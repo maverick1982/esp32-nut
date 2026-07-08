@@ -11,7 +11,6 @@ epics:
     title: Server NUT
 order:
   - US-003
-  - US-005
   - US-006
   - US-007
   - US-008
@@ -21,3 +20,4 @@ order:
   - US-001
   - US-002
   - US-004
+  - US-005

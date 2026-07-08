@@ -1,0 +1,127 @@
+schema: archetipo/plan/v2
+spec_code: US-005
+body: |-
+  # US-005: Connettività Wi-Fi e Gestione Riconnessioni — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Specifica
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come amministratrice SOHO (Sara),
+  voglio che l'ESP32-S3 si connetta alla rete Wi-Fi locale ed esegua la riconnessione automatica in caso di disconnessioni temporanee,
+  in modo da garantire che il server NUT sia sempre raggiungibile.
+
+  **Criteri di Accettazione**
+  - Il firmware deve stabilire una connessione Wi-Fi in modalità Station (STA) utilizzando l'SSID e la password letti da `config.json`.
+  - Il firmware deve monitorare lo stato della connessione e riprovare a connettersi ad intervalli regolari (es. ogni 10-30 secondi) in caso di perdita del segnale.
+  - Lo stato della connettività Wi-Fi deve essere stampato tramite log seriali.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'obiettivo di questa user story è dotare l'ESP32-S3 di connettività Wi-Fi stabile con capacità di auto-riconnessione automatica per garantire l'affidabilità del servizio NUT.
+
+  - **Modulo NetworkManager**: Verrà creata una nuova classe `NetworkManager` in `include/network_manager.h` e `src/network_manager.cpp`. Questo modulo gestirà lo stato del modulo Wi-Fi.
+  - **Inizializzazione Wi-Fi**: Il modulo accetterà le credenziali Wi-Fi (ottenute da `ConfigManager`) e configurerà il chip in modalità Station (`WiFi.mode(WIFI_STA)`). Avvierà la connessione non bloccante via `WiFi.begin(ssid, password)`.
+  - **Monitoraggio e Riconnessione**: Invece di fare affidamento unicamente sulla riconnessione automatica dello stack ESP32 (che in alcune condizioni può bloccarsi o comportarsi in modo non deterministico), `NetworkManager::loop()` monitorerà periodicamente lo stato della connessione (tramite `WiFi.status()`). In caso di stato diverso da `WL_CONNECTED` per un certo periodo, avvierà un tentativo di riconnessione a intervalli regolari di 15 secondi (non bloccanti, usando un timer basato su `millis()`).
+  - **Diagnostica**: Tutti i passaggi di stato (connessione in corso, connessione stabilita con indirizzo IP, disconnessione e tentativi di riconnessione) saranno tracciati tramite la porta seriale con prefissi diagnostici leggibili (es. `[WIFI]`).
+
+  ---
+
+  ## Strategia di Test
+
+  La validazione della connettività Wi-Fi e della gestione delle disconnessioni avverrà tramite:
+
+  - **Test Unitari sul Target**: Creazione di una suite di test `test_network_manager` usando Unity. Coprirà:
+    - L'inizializzazione corretta dello stato del manager.
+    - La verifica che all'avvio senza credenziali il modulo restituisca lo stato di errore atteso.
+    - La simulazione del comportamento del timer di riconnessione.
+  - **Test di Integrazione e Robustezza**:
+    - Caricamento del firmware e LittleFS con credenziali Wi-Fi valide.
+    - Rilevazione dell'indirizzo IP locale assegnato stampato nei log seriali.
+    - Simulazione di disconnessione spegnendo l'access point di test o cambiando temporaneamente la password nel router.
+    - Verifica tramite console seriale dei log di disconnessione e dei successivi tentativi di riconnessione distanziati di 15 secondi.
+    - Ripristino dell'access point e verifica della riconnessione automatica e riassegnazione dell'IP.
+tasks:
+  - id: TASK-01
+    title: Creazione del modulo NetworkManager
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Implementare la classe `NetworkManager` responsabile dell'inizializzazione del Wi-Fi in modalità STA e della gestione delle riconnessioni automatiche non bloccanti.
+
+      ## File Coinvolti
+      - `include/network_manager.h` — Dichiarazione della classe `NetworkManager`.
+      - `src/network_manager.cpp` — Implementazione della logica di connessione Wi-Fi, monitoraggio dello stato e tentativi di riconnessione a intervalli di 15 secondi.
+
+      ## Criteri di Completamento
+      - [ ] La classe `NetworkManager` espone il metodo `begin(const String& ssid, const String& password)` per avviare la connessione.
+      - [ ] La classe espone il metodo `loop()` da chiamare nel ciclo principale per il monitoraggio e la riconnessione.
+      - [ ] La classe espone il metodo `isConnected()` per verificare lo stato di rete.
+      - [ ] Tutti i passaggi di stato (connessione in corso, connessione stabilita, disconnessione, IP assegnato) sono tracciati con log diagnostici seriali.
+    ref: TASK-01
+  - id: TASK-02
+    title: Creazione dei test unitari per NetworkManager
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare una suite di test unitari con Unity per validare il comportamento del modulo `NetworkManager`.
+
+      ## File Coinvolti
+      - `test/test_network_manager/test_main.cpp` — Suite di test Unity sul target per verificare l'inizializzazione e il comportamento degli stati del modulo.
+
+      ## Criteri di Completamento
+      - [ ] Esecuzione con successo del test di inizializzazione dello stato del manager.
+      - [ ] Esecuzione con successo del test che verifica che `isConnected()` restituisca `false` prima di avviare la connessione.
+      - [ ] La suite di test compila ed esegue con successo via PlatformIO (`pio test -f test_network_manager`).
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrazione del NetworkManager nel ciclo principale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Integrare il `NetworkManager` in `src/main.cpp` per connettersi al Wi-Fi all'avvio utilizzando le credenziali caricate da `ConfigManager`.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Modifica di `setup()` e `loop()` per istanziare, inizializzare e aggiornare `NetworkManager`.
+      - `include/main.h` — Inclusione dell'header `network_manager.h`.
+
+      ## Criteri di Completamento
+      - [ ] `NetworkManager` viene inizializzato in `setup()` con SSID e password letti da `ConfigManager`.
+      - [ ] `network_mgr.loop()` viene chiamato in `loop()` principale.
+      - [ ] All'avvio corretto, viene stampato l'IP locale assegnato sulla console seriale.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verifica dell'integrazione sul target
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Verificare sul target reale o simulato il corretto funzionamento della connessione Wi-Fi, della diagnostica e delle riconnessioni automatiche.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - [ ] Compilazione e caricamento riusciti del firmware con `pio run`.
+      - [ ] All'avvio, il monitor seriale mostra la corretta sequenza di connessione e la stampa dell'indirizzo IP locale.
+      - [ ] Spegnendo temporaneamente il router Wi-Fi di test, il log seriale segnala la disconnessione e avvia i tentativi regolari di connessione.
+      - [ ] Riaccendendo il router, l'ESP32-S3 si riconnette automaticamente e riprende le metriche loggando l'evento.
+    ref: TASK-04

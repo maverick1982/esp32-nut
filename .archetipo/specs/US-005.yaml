@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 3
-status: TODO
+status: DONE
 blocked_by:
   - US-004
 scope: MVP
@@ -31,3 +31,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-08T15:14:58Z"
+  - status: PLANNED
+    at: "2026-07-08T17:05:06Z"
+  - status: IN PROGRESS
+    at: "2026-07-08T17:07:02Z"
+  - status: REVIEW
+    at: "2026-07-08T17:21:07Z"
+  - status: DONE
+    at: "2026-07-08T17:23:04Z"

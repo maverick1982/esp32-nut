@@ -3,6 +3,7 @@
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
+AppNetworkManager network_mgr;
 
 #ifndef UNIT_TEST
 void setup() {
@@ -21,6 +22,9 @@ void setup() {
         NutConfig nut = config_mgr.getNutConfig();
         Serial.printf("[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
         Serial.printf("[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
+        
+        // Inizializzazione di AppNetworkManager
+        network_mgr.begin(wifi.ssid, wifi.password);
     }
 
     // Inizializzazione della libreria USBHostUPS (solo se la configurazione è valida)
@@ -46,6 +50,7 @@ void loop() {
         return;
     }
 
+    network_mgr.loop();
     usb_ups.loop();
 
     uint32_t now = millis();
