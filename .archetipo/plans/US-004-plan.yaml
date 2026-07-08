@@ -1,0 +1,121 @@
+schema: archetipo/plan/v2
+spec_code: US-004
+body: |
+  # US-004: Caricamento Configurazione JSON da LittleFS — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Specifica
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** HIGH | **Punti:** 2
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 legga le credenziali Wi-Fi e NUT da un file `config.json` memorizzato su partizione LittleFS,
+  in modo da poter configurare il dispositivo senza dover ricompilare il codice.
+
+  **Criteri di Accettazione**
+  - Il firmware deve montare correttamente il file system LittleFS all'avvio.
+  - Il firmware deve leggere il file `/config.json`, eseguendo il parsing dei campi Wi-Fi e NUT usando una libreria JSON (es. ArduinoJson).
+  - In caso di file mancante o formato JSON non valido, il sistema deve segnalare l'errore sulla console seriale e avviarsi in una modalità di errore/attesa sicura.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'obiettivo di questa user story è consentire all'ESP32-S3 di caricare le credenziali Wi-Fi e NUT da un file JSON memorizzato su LittleFS anziché codificarle direttamente nel firmware.
+
+  - **Montaggio del File System**: All'avvio, il sistema tenterà di inizializzare LittleFS tramite `LittleFS.begin(false)`. L'argomento `false` impedisce la formattazione automatica, consentendo di rilevare se la partizione LittleFS non è presente o non è stata pre-caricata con un'immagine valida, segnalando l'errore in modo appropriato.
+  - **Parsing del JSON**: Verrà sviluppata la classe `ConfigManager` che incapsulerà la logica di caricamento. Per il parsing del file `/config.json`, useremo la libreria ArduinoJson (v7.0.0, già configurata in `platformio.ini`). Verranno estratte le chiavi per il blocco `wifi` (`ssid` e `password`) e per il blocco `nut` (`username`, `password`, `ups_name`).
+  - **Gestione degli Errori e Modalità Sicura**: Se il montaggio fallisce, il file `/config.json` è assente o il JSON è malformato/incompleto, il firmware segnalerà l'errore tramite `Serial` ed entrerà in un ciclo di attesa sicuro (`config_valid = false`), disabilitando l'inizializzazione dello stack USB Host e dei futuri servizi di rete, per prevenire comportamenti imprevisti.
+
+  ---
+
+  ## Strategia di Test
+
+  La validazione del corretto caricamento ed elaborazione della configurazione avverrà su due livelli:
+
+  - **Test Unitari sul Target**: Creazione di una suite di test `test_config_manager` tramite Unity. I test verranno eseguiti sul microcontrollore e copriranno:
+    - Il caricamento corretto con un file JSON di prova valido (creato dinamicamente durante il setup del test e poi rimosso).
+    - Il comportamento del sistema in caso di file mancante.
+    - La corretta intercettazione di file JSON malformati.
+  - **Test di Integrazione e Diagnostica Seriale**: Verifica tramite monitor seriale dell'output all'avvio. Si caricherà sul chip sia l'immagine LittleFS (contenente `config.json`) sia il firmware. Si verificherà che all'avvio i log mostrino il corretto montaggio di LittleFS e la corretta interpretazione dei campi. Si proverà poi a caricare un file malformato per validare la modalità di attesa sicura.
+tasks:
+  - id: TASK-01
+    title: Creazione del modulo ConfigManager
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Implementare la classe `ConfigManager` responsabile del montaggio del file system LittleFS, della lettura del file `/config.json` e del parsing dei parametri utilizzando la libreria `ArduinoJson`.
+
+      ## File Coinvolti
+      - `include/config_manager.h` — Dichiarazione della classe `ConfigManager` e delle strutture dati `WifiConfig` e `NutConfig`.
+      - `src/config_manager.cpp` — Implementazione dei metodi della classe, inclusa la logica di gestione degli errori di montaggio e di parsing del file JSON.
+
+      ## Criteri di Completamento
+      - [ ] La classe `ConfigManager` espone il metodo `begin(const char* filepath)` per caricare la configurazione.
+      - [ ] La classe espone getter per le credenziali Wi-Fi (`WifiConfig`) e NUT (`NutConfig`).
+      - [ ] La classe espone un metodo `isValid()` per verificare se il caricamento è andato a buon fine.
+      - [ ] In caso di fallimento nel montaggio di LittleFS o errore di parsing, `isValid()` restituisce `false` e l'errore viene loggato sulla porta seriale.
+    ref: TASK-01
+  - id: TASK-02
+    title: Creazione dei test unitari per ConfigManager
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare una suite di test unitari con Unity per validare tutti i percorsi (successo, file mancante, JSON invalido) di `ConfigManager`.
+
+      ## File Coinvolti
+      - `test/test_config_manager/test_main.cpp` — File principale dei test che monta LittleFS, scrive file JSON temporanei per validare i diversi scenari e verifica lo stato del modulo.
+
+      ## Criteri di Completamento
+      - [ ] Esecuzione con successo del test di caricamento di un file JSON valido (campi Wi-Fi e NUT corretti).
+      - [ ] Esecuzione con successo del test di errore su file mancante.
+      - [ ] Esecuzione con successo del test di errore su file JSON malformato.
+      - [ ] La suite di test compila ed esegue con successo via PlatformIO (`pio test -f test_config_manager`).
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrazione del ConfigManager nel ciclo principale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Integrare il `ConfigManager` in `src/main.cpp` per caricare la configurazione all'avvio del firmware ed entrare in modalità di attesa sicura in caso di configurazione non valida.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Modifica di `setup()` e `loop()` per istanziare ed inizializzare il modulo `ConfigManager`, gestendo l'eventuale stato di errore.
+      - `include/main.h` — Aggiunta delle inclusioni necessarie.
+
+      ## Criteri di Completamento
+      - [ ] `ConfigManager` viene inizializzato all'avvio in `setup()`.
+      - [ ] Se la configurazione non è valida, viene stampato un messaggio di errore ed avviata la modalità di attesa sicura.
+      - [ ] Se in modalità sicura, il task `USBHostUPS` non viene avviato o eseguito.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verifica dell'integrazione sul target
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Verificare l'integrazione end-to-end caricando il file system LittleFS e il firmware sull'ESP32-S3 e ispezionando l'output seriale.
+
+      ## File Coinvolti
+      - Nessuno (verifica sul firmware caricato)
+
+      ## Criteri di Completamento
+      - [ ] Il comando `pio run -t uploadfs` carica correttamente l'immagine LittleFS contenente `/config.json` sul microcontrollore.
+      - [ ] Il caricamento del firmware e il monitoraggio seriale mostrano l'inizializzazione corretta con le credenziali configurate.
+      - [ ] Un test con file mancante o JSON corrotto mostra il blocco del sistema in modalità di attesa sicura con messaggi di diagnostica appropriati.
+    ref: TASK-04
