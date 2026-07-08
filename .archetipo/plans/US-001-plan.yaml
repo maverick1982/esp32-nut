@@ -1,0 +1,135 @@
+schema: archetipo/plan/v2
+spec_code: US-001
+body: |-
+  # US-001: Inizializzazione USB Host e Rilevamento Eaton 3S 700 — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Specifica
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 configuri la sua porta USB nativa in modalità USB Host e identifichi l'UPS Eaton 3S 700 collegato,
+  in modo da stabilire la connessione fisica e logica a basso livello con il dispositivo.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, collegando l'UPS Eaton alla porta USB OTG dell'ESP32-S3, sarà possibile osservare tramite la console seriale (log a 115200 baud) che l'ESP32-S3 rileva la connessione del dispositivo USB, stampa il Vendor ID (0463) e Product ID (ffff) corretti e registra il dispositivo come HID.
+
+  **Criteri di Accettazione**
+  - All'avvio, l'ESP32-S3 deve inizializzare lo stack USB Host di ESP-IDF.
+  - Collegando l'UPS Eaton, l'ESP32-S3 deve identificare il dispositivo USB HID verificando Vendor ID e Product ID.
+  - In caso di mancata connessione o dispositivo non compatibile, il sistema deve riportare un errore appropriato sulla console seriale.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Per abilitare l'USB Host nativo su ESP32-S3 all'interno del framework Arduino (basato su ESP-IDF v5.1), implementeremo la libreria `USBHostUPS` sotto `lib/USBHostUPS/`.
+
+  - **Inizializzazione dello stack USB Host**: Verranno chiamate le API native di ESP-IDF `usb_host_install()` per configurare i driver del controller USB.
+  - **Gestione degli eventi in background**: Verrà avviato un task FreeRTOS separato (`usb_host_lib_handle_events()`) per elaborare in modo asincrono tutti gli eventi generati sul bus USB Host senza bloccare il ciclo di esecuzione principale di Arduino.
+  - **Registrazione del client USB Host**: Registreremo un client generico tramite `usb_host_client_register()`. Nelle callback di notifica del client (in particolare su `USB_HOST_CLIENT_EVENT_ACTIVE_CLIENTS`), intercetteremo la connessione di nuovi dispositivi.
+  - **Lettura dei descrittori del dispositivo**: All'atto della connessione, apriremo il dispositivo con `usb_host_device_open()`, recupereremo il descrittore del dispositivo con `usb_host_get_device_descriptor()` e confronteremo i campi `idVendor` (`0x0463`) e `idProduct` (`0xFFFF`) stampando i dettagli in console. Se non corrispondono, loggheremo un warning per dispositivo non supportato.
+
+  ---
+
+  ## Strategia di Test
+
+  La strategia prevede test di compilazione, logging diagnostico e un test unitario per verificare la robustezza dell'inizializzazione:
+
+  - **Verifica tramite Logging**: Il flusso di connessione, rilevamento descrittori ed eventuali errori di inizializzazione dello stack verranno stampati sulla console seriale a 115200 baud.
+  - **Unit Test isolato**: Creazione di un test in `test/test_usb_host/test_main.cpp` che inizializza la libreria `USBHostUPS` e verifica che lo stack si avvii senza generare kernel panic o blocchi del microcontrollore.
+tasks:
+  - id: TASK-01
+    title: Creazione della struttura ed interfaccia della libreria USBHostUPS
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Definire l'interfaccia e la struttura della classe `USBHostUPS` in `lib/USBHostUPS/src/`. Questa classe fornirà i metodi pubblici `begin()` per configurare e installare lo stack USB Host e `loop()` per processare gli eventi.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Creazione dell'header file
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Creazione dell'implementazione di base (stub)
+
+      ## Criteri di Completamento
+      - [ ] La classe `USBHostUPS` è definita.
+      - [ ] Il metodo `begin()` restituisce un booleano per indicare il successo/errore di configurazione iniziale.
+      - [ ] Il codice compila senza errori.
+    ref: TASK-01
+  - id: TASK-02
+    title: Inizializzazione dello stack USB Host ed event loop
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Configurare il driver USB Host di ESP-IDF. Chiamare `usb_host_install()` e creare un task FreeRTOS dedicato a far girare `usb_host_lib_handle_events()` per elaborare gli eventi in background.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Integrazione delle API ESP-IDF USB Host ed event loop
+
+      ## Criteri di Completamento
+      - [ ] Installazione corretta di driver e stack USB Host tramite le API di ESP-IDF.
+      - [ ] Creazione e avvio con successo del task FreeRTOS per l'event loop di USB Host.
+    ref: TASK-02
+  - id: TASK-03
+    title: Registrazione del client e lettura descrittori Eaton 3S 700
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Registrare un client USB Host tramite `usb_host_client_register()`. Nelle callback del client, gestire il rilevamento dei dispositivi: aprire il dispositivo con `usb_host_device_open()`, estrarre il descrittore con `usb_host_get_device_descriptor()` e verificare se si tratta del Vendor ID `0x0463` (Eaton) e Product ID `0xFFFF`. Stampare i log in console seriale.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Registrazione client, callbacks e lettura descrittori
+
+      ## Criteri di Completamento
+      - [ ] Il client USB Host viene registrato correttamente.
+      - [ ] Le callback stampano a schermo Vendor ID e Product ID di ogni periferica connessa.
+      - [ ] Se viene rilevato il Vendor ID `0463` e Product ID `ffff`, viene loggata la corretta associazione e il dispositivo viene registrato como HID.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrazione nel main.cpp ed inizializzazione all'avvio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Includere la libreria `USBHostUPS.h` in `src/main.cpp` e inizializzare un'istanza globale in `setup()`. Aggiungere la gestione del log di errore qualora l'inizializzazione fallisca all'avvio.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Inizializzazione della libreria ed integrazione di diagnostica
+      - `include/main.h` — Eventuali macro aggiuntive
+
+      ## Criteri di Completamento
+      - [ ] Il firmware inizializza `USBHostUPS` all'avvio.
+      - [ ] Se l'inizializzazione dello stack fallisce, viene stampato un messaggio di errore chiaro sulla console seriale.
+    ref: TASK-04
+  - id: TASK-05
+    title: Unit test per inizializzazione USB Host
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Creare un test unitario basato su Unity per verificare che l'inizializzazione di `USBHostUPS` avvenga senza crash ed entri nello stato corretto.
+
+      ## File Coinvolti
+      - `test/test_usb_host/test_main.cpp` — Creazione del file di test unitario
+
+      ## Criteri di Completamento
+      - [ ] Il test unitario si compila con successo.
+      - [ ] L'esecuzione del test conferma l'inizializzazione corretta e pulita dello stack.
+    ref: TASK-05

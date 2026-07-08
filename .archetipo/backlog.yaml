@@ -10,7 +10,6 @@ epics:
   - code: EP-003
     title: Server NUT
 order:
-  - US-001
   - US-002
   - US-003
   - US-004
@@ -21,3 +20,4 @@ order:
   - US-009
   - US-010
   - US-000
+  - US-001
