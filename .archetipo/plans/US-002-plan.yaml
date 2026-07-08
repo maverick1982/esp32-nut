@@ -1,0 +1,132 @@
+schema: archetipo/plan/v2
+spec_code: US-002
+body: |-
+  # US-002: Parsing Report HID PDC dell'UPS — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priority:** HIGH | **Points:** 5
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 interroghi periodicamente l'UPS leggendo e decodificando i report HID conformi alla classe Power Device Class (PDC),
+  in modo da estrarre lo stato di rete, la carica della batteria e la tensione di ingresso.
+
+  **Acceptance Criteria**
+  - [ ] Il firmware deve implementare un parser per decodificare i pacchetti HID inviati dall'UPS (es. variabili standard della classe PDC).
+  - [ ] I valori di carica della batteria (`battery.charge`), stato dell'alimentazione (`ups.status` come OL/OB) e tensione di ingresso (`input.voltage`) devono essere estratti correttamente e aggiornati in memoria.
+  - [ ] Eventuali errori di lettura o dati corrotti sul bus USB devono essere gestiti senza bloccare il ciclo di polling.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'approccio prevede l'estensione del driver `USBHostUPS` esistente per reclamare l'interfaccia HID ed eseguire il polling dell'UPS Eaton 3S 700. La decodifica utilizzerà i report conformi alla classe standard USB Power Device Class (PDC).
+
+  - **Claim dell'Interfaccia USB HID:** All'attivazione del dispositivo, verrà chiamata la funzione `usb_host_interface_claim` sull'interfaccia 0 (l'interfaccia HID dell'UPS). In fase di rimozione del dispositivo, verrà eseguito il rilascio dell'interfaccia.
+  - **Strategia di Polling (GET_REPORT):** Per garantire la robustezza delle letture periodiche (es. ogni 5 secondi), verranno inviati dei Control Transfer indirizzati all'Endpoint 0, richiedendo i Report ID specifici dell'Eaton per la capacità della batteria, lo stato e la tensione di ingresso.
+  - **Decodifica e Parser PDC:** I pacchetti ricevuti verranno decodificati leggendo i byte specifici per estrarre la carica della batteria (`battery.charge` in percentuale), lo stato dell'alimentazione (estratto dai bit di stato del report per mappare "OL" per alimentazione da rete o "OB" per funzionamento da batteria) e la tensione di ingresso (`input.voltage`). I dati saranno memorizzati in variabili private e accessibili tramite metodi getter thread-safe.
+  - **Robustezza e Tolleranza agli Errori:** Qualsiasi errore nei trasferimenti USB o nella formattazione dei report non bloccherà il ciclo di polling, registrando l'evento diagnostico su console seriale e continuando l'esecuzione del loop.
+
+  ---
+
+  ## Strategia di Test
+
+  La strategia si concentra sul test della decodifica logica dei pacchetti HID (unit testing) e sull'integrazione nel firmware con diagnostica via seriale.
+
+  - **Unit Test del Parser (Unity):** Creazione di casi di test che simulano pacchetti di byte HID reali/fittizi e verifichino che il parser estragga correttamente la percentuale della batteria, la tensione e lo stato di alimentazione (OL/OB).
+  - **Test di Robustezza:** Validazione del comportamento del parser in caso di ricezione di report incompleti o corrotti per garantire la continuità del polling.
+
+  _Piano generato via ARchetipo Planning — 2026-07-08_
+tasks:
+  - id: TASK-01
+    title: Definizione dei dati dell'UPS e interfaccia pubblica
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere campi dati privati nella classe `USBHostUPS` per contenere i valori correnti di carica della batteria, stato di alimentazione e tensione di ingresso. Creare i metodi getter pubblici `getBatteryCharge()`, `getUPSStatus()` e `getInputVoltage()` per consentire la lettura in memoria dei valori.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Definizione dei metodi getter e delle variabili di stato private.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementazione iniziale dei getter con valori di default.
+
+      ## Criteri di Completamento
+      - [ ] La classe `USBHostUPS` compila correttamente ed espone i metodi pubblici.
+      - [ ] I metodi restituiscono i valori iniziali di default.
+    ref: TASK-01
+  - id: TASK-02
+    title: Claim dell'interfaccia USB HID e gestione ciclo di vita
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare la logica di claim dell'interfaccia 0 (interfaccia HID) dell'UPS all'avvio del dispositivo ed eseguire il rilascio dell'interfaccia alla rimozione, utilizzando le API ESP-IDF `usb_host_interface_claim` e `usb_host_interface_release`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Integrazione di `usb_host_interface_claim` in `handle_client_event` (evento `USB_HOST_CLIENT_EVENT_NEW_DEV`) e `usb_host_interface_release` (evento `USB_HOST_CLIENT_EVENT_DEV_GONE`).
+
+      ## Criteri di Completamento
+      - [ ] L'interfaccia HID viene reclamata con successo quando l'Eaton 3S 700 viene connesso.
+      - [ ] L'interfaccia viene rilasciata correttamente in caso di disconnessione.
+    ref: TASK-02
+  - id: TASK-03
+    title: Implementazione del Polling dei Report e del Parser HID PDC
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Implementare il meccanismo di invio periodico (polling) delle richieste di report HID tramite Control Transfer (GET_REPORT) o Interrupt IN transfer. Decodificare il payload del report ricevuto estraendo la percentuale di batteria, lo stato (OL/OB) e la tensione di ingresso, salvandoli nelle variabili in memoria. Gestire eventuali errori di trasferimento USB in modo non bloccante.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Dichiarazione di strutture d'appoggio e costanti per i Report ID di Eaton.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Logica di invio delle transazioni USB e parsing dei byte dei report.
+
+      ## Criteri di Completamento
+      - [ ] Invio periodico delle interrogazioni USB all'UPS.
+      - [ ] Decodifica corretta dei byte dei report per aggiornare le variabili in memoria.
+      - [ ] Tolleranza agli errori del bus senza bloccare lo stack.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrazione del loop diagnostico e stampe seriali
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Includere nel ciclo di `loop()` principale o in un task periodico la visualizzazione a schermo dei valori dell'UPS ogni 5 secondi per soddisfare i requisiti di dimostrazione della spec.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Modifica della funzione `loop()` per aggiungere un timer software non bloccante che stampa lo stato dell'UPS.
+
+      ## Criteri di Completamento
+      - [ ] Il firmware stampa in chiaro sulla console seriale i valori letti dall'UPS ogni 5 secondi.
+      - [ ] La console riporta correttamente la percentuale di batteria, lo stato e la tensione.
+    ref: TASK-04
+  - id: TASK-05
+    title: Unit test per la decodifica dei report HID dell'UPS
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Aggiungere test unitari in Unity per validare la correttezza del parser dei report HID. Fornire al parser array di byte fittizi pre-configurati (simulando vari scenari come alimentazione da rete e blackout) e verificare che i getter leggano i valori corrispondenti corretti.
+
+      ## File Coinvolti
+      - `test/test_usb_host/test_main.cpp` — Aggiunta dei test per la decodifica dei pacchetti e gestione errori del parser.
+
+      ## Criteri di Completamento
+      - [ ] I test unitari si compilano correttamente ed eseguono con successo la validazione del parser.
+    ref: TASK-05
