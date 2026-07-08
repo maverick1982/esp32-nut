@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-000
+title: Setup del Progetto PlatformIO e Layout Iniziale
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: HIGH
+points: 2
+status: DONE
+scope: MVP
+body: |-
+  #### US-000: Setup del Progetto PlatformIO e Layout Iniziale
+
+  **Epic:** EP-000 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del progetto,
+  voglio inizializzare la struttura del progetto PlatformIO configurando il file `platformio.ini` per ESP32-S3,
+  in modo da avere un ambiente di sviluppo pronto, compilabile e configurato con le librerie di base.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, un componente del team può avviare la compilazione tramite PlatformIO (`pio run`) ed ottenere un firmware di base (`firmware.bin`) compilato senza errori, oltre a verificare la corretta disposizione delle directory `src/`, `lib/` e `data/`.
+
+  **Criteri di Accettazione**
+  - [ ] Il file `platformio.ini` deve essere presente nella root del progetto e configurato per la scheda ESP32-S3 (es. `board = esp32-s3-devkitc-1`, `framework = arduino`).
+  - [ ] Devono essere presenti le directory standard `src/`, `lib/`, `include/` e la directory `data/` per LittleFS.
+  - [ ] Il progetto deve compilare correttamente all'esecuzione del comando `pio run` su un sorgente `main.cpp` minimale.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"
+  - status: PLANNED
+    at: "2026-07-08T15:18:52Z"
+  - status: IN PROGRESS
+    at: "2026-07-08T15:28:50Z"
+  - status: REVIEW
+    at: "2026-07-08T15:34:28Z"
+  - status: DONE
+    at: "2026-07-08T15:53:35Z"

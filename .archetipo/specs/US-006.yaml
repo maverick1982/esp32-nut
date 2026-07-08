@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-006
+title: LED di Stato Diagnostico
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+blocked_by:
+  - US-000
+scope: MVP
+body: |-
+  #### US-006: LED di Stato Diagnostico
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-000
+
+  **User Story**
+  Come utente del bridge (Sara),
+  voglio che il LED di stato dell'ESP32-S3 cambi comportamento a seconda dello stato di connessione del Wi-Fi e dell'UPS,
+  in modo da poter diagnosticare lo stato di funzionamento visivamente senza collegare il PC alla console seriale.
+
+  **Dimostrazione**
+  Dopo alter implementato questa spec, alimentando la scheda di sviluppo, il LED lampeggerà lentamente durante la connessione al Wi-Fi, rimarrà acceso fisso quando il sistema è operativo (connesso sia a Wi-Fi che a UPS) e lampeggerà rapidamente in caso di errori di comunicazione con l'UPS.
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve pilotare il LED integrato o un LED NeoPixel/RGB sulla scheda ESP32-S3.
+  - [ ] Devono essere definiti almeno 3 pattern visivi distinguibili per: connessione Wi-Fi in corso, funzionamento nominale, ed errore hardware/USB.
+  - [ ] I pattern LED devono aggiornarsi tempestivamente al variare dello stato di rete o USB.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

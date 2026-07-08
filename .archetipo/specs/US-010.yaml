@@ -1,0 +1,34 @@
+schema: archetipo/spec/v2
+code: US-010
+title: Test di Integrazione con Home Assistant
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 4
+status: TODO
+blocked_by:
+  - US-002
+  - US-008
+scope: MVP
+body: |-
+  #### US-010: Test di Integrazione con Home Assistant
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 4 | **Stato:** TODO
+  **Bloccato da:** US-002, US-008
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che il server NUT restituisca tutte le variabili richieste in un formato pienamente compatibile con l'integrazione ufficiale NUT di Home Assistant,
+  in modo da poter monitorare l'UPS nella dashboard ed utilizzarlo per le automazioni di spegnimento.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, aggiungendo l'integrazione "Network UPS Tools (NUT)" in Home Assistant indicando l'indirizzo IP dell'ESP32-S3 e la porta 3493, Home Assistant rileverà correttamente l'UPS Eaton ed esporrà tutte le entità desiderate (stato, livello batteria, tensione) con aggiornamenti in tempo reale.
+
+  **Criteri di Accettazione**
+  - [ ] L'integrazione ufficiale NUT di Home Assistant deve connettersi con successo all'ESP32-S3 senza generare errori di protocollo o timeout.
+  - [ ] Tutte le entità necessarie (sensore di carica, stato dell'UPS, tensione di ingresso) devono comparire in Home Assistant ed aggiornarsi periodicamente.
+  - [ ] Eventuali cambi di stato dell'UPS (es. blackout simulato staccando la spina dell'Eaton 3S) devono propagarsi a Home Assistant entro 10 secondi.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

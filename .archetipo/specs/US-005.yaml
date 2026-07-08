@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-005
+title: Connettività Wi-Fi e Gestione Riconnessioni
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 3
+status: TODO
+blocked_by:
+  - US-004
+scope: MVP
+body: |-
+  #### US-005: Connettività Wi-Fi e Gestione Riconnessioni
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-004
+
+  **User Story**
+  Come amministratrice SOHO (Sara),
+  voglio che l'ESP32-S3 si connetta alla rete Wi-Fi locale ed esegua la riconnessione automatica in caso di disconnessioni temporanee,
+  in modo da garantire che il server NUT sia sempre raggiungibile.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, l'ESP32-S3 si connetterà al Wi-Fi all'avvio stampando l'indirizzo IP locale assegnato. Spegnendo e riaccendendo il router Wi-Fi di test, l'ESP32-S3 rileverà la perdita della connessione e si riconnetterà autonomamente non appena la rete sarà di nuovo disponibile.
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve stabilire una connessione Wi-Fi in modalità Station (STA) utilizzando l'SSID e la password letti da `config.json`.
+  - [ ] Il firmware deve monitorare lo stato della connessione e riprovare a connettersi ad intervalli regolari (es. ogni 10-30 secondi) in caso di perdita del segnale.
+  - [ ] Lo stato della connettività Wi-Fi deve essere stampato tramite log seriali.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

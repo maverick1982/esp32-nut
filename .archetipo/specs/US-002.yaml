@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-002
+title: Parsing Report HID PDC dell'UPS
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: TODO
+blocked_by:
+  - US-001
+scope: MVP
+body: |-
+  #### US-002: Parsing Report HID PDC dell'UPS
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-001
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 interroghi periodicamente l'UPS leggendo e decodificando i report HID conformi alla classe Power Device Class (PDC),
+  in modo da estrarre lo stato di rete, la carica della batteria e la tensione di ingresso.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, la console seriale del microcontrollore stamperà periodicamente (es. ogni 5 secondi) i valori letti dall'UPS in chiaro: carica della batteria (%), stato di alimentazione (Rete/Batteria), e tensione.
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve implementare un parser per decodificare i pacchetti HID inviati dall'UPS (es. variabili standard della classe PDC).
+  - [ ] I valori di carica della batteria (`battery.charge`), stato dell'alimentazione (`ups.status` come OL/OB) e tensione di ingresso (`input.voltage`) devono essere estratti correttamente e aggiornati in memoria.
+  - [ ] Eventuali errori di lettura o dati corrotti sul bus USB devono essere gestiti senza bloccare il ciclo di polling.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

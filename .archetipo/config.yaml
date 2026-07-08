@@ -1,0 +1,78 @@
+connector: file
+
+# Shared paths — used by every connector.
+paths:
+  prd: docs/PRD.md
+  mockups: docs/mockups/
+  test_results: docs/test-results/
+
+workflow:
+  statuses:
+    todo: TODO
+    planned: PLANNED
+    in_progress: IN PROGRESS
+    review: REVIEW
+    done: DONE        # human-gated: only /archetipo-review moves a spec here, after explicit user approval
+
+# Used only when connector == file
+file:
+  backlog: .archetipo/backlog.yaml
+  planning: .archetipo/plans/
+
+# Optional per-spec git worktree workflow. When enabled, `archetipo spec start`
+# creates a branch + worktree per spec so the review diff is isolated to a
+# single spec and integrated back with one merge. Disabled by default.
+worktree:
+  enabled: false
+  base: main
+  dir: .archetipo/worktrees
+  branch_prefix: archetipo/
+
+# Optional end-to-end demo recording. `archetipo e2e demo` produces a video
+# ONLY when record_demo_video is true; otherwise it records nothing and reports
+# the skip. Off by default, so demo videos are opt-in.
+e2e:
+  record_demo_video: false
+
+# Used only when connector == github. owner/project_number are auto-detected
+# from `gh`; the remaining keys are populated automatically by the CLI during
+# initialize_connector — leave them commented unless you need to override.
+github:
+  # owner: auto-detected from repo
+  # project_number: auto-detected from repo
+  # project_node_id: <auto>
+  # project_url: <auto>
+  # fields:
+  #   status_field_id: <auto>
+  #   status_options: { ... }
+  #   priority_field_id: <auto>
+  #   priority_options: { ... }
+  #   points_field_id: <auto>
+  #   epic_field_id: <auto>
+  #   epic_options: { ... }
+
+# Used only when connector == jira. The API token is read from the
+# JIRA_API_TOKEN env var (never stored here); the email from JIRA_EMAIL or the
+# jira.email key below. project_key and status_map are resolved automatically
+# on first run: the CLI finds (or creates — requires the Administer Jira
+# permission) a project named after the project directory, matches the
+# canonical workflow statuses against the Jira workflow, and writes both keys
+# back here. Note: workflow.statuses above are display labels; status_map maps
+# the canonical statuses onto the names the Jira project actually uses.
+jira:
+  # base_url: https://acme.atlassian.net  # or export JIRA_BASE_URL
+  # project_key: ARCH              # auto-detected/created from the directory name on first run
+  # email: you@acme.com            # optional; falls back to $JIRA_EMAIL
+  # story_type: Story              # issue type for specs (default: Story)
+  # subtask_type: Sub-task         # issue type for plan tasks (default: Sub-task)
+  # points_field: customfield_10016  # story points custom field id (optional)
+  # status_map:                    # auto-discovered from the Jira workflow on first run; override to correct
+  #   TODO: To Do
+  #   PLANNED: Selected for Development
+  #   IN PROGRESS: In Progress
+  #   REVIEW: In Review
+  #   DONE: Done
+  # priority_map:                  # canonical priority -> Jira priority name
+  #   HIGH: High
+  #   MEDIUM: Medium
+  #   LOW: Low

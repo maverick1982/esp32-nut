@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-007
+title: Server TCP NUT porta 3493
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 3
+status: TODO
+blocked_by:
+  - US-005
+scope: MVP
+body: |-
+  #### US-007: Server TCP NUT porta 3493
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-005
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 avvii un server TCP in ascolto sulla porta 3493 e accetti connessioni in ingresso,
+  in modo da poter ricevere le query dai client compatibili con il protocollo NUT.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, l'ESP32-S3 aprirà la porta TCP 3493 sulla rete Wi-Fi. Utilizzando un tool come `netcat` o `telnet` da un PC locale, sarà possibile connettersi all'IP dell'ESP32 sulla porta 3493 e stabilire una sessione di rete.
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve avviare un server TCP in ascolto sulla porta standard NUT (3493).
+  - [ ] Il server deve accettare e gestire connessioni client multiple (almeno 2 connessioni concorrenti).
+  - [ ] Il server deve liberare correttamente le risorse della connessione TCP alla disconnessione dei client o in caso di timeout.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

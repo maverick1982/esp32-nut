@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-009
+title: Autenticazione Client NUT
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: TODO
+blocked_by:
+  - US-008
+scope: MVP
+body: |-
+  #### US-009: Autenticazione Client NUT
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-008
+
+  **User Story**
+  Come amministratrice SOHO (Sara),
+  voglio che il server NUT supporti comandi di autenticazione (`USERNAME` e `PASSWORD`),
+  in modo da limitare l'accesso ai dati dell'UPS solo ai client autorizzati sulla rete.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, aprendo una connessione telnet ed inviando richieste di variabili senza essersi prima autenticati, il server risponderà con un errore di diniego (se l'autenticazione è abilitata). Inviando la sequenza corretta `USERNAME <user>` e `PASSWORD <pass>`, il server autorizzerà il client all'interrogazione delle variabili.
+
+  **Criteri di Accettazione**
+  - [ ] Il server deve supportare i comandi NUT `USERNAME` e `PASSWORD`.
+  - [ ] Le credenziali inviate dai client devono essere validate a fronte di quelle impostate nel file `/config.json`.
+  - [ ] Se le credenziali sono errate o assenti (e l'autenticazione è abilitata nella configurazione), il server deve rifiutare l'accesso ai comandi di lettura delle variabili.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

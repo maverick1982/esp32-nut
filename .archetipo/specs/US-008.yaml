@@ -1,0 +1,34 @@
+schema: archetipo/spec/v2
+code: US-008
+title: Parsing Comandi Base NUT (LIST, GET)
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 4
+status: TODO
+blocked_by:
+  - US-007
+scope: MVP
+body: |-
+  #### US-008: Parsing Comandi Base NUT (LIST, GET)
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 4 | **Stato:** TODO
+  **Bloccato da:** US-007
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che il server TCP esegua il parsing ed elabori i comandi base del protocollo NUT (`LIST UPS`, `LIST VAR <ups>`, `GET VAR <ups> <var>`),
+  in modo da poter fornire lo stato dell'UPS e le singole variabili richieste.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, connettendosi in telnet all'ESP32 ed inviando il comando `LIST UPS`, il server risponderà con l'elenco dell'UPS configurato (es. `UPS eaton "Eaton 3S 700"`). Inviando `GET VAR eaton battery.charge`, risponderà con il valore corretto letto dall'USB dell'UPS (es. `VAR eaton battery.charge "100"`).
+
+  **Criteri di Accettazione**
+  - [ ] Il server deve interpretare correttamente le stringhe di comando conformi al protocollo NUT (case-insensitive o standard).
+  - [ ] Il comando `LIST UPS` deve restituire l'identificativo e la descrizione dell'UPS.
+  - [ ] I comandi `LIST VAR` e `GET VAR` devono restituire i valori correnti delle variabili in memoria estratti dall'UPS USB (come `ups.status`, `battery.charge`, `input.voltage`).
+  - [ ] Il server deve rispondere con un messaggio di errore standard in caso di comando non supportato o UPS inesistente.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

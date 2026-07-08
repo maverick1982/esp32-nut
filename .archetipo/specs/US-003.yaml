@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-003
+title: Gestione Connessione a Caldo (Hot-Plug) USB
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 3
+status: TODO
+blocked_by:
+  - US-001
+scope: MVP
+body: |-
+  #### US-003: Gestione Connessione a Caldo (Hot-Plug) USB
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-001
+
+  **User Story**
+  Come amministratrice SOHO (Sara),
+  voglio che l'ESP32-S3 gestisca lo scollegamento e il ricollegamento a caldo dell'UPS senza bloccarsi,
+  in modo da garantire la continuità del monitoraggio se il cavo viene accidentalmente rimosso.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, scollegando il cavo USB tra l'UPS e l'ESP32-S3, il sistema segnalerà la disconnessione sulla console seriale; ricollegandolo, il sistema rileverà nuovamente il dispositivo ed avvierà di nuovo il polling dei dati automaticamente.
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve intercettare l'evento di disconnessione USB (disconnection callback) e pulire le risorse associate al driver dell'UPS.
+  - [ ] Il firmware deve rimanere in ascolto per una nuova connessione USB e rinizializzare il driver dell'UPS non appena viene ricollegato.
+  - [ ] Lo stato dell'UPS memorizzato in locale deve essere impostato su "sconosciuto" (o contrassegnato come non in comunicazione) durante la disconnessione.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

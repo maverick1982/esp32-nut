@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-004
+title: Caricamento Configurazione JSON da LittleFS
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 2
+status: TODO
+blocked_by:
+  - US-000
+scope: MVP
+body: |-
+  #### US-004: Caricamento Configurazione JSON da LittleFS
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-000
+
+  **User Story**
+  Come smanettatore Smart Home (Marco),
+  voglio che l'ESP32-S3 legga le credenziali Wi-Fi e NUT da un file `config.json` memorizzato su partizione LittleFS,
+  in modo da poter configurare il dispositivo senza dover ricompilare il codice.
+
+  **Dimostrazione**
+  Dopo aver implementato questa spec, all'avvio del dispositivo, la console seriale mostrerà i log di montaggio del file system LittleFS e la corretta lettura dei parametri di configurazione (SSID, password Wi-Fi, username/password NUT).
+
+  **Criteri di Accettazione**
+  - [ ] Il firmware deve montare correttamente il file system LittleFS all'avvio.
+  - [ ] Il firmware deve leggere il file `/config.json`, eseguendo il parsing dei campi Wi-Fi e NUT usando una libreria JSON (es. ArduinoJson).
+  - [ ] In caso di file mancante o formato JSON non valido, il sistema deve segnalare l'errore sulla console seriale e avviarsi in una modalità di errore/attesa sicura.
+history:
+  - status: TODO
+    at: "2026-07-08T15:14:58Z"

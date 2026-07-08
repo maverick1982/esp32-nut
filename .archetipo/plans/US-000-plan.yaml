@@ -1,0 +1,103 @@
+schema: archetipo/plan/v2
+spec_code: US-000
+body: |-
+  # US-000: Setup del Progetto PlatformIO e Layout Iniziale — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-000 — Fondamenta del Progetto
+  **Priorità:** HIGH | **Punti:** 2
+
+  **User Story**
+  Come sviluppatore del progetto,
+  voglio inizializzare la struttura del progetto PlatformIO configurando il file `platformio.ini` per ESP32-S3,
+  in modo da avere un ambiente di sviluppo pronto, compilabile e configurato con le librerie di base.
+
+  **Criteri di Accettazione**
+  - Il file `platformio.ini` deve essere presente nella root del progetto e configurato per la scheda ESP32-S3 (es. `board = esp32-s3-devkitc-1`, `framework = arduino`).
+  - Devono essere presenti le directory standard `src/`, `lib/`, `include/` e la directory `data/` per LittleFS.
+  - Il progetto deve compilare correttamente all'esecuzione del comando `pio run` su un sorgente `main.cpp` minimale.
+
+  ---
+
+  ## Technical Solution
+
+  L'obiettivo di questa specifica è gettare le basi del firmware configurando un ambiente di sviluppo robusto e riproducibile tramite PlatformIO.
+
+  - **Configurazione di build:** Utilizzeremo `platformio.ini` per definire la scheda di destinazione (ESP32-S3) e le impostazioni del framework Arduino. Configureremo LittleFS come filesystem predefinito per memorizzare in futuro la configurazione JSON.
+  - **Integrazione delle librerie:** Includeremo da subito la libreria `ArduinoJson` (v7.x) tra le dipendenze per supportare la gestione delle configurazioni.
+  - **Codice di bootstrap:** Verrà strutturato un `main.cpp` minimale con la sola inizializzazione della porta seriale, per verificare che il compilatore e le librerie incluse funzionino all'unisono.
+
+  ---
+
+  ## Test Strategy
+
+  La strategia di test per questo incremento strutturale si basa sulla verifica della compilazione statica e sulla correttezza formale della struttura delle directory.
+
+  - **Verifica strutturale:** Controllo automatico della presenza di tutte le cartelle obbligatorie del layout di progetto.
+  - **Test di compilazione:** Esecuzione del comando di compilazione `pio run` per verificare che non vi siano conflitti di libreria o errori di sintassi.
+  - **Nessuna interfaccia utente:** Trattandosi di un firmware headless privo di interfaccia grafica, i test end-to-end simulati ed i video dimostrativi non sono applicabili per questa specifica.
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-07-08_
+tasks:
+  - id: TASK-01
+    title: Creazione di platformio.ini e struttura cartelle
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare il file di configurazione `platformio.ini` nella radice del progetto configurato per l'ESP32-S3. Inoltre, assicurarsi che le cartelle strutturali `src/`, `lib/`, `include/` e `data/` siano create ed esistenti.
+
+      ## File Coinvolti
+      - `platformio.ini` — Creazione del file con la configurazione di base
+      - `src/` — Cartella per i sorgenti
+      - `lib/` — Cartella per le librerie
+      - `include/` — Cartella per gli header
+      - `data/` — Cartella per le risorse LittleFS
+
+      ## Criteri di Completamento
+      - [ ] Il file `platformio.ini` contiene le definizioni per `platform = espressif32`, `framework = arduino`, `board = esp32-s3-devkitc-1` e `board_build.filesystem = littlefs`.
+      - [ ] Le cartelle `src/`, `lib/`, `include/` e `data/` sono presenti sul file system.
+    ref: TASK-01
+  - id: TASK-02
+    title: Creazione del codice sorgente minimale di base
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare un punto di ingresso minimale in `src/main.cpp` e l'header di base in `include/main.h`. Il codice deve implementare le funzioni standard di Arduino `setup()` e `loop()`, inizializzando la comunicazione seriale a 115200 baud per stampare un messaggio di avvio.
+
+      ## File Coinvolti
+      - `include/main.h` — Creazione del file header con dichiarazioni di base
+      - `src/main.cpp` — Creazione del file sorgente principale
+
+      ## Criteri di Completamento
+      - [ ] `include/main.h` è creato e contiene le inclusioni e definizioni di base.
+      - [ ] `src/main.cpp` include `main.h`, configura `Serial.begin(115200)` in `setup()`, e stampa un messaggio di diagnostica all'avvio (es. "ESP32 NUT Server Initialized").
+    ref: TASK-02
+  - id: TASK-03
+    title: Verifica e compilazione del firmware di base
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Esegui il comando di compilazione di PlatformIO per verificare che l'ambiente sia configurato correttamente e che il codice di base compili senza errori generando il file binario del firmware.
+
+      ## File Coinvolti
+      - Nessuno (comando di test)
+
+      ## Criteri di Completamento
+      - [ ] La compilazione tramite il comando `pio run` (o comando equivalente di PlatformIO) si conclude con successo (EXIT CODE 0).
+      - [ ] Viene generato il file binario compilato `.pio/build/esp32-s3-devkitc-1/firmware.bin` (o percorso equivalente in base alla board).
+    ref: TASK-03
