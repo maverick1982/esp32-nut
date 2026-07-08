@@ -4,6 +4,7 @@
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
 AppNetworkManager network_mgr;
+NUTServer nut_server;
 
 #ifndef UNIT_TEST
 void setup() {
@@ -27,12 +28,21 @@ void setup() {
         network_mgr.begin(wifi.ssid, wifi.password);
     }
 
-    // Inizializzazione della libreria USBHostUPS (solo se la configurazione è valida)
+    // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
     if (config_mgr.isValid()) {
         if (!usb_ups.begin()) {
             Serial.println("[MAIN] ERRORE: Inizializzazione USBHostUPS fallita!");
         } else {
             Serial.println("[MAIN] USBHostUPS inizializzato correttamente.");
+        }
+
+        // Inizializzazione NUTServer
+        NutConfig nut_config = config_mgr.getNutConfig();
+        NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
+        if (!nut_server.begin(nut_server_config, &usb_ups)) {
+            Serial.println("[MAIN] ERRORE: Inizializzazione NUTServer fallita!");
+        } else {
+            Serial.println("[MAIN] NUTServer avviato correttamente sulla porta 3493.");
         }
     }
 }
@@ -52,6 +62,7 @@ void loop() {
 
     network_mgr.loop();
     usb_ups.loop();
+    nut_server.loop();
 
     uint32_t now = millis();
     static uint32_t last_print = 0;

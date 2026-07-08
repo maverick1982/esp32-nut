@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "config_manager.h"
 #include "network_manager.h"
+#include "NUTServer.h"
 
 // Definizioni globali ed intestazioni del firmware
 #define MONITOR_BAUD_RATE 115200

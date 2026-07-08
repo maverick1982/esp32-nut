@@ -1,0 +1,133 @@
+schema: archetipo/plan/v2
+spec_code: US-007
+body: |-
+  # US-007: Server TCP NUT porta 3493 — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'obiettivo di questa user story è implementare un server TCP sulla porta 3493 conforme al protocollo NUT (Network UPS Tools) per esporre le informazioni dell'UPS Eaton 3S 700 ai client compatibili (es. Home Assistant, upsc).
+
+  1. **Modulo NUTServer**:
+     Verrà creata una libreria locale in `lib/NUTServer/` con la classe `NUTServer` (`NUTServer.h` e `NUTServer.cpp`).
+     - La classe accetterà i riferimenti a `ConfigManager` e `USBHostUPS`.
+     - Inizializzerà `WiFiServer` sulla porta standard NUT `3493`.
+
+  2. **Gestione Sessioni e Concorrenza**:
+     - Verrà gestito un array a dimensione fissa di sessioni `NUTClientSession` (massimo 4) per supportare la concorrenza richiesta senza allocazione dinamica.
+     - Ogni sessione terrà traccia dello stato di connessione, dello stato di autenticazione e dell'ultimo timestamp di attività per forzare la chiusura delle connessioni inattive (timeout di 60 secondi).
+     - Per prevenire blocchi nel firmware, la lettura dei comandi avverrà carattere per carattere, accumulando i dati in un buffer di sessione non bloccante fino al carattere terminatore `\n`.
+
+  3. **Integrazione del Protocollo NUT**:
+     - Il server tokenizzerà i comandi tenendo conto di eventuali argomenti racchiusi tra doppi apici (es. `LIST UPS`).
+     - I comandi implementati includono:
+       - `USERNAME <username>`: Risponde `OK\n`.
+       - `PASSWORD <password>`: Verifica le credenziali rispetto a quelle di `ConfigManager`. Se corrette, autentica la sessione e risponde `OK\n`, altrimenti `ERR ACCESS-DENIED\n`.
+       - `LIST UPS`: Risponde con `BEGIN LIST UPS\n`, `UPS <upsname> "Eaton 3S 700 UPS"\n` ed `END LIST UPS\n`.
+       - `LIST VAR <upsname>`: Risponde con `BEGIN LIST VAR <upsname>\n` seguito dall'elenco delle variabili dell'UPS specificate (es. `device.mfr`, `device.model`, `device.type`, `ups.mfr`, `ups.model`, `ups.status`, `battery.charge`, `input.voltage`) racchiuse tra doppi apici, terminando con `END LIST VAR <upsname>\n`.
+       - `GET VAR <upsname> <varname>`: Risponde con `VAR <upsname> <varname> "<value>"\n`.
+       - `LOGOUT`: Risponde `OK Goodbye\n` e chiude la connessione.
+
+  4. **Integrazione nel Firmware**:
+     - In `src/main.cpp`, `NUTServer` verrà inizializzato in `setup()` e periodicamente aggiornato in `loop()` richiamando `nut_server.loop()`.
+
+  ---
+
+  ## Strategia di Test
+
+  La validazione del server NUT e delle sue risposte avverrà tramite:
+
+  1. **Test Unitari**:
+     - Creazione della suite `test_nut_server` in `test/test_nut_server/test_main.cpp`.
+     - Copertura dei test:
+       - Tokenizzazione dei comandi e parsing dei doppi apici.
+       - Logica di autenticazione e controllo degli accessi.
+       - Formattazione delle risposte per i comandi `LIST` e `GET`.
+
+  2. **Test di Integrazione e Accettazione**:
+     - Compilazione e caricamento del firmware sul target reale.
+     - Verifica di rete con `netcat` o `telnet` simulando sessioni multiple ed interrogazioni interattive.
+     - Test di robustezza: verifica della liberazione dello slot client alla disconnessione e in caso di inattività prolungata (60s).
+tasks:
+  - id: TASK-01
+    title: Creazione della libreria NUTServer
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare e implementare la libreria locale `lib/NUTServer` contenente la classe `NUTServer` responsabile della gestione del server TCP e del protocollo NUT.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h` — Definizione della classe `NUTServer` e delle strutture dati delle sessioni client.
+      - `lib/NUTServer/src/NUTServer.cpp` — Implementazione della gestione delle connessioni multiple non bloccanti, del timeout per inattività e del parsing/risposta dei comandi NUT (`USERNAME`, `PASSWORD`, `LIST UPS`, `LIST VAR`, `GET VAR`, `LOGOUT`).
+
+      ## Criteri di Completamento
+      - [ ] Il server TCP è in ascolto sulla porta 3493.
+      - [ ] Supporta fino a 4 connessioni concorrenti simultanee gestite in modalità non bloccante.
+      - [ ] Se configurata, l'autenticazione tramite `USERNAME` e `PASSWORD` viene applicata prima di consentire query.
+      - [ ] Il comando `LIST UPS` risponde correttamente conformemente allo standard.
+      - [ ] I comandi `LIST VAR` e `GET VAR` leggono i dati reali da `USBHostUPS` (`battery.charge`, `ups.status`, `input.voltage`) ed espongono le variabili richieste.
+      - [ ] Il timeout di inattività rilascia e chiude le sessioni dopo 60 secondi.
+    ref: TASK-01
+  - id: TASK-02
+    title: Creazione dei test unitari per NUTServer
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare una suite di test unitari con Unity per validare il comportamento del modulo `NUTServer`.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — Suite di test Unity sul target per verificare la tokenizzazione dei comandi, il ciclo di autenticazione e il formato delle risposte del server NUT.
+
+      ## Criteri di Completamento
+      - [ ] Il test di tokenizzazione (`splitTokens`) gestisce correttamente argomenti singoli e racchiusi tra doppi apici.
+      - [ ] Il test di validazione delle credenziali rifiuta e accetta correttamente le sessioni client in base alla configurazione.
+      - [ ] Il test della logica delle variabili verifica che le risposte corrispondano ai valori mockati.
+      - [ ] La suite di test compila ed esegue con successo via PlatformIO (`pio test -f test_nut_server`).
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrazione del NUTServer nel ciclo principale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Integrare il `NUTServer` in `src/main.cpp` per avviare il servizio TCP dopo che la connessione Wi-Fi è stata stabilita e aggiornarlo regolarmente.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Inizializzazione del server in `setup()` e chiamata non bloccante a `loop()` principale.
+      - `include/main.h` — Inclusione dell'header `NUTServer.h`.
+
+      ## Criteri di Completamento
+      - [ ] `NUTServer` viene istanziato e inizializzato correttamente in `setup()` solo se la configurazione è valida.
+      - [ ] `nut_server.begin()` viene invocato per avviare l'ascolto sulla porta 3493.
+      - [ ] `nut_server.loop()` viene richiamato nel ciclo di `loop()` principale.
+      - [ ] I log diagnostici mostrano l'avvio del server sulla porta 3493.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verifica dell'integrazione sul target
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Verificare sul target reale l'avvio del server TCP, la connettività di rete multipla concorrente e le risposte del protocollo NUT usando client esterni.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - [ ] Compilazione e caricamento riusciti del firmware con `pio run`.
+      - [ ] Connettendosi con `netcat` o `telnet` da PC (`nc <ESP32_IP> 3493`), il server risponde correttamente ai comandi `USERNAME`, `PASSWORD`, `LIST UPS`, `LIST VAR <ups_name>`, `GET VAR <ups_name> battery.charge` e `LOGOUT`.
+      - [ ] Almeno 2 client concorrenti riescono a rimanere connessi e interrogare il server contemporaneamente.
+      - [ ] Disconnettendo bruscamente un client o lasciandolo inattivo per 60 secondi, le risorse vengono liberate e lo slot del client torna disponibile.
+    ref: TASK-04
