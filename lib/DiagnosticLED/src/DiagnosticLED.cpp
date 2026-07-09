@@ -31,7 +31,7 @@ void DiagnosticLED::begin(uint8_t pin) {
     digitalWrite(NEOPIXEL_POWER_PIN, HIGH);
 
     _pixels.begin();
-    _pixels.setBrightness(50);
+    _pixels.setBrightness(10);
     _pixels.setPixelColor(0, 0, 0, 0); // Spento inizialmente
     _pixels.show();
     
