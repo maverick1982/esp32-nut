@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 3
-status: REVIEW
+status: DONE
 blocked_by:
   - US-008
 scope: MVP
@@ -37,3 +37,5 @@ history:
     at: "2026-07-09T14:59:36Z"
   - status: REVIEW
     at: "2026-07-09T15:03:27Z"
+  - status: DONE
+    at: "2026-07-09T15:26:04Z"
