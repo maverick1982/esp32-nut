@@ -5,6 +5,18 @@ USBHostUPS usb_ups;
 ConfigManager config_mgr;
 AppNetworkManager network_mgr;
 NUTServer nut_server;
+DiagnosticLED diagnostic_led;
+
+// Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
+LedState computeSystemState(bool wifiConnected, bool upsConnected) {
+    if (!wifiConnected) {
+        return LedState::CONNECTING;
+    }
+    if (!upsConnected) {
+        return LedState::ERROR;
+    }
+    return LedState::OPERATIONAL;
+}
 
 #ifndef UNIT_TEST
 void setup() {
@@ -12,6 +24,9 @@ void setup() {
     Serial.begin(MONITOR_BAUD_RATE);
     delay(1000); // Piccolo delay per stabilizzare la connessione seriale
     Serial.println("\n--- ESP32 NUT Server Initialized ---");
+
+    // Inizializzazione del LED diagnostico
+    diagnostic_led.begin(LED_BUILTIN_PIN);
 
     // Inizializzazione di ConfigManager
     if (!config_mgr.begin()) {
@@ -73,6 +88,10 @@ void loop() {
                       usb_ups.getUPSStatus().c_str(),
                       usb_ups.getInputVoltage());
     }
+
+    // Aggiornamento stato LED diagnostico
+    diagnostic_led.setState(computeSystemState(network_mgr.isConnected(), usb_ups.isConnected()));
+    diagnostic_led.update();
 
     delay(10);
 }

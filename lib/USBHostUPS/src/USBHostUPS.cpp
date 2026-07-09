@@ -26,6 +26,10 @@ float USBHostUPS::getInputVoltage() const {
     return _input_voltage;
 }
 
+bool USBHostUPS::isConnected() const {
+    return _initialized && (_dev_handle != NULL);
+}
+
 void USBHostUPS::usb_host_lib_task(void *arg) {
     USBHostUPS *self = static_cast<USBHostUPS*>(arg);
     (void)self;

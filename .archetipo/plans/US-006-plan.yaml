@@ -1,0 +1,336 @@
+schema: archetipo/plan/v2
+spec_code: US-006
+body: |-
+  ## Soluzione Tecnica (Finalizzazione)
+  Dopo un'accurata diagnosi hardware, è stato accertato che il chip WS2812B è collegato al GPIO 48 (in linea con lo schema elettrico `img3.jpg` e smentendo il pinout descrittivo). Inoltre, la resistenza di serie da 0 ohm (R1) non era stata saldata in fabbrica, interrompendo il segnale dati. Effettuato il ponte hardware, il NeoPixel Sweeper ha illuminato con successo il LED sul pin 48.
+
+  Il piano finale consiste nel rimuovere la logica diagnostica (lo sweeper dinamico) e ripristinare la macchina a stati diagnostica definita originariamente:
+  - **CONNECTING**: Lampeggio Giallo (~1 Hz)
+  - **OPERATIONAL**: Verde fisso
+  - **ERROR**: Lampeggio veloce Rosso (~4 Hz)
+
+  Il driver `Adafruit_NeoPixel` verrà allocato staticamente/fissato sul GPIO 48. I test unitari precedentemente commentati per permettere lo sweeping verranno de-commentati e ripristinati, assicurandosi che verifichino i cambi di stato e colore sull'istanza `_pixels`.
+tasks:
+  - id: TASK-01
+    title: Implementazione header DiagnosticLED con enum LedState e interfaccia pubblica
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare il file header `DiagnosticLED.h` nella libreria locale `lib/DiagnosticLED/src/`. Definire l'enum `LedState` con i valori `CONNECTING`, `OPERATIONAL`, `ERROR` e la classe `DiagnosticLED` con i metodi `begin(uint8_t pin)`, `setState(LedState state)`, `update()` e `getState()`. Il metodo `update()` gestisce i pattern di lampeggio in modo non-bloccante usando `millis()`.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h` — Creazione del file header con enum, classe e costanti per i tempi di lampeggio
+
+      ## Criteri di Completamento
+      - [ ] Il file `lib/DiagnosticLED/src/DiagnosticLED.h` esiste e contiene l'enum `LedState` con almeno i valori CONNECTING, OPERATIONAL, ERROR.
+      - [ ] La classe `DiagnosticLED` dichiara i metodi `begin()`, `setState()`, `update()` e `getState()`.
+      - [ ] Sono definite costanti per i periodi di lampeggio (es. `LED_BLINK_SLOW_MS = 1000`, `LED_BLINK_FAST_MS = 125`).
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementazione sorgente DiagnosticLED con logica pattern non-bloccante
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare il file sorgente `DiagnosticLED.cpp` in `lib/DiagnosticLED/src/`. Implementare:
+      - `begin(uint8_t pin)`: configura il pin come OUTPUT e inizializza lo stato a CONNECTING.
+      - `setState(LedState state)`: cambia lo stato corrente e resetta il timer del pattern.
+      - `update()`: in base allo stato corrente, pilota il LED:
+        - `CONNECTING`: toggle del LED ogni `LED_BLINK_SLOW_MS / 2` (lampeggio ~1 Hz, 500ms on / 500ms off).
+        - `OPERATIONAL`: LED acceso fisso (`digitalWrite(pin, HIGH)`).
+        - `ERROR`: toggle del LED ogni `LED_BLINK_FAST_MS / 2` (lampeggio ~4 Hz, ~125ms on / 125ms off).
+      - Usare `millis()` per il timing non-bloccante. Nessuna chiamata a `delay()`.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp` — Creazione del file con l'implementazione completa della classe
+
+      ## Criteri di Completamento
+      - [ ] Il file `lib/DiagnosticLED/src/DiagnosticLED.cpp` esiste e implementa tutti i metodi dichiarati nell'header.
+      - [ ] Il pattern CONNECTING produce un lampeggio lento (~1 Hz).
+      - [ ] Il pattern OPERATIONAL tiene il LED acceso fisso.
+      - [ ] Il pattern ERROR produce un lampeggio rapido (~4 Hz).
+      - [ ] Nessuna chiamata a `delay()` nel codice.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiunta metodo isConnected() a USBHostUPS
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere un metodo pubblico `bool isConnected() const` alla classe `USBHostUPS` che espone lo stato di connessione del dispositivo USB. Il valore si basa sul campo `_initialized` già presente nella classe (o un flag equivalente che indica se un dispositivo UPS è stato enumerato con successo ed è ancora connesso). Questo metodo è necessario per determinare lo stato di sistema nel loop principale.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiunta dichiarazione `bool isConnected() const`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Aggiunta implementazione che ritorna lo stato di connessione basato su `_initialized` e `_dev_handle`
+
+      ## Criteri di Completamento
+      - [ ] Il metodo `isConnected()` è dichiarato nell'header e implementato nel sorgente.
+      - [ ] Il metodo ritorna `true` quando un dispositivo UPS è enumerato e connesso, `false` altrimenti.
+      - [ ] Il progetto compila senza errori dopo la modifica.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrazione DiagnosticLED nel loop principale di main.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Integrare la classe `DiagnosticLED` nel file `src/main.cpp`:
+      1. Includere `DiagnosticLED.h`.
+      2. Dichiarare un'istanza globale `DiagnosticLED diagnostic_led`.
+      3. In `setup()`, chiamare `diagnostic_led.begin(LED_PIN)` con il pin del LED integrato (GPIO 48 per ESP32-S3-DevKitC-1, definito come costante in `main.h` o `DiagnosticLED.h`).
+      4. In `loop()`, calcolare lo stato di sistema:
+         - Se `!network_mgr.isConnected()` → `diagnostic_led.setState(LedState::CONNECTING)`
+         - Se `network_mgr.isConnected() && !usb_ups.isConnected()` → `diagnostic_led.setState(LedState::ERROR)`
+         - Se `network_mgr.isConnected() && usb_ups.isConnected()` → `diagnostic_led.setState(LedState::OPERATIONAL)`
+      5. Chiamare `diagnostic_led.update()` ad ogni iterazione del loop.
+      6. Aggiornare anche l'header `include/main.h` per includere `DiagnosticLED.h`.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Aggiunta inclusione, istanza globale, inizializzazione in setup() e logica di stato + update in loop()
+      - `include/main.h` — Aggiunta `#include "DiagnosticLED.h"`
+
+      ## Criteri di Completamento
+      - [ ] `DiagnosticLED.h` è incluso in `main.h`.
+      - [ ] Un'istanza `diagnostic_led` è dichiarata e inizializzata in `setup()` con il pin corretto.
+      - [ ] Il loop calcola lo stato di sistema combinando `network_mgr.isConnected()` e `usb_ups.isConnected()` e chiama `setState()` di conseguenza.
+      - [ ] `diagnostic_led.update()` è chiamato ad ogni iterazione del loop.
+      - [ ] Il progetto compila senza errori.
+    ref: TASK-04
+  - id: TASK-05
+    title: Test unitari per la macchina a stati DiagnosticLED
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Creare test unitari per la classe `DiagnosticLED` in `test/test_diagnostic_led/test_diagnostic_led.cpp` usando il framework Unity integrato in PlatformIO. I test devono verificare:
+      1. **Stato iniziale:** dopo `begin()`, lo stato è `CONNECTING`.
+      2. **Transizioni di stato:** `setState()` cambia correttamente lo stato e `getState()` lo riflette.
+      3. **Pattern OPERATIONAL:** dopo `setState(OPERATIONAL)`, il LED è acceso fisso.
+      4. **Pattern CONNECTING:** dopo `setState(CONNECTING)`, il LED alterna ON/OFF con periodo ~1000ms.
+      5. **Pattern ERROR:** dopo `setState(ERROR)`, il LED alterna ON/OFF con periodo ~250ms.
+
+      Per i test in ambiente nativo (non su hardware), mockare `digitalWrite` e `millis()` per verificare i pattern senza GPIO reale.
+
+      ## File Coinvolti
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp` — Creazione del file di test con i casi sopra descritti
+
+      ## Criteri di Completamento
+      - [ ] Il file di test esiste e contiene almeno 5 test case che coprono inizializzazione, transizioni e i 3 pattern.
+      - [ ] I test passano con `pio test` (ambiente nativo o embedded a seconda della configurazione).
+      - [ ] Nessun test fallito o warning critico.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test di integrazione della logica di stato nel main loop
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Creare o estendere i test per verificare che la logica di calcolo dello stato di sistema in `main.cpp` produca il `LedState` corretto per ogni combinazione di stati. Testare le seguenti combinazioni:
+      1. Wi-Fi disconnesso + UPS disconnesso → `CONNECTING`
+      2. Wi-Fi disconnesso + UPS connesso → `CONNECTING`
+      3. Wi-Fi connesso + UPS disconnesso → `ERROR`
+      4. Wi-Fi connesso + UPS connesso → `OPERATIONAL`
+
+      Si può estrarre la logica di calcolo dello stato in una funzione helper `LedState computeSystemState(bool wifiConnected, bool upsConnected)` per facilitare il test unitario.
+
+      ## File Coinvolti
+      - `test/test_system_state/test_system_state.cpp` — Creazione del file di test per la logica di determinazione dello stato
+      - `src/main.cpp` — Eventuale refactoring per estrarre `computeSystemState()` come funzione testabile
+
+      ## Criteri di Completamento
+      - [ ] Tutti e 4 i casi combinatori sono testati.
+      - [ ] I test passano con `pio test`.
+      - [ ] La funzione `computeSystemState()` (se estratta) è coerente con la logica in `loop()`.
+    ref: TASK-06
+  - id: TASK-07
+    title: Aggiunta dipendenza Adafruit NeoPixel
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere la dipendenza per pilotare il LED RGB WS2812 al file di configurazione di PlatformIO.
+
+      ## File Coinvolti
+      - `platformio.ini` — Aggiungere `adafruit/Adafruit NeoPixel@^1.12.0` sotto `lib_deps`.
+
+      ## Criteri di Completamento
+      - [ ] `adafruit/Adafruit NeoPixel` è presente in `platformio.ini`.
+      - [ ] Il progetto scarica correttamente la dipendenza durante il build.
+    ref: TASK-07
+  - id: TASK-08
+    title: Refactoring DiagnosticLED per usare Adafruit NeoPixel
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      Modificare `DiagnosticLED` per utilizzare un oggetto `Adafruit_NeoPixel` invece di `digitalWrite` per rispondere al rework feedback. Il pin per ESP32-S3-DevKitC-1 è GPIO 48.
+      - Includere `<Adafruit_NeoPixel.h>` in `DiagnosticLED.h`.
+      - Istanziare o includere `Adafruit_NeoPixel` come membro privato della classe (allocato dinamicamente o staticamente con 1 LED).
+      - Modificare `begin()` per inizializzare l'oggetto NeoPixel (chiamare `begin()`, `setBrightness()`, `show()`).
+      - Aggiungere il getter `uint32_t getCurrentColor() const;` alla classe.
+      - Modificare `setState()` e `update()` per usare `setPixelColor()` e `show()` invece di `digitalWrite()`.
+      - Impostare i colori: CONNECTING = Giallo (es. `Color(255, 255, 0)`), OPERATIONAL = Verde (`Color(0, 255, 0)`), ERROR = Rosso (`Color(255, 0, 0)`). Per spegnere usare NERO (`Color(0, 0, 0)`).
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+
+      ## Criteri di Completamento
+      - [ ] L'utilizzo di `digitalWrite` sul LED diagnostico è stato rimosso.
+      - [ ] I pattern di lampeggio e stati usano colori sul NeoPixel.
+      - [ ] `getCurrentColor()` espone l'ultimo colore impostato.
+    ref: TASK-08
+  - id: TASK-09
+    title: Aggiornamento Test Unitari DiagnosticLED per NeoPixel
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      Aggiornare i test unitari in `test_diagnostic_led.cpp` per verificare lo stato interno del NeoPixel al posto di leggere il pin con `digitalRead`.
+
+      ## File Coinvolti
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp`
+
+      ## Criteri di Completamento
+      - [ ] I test in `test_diagnostic_led.cpp` sostituiscono le chiamate `digitalRead(TEST_PIN)` con `led.getCurrentColor()`.
+      - [ ] Verificano che durante i blink i colori si alternino tra il colore di stato (Es. Giallo per CONNECTING) e il colore spento (Nero).
+      - [ ] I test compilano ed eseguono correttamente con `pio test`.
+    ref: TASK-09
+  - id: TASK-10
+    title: Abilitazione alimentazione NeoPixel su ESP32-S3
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sulle board ESP32-S3, il NeoPixel richiede spesso che un pin di alimentazione specifico venga attivato per funzionare. Per la DevKitC-1 e cloni, questo pin è tipicamente il GPIO 38.
+      Nel metodo `begin()` di `DiagnosticLED.cpp` aggiungeremo il setup di questo pin di alimentazione (impostandolo ad OUTPUT e su HIGH).
+      Se la libreria core di Arduino per ESP32 definisce la macro `RGB_BUILTIN`, useremo quella; altrimenti faremo fallback sul PIN 48 per i dati. Inoltre definiremo una costante `NEOPIXEL_POWER_PIN` a 38.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+
+      ## Criteri di Completamento
+      - [ ] In `DiagnosticLED.h`, viene definita una macro `NEOPIXEL_POWER_PIN` (valore 38).
+      - [ ] In `DiagnosticLED.cpp` `begin()`, il `NEOPIXEL_POWER_PIN` viene configurato come `OUTPUT` e scritto su `HIGH`.
+      - [ ] La compilazione completa senza errori.
+    ref: TASK-10
+  - id: TASK-11
+    title: Migrazione da Adafruit_NeoPixel a neopixelWrite (Core)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      In base all'ultimo feedback, Adafruit_NeoPixel in combinazione con il GPIO 48 non ha successo. Vogliamo sfruttare la funzione core nativa di Arduino ESP32 (`neopixelWrite`) pensata specificamente per pilotare `RGB_BUILTIN` senza driver RMT esterni che spesso conflittano sull'ESP32-S3.
+      1. In `platformio.ini`, rimuovere `adafruit/Adafruit NeoPixel` dalle dipendenze.
+      2. In `DiagnosticLED.h`, rimuovere l'inclusione di Adafruit_NeoPixel, l'oggetto `_pixels`, e usare macro colore semplici in formato esadecimale (es. `0x00RRGGBB`). Mantenere la variabile per salvare lo stato dei colori.
+      3. In `DiagnosticLED.cpp` aggiornare `setPixelColorAndShow` per chiamare `neopixelWrite(RGB_BUILTIN, r, g, b)`. Aggiungere un piccolo delay di 10ms dopo l'accensione del pin di potenza prima di fare il primo `neopixelWrite`.
+      4. Rimuovere ogni riferimento ad Adafruit_NeoPixel anche nei file di test (`test_diagnostic_led.cpp`), sostituendo la logica dei colori con semplici numeri `uint32_t` o define di costanti.
+
+      ## File Coinvolti
+      - `platformio.ini`
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La dipendenza adafruit viene rimossa.
+      - [ ] Il metodo `update()` usa `neopixelWrite(RGB_BUILTIN, ...)` estraendo le componenti R, G, B dal colore salvato.
+      - [ ] I test unitari sono refattorizzati per compilare con le nuove costanti dei colori e verificano che `getCurrentColor()` esponga il valore HEX corretto.
+      - [ ] Il codice compila correttamente.
+    ref: TASK-11
+  - id: TASK-12
+    title: Implementazione della routine diagnostica Pin Sweeper
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Poiché non conosciamo il pin esatto del NeoPixel, implementiamo una routine temporanea di diagnostica. Sostituiamo il corpo del metodo `DiagnosticLED::update()` con un ciclo che prova una serie di pin noti per ESP32-S3: `8, 21, 33, 35, 38, 48, 4, 18, 47, 45`.
+      Il metodo manterrà internamente l'indice del pin testato correntemente e lo cambierà ogni 2 secondi, usando sempre `millis()` per non bloccare il loop.
+      Ad ogni cambio pin, scriverà su `Serial` il messaggio `"*** DIAGNOSTICA NEOPIXEL: Provo il PIN %d ***\n"` e invierà un colore (es. Rosso acceso) al pin corrente tramite `rgbLedWrite(pin, 255, 0, 0)`.
+      Sui pin precedenti che sono stati testati invierà un colore spento `rgbLedWrite(pin_precedente, 0, 0, 0)` prima di passare al successivo per evitare che rimangano tutti accesi se ci sono più LED.
+      Una volta scoperto il pin corretto, questo task servirà da base per impostare definitivamente il PIN corretto e annullare questa routine temporanea.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+
+      ## Criteri di Completamento
+      - [ ] `DiagnosticLED.h` dichiara i membri necessari per tenere traccia dell'indice del pin diagnostico e del tempo trascorso.
+      - [ ] `DiagnosticLED::update()` ignora lo stato di sistema e si limita a scorrere l'array di pin, stampare su `Serial` e chiamare `rgbLedWrite(pin, r, g, b)`.
+      - [ ] Il codice compila senza errori.
+    ref: TASK-12
+  - id: TASK-13
+    title: Configurazione Definitiva NeoPixel su GPIO 47
+    type: Fix
+    status: DONE
+    body: "## Descrizione\nSostituiamo la routine di diagnostica con la soluzione finale basata sul pin 47 fornito dall'utente. Per massimizzare la compatibilità hardware con i cloni cinesi WS2812/SK6812 (che potrebbero non digerire bene la funzione nativa `rgbLedWrite`), ripristineremo `Adafruit_NeoPixel`.\nInoltre, rimuoveremo completamente il blocco forzato del `GPIO 38` come power pin, poiché tenerlo HIGH potrebbe aver interferito con il funzionamento della scheda durante il precedente Pin Sweeper.\n\n1. In `platformio.ini`, ripristinare la libreria `adafruit/Adafruit NeoPixel@^1.12.0` in `lib_deps`.\n2. In `DiagnosticLED.h`: \n   - Includere `Adafruit_NeoPixel.h`\n   - Impostare `#define LED_BUILTIN_PIN 47` e rimuovere la definizione `NEOPIXEL_POWER_PIN`.\n   - Rimuovere i campi dello sweeper (`_sweepIndex`) e reintrodurre `Adafruit_NeoPixel _pixels`.\n3. In `DiagnosticLED.cpp`: \n   - Re-inizializzare `_pixels(1, LED_BUILTIN_PIN, NEO_GRB + NEO_KHZ800)` nel costruttore.\n   - Ripristinare `setPixelColorAndShow` affinché usi `_pixels.setPixelColor()` e `_pixels.show()`.\n   - In `begin()`, rimuovere pinMode e digitalWrite per il power pin 38. Chiamare `_pixels.begin()`, `setBrightness(50)` e `show()`.\n   - In `update()`, **ripristinare la logica originale** a stati (CONNECTING = blink giallo, OPERATIONAL = fisso verde, ERROR = blink veloce rosso) rimpiazzando lo sweeper.\n4. In `test_diagnostic_led.cpp`: aggiornare le macro colore se necessario.\n\n## File Coinvolti\n- `platformio.ini`\n- `lib/DiagnosticLED/src/DiagnosticLED.h`\n- `lib/DiagnosticLED/src/DiagnosticLED.cpp`\n- `test/test_diagnostic_led/test_diagnostic_led.cpp`\n\n## Criteri di Completamento\n- [ ] La libreria Adafruit è presente in `platformio.ini`.\n- [ ] Il codice usa il pin 47 fisso.\n- [ ] Non vi sono più pin di potenza forzati a HIGH.\n- [ ] Il pattern a stati di connettività in `update()` è stato ripristinato.\n- [ ] Compilazione e test passano."
+    ref: TASK-13
+  - id: TASK-14
+    title: Implementazione NeoPixel Sweeper con Adafruit_NeoPixel
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      A causa di incongruenze tra schema elettrico (che riporta GPIO 48) e pinout del fornitore (che riporta GPIO 47), modifichiamo la classe `DiagnosticLED` per eseguire uno sweeping su un array limitato di pin: `{48, 47, 38, 21, 35, 33, 8, 45, 4, 18}`.
+      La particolarità di questo sweeper è che **DEVE utilizzare `Adafruit_NeoPixel`** e non `rgbLedWrite()`, per assicurare che il timing del segnale sia digeribile dalla board.
+      1. In `DiagnosticLED.h`: rimpiazzare l'istanza privata `_pixels` con un puntatore `Adafruit_NeoPixel* _pixels;`. Aggiungere un membro `uint8_t _sweepIndex;` (inizializzato a 0 nel costruttore).
+      2. In `DiagnosticLED.cpp` `begin()`: allocare dinamicamente il primo pixel `_pixels = new Adafruit_NeoPixel(1, testPins[0], NEO_GRB + NEO_KHZ800);`, avviarlo e impostare rosso brillante.
+      3. In `DiagnosticLED.cpp` `update()`: ogni 2 secondi, spegnere il led corrente (`_pixels->setPixelColor(0,0)`, `_pixels->show()`), distruggere l'oggetto (`delete _pixels;`), avanzare l'indice dell'array, stampare su `Serial` (es. `"*** DIAGNOSTICA NEOPIXEL (Adafruit): Provo il PIN %d ***\n"`), e **riallocare** `_pixels = new Adafruit_NeoPixel(1, testPins[_sweepIndex], ...);`. Poi fare `begin()`, `setBrightness(255)` e mandare Rosso fisso.
+
+      Per i test unitari (`test_diagnostic_led.cpp`): commentare tutto temporaneamente in modo che non fallisca la compilazione, visto che il comportamento in questo step è diagnostico. La signature di `setPixelColorAndShow()` può semplicemente inoltrare al puntatore `if(_pixels) _pixels->setPixelColor...` oppure rimanere inutilizzata finché lo sweeper è attivo.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `_pixels` è un puntatore gestito dinamicamente.
+      - [ ] `update()` cambia pin ogni 2 secondi, allocando un nuovo oggetto `Adafruit_NeoPixel` per azzerare il canale RMT e garantire pulizia del segnale.
+      - [ ] Il PIN corrente viene stampato sulla Seriale.
+      - [ ] Nessun errore di sintassi, compilazione ok.
+    ref: TASK-14
+  - id: TASK-15
+    title: Ripristino logica diagnostica su GPIO 48
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Dopo aver identificato il GPIO 48 tramite ponte hardware e sweeper software, ripristiniamo la logica funzionale del LED, eliminando il codice di test temporaneo.
+      1. In `DiagnosticLED.h`:
+         - Impostare la macro `LED_BUILTIN_PIN 48` in caso fosse stata cambiata.
+         - Rimuovere il membro `_sweepIndex` e ripristinare `Adafruit_NeoPixel _pixels;` al posto del puntatore `Adafruit_NeoPixel* _pixels;` per una gestione della memoria statica e più sicura, visto che il pin non deve più cambiare a runtime.
+      2. In `DiagnosticLED.cpp`:
+         - Nel costruttore, inizializzare `_pixels(1, LED_BUILTIN_PIN, NEO_GRB + NEO_KHZ800)`.
+         - In `begin()`: chiamare `_pixels.setPin(_pin); _pixels.begin(); _pixels.setBrightness(50); _pixels.show(); setPixelColorAndShow(COLOR_OFF);` per l'avvio.
+         - In `update()`: ripristinare integralmente lo `switch (_state)` originale che gestisce i 3 pattern (`CONNECTING`, `OPERATIONAL`, `ERROR`) tramite `millis()`, eliminando il loop di test `testPins[]` e le stampe seriali.
+         - Ripristinare `setPixelColorAndShow()` senza la sintassi puntatore (`_pixels.setPixelColor(...)`).
+      3. In `test_diagnostic_led.cpp`:
+         - De-commentare (rimuovere i `return;` inseriti all'inizio) tutte le funzioni di test unitario, in modo da riattivare la verifica della corretta logica della macchina a stati.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h`
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp`
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Lo sweeper è rimosso; `update()` reagisce solo ai cambi di `_state` e gestisce i blink non-bloccanti.
+      - [ ] `_pixels` non è più un puntatore allocato dinamicamente.
+      - [ ] Tutti i test unitari passano correttamente su ambiente nativo con `pio test`.
+      - [ ] La compilazione base con `pio run` ha successo senza avvisi.
+    ref: TASK-15

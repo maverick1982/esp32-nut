@@ -6,11 +6,11 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 blocked_by:
   - US-000
 scope: MVP
-body: |-
+body: |
   #### US-006: LED di Stato Diagnostico
 
   **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
@@ -28,6 +28,112 @@ body: |-
   - [ ] Il firmware deve pilotare il LED integrato o un LED NeoPixel/RGB sulla scheda ESP32-S3.
   - [ ] Devono essere definiti almeno 3 pattern visivi distinguibili per: connessione Wi-Fi in corso, funzionamento nominale, ed errore hardware/USB.
   - [ ] I pattern LED devono aggiornarsi tempestivamente al variare dello stato di rete o USB.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il LED RGB non sta funzionando. C'è un led rosso sempre acceso, uno blu che si accende durante la fase di flash del firmware ed uno verde che fa un flash velocissimo ad ogni ciclo di monitoraggio. Il LED RGB (WS2812/Neopixel) integrato sulla board ESP32-S3-DevKitC-1 rimane sempre spento. La libreria corrente controlla il pin sbagliato o usa un protocollo errato (digitalWrite invece del protocollo WS2812).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il LED RGB continua a non funzionare, non si accende mai. Anche usando la libreria Adafruit_NeoPixel sul pin 48, il LED rimane spento. Potrebbe essere necessario abilitare un pin di alimentazione specifico per il NeoPixel (es. NEOPIXEL_POWER, che su alcune board ESP32-S3 è necessario per dare corrente al WS2812), oppure il pin dati non è il 48, oppure la luminosità/protocollo richiede un timing diverso.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il LED RGB continua ad essere spento. L'impostazione del GPIO 38 a HIGH e l'uso di Adafruit_NeoPixel sul GPIO 48 non ha risolto il problema. Potrebbe esserci una discrepanza nei pin effettivi sulla specifica board fisica in uso, o la libreria NeoPixel richiede un delay/reset prima dell'inizializzazione, o il pin dati e power sono invertiti o diversi (es. alcune board usano il pin 48 per l'alimentazione e un altro per i dati).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il LED RGB continua a non accendersi nonostante l'uso della funzione core `neopixelWrite`. Abbiamo bisogno di informazioni hardware specifiche sulla scheda in uso per evitare ulteriori tentativi a vuoto, poiché i pin 48 (dati) e 38 (power) non sembrano essere corretti per questa specifica board, oppure la board non monta un LED WS2812 (NeoPixel).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il pin sweeper non ha prodotto risultati. Tuttavia, l'utente ha trovato documentazione fotografica dal produttore che indica esplicitamente che il WS2812 è collegato al GPIO 47. Rimuovere il Pin Sweeper temporaneo e impostare in modo definitivo GPIO 47 come target di `neopixelWrite`/`rgbLedWrite`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il LED continua a non accendersi anche impostando stabilmente il GPIO 47 e utilizzando la libreria Adafruit_NeoPixel. Questo suggerisce che il problema risieda in una componente hardware (es. pin di alimentazione specifico per l'RGB ancora sconosciuto, difetto hardware) o in un malinteso della documentazione (es. l'immagine potrebbe riferirsi a una revisione diversa della scheda).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Nonostante lo sweeper abbia testato dinamicamente tutti i pin candidati con la libreria corretta (Adafruit_NeoPixel) e l'alimentazione sia a 4.7V, il LED continua a rimanere spento. È fortissimo il sospetto di un problema puramente hardware: potrebbe trattarsi di una resistenza di serie (es. R1 da 0 ohm vista nello schema) non saldata in fabbrica, oppure il LED stesso è difettoso/bruciato, o persino un modello non compatibile (es. RGB analogico). La soluzione via software potrebbe essere esaurita.
 history:
   - status: TODO
     at: "2026-07-08T15:14:58Z"
+  - status: PLANNED
+    at: "2026-07-09T18:27:51Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T18:31:05Z"
+  - status: REVIEW
+    at: "2026-07-09T18:49:03Z"
+  - status: TODO
+    at: "2026-07-09T20:21:04Z"
+  - status: PLANNED
+    at: "2026-07-09T20:25:23Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T20:27:16Z"
+  - status: REVIEW
+    at: "2026-07-09T20:33:00Z"
+  - status: TODO
+    at: "2026-07-09T20:36:04Z"
+  - status: PLANNED
+    at: "2026-07-09T20:37:52Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T20:39:07Z"
+  - status: REVIEW
+    at: "2026-07-09T20:40:14Z"
+  - status: TODO
+    at: "2026-07-09T20:41:56Z"
+  - status: PLANNED
+    at: "2026-07-09T20:44:05Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T20:46:22Z"
+  - status: REVIEW
+    at: "2026-07-09T20:54:06Z"
+  - status: TODO
+    at: "2026-07-09T20:57:46Z"
+  - status: PLANNED
+    at: "2026-07-09T21:06:19Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T21:08:04Z"
+  - status: REVIEW
+    at: "2026-07-09T21:10:55Z"
+  - status: TODO
+    at: "2026-07-09T21:17:18Z"
+  - status: PLANNED
+    at: "2026-07-09T21:21:35Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T21:23:03Z"
+  - status: REVIEW
+    at: "2026-07-09T21:32:32Z"
+  - status: TODO
+    at: "2026-07-09T21:34:54Z"
+  - status: PLANNED
+    at: "2026-07-09T21:53:33Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T21:54:18Z"
+  - status: REVIEW
+    at: "2026-07-09T21:57:22Z"
+  - status: TODO
+    at: "2026-07-09T22:00:17Z"
+  - status: PLANNED
+    at: "2026-07-09T22:28:00Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T22:29:37Z"
+  - status: REVIEW
+    at: "2026-07-09T22:33:43Z"
+  - status: DONE
+    at: "2026-07-09T22:37:19Z"

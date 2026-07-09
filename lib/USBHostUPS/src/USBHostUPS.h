@@ -18,6 +18,7 @@ public:
     String getUPSStatus() const;
     float getInputVoltage() const;
     void decodeReport(uint8_t report_id, const uint8_t *data, size_t length);
+    bool isConnected() const;
 
 private:
     static void usb_host_lib_task(void *arg);
