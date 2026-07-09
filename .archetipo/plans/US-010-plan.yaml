@@ -1,0 +1,110 @@
+schema: archetipo/plan/v2
+spec_code: US-010
+body: |-
+  # US-010: Test di Integrazione con Home Assistant — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-09
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'obiettivo di questa user story è garantire che il server TCP dell'ESP32-S3 sia pienamente compatibile con l'integrazione ufficiale NUT (Network UPS Tools) di Home Assistant, garantendo stabilità di connessione, aggiornamenti tempestivi e assenza di timeout.
+
+  L'integrazione di Home Assistant si basa sul client Python `pynut`. Questo client si connette alla porta 3493, effettua l'autenticazione con `USERNAME`/`PASSWORD` (se abilitata) e invia query periodiche come `LIST UPS` e `LIST VAR <ups>`. Le modifiche tecniche consisteranno in:
+  1. **Gestione Connessioni Persistenti e Riconnessioni**: Verifica e ottimizzazione in `NUTServer.cpp` della gestione dei socket per evitare memory leak o saturazione delle risorse di rete in caso di connessioni non chiuse correttamente dal client.
+  2. **Strumentazione di Emulazione Host**: Scrittura di uno script di test di integrazione Python (`test/integration/test_ha_emulator.py`) che agisca da client NUT, simulando il comportamento esatto di Home Assistant per validare la robustezza del protocollo.
+
+  ---
+
+  ## Strategia di Test
+
+  La strategia di test per l'integrazione si articola in:
+
+  1. **Test di Integrazione Automatizzato (Host-Side)**:
+     - Sviluppo di uno script Python (`test/integration/test_ha_emulator.py`) per connettersi all'ESP32, eseguire la sequenza di autenticazione e interrogazione e verificare la conformità.
+     - Esecuzione di stress test per verificare che connessioni rapide consecutive non portino al blocco del server.
+
+  2. **Test End-to-End con Home Assistant e Hardware**:
+     - Aggiunta dell'integrazione in Home Assistant configurando l'IP dell'ESP32-S3.
+     - Verifica della comparsa delle entità (`battery.charge`, `input.voltage`, `ups.status`) con aggiornamenti in tempo reale.
+     - Simulazione di blackout (scollegamento alimentazione UPS) e ripristino, verificando la propagazione dei cambi di stato entro 10 secondi.
+tasks:
+  - id: TASK-01
+    title: Sviluppo di uno script di test di integrazione Python per simulare Home Assistant
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Creare uno script Python sul lato host (`test/integration/test_ha_emulator.py`) che simuli le chiamate effettuate dal client NUT di Home Assistant (PyNUTClient), testando la conformità del server NUT.
+
+      **Blockers:** Nessuno.
+
+      ## File Coinvolti
+      - `test/integration/test_ha_emulator.py` — Creazione dello script di emulazione client NUT.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Creare la cartella `test/integration/` se non esiste.
+        2. Scrivere lo script Python usando `socket` o la libreria `pynut2` per connettersi al server NUT dell'ESP32-S3.
+        3. Lo script deve inviare la sequenza: `USERNAME`, `PASSWORD`, `LIST UPS`, `LIST VAR <ups>` e verificare le risposte.
+        4. Aggiungere test di robustezza inviando pacchetti frammentati o comandi consecutivi rapidi.
+      - **Verify:** Eseguire lo script Python puntando all'IP dell'ESP32 e assicurarsi che restituisca successo senza fallimenti del protocollo.
+      - **Done:**
+        - [ ] Lo script Python compila ed esegue senza errori di sintassi.
+        - [ ] Lo script valida con successo la connessione e il parsing dei comandi.
+        - [ ] Lo script segnala correttamente eventuali deviazioni dal protocollo NUT standard.
+    ref: TASK-01
+  - id: TASK-02
+    title: Ottimizzazione della stabilità del NUTServer sotto connessioni persistenti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Ottimizzare la gestione dei client attivi in `NUTServer` per garantire la robustezza contro timeout di socket, connessioni parzialmente aperte o riconnessioni rapide provocate da Home Assistant.
+
+      **Blockers:** Richiede il completamento del test in `TASK-01`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp`
+        - **Read:** Esaminare la logica in `loop()` per la gestione del timeout e la disconnessione dei client.
+        - **Change:** Assicurarsi che le connessioni inattive vengano chiuse prontamente e che i socket vengano liberati correttamente. Gestire in modo non bloccante la scrittura dei dati per evitare che client lenti blocchino l'intero firmware.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Modificare `lib/NUTServer/src/NUTServer.cpp` affinando la chiusura dei socket.
+        2. Testare la stabilità con lo script sviluppato in `TASK-01`.
+      - **Verify:** Verificare che il codice compili correttamente per ESP32-S3.
+      - **Done:**
+        - [ ] Il firmware gestisce disconnessioni improvvise senza memory leak.
+        - [ ] Il server gestisce correttamente client multipli contemporanei fino al limite configurato.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verifica E2E dell'integrazione fisica con Home Assistant
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Eseguire la validazione fisica finale dell'integrazione di Home Assistant con il dispositivo reale.
+
+      **Blockers:** Richiede il completamento di `TASK-02`.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Configurare e avviare l'integrazione Network UPS Tools (NUT) su un'istanza Home Assistant, puntando all'IP dell'ESP32-S3.
+        2. Verificare che l'UPS venga rilevato con il nome corretto e che vengano create le entità `battery.charge`, `input.voltage`, `ups.status`.
+        3. Staccare l'alimentazione all'UPS Eaton per forzare lo stato a `OB` (On Battery).
+      - **Verify:** Verificare su Home Assistant che lo stato cambi in `OB` entro 10 secondi dall'evento fisico. Ricollegare e verificare il ripristino a `OL`.
+      - **Done:**
+        - [ ] Integrazione configurata con successo in Home Assistant.
+        - [ ] Entità create e funzionanti con aggiornamenti in tempo reale.
+        - [ ] Cambio di stato propagato e registrato entro 10 secondi.
+    ref: TASK-03

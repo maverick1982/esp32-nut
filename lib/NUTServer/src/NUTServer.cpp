@@ -94,6 +94,10 @@ void NUTServer::loop() {
                     _clients[slot].stop();
                 }
                 _clients[slot] = newClient;
+                
+                // Ottimizzazione stabilità: timeout ridotto a 200ms per evitare blocchi
+                _clients[slot].setTimeout(200);
+                
                 _clientActive[slot] = true;
                 _clientAuthenticated[slot] = false;
                 _clientLastActivity[slot] = millis();
