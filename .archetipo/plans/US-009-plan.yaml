@@ -1,0 +1,110 @@
+schema: archetipo/plan/v2
+spec_code: US-009
+body: "# US-009: Autenticazione Client NUT — Piano di Implementazione\n\n**Generato da:** Team di Pianificazione ARchetipo\n**Data:** 2026-07-09\n\n---\n\n## Soluzione Tecnica\n\nL'obiettivo di questa user story è garantire che il server NUT supporti l'autenticazione tramite i comandi `USERNAME` e `PASSWORD`, validandoli a fronte delle credenziali impostate nel file `/config.json` su LittleFS. \n\nL'approccio prevede:\n1. **Gestione Configurazione**: Il modulo `ConfigManager` carica le credenziali (`username` e `password`) dal file `/config.json` e le rende disponibili per l'inizializzazione del server.\n2. **Stato Sessione Client**: In `NUTServer`, ciascuno slot gestisce lo stato di autenticazione tramite due array interni: `_clientUsername` e `_clientAuthenticated`.\n3. **Parsing Comandi**: \n   - `USERNAME <user>`: memorizza lo username per lo slot corrente e risponde con `OK`.\n   - `PASSWORD <pass>`: verifica lo username precedentemente memorizzato e la password fornita con i dati di configurazione del server. Se corretti, imposta `_clientAuthenticated[slot] = true` e risponde `OK`. Altrimenti, restituisce `ERR ACCESS-DENIED`.\n4. **Controllo Accessi**: Se l'autenticazione è configurata (username e password non vuoti in `/config.json`), qualsiasi comando di interrogazione (`LIST`, `GET`) viene bloccato e respinto con `ERR ACCESS-DENIED` si la sessione non è autenticata.\n\n---\n\n## Strategia di Test\n\nLa conformità dei requisiti di autenticazione sarà verificata tramite:\n1. **Test Unitari (Unity)**:\n   - Verifica che l'invio di comandi (`LIST UPS`, `GET VAR`) prima dell'autenticazione fallisca con `ERR ACCESS-DENIED`.\n   - Verifica che l'invio di `USERNAME` valido risponda `OK`.\n   - Verifica che l'invio di `PASSWORD` errata risponda `ERR ACCESS-DENIED`.\n   - Verifica che l'invio di `PASSWORD` corretta risponda `OK` e sblocchi i comandi di interrogazione.\n2. **Validazione sul Target (E2E)**:\n   - Connessione TCP manuale tramite Netcat o Telnet per simulare e validare interattivamente l'accesso sicuro.\n"
+tasks:
+  - id: TASK-01
+    title: Configurazione e Caricamento Credenziali NUT
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Caricare i campi `username` e `password` dal file `/config.json` e passarli a `NUTServer` all'avvio.
+
+      **Blockers:** Nessuno.
+
+      ## File Coinvolti
+      - `src/config_manager.cpp`
+        - **Read:** Verificare l'estrazione dell'oggetto `nut`.
+        - **Change:** Estrarre i campi stringa `username` e `password` inserendoli nella struttura `NutConfig`.
+      - `src/main.cpp`
+        - **Read:** Verificare l'avvio del server NUT.
+        - **Change:** Passare `nut_config.username` e `nut_config.password` al costruttore/inizializzatore di `NUTServerConfig`.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Aggiornare `config_manager.cpp` per leggere `username` e `password` da LittleFS.
+        2. Modificare `main.cpp` per alimentare la configurazione del server.
+      - **Verify:** Compilare con PlatformIO per assicurare l'assenza di errori.
+      - **Done:**
+        - [ ] Le credenziali vengono lette correttamente da LittleFS.
+        - [ ] La configurazione viene passata con successo a `NUTServer` all'inizializzazione.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementazione Gestione Comandi USERNAME/PASSWORD e Controllo Accessi
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Gestire lo stato di autenticazione per sessione client e intercettare i comandi non autorizzati.
+
+      **Blockers:** Richiede il completamento di `TASK-01`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h`
+        - **Read:** Verificare la struttura `NUTServerConfig` e le proprietà private.
+        - **Change:** Assicurarsi che `_clientUsername` e `_clientAuthenticated` siano pronti per tracciare lo stato per ciascuno slot client.
+      - `lib/NUTServer/src/NUTServer.cpp`
+        - **Read:** Esaminare la funzione `handleCommand`.
+        - **Change:** Aggiungere la gestione di `USERNAME` e `PASSWORD`. Introdurre il controllo prima dei comandi `LIST` e `GET` per restituire `ERR ACCESS-DENIED` se `authRequired` è vero ma il client non è autenticato.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Implementare `USERNAME` e `PASSWORD` in `NUTServer::handleCommand`.
+        2. Aggiungere il blocco dei comandi `LIST`/`GET` per client non autenticati.
+      - **Verify:** Compilazione del modulo senza avvertimenti.
+      - **Done:**
+        - [ ] Il comando `USERNAME` restituisce `OK` e salva lo username.
+        - [ ] Il comando `PASSWORD` valida le credenziali e sblocca la sessione.
+        - [ ] L'accesso non autenticato viene respinto con `ERR ACCESS-DENIED`.
+    ref: TASK-02
+  - id: TASK-03
+    title: Scrittura dei Test Unitari per l'Autenticazione NUT
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare l'autenticazione tramite una suite di test automatici Unity.
+
+      **Blockers:** Richiede il completamento di `TASK-02`.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp`
+        - **Read:** Esaminare i test esistenti.
+        - **Change:** Aggiungere asserzioni per verificare la restrizione delle letture pre-auth, il rifiuto delle password errate e l'accesso post-auth.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Integrare i test case di autenticazione nella suite `test_auth_and_commands`.
+        2. Eseguire la suite di test unitari sul target.
+      - **Verify:** Eseguire `pio test -f test_nut_server` e verificare il superamento dei test.
+      - **Done:**
+        - [ ] Tutti i test di autenticazione compilano e passano con successo sul target.
+    ref: TASK-03
+  - id: TASK-04
+    title: Validazione Interattiva E2E via Netcat/Telnet
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** Testare manualmente la connessione autenticata da un client terminale reale.
+
+      **Blockers:** Richiede il completamento di `TASK-03`.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Caricare l'applicazione principale sul microcontrollore.
+        2. Connettersi via Netcat o Telnet alla porta 3493.
+        3. Validare la sequenza `USERNAME` e `PASSWORD` per ottenere l'accesso alle variabili dell'UPS.
+      - **Verify:** Assicurarsi che le risposte del protocollo siano conformi e che i comandi vengano rifiutati prima del login.
+      - **Done:**
+        - [ ] Flusso E2E validato con successo da client interattivo.
+    ref: TASK-04

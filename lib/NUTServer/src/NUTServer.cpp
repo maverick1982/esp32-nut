@@ -107,7 +107,7 @@ void NUTServer::loop() {
                               slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
             } else {
                 Serial.println("[NUTServer] Rifiutata connessione: raggiunto limite massimo di client");
-                newClient.println("ERR FAILED - Max clients reached");
+                newClient.print("ERR FAILED - Max clients reached\n");
                 newClient.stop();
             }
         }
@@ -124,7 +124,7 @@ void NUTServer::loop() {
             // Verifica timeout di inattività (60 secondi)
             if (millis() - _clientLastActivity[i] > NUT_TIMEOUT_MS) {
                 Serial.printf("[NUTServer] Timeout inattività per lo slot %d. Disconnessione in corso.\n", i);
-                _clients[i].println("ERR ACCESS-DENIED");
+                _clients[i].print("ERR ACCESS-DENIED\n");
                 closeSession(i);
                 continue;
             }
@@ -164,57 +164,57 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
 
     if (cmd == "USERNAME") {
         if (tokens.size() < 2) {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
         _clientUsername[slot] = tokens[1];
-        client.println("OK");
+        client.print("OK\n");
         return;
     }
 
     if (cmd == "PASSWORD") {
         if (tokens.size() < 2) {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
         String password = tokens[1];
         if (_clientUsername[slot] == _config.username && password == _config.password) {
             _clientAuthenticated[slot] = true;
-            client.println("OK");
+            client.print("OK\n");
         } else {
-            client.println("ERR ACCESS-DENIED");
+            client.print("ERR ACCESS-DENIED\n");
         }
         return;
     }
 
     if (authRequired && !_clientAuthenticated[slot]) {
-        client.println("ERR ACCESS-DENIED");
+        client.print("ERR ACCESS-DENIED\n");
         return;
     }
 
     if (cmd == "LOGOUT") {
-        client.println("OK Goodbye");
+        client.print("OK Goodbye\n");
         closeSession(slot);
         return;
     }
 
     if (cmd == "LIST") {
         if (tokens.size() < 2) {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
         String subcmd = tokens[1];
         subcmd.toUpperCase();
 
         if (subcmd == "UPS") {
-            client.println("BEGIN LIST UPS");
+            client.print("BEGIN LIST UPS\n");
             client.printf("UPS %s \"ESP32-S3 UPS Bridge\"\n", _config.ups_name.c_str());
-            client.println("END LIST UPS");
+            client.print("END LIST UPS\n");
             return;
         } 
         else if (subcmd == "VAR") {
             if (tokens.size() < 3) {
-                client.println("ERR INVALID-ARGUMENT");
+                client.print("ERR INVALID-ARGUMENT\n");
                 return;
             }
             String upsName = tokens[2];
@@ -223,7 +223,7 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             String configUpsNameLower = _config.ups_name;
             configUpsNameLower.toLowerCase();
             if (upsNameLower != configUpsNameLower) {
-                client.println("ERR UNKNOWN-UPS");
+                client.print("ERR UNKNOWN-UPS\n");
                 return;
             }
 
@@ -244,14 +244,14 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             return;
         }
         else {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
     }
 
     if (cmd == "GET") {
         if (tokens.size() < 2) {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
         String subcmd = tokens[1];
@@ -259,7 +259,7 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
 
         if (subcmd == "VAR") {
             if (tokens.size() < 4) {
-                client.println("ERR INVALID-ARGUMENT");
+                client.print("ERR INVALID-ARGUMENT\n");
                 return;
             }
             String upsName = tokens[2];
@@ -270,7 +270,7 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             String configUpsNameLower = _config.ups_name;
             configUpsNameLower.toLowerCase();
             if (upsNameLower != configUpsNameLower) {
-                client.println("ERR UNKNOWN-UPS");
+                client.print("ERR UNKNOWN-UPS\n");
                 return;
             }
 
@@ -293,15 +293,15 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             } else if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), status.c_str());
             } else {
-                client.println("ERR VAR-NOT-SUPPORTED");
+                client.print("ERR VAR-NOT-SUPPORTED\n");
             }
             return;
         }
         else {
-            client.println("ERR INVALID-ARGUMENT");
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
     }
 
-    client.println("ERR UNKNOWN-COMMAND");
+    client.print("ERR UNKNOWN-COMMAND\n");
 }
