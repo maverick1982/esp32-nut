@@ -227,6 +227,123 @@ void test_auth_and_commands(void) {
     resp.trim();
     TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED", resp.c_str());
 
+    // --- Nuovi Test Case-Insensitivity e Gestione Errori (TASK-02) ---
+
+    // A. LIST VAR con case misto per UPS: LIST VAR EATON
+    client.println("LIST VAR EATON");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST VAR EATON", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR EATON battery.charge \"85\"", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR EATON input.voltage \"230.0\"", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR EATON ups.status \"OL\"", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("END LIST VAR EATON", resp.c_str());
+
+    // B. GET VAR con case misto per UPS e variabili: GET VAR EATON BATTERY.CHARGE
+    client.println("GET VAR EATON BATTERY.CHARGE");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR EATON battery.charge \"85\"", resp.c_str());
+
+    // C. GET VAR con case misto solo per variabile: GET VAR eaton INPUT.VOLTAGE
+    client.println("GET VAR eaton INPUT.VOLTAGE");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR eaton input.voltage \"230.0\"", resp.c_str());
+
+    // D. GET VAR con case misto per comando e argomenti: get var EaToN ups.status
+    client.println("get var EaToN ups.status");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("VAR EaToN ups.status \"OL\"", resp.c_str());
+
+    // E. Gestione Errori: UPS inesistente (es. GET VAR apc battery.charge)
+    client.println("GET VAR apc battery.charge");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS", resp.c_str());
+
+    // F. Gestione Errori: LIST VAR con UPS inesistente
+    client.println("LIST VAR apc");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS", resp.c_str());
+
+    // G. Gestione Errori: Argomenti mancanti per GET VAR
+    client.println("GET VAR");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT", resp.c_str());
+
+    // H. Gestione Errori: Argomenti mancanti per LIST VAR
+    client.println("LIST VAR");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT", resp.c_str());
+
+    // I. Gestione Errori: Comando non supportato/sconosciuto
+    client.println("INVALIDCMD");
+    client.flush();
+    for (int i = 0; i < 5; i++) {
+        test_server.loop();
+        delay(10);
+    }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-COMMAND", resp.c_str());
+
     // 12. LOGOUT
     client.println("LOGOUT");
     client.flush();

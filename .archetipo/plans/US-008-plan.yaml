@@ -1,0 +1,125 @@
+schema: archetipo/plan/v2
+spec_code: US-008
+body: |
+  # US-008: Parsing Comandi Base NUT (LIST, GET) — Piano di Implementazione
+
+  **Generato da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-07-08
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'obiettivo di questa user story è garantire che il server TCP esegua correttamente il parsing ed elabori i comandi base del protocollo NUT (`LIST UPS`, `LIST VAR <ups>`, `GET VAR <ups> <var>`), rispondendo in modo conforme allo standard e integrandosi con i dati estratti dall'UPS Eaton 3S 700 tramite la libreria `USBHostUPS`.
+
+  Sebbene esista già una base di parsing in `NUTServer.cpp`, sono necessari affinamenti per garantire robustezza e totale aderenza ai criteri di accettazione:
+  1. **Case-Insensitivity delle Variabili e dell'UPS**:
+     - I nomi delle variabili (es. `battery.charge`, `input.voltage`, `ups.status`) e il nome dell'UPS (es. `eaton`) devono essere confrontati in modo case-insensitive per evitare errori nel caso in cui i client li inviino con caratteri maiuscoli o misti.
+     - Tutti i token relativi ai comandi e ai parametri (tranne le credenziali sensibili) saranno normalizzati o confrontati case-insensitively.
+  2. **Robustezza del Parsing dei Token**:
+     - Validare il numero corretto di argomenti prima di accedere a elementi del vettore `tokens`, evitando potenziali crash o comportamenti indefiniti (out-of-bounds).
+  3. **Gestione degli Errori Standard**:
+     - Rispondere con `ERR UNKNOWN-UPS` in caso di UPS non configurato.
+     - Rispondere con `ERR VAR-NOT-SUPPORTED` se viene richiesta una variabile non gestita dal driver.
+     - Rispondere con `ERR INVALID-ARGUMENT` per comandi con sintassi errata.
+     - Rispondere con `ERR UNKNOWN-COMMAND` per comandi non riconosciuti.
+
+  ---
+
+  ## Strategia di Test
+
+  La validazione delle modifiche avverrà attraverso i seguenti passaggi:
+
+  1. **Test Unitari (Unity)**:
+     - Estendere il file `test/test_nut_server/test_main.cpp` con casi di test specifici per la case-insensitivity:
+       - `GET VAR EATON BATTERY.CHARGE`
+       - `get var eaton INPUT.VOLTAGE`
+       - `list var EATON`
+       - `LIST UPS` in varie combinazioni di maiuscole/minuscole.
+     - Testare la risposta di errore `ERR UNKNOWN-UPS` inviando un nome UPS non valido (es. `GET VAR apc battery.charge`).
+     - Testare la risposta di errore `ERR VAR-NOT-SUPPORTED` inviando una variabile sconosciuta.
+     - Testare la stabilità inviando comandi con parametri mancanti (es. `GET VAR`).
+
+  2. **Test sul Target (Hardware)**:
+     - Compilazione del firmware ed esecuzione dei test tramite `pio test -f test_nut_server` su ESP32-S3.
+     - Test interattivo tramite `nc` (Netcat) o `telnet` simulando query reali per verificare il comportamento e la conformità del protocollo.
+tasks:
+  - id: TASK-01
+    title: Ottimizzazione del Parsing e Case-Insensitivity nel NUTServer
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Ottimizzare il parsing dei comandi nel modulo `NUTServer` per gestire in modo case-insensitive i nomi dell'UPS e delle variabili, prevenendo crash da argomenti mancanti.
+
+      **Blockers:** Nessuno.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp`
+        - **Read:** Analizzare come vengono confrontati `upsName` e `varName` nei comandi `LIST VAR` e `GET VAR`.
+        - **Change:** Modificare il confronto dell'UPS per renderlo case-insensitive (es. convertendo `upsName` in minuscolo e confrontandolo con il valore minuscolo di `_config.ups_name`). Modificare il confronto di `varName` nel comando `GET VAR` in modo case-insensitive (es. convertendo `varName` in minuscolo prima dei controlli `battery.charge`, `input.voltage`, `ups.status`). Verificare la corretta gestione degli errori (es. `ERR UNKNOWN-UPS`, `ERR VAR-NOT-SUPPORTED`, `ERR INVALID-ARGUMENT`) con le relative risposte standard del protocollo NUT.
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Aprire `lib/NUTServer/src/NUTServer.cpp`.
+        2. Implementare la conversione a minuscolo o il confronto case-insensitive per il nome dell'UPS e delle variabili.
+        3. Verificare che tutti i percorsi d'errore restituiscano i corretti codici NUT.
+      - **Verify:** Verificare che il codice compili senza warning o errori di sintassi.
+      - **Done:**
+        - [ ] Il server accetta `LIST VAR EATON` e risponde correttamente.
+        - [ ] Il server accetta `GET VAR eaton BATTERY.CHARGE` e restituisce il valore.
+        - [ ] Gli errori sintattici restituiscono `ERR INVALID-ARGUMENT`.
+        - [ ] UPS inesistenti restituiscono `ERR UNKNOWN-UPS`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Estensione della Suite di Test Unitari per la Robustezza dei Comandi NUT
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Aggiungere nuovi casi di test unitari a `test/test_nut_server/test_main.cpp` per verificare la case-insensitivity e la gestione degli errori.
+
+      **Blockers:** Richiede il completamento di `TASK-01`.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp`
+        - **Read:** Comprendere come viene eseguito il test `test_auth_and_commands`.
+        - **Change:** Aggiungere asserzioni Unity per testare comandi inviati con case misto (es. `list var EATON`, `GET VAR eaton battery.charge`), variabili inviate con case misto (es. `GET VAR eaton BATTERY.CHARGE`), comandi non validi o con argomenti mancanti (es. `GET VAR`, `LIST VAR`), e UPS inesistenti (es. `GET VAR apc battery.charge`).
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Modificare `test/test_nut_server/test_main.cpp` inserendo i nuovi casi di test all'interno della funzione `test_auth_and_commands`.
+        2. Eseguire i test con PlatformIO.
+      - **Verify:** Eseguire `pio test -f test_nut_server` e assicurarsi che tutti i test passino con successo sul target.
+      - **Done:**
+        - [ ] La suite di test Unity compila con successo.
+        - [ ] I test per la case-insensitivity passano sul target.
+        - [ ] I test per la gestione degli errori e i parametri mancanti passano sul target.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verifica dell'Integrazione e Test di Connessione con Client Esterni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Eseguire la validazione manuale end-to-end sul dispositivo target simulando un client reale tramite terminale.
+
+      **Blockers:** Richiede il completamento di `TASK-02`.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - **Steps:**
+        1. Compilare e caricare l'applicazione principale con `pio run -t upload`.
+        2. Aprire una connessione TCP verso l'IP dell'ESP32 sulla porta 3493 usando Netcat (`nc <IP> 3493`) o Telnet.
+        3. Inviare comandi con combinazioni differenti di maiuscole/minuscole e verificare le risposte.
+      - **Verify:** Verificare che `GET VAR eaton battery.charge` e `GET VAR EATON BATTERY.CHARGE` restituiscano risposte identiche. Verificare la corretta risposta a comandi sconosciuti o incompleti.
+      - **Done:**
+        - [ ] Connessione TCP stabilita con successo.
+        - [ ] Risposte conformi riscontrate sul client Netcat/Telnet sia in caso di successo che di errore.
+    ref: TASK-03

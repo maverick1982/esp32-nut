@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 4
-status: TODO
+status: DONE
 blocked_by:
   - US-007
 scope: MVP
@@ -32,3 +32,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-08T15:14:58Z"
+  - status: PLANNED
+    at: "2026-07-08T18:43:15Z"
+  - status: IN PROGRESS
+    at: "2026-07-09T13:54:44Z"
+  - status: REVIEW
+    at: "2026-07-09T14:04:04Z"
+  - status: DONE
+    at: "2026-07-09T14:05:40Z"

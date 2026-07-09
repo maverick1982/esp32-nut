@@ -214,7 +214,11 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 return;
             }
             String upsName = tokens[2];
-            if (upsName != _config.ups_name) {
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
                 client.println("ERR UNKNOWN-UPS");
                 return;
             }
@@ -257,7 +261,11 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             String upsName = tokens[2];
             String varName = tokens[3];
 
-            if (upsName != _config.ups_name) {
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
                 client.println("ERR UNKNOWN-UPS");
                 return;
             }
@@ -271,11 +279,14 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 voltage = _usb_ups->getInputVoltage();
             }
 
-            if (varName == "battery.charge") {
+            String varNameLower = varName;
+            varNameLower.toLowerCase();
+
+            if (varNameLower == "battery.charge") {
                 client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), charge);
-            } else if (varName == "input.voltage") {
+            } else if (varNameLower == "input.voltage") {
                 client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), voltage);
-            } else if (varName == "ups.status") {
+            } else if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), status.c_str());
             } else {
                 client.println("ERR VAR-NOT-SUPPORTED");
