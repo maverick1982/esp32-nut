@@ -207,11 +207,11 @@ void USBHostUPS::loop() {
     uint32_t now = millis();
     if (now - _last_poll >= 5000 || _last_poll == 0) {
         _last_poll = now != 0 ? now : 1;
-        Serial.println("[USBHostUPS] Esecuzione polling dei report dell'UPS...");
-        // Invia richieste per i report 0x01 (carica), 0x02 (stato), 0x03 (tensione)
-        requestReport(0x01, 0x03); // Feature Report
-        requestReport(0x02, 0x03); // Feature Report
-        requestReport(0x03, 0x03); // Feature Report
+        // Richiediamo solo i report identificati:
+        // 0x02 (Status), 0x06 (Battery & Runtime), 0x0E (Voltage)
+        requestReport(0x02, 0x03); 
+        requestReport(0x06, 0x03); 
+        requestReport(0x0E, 0x03); 
     }
 }
 
@@ -225,11 +225,13 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
         offset = 1;
     }
 
-    if (report_id == 0x01) {
+    if (report_id == 0x06) {
+        // Report 06: Battery (Byte 1)
         _battery_charge = data[offset];
         if (_battery_charge > 100) _battery_charge = 100;
         Serial.printf("[USBHostUPS] Carica batteria aggiornata: %d%%\n", _battery_charge);
     } else if (report_id == 0x02) {
+        // Report 02: Status (Byte 1)
         uint8_t status_val = data[offset];
         if (status_val == 1) {
             _ups_status = "OL";
@@ -239,10 +241,11 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
             _ups_status = "Unknown";
         }
         Serial.printf("[USBHostUPS] Stato UPS aggiornato: %s\n", _ups_status.c_str());
-    } else if (report_id == 0x03) {
+    } else if (report_id == 0x0E) {
+        // Report 0E: Input Voltage (Byte 1 e 2, Little Endian)
         if (length - offset >= 2) {
             uint16_t raw_val = data[offset] | (data[offset + 1] << 8);
-            _input_voltage = raw_val / 10.0f;
+            _input_voltage = (float)raw_val; // Eaton 3S restituisce i Volt interi, es. 230
             Serial.printf("[USBHostUPS] Tensione ingresso aggiornata: %.1f V\n", _input_voltage);
         }
     }
