@@ -8,7 +8,8 @@ USBHostUPS::USBHostUPS() :
     _initialized(false),
     _battery_charge(0),
     _ups_status("Unknown"),
-    _input_voltage(0.0f) {
+    _input_voltage(0.0f),
+    _last_poll(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -88,6 +89,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                         esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
                         if (claim_err == ESP_OK) {
                             Serial.println("[USBHostUPS] Interfaccia 0 HID reclamata con successo.");
+                            _last_poll = 0;
                         } else {
                             Serial.printf("[USBHostUPS] Errore claim interfaccia 0: %d\n", claim_err);
                             usb_host_device_close(_client_handle, dev_hdl);
@@ -108,6 +110,9 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
         }
         case USB_HOST_CLIENT_EVENT_DEV_GONE: {
             Serial.println("[USBHostUPS] Dispositivo USB rimosso.");
+            _ups_status = "Unknown";
+            _battery_charge = 0;
+            _input_voltage = 0.0f;
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
                 esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
                 if (release_err == ESP_OK) {
@@ -200,9 +205,8 @@ void USBHostUPS::loop() {
     }
 
     uint32_t now = millis();
-    static uint32_t last_poll = 0;
-    if (now - last_poll >= 5000) {
-        last_poll = now;
+    if (now - _last_poll >= 5000 || _last_poll == 0) {
+        _last_poll = now != 0 ? now : 1;
         Serial.println("[USBHostUPS] Esecuzione polling dei report dell'UPS...");
         // Invia richieste per i report 0x01 (carica), 0x02 (stato), 0x03 (tensione)
         requestReport(0x01, 0x03); // Feature Report

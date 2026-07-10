@@ -37,6 +37,7 @@ private:
     uint8_t _battery_charge;
     String _ups_status;
     float _input_voltage;
+    uint32_t _last_poll;
 };
 
 #endif // USB_HOST_UPS_H

@@ -1,0 +1,64 @@
+schema: archetipo/plan/v2
+spec_code: US-003
+body: |-
+  ## Soluzione Tecnica
+
+  L'implementazione per il supporto hot-plug USB si innesterà all'interno del gestore eventi esistente (`handle_client_event`) della libreria `USBHostUPS`.
+
+  1. **Gestione Disconnessione (`DEV_GONE`)**: Quando il dispositivo viene scollegato, lo stack ESP-IDF emette un evento `USB_HOST_CLIENT_EVENT_DEV_GONE`. In risposta a questo evento, aggiorneremo lo stato interno (`_ups_status`) a `"Unknown"` e resetteremo gli altri parametri vitali per segnalare ai client (come il server NUT) che l'UPS non è più rintracciabile. Il codice esistente già chiude l'handle del dispositivo, rendendo sicura questa operazione.
+  2. **Gestione Riconnessione (`NEW_DEV`)**: L'infrastruttura attuale già gestisce l'evento `USB_HOST_CLIENT_EVENT_NEW_DEV`, identificando l'UPS tramite VID/PID e riacquisendo l'handle. Non sono necessarie grosse modifiche strutturali, ma è opportuno assicurarsi che il timer di polling riprenda in modo efficiente resettando eventualmente il contatore al reinserimento.
+
+  ## Strategia di Testing
+
+  * **Unit Testing (Unity)**: Scriveremo unit test che invocano direttamente `handle_client_event` simulando `DEV_GONE` per verificare che la classe `USBHostUPS` pulisca correttamente il suo stato interno (`getUPSStatus()` restituisce `"Unknown"`).
+  * Poiché non vi sono interfacce utente coinvolte (UI), la validazione del comportamento a runtime sarà monitorabile via log seriale e test dei comandi NUT (GET VAR ups.status).
+tasks:
+  - id: TASK-01
+    title: Gestione stato interno su disconnessione (DEV_GONE)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Modificare il metodo `handle_client_event` in `USBHostUPS.cpp` nella gestione del caso `USB_HOST_CLIENT_EVENT_DEV_GONE`. Aggiungere la logica per impostare `_ups_status = "Unknown";` quando il dispositivo viene rimosso, in modo che i client esterni ricevano questa informazione.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Modificare la gestione di `DEV_GONE`
+
+      ## Criteri di Completamento
+      - [ ] Quando avviene `DEV_GONE`, la variabile `_ups_status` diventa `"Unknown"`.
+      - [ ] La disconnessione stampa un log seriale appropriato confermando l'aggiornamento dello stato.
+    ref: TASK-01
+  - id: TASK-02
+    title: Ottimizzazione timer polling su riconnessione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Assicurarsi che dopo un evento `NEW_DEV` riuscito, il polling dei report HID riprenda correttamente nel `loop()`. Azzerare la variabile `last_poll` (o impostarla a 0) durante `NEW_DEV` per forzare un invio immediato dei transfer al prossimo ciclo di `loop()` dopo la connessione a caldo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Modifica a `handle_client_event` o `loop()`
+
+      ## Criteri di Completamento
+      - [ ] Dopo la riconnessione, il sistema riprende immediatamente il polling dei dati.
+      - [ ] Nessun blocco dell'event loop USB in caso di scollegamento o ricollegamento rapido.
+    ref: TASK-02
+  - id: TASK-03
+    title: Unit test per disconnessione USB
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiungere un test unitario basato su Unity per simulare l'evento di disconnessione e verificare lo stato risultante della classe `USBHostUPS`.
+
+      ## File Coinvolti
+      - `test/test_usb_host/test_main.cpp` — Aggiunta test per disconnessione (DEV_GONE)
+
+      ## Criteri di Completamento
+      - [ ] Il test invoca la disconnessione simulata e verifica che `getUPSStatus()` ritorni `"Unknown"`.
+      - [ ] Tutti i test passano correttamente.
+    ref: TASK-03

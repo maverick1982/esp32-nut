@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <unity.h>
+#define private public
 #include "USBHostUPS.h"
-
+#undef private
 USBHostUPS test_usb_ups;
 
 void setUp(void) {
@@ -53,6 +54,28 @@ void test_decode_input_voltage(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 225.5f, test_usb_ups.getInputVoltage());
 }
 
+void test_dev_gone(void) {
+    // Impostiamo dei valori
+    uint8_t data_ol[] = {0x02, 1};
+    test_usb_ups.decodeReport(0x02, data_ol, sizeof(data_ol));
+    uint8_t data_charge[] = {0x01, 85};
+    test_usb_ups.decodeReport(0x01, data_charge, sizeof(data_charge));
+    
+    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getBatteryCharge());
+
+    // Simuliamo disconnessione
+    usb_host_client_event_msg_t event_msg;
+    event_msg.event = USB_HOST_CLIENT_EVENT_DEV_GONE;
+    event_msg.dev_gone.dev_hdl = NULL;
+    test_usb_ups.handle_client_event(&event_msg);
+
+    // Verifichiamo reset
+    TEST_ASSERT_EQUAL_STRING("Unknown", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_UINT8(0, test_usb_ups.getBatteryCharge());
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, test_usb_ups.getInputVoltage());
+}
+
 void setup() {
     // Delay per stabilizzare la connessione seriale e permettere al monitor di agganciarsi
     delay(2000);
@@ -62,6 +85,7 @@ void setup() {
     RUN_TEST(test_decode_battery_charge);
     RUN_TEST(test_decode_status);
     RUN_TEST(test_decode_input_voltage);
+    RUN_TEST(test_dev_gone);
     UNITY_END();
 }
 
