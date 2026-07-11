@@ -44,5 +44,13 @@ Contiene i flag di stato dell'UPS mappati a livello di singolo bit nell'offset 0
 - Report `0x13`, `data[1]`-`data[2]` (Offset 0, Size 16): `HighVoltageTransfer` (Soglia alta tensione, es. 264 V).
 - Report `0x14`, `data[1]` (Offset 0, Size 8): `LowVoltageTransfer` (Soglia bassa tensione, es. 161 V).
 
+## Informazioni di Sistema (USB String Descriptors)
+L'UPS non trasmette costruttore, modello e numero di serie come stringhe di testo nei normali payload HID, ma li segnala (nel Report `0x10`) sotto forma di **indici dei descrittori di stringa USB** (`USB String Descriptor Indices`):
+- `iManufacturer` (Offset 8, Size 8): Indice `1`
+- `iProduct` (Offset 24, Size 8): Indice `2`
+- `iSerialNumber` (Offset 40, Size 8): Indice `4`
+
+Per estrarre questi dati, lo stack USB Host dell'ESP32 deve interrogare esplicitamente il dispositivo durante o dopo l'enumerazione (es. con un *Control Transfer* mirato alla lettura delle *String Descriptors*), passando l'indice desiderato (1, 2 o 4).
+
 ## Note Hardware (ESP32-S3)
 L'Eaton 3S 700 (e i dispositivi HID Low-Speed in generale) necessitano fisicamente dei **5V (VBUS)** attivi da parte dell'Host (ESP32). Senza questa tensione, l'UPS non applica la resistenza di pull-up sul pin dati D- e la periferica non viene in alcun modo rilevata. Nelle board in cui la porta Type-C OTG è bloccata da un diodo, è necessario un bypass hardware (es. saldatura diretta) per alimentare l'UPS.

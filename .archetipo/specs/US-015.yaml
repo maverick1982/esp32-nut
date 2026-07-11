@@ -1,0 +1,31 @@
+schema: archetipo/spec/v2
+code: US-015
+title: Lettura Descrittori di Stringa USB (Costruttore e Modello)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-015: Lettura Descrittori di Stringa USB (Costruttore e Modello)
+
+  **Epic:** EP-001 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As an end user,
+  I want the ESP32 USB Host to automatically read the manufacturer and product name directly from the UPS hardware during the connection phase,
+  so that the NUT server can report the correct `ups.mfr` and `ups.model` dynamically without relying on hardcoded strings in the firmware.
+
+  **Demonstrates**
+  After implementing this spec, when the UPS is connected, the ESP32 performs standard USB control transfers to request String Descriptors at indices 1, 2, and 4. The retrieved strings (e.g., "EATON" and "Eaton 3S") are stored and correctly served via the NUT protocol when a client requests `ups.mfr`, `ups.model`, and `ups.serial`.
+
+  **Acceptance Criteria**
+  - [ ] The USB Host stack implementation successfully retrieves USB String Descriptors using control transfers.
+  - [ ] The ESP32 parses the UTF-16LE string descriptors into standard ASCII/UTF-8 strings.
+  - [ ] The retrieved strings are used to dynamically populate `ups.mfr`, `ups.model`, and `ups.serial` instead of returning hardcoded values.
+  - [ ] If string descriptor retrieval fails, the system falls back to a safe default (e.g., "Unknown").
+history:
+  - status: TODO
+    at: "2026-07-11T15:11:19Z"
