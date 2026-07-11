@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-012
+title: Interfaccia Web di Configurazione Wi-Fi
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 5
+status: TODO
+body: |-
+  #### US-012: Interfaccia Web di Configurazione Wi-Fi
+
+  **Epic:** EP-002 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As an end user,
+  I want to access a graphical web interface to configure the Wi-Fi connection,
+  so that I can easily select my network, enter the password, and connect the device to my local network without hardcoding credentials.
+
+  **Demonstrates**
+  After implementing this spec, a user can connect to the ESP32 (e.g. via an Access Point mode if not connected) and open a web page in their browser. The page displays a list of available Wi-Fi networks. The user can select a network, input the password, and save the configuration to connect the device to the selected network.
+
+  **Acceptance Criteria**
+  - [ ] The ESP32 hosts a web server serving a configuration page.
+  - [ ] The page performs a scan of available Wi-Fi networks and displays them in a dropdown or list.
+  - [ ] The user can enter the password for the selected network and submit the form.
+  - [ ] The ESP32 saves the credentials securely (e.g., in NVS) and attempts to connect to the configured network.
+  - [ ] The interface provides basic feedback (e.g., success or error) after attempting the connection.
+history:
+  - status: TODO
+    at: "2026-07-11T14:13:36Z"

@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-014
+title: Mappatura ed Esposizione Completa Parametri UPS
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 5
+status: TODO
+body: |-
+  #### US-014: Mappatura ed Esposizione Completa Parametri UPS
+
+  **Epic:** EP-003 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As an end user (Home Assistant Administrator),
+  I want the ESP32 NUT server to extract and expose all the UPS parameters mapped in the `HID_EATON_3S_700_MAPPING.md` file,
+  so that I have full visibility into the UPS status, metrics, and configuration directly from my home automation dashboard.
+
+  **Demonstrates**
+  After implementing this spec, a NUT client (like Home Assistant or `upsc`) querying the ESP32 NUT server will receive the full list of mapped variables (e.g., `battery.charge`, `battery.runtime`, `input.voltage`, `ups.status` flags, etc.) properly parsed from the raw HID reports.
+
+  **Acceptance Criteria**
+  - [ ] The ESP32 correctly reads and parses the raw USB HID reports (0x01, 0x02, 0x06, 0x08, 0x0c, 0x0d, 0x0e, 0x12, 0x13, 0x14) using the defined offsets and sizes.
+  - [ ] Multi-byte values (like 16-bit voltages or 32-bit runtimes) are correctly reconstructed taking Little Endian format into account.
+  - [ ] Bit-level flags in the PresentStatus report (0x01) are correctly extracted and mapped to the corresponding NUT status string (e.g., OL, OB, CHRG).
+  - [ ] The internal state holding these parameters is updated continuously based on incoming USB HID reports.
+  - [ ] The NUT server component serves these parsed values to connected clients adhering to the NUT protocol standard.
+history:
+  - status: TODO
+    at: "2026-07-11T15:00:27Z"

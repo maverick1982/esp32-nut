@@ -1,0 +1,31 @@
+schema: archetipo/spec/v2
+code: US-013
+title: Interfaccia Web per Credenziali Server NUT
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-013: Interfaccia Web per Credenziali Server NUT
+
+  **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As an end user (Home Assistant Administrator),
+  I want to use the web configuration interface to set the username and password for the NUT server,
+  so that I can secure the NUT service without hardcoding credentials in the firmware and easily update them if needed.
+
+  **Demonstrates**
+  After implementing this spec, navigating to the configuration web page provides a section (or a dedicated page) to input the NUT server username and password. Saving the form updates the credentials in non-volatile storage and applies them to the running NUT server.
+
+  **Acceptance Criteria**
+  - [ ] The web interface includes form fields for configuring the NUT username and password.
+  - [ ] Submitting the form securely saves the credentials (e.g., using NVS).
+  - [ ] The NUT server uses these configured credentials for authenticating incoming connections (like those from Home Assistant).
+  - [ ] If no credentials are configured, the server correctly enforces a default state (e.g., default credentials or disabled authentication depending on security policy).
+history:
+  - status: TODO
+    at: "2026-07-11T14:16:19Z"
