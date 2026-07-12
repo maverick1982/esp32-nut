@@ -1,0 +1,105 @@
+schema: archetipo/plan/v2
+spec_code: US-014
+body: |-
+  ### Technical Solution for Rework 4
+
+  **Analisi del Problema con Home Assistant:**
+  Home Assistant, tramite la sua integrazione NUT, effettua il discovery del dispositivo. Se i campi identificativi fondamentali come `ups.mfr` e `ups.model` risultano vuoti, l'integrazione fallisce la creazione del dispositivo nel registro (Device Registry) e non mostra le entità.
+
+  Attualmente `ups.mfr` e `ups.model` dipendono dalla lettura asincrona dei *String Descriptors* USB. Se questa lettura fallisce, le stringhe risultano vuote.
+
+  **Soluzione Proposta:**
+  1. Aggiungere dei valori di *fallback* per le stringhe descrittive (es. `"Eaton"` per manufacturer e `"3S UPS"` per product) se risultano vuote, garantendo così che HA riesca sempre a instanziare il dispositivo.
+  *(Nota: Su richiesta dell'utente non verrà effettuato alcun mock o copia per la variabile `input.voltage`.)*
+
+  ### Test Strategy
+  Verificare con i test in `test_comprehensive_variables` che le variabili di fallback per il produttore e il modello vengano correttamente esposte da `GET VAR` e `LIST VAR` se i descrittori originali mancano.
+tasks:
+  - id: TASK-01
+    title: Extend USBHostUPS data model and HID parser
+    type: Impl
+    status: DONE
+    body: Già completato.
+    ref: TASK-01
+  - id: TASK-02
+    title: Expose all variables in NUTServer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: Già completato.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verify comprehensive variable parsing and exposure
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: Già completato.
+    ref: TASK-03
+  - id: TASK-04
+    title: Fix compilation errors in main.cpp
+    type: Impl
+    status: DONE
+    body: Già completato.
+    ref: TASK-04
+  - id: TASK-05
+    title: Fix missing exposed parameters in NUTServer
+    type: Impl
+    status: DONE
+    body: Già completato.
+    ref: TASK-05
+  - id: TASK-06
+    title: Upload the updated firmware to ESP32
+    type: Impl
+    status: DONE
+    body: Già completato.
+    ref: TASK-06
+  - id: TASK-07
+    title: Implement fallback variables for HA compatibility
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Esporre valori testuali di fallback per `ups.mfr` e `ups.model` nel caso in cui i *String Descriptors* dell'UPS non siano stati letti (stringhe vuote). Non verranno introdotte variabili di voltage fittizie.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `ups.mfr` espone sempre un valore (es. "Eaton") se `data.manufacturer` è vuoto.
+      - [ ] `ups.model` espone sempre un valore (es. "3S UPS") se `data.product` è vuoto.
+    ref: TASK-07
+  - id: TASK-08
+    title: Verify fallback variables exposure
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      Aggiornare i test unitari in `test_main.cpp` per assicurarci che i valori di fallback di produttore/modello vengano esposti quando mancano le stringhe originali.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] I test controllano l'esposizione di `ups.mfr` e `ups.model` di fallback e passano correttamente.
+    ref: TASK-08
+  - id: TASK-09
+    title: Upload the final firmware to ESP32
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      Eseguire l'upload sull'ESP32 con le logiche di fallback inserite.
+
+      ## File Coinvolti
+      - `Nessuno`
+
+      ## Criteri di Completamento
+      - [ ] L'esecuzione dell'upload termina con successo.
+    ref: TASK-09

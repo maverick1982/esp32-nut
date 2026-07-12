@@ -227,19 +227,27 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 return;
             }
 
-            uint8_t charge = 0;
-            String status = "Unknown";
-            float voltage = 0.0f;
-            if (_usb_ups) {
-                charge = _usb_ups->getBatteryCharge();
-                status = _usb_ups->getUPSStatus();
-                voltage = _usb_ups->getInputVoltage();
-            }
-
             client.printf("BEGIN LIST VAR %s\n", upsName.c_str());
-            client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), charge);
-            client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), voltage);
-            client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), status.c_str());
+            if (_usb_ups) {
+                const UPSData& data = _usb_ups->getUPSData();
+                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Eaton"));
+                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "3S UPS"));
+                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data.serialNumber.c_str());
+                client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data.remainingCapacity);
+                client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data.remainingCapacityLimit);
+                client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data.designCapacity);
+                client.printf("VAR %s battery.charge.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
+                client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data.runTimeToEmpty);
+                client.printf("VAR %s output.voltage \"%d\"\n", upsName.c_str(), data.outputVoltage);
+                client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data.highVoltageTransfer);
+                client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data.lowVoltageTransfer);
+                client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
+                client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
+                client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data.configVoltage);
+                client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data.outlet1Switch ? 1 : 0);
+                client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data.outlet2Switch ? 1 : 0);
+            }
             client.printf("END LIST VAR %s\n", upsName.c_str());
             return;
         }
@@ -295,24 +303,49 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 return;
             }
 
-            uint8_t charge = 0;
-            String status = "Unknown";
-            float voltage = 0.0f;
-            if (_usb_ups) {
-                charge = _usb_ups->getBatteryCharge();
-                status = _usb_ups->getUPSStatus();
-                voltage = _usb_ups->getInputVoltage();
+            if (!_usb_ups) {
+                client.print("ERR VAR-NOT-SUPPORTED\n");
+                return;
             }
 
+            const UPSData& data = _usb_ups->getUPSData();
             String varNameLower = varName;
             varNameLower.toLowerCase();
 
-            if (varNameLower == "battery.charge") {
-                client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), charge);
-            } else if (varNameLower == "input.voltage") {
-                client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), voltage);
-            } else if (varNameLower == "ups.status") {
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), status.c_str());
+            if (varNameLower == "ups.status") {
+                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+            } else if (varNameLower == "ups.mfr") {
+                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Eaton"));
+            } else if (varNameLower == "ups.model") {
+                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "3S UPS"));
+            } else if (varNameLower == "ups.serial") {
+                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data.serialNumber.c_str());
+            } else if (varNameLower == "battery.charge") {
+                client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data.remainingCapacity);
+            } else if (varNameLower == "battery.charge.low") {
+                client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data.remainingCapacityLimit);
+            } else if (varNameLower == "battery.capacity") {
+                client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data.designCapacity);
+            } else if (varNameLower == "battery.charge.full") {
+                client.printf("VAR %s battery.charge.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
+            } else if (varNameLower == "battery.runtime") {
+                client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data.runTimeToEmpty);
+            } else if (varNameLower == "output.voltage") {
+                client.printf("VAR %s output.voltage \"%d\"\n", upsName.c_str(), data.outputVoltage);
+            } else if (varNameLower == "input.transfer.high") {
+                client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data.highVoltageTransfer);
+            } else if (varNameLower == "input.transfer.low") {
+                client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data.lowVoltageTransfer);
+            } else if (varNameLower == "ups.power.nominal") {
+                client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
+            } else if (varNameLower == "input.frequency.nominal") {
+                client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
+            } else if (varNameLower == "input.voltage.nominal") {
+                client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data.configVoltage);
+            } else if (varNameLower == "outlet.1.switch") {
+                client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data.outlet1Switch ? 1 : 0);
+            } else if (varNameLower == "outlet.2.switch") {
+                client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data.outlet2Switch ? 1 : 0);
             } else {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
             }

@@ -84,9 +84,9 @@ void loop() {
     if (now - last_print >= 5000) {
         last_print = now;
         Serial.printf("[DIAG] UPS Info: Batteria = %d%% | Stato = %s | Tensione = %.1f V\n",
-                      usb_ups.getBatteryCharge(),
-                      usb_ups.getUPSStatus().c_str(),
-                      usb_ups.getInputVoltage());
+                      usb_ups.getUPSData().remainingCapacity,
+                      usb_ups.getUPSStatusString().c_str(),
+                      (float)usb_ups.getUPSData().outputVoltage);
     }
 
     // Aggiornamento stato LED diagnostico

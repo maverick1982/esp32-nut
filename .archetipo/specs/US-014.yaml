@@ -6,27 +6,93 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 5
-status: TODO
-body: |-
+status: DONE
+body: |
   #### US-014: Mappatura ed Esposizione Completa Parametri UPS
 
   **Epic:** EP-003 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
   **Blocked by:** -
 
   **User Story**
-  As an end user (Home Assistant Administrator),
-  I want the ESP32 NUT server to extract and expose all the UPS parameters mapped in the `HID_EATON_3S_700_MAPPING.md` file,
-  so that I have full visibility into the UPS status, metrics, and configuration directly from my home automation dashboard.
+  Come utente finale (Amministratore di Home Assistant),
+  Voglio che il server NUT dell'ESP32 estragga ed esponga tutti i parametri dell'UPS mappati nel file `HID_EATON_3S_700_MAPPING.md`,
+  in modo da avere piena visibilità sullo stato, le metriche e la configurazione dell'UPS direttamente dalla mia dashboard di domotica.
+  *Nota bene: Gli attuali mapping parziali presenti nel codice vanno eliminati completamente prima di essere rimpiazzati con i nuovi mapping corretti.*
 
   **Demonstrates**
-  After implementing this spec, a NUT client (like Home Assistant or `upsc`) querying the ESP32 NUT server will receive the full list of mapped variables (e.g., `battery.charge`, `battery.runtime`, `input.voltage`, `ups.status` flags, etc.) properly parsed from the raw HID reports.
+  Dopo aver implementato questa spec, un client NUT (come Home Assistant o `upsc`) che interroga il server NUT dell'ESP32 riceverà l'elenco completo delle variabili mappate (es. `battery.charge`, `battery.runtime`, `input.voltage`, i flag di `ups.status`, ecc.) correttamente parsate dai report HID raw.
 
   **Acceptance Criteria**
-  - [ ] The ESP32 correctly reads and parses the raw USB HID reports (0x01, 0x02, 0x06, 0x08, 0x0c, 0x0d, 0x0e, 0x12, 0x13, 0x14) using the defined offsets and sizes.
-  - [ ] Multi-byte values (like 16-bit voltages or 32-bit runtimes) are correctly reconstructed taking Little Endian format into account.
-  - [ ] Bit-level flags in the PresentStatus report (0x01) are correctly extracted and mapped to the corresponding NUT status string (e.g., OL, OB, CHRG).
-  - [ ] The internal state holding these parameters is updated continuously based on incoming USB HID reports.
-  - [ ] The NUT server component serves these parsed values to connected clients adhering to the NUT protocol standard.
+  - [ ] Gli attuali mapping presenti nel codice sono stati eliminati.
+  - [ ] L'ESP32 legge e parsa correttamente i report USB HID raw (0x01, 0x02, 0x06, 0x08, 0x0c, 0x0d, 0x0e, 0x12, 0x13, 0x14) usando gli offset e le dimensioni definite.
+  - [ ] I valori multi-byte (come tensioni a 16-bit o runtime a 32-bit) sono ricostruiti correttamente tenendo conto del formato Little Endian.
+  - [ ] I flag a livello di bit nel report PresentStatus (0x01) sono estratti correttamente e mappati nella corrispondente stringa di stato NUT (es. OL, OB, CHRG).
+  - [ ] Lo stato interno che memorizza questi parametri è aggiornato continuamente in base ai report USB HID in ingresso.
+  - [ ] Il componente server NUT espone questi valori parsati ai client connessi aderendo allo standard del protocollo NUT.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/main.cpp** — La compilazione fallisce: 'class USBHostUPS' has no member named 'getBatteryCharge', 'getUPSStatus', 'getInputVoltage'. I vecchi metodi sono stati rimossi in TASK-01 ma main.cpp li utilizza ancora (linee 87-89). È necessario aggiornare main.cpp per usare la nuova struct UPSData o i getter aggiornati.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Mancano alcuni parametri esposti al client NUT rispetto a quelli attesi (come visibile nello screenshot di Home Assistant fornito). Verificare la mappatura e l'esposizione di tutte le variabili richieste rispetto a HID_EATON_3S_700_MAPPING.md.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Non è cambiato nulla rispetto a prima (l'aggiornamento non risulta visibile dal client). È probabile che le modifiche non siano state caricate sul dispositivo (l'upload precedente era fallito per COM5 occupata) oppure ci siano altri problemi di esposizione. Verificare e riprovare.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Nonostante l'upload del nuovo firmware con l'aggiunta di battery.capacity e battery.charge.full sia andato a buon fine, su Home Assistant non risulta cambiato nulla. Bisogna indagare su due possibili fronti: o Home Assistant sta cachando i vecchi valori e va forzato il ricaricamento dell'integrazione NUT, oppure i nomi delle variabili esposte in NUTServer.cpp (es. battery.capacity) non corrispondono esattamente a quelli attesi dal client per l'integrazione specifica, oppure le variabili non vengono effettivamente listate quando il client chiama LIST VAR a causa di un bug nel loop.
 history:
   - status: TODO
     at: "2026-07-11T15:00:27Z"
+  - status: PLANNED
+    at: "2026-07-12T08:04:50Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T08:09:54Z"
+  - status: REVIEW
+    at: "2026-07-12T08:21:25Z"
+  - status: TODO
+    at: "2026-07-12T08:25:34Z"
+  - status: PLANNED
+    at: "2026-07-12T08:28:05Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T08:29:21Z"
+  - status: REVIEW
+    at: "2026-07-12T08:31:58Z"
+  - status: TODO
+    at: "2026-07-12T08:43:59Z"
+  - status: PLANNED
+    at: "2026-07-12T08:45:45Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T08:48:35Z"
+  - status: REVIEW
+    at: "2026-07-12T08:54:11Z"
+  - status: TODO
+    at: "2026-07-12T08:59:07Z"
+  - status: PLANNED
+    at: "2026-07-12T09:03:12Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T09:04:38Z"
+  - status: REVIEW
+    at: "2026-07-12T09:12:21Z"
+  - status: TODO
+    at: "2026-07-12T09:14:47Z"
+  - status: PLANNED
+    at: "2026-07-12T09:18:22Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T09:22:52Z"
+  - status: REVIEW
+    at: "2026-07-12T09:32:06Z"
+  - status: DONE
+    at: "2026-07-12T09:37:28Z"
