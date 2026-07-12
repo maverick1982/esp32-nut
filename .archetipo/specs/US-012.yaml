@@ -6,8 +6,8 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 5
-status: TODO
-body: |-
+status: DONE
+body: |
   #### US-012: Interfaccia Web di Configurazione Wi-Fi
 
   **Epic:** EP-002 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
@@ -27,6 +27,155 @@ body: |-
   - [ ] The user can enter the password for the selected network and submit the form.
   - [ ] The ESP32 saves the credentials securely (e.g., in NVS) and attempts to connect to the configured network.
   - [ ] The interface provides basic feedback (e.g., success or error) after attempting the connection.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/main.cpp:15** — Errore di compilazione: 'WARNING' is not a member of 'LedState'. Sostituire con uno stato valido dall'enum (es. LedState::ERROR o simile).
+  - **src/web_config_server.cpp:14** — Errore di compilazione: 'WiFi' was not declared in this scope. Aggiungere l'inclusione di <WiFi.h>.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/web_config_server.cpp:19** — Errore di compilazione: `invalid use of 'void'`. Nella libreria WebServer per ESP32, il metodo `serveStatic` restituisce `void`, quindi non è possibile concatenare `.setDefaultFile("index.html")`. Rimuovere la chiamata a `setDefaultFile`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - A runtime, la pagina web non viene caricata e i log mostrano ripetuti errori `_handleRequest(): request handler failed to handle request`. Verificare che LittleFS sia montato correttamente prima di servire i file, che l'immagine del filesystem sia stata caricata (Upload File System Image), oppure aggiungere un handler esplicito `server.on("/", ...)` per servire `index.html` se `serveStatic` da solo non basta per la route radice senza `setDefaultFile`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - A runtime, la pagina web si apre, ma premendo il tasto "Scan" per la scansione delle reti l'ESP32 va in errore (`_handleRequest(): request handler failed to handle request`) e perde la connessione all'Access Point. Questo è probabilmente dovuto al blocco causato dalla chiamata sincrona `WiFi.scanNetworks()` mentre si è in modalità AP o nel mezzo di una richiesta HTTP del WebServer. Verificare l'implementazione asincrona o la gestione corretta della scansione Wi-Fi senza far crashare il server/AP.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il pulsante Scan ora non fa più crashare la rete Wi-Fi dell'ESP32, ma la chiamata a `/api/wifi/scan` fallisce con un errore HTTP 404 (Not Found) nella console di Chrome. Probabilmente c'è un problema di instradamento o precedenza nel server HTTP (es. la registrazione di `serveStatic` rispetto ai route REST), oppure il route della API non viene più trovato.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il pulsante Scan non fa disconnettere esplicitamente il router/access point lato ESP32, ma causa un errore `net::ERR_NETWORK_CHANGED` nel browser durante la chiamata a `/api/wifi/scan`. Questo accade perché quando il firmware chiama `WiFi.scanNetworks(true, true)` (che impone una scansione attiva) in modalità Access Point, il modulo radio è costretto a cambiare continuamente canale per scansionare le reti circostanti. Questo salto di canali interrompe la connessione con il client connesso all'AP, spingendo il browser a sganciare la rete con l'errore `ERR_NETWORK_CHANGED`. Servirà implementare un workaround (come fare una scansione passiva o differita, limitare il tempo di scansione, oppure accettare che la connessione cada ma informando la UI che dovrà attendere e riprovare la connessione in un secondo momento con retry automatici più prolungati).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il pulsante Scan continua a restituire errori. Nei log dell'ESP32 compare ancora `_handleRequest(): request handler failed to handle request` durante la scansione e la UI riporta un fallimento. È probabile che la cache del browser stia mantenendo la vecchia versione di `app.js` senza logica di retry, oppure che il workaround del passive scan su `web_config_server.cpp` non sia stato sufficiente a impedire al core dell'ESP32 di scartare le richieste concorrenti. Occorre indagare ulteriormente: ad esempio provando a gestire lo status di scan a livello C++ rifiutando nuove connessioni con un 503 temporaneo, oppure disabilitando completamente lo scan e delegandolo a una configurazione manuale se i drop di rete si rivelassero insormontabili lato hardware.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il workaround del passive scan a 100ms per canale nasconde l'errore frontend (grazie alla logica retry anti-cache che ha funzionato) ma, purtroppo, non trova alcuna rete e continua a far cadere la connessione Access Point (con i consueti log `request handler failed`). Questo è causato da un limite fisico della radio condivisa dell'ESP32. Si deve cambiare strategia architetturale: la scansione simultanea all'AP non è supportata stabilmente su questo specifico hardware. Suggerisco di aggiungere l'inserimento manuale dell'SSID (come alternativa primaria) o di sospendere la connessione client prima della scansione in modo esplicito per poi ripristinarla a risultati memorizzati.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il salvataggio funziona, ma appena ci si connette all'AP dell'ESP32 compaiono log di errore: [E][WebServer.cpp:895] _handleRequest(): request handler failed to handle request.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Continuano i log [E][WebServer.cpp:895] _handleRequest(). Inoltre c'è un problema nel redirect iniziale del captive portal: compare un'icona di un fulmine a tutto schermo al posto della pagina di configurazione. Navigando manualmente su 192.168.4.1 la pagina compare correttamente.
 history:
   - status: TODO
     at: "2026-07-11T14:13:36Z"
+  - status: PLANNED
+    at: "2026-07-12T10:13:44Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T12:24:54Z"
+  - status: REVIEW
+    at: "2026-07-12T12:33:50Z"
+  - status: TODO
+    at: "2026-07-12T12:44:03Z"
+  - status: PLANNED
+    at: "2026-07-12T12:46:30Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T12:47:49Z"
+  - status: REVIEW
+    at: "2026-07-12T12:48:54Z"
+  - status: TODO
+    at: "2026-07-12T12:52:24Z"
+  - status: PLANNED
+    at: "2026-07-12T12:55:25Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T12:56:30Z"
+  - status: REVIEW
+    at: "2026-07-12T12:57:42Z"
+  - status: TODO
+    at: "2026-07-12T13:04:20Z"
+  - status: PLANNED
+    at: "2026-07-12T13:06:11Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T13:07:35Z"
+  - status: REVIEW
+    at: "2026-07-12T13:08:58Z"
+  - status: TODO
+    at: "2026-07-12T13:17:38Z"
+  - status: PLANNED
+    at: "2026-07-12T13:19:22Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T13:20:22Z"
+  - status: REVIEW
+    at: "2026-07-12T13:21:56Z"
+  - status: TODO
+    at: "2026-07-12T13:34:40Z"
+  - status: PLANNED
+    at: "2026-07-12T13:36:21Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T13:37:47Z"
+  - status: REVIEW
+    at: "2026-07-12T13:38:59Z"
+  - status: TODO
+    at: "2026-07-12T13:46:08Z"
+  - status: PLANNED
+    at: "2026-07-12T13:47:50Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T13:49:13Z"
+  - status: REVIEW
+    at: "2026-07-12T13:51:47Z"
+  - status: TODO
+    at: "2026-07-12T14:00:36Z"
+  - status: PLANNED
+    at: "2026-07-12T14:02:46Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T14:05:37Z"
+  - status: REVIEW
+    at: "2026-07-12T14:22:39Z"
+  - status: TODO
+    at: "2026-07-12T14:22:39Z"
+  - status: PLANNED
+    at: "2026-07-12T14:25:54Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T14:27:57Z"
+  - status: REVIEW
+    at: "2026-07-12T14:41:21Z"
+  - status: TODO
+    at: "2026-07-12T15:03:44Z"
+  - status: PLANNED
+    at: "2026-07-12T15:07:31Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T15:09:49Z"
+  - status: REVIEW
+    at: "2026-07-12T15:12:45Z"
+  - status: TODO
+    at: "2026-07-12T15:22:23Z"
+  - status: PLANNED
+    at: "2026-07-12T15:25:08Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T15:26:35Z"
+  - status: REVIEW
+    at: "2026-07-12T15:27:09Z"
+  - status: DONE
+    at: "2026-07-12T15:34:52Z"

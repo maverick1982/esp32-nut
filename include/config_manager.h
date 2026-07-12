@@ -22,6 +22,10 @@ public:
     WifiConfig getWifiConfig() const;
     NutConfig getNutConfig() const;
     bool isValid() const;
+    
+    void setWifiConfig(const WifiConfig& config);
+    void setNutConfig(const NutConfig& config);
+    bool save(const char* filepath = "/config.json");
 
 private:
     WifiConfig wifi_config;

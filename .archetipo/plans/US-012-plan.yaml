@@ -1,0 +1,282 @@
+schema: archetipo/plan/v2
+spec_code: US-012
+body: |-
+  ## Rework 2
+  In seguito al precedente rework, il captive portal probe di Android (che chiama `/generate_204`) ha ricevuto `204 No Content` come risposta. Questo ha causato la convinzione da parte del sistema operativo di avere accesso a internet, bypassando così il popup nativo del captive portal e bloccando l'utente su schermate vuote o icone di sistema (es. fulmine per app in background). Per ripristinare il corretto funzionamento, rimuoveremo le route spurie aggiunte nel TASK-16 (o le modificheremo per restituire un redirect 302 verso la root), delegando nuovamente all'`onNotFound` la corretta intercettazione dei probe. Accetteremo come compromesso tecnico la presenza del log `_handleRequest(): request handler failed` causato dalle probe TLS su porta 80.
+
+  ## Architettura della Soluzione
+  Per abilitare la configurazione Wi-Fi tramite interfaccia grafica (UI), sfrutteremo la libreria nativa `WebServer` di ESP32, combinata con `DNSServer` per creare un Captive Portal in modalità Access Point (AP). L'interfaccia utente è già stata progettata (Mockup Hi-Tech) e verrà servita direttamente dalla partizione LittleFS (`data/www/`).
+
+  1.  **Modalità AP Fallback**: Verrà modificata la classe `AppNetworkManager` per attivare la modalità `WIFI_AP_STA` (o solo `WIFI_AP`) qualora il file `config.json` manchi o la connessione fallisca ripetutamente.
+  2.  **ConfigManager**: Verrà arricchito con un metodo `save(const char* filepath)` per sovrascrivere `config.json` includendo le nuove credenziali Wi-Fi senza perdere la configurazione NUT.
+  3.  **WebConfigServer**: Verrà creata una nuova classe in `lib/WebConfigServer/` o in `src/` che implementa le route HTTP.
+
+  ## Strategia di Testing (Mina)
+  Essendo questa una spec che introduce un'interfaccia utente (UI), adotteremo un framework End-to-End (E2E). Dato che non esiste infrastruttura E2E attuale, utilizzeremo **Playwright**.
+tasks:
+  - id: TASK-01
+    title: 'ConfigManager: Aggiunta metodo per salvataggio config.json'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare `ConfigManager` per consentire la serializzazione e il salvataggio dei dati in formato JSON su LittleFS.
+
+      ## File Coinvolti
+      - `include/config_manager.h` — Aggiungere la firma `bool save(const char* filepath);` e setter per wifi e nut.
+      - `src/config_manager.cpp` — Implementare la serializzazione usando `ArduinoJson` e `LittleFS.open(filepath, "w")`.
+
+      ## Criteri di Completamento
+      - [ ] La funzione aggiorna i valori `wifi` nel JSON mantenendo invariati i parametri `nut` originali.
+      - [ ] La funzione gestisce in sicurezza eventuali errori di scrittura su file system LittleFS.
+    ref: TASK-01
+  - id: TASK-02
+    title: Integrazione file statici Mockup su LittleFS
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Spostare i file del mockup dall'area di design alla partizione dati di PlatformIO per essere distribuiti sull'ESP32.
+
+      ## File Coinvolti
+      - `docs/mockups/us-012/` — File d'origine (HTML, CSS, JS).
+      - `data/www/` — Creare la directory di destinazione e spostarvi i file `index.html`, `shared.css`, `app.js`. Adeguare eventuali percorsi o API mock in `app.js`.
+
+      ## Criteri di Completamento
+      - [ ] I file statici sono posizionati correttamente nella directory `data/www/` e pronti per essere flashati tramite il task `Upload File System image` di PlatformIO.
+    ref: TASK-02
+  - id: TASK-03
+    title: Implementazione WebConfigServer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Sviluppare il Web Server in C++ che ospita l'interfaccia e gestisce i comandi di scansione e salvataggio Wi-Fi.
+
+      ## File Coinvolti
+      - `include/web_config_server.h` — Definizione classe basata su `WebServer` (porta 80) e `DNSServer` (porta 53 per captive portal).
+      - `src/web_config_server.cpp` — Implementazione delle route: `server.serveStatic("/", LittleFS, "/www/")`, `server.on("/api/wifi/scan", HTTP_GET, ...)`, `server.on("/api/wifi/connect", HTTP_POST, ...)`.
+
+      ## Criteri di Completamento
+      - [ ] L'endpoint REST `GET /api/wifi/scan` esegue una scansione e restituisce un JSON strutturato con le reti.
+      - [ ] L'endpoint REST `POST /api/wifi/connect` elabora il JSON in ingresso, aggiorna il `ConfigManager` chiamando `save()`, e comanda il riavvio o la riconnessione.
+      - [ ] Tutte le route web (HTML/CSS/JS) vengono lette correttamente da LittleFS.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'NetworkManager: Gestione Access Point Fallback'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Modificare il ciclo di rete affinché attivi la modalità Access Point in caso di fallimento della configurazione.
+
+      ## File Coinvolti
+      - `src/network_manager.cpp` — Se la connessione fallisce per N secondi, invocare `WiFi.softAP("NUT_ESP32_Config", "12345678")`.
+      - `src/main.cpp` — Inizializzare ed eseguire nel loop il `WebConfigServer`.
+
+      ## Criteri di Completamento
+      - [ ] L'ESP32 diventa visibile come Access Point Wi-Fi ("NUT_ESP32_Config") in caso di mancata connessione al router di casa.
+      - [ ] Il web server e il DNS server ricevono il metodo `handleClient()` e `processNextRequest()` regolarmente nel loop di `main.cpp`.
+    ref: TASK-04
+  - id: TASK-05
+    title: Configurazione framework test E2E (Playwright)
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      Installare e configurare l'infrastruttura Playwright nel repository per supportare il test dell'interfaccia web.
+
+      ## File Coinvolti
+      - `package.json` — Generato / Modificato dal comando di setup.
+      - `playwright.config.ts` — Configurazione del runner.
+
+      ## Criteri di Completamento
+      - [ ] Viene eseguito `archetipo e2e ensure` o configurato manualmente `npm init playwright@latest`.
+      - [ ] I comandi npm per l'esecuzione di test e2e sono definiti in `package.json`.
+    ref: TASK-05
+  - id: TASK-06
+    title: Stesura Test E2E Scenari UI Wi-Fi
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere i file di test effettivi per validare il flusso UI di base descritto nella strategia.
+
+      ## File Coinvolti
+      - `e2e/wifi-config.spec.ts` — Script di test Playwright.
+
+      ## Criteri di Completamento
+      - [ ] I test coprono il rendering dell'interfaccia principale `/`.
+      - [ ] Mock di rete per validare la visualizzazione corretta della lista reti generata dalla chiamata a `/api/wifi/scan`.
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Fix compilazione: Errore LedState::WARNING'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il reviewer ha segnalato un errore in `src/main.cpp:15`: `WARNING` non è un membro di `LedState`. Sostituirlo con `LedState::CONNECTING` (o `LedState::ERROR`) che sono membri validi dell'enum per indicare la modalità di setup/AP.
+
+      ## File Coinvolti
+      - `src/main.cpp` — riga 15.
+
+      ## Criteri di Completamento
+      - [ ] La compilazione C++ in `src/main.cpp` ha successo senza errori sull'enum `LedState`.
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Fix compilazione: Inclusione <WiFi.h> mancante'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il reviewer ha segnalato un errore in `src/web_config_server.cpp:14`: `WiFi` non è dichiarato nello scope corrente perché manca l'include della libreria nativa.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — riga 14 (o inizio file).
+
+      ## Criteri di Completamento
+      - [ ] Aggiunta la direttiva `#include <WiFi.h>` all'inizio del file.
+      - [ ] Il comando `pio run -e esp32-s3-devkitc-1` termina con successo (compilazione del firmware C++ pulita).
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Fix compilazione: Rimuovere setDefaultFile() concatenato'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il metodo `serveStatic` per ESP32 restituisce `void`, rendendo invalido il concatenamento con `.setDefaultFile("index.html")`.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La chiamata a `.setDefaultFile("index.html")` viene rimossa da `serveStatic` in `web_config_server.cpp`.
+      - [ ] La compilazione C++ ha successo.
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Fix runtime: Mount LittleFS ed handler radice'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il server web non riesce a servire le pagine e stampa nei log l'errore `_handleRequest(): request handler failed to handle request`. Serve un controllo sull'inizializzazione corretta di `LittleFS` prima dell'avvio del server, nonché un route esplicito per la radice.
+
+      ## File Coinvolti
+      - `src/main.cpp` — Assicurarsi che `LittleFS.begin(true)` (o configurazione `ConfigManager`) venga chiamato correttamente prima di passare allo stato di AP/Web server.
+      - `src/web_config_server.cpp` — Aggiungere un route esplicito `server.on("/", ...)` che usi un comando per aprire o reindirizzare il traffico verso `/www/index.html` qualora `serveStatic` generico non basti, oppure servire l'intero `www` correttamente.
+
+      ## Criteri di Completamento
+      - [ ] `LittleFS.begin(true)` (o simile) garantisce il montaggio del filesystem in `setup()`.
+      - [ ] Nessun errore `request handler failed` appare nei log a runtime quando viene richiamato l'indirizzo IP locale.
+      - [ ] L'interfaccia UI si apre regolarmente nel browser.
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Fix runtime: Scansione Wi-Fi asincrona non bloccante'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Attualmente, la chiamata a `WiFi.scanNetworks()` nell'handler `/api/wifi/scan` viene eseguita in modalità sincrona e bloccante. Questo causa il blocco del WebServer o il timeout del driver Wi-Fi in modalità AP, disconnettendo la rete e producendo `request handler failed to handle request`. Dobbiamo passare a un approccio asincrono o con polling per evitare il blocco totale.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Nell'handler `handleScan`, chiamare `WiFi.scanNetworks(true, true)` se non c'è una scansione in corso.
+
+      ## Criteri di Completamento
+      - [ ] La pressione del pulsante "Scan" sull'interfaccia UI non causa più la disconnessione della scheda dall'AP.
+    ref: TASK-11
+  - id: TASK-12
+    title: 'Fix runtime: Ordine registrazione route REST vs serveStatic'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il frontend restituisce errore 404 (Not Found) chiamando l'API `/api/wifi/scan`. Questo si verifica perché `server.serveStatic("/", LittleFS, "/www/")` è registrato prima dei route REST in `web_config_server.cpp`.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Spostare la registrazione di `server.on("/api/wifi/scan", ...)` e `server.on("/api/wifi/connect", ...)` PRIMA della direttiva `server.serveStatic("/", ...)`.
+
+      ## Criteri di Completamento
+      - [ ] Le richieste all'endpoint `/api/wifi/scan` restituiscono codice 202 o 200.
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Fix runtime: Resilienza UI a ERR_NETWORK_CHANGED'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Durante l'esecuzione della scansione asincrona in background, i salti di canale del chip ESP32 per ispezionare le reti interrompono transitoriamente la connessione AP. Il frontend deve essere irrobustito tramite retry logici.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] In caso di instabilità dell'AP, il JS sopprime l'errore e ritenta finché il Wi-Fi non torna raggiungibile.
+    ref: TASK-13
+  - id: TASK-14
+    title: 'Fix runtime: Disabilitazione Cache-Control per UI e Bypass fetch'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Per colpa della cache aggressiva del browser, gli aggiornamenti al file `app.js` non vengono caricati dai client esistenti.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] Il WebServer invia gli header di no-cache.
+    ref: TASK-14
+  - id: TASK-15
+    title: 'Rework UI: Sostituzione Scan Wi-Fi con Inserimento Manuale SSID'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sostituiremo il selettore della lista delle reti con un campo di testo. Questo garantirà una connessione AP stabile.
+
+      ## File Coinvolti
+      - `data/www/index.html`
+      - `data/www/app.js`
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [ ] L'interfaccia UI mostra un campo di testo per l'SSID al posto di una tendina.
+    ref: TASK-15
+  - id: TASK-16
+    title: 'Rework Fix: Mitigazione log [E] request handler failed'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiunta route per Captive Portal.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Route aggiunte.
+    ref: TASK-16
+  - id: TASK-17
+    title: 'Rework Fix: Rollback Captive Portal Mitigation e ripristino Redirect'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Rimuovere le route `generate_204`, `hotspot-detect.html` e `favicon.ico` introdotte dal TASK-16. Rimuovendole, il flusso tornerà a ricadere nell'handler `onNotFound()`, che invia il corretto HTTP 302 Redirect al router IP `192.168.4.1`, triggerando la popup UI del sistema operativo. Il log `[E]` verrà ignorato come fisiologico.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Eliminare il blocco `// Captive Portal probe mitigations`.
+
+      ## Criteri di Completamento
+      - [ ] Le route incriminate sono rimosse dal codice.
+      - [ ] La compilazione C++ ha successo.
+    ref: TASK-17

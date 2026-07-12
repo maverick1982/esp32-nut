@@ -1,14 +1,19 @@
 #include "main.h"
 #include "USBHostUPS.h"
+#include "web_config_server.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
 AppNetworkManager network_mgr;
 NUTServer nut_server;
 DiagnosticLED diagnostic_led;
+WebConfigServer web_server(config_mgr);
 
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
 LedState computeSystemState(bool wifiConnected, bool upsConnected) {
+    if (network_mgr.isAPModeActive()) {
+        return LedState::CONNECTING; // AP mode = Connecting
+    }
     if (!wifiConnected) {
         return LedState::CONNECTING;
     }
@@ -28,9 +33,17 @@ void setup() {
     // Inizializzazione del LED diagnostico
     diagnostic_led.begin(LED_BUILTIN_PIN);
 
+    // Setup fallback AP trigger
+    network_mgr.onFallback([]() {
+        Serial.println("[MAIN] Fallback rilevato, avvio WebConfigServer in modalità AP.");
+        web_server.begin(true);
+    });
+
     // Inizializzazione di ConfigManager
     if (!config_mgr.begin()) {
         Serial.println("[MAIN] ERRORE: Caricamento configurazione fallito! Avvio in modalità sicura...");
+        network_mgr.beginAP("NUT_ESP32_Config", "12345678");
+        web_server.begin(true);
     } else {
         Serial.println("[MAIN] Configurazione caricata con successo.");
         // Stampa parametri per verifica
@@ -41,6 +54,7 @@ void setup() {
         
         // Inizializzazione di AppNetworkManager
         network_mgr.begin(wifi.ssid, wifi.password);
+        web_server.begin(false);
     }
 
     // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
@@ -63,6 +77,9 @@ void setup() {
 }
 
 void loop() {
+    web_server.loop();
+    network_mgr.loop();
+
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura
     if (!config_mgr.isValid()) {
         static uint32_t last_safe_print = 0;
@@ -71,11 +88,13 @@ void loop() {
             last_safe_print = now;
             Serial.println("[MAIN] ATTENZIONE: Sistema in attesa sicura. Configurazione mancante o non valida!");
         }
-        delay(100);
+        
+        diagnostic_led.setState(computeSystemState(network_mgr.isConnected(), false));
+        diagnostic_led.update();
+        delay(10);
         return;
     }
 
-    network_mgr.loop();
     usb_ups.loop();
     nut_server.loop();
 

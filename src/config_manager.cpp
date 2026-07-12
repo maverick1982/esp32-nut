@@ -68,3 +68,40 @@ NutConfig ConfigManager::getNutConfig() const {
 bool ConfigManager::isValid() const {
     return is_valid;
 }
+
+void ConfigManager::setWifiConfig(const WifiConfig& config) {
+    wifi_config = config;
+}
+
+void ConfigManager::setNutConfig(const NutConfig& config) {
+    nut_config = config;
+}
+
+bool ConfigManager::save(const char* filepath) {
+    JsonDocument doc;
+    
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
+    wifi["ssid"] = wifi_config.ssid;
+    wifi["password"] = wifi_config.password;
+    
+    JsonObject nut = doc["nut"].to<JsonObject>();
+    nut["username"] = nut_config.username;
+    nut["password"] = nut_config.password;
+    nut["ups_name"] = nut_config.ups_name;
+    
+    File file = LittleFS.open(filepath, "w");
+    if (!file) {
+        Serial.printf("[CONFIG] ERRORE: Impossibile aprire il file %s in scrittura!\n", filepath);
+        return false;
+    }
+    
+    if (serializeJson(doc, file) == 0) {
+        Serial.println("[CONFIG] ERRORE: Impossibile scrivere il JSON su file.");
+        file.close();
+        return false;
+    }
+    
+    file.close();
+    Serial.println("[CONFIG] Configurazione salvata correttamente su LittleFS.");
+    return true;
+}

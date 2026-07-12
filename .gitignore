@@ -4,3 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 data/config.json.pwd
+node_modules/
+test-results/
+playwright-report/

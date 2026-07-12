@@ -31,14 +31,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Connect form submission
-    document.getElementById('wifi-form').addEventListener('submit', (e) => {
+    document.getElementById('wifi-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         btnConnect.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Handshake...`;
         btnConnect.disabled = true;
         pwdInput.disabled = true;
         
-        setTimeout(() => {
-            btnConnect.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Connected`;
+        try {
+            const response = await fetch('/api/wifi/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ssid: ssidInput.value,
+                    password: pwdInput.value
+                })
+            });
+            
+            if (!response.ok) throw new Error('Connect failed');
+            
+            btnConnect.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved & Connecting`;
             btnConnect.style.background = 'var(--success)';
             btnConnect.style.borderColor = 'var(--success)';
             btnConnect.style.color = '#000';
@@ -48,11 +59,16 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelector('.status-indicator').style.background = 'var(--success)';
             document.querySelector('.status-indicator').style.boxShadow = '0 0 8px rgba(0, 255, 157, 0.5)';
             document.querySelector('.status-indicator').style.animation = 'none';
-            document.querySelector('.system-status span').textContent = 'Network Connected';
+            document.querySelector('.system-status span').textContent = 'Restarting...';
             
             setTimeout(() => {
-                alert('Device successfully connected and configuration saved in NVS.');
+                alert('Credentials saved! Device will now restart to apply changes.');
             }, 500);
-        }, 2000);
+        } catch (error) {
+            btnConnect.innerHTML = `<span>Error</span>`;
+            btnConnect.disabled = false;
+            pwdInput.disabled = false;
+            alert('Failed to send configuration.');
+        }
     });
 });
