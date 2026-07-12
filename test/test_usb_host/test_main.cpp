@@ -76,6 +76,23 @@ void test_dev_gone(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, test_usb_ups.getInputVoltage());
 }
 
+void test_decode_string_descriptor(void) {
+    // UTF-16LE data: length 12, type 0x03, "EATON"
+    uint8_t data_mfr[] = {12, 0x03, 'E', 0, 'A', 0, 'T', 0, 'O', 0, 'N', 0};
+    test_usb_ups.parseStringDescriptor(1, data_mfr, sizeof(data_mfr));
+    TEST_ASSERT_EQUAL_STRING("EATON", test_usb_ups.getUPSData().manufacturer.c_str());
+
+    // UTF-16LE data: length 14, type 0x03, "3S UPS"
+    uint8_t data_model[] = {14, 0x03, '3', 0, 'S', 0, ' ', 0, 'U', 0, 'P', 0, 'S', 0};
+    test_usb_ups.parseStringDescriptor(2, data_model, sizeof(data_model));
+    TEST_ASSERT_EQUAL_STRING("3S UPS", test_usb_ups.getUPSData().product.c_str());
+
+    // Empty string
+    uint8_t data_empty[] = {2, 0x03};
+    test_usb_ups.parseStringDescriptor(4, data_empty, sizeof(data_empty));
+    TEST_ASSERT_EQUAL_STRING("", test_usb_ups.getUPSData().serialNumber.c_str());
+}
+
 void setup() {
     // Delay per stabilizzare la connessione seriale e permettere al monitor di agganciarsi
     delay(2000);
@@ -86,6 +103,7 @@ void setup() {
     RUN_TEST(test_decode_status);
     RUN_TEST(test_decode_input_voltage);
     RUN_TEST(test_dev_gone);
+    RUN_TEST(test_decode_string_descriptor);
     UNITY_END();
 }
 

@@ -61,6 +61,7 @@ private:
     static void usb_client_task(void *arg);
     static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg);
     static void control_transfer_cb(usb_transfer_t *transfer);
+    void parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length);
     void handle_client_event(const usb_host_client_event_msg_t *event_msg);
     bool requestReport(uint8_t report_id, uint8_t report_type);
     bool requestStringDescriptor(uint8_t string_index);

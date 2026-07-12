@@ -1,0 +1,37 @@
+schema: archetipo/plan/v2
+spec_code: US-015
+body: "### Approccio Tecnico\nL'obiettivo è recuperare i descrittori di stringa per costruttore, modello e numero di serie (indici 1, 2 e 4) direttamente dal dispositivo USB tramite Control Transfers (GET_DESCRIPTOR). Questi valori sostituiranno le stringhe hardcoded nel server NUT.\n\nAttualmente, la classe `USBHostUPS` prevede già `requestStringDescriptor` e un abbozzo di decodifica nella callback di trasferimento. Il descrittore di stringa in formato USB è codificato in UTF-16LE. La conversione verso ASCII/UTF-8 consiste nel processare l'array ignorando i byte alti nulli per i caratteri latini.\n\nIl server NUT in `NUTServer.cpp` andrà aggiornato per restituire `\"Unknown\"` anziché valori specifici di un singolo brand (come `\"Eaton\"` o `\"3S UPS\"`) nel caso in cui i campi in `UPSData` (es. `manufacturer`, `product`, `serialNumber`) siano stringhe vuote. \n\n### Strategia di Test\nNon essendoci alcun componente visibile per l'utente, non è necessaria una strategia di test E2E. \n\nSaranno implementati **Unit Test** tramite Unity (framework nativo di PlatformIO) focalizzati su:\n1. Parsing corretto dei pacchetti UTF-16LE di risposta per il GET_DESCRIPTOR.\n2. Verificare che le richieste NUT (`GET VAR ups.mfr`, `LIST VAR`) applichino il fallback corretto (`\"Unknown\"`) quando la lettura USB fallisce o il dispositivo non fornisce i descrittori."
+tasks:
+  - id: TASK-01
+    title: Aggiornare fallback delle variabili NUT
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il `NUTServer` per gestire correttamente i fallback delle stringhe `ups.mfr`, `ups.model` e `ups.serial`. Attualmente ci sono dei fallback hardcoded a stringhe specifiche di un brand. Devono essere sostituiti con `"Unknown"` se il valore non è disponibile nel `UPSData`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — Modificare i comandi `LIST VAR` e `GET VAR` per usare `"Unknown"` se i campi di `UPSData` sono vuoti.
+
+      ## Criteri di Completamento
+      - [ ] Le risposte a `ups.mfr`, `ups.model` e `ups.serial` usano `"Unknown"` se i campi in `_usb_ups->getUPSData()` sono vuoti.
+      - [ ] Nessuna occorrenza hardcoded di `"Eaton"` o `"3S UPS"` nel `NUTServer.cpp`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiungere unit test per la lettura delle stringhe
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere test unitari per validare il parsing dei descrittori di stringa da parte di `USBHostUPS` e la logica di fallback di `NUTServer`.
+
+      ## File Coinvolti
+      - `test/test_usbhostups/test_usbhostups.cpp` (o nuovo file) — Scrivere test per verificare il parsing del payload UTF-16LE.
+      - `test/test_nutserver/test_nutserver.cpp` (o nuovo file) — Verificare che venga ritornato `"Unknown"`.
+
+      ## Criteri di Completamento
+      - [ ] Test unitario per il metodo di decoding dei descrittori stringa.
+      - [ ] Test unitario per assicurare che il server NUT invii la stringa corretta ai client.
+    ref: TASK-02

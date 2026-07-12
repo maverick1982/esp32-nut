@@ -469,8 +469,8 @@ void test_comprehensive_variables(void) {
     // VERIFY ALL VARS via GET VAR eaton
     const char* vars[] = {
         "ups.status", "OL",
-        "ups.mfr", "Eaton",
-        "ups.model", "3S UPS",
+        "ups.mfr", "Unknown",
+        "ups.model", "Unknown",
         "battery.charge", "100",
         "battery.charge.low", "20",
         "battery.capacity", "100",
@@ -484,8 +484,8 @@ void test_comprehensive_variables(void) {
         "input.voltage.nominal", "230",
         "outlet.1.switch", "1",
         "outlet.2.switch", "0",
-        "ups.mfr", "Eaton",
-        "ups.model", "3S UPS"
+        "ups.mfr", "Unknown",
+        "ups.model", "Unknown"
     };
 
     for(size_t i = 0; i < sizeof(vars)/sizeof(vars[0]); i+=2) {

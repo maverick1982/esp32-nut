@@ -231,9 +231,9 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             if (_usb_ups) {
                 const UPSData& data = _usb_ups->getUPSData();
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
-                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Eaton"));
-                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "3S UPS"));
-                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data.serialNumber.c_str());
+                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Unknown"));
+                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "Unknown"));
+                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), (data.serialNumber.length() > 0 ? data.serialNumber.c_str() : "Unknown"));
                 client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data.remainingCapacity);
                 client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data.remainingCapacityLimit);
                 client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data.designCapacity);
@@ -315,11 +315,11 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
             } else if (varNameLower == "ups.mfr") {
-                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Eaton"));
+                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), (data.manufacturer.length() > 0 ? data.manufacturer.c_str() : "Unknown"));
             } else if (varNameLower == "ups.model") {
-                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "3S UPS"));
+                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), (data.product.length() > 0 ? data.product.c_str() : "Unknown"));
             } else if (varNameLower == "ups.serial") {
-                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data.serialNumber.c_str());
+                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), (data.serialNumber.length() > 0 ? data.serialNumber.c_str() : "Unknown"));
             } else if (varNameLower == "battery.charge") {
                 client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data.remainingCapacity);
             } else if (varNameLower == "battery.charge.low") {

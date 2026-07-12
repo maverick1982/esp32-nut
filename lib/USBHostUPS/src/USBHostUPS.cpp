@@ -391,15 +391,7 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
 
             if (setup->bmRequestType == 0x80 && setup->bRequest == 0x06 && (setup->wValue >> 8) == 0x03) {
                 if (actual_length > 2 && data[1] == 0x03) {
-                    uint8_t str_len = data[0];
-                    String str = "";
-                    for (int i = 2; i < str_len && i < actual_length; i += 2) {
-                        str += (char)data[i];
-                    }
-                    uint8_t idx = setup->wValue & 0xFF;
-                    if (idx == 1) self->_ups_data.manufacturer = str;
-                    else if (idx == 2) self->_ups_data.product = str;
-                    else if (idx == 4) self->_ups_data.serialNumber = str;
+                    self->parseStringDescriptor(setup->wValue & 0xFF, data, actual_length);
                 }
             } else if (setup->bmRequestType == 0xA1 && setup->bRequest == 0x01) {
                 uint8_t report_id = setup->wValue & 0xFF;
@@ -408,4 +400,18 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
         }
     }
     usb_host_transfer_free(transfer);
+}
+
+void USBHostUPS::parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length) {
+    if (length < 2 || data[1] != 0x03) return;
+    uint8_t str_len = data[0];
+    String str = "";
+    for (int i = 2; i < str_len && i < length; i += 2) {
+        if (data[i] != 0) { // Safety check to skip null characters if they happen to appear in the low byte, though UTF-16LE has ascii in low byte.
+            str += (char)data[i];
+        }
+    }
+    if (index == 1) _ups_data.manufacturer = str;
+    else if (index == 2) _ups_data.product = str;
+    else if (index == 4) _ups_data.serialNumber = str;
 }

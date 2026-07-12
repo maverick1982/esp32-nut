@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |-
   #### US-015: Lettura Descrittori di Stringa USB (Costruttore e Modello)
 
@@ -29,3 +29,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-11T15:11:19Z"
+  - status: PLANNED
+    at: "2026-07-12T09:42:03Z"
+  - status: IN PROGRESS
+    at: "2026-07-12T09:43:24Z"
+  - status: REVIEW
+    at: "2026-07-12T09:48:12Z"
+  - status: DONE
+    at: "2026-07-12T09:54:22Z"
