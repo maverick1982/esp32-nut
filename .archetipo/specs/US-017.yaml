@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-017
+title: Aggiornamento Firmware via OTA (Over-The-Air)
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-017: Aggiornamento Firmware via OTA (Over-The-Air)
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come amministratore di sistema (o Marco l'hobbista),
+  Voglio poter aggiornare il firmware dell'ESP32 tramite la rete Wi-Fi (Over-The-Air),
+  in modo da non dover scollegare fisicamente il dispositivo dall'UPS e smontarlo per collegarlo al PC ogni volta che esce una nuova release.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, un utente può navigare sull'interfaccia web dell'ESP32 (es. alla pagina `/update`), selezionare il file `.bin` compilato e caricarlo. Il dispositivo installerà l'aggiornamento e si riavvierà autonomamente applicando la nuova versione.
+
+  **Acceptance Criteria**
+  - [ ] Il firmware integra la libreria standard per gli aggiornamenti OTA su ESP32 (es. `Update.h` / `ElegantOTA` o una soluzione custom su server web).
+  - [ ] Il web server espone una pagina (es. `/update`) contenente un form per il caricamento del file del firmware.
+  - [ ] Il processo di caricamento restituisce feedback (successo o errore) all'utente.
+  - [ ] In caso di caricamento corretto, il dispositivo esegue il commit del firmware e si riavvia automaticamente.
+  - [ ] Lo spazio delle partizioni flash è configurato correttamente nel `platformio.ini` per supportare due partizioni app (schema OTA).
+history:
+  - status: TODO
+    at: "2026-07-12T10:00:22Z"

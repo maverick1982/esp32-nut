@@ -1,0 +1,31 @@
+schema: archetipo/spec/v2
+code: US-016
+title: Visualizzazione del log tramite interfaccia grafica WEB
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 3
+status: TODO
+body: |-
+  #### US-016: Visualizzazione del log tramite interfaccia grafica WEB
+
+  **Epic:** EP-002 | **Priority:** LOW | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come amministratore di sistema (o Marco l'hobbista),
+  Voglio poter visualizzare i log del dispositivo (eventi USB, errori, query NUT) tramite una pagina dell'interfaccia web esistente,
+  in modo da poter diagnosticare rapidamente eventuali problemi di connessione all'UPS o alla rete senza dover collegare l'ESP32 al PC tramite cavo seriale.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, un utente che naviga all'indirizzo IP dell'ESP32 su un browser (es. al path `/logs`) visualizzerà una pagina web contenente gli ultimi eventi di sistema registrati.
+
+  **Acceptance Criteria**
+  - [ ] Il firmware implementa un buffer circolare in RAM (es. ultimi 50-100 messaggi) che raccoglie l'output seriale più importante.
+  - [ ] Il web server dell'ESP32 espone una route `/logs` (o integra un tab nella pagina esistente) che restituisce il contenuto di questo buffer.
+  - [ ] L'interfaccia grafica della pagina dei log è semplice, responsiva e si aggiorna al ricaricamento (o include un pulsante di refresh).
+  - [ ] I log mostrati indicano correttamente le variazioni di stato del Wi-Fi, la connessione/disconnessione dell'UPS e gli eventuali errori generati dallo stack USB Host o dal server NUT.
+history:
+  - status: TODO
+    at: "2026-07-12T09:57:41Z"
