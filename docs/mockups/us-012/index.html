@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Config</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </div>
+                <div class="brand-name">NUT-OS <span>v1.0</span></div>
+            </div>
+            
+            <nav class="tabs">
+                <button class="tab active" data-target="wifi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
+                    Wi-Fi Config
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status">
+                <div class="status-indicator warning"></div>
+                <span>AP Mode Active</span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">Network Configuration</h1>
+                <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
+            </header>
+
+            <div class="tab-content active" id="content-wifi">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Available Networks</h2>
+                        <button class="btn btn-outline" id="btn-scan">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 8v4l3 3"/></svg>
+                            <span>Scan</span>
+                        </button>
+                    </div>
+                    
+                    <div class="network-list" id="network-list">
+                        <!-- Networks will be injected here -->
+                        <div class="scan-placeholder">
+                            <div class="spinner"></div>
+                            <p>Scanning environment for 2.4GHz networks...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel config-panel">
+                    <div class="panel-header">
+                        <h2>Connection Setup</h2>
+                    </div>
+                    <form id="wifi-form" class="form-container">
+                        <div class="form-group">
+                            <label for="ssid">Selected SSID</label>
+                            <input type="text" id="ssid" placeholder="Select a network or type here..." readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="password">Security Key</label>
+                            <div class="input-wrapper">
+                                <input type="password" id="password" placeholder="••••••••••••" disabled>
+                                <button type="button" class="btn-icon" id="toggle-pwd" disabled>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary" id="btn-connect" disabled>
+                                <span class="glow"></span>
+                                Initialize Connection
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Placeholders for other tabs -->
+            <div class="tab-content" id="content-nut">
+                <div class="panel placeholder-panel">
+                    <h2>NUT Server Configuration</h2>
+                    <p class="mono">MODULE_NOT_INITIALIZED</p>
+                </div>
+            </div>
+            <div class="tab-content" id="content-logs">
+                <div class="panel placeholder-panel">
+                    <h2>System Telemetry & Logs</h2>
+                    <p class="mono">AWAITING_DATA_STREAM</p>
+                </div>
+            </div>
+            <div class="tab-content" id="content-ota">
+                <div class="panel placeholder-panel">
+                    <h2>Over-The-Air Update</h2>
+                    <p class="mono">SECURE_BOOT_VERIFY</p>
+                </div>
+            </div>
+
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
