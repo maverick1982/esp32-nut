@@ -1,0 +1,61 @@
+schema: archetipo/plan/v2
+spec_code: US-011
+body: |-
+  ### Soluzione Tecnica
+
+  Per stabilizzare la connessione con Home Assistant, dobbiamo risolvere due problemi principali evidenziati nei criteri di accettazione:
+
+  1. **Gestione del Keep-Alive e Timeout:** Attualmente il server NUT impone un timeout di inattività di 60 secondi (`NUT_TIMEOUT_MS`). Home Assistant mantiene connessioni persistenti prolungate e può eseguire il polling con frequenza minore. Aumenteremo il timeout a 300 secondi (5 minuti) per tollerare intervalli di polling più lunghi e garantire stabilità.
+  2. **Supporto per Comandi Aggiuntivi:** Durante l'inizializzazione o il polling, Home Assistant (tramite il suo client NUT integrato o librerie come pynut) invia comandi esplorativi come `LIST CMD`, `LIST RW`, `LIST ENUM`, e `LIST RANGE`. Attualmente il server risponde con `ERR UNKNOWN-COMMAND`, il che può portare HA a ritenere il dispositivo incompatibile o a richiedere una riconfigurazione. Implementeremo risposte vuote e conformi allo standard per questi comandi (`BEGIN LIST...` / `END LIST...`).
+
+  ### Strategia di Test
+
+  - **Unit/Integration Test:** Verificare che il server NUT restituisca le risposte corrette ai nuovi comandi `LIST CMD`, `LIST RW`, ecc.
+  - **Test di Stabilità (E2E/Manuale):** Simulare un client che mantiene aperta la connessione in idle per 2 minuti senza essere disconnesso. (Non trattandosi di un'interfaccia UI, l'e2e test consisterà nell'utilizzare un client tcp per validare il protocollo over-the-network).
+tasks:
+  - id: TASK-01
+    title: Aumentare il timeout di inattività e TCP stability
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aumentare la costante `NUT_TIMEOUT_MS` per evitare la disconnessione prematura per inattività.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h` — Modificare `NUT_TIMEOUT_MS` portandolo da 60000 a 300000.
+
+      ## Criteri di Completamento
+      - [ ] `NUT_TIMEOUT_MS` aggiornato a 300000.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare risposte fittizie comandi NUT
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere il supporto per `LIST CMD`, `LIST RW`, `LIST ENUM`, e `LIST RANGE`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — Aggiungere i rami `if/else if` in `handleCommand`.
+
+      ## Criteri di Completamento
+      - [ ] Il server risponde con blocchi validi per i comandi esplorativi.
+    ref: TASK-02
+  - id: TASK-03
+    title: Test di conformità
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere o adattare test per assicurare che le connessioni vengano mantenute e che i comandi siano gestiti.
+
+      ## File Coinvolti
+      - `test/test_nut_server.cpp` — test dei nuovi comandi.
+
+      ## Criteri di Completamento
+      - [ ] Test superati.
+    ref: TASK-03

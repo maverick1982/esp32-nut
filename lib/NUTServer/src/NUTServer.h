@@ -8,7 +8,7 @@
 
 #define NUT_DEFAULT_PORT 3493
 #define NUT_MAX_CLIENTS 4
-#define NUT_TIMEOUT_MS 60000
+#define NUT_TIMEOUT_MS 300000
 
 struct NUTServerConfig {
     String username;

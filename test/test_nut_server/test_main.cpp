@@ -344,6 +344,25 @@ void test_auth_and_commands(void) {
     resp = client.readStringUntil('\n'); resp.trim();
     TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-COMMAND", resp.c_str());
 
+    // J. Test Comandi Esplorativi Dummy (TASK-02)
+    client.println("LIST CMD eaton");
+    client.flush();
+    for (int i = 0; i < 5; i++) { test_server.loop(); delay(10); }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD eaton", resp.c_str());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("END LIST CMD eaton", resp.c_str());
+
+    client.println("LIST ENUM eaton battery.charge");
+    client.flush();
+    for (int i = 0; i < 5; i++) { test_server.loop(); delay(10); }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST ENUM eaton battery.charge", resp.c_str());
+    resp = client.readStringUntil('\n'); resp.trim();
+    TEST_ASSERT_EQUAL_STRING("END LIST ENUM eaton battery.charge", resp.c_str());
+
     // 12. LOGOUT
     client.println("LOGOUT");
     client.flush();

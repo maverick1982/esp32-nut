@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 3
-status: TODO
+status: DONE
 body: |-
   #### US-011: Stabilizzare la connessione del server NUT per Home Assistant
 
@@ -14,18 +14,26 @@ body: |-
   **Blocked by:** -
 
   **User Story**
-  As an end user (Home Assistant Administrator),
-  I want the ESP32 NUT server to maintain a stable and continuous connection with Home Assistant without dropping,
-  so that I don't receive "Reconfigure" error messages and monitoring remains reliable over time.
+  Come utente finale (Amministratore di Home Assistant),
+  voglio che il server NUT sull'ESP32 mantenga una connessione stabile e continua con Home Assistant senza interruzioni,
+  così da non ricevere messaggi di errore "Riconfigura" e mantenere il monitoraggio affidabile nel tempo.
 
   **Demonstrates**
-  After implementing this spec, Home Assistant can connect to the ESP32 NUT server and remain connected indefinitely. The connection does not drop after a few seconds or minutes, and no "Reconfigure" error prompts appear in Home Assistant.
+  Dopo aver implementato questa spec, Home Assistant può connettersi al server NUT sull'ESP32 e rimanere connesso indefinitamente. La connessione non cade dopo pochi secondi o minuti e in Home Assistant non compaiono richieste di errore "Riconfigura".
 
   **Acceptance Criteria**
-  - [ ] The NUT protocol implementation correctly handles keep-alive, ping, or background polling from Home Assistant without timing out.
-  - [ ] Resources (sockets, memory) are not leaked over multiple requests or long-standing connections, preventing out-of-memory drops.
-  - [ ] The ESP32 correctly responds to all required NUT commands that Home Assistant uses for status checking.
-  - [ ] A test connection from Home Assistant remains stable for at least 24 hours without any disconnection or error logs.
+  - [ ] L'implementazione del protocollo NUT gestisce correttamente i keep-alive, i ping o il polling in background da Home Assistant senza andare in timeout.
+  - [ ] Le risorse (socket, memoria) non vengono perse nel corso di richieste multiple o connessioni prolungate, prevenendo cadute per esaurimento della memoria (out-of-memory).
+  - [ ] L'ESP32 risponde correttamente a tutti i comandi NUT richiesti che Home Assistant usa per il controllo dello stato.
+  - [ ] Una connessione di test da Home Assistant rimane stabile per almeno 24 ore senza alcuna disconnessione o log di errore.
 history:
   - status: TODO
     at: "2026-07-11T14:09:22Z"
+  - status: PLANNED
+    at: "2026-07-11T15:24:43Z"
+  - status: IN PROGRESS
+    at: "2026-07-11T15:27:25Z"
+  - status: REVIEW
+    at: "2026-07-11T15:32:17Z"
+  - status: DONE
+    at: "2026-07-12T08:01:21Z"
