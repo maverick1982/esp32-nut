@@ -71,4 +71,90 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('Failed to send configuration.');
         }
     });
+
+    // Logs functionality
+    const terminalOutput = document.getElementById('terminal-output');
+    const btnClearLogs = document.getElementById('btn-clear-logs');
+    const btnRefresh = document.getElementById('btn-refresh');
+    const btnDownload = document.getElementById('btn-download');
+
+    if(btnClearLogs) {
+        btnClearLogs.addEventListener('click', () => {
+            terminalOutput.innerHTML = '';
+            addLogEntry('INFO', 'System logs cleared manually.');
+        });
+    }
+
+    if(btnRefresh) {
+        btnRefresh.addEventListener('click', () => {
+            const btnIcon = btnRefresh.querySelector('svg');
+            btnIcon.style.animation = 'spin 1s linear infinite';
+            
+            fetchLogs().finally(() => {
+                setTimeout(() => {
+                    btnIcon.style.animation = 'none';
+                }, 500);
+            });
+        });
+    }
+
+    if(btnDownload) {
+        btnDownload.addEventListener('click', () => {
+            addLogEntry('INFO', 'Downloading logs...');
+            window.location.href = '/api/logs';
+        });
+    }
+
+    function addLogEntry(level, msg) {
+        if(!terminalOutput) return;
+        const now = new Date();
+        const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
+        
+        let levelClass = 'terminal-level-info';
+        if(level === 'WARN') levelClass = 'terminal-level-warn';
+        if(level === 'ERROR') levelClass = 'terminal-level-err';
+
+        const line = document.createElement('div');
+        line.className = 'terminal-line';
+        
+        // Escape HTML to prevent XSS
+        const escapeHtml = (text) => {
+            const div = document.createElement('div');
+            div.innerText = text;
+            return div.innerHTML;
+        };
+
+        line.innerHTML = `<span class="terminal-time">${timeStr}</span><span class="${levelClass}">[${level}]</span> <span class="terminal-msg">${escapeHtml(msg)}</span>`;
+        
+        terminalOutput.appendChild(line);
+        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+    }
+
+    let lastLogIndex = 0;
+
+    async function fetchLogs() {
+        if (!document.getElementById('content-logs').classList.contains('active')) return;
+        
+        try {
+            const response = await fetch('/api/logs');
+            if (response.ok) {
+                const logs = await response.json();
+                
+                if (logs.length < lastLogIndex) {
+                    terminalOutput.innerHTML = '';
+                    lastLogIndex = 0;
+                }
+                
+                for (let i = lastLogIndex; i < logs.length; i++) {
+                    addLogEntry(logs[i].level, logs[i].msg);
+                }
+                lastLogIndex = logs.length;
+            }
+        } catch (error) {
+            console.error('Error fetching logs:', error);
+        }
+    }
+
+    // Auto-refresh logs every 2 seconds
+    setInterval(fetchLogs, 2000);
 });

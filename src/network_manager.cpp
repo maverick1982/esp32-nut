@@ -1,4 +1,5 @@
 #include "network_manager.h"
+#include "app_logger.h"
 
 AppNetworkManager::AppNetworkManager() 
     : m_lastStatus(WL_IDLE_STATUS), 
@@ -15,10 +16,10 @@ void AppNetworkManager::onFallback(std::function<void()> callback) {
 void AppNetworkManager::beginAP(const String& ap_ssid, const String& ap_password) {
     m_isStarted = true;
     m_apFallbackActive = true;
-    Serial.println("[NETWORK] Avvio modalità Access Point...");
+    AppLogger::log("INFO", "[NETWORK] Avvio modalità Access Point...");
     WiFi.mode(WIFI_AP);
     WiFi.softAP(ap_ssid.c_str(), ap_password.c_str());
-    Serial.printf("[NETWORK] AP Avviato. IP: %s\n", WiFi.softAPIP().toString().c_str());
+    AppLogger::log("INFO", "[NETWORK] AP Avviato. IP: %s\n", WiFi.softAPIP().toString().c_str());
 }
 
 void AppNetworkManager::begin(const String& ssid, const String& password) {
@@ -28,11 +29,11 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     m_apFallbackActive = false;
     m_lastStatus = WL_IDLE_STATUS;
     
-    Serial.println("[NETWORK] Inizializzazione Wi-Fi in corso...");
+    AppLogger::log("INFO", "[NETWORK] Inizializzazione Wi-Fi in corso...");
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true); // Consente all'ESP32 di gestire le riconnessioni a basso livello
     
-    Serial.printf("[NETWORK] Connessione a SSID: %s...\n", m_ssid.c_str());
+    AppLogger::log("INFO", "[NETWORK] Connessione a SSID: %s...\n", m_ssid.c_str());
     WiFi.begin(m_ssid.c_str(), m_password.c_str());
     m_lastConnectionAttempt = millis();
     m_firstConnectionAttempt = m_lastConnectionAttempt;
@@ -49,15 +50,15 @@ void AppNetworkManager::loop() {
     // Rileva cambiamenti di stato
     if (currentStatus != m_lastStatus) {
         if (currentStatus == WL_CONNECTED) {
-            Serial.printf("[NETWORK] Connessione stabilita! Indirizzo IP: %s\n", WiFi.localIP().toString().c_str());
+            AppLogger::log("INFO", "[NETWORK] Connessione stabilita! Indirizzo IP: %s\n", WiFi.localIP().toString().c_str());
         } else if (currentStatus == WL_DISCONNECTED && m_lastStatus == WL_CONNECTED) {
-            Serial.println("[NETWORK] Connessione Wi-Fi persa!");
+            AppLogger::log("WARN", "[NETWORK] Connessione Wi-Fi persa!");
         } else if (currentStatus == WL_NO_SSID_AVAIL) {
-            Serial.println("[NETWORK] Rete SSID non trovata.");
+            AppLogger::log("WARN", "[NETWORK] Rete SSID non trovata.");
         } else if (currentStatus == WL_CONNECT_FAILED) {
-            Serial.println("[NETWORK] Connessione fallita.");
+            AppLogger::log("ERROR", "[NETWORK] Connessione fallita.");
         } else if (currentStatus == WL_CONNECTION_LOST) {
-            Serial.println("[NETWORK] Connessione persa (WL_CONNECTION_LOST).");
+            AppLogger::log("WARN", "[NETWORK] Connessione persa (WL_CONNECTION_LOST).");
         }
         m_lastStatus = currentStatus;
     }
@@ -65,14 +66,14 @@ void AppNetworkManager::loop() {
     // Gestione riconnessione e fallback
     if (currentStatus != WL_CONNECTED && !m_apFallbackActive) {
         if (now - m_firstConnectionAttempt >= 30000) {
-            Serial.println("[NETWORK] Fallback Access Point attivato dopo 30s di fallimento.");
+            AppLogger::log("WARN", "[NETWORK] Fallback Access Point attivato dopo 30s di fallimento.");
             WiFi.mode(WIFI_AP_STA);
             WiFi.softAP("NUT_ESP32_Config", "12345678");
             m_apFallbackActive = true;
             if (m_fallbackCallback) m_fallbackCallback();
         } else if (now - m_lastConnectionAttempt >= 15000) {
             m_lastConnectionAttempt = now;
-            Serial.printf("[NETWORK] Riconnessione in corso... Tentativo su SSID: %s\n", m_ssid.c_str());
+            AppLogger::log("INFO", "[NETWORK] Riconnessione in corso... Tentativo su SSID: %s\n", m_ssid.c_str());
             // Forza una nuova connessione
             WiFi.disconnect();
             WiFi.begin(m_ssid.c_str(), m_password.c_str());

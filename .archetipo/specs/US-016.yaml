@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: LOW
 points: 3
-status: TODO
+status: IN PROGRESS
 body: |-
   #### US-016: Visualizzazione del log tramite interfaccia grafica WEB
 
@@ -29,3 +29,7 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-12T09:57:41Z"
+  - status: PLANNED
+    at: "2026-07-13T18:51:17Z"
+  - status: IN PROGRESS
+    at: "2026-07-13T18:54:30Z"

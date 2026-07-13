@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "app_logger.h"
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
@@ -32,6 +33,7 @@ void WebConfigServer::begin(bool isAPMode) {
     // REST endpoints
     server.on("/api/wifi/scan", HTTP_GET, [this]() { handleScan(); });
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
+    server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
 
     // Serve static files from LittleFS with Cache-Control
     server.serveStatic("/", LittleFS, "/www/", "no-cache, no-store, must-revalidate");
@@ -47,7 +49,7 @@ void WebConfigServer::begin(bool isAPMode) {
     });
 
     server.begin();
-    Serial.println("[WEB] Server avviato sulla porta 80");
+    AppLogger::log("INFO", "[WEB] Server avviato sulla porta 80");
 }
 
 void WebConfigServer::loop() {
@@ -131,4 +133,8 @@ void WebConfigServer::handleConnect() {
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
+}
+
+void WebConfigServer::handleLogs() {
+    server.send(200, "application/json", AppLogger::getLogsJSON());
 }

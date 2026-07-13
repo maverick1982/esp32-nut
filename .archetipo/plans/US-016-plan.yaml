@@ -1,0 +1,104 @@
+schema: archetipo/plan/v2
+spec_code: US-016
+body: |-
+  ## Architettura della Soluzione
+  Per esporre i log di sistema (USB, NUT, Wi-Fi) sull'interfaccia web, introdurremo un `AppLogger` dedicato. Questo modulo affiancherà la scrittura su `HardwareSerial` con il salvataggio in un buffer circolare in RAM. Il server web fornirà poi un endpoint REST per interrogare il buffer.
+
+  1.  **Classe AppLogger**: Implementerà un buffer circolare (es. 50 messaggi) per mantenere l'impronta in RAM contenuta. Esporrà metodi per registrare log con livelli di severità (`INFO`, `WARN`, `ERROR`).
+  2.  **Refactoring del Logging**: I file sorgente principali (`main.cpp`, `network_manager.cpp`, `usb_ups.cpp`) verranno aggiornati per usare `AppLogger` al posto delle chiamate dirette a `Serial.print`.
+  3.  **Endpoint API**: Il `WebConfigServer` espone una route `GET /api/logs` che serializza il buffer in un array JSON.
+  4.  **UI Terminale**: La pagina web integra il design hi-tech del mockup (generato per questa spec), con auto-refresh e syntax highlighting basato sui livelli di severità.
+
+  ## Strategia di Testing (Mina)
+  La spec introduce un componente visibile all'utente (il tab dei Log) interattivo. Pertanto, **Playwright** (già configurato nel repository per i task precedenti) verrà esteso.
+  -   **Scenari E2E**: Navigazione verso il tab "System Logs", verifica della comparsa del terminale, simulazione di log mockati nell'API `/api/logs` e verifica che vengano renderizzati con la classe CSS corretta (es. `log-error` se il livello è ERROR). Verifica del corretto funzionamento dei pulsanti Refresh e Clear.
+tasks:
+  - id: TASK-01
+    title: Sviluppo Classe AppLogger (Buffer Circolare)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare la classe singleton o statica `AppLogger` che gestisce un buffer circolare di stringhe e le smista sia sulla porta `Serial` hardware sia nel buffer in memoria.
+
+      ## File Coinvolti
+      - `include/app_logger.h` — Definizione del buffer (es. 50 elementi max) e metodi statici come `log(String level, String msg)` e `getLogsJSON()`.
+      - `src/app_logger.cpp` — Implementazione.
+
+      ## Criteri di Completamento
+      - [ ] La classe mantiene al massimo 50 entry; le più vecchie vengono sovrascritte ciclicamente.
+      - [ ] Il metodo `getLogsJSON()` restituisce un JSON array valido con i messaggi ordinati dal più vecchio al più recente.
+    ref: TASK-01
+  - id: TASK-02
+    title: Refactoring Serial.println verso AppLogger
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Sostituire le chiamate a `Serial.println()` e `Serial.printf()` nel codice esistente affinché passino tramite il nuovo sistema di log.
+
+      ## File Coinvolti
+      - `src/main.cpp`
+      - `src/network_manager.cpp`
+      - `src/usb_ups.cpp`
+      - `src/nut_server.cpp`
+
+      ## Criteri di Completamento
+      - [ ] I messaggi critici di sistema vengono intercettati dal buffer di log.
+      - [ ] La compilazione C++ ha successo.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esposizione Endpoint REST /api/logs
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Estendere il server web di configurazione per servire i log tramite API.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Aggiungere un route handler `server.on("/api/logs", HTTP_GET, ...)`.
+
+      ## Criteri di Completamento
+      - [ ] Una chiamata `GET /api/logs` restituisce codice 200 OK e il payload generato da `AppLogger::getLogsJSON()`.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrazione Frontend UI (Terminale Log)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Trasferire l'interfaccia terminal-style generata dal mockup nella cartella dei dati del progetto ESP32.
+
+      ## File Coinvolti
+      - `docs/mockups/us-016/` — Sorgente mockup.
+      - `data/www/index.html` — Sostituire il placeholder con il contenitore del terminale e i controlli.
+      - `data/www/shared.css` — Integrare gli stili del terminale.
+      - `data/www/app.js` — Implementare il fetching periodico (polling) da `/api/logs` e la stampa sulla UI.
+
+      ## Criteri di Completamento
+      - [ ] L'interfaccia UI visualizza i log a schermo nel tab "System Logs".
+      - [ ] I log con ERROR o WARN hanno stili cromatici differenti per risaltare.
+    ref: TASK-04
+  - id: TASK-05
+    title: Stesura Test E2E System Logs
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Verificare il funzionamento dell'interfaccia utente con Playwright.
+
+      ## File Coinvolti
+      - `e2e/logs-viewer.spec.ts` — Nuovo file di test Playwright.
+
+      ## Criteri di Completamento
+      - [ ] Il test carica l'interfaccia web e intercetta le chiamate verso `/api/logs` restituendo un mock JSON.
+      - [ ] Il test asserisce la presenza del testo mockato nel DOM del terminale dei log.
+    ref: TASK-05

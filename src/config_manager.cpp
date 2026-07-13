@@ -1,6 +1,7 @@
 #include "config_manager.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "app_logger.h"
 
 ConfigManager::ConfigManager() : is_valid(false) {}
 
@@ -9,14 +10,14 @@ bool ConfigManager::begin(const char* filepath) {
     
     // Inizializzazione LittleFS
     if (!LittleFS.begin(true)) {
-        Serial.println("[CONFIG] ERRORE: Impossibile montare LittleFS!");
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile montare LittleFS!");
         return false;
     }
     
     // Apertura del file di configurazione
     File file = LittleFS.open(filepath, "r");
     if (!file) {
-        Serial.printf("[CONFIG] ERRORE: Impossibile aprire il file %s!\n", filepath);
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s!\n", filepath);
         return false;
     }
     
@@ -26,7 +27,7 @@ bool ConfigManager::begin(const char* filepath) {
     file.close();
     
     if (error) {
-        Serial.printf("[CONFIG] ERRORE: Parsing JSON fallito per il file %s. Dettagli: %s\n", filepath, error.c_str());
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito per il file %s. Dettagli: %s\n", filepath, error.c_str());
         return false;
     }
     
@@ -36,7 +37,7 @@ bool ConfigManager::begin(const char* filepath) {
         wifi_config.ssid = wifi["ssid"].as<String>();
         wifi_config.password = wifi["password"].as<String>();
     } else {
-        Serial.println("[CONFIG] ERRORE: Sezione 'wifi' mancante o non valida nel file JSON.");
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Sezione 'wifi' mancante o non valida nel file JSON.");
         return false;
     }
     
@@ -47,13 +48,13 @@ bool ConfigManager::begin(const char* filepath) {
         nut_config.password = nut["password"].as<String>();
         nut_config.ups_name = nut["ups_name"].as<String>();
     } else {
-        Serial.println("[CONFIG] ERRORE: Sezione 'nut' mancante o non valida nel file JSON.");
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Sezione 'nut' mancante o non valida nel file JSON.");
         return false;
     }
     
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
-    Serial.println("[CONFIG] Configurazione caricata correttamente da LittleFS.");
+    AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da LittleFS.");
     return true;
 }
 
@@ -91,17 +92,17 @@ bool ConfigManager::save(const char* filepath) {
     
     File file = LittleFS.open(filepath, "w");
     if (!file) {
-        Serial.printf("[CONFIG] ERRORE: Impossibile aprire il file %s in scrittura!\n", filepath);
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s in scrittura!\n", filepath);
         return false;
     }
     
     if (serializeJson(doc, file) == 0) {
-        Serial.println("[CONFIG] ERRORE: Impossibile scrivere il JSON su file.");
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile scrivere il JSON su file.");
         file.close();
         return false;
     }
     
     file.close();
-    Serial.println("[CONFIG] Configurazione salvata correttamente su LittleFS.");
+    AppLogger::log("INFO", "[CONFIG] Configurazione salvata correttamente su LittleFS.");
     return true;
 }
