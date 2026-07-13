@@ -46,4 +46,32 @@ test.describe('System Logs View', () => {
     const logLine = page.locator('.terminal-line', { hasText: 'Mocked warning message' });
     await expect(logLine.locator('.terminal-level-warn')).toBeVisible();
   });
+
+  test('should pause and resume auto-refresh', async ({ page }) => {
+    // 1. Navigate to /
+    await page.goto('http://esp32.local/');
+
+    // 2. Click on the "System Logs" tab
+    await page.click('[data-target="logs"]');
+
+    const toggleAutoRefresh = page.locator('#toggle-auto-refresh');
+    const terminalOutput = page.locator('#terminal-output');
+
+    // Assicurati che il toggle (label) sia visibile e l'input checkato di default
+    const switchLabel = page.locator('.switch');
+    await expect(switchLabel).toBeVisible();
+    await expect(toggleAutoRefresh).toBeChecked();
+
+    // Clicca il toggle per spegnerlo (pause)
+    await switchLabel.click();
+    
+    // Verifica che appaia il messaggio "Auto-refresh disabled"
+    await expect(terminalOutput).toContainText('Auto-refresh disabled');
+
+    // Cliccalo di nuovo per riaccenderlo (resume)
+    await switchLabel.click();
+
+    // Verifica che appaia "Auto-refresh enabled"
+    await expect(terminalOutput).toContainText('Auto-refresh enabled');
+  });
 });

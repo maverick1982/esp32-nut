@@ -12,6 +12,9 @@ body: |-
   ## Strategia di Testing (Mina)
   La spec introduce un componente visibile all'utente (il tab dei Log) interattivo. Pertanto, **Playwright** (già configurato nel repository per i task precedenti) verrà esteso.
   -   **Scenari E2E**: Navigazione verso il tab "System Logs", verifica della comparsa del terminale, simulazione di log mockati nell'API `/api/logs` e verifica che vengano renderizzati con la classe CSS corretta (es. `log-error` se il livello è ERROR). Verifica del corretto funzionamento dei pulsanti Refresh e Clear.
+
+  ## Rework (Auto-Refresh Toggle)
+  In base al feedback ricevuto in fase di Review, è stato aggiunto un controllo (toggle/checkbox) per l'auto-refresh. Il piano include task per aggiornare i mockup UX, l'HTML/JS del frontend e i test E2E associati.
 tasks:
   - id: TASK-01
     title: Sviluppo Classe AppLogger (Buffer Circolare)
@@ -102,3 +105,50 @@ tasks:
       - [ ] Il test carica l'interfaccia web e intercetta le chiamate verso `/api/logs` restituendo un mock JSON.
       - [ ] Il test asserisce la presenza del testo mockato nel DOM del terminale dei log.
     ref: TASK-05
+  - id: TASK-06
+    title: 'Fix Mockup: Aggiunta toggle auto-refresh'
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il mockup UX della pagina dei log per includere un controllo (es. toggle o checkbox) che permetta di abilitare/disabilitare l'auto-refresh dei log. Questo task è delegabile all'esperto UX / Livia.
+
+      ## File Coinvolti
+      - `docs/mockups/us-016/`
+
+      ## Criteri di Completamento
+      - [ ] Il mockup mostra chiaramente il nuovo controllo di auto-refresh vicino al pulsante 'Refresh' esistente.
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Fix Frontend: Implementazione toggle auto-refresh'
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      Aggiornare l'interfaccia HTML e la logica JavaScript per implementare il toggle dell'auto-refresh. Se l'auto-refresh è disabilitato, il polling deve interrompersi.
+
+      ## File Coinvolti
+      - `data/www/index.html`
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] L'utente può mettere in pausa e riprendere l'aggiornamento automatico dei log tramite la UI.
+    ref: TASK-07
+  - id: TASK-08
+    title: Aggiornamento Test E2E System Logs
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      Aggiornare i test Playwright per verificare il corretto funzionamento del toggle di auto-refresh.
+
+      ## File Coinvolti
+      - `e2e/logs-viewer.spec.ts`
+
+      ## Criteri di Completamento
+      - [ ] Il test verifica che disabilitando l'auto-refresh, non vengano effettuate nuove fetch.
+    ref: TASK-08

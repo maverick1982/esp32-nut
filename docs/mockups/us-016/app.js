@@ -116,9 +116,26 @@ document.addEventListener('DOMContentLoaded', () => {
         terminalOutput.scrollTop = terminalOutput.scrollHeight;
     }
 
+    const toggleAutoRefresh = document.getElementById('toggle-auto-refresh');
+    const refreshStateText = document.getElementById('refresh-state');
+
+    if(toggleAutoRefresh) {
+        toggleAutoRefresh.addEventListener('change', (e) => {
+            if(e.target.checked) {
+                refreshStateText.textContent = 'Active';
+                refreshStateText.className = 'state-text active';
+                addLogEntry('INFO', 'Auto-refresh enabled');
+            } else {
+                refreshStateText.textContent = 'Paused';
+                refreshStateText.className = 'state-text paused';
+                addLogEntry('WARN', 'Auto-refresh disabled');
+            }
+        });
+    }
+
     // Simulate incoming logs randomly
     setInterval(() => {
-        if(document.getElementById('content-logs').classList.contains('active')) {
+        if(document.getElementById('content-logs').classList.contains('active') && (!toggleAutoRefresh || toggleAutoRefresh.checked)) {
             if(Math.random() > 0.7) {
                 const msgs = [
                     "Client disconnected from 192.168.1.50",

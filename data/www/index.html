@@ -92,8 +92,12 @@
                 <div class="panel">
                     <div class="logs-actions">
                         <div class="auto-refresh">
-                            <div class="status-indicator warning" id="refresh-indicator"></div>
-                            <span>Auto-refresh <span id="refresh-state">Active</span></span>
+                            <span class="toggle-label">Auto-refresh</span>
+                            <label class="switch">
+                                <input type="checkbox" id="toggle-auto-refresh" checked>
+                                <span class="slider"></span>
+                            </label>
+                            <span id="refresh-state" class="state-text active">Active</span>
                         </div>
                         <div class="logs-controls">
                             <button class="btn btn-outline" id="btn-refresh">

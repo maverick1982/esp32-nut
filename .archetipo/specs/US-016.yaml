@@ -6,8 +6,8 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: LOW
 points: 3
-status: IN PROGRESS
-body: |-
+status: DONE
+body: |
   #### US-016: Visualizzazione del log tramite interfaccia grafica WEB
 
   **Epic:** EP-002 | **Priority:** LOW | **Points:** 3 | **Status:** TODO
@@ -26,6 +26,12 @@ body: |-
   - [ ] Il web server dell'ESP32 espone una route `/logs` (o integra un tab nella pagina esistente) che restituisce il contenuto di questo buffer.
   - [ ] L'interfaccia grafica della pagina dei log è semplice, responsiva e si aggiorna al ricaricamento (o include un pulsante di refresh).
   - [ ] I log mostrati indicano correttamente le variazioni di stato del Wi-Fi, la connessione/disconnessione dell'UPS e gli eventuali errori generati dallo stack USB Host o dal server NUT.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Manca un toggle/pulsante per abilitare/disabilitare l'auto refresh dei log. Senza poterlo disabilitare, il pulsante 'Refresh' manuale ha poco senso.   Azione richiesta: 1. Aggiornare il mockup UX per includere il controllo di auto-refresh. 2. Aggiornare l'implementazione frontend (data/www/app.js e index.html) per permettere all'utente di mettere in pausa o riprendere il polling.
 history:
   - status: TODO
     at: "2026-07-12T09:57:41Z"
@@ -33,3 +39,13 @@ history:
     at: "2026-07-13T18:51:17Z"
   - status: IN PROGRESS
     at: "2026-07-13T18:54:30Z"
+  - status: REVIEW
+    at: "2026-07-13T19:15:40Z"
+  - status: TODO
+    at: "2026-07-13T19:25:52Z"
+  - status: PLANNED
+    at: "2026-07-13T21:30:00Z"
+  - status: REVIEW
+    at: "2026-07-13T19:37:07Z"
+  - status: DONE
+    at: "2026-07-13T19:41:54Z"

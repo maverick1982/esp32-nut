@@ -155,6 +155,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Auto-refresh logs every 2 seconds
-    setInterval(fetchLogs, 2000);
+    const toggleAutoRefresh = document.getElementById('toggle-auto-refresh');
+    const refreshStateText = document.getElementById('refresh-state');
+    let autoRefreshInterval = setInterval(fetchLogs, 2000);
+
+    if(toggleAutoRefresh) {
+        toggleAutoRefresh.addEventListener('change', (e) => {
+            if(e.target.checked) {
+                refreshStateText.textContent = 'Active';
+                refreshStateText.className = 'state-text active';
+                addLogEntry('INFO', 'Auto-refresh enabled');
+                autoRefreshInterval = setInterval(fetchLogs, 2000);
+            } else {
+                refreshStateText.textContent = 'Paused';
+                refreshStateText.className = 'state-text paused';
+                addLogEntry('WARN', 'Auto-refresh disabled');
+                clearInterval(autoRefreshInterval);
+            }
+        });
+    }
 });
