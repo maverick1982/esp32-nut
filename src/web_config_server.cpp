@@ -35,6 +35,7 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
+    server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
 
     // Serve static files from LittleFS with Cache-Control
     server.serveStatic("/", LittleFS, "/www/", "no-cache, no-store, must-revalidate");
@@ -171,4 +172,19 @@ void WebConfigServer::handleNutConfig() {
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
+}
+
+void WebConfigServer::handleGetConfig() {
+    JsonDocument doc;
+    
+    JsonObject wifiObj = doc["wifi"].to<JsonObject>();
+    wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
+    wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
+    
+    JsonObject nutObj = doc["nut"].to<JsonObject>();
+    nutObj["username"] = config_mgr.getNutConfig().username;
+    
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
 }

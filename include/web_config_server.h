@@ -21,6 +21,7 @@ private:
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
+    void handleGetConfig();
 
     bool should_restart = false;
     unsigned long restart_time = 0;

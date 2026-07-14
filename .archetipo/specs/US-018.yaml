@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-018
+title: Auto-popolamento campi configurazione nella UI Web
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 2
+status: DONE
+body: |-
+  #### US-018: Auto-popolamento campi configurazione nella UI Web
+
+  **Epic:** EP-002 | **Priority:** LOW | **Points:** 2 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come amministratore di sistema,
+  Voglio che i campi del form web mostrino i valori correnti della configurazione (SSID attualmente connesso e Username NUT salvato),
+  in modo da poter aggiornare facilmente la configurazione senza dover reinserire dati noti o doverli ricordare a memoria.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, l'utente aprendo l'interfaccia web noterà che il campo SSID (se l'ESP32 non è in modalità Access Point ma è connesso alla rete) e il campo Username del Server NUT sono già precompilati con i valori attuali, pronti per essere eventualmente modificati o lasciati inalterati.
+
+  **Acceptance Criteria**
+  - [ ] Il backend dell'ESP32 restituisce in modo sicuro i valori non sensibili correnti della configurazione.
+  - [ ] Il frontend JavaScript pre-popola il campo 'SSID' con l'SSID del Wi-Fi a cui l'ESP32 è attualmente connesso (solo in modalità STA).
+  - [ ] Il frontend JavaScript pre-popola il campo 'Username' della tab NUT con lo username attualmente configurato.
+  - [ ] Le password non vengono mai esposte né pre-compilate.
+history:
+  - status: TODO
+    at: "2026-07-14T15:50:45Z"
+  - status: PLANNED
+    at: "2026-07-14T16:07:32Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T16:10:14Z"
+  - status: REVIEW
+    at: "2026-07-14T16:13:13Z"
+  - status: DONE
+    at: "2026-07-14T16:27:52Z"

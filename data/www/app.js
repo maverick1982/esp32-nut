@@ -229,4 +229,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Pre-populate fields
+    fetch('/api/config')
+        .then(res => res.json())
+        .then(data => {
+            if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
+                if (!ssidInput.value) {
+                    ssidInput.value = data.wifi.ssid;
+                }
+            }
+            if (data.nut && data.nut.username) {
+                if (nutUsernameInput && !nutUsernameInput.value) {
+                    nutUsernameInput.value = data.nut.username;
+                }
+            }
+        })
+        .catch(err => console.error('Failed to fetch config:', err));
 });

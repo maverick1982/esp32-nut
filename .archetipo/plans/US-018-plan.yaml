@@ -1,0 +1,72 @@
+schema: archetipo/plan/v2
+spec_code: US-018
+body: |-
+  ### Technical Solution
+
+  Per supportare l'auto-popolamento dei campi, introdurremo un nuovo endpoint GET `/api/config` nel `WebConfigServer`. Questo endpoint restituirà le configurazioni correnti in formato JSON, omettendo esplicitamente le password per motivi di sicurezza. Il payload includerà:
+  - La modalità corrente (AP o STA) esaminando il flag interno `is_ap_mode`.
+  - L'SSID attualmente configurato (letto tramite `config_mgr`).
+  - L'username del server NUT attualmente configurato.
+
+  Nel frontend (`data/www/app.js`), al caricamento della pagina (o all'apertura del tab relativo), verrà effettuata una chiamata fetch a questo endpoint. Se la risposta è positiva, i valori restituiti verranno inseriti nei rispettivi campi `<input>`, se non già avvalorati.
+
+  Nessuna mockups generation è richiesta per questa spec, in quanto si tratta di valorizzare i campi input standard preesistenti senza introdurre o modificare il layout.
+
+  ### Test Strategy
+
+  - **Unit/Integration Tests**: Verificare che l'endpoint `/api/config` formatti correttamente il JSON e che escluda rigorosamente le password e restituisca i valori correnti di `ConfigManager`.
+  - **E2E Strategy**: Utilizzando il framework E2E Playwright, scriveremo un test E2E che verifica il caricamento della pagina iniziale, intercetta e simula una risposta per `/api/config` e verifica che i campi `ssid` e `nut-username` siano pre-popolati in modo automatico. (Demo video flaggata per `archetipo-review`).
+tasks:
+  - id: TASK-01
+    title: Add GET /api/config endpoint
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere un nuovo endpoint al `WebConfigServer` per restituire le informazioni correnti non sensibili (SSID, username NUT e modalità AP/STA).
+
+      ## File Coinvolti
+      - `include/web_config_server.h` — Dichiarare il nuovo metodo `handleGetConfig()`.
+      - `src/web_config_server.cpp` — Registrare la route `/api/config` (GET). Implementare `handleGetConfig()` per restituire un JSON con `{ "wifi": { "ssid": "...", "mode": "STA" }, "nut": { "username": "..." } }`. Utilizzare `is_ap_mode` per il campo `mode` (ritornare "AP" se true, altrimenti "STA"). Le password NON devono essere inserite nel JSON.
+
+      ## Criteri di Completamento
+      - [ ] L'endpoint `/api/config` è accessibile in GET.
+      - [ ] La risposta è un JSON valido che contiene `wifi.ssid`, `wifi.mode` e `nut.username`.
+      - [ ] Le password non sono esposte in nessun caso.
+    ref: TASK-01
+  - id: TASK-02
+    title: Pre-populate UI form fields
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiornare il frontend JavaScript per recuperare la configurazione all'avvio e riempire i campi del form se applicabile.
+
+      ## File Coinvolti
+      - `data/www/app.js` — All'interno del `DOMContentLoaded`, effettuare una fetch asincrona verso `/api/config`. Se la richiesta ha successo: 1) assegnare `ssidInput.value` usando `data.wifi.ssid` solo se `data.wifi.mode === 'STA'`; 2) assegnare `nutUsernameInput.value` usando `data.nut.username` se presente.
+
+      ## Criteri di Completamento
+      - [ ] Al caricamento della pagina, il frontend richiede asincronamente `/api/config`.
+      - [ ] Il campo SSID è popolato solo se in modalità STA.
+      - [ ] Il campo Username NUT è popolato se il dato è presente.
+      - [ ] In caso di errore di rete, l'app non si blocca e i campi restano vuoti o coi placeholder di default.
+    ref: TASK-02
+  - id: TASK-03
+    title: E2E Test for UI Auto-populate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Implementare un test E2E che verifichi il corretto popolamento dei campi all'avvio dell'applicazione tramite Playwright.
+
+      ## File Coinvolti
+      - `tests/e2e/config_autopopulate.spec.ts` (creare il file) — Scrivere un test che mocka la risposta di `/api/config` (restituendo ad esempio `{"wifi":{"ssid":"MyHomeNetwork","mode":"STA"},"nut":{"username":"nutadmin"}}`) e verifica che gli input `ssid` e `nut-username` abbiano il `.value` corrispondente a quanto restituito dal mock.
+
+      ## Criteri di Completamento
+      - [ ] Il test E2E verifica che il campo SSID sia corretto in base alla risposta mockata del server in STA mode.
+      - [ ] Il test E2E verifica che il campo username del NUT sia pre-popolato correttamente.
+    ref: TASK-03
