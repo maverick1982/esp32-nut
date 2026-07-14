@@ -72,6 +72,61 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // NUT form functionality
+    const nutUsernameInput = document.getElementById('nut-username');
+    const nutPwdInput = document.getElementById('nut-password');
+    const btnSaveNut = document.getElementById('btn-save-nut');
+    const toggleNutPwd = document.getElementById('toggle-nut-pwd');
+
+    if(toggleNutPwd) {
+        toggleNutPwd.addEventListener('click', () => {
+            if(nutPwdInput.type === 'password') {
+                nutPwdInput.type = 'text';
+                toggleNutPwd.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"/></svg>`;
+            } else {
+                nutPwdInput.type = 'password';
+                toggleNutPwd.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+            }
+        });
+    }
+
+    if(document.getElementById('nut-form')) {
+        document.getElementById('nut-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            btnSaveNut.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...`;
+            btnSaveNut.disabled = true;
+            
+            try {
+                const response = await fetch('/api/nut/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: nutUsernameInput.value,
+                        password: nutPwdInput.value
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Save failed');
+                
+                btnSaveNut.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved!`;
+                btnSaveNut.style.background = 'var(--success)';
+                btnSaveNut.style.borderColor = 'var(--success)';
+                btnSaveNut.style.color = '#000';
+                btnSaveNut.style.boxShadow = '0 0 20px rgba(0, 255, 157, 0.4)';
+                
+                setTimeout(() => {
+                    btnSaveNut.innerHTML = `<span class="glow"></span> Save Credentials`;
+                    btnSaveNut.style = '';
+                    btnSaveNut.disabled = false;
+                }, 2000);
+            } catch (error) {
+                btnSaveNut.innerHTML = `<span>Error</span>`;
+                btnSaveNut.disabled = false;
+                alert('Failed to save NUT configuration.');
+            }
+        });
+    }
+
     // Logs functionality
     const terminalOutput = document.getElementById('terminal-output');
     const btnClearLogs = document.getElementById('btn-clear-logs');

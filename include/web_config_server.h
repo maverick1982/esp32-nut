@@ -20,6 +20,7 @@ private:
     void handleScan();
     void handleConnect();
     void handleLogs();
+    void handleNutConfig();
 
     bool should_restart = false;
     unsigned long restart_time = 0;

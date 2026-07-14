@@ -1,0 +1,89 @@
+schema: archetipo/plan/v2
+spec_code: US-013
+body: "### Technical Solution\n\nThe configuration page will be expanded to replace the placeholder in the NUT tab with an actual form for NUT server credentials (`username` and `password`). \n\nOn the backend, `web_config_server.cpp` will be updated to add a new `POST` endpoint `/api/nut/config` that parses the JSON payload containing the NUT credentials and updates them via `ConfigManager`. Since `ConfigManager` already supports extracting `nut.username` and `nut.password` from `config.json`, no changes are needed there.\n\n`NUTServer` must be updated to enforce these credentials. If no credentials are provided (empty string), it should fall back to disabled authentication or a default state per security policy.\n\n### Test Strategy\n\n- **Unit Tests**: Verify the `WebConfigServer` correctly parses the `/api/nut/config` request and updates the configuration.\n- **E2E Strategy**: Using Playwright (assuming standard setup), a test will navigate to the NUT Server tab, input a username and password, save the form, and verify that the UI shows a success state and the configuration is persisted. Another test will verify the fallback state.\n\n### Rework\nAggiornato l'utilizzo della libreria ArduinoJson in `src/web_config_server.cpp` per evitare l'utilizzo del metodo deprecato `containsKey`."
+tasks:
+  - id: TASK-01
+    title: Add NUT credentials form to UI
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sostituire il placeholder nel tab NUT con un form per le credenziali (username e password).
+
+      ## File Coinvolti
+      - `data/www/index.html` — Aggiungere il markup del form.
+      - `data/www/app.js` — Aggiungere il listener per la sottomissione del form e l'invio dei dati all'API.
+
+      ## Criteri di Completamento
+      - [ ] Il form contiene i campi username e password.
+      - [ ] La UI gestisce lo stato di invio (loading, success, error).
+    ref: TASK-01
+  - id: TASK-02
+    title: Add API endpoint for saving NUT config
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare un nuovo endpoint `/api/nut/config` nel WebConfigServer per ricevere e salvare la configurazione NUT.
+
+      ## File Coinvolti
+      - `include/web_config_server.h` — Dichiarare il metodo `handleNutConfig()`.
+      - `src/web_config_server.cpp` — Registrare l'endpoint `POST /api/nut/config` e implementare `handleNutConfig()` per leggere il JSON, aggiornare `ConfigManager` e chiamare `save()`.
+
+      ## Criteri di Completamento
+      - [ ] Il server risponde 200 OK con successo se il JSON è valido.
+      - [ ] La configurazione viene salvata correttamente in LittleFS.
+    ref: TASK-02
+  - id: TASK-03
+    title: Enforce NUT server authentication
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiornare l'implementazione del server NUT per richiedere l'autenticazione tramite i comandi USERNAME e PASSWORD se configurate in ConfigManager.
+
+      ## File Coinvolti
+      - `lib/NUTServer/nut_server.cpp` (o file che gestisce NUTServer) — Aggiungere il controllo delle credenziali memorizzate in ConfigManager durante le sessioni dei client.
+
+      ## Criteri di Completamento
+      - [ ] I client senza credenziali corrette vengono rifiutati.
+      - [ ] Se le credenziali sono vuote, abilitare un fallback di default o disabilitare l'autenticazione.
+    ref: TASK-03
+  - id: TASK-04
+    title: E2E Tests for NUT config
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere un test E2E per verificare la configurazione NUT dall'interfaccia utente.
+
+      ## File Coinvolti
+      - `tests/e2e/nut_config.spec.ts` (o framework E2E in uso) — Creare il test E2E.
+
+      ## Criteri di Completamento
+      - [ ] Il test compila il form NUT, lo invia e verifica il messaggio di successo.
+    ref: TASK-04
+  - id: TASK-05
+    title: Fix ArduinoJson deprecation warnings
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Risolvere i warning di compilazione dovuti all'utilizzo del metodo deprecato `containsKey` di `JsonDocument`.
+      Come segnalato in fase di review, in `ArduinoJson` v7 `containsKey` è deprecato.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Alle righe 158 e 161, sostituire `doc.containsKey("username")` con `doc["username"].is<String>()` e analogamente per `password`.
+
+      ## Criteri di Completamento
+      - [ ] I warning di compilazione relativi a `containsKey` sono risolti.
+    ref: TASK-05

@@ -6,8 +6,8 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 3
-status: TODO
-body: |-
+status: DONE
+body: |
   #### US-013: Interfaccia Web per Credenziali Server NUT
 
   **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
@@ -26,6 +26,29 @@ body: |-
   - [ ] Submitting the form securely saves the credentials (e.g., using NVS).
   - [ ] The NUT server uses these configured credentials for authenticating incoming connections (like those from Home Assistant).
   - [ ] If no credentials are configured, the server correctly enforces a default state (e.g., default credentials or disabled authentication depending on security policy).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/web_config_server.cpp:158** — Risolvere i warning di compilazione dovuti all'utilizzo del metodo deprecato `containsKey`. Sostituire `doc.containsKey("username")` con `doc["username"].is<String>()` (o analogo per il tipo) come suggerito dal compilatore per ArduinoJson v7.
+  - **src/web_config_server.cpp:161** — Sostituire `doc.containsKey("password")` con `doc["password"].is<String>()` per rimuovere il warning di deprecazione di ArduinoJson.
 history:
   - status: TODO
     at: "2026-07-11T14:16:19Z"
+  - status: PLANNED
+    at: "2026-07-14T15:08:49Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T15:11:40Z"
+  - status: REVIEW
+    at: "2026-07-14T15:19:26Z"
+  - status: TODO
+    at: "2026-07-14T15:26:15Z"
+  - status: PLANNED
+    at: "2026-07-14T15:28:58Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T15:30:12Z"
+  - status: REVIEW
+    at: "2026-07-14T15:30:44Z"
+  - status: DONE
+    at: "2026-07-14T15:39:20Z"

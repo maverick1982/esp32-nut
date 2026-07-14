@@ -33,6 +33,7 @@ void WebConfigServer::begin(bool isAPMode) {
     // REST endpoints
     server.on("/api/wifi/scan", HTTP_GET, [this]() { handleScan(); });
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
+    server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
 
     // Serve static files from LittleFS with Cache-Control
@@ -137,4 +138,37 @@ void WebConfigServer::handleConnect() {
 
 void WebConfigServer::handleLogs() {
     server.send(200, "application/json", AppLogger::getLogsJSON());
+}
+
+void WebConfigServer::handleNutConfig() {
+    if (server.hasArg("plain") == false) {
+        server.send(400, "application/json", "{\"error\": \"Body not received\"}");
+        return;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+    if (error) {
+        server.send(400, "application/json", "{\"error\": \"Invalid JSON\"}");
+        return;
+    }
+
+    NutConfig nc = config_mgr.getNutConfig();
+    if (doc["username"].is<String>()) {
+        nc.username = doc["username"].as<String>();
+    }
+    if (doc["password"].is<String>()) {
+        nc.password = doc["password"].as<String>();
+    }
+
+    config_mgr.setNutConfig(nc);
+    if (config_mgr.save("/config.json")) {
+        server.send(200, "application/json", "{\"success\": true}");
+        AppLogger::log("INFO", "[WEB] NUT configuration updated");
+        should_restart = true;
+        restart_time = millis() + 1000;
+    } else {
+        server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
+    }
 }

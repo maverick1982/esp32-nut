@@ -81,11 +81,32 @@
                 </div>
             </div>
 
-            <!-- Placeholders for other tabs -->
             <div class="tab-content" id="content-nut">
-                <div class="panel placeholder-panel">
-                    <h2>NUT Server Configuration</h2>
-                    <p class="mono">MODULE_NOT_INITIALIZED</p>
+                <div class="panel config-panel">
+                    <div class="panel-header">
+                        <h2>NUT Server Credentials</h2>
+                    </div>
+                    <form id="nut-form" class="form-container">
+                        <div class="form-group">
+                            <label for="nut-username">Username</label>
+                            <input type="text" id="nut-username" placeholder="admin" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="nut-password">Password</label>
+                            <div class="input-wrapper">
+                                <input type="password" id="nut-password" placeholder="••••••••••••" required>
+                                <button type="button" class="btn-icon" id="toggle-nut-pwd">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary" id="btn-save-nut">
+                                <span class="glow"></span>
+                                Save Credentials
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
             <div class="tab-content" id="content-logs">
