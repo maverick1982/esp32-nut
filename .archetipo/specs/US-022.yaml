@@ -1,0 +1,31 @@
+schema: archetipo/spec/v2
+code: US-022
+title: Fix blocco completo del sistema (freeze) dopo alcuni minuti
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: HIGH
+points: 3
+status: TODO
+body: |-
+  #### US-022: Fix blocco completo del sistema (freeze) dopo alcuni minuti
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As a user of the ESP32 NUT server,
+  I want the device to run continuously without freezing,
+  so that Home Assistant sensors remain updated reliably over time and the web UI remains accessible.
+
+  **Demonstrates**
+  After implementing this spec, the ESP32 will run stably for extended periods without freezing. The web logs will continue to update continuously, and the Home Assistant sensors will not become unavailable.
+
+  **Acceptance Criteria**
+  - [ ] Investigate and identify the root cause of the freeze (e.g. Watchdog Timer (WDT) reset, memory leak, infinite loop in USB/NUT communication, or a blocking call).
+  - [ ] Implement a fix that prevents the ESP32 from freezing after a few minutes of operation.
+  - [ ] Verify that the device operates continuously for at least 1 hour without any lock-ups or restarts.
+  - [ ] Confirm that both the web interface (logs) and the NUT server (HA sensors) remain responsive and update correctly over time.
+history:
+  - status: TODO
+    at: "2026-07-15T15:02:20Z"

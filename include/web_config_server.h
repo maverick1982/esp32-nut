@@ -17,7 +17,6 @@ private:
     ConfigManager& config_mgr;
     bool is_ap_mode;
 
-    void handleScan();
     void handleConnect();
     void handleLogs();
     void handleNutConfig();

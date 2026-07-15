@@ -1,0 +1,30 @@
+schema: archetipo/spec/v2
+code: US-021
+title: Fix bug overflow di millis() nel riavvio
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 1
+status: TODO
+body: |-
+  #### US-021: Fix bug overflow di millis() nel riavvio
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As a developer maintaining the web config server,
+  I want the delay logic for ESP.restart() to use subtraction instead of direct comparison,
+  so that the device correctly restarts even after 50 days of continuous uptime when millis() overflows.
+
+  **Demonstrates**
+  After implementing this spec, the restart condition logic will be safe from `millis()` overflow, ensuring the device doesn't get stuck indefinitely if a restart is requested around the 49.7 day mark.
+
+  **Acceptance Criteria**
+  - [ ] The restart condition in `WebConfigServer::loop()` is changed to use `(millis() - restart_request_time >= 1000)` or equivalent subtraction logic.
+  - [ ] The variable storing the time represents the moment the restart was requested, not the future time.
+  - [ ] The web interface can still successfully trigger a restart after saving configurations.
+history:
+  - status: TODO
+    at: "2026-07-15T14:58:37Z"

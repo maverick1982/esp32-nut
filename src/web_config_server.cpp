@@ -31,7 +31,6 @@ void WebConfigServer::begin(bool isAPMode) {
     });
 
     // REST endpoints
-    server.on("/api/wifi/scan", HTTP_GET, [this]() { handleScan(); });
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
@@ -63,45 +62,6 @@ void WebConfigServer::loop() {
     if (should_restart && millis() > restart_time) {
         ESP.restart();
     }
-}
-
-void WebConfigServer::handleScan() {
-    int n = WiFi.scanComplete();
-
-    if (n == WIFI_SCAN_FAILED) {
-        // Run async scan, show hidden, passive mode to avoid dropping AP connections, 100ms per channel
-        WiFi.scanNetworks(true, true, true, 100);
-        server.send(202, "application/json", "{\"status\": \"scanning\"}");
-        return;
-    }
-
-    if (n == WIFI_SCAN_RUNNING) {
-        server.send(202, "application/json", "{\"status\": \"scanning\"}");
-        return;
-    }
-
-    // Scan is complete
-    JsonDocument doc;
-    JsonArray networks = doc.to<JsonArray>();
-
-    for (int i = 0; i < n; ++i) {
-        JsonObject net = networks.add<JsonObject>();
-        net["ssid"] = WiFi.SSID(i);
-        net["sec"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "Open" : "WPA/WPA2";
-        
-        int rssi = WiFi.RSSI(i);
-        net["sig"] = rssi;
-        if (rssi > -60) net["type"] = "excellent";
-        else if (rssi > -80) net["type"] = "good";
-        else net["type"] = "weak";
-    }
-
-    String response;
-    serializeJson(doc, response);
-    server.send(200, "application/json", response);
-
-    // Free memory
-    WiFi.scanDelete();
 }
 
 void WebConfigServer::handleConnect() {

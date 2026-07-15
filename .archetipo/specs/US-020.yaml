@@ -1,0 +1,30 @@
+schema: archetipo/spec/v2
+code: US-020
+title: Fix bug logico nel fallback Wi-Fi
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 1
+status: TODO
+body: |-
+  #### US-020: Fix bug logico nel fallback Wi-Fi
+
+  **Epic:** EP-002 | **Priority:** HIGH | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As a developer maintaining the network stack,
+  I want the Wi-Fi fallback logic to correctly track the time since the last disconnection instead of the first boot connection attempt,
+  so that the ESP32 tries to reconnect to the router for 30 secondi before falling back to AP mode if a disconnection occurs later on.
+
+  **Demonstrates**
+  After implementing this spec, simulating a router disconnection after the ESP32 has been connected for several minutes will result in the ESP32 attempting to reconnect for 30 seconds before broadcasting its own Access Point, rather than immediately falling back to AP mode.
+
+  **Acceptance Criteria**
+  - [ ] The `m_firstConnectionAttempt` logic in `AppNetworkManager` is corrected or replaced with a `m_lastDisconnectTime`.
+  - [ ] If the router goes offline after a long period of successful connection, the device attempts to reconnect for at least 30 seconds.
+  - [ ] If the device fails to reconnect within 30 seconds, it falls back to AP mode.
+history:
+  - status: TODO
+    at: "2026-07-15T14:58:37Z"
