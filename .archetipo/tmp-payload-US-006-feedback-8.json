@@ -1,7 +1,0 @@
-{
-  "comments": [
-    {
-      "body": "Lo Sweeper ha completato con successo la sua missione! Il ponticello hardware mancante è stato identificato e scavalcato, e il LED RGB si è acceso trionfalmente sul **GPIO 48** come indicato dallo schema elettrico. Rimuovere ora la logica temporanea dello sweeper da `update()`, ripristinare la logica originale della macchina a stati (CONNECTING = blink giallo, OPERATIONAL = fisso verde, ERROR = blink rosso) usando l'oggetto `Adafruit_NeoPixel` allocato in modo fisso sul pin 48, e togliere il bypass sui test unitari."
-    }
-  ]
-}

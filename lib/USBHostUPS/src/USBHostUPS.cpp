@@ -6,7 +6,8 @@ USBHostUPS::USBHostUPS() :
     _client_handle(NULL), 
     _dev_handle(NULL), 
     _initialized(false),
-    _last_poll(0) {
+    _last_poll(0),
+    _chemStrIdx(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -213,24 +214,28 @@ void USBHostUPS::loop() {
         if (_ups_data.product == "") { requestStringDescriptor(2); vTaskDelay(pdMS_TO_TICKS(10)); }
         if (_ups_data.serialNumber == "") { requestStringDescriptor(4); vTaskDelay(pdMS_TO_TICKS(10)); }
 
-        requestReport(0x01, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x02, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x06, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x08, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x0c, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x0d, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x0e, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x12, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x13, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
-        requestReport(0x14, 0x03); vTaskDelay(pdMS_TO_TICKS(10));
+        requestReport(0x01, 0x03, 4); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x02, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x06, 0x03, 6); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x07, 0x03, 8); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x08, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x09, 0x03, 5); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x0a, 0x03, 5); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x0c, 0x03, 8); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x0d, 0x03, 4); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x0e, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x10, 0x03, 9); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x12, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x13, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x14, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
+        requestReport(0x1f, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
-
 void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t length) {
     if (length == 0 || data == NULL) return;
 
-    size_t offset = 0;
-    if (data[0] == report_id && length > 1) {
+    size_t offset = 0; // The ESP-IDF driver may or may not strip the Report ID
+    if (length > 1 && data[0] == report_id) {
         offset = 1;
     }
 
@@ -274,9 +279,30 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
             }
             break;
 
+        case 0x07:
+            if (length - offset >= 6) {
+                _ups_data.load = data[offset + 5];
+                if (_ups_data.configApparentPower > 0) {
+                    _ups_data.realPower = (uint16_t)(((uint32_t)_ups_data.configApparentPower * 60 * _ups_data.load) / 10000);
+                }
+            }
+            break;
+
         case 0x08:
             if (length - offset >= 1) {
                 _ups_data.remainingCapacityLimit = data[offset];
+            }
+            break;
+
+        case 0x09:
+            if (length - offset >= 4) {
+                _ups_data.delayShutdown = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
+            }
+            break;
+
+        case 0x0a:
+            if (length - offset >= 4) {
+                _ups_data.delayStart = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
             }
             break;
 
@@ -302,6 +328,16 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
             }
             break;
 
+        case 0x10:
+            if (length - offset >= 1) {
+                uint8_t chemIdx = data[offset];
+                if (chemIdx > 0 && chemIdx != _chemStrIdx) {
+                    _chemStrIdx = chemIdx;
+                    requestStringDescriptor(chemIdx);
+                }
+            }
+            break;
+
         case 0x12:
             if (length - offset >= 1) {
                 _ups_data.configVoltage = data[offset];
@@ -320,16 +356,22 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
             }
             break;
 
+        case 0x1f:
+            if (length - offset >= 1) {
+                _ups_data.beeperEnabled = (data[offset] == 2);
+            }
+            break;
+
         default:
             break;
     }
 }
 
-bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type) {
+bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
 
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 8, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + expected_length, 0, &transfer);
     if (err != ESP_OK) {
         return false;
     }
@@ -339,12 +381,12 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type) {
     setup->bRequest = 0x01;      
     setup->wValue = (report_type << 8) | report_id;
     setup->wIndex = 0;           
-    setup->wLength = 8;
+    setup->wLength = expected_length;
 
     transfer->device_handle = _dev_handle;
     transfer->callback = control_transfer_cb;
     transfer->context = this;
-    transfer->num_bytes = 8 + 8;
+    transfer->num_bytes = 8 + expected_length;
 
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
@@ -414,4 +456,5 @@ void USBHostUPS::parseStringDescriptor(uint8_t index, const uint8_t *data, size_
     if (index == 1) _ups_data.manufacturer = str;
     else if (index == 2) _ups_data.product = str;
     else if (index == 4) _ups_data.serialNumber = str;
+    else if (_chemStrIdx > 0 && index == _chemStrIdx) _ups_data.batteryType = str;
 }

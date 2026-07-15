@@ -40,6 +40,19 @@ struct UPSData {
     String manufacturer = "";
     String product = "";
     String serialNumber = "";
+
+    uint8_t load = 0;
+    uint16_t realPower = 0;
+    bool beeperEnabled = true;
+    int32_t delayShutdown = -1;
+    int32_t delayStart = -1;
+    int32_t timerStart = -1;
+    int32_t timerShutdown = -1;
+
+    String batteryType = "";
+    String upsType = "";
+    uint16_t outputVoltageNominal = 0;
+    uint16_t outputFrequencyNominal = 0;
 };
 
 class USBHostUPS {
@@ -63,7 +76,7 @@ private:
     static void control_transfer_cb(usb_transfer_t *transfer);
     void parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length);
     void handle_client_event(const usb_host_client_event_msg_t *event_msg);
-    bool requestReport(uint8_t report_id, uint8_t report_type);
+    bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8);
     bool requestStringDescriptor(uint8_t string_index);
 
     TaskHandle_t _usb_task_handle;
@@ -74,6 +87,7 @@ private:
 
     UPSData _ups_data;
     uint32_t _last_poll;
+    uint8_t _chemStrIdx;
 };
 
 #endif // USB_HOST_UPS_H

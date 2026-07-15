@@ -1,0 +1,165 @@
+schema: archetipo/spec/v2
+code: US-019
+title: Estensione Parametri Diagnostici UPS per Home Assistant
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-019: Estensione Parametri Diagnostici UPS per Home Assistant
+
+  **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente finale (Amministratore di Home Assistant),
+  Voglio che il server NUT su ESP32 esponga tutti i parametri diagnostici aggiuntivi dell'UPS Eaton (es. autonomia batteria, carico reale, chimica della batteria, tensioni nominali, stato del beeper, ritardi di spegnimento/riavvio, soglie di trasferimento),
+  in modo da avere la stessa visibilità e le stesse entità fornite da un server NUT standard installato su un sistema Linux.
+
+  **Demonstrates**
+  Dopo l'implementazione, l'integrazione NUT di Home Assistant mostrerà i nuovi sensori (Sensori e Diagnostica) come: Autonomia della batteria, Real power, Chimica della batteria, Frequenze/Tensioni nominali, Setpoint batteria scarica, Stato del segnalatore acustico, e le soglie di trasferimento di tensione. I comandi `LIST VAR` tramite NUT risponderanno con i dati necessari a popolare tali entità.
+
+  **Acceptance Criteria**
+  - [ ] Mappare ed esporre le variabili NUT mancanti (es. `battery.runtime`, `ups.realpower`, `battery.type`, `output.voltage.nominal`, `output.frequency.nominal`, `ups.power.nominal`, `ups.delay.shutdown`, `ups.delay.start`, `battery.charge.low`, `ups.beeper.status`, `ups.timer.start`, `ups.timer.shutdown`, `ups.type`, `input.transfer.low`, `input.transfer.high`).
+  - [ ] Il parser HID (`UPSStatus`) deve estrarre questi dati dall'UPS Eaton in maniera totalmente dinamica. Non è consentito hardcodare alcun valore costante (né `battery.type`, né `ups.type`, né tensioni nominali).
+  - [ ] L'aggiornamento viene verificato accertandosi che Home Assistant rilevi correttamente le nuove entità senza errori di parsing.
+  - [ ] L'esecuzione del comando `LIST VAR <upsname>` sul server ESP32 NUT deve restituire l'elenco esteso completo interrogando i dati in RAM ricavati esclusivamente da USB.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Aggiungere uno strumento, uno script o istruzioni per estrarre i descrittori USB avanzati (es. tramite il driver usbhid-ups in debug mode su Ubuntu) in modo da poter mappare dinamicamente i parametri mancanti in C++.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Esporre in `NUTServer.cpp` i parametri `ups.load` e `ups.realpower` (e gli altri parametri parsati come delayStart, delayShutdown, beeperEnabled, ecc.) tramite i comandi LIST VAR e GET VAR.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - I parametri `ups.load` e `ups.realpower` risultano esposti ma sempre a 0, nonostante ci sia un carico. Il calcolo o la lettura dal descrittore HID nel file `USBHostUPS.cpp` è errato. Controllare l'estrazione da `Report 0x07` e il calcolo del `realPower`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Carico e Potenza ora funzionano correttamente. Ci sono problemi ancora sui valori di 'Stato' e 'Dati di stato', controllare la lettura o l'assegnazione dello stato UPS nel parser.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Continua a non funzionare. I valori di 'Stato' e 'Dati di stato' dovrebbero essere 'OL' e 'Online'.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Non è cambiato nulla. Lo stato continua ad essere sconosciuto o errato su Home Assistant.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - La situazione è peggiorata. Ora i valori di tutti i parametri sono 'Sconosciuto', 'Unknown' o '0'. L'offset non va forzato a 1, ma rimosso del tutto: i payload inviati dall'ESP-IDF non contengono il Report ID al primo byte.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Nuovamente tutti i sensori senza valori. Problema identificato: in `requestReport`, `wLength` è cablato a 8. Tuttavia, alcuni dei report aggiunti recentemente (es. 0x10, 0x18, 0x0b) superano gli 8 byte di lunghezza. Questo causava uno STALL o un overflow durante il controllo transfer, invalidando tutte le letture. È necessario aumentare `wLength` e l'allocazione del buffer a 64 byte in `requestReport`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Continua a non funzionare. Il device (Eaton 3S) va in STALL se si richiede una wLength che non corrisponde ESATTAMENTE alla dimensione del payload (+1 se include il Report ID). Utilizzare wLength = 64 non ha funzionato.  Soluzione adottata: 1) Aggiungere `expected_length` dinamico a `requestReport` basato sulle esatte dimensioni dei report dal log HID. 2) Aumentare il delay tra richieste successive nel `loop` da 10ms a 50ms per dare tempo all'UPS di processarle. 3) Ripristinare l'euristica `offset = 1 se data[0] == report_id` per gestire la potenziale fluttuazione del Report ID.
+history:
+  - status: TODO
+    at: "2026-07-14T16:49:30Z"
+  - status: PLANNED
+    at: "2026-07-14T16:52:03Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T16:58:03Z"
+  - status: REVIEW
+    at: "2026-07-14T17:09:50Z"
+  - status: TODO
+    at: "2026-07-14T17:43:18Z"
+  - status: PLANNED
+    at: "2026-07-14T17:53:42Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T17:55:15Z"
+  - status: REVIEW
+    at: "2026-07-14T17:56:41Z"
+  - status: TODO
+    at: "2026-07-14T18:11:25Z"
+  - status: PLANNED
+    at: "2026-07-14T18:12:56Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T18:13:53Z"
+  - status: REVIEW
+    at: "2026-07-14T18:14:53Z"
+  - status: TODO
+    at: "2026-07-14T18:19:16Z"
+  - status: PLANNED
+    at: "2026-07-14T18:22:32Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T18:25:29Z"
+  - status: REVIEW
+    at: "2026-07-14T18:25:35Z"
+  - status: TODO
+    at: "2026-07-14T19:50:36Z"
+  - status: PLANNED
+    at: "2026-07-14T19:55:26Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T19:57:50Z"
+  - status: REVIEW
+    at: "2026-07-14T19:58:00Z"
+  - status: TODO
+    at: "2026-07-14T20:05:41Z"
+  - status: PLANNED
+    at: "2026-07-14T20:10:01Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T20:13:32Z"
+  - status: REVIEW
+    at: "2026-07-14T20:13:40Z"
+  - status: TODO
+    at: "2026-07-14T20:20:35Z"
+  - status: PLANNED
+    at: "2026-07-14T20:22:26Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T20:24:35Z"
+  - status: REVIEW
+    at: "2026-07-14T20:24:45Z"
+  - status: TODO
+    at: "2026-07-14T20:30:04Z"
+  - status: PLANNED
+    at: "2026-07-14T20:31:42Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T20:33:02Z"
+  - status: REVIEW
+    at: "2026-07-14T20:33:47Z"
+  - status: TODO
+    at: "2026-07-14T20:40:51Z"
+  - status: PLANNED
+    at: "2026-07-14T20:43:29Z"
+  - status: IN PROGRESS
+    at: "2026-07-14T20:43:43Z"
+  - status: REVIEW
+    at: "2026-07-14T20:44:03Z"
+  - status: TODO
+    at: "2026-07-15T14:16:24Z"
+  - status: PLANNED
+    at: "2026-07-15T14:19:39Z"
+  - status: IN PROGRESS
+    at: "2026-07-15T14:22:15Z"
+  - status: REVIEW
+    at: "2026-07-15T14:25:29Z"
+  - status: DONE
+    at: "2026-07-15T14:31:51Z"

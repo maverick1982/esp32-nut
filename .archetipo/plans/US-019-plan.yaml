@@ -1,0 +1,228 @@
+schema: archetipo/plan/v2
+spec_code: US-019
+body: "### Technical Solution (Rework 8)\n\nIl problema del ritorno allo stato in cui tutti i sensori non hanno valori è dovuto a un errore di dimensionamento del buffer in `requestReport`. L'implementazione attuale richiede `wLength = 8` per tutti i report. Tuttavia, alcuni dei report interrogati (es. `0x18`, `0x0b`, `0x10`) superano abbondantemente questa lunghezza. \n\nQuando l'host richiede 8 byte per un report che ne contiene di più, il dispositivo causa un overflow buffer e il Control Endpoint va in STALL. Una volta che l'endpoint va in STALL, tutte le chiamate successive falliscono in cascata, impedendo la lettura di qualsiasi sensore.\n\nLa soluzione è aumentare l'allocazione in `usb_host_transfer_alloc` a `8 + 64` e impostare `wLength = 64` (il max packet size standard per i report HID).\n\n### Rework 9\nL'impostazione generica di `wLength = 64` non ha risolto lo STALL. L'Eaton 3S è estremamente pignolo e blocca l'endpoint di controllo se `wLength` non corrisponde all'esatta lunghezza del report (Payload Size + 1 per il Report ID). La soluzione è mappare staticamente la lunghezza esatta per ogni Report ID e ritardare leggermente il polling a 50ms. Inoltre, va ripristinata l'euristica sull'offset per gestire eventuali differenze nell'invio o meno del Report ID come primo byte."
+tasks:
+  - id: TASK-01
+    title: Extend UPSData struct and HID mapping
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere i nuovi campi alla struttura `UPSData` per gestire interamente da USB le letture richieste, inclusi i testi (tipo batteria, tipo UPS) e le nominali.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere i nuovi campi: `uint8_t load`, `uint16_t realPower`, `bool beeperEnabled`, delay e timer vari. Aggiungere anche `String batteryType`, `String upsType`, `uint16_t outputVoltageNominal`, e `uint16_t outputFrequencyNominal`.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementare la logica di estrazione dei nuovi campi dal report HID o dai feature reports, evitando ogni fallback a stringhe statiche.
+
+      ## Criteri di Completamento
+      - [ ] `UPSData` supporta le nuove variabili senza hardcoding.
+      - [ ] Il parser decodifica attivamente i nuovi Usage ID dell'UPS Eaton.
+    ref: TASK-01
+  - id: TASK-02
+    title: Expose parsed variables via NUT TCP Server
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Mappare i campi estratti attivamente da `UPSData` nel server TCP.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — Aggiornare `LIST VAR` e `GET VAR` in modo da esporre `battery.type`, `ups.type`, `output.voltage.nominal`, `output.frequency.nominal`, e tutti i ritardi/soglie puntando **solamente** ai campi dell'oggetto `UPSData` ritornato da `_usb_ups->getUPSData()`.
+
+      ## Criteri di Completamento
+      - [ ] `LIST VAR` elenca tutte le variabili richieste a condizione che siano state lette dall'UPS.
+      - [ ] Nessun parametro è restituito come stringa costante se non arriva dallo stack USB.
+    ref: TASK-02
+  - id: TASK-03
+    title: Automated test for TCP variables
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiungere uno script per confermare che l'elenco delle variabili esposte includa i dati presi dalla memoria RAM letta dall'USB.
+
+      ## File Coinvolti
+      - `tests/test_nut_tcp.js` (o aggiunta a `tests/integration/ups_status.cpp` se esistente) — Testare che `GET VAR` ritorni i campi corretti e verificare che un UPS con report non noto o scollegato non restituisca fallback pre-compilati.
+
+      ## Criteri di Completamento
+      - [ ] Il test verifica l'assenza di dati hardcodati per `battery.type` e tensioni nominali.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Fix: Parse advanced reports (0x07, 0x09, 0x0a, 0x1f)'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere il polling e il parsing dei Report ID 0x07 (per il load), 0x09 (DelayBeforeShutdown), 0x0a (DelayBeforeStartup), 0x1f (AudibleAlarmControl) estratti dal log di debug.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] I report aggiuntivi vengono interrogati nel loop.
+      - [ ] `decodeReport` aggiorna i campi in `UPSData` leggendo ai corretti offset emersi dal log.
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Fix: Parse string indices (Report 0x10) for battery type'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Aggiungere la logica per leggere l'indice della stringa per `iDeviceChemistry` dal Report 0x10 all'offset 0, e inoltrare una `requestStringDescriptor` per tale indice. Quando ricevuta, assegnarla a `batteryType`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Il parametro `battery.type` viene risolto tramite string descriptor dinamico basato sul report 0x10.
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Fix: Expose load and realpower in NUTServer'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Aggiornare `NUTServer.cpp` per esporre nei comandi `LIST VAR` e `GET VAR` le variabili `ups.load`, `ups.realpower`, `ups.delay.start`, `ups.delay.shutdown` e `ups.beeper.status`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `LIST VAR` include `ups.load` se `data.load > 0`.
+      - [ ] `LIST VAR` include `ups.realpower` se calcolato (>0).
+      - [ ] Vengono stampati anche i delay se presenti.
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Fix: Correct load offset in Report 0x07 and math precision'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      Correggere la lettura del byte in `USBHostUPS.cpp` per il report ID 0x07. L'offset corretto è 5 (40 bit), non 40 byte. Aggiornare anche il calcolo di `realPower` utilizzando tipi `uint32_t` temporanei per prevenire precision loss.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `data[offset + 5]` viene utilizzato in fase di decodifica del report 0x07.
+      - [ ] La formula per `realPower` non perde zeri significativi.
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Fix: Use Input Report type for Report 0x01'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      Modificare il polling in `USBHostUPS.cpp` affinché il `Report 0x01` venga richiesto come Input Report (`0x01`) anziché Feature Report (`0x03`). I valori di stato real-time sono infatti aggiornati sull'Input report.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `requestReport(0x01, 0x01)` viene usato al posto di `requestReport(0x01, 0x03)`.
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Fix: Fix offset heuristic in decodeReport'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      Modificare la logica di `offset` in `decodeReport` rimuovendo l'euristica fallace `data[0] == report_id`. Poiché l'UPS usa Report IDs e l'ESP-IDF passa il pacchetto grezzo con il Report ID al primo byte, l'offset deve essere sempre `1` fintanto che la lunghezza lo consente (`length > 1`). Questo risolve il bug in cui il report `0x01` con primo byte di payload a `0x01` faceva slittare erroneamente l'offset.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] L'euristica `data[0] == report_id` è rimossa.
+      - [ ] `offset = 1` viene assegnato incondizionatamente se `length > 1` per gestire la presenza del Report ID.
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Fix: Revert Report 0x01 polling to Feature Report'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      Ripristinare il polling del Report `0x01` come Feature Report (`0x03`) in `USBHostUPS.cpp`. Il tentativo di leggerlo come Input Report (`0x01`) falliva probabilmente con uno stall sul control endpoint, impedendo a `decodeReport` di essere chiamato e lasciando lo stato indefinito.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La chiamata `requestReport(0x01, 0x01)` viene riportata a `requestReport(0x01, 0x03)`.
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Fix: Remove offset entirely in decodeReport'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      Il driver USB dell'ESP-IDF non restituisce il Report ID come primo byte del payload dopo una GET_REPORT. L'imposizione di `offset = 1` fatta nel Rework 5 ha quindi sfasato tutti i report di un byte, rompendo anche ciò che funzionava (es. il carico). Modificare `decodeReport` per forzare `offset = 0` (o rimuovere del tutto l'uso della variabile `offset`) in modo che la lettura del payload inizi sempre dall'indice 0 del buffer `data`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] In `decodeReport`, `offset` è pari a 0.
+      - [ ] Tutte le estrazioni leggono correttamente a partire dall'inizio del buffer.
+    ref: TASK-11
+  - id: TASK-12
+    title: 'Fix: Increase requestReport buffer size to 64 bytes'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      In `requestReport`, l'impostazione cablata di `wLength = 8` e l'allocazione del buffer `8 + 8` limitano la lettura a soli 8 byte. Dato che stiamo richiedendo report molto più grandi (come lo `0x18` o lo `0x0b`), richiedere soli 8 byte provoca un overflow che manda l'endpoint in STALL. Modificare l'allocazione a `8 + 64` e `wLength` a `64` per consentire all'UPS di inviare report completi senza errori.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `usb_host_transfer_alloc` richiede `8 + 64` byte.
+      - [ ] `setup->wLength` è impostato a 64.
+      - [ ] `transfer->num_bytes` è `8 + 64`.
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Fix: Exact wLength and delay on GET_REPORT'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Descrizione
+      Il dispositivo (Eaton 3S) va in STALL se si richiede una `wLength` che non corrisponde ESATTAMENTE alla dimensione del report.
+
+      1) Aggiungere `expected_length` dinamico a `requestReport` basato sulle esatte dimensioni dei report dal log HID.
+      2) Aumentare il delay tra richieste successive nel `loop` da 10ms a 50ms per dare tempo all'UPS di processarle.
+      3) Ripristinare l'euristica `offset = 1 se data[0] == report_id` per gestire la potenziale fluttuazione del Report ID nel payload della control pipe.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Il metodo `requestReport` accetta la `expected_length` calcolata su base Report ID.
+      - [ ] Il polling avviene con 50ms di delay tra richieste.
+      - [ ] L'euristica `data[0] == report_id` è attiva.
+    ref: TASK-13

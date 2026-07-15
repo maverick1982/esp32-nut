@@ -245,6 +245,17 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
                 client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
                 client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data.configVoltage);
+                if (data.outputVoltageNominal > 0) client.printf("VAR %s output.voltage.nominal \"%d\"\n", upsName.c_str(), data.outputVoltageNominal);
+                if (data.outputFrequencyNominal > 0) client.printf("VAR %s output.frequency.nominal \"%d\"\n", upsName.c_str(), data.outputFrequencyNominal);
+                client.printf("VAR %s ups.load \"%d\"\n", upsName.c_str(), data.load);
+                client.printf("VAR %s ups.realpower \"%d\"\n", upsName.c_str(), data.realPower);
+                if (data.delayShutdown >= 0) client.printf("VAR %s ups.delay.shutdown \"%d\"\n", upsName.c_str(), data.delayShutdown);
+                if (data.delayStart >= 0) client.printf("VAR %s ups.delay.start \"%d\"\n", upsName.c_str(), data.delayStart);
+                if (data.timerStart >= 0) client.printf("VAR %s ups.timer.start \"%d\"\n", upsName.c_str(), data.timerStart);
+                if (data.timerShutdown >= 0) client.printf("VAR %s ups.timer.shutdown \"%d\"\n", upsName.c_str(), data.timerShutdown);
+                if (data.batteryType.length() > 0) client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data.batteryType.c_str());
+                if (data.upsType.length() > 0) client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data.upsType.c_str());
+                client.printf("VAR %s ups.beeper.status \"%s\"\n", upsName.c_str(), data.beeperEnabled ? "enabled" : "disabled");
                 client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data.outlet1Switch ? 1 : 0);
                 client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data.outlet2Switch ? 1 : 0);
             }
@@ -342,6 +353,28 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
             } else if (varNameLower == "input.voltage.nominal") {
                 client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data.configVoltage);
+            } else if (varNameLower == "output.voltage.nominal" && data.outputVoltageNominal > 0) {
+                client.printf("VAR %s output.voltage.nominal \"%d\"\n", upsName.c_str(), data.outputVoltageNominal);
+            } else if (varNameLower == "output.frequency.nominal" && data.outputFrequencyNominal > 0) {
+                client.printf("VAR %s output.frequency.nominal \"%d\"\n", upsName.c_str(), data.outputFrequencyNominal);
+            } else if (varNameLower == "ups.load") {
+                client.printf("VAR %s ups.load \"%d\"\n", upsName.c_str(), data.load);
+            } else if (varNameLower == "ups.realpower") {
+                client.printf("VAR %s ups.realpower \"%d\"\n", upsName.c_str(), data.realPower);
+            } else if (varNameLower == "ups.delay.shutdown" && data.delayShutdown >= 0) {
+                client.printf("VAR %s ups.delay.shutdown \"%d\"\n", upsName.c_str(), data.delayShutdown);
+            } else if (varNameLower == "ups.delay.start" && data.delayStart >= 0) {
+                client.printf("VAR %s ups.delay.start \"%d\"\n", upsName.c_str(), data.delayStart);
+            } else if (varNameLower == "ups.timer.start" && data.timerStart >= 0) {
+                client.printf("VAR %s ups.timer.start \"%d\"\n", upsName.c_str(), data.timerStart);
+            } else if (varNameLower == "ups.timer.shutdown" && data.timerShutdown >= 0) {
+                client.printf("VAR %s ups.timer.shutdown \"%d\"\n", upsName.c_str(), data.timerShutdown);
+            } else if (varNameLower == "battery.type" && data.batteryType.length() > 0) {
+                client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data.batteryType.c_str());
+            } else if (varNameLower == "ups.type" && data.upsType.length() > 0) {
+                client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data.upsType.c_str());
+            } else if (varNameLower == "ups.beeper.status") {
+                client.printf("VAR %s ups.beeper.status \"%s\"\n", upsName.c_str(), data.beeperEnabled ? "enabled" : "disabled");
             } else if (varNameLower == "outlet.1.switch") {
                 client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data.outlet1Switch ? 1 : 0);
             } else if (varNameLower == "outlet.2.switch") {
