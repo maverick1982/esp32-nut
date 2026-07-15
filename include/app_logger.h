@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 
 struct LogMessage {
+    uint32_t id;
     unsigned long time;
     String level;
     String msg;
@@ -22,6 +23,7 @@ private:
     static LogMessage logBuffer[MAX_LOGS];
     static int head;
     static int count;
+    static uint32_t nextId;
 };
 
 #endif // APP_LOGGER_H

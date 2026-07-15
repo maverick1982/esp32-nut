@@ -1,0 +1,102 @@
+schema: archetipo/plan/v2
+spec_code: US-022
+body: |-
+  ## Rework
+  Il feedback indica che i sensori Home Assistant non funzionano più, pur essendo i log funzionanti e senza freeze del sistema. Questo indica che il server TCP (NUTServer) sta chiudendo le connessioni prematuramente o troncando i pacchetti.
+
+  ## Technical Solution
+  Analizzando le modifiche introdotte per `TASK-02`, sono emersi due problemi critici nel `NUTServer.cpp`:
+  1. È stato inserito `_clients[slot].setTimeout(200);`. Ridurre il timeout a 200ms sulla socket TCP fa sì che le molteplici chiamate a `client.printf()` per inviare le variabili (`LIST VAR ups`, che produce oltre 1000 byte) vadano in timeout prima che l'ACK Wi-Fi ritorni, troncando l'output. Home Assistant non riceve la fine della lista e contrassegna i sensori come offline.
+  2. La condizione di disconnessione `if (!_clients[i].connected()) { closeSession(i); }` chiude la sessione e distrugge il buffer anche se ci sono ancora byte da leggere (`available() > 0`), perdendo richieste in caso di half-close della socket.
+
+  ## Test Strategy
+  - Test di Integrazione / E2E: Verificare che Home Assistant riceva l'intera risposta di `LIST VAR ups` senza troncamenti e che i sensori si aggiornino regolarmente.
+tasks:
+  - id: TASK-01
+    title: Refactoring USBHostUPS in Macchina a Stati Non-Bloccante
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Eliminare le chiamate bloccanti `vTaskDelay` all'interno del metodo `loop()` per impedire il congelamento del main loop di Arduino. La logica di polling deve diventare una state machine asincrona temporizzata con `millis()`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere variabili di stato (es. `_poll_step`, `_last_step_time`).
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Modificare `loop()` per eseguire uno switch su `_poll_step`. Ogni 50ms, inviare la richiesta appropriata (`requestReport` o `requestStringDescriptor`) e incrementare lo step. Se tutti i report sono stati richiesti, reimpostare il timer per il ciclo successivo (es. 5000ms).
+
+      ## Criteri di Completamento
+      - [ ] Nessuna chiamata a `vTaskDelay` è presente in `USBHostUPS::loop()`.
+      - [ ] L'intervallo tra le singole richieste USB rimane di ~50ms.
+      - [ ] I parametri dell'UPS continuano ad aggiornarsi correttamente.
+    ref: TASK-01
+  - id: TASK-02
+    title: Ottimizzazione e Protezione NUTServer
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Prevenire infinite loop sulla socket TCP e ridurre la frammentazione dell'heap allocando i buffer in anticipo.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — Modificare l'inizializzazione del client per chiamare `_clientBuffer[slot].reserve(256)`. Modificare il loop di lettura sostituendo `while (_clients[i].available())` con un ciclo limitato, es. `for(int b = 0; b < 128 && _clients[i].available(); b++)`.
+
+      ## Criteri di Completamento
+      - [ ] `_clientBuffer` utilizza `reserve(256)` quando un client viene accettato.
+      - [ ] La lettura dal client è limitata a un numero massimo di byte per singola esecuzione di `loop()` per garantire il fair-scheduling del microcontrollore.
+      - [ ] Il comando `LIST VAR` e gli altri continuano a funzionare normalmente.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verifica della stabilità sul lungo termine
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Eseguire uno stress test manuale per verificare che le latenze bloccanti siano state risolte.
+
+      ## File Coinvolti
+      - Manual Testing
+
+      ## Criteri di Completamento
+      - [ ] L'ESP32 gira per almeno 1 ora senza freeze né reboot.
+      - [ ] L'interfaccia Web e la connessione NUT rispondono in tempi rapidi anche durante le fasi di polling.
+    ref: TASK-03
+  - id: TASK-04
+    title: Fix Frontend Polling per Log Infiniti (Rework)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Risolvere il blocco dei log sulla Web UI causato dalla saturazione del buffer circolare. Aggiungere un ID incrementale per ogni log nel backend e aggiornare il frontend per filtrare in base all'ultimo ID visualizzato invece che usare la lunghezza dell'array.
+
+      ## File Coinvolti
+      - `include/app_logger.h` — Aggiungere un campo `uint32_t id` a `LogMessage` e un contatore statico `uint32_t nextId = 1` alla classe `AppLogger`.
+      - `src/app_logger.cpp` — Assegnare `nextId++` al log generato (nella funzione `log()`) e aggiungere il campo `id` nell'output JSON restituito da `getLogsJSON()`.
+      - `data/www/app.js` — Sostituire la logica basata su `lastLogIndex` e `logs.length`. Tenere traccia di un `lastLogId` (inizialmente 0). Quando arriva la risposta, iterare sui log ricevuti e aggiungere al terminale solo quelli con `log.id > lastLogId`. Aggiornare `lastLogId` con l'ID più alto ricevuto tra i log aggiunti.
+
+      ## Criteri di Completamento
+      - [ ] Il backend genera un campo `id` autoincrementale per ogni log JSON.
+      - [ ] Il frontend aggiorna correttamente il terminale anche dopo la soglia dei 50 log.
+      - [ ] L'interfaccia web mostra log in scorrimento continuo senza mai bloccarsi o svuotarsi erroneamente.
+    ref: TASK-04
+  - id: TASK-05
+    title: Fix Timeout TCP e Half-Close Socket
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Risolvere il problema di disconnessione prematura e troncamento dei dati verso Home Assistant eliminando il timeout restrittivo e migliorando il controllo di connessione.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — In `loop()`, cercare la linea `_clients[slot].setTimeout(200);` e rimuoverla (o commentarla) ripristinando il timeout di default di 1000-2000ms.
+      - `lib/NUTServer/src/NUTServer.cpp` — Nello stesso file, modificare la guardia di chiusura connessione da `if (!_clients[i].connected())` a `if (!_clients[i].connected() && !_clients[i].available())` per evitare di perdere comandi inviati con half-close.
+
+      ## Criteri di Completamento
+      - [ ] Il timeout non è forzato a 200ms sulla socket del client.
+      - [ ] La disconnessione avviene solo se non ci sono più byte pendenti in ricezione.
+      - [ ] I comandi lunghi (come `LIST VAR ups`) vengono trasmessi per intero senza interruzioni.
+    ref: TASK-05

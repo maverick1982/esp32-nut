@@ -7,7 +7,9 @@ USBHostUPS::USBHostUPS() :
     _dev_handle(NULL), 
     _initialized(false),
     _last_poll(0),
-    _chemStrIdx(0) {
+    _chemStrIdx(0),
+    _poll_step(0),
+    _last_step_time(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -207,28 +209,42 @@ void USBHostUPS::loop() {
     }
 
     uint32_t now = millis();
-    if (now - _last_poll >= 5000 || _last_poll == 0) {
-        _last_poll = now != 0 ? now : 1;
-        
-        if (_ups_data.manufacturer == "") { requestStringDescriptor(1); vTaskDelay(pdMS_TO_TICKS(10)); }
-        if (_ups_data.product == "") { requestStringDescriptor(2); vTaskDelay(pdMS_TO_TICKS(10)); }
-        if (_ups_data.serialNumber == "") { requestStringDescriptor(4); vTaskDelay(pdMS_TO_TICKS(10)); }
+    if (_poll_step == 0) {
+        if (now - _last_poll >= 5000 || _last_poll == 0) {
+            _last_poll = now != 0 ? now : 1;
+            _poll_step = 1;
+            _last_step_time = now;
+        }
+    }
 
-        requestReport(0x01, 0x03, 4); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x02, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x06, 0x03, 6); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x07, 0x03, 8); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x08, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x09, 0x03, 5); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x0a, 0x03, 5); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x0c, 0x03, 8); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x0d, 0x03, 4); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x0e, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x10, 0x03, 9); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x12, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x13, 0x03, 3); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x14, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
-        requestReport(0x1f, 0x03, 2); vTaskDelay(pdMS_TO_TICKS(50));
+    if (_poll_step > 0) {
+        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
+            _last_step_time = now;
+            switch (_poll_step) {
+                case 1: if (_ups_data.manufacturer == "") requestStringDescriptor(1); break;
+                case 2: if (_ups_data.product == "") requestStringDescriptor(2); break;
+                case 3: if (_ups_data.serialNumber == "") requestStringDescriptor(4); break;
+                case 4: requestReport(0x01, 0x03, 4); break;
+                case 5: requestReport(0x02, 0x03, 3); break;
+                case 6: requestReport(0x06, 0x03, 6); break;
+                case 7: requestReport(0x07, 0x03, 8); break;
+                case 8: requestReport(0x08, 0x03, 2); break;
+                case 9: requestReport(0x09, 0x03, 5); break;
+                case 10: requestReport(0x0a, 0x03, 5); break;
+                case 11: requestReport(0x0c, 0x03, 8); break;
+                case 12: requestReport(0x0d, 0x03, 4); break;
+                case 13: requestReport(0x0e, 0x03, 3); break;
+                case 14: requestReport(0x10, 0x03, 9); break;
+                case 15: requestReport(0x12, 0x03, 2); break;
+                case 16: requestReport(0x13, 0x03, 3); break;
+                case 17: requestReport(0x14, 0x03, 2); break;
+                case 18: requestReport(0x1f, 0x03, 2); break;
+                default: 
+                    _poll_step = 0; 
+                    return;
+            }
+            _poll_step++;
+        }
     }
 }
 void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t length) {

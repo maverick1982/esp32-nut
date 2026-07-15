@@ -185,7 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
         terminalOutput.scrollTop = terminalOutput.scrollHeight;
     }
 
-    let lastLogIndex = 0;
+    let lastLogId = 0;
 
     async function fetchLogs() {
         if (!document.getElementById('content-logs').classList.contains('active')) return;
@@ -195,15 +195,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 const logs = await response.json();
                 
-                if (logs.length < lastLogIndex) {
-                    terminalOutput.innerHTML = '';
-                    lastLogIndex = 0;
+                let maxId = lastLogId;
+                for (let i = 0; i < logs.length; i++) {
+                    if (logs[i].id > lastLogId) {
+                        addLogEntry(logs[i].level, logs[i].msg);
+                        if (logs[i].id > maxId) {
+                            maxId = logs[i].id;
+                        }
+                    }
                 }
-                
-                for (let i = lastLogIndex; i < logs.length; i++) {
-                    addLogEntry(logs[i].level, logs[i].msg);
-                }
-                lastLogIndex = logs.length;
+                lastLogId = maxId;
             }
         } catch (error) {
             console.error('Error fetching logs:', error);

@@ -95,13 +95,14 @@ void NUTServer::loop() {
                 }
                 _clients[slot] = newClient;
                 
-                // Ottimizzazione stabilità: timeout ridotto a 200ms per evitare blocchi
-                _clients[slot].setTimeout(200);
+                // Il timeout di 200ms è rimosso per evitare troncamento dei dati
+                // _clients[slot].setTimeout(200);
                 
                 _clientActive[slot] = true;
                 _clientAuthenticated[slot] = false;
                 _clientLastActivity[slot] = millis();
                 _clientBuffer[slot] = "";
+                _clientBuffer[slot].reserve(256);
                 _clientUsername[slot] = "";
                 Serial.printf("[NUTServer] Client connesso allo slot %d da %s:%d\n", 
                               slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
@@ -116,7 +117,7 @@ void NUTServer::loop() {
     // 2. Gestisci i client attivi
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         if (_clientActive[i]) {
-            if (!_clients[i].connected()) {
+            if (!_clients[i].connected() && !_clients[i].available()) {
                 closeSession(i);
                 continue;
             }
@@ -130,7 +131,7 @@ void NUTServer::loop() {
             }
 
             // Leggi dati disponibili dal buffer del client
-            while (_clients[i].available()) {
+            for (int b = 0; b < 128 && _clients[i].available(); b++) {
                 char c = _clients[i].read();
                 _clientLastActivity[i] = millis(); // Resetta il timer di inattività
                 

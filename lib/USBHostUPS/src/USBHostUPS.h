@@ -88,6 +88,8 @@ private:
     UPSData _ups_data;
     uint32_t _last_poll;
     uint8_t _chemStrIdx;
+    uint8_t _poll_step;
+    uint32_t _last_step_time;
 };
 
 #endif // USB_HOST_UPS_H

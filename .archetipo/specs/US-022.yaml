@@ -6,8 +6,8 @@ epic:
   title: Fondamenta del Progetto
 priority: HIGH
 points: 3
-status: TODO
-body: |-
+status: DONE
+body: |
   #### US-022: Fix blocco completo del sistema (freeze) dopo alcuni minuti
 
   **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
@@ -26,6 +26,42 @@ body: |-
   - [ ] Implement a fix that prevents the ESP32 from freezing after a few minutes of operation.
   - [ ] Verify that the device operates continuously for at least 1 hour without any lock-ups or restarts.
   - [ ] Confirm that both the web interface (logs) and the NUT server (HA sensors) remain responsive and update correctly over time.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il log sull'interfaccia web si blocca dopo circa 3 minuti, nonostante l'ESP32 continui a funzionare (come verificato dal serial monitor e dagli aggiornamenti di Home Assistant). Il problema sembra circoscritto alla gestione dei log via Web UI (es. WebSockets o SSE). Indagare e risolvere il blocco.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - I sensori su Home Assistant hanno smesso di funzionare (mentre il problema ai log web è stato risolto). Indagare sulle cause della mancata comunicazione o aggiornamento dei sensori via NUT e ripristinare il corretto funzionamento.
 history:
   - status: TODO
     at: "2026-07-15T15:02:20Z"
+  - status: PLANNED
+    at: "2026-07-15T15:07:21Z"
+  - status: IN PROGRESS
+    at: "2026-07-15T15:10:05Z"
+  - status: REVIEW
+    at: "2026-07-15T15:11:54Z"
+  - status: TODO
+    at: "2026-07-15T15:31:46Z"
+  - status: PLANNED
+    at: "2026-07-15T15:34:52Z"
+  - status: IN PROGRESS
+    at: "2026-07-15T15:39:03Z"
+  - status: REVIEW
+    at: "2026-07-15T15:40:13Z"
+  - status: TODO
+    at: "2026-07-15T15:51:55Z"
+  - status: PLANNED
+    at: "2026-07-15T15:56:26Z"
+  - status: IN PROGRESS
+    at: "2026-07-15T15:58:11Z"
+  - status: REVIEW
+    at: "2026-07-15T16:00:44Z"
+  - status: DONE
+    at: "2026-07-15T16:14:24Z"

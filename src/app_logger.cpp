@@ -4,12 +4,14 @@
 LogMessage AppLogger::logBuffer[AppLogger::MAX_LOGS];
 int AppLogger::head = 0;
 int AppLogger::count = 0;
+uint32_t AppLogger::nextId = 1;
 
 void AppLogger::log(const String& level, const String& msg) {
     // Print to serial
     Serial.printf("[%lu] [%s] %s\n", millis(), level.c_str(), msg.c_str());
 
     // Add to buffer
+    logBuffer[head].id = nextId++;
     logBuffer[head].time = millis();
     logBuffer[head].level = level;
     logBuffer[head].msg = msg;
@@ -38,6 +40,7 @@ String AppLogger::getLogsJSON() {
     for (int i = 0; i < count; i++) {
         int idx = (startIdx + i) % MAX_LOGS;
         JsonObject obj = array.add<JsonObject>();
+        obj["id"] = logBuffer[idx].id;
         obj["time"] = logBuffer[idx].time;
         obj["level"] = logBuffer[idx].level;
         obj["msg"] = logBuffer[idx].msg;
