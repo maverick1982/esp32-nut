@@ -26,7 +26,7 @@ private:
     String m_password;
     wl_status_t m_lastStatus;
     uint32_t m_lastConnectionAttempt;
-    uint32_t m_firstConnectionAttempt;
+    uint32_t m_lastDisconnectTime;
     bool m_isStarted;
     bool m_apFallbackActive;
     std::function<void()> m_fallbackCallback;

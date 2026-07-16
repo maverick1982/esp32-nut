@@ -4,7 +4,7 @@
 AppNetworkManager::AppNetworkManager() 
     : m_lastStatus(WL_IDLE_STATUS), 
       m_lastConnectionAttempt(0), 
-      m_firstConnectionAttempt(0),
+      m_lastDisconnectTime(0),
       m_isStarted(false),
       m_apFallbackActive(false),
       m_fallbackCallback(nullptr) {}
@@ -36,7 +36,7 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     AppLogger::log("INFO", "[NETWORK] Connessione a SSID: %s...\n", m_ssid.c_str());
     WiFi.begin(m_ssid.c_str(), m_password.c_str());
     m_lastConnectionAttempt = millis();
-    m_firstConnectionAttempt = m_lastConnectionAttempt;
+    m_lastDisconnectTime = m_lastConnectionAttempt;
 }
 
 void AppNetworkManager::loop() {
@@ -49,6 +49,10 @@ void AppNetworkManager::loop() {
     
     // Rileva cambiamenti di stato
     if (currentStatus != m_lastStatus) {
+        if (m_lastStatus == WL_CONNECTED && currentStatus != WL_CONNECTED) {
+            m_lastDisconnectTime = now;
+        }
+        
         if (currentStatus == WL_CONNECTED) {
             AppLogger::log("INFO", "[NETWORK] Connessione stabilita! Indirizzo IP: %s\n", WiFi.localIP().toString().c_str());
         } else if (currentStatus == WL_DISCONNECTED && m_lastStatus == WL_CONNECTED) {
@@ -65,7 +69,7 @@ void AppNetworkManager::loop() {
     
     // Gestione riconnessione e fallback
     if (currentStatus != WL_CONNECTED && !m_apFallbackActive) {
-        if (now - m_firstConnectionAttempt >= 30000) {
+        if (now - m_lastDisconnectTime >= 30000) {
             AppLogger::log("WARN", "[NETWORK] Fallback Access Point attivato dopo 30s di fallimento.");
             WiFi.mode(WIFI_AP_STA);
             WiFi.softAP("NUT_ESP32_Config", "12345678");

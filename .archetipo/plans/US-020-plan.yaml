@@ -1,0 +1,51 @@
+schema: archetipo/plan/v2
+spec_code: US-020
+body: |-
+  ## Soluzione Tecnica
+
+  L'attuale implementazione di `AppNetworkManager` attiva il fallback in modalità Access Point basandosi su `m_firstConnectionAttempt`, che viene impostato solo in `begin()`. Se l'ESP32 perde la connessione dopo essere stato connesso con successo per un tempo superiore al timeout (30s), la condizione `now - m_firstConnectionAttempt >= 30000` risulta immediatamente vera, causando un fallback istantaneo senza alcun tentativo di riconnessione.
+
+  Per risolvere il problema:
+  1. Sostituire `m_firstConnectionAttempt` con `m_lastDisconnectTime`.
+  2. Inizializzare `m_lastDisconnectTime` a `millis()` all'interno di `begin()` per coprire la fase di connessione iniziale.
+  3. Aggiornare `m_lastDisconnectTime = millis()` nel metodo `loop()` ogni volta che lo stato Wi-Fi passa da `WL_CONNECTED` a uno stato disconnesso.
+  4. Aggiornare la condizione di fallback per valutare `now - m_lastDisconnectTime >= 30000`.
+
+  ## Strategia di Test
+
+  - **Unit Test**: Aggiornare `test_main.cpp` per garantire che i test di base continuino a passare.
+  - **Test di Integrazione/Manuale**: La verifica principale avverrà tramite test su hardware reale. Dopo aver connesso l'ESP32 e atteso un paio di minuti, si spegnerà il router per verificare che il dispositivo tenti la riconnessione per 30 secondi prima di attivare l'AP.
+  - **Strategia E2E**: Dato che la spec non introduce nuove componenti UI o pagine ma si limita a correggere la logica di backend, non è richiesta alcuna strategia di test E2E (mockup_generated = false).
+tasks:
+  - id: TASK-01
+    title: Refactoring AppNetworkManager per tempistiche di fallback
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sostituire la logica basata su `m_firstConnectionAttempt` con `m_lastDisconnectTime` per gestire correttamente i fallback successivi alla prima connessione.
+
+      ## File Coinvolti
+      - `include/network_manager.h` — Sostituire `m_firstConnectionAttempt` con `m_lastDisconnectTime`.
+      - `src/network_manager.cpp` — Inizializzare `m_lastDisconnectTime` in `begin()`. Aggiornare la variabile in `loop()` quando la connessione viene persa. Modificare il controllo a `now - m_lastDisconnectTime >= 30000`.
+
+      ## Criteri di Completamento
+      - [ ] La classe `AppNetworkManager` usa `m_lastDisconnectTime` al posto di `m_firstConnectionAttempt`.
+      - [ ] Il fallback ad AP avviene solo dopo 30 secondi dalla disconnessione.
+    ref: TASK-01
+  - id: TASK-02
+    title: Validazione Test e Comportamento
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Assicurarsi che i test in `test_network_manager/test_main.cpp` compilino e riflettano (se possibile) le nuove dipendenze o comportamenti.
+
+      ## File Coinvolti
+      - `test/test_network_manager/test_main.cpp` — Aggiunta di eventuali check di validazione base.
+
+      ## Criteri di Completamento
+      - [ ] I test unitari passano con successo (nessuna regressione introdotta).
+    ref: TASK-02

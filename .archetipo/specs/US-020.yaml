@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 1
-status: TODO
+status: DONE
 body: |-
   #### US-020: Fix bug logico nel fallback Wi-Fi
 
@@ -28,3 +28,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-15T14:58:37Z"
+  - status: PLANNED
+    at: "2026-07-16T15:34:54Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T15:36:34Z"
+  - status: REVIEW
+    at: "2026-07-16T15:37:50Z"
+  - status: DONE
+    at: "2026-07-16T15:48:24Z"
