@@ -122,6 +122,9 @@ void WebConfigServer::handleNutConfig() {
     if (doc["password"].is<String>()) {
         nc.password = doc["password"].as<String>();
     }
+    if (doc["ups_name"].is<String>()) {
+        nc.ups_name = doc["ups_name"].as<String>();
+    }
 
     config_mgr.setNutConfig(nc);
     if (config_mgr.save("/config.json")) {
@@ -143,6 +146,7 @@ void WebConfigServer::handleGetConfig() {
     
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
+    nutObj["ups_name"] = config_mgr.getNutConfig().ups_name;
     
     String response;
     serializeJson(doc, response);

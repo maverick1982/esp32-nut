@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Firmware OTA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </div>
+                <div class="brand-name">NUT-OS <span>v1.0</span></div>
+            </div>
+            
+            <nav class="tabs">
+                <button class="tab" data-target="wifi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
+                    Wi-Fi Config
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    System Logs
+                </button>
+                <button class="tab active" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status">
+                <div class="status-indicator" style="background: var(--success); box-shadow: 0 0 8px rgba(0, 255, 157, 0.5);"></div>
+                <span>Network Connected</span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">Firmware Update</h1>
+                <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
+            </header>
+
+            <div class="ota-layout">
+                <!-- Main Column -->
+                <div class="ota-main">
+
+                    <!-- Current Firmware Readout -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Firmware Corrente</h2>
+                        </div>
+                        <div class="firmware-readout">
+                            <div class="readout-cell">
+                                <div class="readout-label">Versione</div>
+                                <div class="readout-value accent" id="fw-version">1.2.0</div>
+                            </div>
+                            <div class="readout-cell">
+                                <div class="readout-label">Build</div>
+                                <div class="readout-value" id="fw-build">Jul 15 2026 09:32</div>
+                            </div>
+                            <div class="readout-cell">
+                                <div class="readout-label">Partizione Attiva</div>
+                                <div class="readout-value accent" id="fw-partition">app0</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Panel -->
+                    <div class="panel" id="upload-panel">
+                        <div class="panel-header">
+                            <h2>Carica Firmware</h2>
+                        </div>
+
+                        <!-- State 1: Dropzone -->
+                        <div id="state-idle">
+                            <div class="ota-type-selector">
+                                <label class="radio-label">
+                                    <input type="radio" name="ota-type" value="firmware" checked>
+                                    <span class="radio-custom"></span>
+                                    <span class="radio-text">Firmware (App)</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="ota-type" value="filesystem">
+                                    <span class="radio-custom"></span>
+                                    <span class="radio-text">Filesystem (Web UI)</span>
+                                </label>
+                            </div>
+
+                            <div class="ota-warning fs-warning" id="fs-warning" style="display: none;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                <p><strong>Attenzione:</strong> il flash del filesystem sovrascriverà la configurazione (config.json). Sarà necessario riconfigurare Wi-Fi e NUT dopo il riavvio.</p>
+                            </div>
+
+                            <div class="upload-dropzone" id="dropzone">
+                                <input type="file" id="file-input" accept=".bin">
+                                <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                <div class="upload-label">Trascina il file .bin qui</div>
+                                <div class="upload-sublabel" id="upload-hint">Seleziona firmware.bin per aggiornare l'applicazione</div>
+                            </div>
+
+                            <!-- File Selected -->
+                            <div class="file-info" id="file-info">
+                                <div class="file-icon-wrapper">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                                </div>
+                                <div class="file-details">
+                                    <div class="file-name" id="file-name">firmware_v1.3.0.bin</div>
+                                    <div class="file-size" id="file-size">842.7 KB</div>
+                                </div>
+                                <button class="file-remove" id="file-remove" title="Rimuovi file">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                </button>
+                            </div>
+
+                            <div class="upload-actions" id="upload-actions" style="display: none;">
+                                <button class="btn btn-primary" id="btn-flash" disabled>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                                    Avvia Aggiornamento
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- State 2: Progress -->
+                        <div class="progress-section" id="state-progress">
+                            <div class="progress-header">
+                                <span class="progress-label" id="progress-status">Scrittura in flash...</span>
+                                <span class="progress-percent" id="progress-percent">0%</span>
+                            </div>
+                            <div class="progress-track" id="progress-track">
+                                <!-- 20 segments generated by JS -->
+                            </div>
+                            <div class="progress-detail">
+                                <span id="progress-bytes">0 KB / 842.7 KB</span>
+                                <span id="progress-speed">-- KB/s</span>
+                            </div>
+
+                            <!-- Phase Steps -->
+                            <div class="phase-steps">
+                                <div class="phase-step active" id="phase-upload">
+                                    <div class="phase-dot">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                    </div>
+                                    <span class="phase-name">Upload</span>
+                                </div>
+                                <div class="phase-step" id="phase-verify">
+                                    <div class="phase-dot">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                    </div>
+                                    <span class="phase-name">Verifica</span>
+                                </div>
+                                <div class="phase-step" id="phase-commit">
+                                    <div class="phase-dot">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2"/></svg>
+                                    </div>
+                                    <span class="phase-name">Commit</span>
+                                </div>
+                                <div class="phase-step" id="phase-reboot">
+                                    <div class="phase-dot">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                                    </div>
+                                    <span class="phase-name">Reboot</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- State 3: Success -->
+                        <div class="ota-result" id="state-success">
+                            <div class="result-icon success">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                            </div>
+                            <div class="result-title success">Aggiornamento Completato</div>
+                            <div class="result-message">Il firmware è stato installato con successo. Il dispositivo si riavvierà automaticamente.</div>
+                            <div class="countdown" id="countdown">5</div>
+                            <div class="result-message" style="font-size: 0.75rem;">Riavvio in corso...</div>
+                        </div>
+
+                        <!-- State 4: Error -->
+                        <div class="ota-result" id="state-error">
+                            <div class="result-icon error">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                            </div>
+                            <div class="result-title error">Aggiornamento Fallito</div>
+                            <div class="result-message" id="error-message">Errore durante la scrittura: hash checksum non corrispondente. Il firmware precedente è stato preservato.</div>
+                            <button class="btn btn-outline" id="btn-retry" style="margin-top: 0.5rem;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                                Riprova
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Sidebar -->
+                <div class="ota-sidebar">
+
+                    <!-- Flash Memory Map -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Mappa Flash</h2>
+                        </div>
+                        <div class="flash-map">
+                            <div class="flash-partition">
+                                <div class="flash-bar app0">APP0 (attiva)</div>
+                                <div class="flash-bar app1 target" id="flash-target">APP1 (target)</div>
+                            </div>
+                            <div class="flash-partition">
+                                <div class="flash-bar spiffs">LittleFS</div>
+                                <div class="flash-bar nvs">NVS</div>
+                            </div>
+                        </div>
+                        <div class="flash-legend">
+                            <div class="legend-item"><div class="legend-dot active"></div> Attiva</div>
+                            <div class="legend-item"><div class="legend-dot target"></div> Target OTA</div>
+                            <div class="legend-item"><div class="legend-dot storage"></div> Dati</div>
+                        </div>
+                    </div>
+
+                    <!-- Device Info -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Informazioni Dispositivo</h2>
+                        </div>
+                        <div class="info-block">
+                            <div class="info-row">
+                                <span class="info-key">Chip</span>
+                                <span class="info-val">ESP32-S3</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">Flash</span>
+                                <span class="info-val">8 MB</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">Free Heap</span>
+                                <span class="info-val success">312 KB</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">Uptime</span>
+                                <span class="info-val">4d 12h 37m</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">Max OTA</span>
+                                <span class="info-val">1.8 MB</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Warning -->
+                    <div class="ota-warning">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <p><strong>Attenzione:</strong> Non scollegare l'alimentazione durante l'aggiornamento. In caso di interruzione, il dispositivo manterrà il firmware precedente grazie allo schema a doppia partizione.</p>
+                    </div>
+
+                </div>
+            </div>
+
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

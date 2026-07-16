@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // NUT form functionality
+    const nutUpsNameInput = document.getElementById('nut-upsname');
     const nutUsernameInput = document.getElementById('nut-username');
     const nutPwdInput = document.getElementById('nut-password');
     const btnSaveNut = document.getElementById('btn-save-nut');
@@ -101,6 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        ups_name: nutUpsNameInput.value,
                         username: nutUsernameInput.value,
                         password: nutPwdInput.value
                     })
@@ -240,9 +242,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     ssidInput.value = data.wifi.ssid;
                 }
             }
-            if (data.nut && data.nut.username) {
-                if (nutUsernameInput && !nutUsernameInput.value) {
+            if (data.nut) {
+                if (data.nut.username && nutUsernameInput && !nutUsernameInput.value) {
                     nutUsernameInput.value = data.nut.username;
+                }
+                if (data.nut.ups_name && nutUpsNameInput && !nutUpsNameInput.value) {
+                    nutUpsNameInput.value = data.nut.ups_name;
                 }
             }
         })

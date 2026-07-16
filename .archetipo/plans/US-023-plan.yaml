@@ -1,0 +1,180 @@
+schema: archetipo/plan/v2
+spec_code: US-023
+body: |-
+  ## Technical Solution
+
+  Il problema segnalato in fase di review (`Error running: LIST VAR: ERR INVALID-ARGUMENT`) deriva da come Home Assistant (tramite la libreria PyNUT) interagisce con il comando `LIST VAR`. Quando PyNUT invia comandi, si aspetta tolleranza lato server.
+  Se il nome dell'UPS viene omesso (perché considerato implicito se ce n'è uno solo) o malformato, il server attualmente rifiuta la richiesta con `ERR INVALID-ARGUMENT` al rigo 217 di `NUTServer.cpp`. Inoltre, comandi `LIST` non supportati (es. `LIST CLIENT`) restituiscono attualmente `ERR INVALID-ARGUMENT`, il che può confondere la gestione degli errori in PyNUT (che solleva l'eccezione col nome dell'ultimo comando supportato o conosciuto).
+
+  È emerso inoltre che il parametro `ups_name` non era esposto nella Web UI, rendendolo non configurabile.
+
+  **Modifiche Architetturali:**
+  1. Rilassare i controlli sui token: se `tokens.size() < 3` per comandi come `LIST VAR`, `LIST RW`, `LIST CMD`, il server utilizzerà `_config.ups_name` come valore di fallback.
+  2. Se il token include virgolette o è malformato in qualche altro modo che riduce il conteggio dei token, il fallback previene l'eccezione.
+  3. Per le varianti di `LIST` non supportate (clausola `else`), il server restituirà `ERR UNKNOWN-COMMAND` o `ERR INVALID-SUBCMD` invece di `ERR INVALID-ARGUMENT` per non mandare in crash l'integrazione di Home Assistant, che si aspetta messaggi d'errore standard.
+  4. Aggiungere il campo `nut-upsname` al form della Web UI per permetterne la configurazione utente (aggiornando HTML, CSS, JS e il controller C++).
+
+  ## Test Strategy
+  - **Unit/Integration Tests:** Creare/aggiornare i test per la libreria `NUTServer` verificando che inviando `LIST VAR` (senza argomenti) venga correttamente elencato il contenuto per l'UPS di default, anziché un errore.
+  - **Mockups:** L'aggiunta di un singolo campo ad un form esistente non richiede mockups.
+tasks:
+  - id: TASK-01
+    title: Refactoring ConfigManager per utilizzare Preferences (NVS)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sostituire la logica di lettura e scrittura su LittleFS con la libreria `Preferences` per salvare la configurazione nella memoria NVS.
+
+      ## Lettura
+      - `include/config_manager.h`
+      - `src/config_manager.cpp`
+
+      ## Modifica
+      - Includere `<Preferences.h>` in `config_manager.h`.
+      - Aggiungere un membro privato `Preferences preferences;` alla classe.
+      - In `ConfigManager::save()`, creare il documento JSON come prima, serializzarlo in una `String` e salvarlo con `preferences.putString("config_json", jsonString)` invece di scriverlo su file.
+      - In `ConfigManager::begin()`, chiamare `preferences.begin("nutos", false)`.
+      - Modificare la logica di caricamento base: leggere la stringa con `preferences.getString("config_json", "")`. Se non è vuota, deserializzare la stringa (anziché il file) e popolare le struct.
+
+      ## File Coinvolti
+      - `include/config_manager.h` — aggiungere `Preferences`
+      - `src/config_manager.cpp` — aggiornare `save()` e la logica base di `begin()`
+
+      ## Criteri di Completamento
+      - [ ] `ConfigManager` non scrive più su file `/config.json`.
+      - [ ] I dati vengono serializzati in JSON e salvati in NVS sotto il namespace `nutos`.
+      - [ ] Il riavvio dell'ESP32 mantiene la configurazione correttamente caricata dalla NVS.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare migrazione legacy da LittleFS a NVS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere un meccanismo di retrocompatibilità in `ConfigManager::begin()` per recuperare le vecchie configurazioni salvate su LittleFS e migrarle silenziosamente in NVS al primo avvio.
+
+      ## Lettura
+      - `src/config_manager.cpp` (modificato da TASK-01)
+
+      ## Modifica
+      - In `ConfigManager::begin()`, se `preferences.getString("config_json", "")` è vuota, verificare se `LittleFS.exists("/config.json")` è true.
+      - Se esiste, leggere il file come si faceva prima, caricare il JSON e popolare le variabili.
+      - Chiamare immediatamente `save()` (che ora scrive in NVS).
+      - Rimpiazzare o rinominare il vecchio file: `LittleFS.rename("/config.json", "/config.json.bak")` in modo che la migrazione avvenga una sola volta.
+
+      ## File Coinvolti
+      - `src/config_manager.cpp` — aggiungere blocco di migrazione in `begin()`
+
+      ## Criteri di Completamento
+      - [ ] Al primo avvio, se NVS è vuota ma esiste `/config.json`, la configurazione viene recuperata.
+      - [ ] Dopo il recupero, la configurazione viene salvata in NVS.
+      - [ ] Il vecchio file `/config.json` viene rinominato in `.bak` (o rimosso) per evitare doppie letture.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiornare i test unitari per ConfigManager
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiornare i test unitari esistenti in `test_config_manager` per farli funzionare con la nuova implementazione basata su NVS e coprire il flusso di migrazione.
+
+      ## Lettura
+      - `test/test_config_manager/test_main.cpp`
+
+      ## Modifica
+      - Assicurarsi che i test chiamino `preferences.clear()` prima di ogni esecuzione per avere uno stato pulito.
+      - Aggiungere un test case specifico per la migrazione: creare manualmente un file fittizio `/config.json` usando `LittleFS.open("w")`, istanziare `ConfigManager`, chiamare `begin()`, verificare che carichi i dati e che il file originale sia rinominato/rimosso.
+
+      ## File Coinvolti
+      - `test/test_config_manager/test_main.cpp` — aggiornare i test case
+
+      ## Criteri di Completamento
+      - [ ] I test esistenti (lettura, scrittura, validazione fallita) passano con la nuova logica NVS.
+      - [ ] C'è un nuovo test case che verifica esplicitamente il comportamento di migrazione da LittleFS a NVS.
+      - [ ] `pio test` supera tutti i controlli per questo modulo.
+    ref: TASK-03
+  - id: TASK-04
+    title: Spostare il montaggio di LittleFS in modo incondizionato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Risolvere il bug segnalato in fase di review: il server web richiede che LittleFS sia sempre montato all'avvio, ma a causa delle modifiche per NVS, `LittleFS.begin(true)` viene chiamato solo nel caso di fallback/migrazione. Bisogna spostare la chiamata all'inizio della funzione `ConfigManager::begin()`, prima di interagire con NVS.
+
+      ## Riferimento Rework
+      Il feedback evidenzia in `src/config_manager.cpp` che se `config_json` non è vuoto, il branch dell'`if` viene saltato, impedendo il mount di LittleFS e mandando in crash il WebServer.
+
+      ## Modifica
+      - Aprire `src/config_manager.cpp` alla riga 8 (`bool ConfigManager::begin(const char* filepath)`).
+      - Spostare `LittleFS.begin(true)` con il relativo controllo di errore all'inizio della funzione, subito dopo l'azzeramento di `is_valid = false;` e prima di `preferences.begin("nutos", false);`.
+      - Rimuovere `LittleFS.begin(true)` dal blocco `if (config_json == "")`.
+
+      ## File Coinvolti
+      - `src/config_manager.cpp` — spostare `LittleFS.begin(true)` incondizionatamente
+
+      ## Criteri di Completamento
+      - [ ] `LittleFS.begin(true)` viene chiamato ogni volta che `ConfigManager::begin()` viene eseguito.
+      - [ ] Il WebServer riesce a leggere i file statici dopo un avvio con configurazione NVS già presente.
+    ref: TASK-04
+  - id: TASK-05
+    title: Implementare logica di fallback per il parametro upsname in LIST VAR
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Risolvere il bug per cui `Home Assistant` fallisce la connessione con errore `ERR INVALID-ARGUMENT` per il comando `LIST VAR`.
+      Il parser del server attualmente richiede l'argomento `upsname`, ma se il client lo omette o invia un comando inatteso, restituisce l'errore bloccante.
+
+      ## Riferimento Rework
+      "Home Assistant restituisce un errore di connessione perché il comando 'LIST VAR' fallisce con 'ERR INVALID-ARGUMENT'."
+
+      ## Modifica
+      - In `lib/NUTServer/src/NUTServer.cpp`, nel metodo `handleCommand`, modificare il branch per `subcmd == "VAR"` (attorno alla riga 216).
+      - Invece di ritornare `ERR INVALID-ARGUMENT` se `tokens.size() < 3`, impostare `upsName = _config.ups_name` in assenza di `tokens[2]`.
+      - Ripetere la stessa logica protettiva di fallback per `LIST CMD` e `LIST RW`.
+      - Nella clausola `else` finale di `if (cmd == "LIST")`, restituire `ERR UNKNOWN-COMMAND` o `ERR INVALID-SUBCMD` invece di `ERR INVALID-ARGUMENT`, per evitare che client come `pynut` interpretino male gli errori per comandi `LIST` non supportati (es. `LIST CLIENT`).
+      - (Opzionale) Gestire il caso analogo in `GET VAR` applicando logiche protettive sui token.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — aggiornare parsing e risposte d'errore
+
+      ## Criteri di Completamento
+      - [ ] `LIST VAR` (senza argomento) restituisce la lista delle variabili per l'UPS configurato.
+      - [ ] `LIST CLIENT` (o comando simile non riconosciuto) restituisce `ERR UNKNOWN-COMMAND` o `ERR INVALID-SUBCMD`.
+      - [ ] `Home Assistant` riesce a completare il pairing del server NUT senza eccezioni di `INVALID-ARGUMENT`.
+    ref: TASK-05
+  - id: TASK-06
+    title: Aggiungere il campo UPS Name all'interfaccia web
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Come richiesto dall'utente, il parametro `ups_name` deve essere esposto e configurabile dalla Web UI nella tab "NUT Server", dato che al momento mancano i campi per configurarlo.
+
+      ## Lettura
+      - `data/www/index.html`
+      - `data/www/app.js`
+      - `src/web_config_server.cpp`
+
+      ## Modifica
+      - In `data/www/index.html`, aggiungere un nuovo `div.form-group` all'interno di `nut-form` per il campo UPS Name (id `nut-upsname`).
+      - In `data/www/app.js`, aggiornare la logica di caricamento (`loadConfig`) per popolare il nuovo campo e la logica di salvataggio (`saveNutConfig`) per inviare il campo `ups_name` nel payload JSON al server.
+      - In `src/web_config_server.cpp`, assicurarsi che l'endpoint `/api/config/nut` gestisca correttamente il campo `ups_name` (se non lo fa già) salvandolo in `ConfigManager`.
+
+      ## File Coinvolti
+      - `data/www/index.html` — aggiungere input field
+      - `data/www/app.js` — gestire lettura e salvataggio del campo `ups_name`
+      - `src/web_config_server.cpp` — assicurare salvataggio del payload
+
+      ## Criteri di Completamento
+      - [ ] L'interfaccia web mostra il campo `UPS Name` nella sezione `NUT Server`.
+      - [ ] Salvare le credenziali aggiorna correttamente l'impostazione `ups_name` in NVS.
+      - [ ] Al ricaricamento della pagina, il nome UPS configurato viene mostrato nel campo.
+    ref: TASK-06

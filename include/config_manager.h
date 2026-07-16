@@ -2,6 +2,7 @@
 #define CONFIG_MANAGER_H
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 struct WifiConfig {
     String ssid;
@@ -31,6 +32,7 @@ private:
     WifiConfig wifi_config;
     NutConfig nut_config;
     bool is_valid;
+    Preferences preferences;
 };
 
 #endif // CONFIG_MANAGER_H

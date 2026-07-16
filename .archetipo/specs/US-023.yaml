@@ -1,0 +1,67 @@
+schema: archetipo/spec/v2
+code: US-023
+title: Migrazione configurazione su NVS per immunità ad aggiornamenti OTA
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 3
+status: DONE
+body: |
+  #### US-023: Migrazione configurazione su NVS per immunità ad aggiornamenti OTA
+
+  **Epic:** EP-002 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As a system administrator or hobbyist user,
+  I want the device configuration (Wi-Fi, NUT credentials) to be stored in the Non-Volatile Storage (NVS) partition instead of a LittleFS file,
+  so that I can safely perform Over-The-Air (OTA) updates of the filesystem (Web UI) without overwriting or losing my configuration data.
+
+  **Demonstrates**
+  After implementing this spec, the device will save and load its configuration using the `Preferences` library (NVS). A developer can perform a full filesystem wipe or flash a new `littlefs.bin` via OTA, and upon reboot, the device will still connect to the configured Wi-Fi network and start the NUT server with the correct credentials.
+
+  **Acceptance Criteria**
+  - [ ] The `ConfigManager` is refactored to use the Arduino `Preferences` library instead of `LittleFS` for reading and writing configuration.
+  - [ ] The configuration data (e.g., serialized JSON string or individual key-value pairs) is persisted correctly across reboots.
+  - [ ] Flashing or formatting the LittleFS partition does not erase the Wi-Fi or NUT configuration.
+  - [ ] Backward compatibility: on boot, if configuration exists in `config.json` on LittleFS but not in NVS, it is automatically migrated to NVS.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/config_manager.cpp** — Il server web e il filesystem non funzionano più se la configurazione è già presente in NVS, perché `LittleFS.begin(true)` viene chiamato solo nel blocco di fallback/migrazione. Bisogna chiamare `LittleFS.begin(true)` incondizionatamente all'inizio di `ConfigManager::begin()` in modo che venga montato sempre, altrimenti il web server va in crash.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Home Assistant restituisce un errore di connessione perché il comando 'LIST VAR' fallisce con 'ERR INVALID-ARGUMENT'. Il server NUT non gestisce correttamente la richiesta (probabilmente legata al passaggio dell'upsname o al parsing degli argomenti del comando LIST VAR), impedendo a Home Assistant di completare il pairing.
+history:
+  - status: TODO
+    at: "2026-07-16T16:46:55Z"
+  - status: PLANNED
+    at: "2026-07-16T16:52:29Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T16:55:50Z"
+  - status: REVIEW
+    at: "2026-07-16T17:05:31Z"
+  - status: TODO
+    at: "2026-07-16T17:37:14Z"
+  - status: PLANNED
+    at: "2026-07-16T17:39:32Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T17:41:46Z"
+  - status: REVIEW
+    at: "2026-07-16T17:48:06Z"
+  - status: TODO
+    at: "2026-07-16T17:55:03Z"
+  - status: PLANNED
+    at: "2026-07-16T18:01:03Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T18:06:25Z"
+  - status: REVIEW
+    at: "2026-07-16T18:12:13Z"
+  - status: DONE
+    at: "2026-07-16T18:19:43Z"

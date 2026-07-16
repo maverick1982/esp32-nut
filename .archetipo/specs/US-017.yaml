@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 5
-status: TODO
+status: PLANNED
 body: |-
   #### US-017: Aggiornamento Firmware via OTA (Over-The-Air)
 
@@ -30,3 +30,5 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-12T10:00:22Z"
+  - status: PLANNED
+    at: "2026-07-16T16:14:27Z"

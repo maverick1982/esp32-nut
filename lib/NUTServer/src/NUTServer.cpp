@@ -214,11 +214,12 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             return;
         } 
         else if (subcmd == "VAR") {
+            String upsName;
             if (tokens.size() < 3) {
-                client.print("ERR INVALID-ARGUMENT\n");
-                return;
+                upsName = _config.ups_name;
+            } else {
+                upsName = tokens[2];
             }
-            String upsName = tokens[2];
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
             String configUpsNameLower = _config.ups_name;
@@ -264,28 +265,35 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             return;
         }
         else if (subcmd == "CMD" || subcmd == "RW") {
+            String upsName;
             if (tokens.size() < 3) {
-                client.print("ERR INVALID-ARGUMENT\n");
-                return;
+                upsName = _config.ups_name;
+            } else {
+                upsName = tokens[2];
             }
-            String upsName = tokens[2];
             client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             client.printf("END LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             return;
         }
         else if (subcmd == "ENUM" || subcmd == "RANGE") {
-            if (tokens.size() < 4) {
+            String upsName;
+            String varName;
+            if (tokens.size() < 3) {
                 client.print("ERR INVALID-ARGUMENT\n");
                 return;
+            } else if (tokens.size() == 3) {
+                upsName = _config.ups_name;
+                varName = tokens[2];
+            } else {
+                upsName = tokens[2];
+                varName = tokens[3];
             }
-            String upsName = tokens[2];
-            String varName = tokens[3];
             client.printf("BEGIN LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
             client.printf("END LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
             return;
         }
         else {
-            client.print("ERR INVALID-ARGUMENT\n");
+            client.print("ERR UNKNOWN-COMMAND\n");
             return;
         }
     }
@@ -299,12 +307,18 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
         subcmd.toUpperCase();
 
         if (subcmd == "VAR") {
-            if (tokens.size() < 4) {
+            String upsName;
+            String varName;
+            if (tokens.size() < 3) {
                 client.print("ERR INVALID-ARGUMENT\n");
                 return;
+            } else if (tokens.size() == 3) {
+                upsName = _config.ups_name;
+                varName = tokens[2];
+            } else {
+                upsName = tokens[2];
+                varName = tokens[3];
             }
-            String upsName = tokens[2];
-            String varName = tokens[3];
 
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();

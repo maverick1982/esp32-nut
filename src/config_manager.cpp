@@ -8,27 +8,44 @@ ConfigManager::ConfigManager() : is_valid(false) {}
 bool ConfigManager::begin(const char* filepath) {
     is_valid = false;
     
-    // Inizializzazione LittleFS
+    // Inizializzazione LittleFS (ora incondizionata)
     if (!LittleFS.begin(true)) {
         AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile montare LittleFS!");
         return false;
     }
     
-    // Apertura del file di configurazione
-    File file = LittleFS.open(filepath, "r");
-    if (!file) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s!\n", filepath);
-        return false;
-    }
+    preferences.begin("nutos", false);
+    String config_json = preferences.getString("config_json", "");
     
-    // Parsing del file JSON usando la libreria ArduinoJson (v7)
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
+    DeserializationError error;
+    bool is_migration = false;
     
-    if (error) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito per il file %s. Dettagli: %s\n", filepath, error.c_str());
-        return false;
+    if (config_json == "") {
+        // Fallback to LittleFS (migrazione)
+        if (LittleFS.exists(filepath)) {
+            AppLogger::log("INFO", "[CONFIG] File legacy trovato, avvio migrazione...");
+            File file = LittleFS.open(filepath, "r");
+            if (!file) {
+                AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s per la migrazione!", filepath);
+                return false;
+            }
+            error = deserializeJson(doc, file);
+            file.close();
+            if (error) {
+                AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito per il file legacy %s. Dettagli: %s\n", filepath, error.c_str());
+                return false;
+            }
+            is_migration = true;
+        } else {
+            return false;
+        }
+    } else {
+        error = deserializeJson(doc, config_json);
+        if (error) {
+            AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito da NVS. Dettagli: %s\n", error.c_str());
+            return false;
+        }
     }
     
     // Estrazione dei campi Wi-Fi
@@ -54,7 +71,15 @@ bool ConfigManager::begin(const char* filepath) {
     
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
-    AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da LittleFS.");
+    
+    if (is_migration) {
+        this->save(filepath);
+        LittleFS.rename(filepath, String(filepath) + ".bak");
+        AppLogger::log("INFO", "[CONFIG] Migrazione a NVS completata.");
+    } else {
+        AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da NVS.");
+    }
+    
     return true;
 }
 
@@ -90,19 +115,19 @@ bool ConfigManager::save(const char* filepath) {
     nut["password"] = nut_config.password;
     nut["ups_name"] = nut_config.ups_name;
     
-    File file = LittleFS.open(filepath, "w");
-    if (!file) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s in scrittura!\n", filepath);
+    String jsonString;
+    if (serializeJson(doc, jsonString) == 0) {
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile serializzare il JSON.");
         return false;
     }
     
-    if (serializeJson(doc, file) == 0) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile scrivere il JSON su file.");
-        file.close();
+    preferences.begin("nutos", false);
+    size_t written = preferences.putString("config_json", jsonString);
+    if (written == 0) {
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile scrivere la configurazione in NVS.");
         return false;
     }
     
-    file.close();
-    AppLogger::log("INFO", "[CONFIG] Configurazione salvata correttamente su LittleFS.");
+    AppLogger::log("INFO", "[CONFIG] Configurazione salvata correttamente in NVS.");
     return true;
 }
