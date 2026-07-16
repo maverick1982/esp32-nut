@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <unity.h>
-#include <LittleFS.h>
 #include <WiFi.h>
 #include "config_manager.h"
 #include "USBHostUPS.h"
@@ -509,16 +508,11 @@ void test_comprehensive_variables(void) {
 void setup() {
     delay(2000); // Stabilizzazione porta seriale
 
-    // Inizializza LittleFS e crea file di configurazione di test
-    LittleFS.begin(true);
-    File f = LittleFS.open("/test_config.json", "w");
-    if (f) {
-        f.print("{\"wifi\":{\"ssid\":\"test_wifi\",\"password\":\"test_pass\"},\"nut\":{\"username\":\"admin\",\"password\":\"nut_password\",\"ups_name\":\"eaton\"}}");
-        f.close();
-    }
-
-    // Carica la configurazione di test
-    test_config.begin("/test_config.json");
+    // Configura la configurazione di test in memoria
+    WifiConfig w = {"test_wifi", "test_pass"};
+    NutConfig n = {"admin", "nut_password", "eaton"};
+    test_config.setWifiConfig(w);
+    test_config.setNutConfig(n);
 
     UNITY_BEGIN();
     RUN_TEST(test_tokenization);

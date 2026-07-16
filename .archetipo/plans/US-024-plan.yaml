@@ -1,0 +1,61 @@
+schema: archetipo/plan/v2
+spec_code: US-024
+body: ""
+tasks:
+  - id: TASK-01
+    title: Modificare la tabella delle partizioni (partitions.csv)
+    type: Infra
+    status: DONE
+    body: |
+      ## Descrizione
+      Rimuovere la partizione LittleFS per recuperare spazio e ingrandire le partizioni del firmware.
+
+      ## Modifica
+      - In `partitions.csv`, eliminare la riga `spiffs`.
+      - Ricalcolare gli offset e ingrandire `app0` e `app1` assegnando loro lo spazio recuperato (circa 1MB aggiuntivo a testa).
+    ref: TASK-01
+  - id: TASK-02
+    title: Rimuovere la dipendenza da LittleFS nel codice sorgente
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |
+      ## Descrizione
+      Eliminare ogni riferimento a LittleFS da `ConfigManager` e dal resto dell'applicativo.
+
+      ## Modifica
+      - In `src/config_manager.cpp`, rimuovere la `#include <LittleFS.h>`.
+      - Rimuovere la chiamata a `LittleFS.begin(true)` dalla funzione `begin()`.
+      - Rimuovere la logica di fallback legacy `test_migration` e la lettura del vecchio `/config.json`.
+      - Ripulire i test unitari in `test_main.cpp`.
+    ref: TASK-02
+  - id: TASK-03
+    title: Creare lo script di embedding (extra_scripts)
+    type: Infra
+    status: DONE
+    body: |
+      ## Descrizione
+      Aggiungere uno script Python che viene eseguito prima della build per convertire `data/www/` in un file header.
+
+      ## Modifica
+      - Creare `scripts/embed_web.py`.
+      - Lo script deve leggere tutti i file HTML, CSS e JS in `data/www/`, comprimerli opzionalmente (o lasciarli come testo), e generare un file `include/web_assets.h` contenente array di byte (`PROGMEM`) e la lunghezza di ciascun file.
+      - In `platformio.ini`, aggiungere `extra_scripts = pre:scripts/embed_web.py`.
+    ref: TASK-03
+  - id: TASK-04
+    title: Aggiornare il WebConfigServer per leggere da memoria
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |
+      ## Descrizione
+      Modificare `web_config_server.cpp` in modo che il server HTTP serva le pagine statiche direttamente dall'array `web_assets.h` generato dallo script.
+
+      ## Modifica
+      - Includere `web_assets.h`.
+      - Modificare la gestione delle route statiche (es. `/`, `/index.html`, `/app.js`, `/style.css`) per usare `server.send_P(200, "text/html", index_html_array, index_html_len)`.
+      - Rimuovere la logica che faceva il serve da `LittleFS`.
+    ref: TASK-04

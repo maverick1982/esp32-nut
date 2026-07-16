@@ -1,8 +1,8 @@
 #include "web_config_server.h"
 #include <WiFi.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "app_logger.h"
+#include "web_assets.h"
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
@@ -21,13 +21,26 @@ void WebConfigServer::begin(bool isAPMode) {
         server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
-        File file = LittleFS.open("/www/index.html", "r");
-        if (file) {
-            server.streamFile(file, "text/html");
-            file.close();
-        } else {
-            server.send(404, "text/plain", "Not Found");
-        }
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/html", (const char*)web_asset_index_html, web_asset_index_html_len);
+    });
+
+    server.on("/index.html", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/html", (const char*)web_asset_index_html, web_asset_index_html_len);
+    });
+
+    server.on("/app.js", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "application/javascript", (const char*)web_asset_app_js, web_asset_app_js_len);
+    });
+
+    server.on("/shared.css", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/css", (const char*)web_asset_shared_css, web_asset_shared_css_len);
     });
 
     // REST endpoints
@@ -35,9 +48,6 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
-
-    // Serve static files from LittleFS with Cache-Control
-    server.serveStatic("/", LittleFS, "/www/", "no-cache, no-store, must-revalidate");
 
     // Catch-all for Captive Portal (redirect to captive page if not found)
     server.onNotFound([this]() {
@@ -86,7 +96,7 @@ void WebConfigServer::handleConnect() {
     wc.password = pwd;
 
     config_mgr.setWifiConfig(wc);
-    if (config_mgr.save("/config.json")) {
+    if (config_mgr.save()) {
         server.send(200, "application/json", "{\"success\": true}");
         
         // Asynchronous restart
@@ -127,7 +137,7 @@ void WebConfigServer::handleNutConfig() {
     }
 
     config_mgr.setNutConfig(nc);
-    if (config_mgr.save("/config.json")) {
+    if (config_mgr.save()) {
         server.send(200, "application/json", "{\"success\": true}");
         AppLogger::log("INFO", "[WEB] NUT configuration updated");
         should_restart = true;

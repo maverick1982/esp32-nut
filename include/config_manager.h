@@ -18,7 +18,7 @@ struct NutConfig {
 class ConfigManager {
 public:
     ConfigManager();
-    bool begin(const char* filepath = "/config.json");
+    bool begin();
     
     WifiConfig getWifiConfig() const;
     NutConfig getNutConfig() const;
@@ -26,7 +26,7 @@ public:
     
     void setWifiConfig(const WifiConfig& config);
     void setNutConfig(const NutConfig& config);
-    bool save(const char* filepath = "/config.json");
+    bool save();
 
 private:
     WifiConfig wifi_config;

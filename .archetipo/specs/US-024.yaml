@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-024
+title: Embedding Web UI nel Firmware ed Eliminazione LittleFS
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: P0
+points: 0
+status: DONE
+body: |-
+  ## User Story
+  Come sviluppatore e utente finale, voglio che i file statici della Web UI (HTML, CSS, JS) siano integrati direttamente all'interno del file firmware.bin, in modo da avere un unico file da caricare durante gli aggiornamenti OTA ed eliminare la necessità di mantenere una partizione LittleFS.
+
+  ## Acceptance Criteria
+  - [ ] La partizione `spiffs/littlefs` viene rimossa dal file `partitions.csv` e lo spazio recuperato riassegnato alle partizioni `app0` e `app1`.
+  - [ ] Uno script di pre-build in PlatformIO (extra_scripts) converte automaticamente il contenuto di `data/www` e lo salva in un file C header (es. `web_assets.h`) usando array `PROGMEM`.
+  - [ ] Il codice C++ che utilizzava `LittleFS` viene completamente ripulito: `ConfigManager` non include né monta più `LittleFS`.
+  - [ ] `web_config_server.cpp` utilizza gli array in memoria per servire l'interfaccia web invece di leggere dal filesystem.
+  - [ ] La compilazione genera con successo un unico file `firmware.bin` senza errori e l'interfaccia web è normalmente funzionante.
+
+  ## Note
+  - La funzionalità OTA beneficerà dell'assenza di file separati.
+  - Tutti i dati di configurazione risiedono già in NVS come completato in US-023.
+history:
+  - status: PLANNED
+    at: "2026-07-16T20:38:50Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T20:44:25Z"
+  - status: REVIEW
+    at: "2026-07-16T20:49:37Z"
+  - status: DONE
+    at: "2026-07-16T20:58:53Z"

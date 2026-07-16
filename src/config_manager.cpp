@@ -1,51 +1,24 @@
 #include "config_manager.h"
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "app_logger.h"
 
 ConfigManager::ConfigManager() : is_valid(false) {}
 
-bool ConfigManager::begin(const char* filepath) {
+bool ConfigManager::begin() {
     is_valid = false;
-    
-    // Inizializzazione LittleFS (ora incondizionata)
-    if (!LittleFS.begin(true)) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile montare LittleFS!");
-        return false;
-    }
     
     preferences.begin("nutos", false);
     String config_json = preferences.getString("config_json", "");
     
-    JsonDocument doc;
-    DeserializationError error;
-    bool is_migration = false;
-    
     if (config_json == "") {
-        // Fallback to LittleFS (migrazione)
-        if (LittleFS.exists(filepath)) {
-            AppLogger::log("INFO", "[CONFIG] File legacy trovato, avvio migrazione...");
-            File file = LittleFS.open(filepath, "r");
-            if (!file) {
-                AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile aprire il file %s per la migrazione!", filepath);
-                return false;
-            }
-            error = deserializeJson(doc, file);
-            file.close();
-            if (error) {
-                AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito per il file legacy %s. Dettagli: %s\n", filepath, error.c_str());
-                return false;
-            }
-            is_migration = true;
-        } else {
-            return false;
-        }
-    } else {
-        error = deserializeJson(doc, config_json);
-        if (error) {
-            AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito da NVS. Dettagli: %s\n", error.c_str());
-            return false;
-        }
+        return false;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, config_json);
+    if (error) {
+        AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito da NVS. Dettagli: %s\n", error.c_str());
+        return false;
     }
     
     // Estrazione dei campi Wi-Fi
@@ -72,13 +45,7 @@ bool ConfigManager::begin(const char* filepath) {
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
     
-    if (is_migration) {
-        this->save(filepath);
-        LittleFS.rename(filepath, String(filepath) + ".bak");
-        AppLogger::log("INFO", "[CONFIG] Migrazione a NVS completata.");
-    } else {
-        AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da NVS.");
-    }
+    AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da NVS.");
     
     return true;
 }
@@ -103,7 +70,7 @@ void ConfigManager::setNutConfig(const NutConfig& config) {
     nut_config = config;
 }
 
-bool ConfigManager::save(const char* filepath) {
+bool ConfigManager::save() {
     JsonDocument doc;
     
     JsonObject wifi = doc["wifi"].to<JsonObject>();
