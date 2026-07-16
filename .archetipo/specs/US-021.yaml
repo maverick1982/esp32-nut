@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 1
-status: TODO
+status: DONE
 body: |-
   #### US-021: Fix bug overflow di millis() nel riavvio
 
@@ -28,3 +28,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-15T14:58:37Z"
+  - status: PLANNED
+    at: "2026-07-16T15:53:01Z"
+  - status: IN PROGRESS
+    at: "2026-07-16T15:54:43Z"
+  - status: REVIEW
+    at: "2026-07-16T15:57:05Z"
+  - status: DONE
+    at: "2026-07-16T16:07:53Z"

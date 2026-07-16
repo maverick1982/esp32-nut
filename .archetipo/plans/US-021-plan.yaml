@@ -1,0 +1,41 @@
+schema: archetipo/plan/v2
+spec_code: US-021
+body: |-
+  ### Soluzione Tecnica
+
+  Attualmente, `WebConfigServer` imposta `restart_time = millis() + 1000` quando viene richiesto un riavvio e verifica `millis() > restart_time` nel metodo `loop()`. Questa logica diretta è vulnerabile all'overflow di `millis()` (che avviene dopo circa 49.7 giorni di uptime continuo): se `millis() + 1000` supera il valore massimo di `unsigned long`, `restart_time` ripartirà da zero o da un valore molto piccolo. In questo scenario, `millis() > restart_time` diventerà subito vero o falso in modo inatteso, compromettendo il riavvio o facendolo avvenire nel momento sbagliato.
+
+  Per risolvere il problema:
+  1.  **Rinominare la variabile** `restart_time` in `restart_request_time` in `include/web_config_server.h` per riflettere il suo nuovo significato (il momento esatto in cui è stato richiesto il riavvio).
+  2.  **Modificare l'assegnazione** in `src/web_config_server.cpp` (nei metodi `handleConnect` e `handleNutConfig`) assegnando direttamente `restart_request_time = millis();`.
+  3.  **Aggiornare la condizione di riavvio** in `loop()` usando la sottrazione sicura per l'overflow: `if (should_restart && (millis() - restart_request_time >= 1000))`.
+
+  ### Strategia di Test
+
+  Poiché il problema di overflow richiede l'esecuzione del dispositivo per 50 giorni per riprodursi, la validazione si concentrerà su:
+  -   **Regression Test**: Verificare che le chiamate per salvare la configurazione Wi-Fi (`/api/wifi/connect`) o NUT (`/api/nut/config`) restituiscano ancora un esito positivo e inneschino il riavvio dopo circa 1 secondo.
+  -   **Code Review**: La logica di sottrazione `millis() - prev_time >= interval` è lo standard ampiamente accettato nel framework Arduino per prevenire problemi di overflow. Una rigorosa revisione statica del codice garantirà che sia implementata e formattata correttamente nei punti in cui è richiesta l'attesa per il riavvio.
+tasks:
+  - id: TASK-01
+    title: Correggere la logica di calcolo del tempo per il riavvio del server
+    type: Impl
+    status: DONE
+    body: "## Descrizione\nAggiornare la gestione dell'attesa di riavvio in `WebConfigServer` per prevenire i bug legati all'overflow di `millis()`, che si verificano dopo circa 49.7 giorni. Si passerà da una verifica assoluta sul tempo futuro a una verifica del delta temporale trascorso, secondo i pattern standard di Arduino.\n\n## File Coinvolti\n- `include/web_config_server.h`: Rinominare il membro `unsigned long restart_time` a `restart_request_time`.\n- `src/web_config_server.cpp`: \n  - Nel metodo `handleConnect()`: Sostituire `restart_time = millis() + 1000;` con `restart_request_time = millis();`.\n  - Nel metodo `handleNutConfig()`: Sostituire `restart_time = millis() + 1000;` con `restart_request_time = millis();`.\n  - Nel metodo `loop()`: Aggiornare la condizione dell'if in `if (should_restart && (millis() - restart_request_time >= 1000))`.\n\n## Criteri di Completamento\n- [ ] La logica in `loop()` usa la sottrazione per il confronto del tempo.\n- [ ] La variabile `restart_request_time` viene usata e memorizza il tempo esatto della richiesta.\n- [ ] L'interfaccia o gli endpoint di rete non presentano regressioni, il riavvio viene correttamente innescato."
+    ref: TASK-01
+  - id: TASK-02
+    title: Verificare il corretto riavvio del server
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Verificare che i cambiamenti introdotti mantengano inalterato il corretto funzionamento delle API e della logica di riavvio, testando manualmente o tramite i test esistenti il salvataggio della configurazione e verificando che l'ESP si riavvii dopo il tempo previsto.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` (Solo per riferimento o per aggiungere debug temporaneo, se necessario)
+
+      ## Criteri di Completamento
+      - [ ] Chiamata a `/api/nut/config` salva con successo e il server innesca il riavvio.
+      - [ ] Code review completata confermando che la logica del tempo è protetta contro l'overflow (usando la sottrazione).
+    ref: TASK-02

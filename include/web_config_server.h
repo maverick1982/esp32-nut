@@ -23,7 +23,7 @@ private:
     void handleGetConfig();
 
     bool should_restart = false;
-    unsigned long restart_time = 0;
+    unsigned long restart_request_time = 0;
 };
 
 #endif // WEB_CONFIG_SERVER_H

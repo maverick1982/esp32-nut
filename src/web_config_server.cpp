@@ -59,7 +59,7 @@ void WebConfigServer::loop() {
     }
     server.handleClient();
 
-    if (should_restart && millis() > restart_time) {
+    if (should_restart && (millis() - restart_request_time >= 1000)) {
         ESP.restart();
     }
 }
@@ -91,7 +91,7 @@ void WebConfigServer::handleConnect() {
         
         // Asynchronous restart
         should_restart = true;
-        restart_time = millis() + 1000;
+        restart_request_time = millis();
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
@@ -128,7 +128,7 @@ void WebConfigServer::handleNutConfig() {
         server.send(200, "application/json", "{\"success\": true}");
         AppLogger::log("INFO", "[WEB] NUT configuration updated");
         should_restart = true;
-        restart_time = millis() + 1000;
+        restart_request_time = millis();
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }
