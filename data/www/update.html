@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT - OTA Update</title>
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body style="background-color: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui);">
+    <div class="ota-container">
+        <h2>Aggiornamento Firmware OTA</h2>
+        <p>Trascina il file .bin compilato qui sotto o clicca per selezionarlo.</p>
+        
+        <div class="dropzone" id="dropzone">
+            <p>Trascina il file .bin qui o clicca per caricare</p>
+            <input type="file" id="fileInput" accept=".bin">
+        </div>
+
+        <div class="progress-bar-container" id="progressContainer">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        
+        <div class="status" id="statusMessage"></div>
+        
+        <a href="/" class="btn-back">&larr; Torna alla Home</a>
+    </div>
+
+    <script>
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const statusMessage = document.getElementById('statusMessage');
+
+        dropzone.addEventListener('click', () => fileInput.click());
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dragover');
+        });
+
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                uploadFile();
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                uploadFile();
+            }
+        });
+
+        function uploadFile() {
+            const file = fileInput.files[0];
+            if (!file || !file.name.endsWith('.bin')) {
+                showStatus('Per favore seleziona un file .bin valido.', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('update', file);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/update', true);
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progressContainer.style.display = 'block';
+                    progressBar.style.width = percentComplete + '%';
+                }
+            };
+
+            xhr.onload = () => {
+                if (xhr.status === 200 && xhr.responseText.trim() === 'OK') {
+                    showStatus('Aggiornamento completato! Riavvio in corso...', 'success');
+                    progressBar.style.backgroundColor = '#28a745';
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 5000);
+                } else {
+                    showStatus('Errore durante l\'aggiornamento.', 'error');
+                    progressBar.style.backgroundColor = '#dc3545';
+                }
+            };
+
+            xhr.onerror = () => {
+                showStatus('Errore di rete durante l\'upload.', 'error');
+                progressBar.style.backgroundColor = '#dc3545';
+            };
+
+            showStatus('Caricamento in corso...', '');
+            xhr.send(formData);
+        }
+
+        function showStatus(message, className) {
+            statusMessage.textContent = message;
+            statusMessage.className = 'status ' + className;
+        }
+    </script>
+</body>
+</html>

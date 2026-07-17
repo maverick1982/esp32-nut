@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include "app_logger.h"
 #include "web_assets.h"
+#include <Update.h>
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
@@ -48,6 +49,20 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
+
+    // OTA endpoints
+    server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });
+    server.on("/update", HTTP_POST, 
+        [this]() { 
+            server.sendHeader("Connection", "close");
+            server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+            if (!Update.hasError()) {
+                should_restart = true;
+                restart_request_time = millis();
+            }
+        },
+        [this]() { handleOTAUpload(); }
+    );
 
     // Catch-all for Captive Portal (redirect to captive page if not found)
     server.onNotFound([this]() {
@@ -161,4 +176,40 @@ void WebConfigServer::handleGetConfig() {
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);
+}
+
+void WebConfigServer::handleOTAPage() {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Content-Encoding", "gzip");
+    server.send_P(200, "text/html", (const char*)web_asset_update_html, web_asset_update_html_len);
+}
+
+void WebConfigServer::handleOTAUpload() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        AppLogger::log("INFO", String("[OTA] Inizio upload: ") + upload.filename);
+        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        if (!Update.begin(maxSketchSpace, U_FLASH)) { //start with max available size
+            Update.printError(Serial);
+        }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        // Validazione magic byte E9 sul primo chunk
+        if (upload.totalSize == 0 && upload.currentSize > 0) {
+            if (upload.buf[0] != 0xE9) {
+                AppLogger::log("ERROR", "[OTA] Magic byte non valido");
+                Update.abort();
+                return;
+            }
+        }
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            Update.printError(Serial);
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (Update.end(true)) { //true to set the size to the current progress
+            AppLogger::log("INFO", String("[OTA] Successo: ") + String(upload.totalSize) + " bytes");
+        } else {
+            Update.printError(Serial);
+            AppLogger::log("ERROR", "[OTA] Errore alla fine");
+        }
+    }
 }

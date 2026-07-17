@@ -5,11 +5,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
+            const target = tab.getAttribute('data-target');
+            if (target === 'ota') {
+                window.location.href = '/update';
+                return;
+            }
+
             tabs.forEach(t => t.classList.remove('active'));
             contents.forEach(c => c.classList.remove('active'));
             
             tab.classList.add('active');
-            const target = tab.getAttribute('data-target');
             document.getElementById(`content-${target}`).classList.add('active');
         });
     });

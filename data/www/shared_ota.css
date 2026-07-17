@@ -1,0 +1,66 @@
+/* OTA Update Styles */
+.ota-container {
+    max-width: 500px;
+    margin: 2rem auto;
+    background: var(--bg-panel);
+    padding: 2rem;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--bg-panel-border);
+    backdrop-filter: blur(10px);
+}
+.dropzone {
+    border: 2px dashed var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: var(--transition);
+    margin-bottom: 1rem;
+    font-family: var(--font-mono);
+}
+.dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(0, 240, 255, 0.05);
+}
+.dropzone input[type="file"] {
+    display: none;
+}
+.progress-bar-container {
+    width: 100%;
+    height: 20px;
+    background-color: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+    display: none;
+    border: 1px solid var(--bg-panel-border);
+}
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: var(--accent);
+    transition: width 0.2s;
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+.status {
+    text-align: center;
+    font-weight: bold;
+    font-family: var(--font-mono);
+    margin-bottom: 1rem;
+}
+.status.success { color: var(--success); }
+.status.error { color: var(--danger); }
+.btn-back {
+    display: inline-block;
+    margin-top: 1rem;
+    text-decoration: none;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    transition: var(--transition);
+}
+.btn-back:hover {
+    color: var(--accent-hover);
+    text-shadow: 0 0 8px var(--accent-glow);
+}

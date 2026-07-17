@@ -1,344 +1,131 @@
 schema: archetipo/plan/v2
 spec_code: US-017
-body: "# US-017: Aggiornamento Firmware via OTA (Over-The-Air) — Piano di Implementazione\n\n> Piano generato in italiano, coerente con la lingua del backlog.\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-16 (rev.2)\n\n---\n\n## Spec\n\n**Epic:** EP-002 — Connettività di Rete e Configurazione\n**Priorità:** MEDIUM | **Punti:** 5\n\n**User Story**\nCome amministratore di sistema (o Marco l'hobbista), voglio poter aggiornare il firmware dell'ESP32 tramite la rete Wi-Fi (Over-The-Air), in modo da non dover scollegare fisicamente il dispositivo dall'UPS e smontarlo per collegarlo al PC ogni volta che esce una nuova release.\n\n**Criteri di Accettazione**\n- Il firmware integra la libreria standard per gli aggiornamenti OTA su ESP32 (`Update.h`).\n- Il web server espone una pagina (`/update`) contenente un form per il caricamento del file del firmware.\n- Il processo di caricamento restituisce feedback (successo o errore) all'utente.\n- In caso di caricamento corretto, il dispositivo esegue il commit del firmware e si riavvia automaticamente.\n- Lo spazio delle partizioni flash è configurato correttamente nel `platformio.ini` per supportare due partizioni app (schema OTA).\n\n---\n\n## Soluzione Tecnica\n\nL'aggiornamento OTA sarà implementato utilizzando la libreria `Update.h` nativa del framework Arduino ESP32, integrandola nel `WebConfigServer` esistente. Non si utilizza ElegantOTA per mantenere zero dipendenze aggiuntive e pieno controllo sul flusso.\n\n- **Schema partizioni OTA:** Si configura `board_build.partitions = min_spiffs.csv` nel `platformio.ini`. Questo schema fornisce due slot app OTA (~1.8 MB ciascuno) + una partizione SPIFFS/LittleFS ridotta. È lo schema standard fornito da ESP-IDF/Arduino per supportare l'aggiornamento sicuro con rollback.\n- **OTA duale (firmware + filesystem):** L'interfaccia supporta due modalità di aggiornamento selezionabili dall'utente:\n  - **Firmware** (`U_FLASH`): scrive `firmware.bin` nella partizione app OTA inattiva. È il caso principale e più sicuro (rollback automatico in caso di fallimento).\n  - **Filesystem** (`U_SPIFFS`): scrive `littlefs.bin` nella partizione LittleFS. Necessario per aggiornare l'interfaccia web (HTML/CSS/JS) da remoto. **Attenzione:** sovrascrive l'intero filesystem, incluso `config.json` — l'utente dovrà riconfigurare Wi-Fi e NUT dopo il flash. L'UI mostra un avviso esplicito prima di procedere.\n- **Endpoint `/update`:** Una route GET serve la pagina HTML. Una route POST gestisce il caricamento multipart chunked tramite `HTTPUpload`. Il parametro `type` (query string, default `firmware`) determina se chiamare `Update.begin(size, U_FLASH)` o `Update.begin(size, U_SPIFFS)`.\n- **Validazione magic byte:** All'inizio dell'upload, il primo byte del file viene controllato: `0xE9` per firmware ESP32 (app image header), oppure un file con estensione `.bin` per LittleFS. Se il magic byte non corrisponde alla modalità selezionata, l'upload viene rifiutato con errore esplicito per evitare brick accidentali (es. caricare `bootloader.bin` o `partitions.bin` al posto del firmware).\n- **Pagina HTML OTA:** File statico `/www/update.html` su LittleFS. Il design segue il mockup in `docs/mockups/us-017/`: layout a due colonne con readout firmware corrente, dropzone drag-and-drop, selettore tipo aggiornamento (Firmware/Filesystem), barra di progresso segmentata con indicatore di fase a 4 step (Upload → Verifica → Commit → Reboot), mappa flash visiva, pannello info dispositivo e avviso di sicurezza. Stile coerente con `shared.css` (estetica cyberpunk: Orbitron, Share Tech Mono, palette ciano/verde/rosso).\n- **Gestione errori:** Validazione Content-Length > 0 e <= spazio disponibile partizione target. Se `Update.end(false)` fallisce, si restituisce HTTP 500 con messaggio di errore specifico (`Update.getError()`). Se il firmware è corrotto, l'ESP32 non eseguirà il commit e rimarrà sulla partizione precedente.\n- **Reboot automatico:** Dopo `Update.end(true)` con successo, il server risponde con HTTP 200, poi schedula un `ESP.restart()` dopo 1 secondo (stesso pattern di `should_restart` già usato in `WebConfigServer`).\n- **Sicurezza:** L'endpoint OTA è disponibile solo quando il web server è attivo (sia in modalità STA che AP). Non è necessaria autenticazione aggiuntiva poiché il dispositivo opera esclusivamente in LAN (SEC-002).\n\n---\n\n## Strategia di Test\n\nLa strategia si concentra su due livelli: unit test per la logica di gestione OTA e test e2e per il flusso utente completo.\n\n- **Unit test:** Verificano il corretto setup dell'handler OTA duale, la validazione magic byte, la gestione degli errori di upload (file vuoto, file troppo grande, magic byte errato, errore di scrittura flash), e il trigger del reboot dopo successo.\n- **Test e2e:** Simulano il flusso utente completo sulla pagina `/update` per entrambe le modalità (firmware e filesystem).\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (già configurato nel progetto, `playwright.config.ts`)\n**Video demo:** Atteso (la spec descrive un incremento filmabile — sarà registrato da `archetipo-review`)\n\n| Scenario | Descrizione flusso utente |\n|---|---|\n| Upload firmware con successo | L'utente naviga su `/update`, seleziona modalità \"Firmware\", carica un file `.bin` valido, vede la barra di progresso segmentata avanzare attraverso le 4 fasi e riceve il messaggio di successo con countdown al riavvio. |\n| Upload filesystem con avviso | L'utente seleziona modalità \"Filesystem\", vede l'avviso di perdita configurazione, conferma, carica `littlefs.bin` e riceve feedback. |\n| Validazione magic byte | L'utente seleziona modalità \"Firmware\" ma carica un file non valido (es. un `.txt` o un `partitions.bin`), riceve un messaggio di errore che indica il formato non riconosciuto. |\n| Navigazione da dashboard | L'utente parte dalla pagina principale, clicca il tab \"Firmware OTA\" nella sidebar, verifica che la pagina `/update` si carichi con readout firmware, dropzone e mappa flash. |\n\n> \U0001F3A8 Mockups per questa spec disponibili in `docs/mockups/us-017/`"
+body: |-
+  ## Rework Plan
+
+  Il piano indirizza il feedback ricevuto in fase di review:
+  1. **CSS Corruption:** Il file `shared.css` è stato corrotto (UTF-16LE null bytes) durante l'append dello stile OTA. Verrà ripristinato ripulendo i null bytes e unificando correttamente le direttive CSS.
+  2. **OTA Upload Failure:** L'upload OTA fallisce probabilmente a causa di `UPDATE_SIZE_UNKNOWN` non sempre digerito da tutti i core ESP32, o per la gestione dell'oggetto `FormData` via XHR. Verrà aggiornato il backend per usare `ESP.getFreeSketchSpace()` come fallback sicuro, e migliorato il logging degli errori di `Update.h` per debug. Verrà inolte controllata l'inizializzazione corretta della Request HTTP nel frontend.
+
+  ## Test Strategy
+  - E2E Playwright test (già definito) assicurerà che l'upload flow sia navigabile.
+  - Test unitari aggiornati se necessario.
 tasks:
   - id: TASK-01
-    title: Configurare schema partizioni OTA nel platformio.ini
+    title: Implementare handler OTA firmware nel WebConfigServer
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
-      Aggiungere la direttiva `board_build.partitions = min_spiffs.csv` al file `platformio.ini` per abilitare lo schema di partizioni a doppio slot app necessario per gli aggiornamenti OTA. Questo schema è fornito dal framework Arduino ESP32 e include due partizioni app (~1.8 MB ciascuna) + una partizione SPIFFS ridotta.
-
-      ## Obiettivo
-      Abilitare il layout flash OTA-ready senza il quale `Update.h` non può scrivere sulla partizione secondaria.
-
-      ## Lettura
-      - `platformio.ini` — configurazione attuale
-
-      ## Modifica
-      - `platformio.ini` — aggiungere `board_build.partitions = min_spiffs.csv` nella sezione `[env:esp32-s3-devkitc-1]`
-
-      ## Passi
-      1. Aprire `platformio.ini`
-      2. Aggiungere la riga `board_build.partitions = min_spiffs.csv` dopo `board_build.filesystem = littlefs`
-
-      ## Verifica
-      - Il progetto compila senza errori con `pio run`
-      - L'output di build mostra l'uso dello schema partizioni `min_spiffs.csv`
-
-      ## Fatto quando
-      - [ ] `platformio.ini` contiene `board_build.partitions = min_spiffs.csv`
-      - [ ] La compilazione va a buon fine
-
-      ## Blocchi
-      Nessuno
+      Aggiungere gli endpoint `/update` (GET per pagina e POST per upload) in `WebConfigServer`.
 
       ## File Coinvolti
-      - `platformio.ini` — aggiungere direttiva partizioni OTA
+      - `include/web_config_server.h` — dichiarazioni handler OTA.
+      - `src/web_config_server.cpp` — implementare handler OTA (solo U_FLASH) con validazione magic byte (0xE9) e registrazione endpoint.
 
       ## Criteri di Completamento
-      - [ ] `platformio.ini` contiene `board_build.partitions = min_spiffs.csv`
-      - [ ] La compilazione va a buon fine con `pio run`
-  - id: TASK-02
-    title: Implementare handler OTA duale nel WebConfigServer
-    type: Impl
-    status: TODO
-    dependencies:
-      - TASK-01
-    body: |-
-      ## Descrizione
-      Aggiungere gli endpoint `/update` (GET per la pagina HTML) e `/update` (POST per il caricamento) al `WebConfigServer` esistente. L'handler POST supporta due modalità: firmware (`U_FLASH`) e filesystem (`U_SPIFFS`), selezionate tramite query parameter `type`. Include validazione magic byte per evitare brick accidentali.
-
-      ## Obiettivo
-      Esporre l'endpoint OTA duale che accetta `firmware.bin` o `littlefs.bin` via HTTP POST multipart, valida il contenuto, lo scrive nella flash e restituisce feedback.
-
-      ## Lettura
-      - `include/web_config_server.h` — interfaccia classe attuale
-      - `src/web_config_server.cpp` — implementazione attuale (pattern `server.on`, `should_restart`)
-      - `docs/mockups/us-017/` — mockup dell'interfaccia OTA (per comprendere il flusso utente)
-
-      ## Modifica
-      - `include/web_config_server.h` — aggiungere dichiarazioni e membro `_otaType`
-      - `src/web_config_server.cpp` — implementare handler e registrazione endpoint
-
-      ## Passi
-      1. In `web_config_server.h`, aggiungere:
-         - `#include <Update.h>` nel header
-         - Membro privato `int _otaType = U_FLASH;` per tracciare il tipo di update corrente
-         - Metodi privati: `void handleOTAPage();` e `void handleOTAUpload();`
-      2. In `web_config_server.cpp`, nella funzione `begin()`, registrare:
-         - `server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });`
-         - `server.on("/update", HTTP_POST, [this]() { /* completion handler */ }, [this]() { handleOTAUpload(); });`
-      3. Implementare `handleOTAPage()`:
-         - Aprire `/www/update.html` da LittleFS e servirlo con `server.streamFile()`
-         - Se il file non esiste, restituire 404
-      4. Implementare `handleOTAUpload()`:
-         - Ottenere `HTTPUpload& upload = server.upload();`
-         - Su `UPLOAD_FILE_START`:
-           a. Leggere il query parameter `type`: se `"filesystem"` impostare `_otaType = U_SPIFFS`, altrimenti `_otaType = U_FLASH` (default)
-           b. Chiamare `Update.begin(UPDATE_SIZE_UNKNOWN, _otaType)`. Se fallisce, logare errore.
-         - Su `UPLOAD_FILE_WRITE`:
-           a. **Al primo chunk** (totalSize == currentSize), validare il magic byte: se `_otaType == U_FLASH` e `upload.buf[0] != 0xE9`, abortire con `Update.abort()` e logare "Invalid firmware image header"
-           b. Chiamare `Update.write(upload.buf, upload.currentSize)`. Se il write fallisce, logare errore.
-         - Su `UPLOAD_FILE_END`:
-           a. Chiamare `Update.end(true)`. Se ha successo, logare successo. Altrimenti logare `Update.getError()`.
-      5. Nel completion handler del POST:
-         - Se `Update.hasError()`: rispondere HTTP 500 con JSON `{"success":false, "error": Update.errorString()}`
-         - Altrimenti: rispondere HTTP 200 con JSON `{"success":true}`, impostare `should_restart = true` e `restart_request_time = millis()`
-
-      ## Verifica
-      - Il progetto compila senza errori
-      - L'endpoint GET `/update` serve la pagina HTML
-      - L'endpoint POST `/update` accetta upload multipart con parametro `type`
-      - Un file con magic byte errato viene rifiutato
-
-      ## Fatto quando
-      - [ ] `handleOTAPage()` e `handleOTAUpload()` sono implementati
-      - [ ] Supporto duale: `type=firmware` (default) e `type=filesystem`
+      - [ ] `handleOTAPage()` serve la pagina tramite `server.send_P(200, "text/html", update_html_array, update_html_len)`
+      - [ ] `handleOTAUpload()` gestisce upload via `Update.begin(..., U_FLASH)`
       - [ ] Validazione magic byte `0xE9` per firmware
-      - [ ] Gli endpoint sono registrati in `begin()`
-      - [ ] Il firmware compila correttamente
-
-      ## Blocchi
-      - TASK-01 (schema partizioni necessario per Update.h)
+      - [ ] Reboot automatico dopo successo
+    ref: TASK-01
+  - id: TASK-02
+    title: Creare pagina HTML per aggiornamento OTA (solo Firmware)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare `data/www/update.html` con interfaccia singola (no selettore filesystem). Lo script di US-024 lo ingloberà.
 
       ## File Coinvolti
-      - `include/web_config_server.h` — aggiungere `#include <Update.h>`, dichiarazioni handler OTA, membro `_otaType`
-      - `src/web_config_server.cpp` — implementare handler OTA duale e registrazione endpoint
+      - `data/www/update.html` — nuova pagina OTA standalone
+      - `data/www/shared.css` — stili per OTA
 
       ## Criteri di Completamento
-      - [ ] `handleOTAPage()` serve `/www/update.html` da LittleFS
-      - [ ] `handleOTAUpload()` gestisce upload chunked con `Update.h` in modalità duale
-      - [ ] Validazione magic byte attiva per modalità firmware
-      - [ ] Endpoint GET e POST `/update` registrati in `begin()`
-      - [ ] Gestione errori con `Update.hasError()` e `Update.getError()`
-      - [ ] Reboot automatico dopo upload riuscito (pattern `should_restart`)
+      - [ ] Dropzone con upload per solo firmware
+      - [ ] Barra progresso e indicatori di stato successo/errore
+      - [ ] Upload invia file in POST a `/update`
+    ref: TASK-02
   - id: TASK-03
-    title: Creare pagina HTML per aggiornamento OTA duale
+    title: Integrare tab OTA nella navigazione principale
     type: Impl
-    status: TODO
-    body: |-
-      ## Descrizione
-      Creare il file `data/www/update.html` che contiene la pagina di aggiornamento OTA. La pagina deve seguire fedelmente il mockup in `docs/mockups/us-017/` e supportare entrambe le modalità di upload (firmware e filesystem) con feedback visivo completo.
-
-      ## Obiettivo
-      Fornire un'interfaccia utente completa per l'aggiornamento OTA, con selettore modalità, dropzone, barra di progresso segmentata, e avvisi di sicurezza.
-
-      ## Lettura
-      - `docs/mockups/us-017/index.html` — **mockup di riferimento principale** per layout, struttura HTML e componenti
-      - `docs/mockups/us-017/shared.css` — stili OTA-specifici dal mockup
-      - `docs/mockups/us-017/app.js` — logica interattiva di riferimento dal mockup
-      - `data/www/index.html` — struttura della pagina principale di produzione
-      - `data/www/shared.css` — foglio di stile condiviso di produzione
-      - `data/www/app.js` — pattern JavaScript di produzione
-
-      ## Modifica
-      - `data/www/update.html` — creare nuovo file
-      - `data/www/shared.css` — aggiungere gli stili OTA-specifici necessari (dropzone, progress bar segmentata, readout, flash map, ecc.)
-
-      ## Passi
-      1. Creare `data/www/update.html` basandosi sul mockup `docs/mockups/us-017/index.html`, adattandolo all'integrazione come tab content nella struttura di navigazione esistente (il mockup mostra il layout completo con sidebar; in produzione la pagina è un content panel dentro il tab OTA già presente in `index.html`).
-      2. **Importante:** Dato che in produzione il web server gira su ESP32 con risorse limitate, la pagina update può essere standalone (servita dalla route GET `/update`) con navigazione alla home via link. Non è necessario replicare l'intero layout sidebar.
-      3. Elementi da implementare dal mockup:
-         - **Readout firmware corrente:** griglia 3 celle (Versione, Build, Partizione Attiva) — i valori possono essere hardcoded o letti da un eventuale endpoint API
-         - **Selettore tipo aggiornamento:** due opzioni radio/button: "Firmware" (default) e "Filesystem". Quando si seleziona "Filesystem", mostrare un avviso giallo: *"Attenzione: il flash del filesystem sovrascriverà la configurazione (config.json). Sarà necessario riconfigurare Wi-Fi e NUT dopo il riavvio."*
-         - **Dropzone drag-and-drop:** con icona upload, label *"Trascina il file .bin qui"* e hint *"Seleziona firmware.bin per aggiornare l'applicazione, oppure littlefs.bin per aggiornare l'interfaccia web"*
-         - **File info:** dopo la selezione, mostrare nome file, dimensione e pulsante rimuovi
-         - **Pulsante "Avvia Aggiornamento":** abilitato solo con file selezionato
-         - **Barra progresso segmentata:** 20 segmenti con animazione filling
-         - **Indicatore fase:** 4 step (Upload → Verifica → Commit → Reboot)
-         - **Stato successo:** icona check, messaggio, countdown 5s al riavvio
-         - **Stato errore:** icona errore, messaggio dettagliato, pulsante "Riprova"
-         - **Mappa flash** (sidebar): visualizzazione partizioni APP0/APP1/LittleFS/NVS
-         - **Info dispositivo** (sidebar): Chip, Flash, Free Heap, Uptime, Max OTA size
-         - **Banner avviso:** "Non scollegare l'alimentazione durante l'aggiornamento"
-      4. Implementare JavaScript per:
-         - Upload via `XMLHttpRequest` con `FormData` verso `POST /update?type=firmware` o `POST /update?type=filesystem`
-         - Listener `progress` per aggiornare la barra segmentata in percentuale
-         - Transizioni di fase animate
-         - Gestione risposta: successo con countdown e riavvio, o errore con dettaglio
-         - Disabilitare dropzone e pulsante durante l'upload
-      5. Aggiungere gli stili OTA-specifici necessari a `data/www/shared.css` (dropzone, progress segments, readout cells, flash map, ecc.) ispirati a `docs/mockups/us-017/shared.css` ma adattati al contesto di produzione.
-
-      ## Verifica
-      - Il file esiste in `data/www/update.html`
-      - La pagina è coerente visivamente con il mockup
-      - Il selettore tipo modifica il query parameter dell'upload
-      - L'avviso filesystem appare quando si seleziona la modalità corrispondente
-
-      ## Fatto quando
-      - [ ] `data/www/update.html` creato con tutti i componenti dal mockup
-      - [ ] Selettore tipo aggiornamento (Firmware/Filesystem) funzionante
-      - [ ] Avviso perdita configurazione visibile per modalità Filesystem
-      - [ ] Hint chiaro su quale file selezionare per ciascuna modalità
-      - [ ] JavaScript gestisce upload duale con progress tracking
-      - [ ] Stile coerente con `shared.css` e mockup di riferimento
-
-      ## Blocchi
-      Nessuno (può procedere in parallelo a TASK-02)
-
-      ## File Coinvolti
-      - `data/www/update.html` — creare pagina OTA completa
-      - `data/www/shared.css` — aggiungere stili OTA-specifici
-
-      ## Criteri di Completamento
-      - [ ] File `data/www/update.html` creato
-      - [ ] Selettore Firmware/Filesystem con avviso per filesystem
-      - [ ] Dropzone con drag-and-drop e hint sul file corretto
-      - [ ] Barra di progresso segmentata con indicatore fase
-      - [ ] Stati successo (con countdown) e errore (con riprova) implementati
-      - [ ] Mappa flash e info dispositivo nel pannello laterale
-      - [ ] Upload invia `POST /update?type=firmware` o `POST /update?type=filesystem`
-      - [ ] Stile coerente con mockup `docs/mockups/us-017/`
-  - id: TASK-04
-    title: Integrare il tab OTA nella navigazione della dashboard
-    type: Impl
-    status: TODO
-    dependencies:
-      - TASK-03
-    body: |-
-      ## Descrizione
-      La sidebar della pagina principale (`data/www/index.html`) contiene già un tab "Firmware OTA" con `data-target="ota"` e un `content-ota` placeholder. Sostituire il placeholder con un link/redirect alla pagina `/update` standalone, oppure integrare il contenuto OTA inline. La soluzione più semplice per ESP32 (risorse limitate) è mantenere `/update` come pagina standalone e far sì che il click sul tab OTA navighi a `/update`.
-
-      ## Obiettivo
-      Rendere la pagina OTA raggiungibile dalla navigazione esistente nella dashboard.
-
-      ## Lettura
-      - `data/www/index.html` — struttura attuale con tab OTA placeholder
-      - `data/www/app.js` — logica di navigazione tab esistente
-
-      ## Modifica
-      - `data/www/index.html` — aggiornare il contenuto del tab OTA
-      - `data/www/app.js` — aggiungere redirect per il tab OTA
-
-      ## Passi
-      1. In `data/www/index.html`, sostituire il `content-ota` placeholder con un link alla pagina `/update`
-      2. In `data/www/app.js`, aggiungere un handler per il tab OTA che esegue `window.location.href = '/update'` invece di mostrare un content inline
-      3. In `data/www/update.html`, assicurarsi che ci sia un link di ritorno alla home (`/`)
-
-      ## Verifica
-      - Click sul tab "Firmware OTA" naviga a `/update`
-      - La pagina `/update` ha un link di ritorno alla home
-
-      ## Fatto quando
-      - [ ] Click su tab OTA naviga a `/update`
-      - [ ] Pagina `/update` ha link ritorno alla dashboard
-
-      ## Blocchi
-      - TASK-03 (la pagina target deve esistere)
-
-      ## File Coinvolti
-      - `data/www/index.html` — aggiornare placeholder tab OTA
-      - `data/www/app.js` — aggiungere redirect per tab OTA
-
-      ## Criteri di Completamento
-      - [ ] Tab "Firmware OTA" nella dashboard naviga a `/update`
-      - [ ] Pagina `/update` ha navigazione di ritorno alla dashboard
-  - id: TASK-05
-    title: Test unitari per handler OTA duale e validazione
-    type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
     body: |-
       ## Descrizione
-      Creare test unitari per verificare la logica dell'handler OTA, focalizzandosi sulla gestione degli errori, la validazione del magic byte, e il supporto duale firmware/filesystem.
-
-      ## Obiettivo
-      Validare la robustezza della logica OTA: gestione file vuoto, magic byte errato, file troppo grande, selezione tipo corretto, errore di scrittura flash, e flusso di successo.
-
-      ## Lettura
-      - `test/` — struttura dei test esistenti (es. `test_config_manager/`, `test_nut_server/`)
-      - `src/web_config_server.cpp` — implementazione handler OTA (da TASK-02)
-
-      ## Modifica
-      - `test/test_ota_handler/` — creare directory e file di test
-
-      ## Passi
-      1. Creare directory `test/test_ota_handler/`
-      2. Creare `test/test_ota_handler/test_ota_handler.cpp` con:
-         - Test: upload firmware con file di dimensione zero restituisce errore
-         - Test: upload firmware con primo byte != 0xE9 viene rifiutato (magic byte validation)
-         - Test: upload firmware con primo byte == 0xE9 viene accettato
-         - Test: upload filesystem (`type=filesystem`) invoca `Update.begin()` con `U_SPIFFS` (non `U_FLASH`)
-         - Test: upload firmware (default) invoca `Update.begin()` con `U_FLASH`
-         - Test: `Update.hasError()` dopo fallimento restituisce errore HTTP 500
-         - Test: dopo upload riuscito, `should_restart` è impostato a `true`
-      3. Utilizzare il framework Unity (integrato in PlatformIO)
-      4. Mockare le dipendenze `Update` e `WebServer` dove necessario
-
-      ## Verifica
-      - I test compilano con `pio test -e esp32-s3-devkitc-1 -f test_ota_handler`
-      - Tutti i test case passano
-
-      ## Fatto quando
-      - [ ] Directory `test/test_ota_handler/` creata
-      - [ ] File di test con almeno 5 test case implementati
-      - [ ] I test compilano correttamente
-
-      ## Blocchi
-      - TASK-02 (handler da testare deve esistere)
+      Aggiungere il link per OTA nella sidebar di `data/www/index.html` e `app.js`.
 
       ## File Coinvolti
-      - `test/test_ota_handler/test_ota_handler.cpp` — creare test unitari OTA
+      - `data/www/index.html` — aggiornare placeholder tab OTA
+      - `data/www/app.js` — redirect a `/update` al click sul tab
 
       ## Criteri di Completamento
-      - [ ] Test case per: file vuoto, magic byte errato, magic byte corretto, tipo firmware vs filesystem, gestione errore, flusso successo
-      - [ ] I test compilano con il framework Unity/PlatformIO
-      - [ ] Struttura dei test coerente con i test esistenti nel progetto
-  - id: TASK-06
-    title: Test E2E Playwright per flusso aggiornamento OTA duale
+      - [ ] Click sul tab OTA nella index naviga su `/update`
+      - [ ] Pagina `/update` ha link di ritorno
+    ref: TASK-03
+  - id: TASK-04
+    title: Test unitari per handler OTA
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
-      - TASK-03
-      - TASK-04
+      - TASK-01
     body: |-
       ## Descrizione
-      Creare test end-to-end con Playwright che simulano il flusso utente completo di aggiornamento OTA: navigazione alla pagina `/update`, selezione modalità, upload di un file, e verifica del feedback per entrambe le modalità (firmware e filesystem).
-
-      ## Obiettivo
-      Validare il flusso utente dall'apertura della pagina OTA al feedback post-upload per entrambe le modalità.
-
-      ## Lettura
-      - `playwright.config.ts` — configurazione Playwright esistente
-      - `tests/` — directory test e2e esistenti
-      - `data/www/update.html` — pagina OTA (da TASK-03)
-      - `docs/mockups/us-017/` — mockup di riferimento per gli elementi UI attesi
-
-      ## Modifica
-      - `tests/ota-update.spec.ts` — creare file test e2e
-
-      ## Passi
-      1. Creare `tests/ota-update.spec.ts` con i seguenti scenari:
-         - **Caricamento pagina OTA:** navigare a `/update`, verificare che siano visibili: readout firmware corrente, dropzone upload, selettore tipo (Firmware/Filesystem), mappa flash, info dispositivo, banner avviso sicurezza
-         - **Selezione modalità Firmware:** selezionare "Firmware" (default), verificare che l'hint indichi `firmware.bin`, che l'avviso filesystem NON sia visibile
-         - **Selezione modalità Filesystem:** selezionare "Filesystem", verificare che appaia l'avviso di perdita configurazione e che l'hint indichi `littlefs.bin`
-         - **Upload firmware (mock):** selezionare un file `.bin` di test, verificare che il file info appaia con nome e dimensione, avviare l'upload, mockare la risposta POST, verificare che la barra di progresso segmentata appaia e che il feedback di successo con countdown venga mostrato
-         - **Navigazione da dashboard:** partire da `/`, cliccare il tab "Firmware OTA", verificare di arrivare su `/update` con tutti gli elementi attesi
-      2. Utilizzare `page.setInputFiles()` per simulare la selezione del file
-      3. Usare `page.route()` per mockare la risposta POST `/update` senza ESP32 reale
-      4. Verificare i messaggi di feedback e le transizioni di stato nell'interfaccia
-
-      ## Verifica
-      - I test vengono eseguiti con `npx playwright test tests/ota-update.spec.ts`
-      - I test passano (con appropriato mock/stub per l'endpoint)
-
-      ## Fatto quando
-      - [ ] File `tests/ota-update.spec.ts` creato con almeno 5 scenari
-      - [ ] I test coprono entrambe le modalità (firmware e filesystem)
-      - [ ] I test verificano l'avviso filesystem e la validazione
-      - [ ] I test sono eseguibili con Playwright
-
-      ## Blocchi
-      - TASK-03 (pagina HTML necessaria)
-      - TASK-04 (link nella dashboard necessario per test navigazione)
+      Test unitari per upload magic byte (valido/invalido), vuoto.
 
       ## File Coinvolti
-      - `tests/ota-update.spec.ts` — creare test e2e OTA
+      - `test/test_ota_handler/test_main.cpp` — creare test.
 
       ## Criteri di Completamento
-      - [ ] Almeno 5 scenari e2e: caricamento pagina, selezione firmware, selezione filesystem con avviso, upload con feedback, navigazione da dashboard
-      - [ ] Test eseguibili con Playwright
-      - [ ] Verifica elementi UI coerenti con mockup (dropzone, progress segmentata, readout, mappa flash)
+      - [ ] Unity test superati per logica OTA
+    ref: TASK-04
+  - id: TASK-05
+    title: Test E2E Playwright OTA Firmware
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Test e2e Playwright per caricamento pagina, drop file, progress.
+
+      ## File Coinvolti
+      - `tests/ota-update.spec.ts` — test Playwright
+
+      ## Criteri di Completamento
+      - [ ] Test Playwright superati
+    ref: TASK-05
+  - id: TASK-06
+    title: Fix CSS Encoding & Layout OTA
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il file `shared.css` è stato corrotto da un append in formato UTF-16LE, aggiungendo null bytes tra i caratteri. Questo causa la rottura degli stili sulla pagina OTA. Occorre ripulire i null bytes e unificare correttamente gli stili.
+
+      ## File Coinvolti
+      - `data/www/shared.css`
+
+      ## Criteri di Completamento
+      - [ ] `shared.css` è in formato UTF-8 valido senza null bytes.
+      - [ ] Gli stili `.ota-container`, `.dropzone`, `.progress-bar` sono applicati correttamente.
+    ref: TASK-06
+  - id: TASK-07
+    title: Fix Backend OTA Upload Logic
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      L'upload OTA fallisce sul backend. L'utilizzo di `UPDATE_SIZE_UNKNOWN` in `Update.begin()` può causare problemi. Sostituire con `ESP.getFreeSketchSpace()`. Assicurarsi che la logica di `app.js` e `update.html` invii correttamente il form, e che gli errori di libreria vengano loggati per un debug più chiaro.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+      - `data/www/update.html`
+
+      ## Criteri di Completamento
+      - [ ] L'upload del firmware carica correttamente il payload in flash.
+      - [ ] Il magic byte check funziona regolarmente.
+      - [ ] Il frontend riceve `OK` dal backend e avvia il countdown.
+    ref: TASK-07

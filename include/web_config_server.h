@@ -21,6 +21,9 @@ private:
     void handleLogs();
     void handleNutConfig();
     void handleGetConfig();
+    
+    void handleOTAPage();
+    void handleOTAUpload();
 
     bool should_restart = false;
     unsigned long restart_request_time = 0;

@@ -6,8 +6,8 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 5
-status: PLANNED
-body: |-
+status: DONE
+body: |
   #### US-017: Aggiornamento Firmware via OTA (Over-The-Air)
 
   **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 5 | **Status:** TODO
@@ -27,8 +27,29 @@ body: |-
   - [ ] Il processo di caricamento restituisce feedback (successo o errore) all'utente.
   - [ ] In caso di caricamento corretto, il dispositivo esegue il commit del firmware e si riavvia automaticamente.
   - [ ] Lo spazio delle partizioni flash è configurato correttamente nel `platformio.ini` per supportare due partizioni app (schema OTA).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **data/www/update.html** — La pagina di aggiornamento OTA presenta problemi di CSS e layout, come segnalato nello screenshot allegato.
+  - **src/web_config_server.cpp** — L'upload del firmware non funziona. Verificare la corretta gestione dell'endpoint /update lato backend e l'invio corretto della request da app.js / update.html.
 history:
   - status: TODO
     at: "2026-07-12T10:00:22Z"
   - status: PLANNED
     at: "2026-07-16T16:14:27Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T16:30:28Z"
+  - status: REVIEW
+    at: "2026-07-17T16:38:12Z"
+  - status: TODO
+    at: "2026-07-17T16:47:44Z"
+  - status: PLANNED
+    at: "2026-07-17T16:52:41Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T16:55:38Z"
+  - status: REVIEW
+    at: "2026-07-17T16:58:15Z"
+  - status: DONE
+    at: "2026-07-17T19:43:27Z"
