@@ -2,6 +2,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Tab switching logic
     const tabs = document.querySelectorAll('.tab');
     const contents = document.querySelectorAll('.tab-content');
+    const pageTitle = document.querySelector('.page-title');
+
+    // Imposta il titolo iniziale
+    const activeTab = document.querySelector('.tab.active');
+    if (activeTab && pageTitle) {
+        pageTitle.textContent = activeTab.textContent.trim();
+    }
 
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
@@ -16,6 +23,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             tab.classList.add('active');
             document.getElementById(`content-${target}`).classList.add('active');
+            
+            // Aggiorna il titolo della pagina
+            if (pageTitle) {
+                pageTitle.textContent = tab.textContent.trim();
+            }
         });
     });
 

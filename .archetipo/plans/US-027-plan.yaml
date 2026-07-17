@@ -1,0 +1,46 @@
+schema: archetipo/plan/v2
+spec_code: US-027
+body: |-
+  ### Soluzione Tecnica
+  Attualmente, l'intestazione della pagina Web (`<h1 class="page-title">`) in `index.html` è statica con il testo "Network Configuration". L'interfaccia ha un menu laterale in cui le tab cambiano i contenuti (`.tab-content`), ma il titolo resta invariato.
+  Per risolvere, verrà estesa la logica di click delle tab (in `app.js`) in modo che, ad ogni navigazione, il testo della tab selezionata (`tab.textContent.trim()`) venga iniettato dentro `.page-title`.
+
+  ### Strategia di Test (E2E UI)
+  Essendo un cambiamento alla User Interface, la strategia prevede la verifica manuale o tramite framework (qualora fosse presente Playwright/Cypress) del corretto passaggio tra le viste, verificando che il selettore `.page-title` abbia il testo corretto.
+  - Clic su "NUT Server" -> il titolo diventa "NUT Server".
+  - Clic su "System Logs" -> il titolo diventa "System Logs".
+  - Il comportamento del tab "Firmware OTA" che ricarica la pagina non deve essere alterato.
+tasks:
+  - id: TASK-01
+    title: Aggiunta aggiornamento titolo in app.js
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare la logica di routing interno lato frontend per cambiare l'H1 principale della pagina in sincrono con la voce di menu selezionata.
+
+      ## File Coinvolti
+      - `data/www/app.js` — Nel listener `tab.addEventListener('click', ...)` recuperare l'elemento `.page-title` e impostarne il `textContent` con il `textContent.trim()` del tab premuto.
+
+      ## Criteri di Completamento
+      - [ ] Navigando tra i tab (Wi-Fi, NUT, Logs), il titolo della pagina `.page-title` corrisponde alla voce del menu laterale.
+      - [ ] La logica non solleva eccezioni se l'elemento titolo non viene trovato.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test manuale e/o E2E della navigazione web
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Verificare che il titolo dell'interfaccia web si aggiorni correttamente durante la navigazione nel menu.
+
+      ## File Coinvolti
+      - N/A (Test sul browser)
+
+      ## Criteri di Completamento
+      - [ ] Aprendo la pagina, il titolo di default è corretto.
+      - [ ] Cliccando su ogni tab disponibile, il titolo `<h1 class="page-title">` si aggiorna all'istante.
+      - [ ] Cliccando sul tab "Firmware OTA" il redirect a `/update` funziona ancora.
+    ref: TASK-02

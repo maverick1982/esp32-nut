@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-027
+title: Fix aggiornamento titolo pagina Web durante navigazione menu
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 1
+status: DONE
+body: |-
+  #### US-027: Fix aggiornamento titolo pagina Web durante navigazione menu
+
+  **Epic:** EP-002 | **Priority:** HIGH | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web di configurazione,
+  Voglio che il titolo nella parte alta della pagina si aggiorni dinamicamente in base alla sezione selezionata nel menu di sinistra,
+  in modo da sapere sempre in quale pagina o sezione mi trovo, anziché vedere fisso "Network configuration".
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, cliccando sulle diverse voci del menu a sinistra (es. System, Logs, Firmware OTA, ecc.) all'interno della Web UI (Captive Portal), il titolo principale (H2 o H1) della view centrale cambierà istantaneamente per riflettere il nome della sezione attiva.
+
+  **Acceptance Criteria**
+  - [ ] La logica JavaScript del frontend (es. in `app.js` o simili) intercetta il click sulle voci di menu e aggiorna il contenuto di testo dell'elemento titolo.
+  - [ ] Il titolo corrisponde esattamente al nome della sezione aperta (es. "NUT Configuration", "System Logs", "Firmware OTA").
+  - [ ] All'avvio della pagina, il titolo corrisponde coerentemente alla sezione attiva di default.
+history:
+  - status: TODO
+    at: "2026-07-17T21:26:42Z"
+  - status: PLANNED
+    at: "2026-07-17T21:28:52Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T21:30:06Z"
+  - status: REVIEW
+    at: "2026-07-17T21:31:28Z"
+  - status: DONE
+    at: "2026-07-17T21:35:48Z"
