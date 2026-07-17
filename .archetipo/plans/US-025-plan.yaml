@@ -1,0 +1,42 @@
+schema: archetipo/plan/v2
+spec_code: US-025
+body: |-
+  ### Technical Solution
+  Modifica della logica in `getUPSStatusString()` per implementare la condizione richiesta: se la batteria è completamente carica (`remainingCapacity == 100`) e l'alimentazione AC è presente (`acPresent == true`), il flag `CHRG` non deve essere concatenato alla stringa di stato. In questo modo lo stato dell'UPS sarà unicamente `OL` senza il falso positivo di ricarica in float.
+
+  ### Test Strategy
+  La logica verrà verificata estendendo i test unitari esistenti in `test_usb_host`, aggiungendo un caso di test specifico che simuli un report HID con batteria al 100% e rete elettrica presente, verificando che `getUPSStatusString()` restituisca esattamente `OL` e non `OL CHRG`. Verrà inoltre corretto un problema pregresso di compilazione dei test legato al nome del metodo `getUPSStatusString()`.
+tasks:
+  - id: TASK-01
+    title: Aggiornamento logica flag CHRG in getUPSStatusString
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare l'implementazione del metodo `getUPSStatusString()` all'interno del driver USB Host per sopprimere l'inserimento del flag `CHRG` se la batteria ha raggiunto il 100% della capacità nominale (`_ups_data.remainingCapacity == 100`) e la rete elettrica è presente.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La condizione `if (_ups_data.charging)` in `getUPSStatusString()` include un check per ignorare il flag se la carica è al 100% ed è presente AC.
+      - [ ] Il metodo non modifica la generazione del flag in assenza di rete (`OB`).
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiunta unit test per soppressione CHRG
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere un test unitario nel modulo `test_usb_host` per validare la nuova logica. Contestualmente, correggere eventuali richiami obsoleti a `getUPSStatus()` (che in passato è stato rinominato in `getUPSStatusString()`) per ripristinare la corretta compilazione della suite di test.
+
+      ## File Coinvolti
+      - `test/test_usb_host/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La compilazione di `test_usb_host` passa con successo.
+      - [ ] È presente un test che valida l'assenza del flag `CHRG` quando si simula carica 100% e AC presente.
+      - [ ] È presente un test che valida la presenza del flag `CHRG` quando la carica è < 100% e AC è presente.
+    ref: TASK-02

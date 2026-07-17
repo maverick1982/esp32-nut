@@ -24,7 +24,7 @@ String USBHostUPS::getUPSStatusString() const {
     if (_ups_data.acPresent && !_ups_data.discharging) status += "OL ";
     if (_ups_data.discharging) status += "OB ";
     if (_ups_data.belowRemainingCapacityLimit) status += "LB ";
-    if (_ups_data.charging) status += "CHRG ";
+    if (_ups_data.charging && !(_ups_data.remainingCapacity == 100 && _ups_data.acPresent)) status += "CHRG ";
     if (_ups_data.needReplacement) status += "RB ";
     if (_ups_data.overload) status += "OVER ";
     if (_ups_data.shutdownImminent) status += "FSD ";

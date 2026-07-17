@@ -34,12 +34,27 @@ void test_decode_status(void) {
     // Test OL con Report ID incluso nel buffer
     uint8_t data_ol[] = {0x02, 1};
     test_usb_ups.decodeReport(0x02, data_ol, sizeof(data_ol));
-    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatusString().c_str());
 
     // Test OB senza Report ID nel buffer (solo payload)
     uint8_t data_ob[] = {2};
     test_usb_ups.decodeReport(0x02, data_ob, sizeof(data_ob));
-    TEST_ASSERT_EQUAL_STRING("OB", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_STRING("OB", test_usb_ups.getUPSStatusString().c_str());
+}
+
+void test_suppress_chrg_at_100(void) {
+    // Impostiamo manualmente i flag
+    test_usb_ups._ups_data.acPresent = true;
+    test_usb_ups._ups_data.discharging = false;
+    test_usb_ups._ups_data.charging = true;
+    
+    // Test 1: < 100% -> should have CHRG
+    test_usb_ups._ups_data.remainingCapacity = 99;
+    TEST_ASSERT_EQUAL_STRING("OL CHRG", test_usb_ups.getUPSStatusString().c_str());
+    
+    // Test 2: == 100% -> should NOT have CHRG
+    test_usb_ups._ups_data.remainingCapacity = 100;
+    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatusString().c_str());
 }
 
 void test_decode_input_voltage(void) {
@@ -61,7 +76,7 @@ void test_dev_gone(void) {
     uint8_t data_charge[] = {0x01, 85};
     test_usb_ups.decodeReport(0x01, data_charge, sizeof(data_charge));
     
-    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatusString().c_str());
     TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getBatteryCharge());
 
     // Simuliamo disconnessione
@@ -71,7 +86,7 @@ void test_dev_gone(void) {
     test_usb_ups.handle_client_event(&event_msg);
 
     // Verifichiamo reset
-    TEST_ASSERT_EQUAL_STRING("Unknown", test_usb_ups.getUPSStatus().c_str());
+    TEST_ASSERT_EQUAL_STRING("Unknown", test_usb_ups.getUPSStatusString().c_str());
     TEST_ASSERT_EQUAL_UINT8(0, test_usb_ups.getBatteryCharge());
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, test_usb_ups.getInputVoltage());
 }
@@ -101,6 +116,7 @@ void setup() {
     RUN_TEST(test_usb_host_initialization);
     RUN_TEST(test_decode_battery_charge);
     RUN_TEST(test_decode_status);
+    RUN_TEST(test_suppress_chrg_at_100);
     RUN_TEST(test_decode_input_voltage);
     RUN_TEST(test_dev_gone);
     RUN_TEST(test_decode_string_descriptor);

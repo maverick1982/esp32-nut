@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-025
+title: Correzione stato UPS (OL) quando la batteria è al 100%
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-025: Correzione stato UPS (OL) quando la batteria è al 100%
+
+  **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 2 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del server NUT o di Home Assistant,
+  Voglio che lo stato dell'UPS riporti solo `OL` (Online) quando la batteria è completamente carica (100%),
+  in modo da avere un comportamento standard ed evitare di visualizzare il flag fittizio "Battery Charging" (CHRG) in stato di float.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, interrogando il server NUT (es. `LIST VAR ups` o `GET VAR ups ups.status`), il server restituirà unicamente lo stato `OL` (senza `CHRG`) a patto che l'UPS sia collegato alla rete e la sua carica sia al 100%.
+
+  **Acceptance Criteria**
+  - [ ] La logica che formatta la variabile `ups.status` (o che esegue il parsing del report HID USB) viene modificata.
+  - [ ] Quando la carica (`ups.charge`) è al 100% (o al livello di _fully charged_) e l'UPS è alimentato dalla rete elettrica, la stringa di stato elimina il flag di ricarica.
+  - [ ] Il flag di ricarica (`CHRG`) continua a comparire regolarmente quando l'UPS è alimentato da rete ma la batteria non è ancora completamente carica.
+  - [ ] Il comportamento in assenza di rete (`OB`, `DISCHRG`) non subisce regressioni e rimane funzionante.
+history:
+  - status: TODO
+    at: "2026-07-17T20:40:23Z"
+  - status: PLANNED
+    at: "2026-07-17T20:44:59Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T20:47:50Z"
+  - status: REVIEW
+    at: "2026-07-17T20:51:08Z"
+  - status: DONE
+    at: "2026-07-17T20:58:16Z"
