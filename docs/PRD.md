@@ -135,12 +135,14 @@ Utilizza un NAS Synology, un UPS Eaton 3S 700, e gestisce la sua rete tramite un
 - Firmware per ESP32-S3 compilato con PlatformIO.
 - Supporto USB Host HID PDC per leggere lo stato di alimentazione e la carica della batteria dell'UPS Eaton 3S 700.
 - Server TCP NUT porta 3493 per rispondere alle query di Home Assistant (`LIST UPS`, `GET VAR`).
-- Configurazione Wi-Fi e NUT statica tramite file `/config.json` su LittleFS.
+- Configurazione Wi-Fi e NUT salvata su file `/config.json` (LittleFS).
+- Portale Web Captive Portal integrato per la configurazione grafica iniziale di Wi-Fi e credenziali NUT.
+- Aggiornamento Firmware OTA (Over-The-Air) gestibile direttamente dall'interfaccia web.
+- Diagnostica visiva avanzata tramite LED RGB (NeoPixel).
 - Gestione riconnessione automatica Wi-Fi e USB (hot-plug).
 
 ### Funzionalità di Crescita (Post-MVP)
 
-- Portale Web Captive Portal per configurazione grafica del Wi-Fi e credenziali (senza caricamento manuale di LittleFS).
 - Supporto per UPS di altri brand (es. APC, CyberPower) tramite configurazione del Vendor ID e mappatura dei report HID.
 
 ### Visione Futura
@@ -165,16 +167,18 @@ Il sistema è basato su un singolo chip ESP32-S3. L'ESP32-S3 funge da controller
 **Componenti Principali:**
 1. **Modulo USB Host Engine**: Gestisce l'inizializzazione del bus USB, l'identificazione dell'UPS e il polling dei report HID PDC.
 2. **Modulo NUT Server**: Gestisce la connessione TCP, effettua il parsing dei comandi del protocollo NUT e restituisce le risposte formattate.
-3. **Modulo Config Manager**: Legge e valida il file `/config.json` da LittleFS.
-4. **Modulo Network Manager**: Gestisce la connessione Wi-Fi e monitora lo stato della rete per avviare riconnessioni automatiche.
+3. **Modulo Web Config Server**: Espone il Captive Portal, le API REST per la configurazione del sistema e l'endpoint per l'aggiornamento Firmware OTA (`/update`) tramite un'interfaccia web embedded.
+4. **Modulo Config Manager**: Legge, valida e salva il file `/config.json` da LittleFS sfruttando `ArduinoJson`.
+5. **Modulo Network Manager**: Gestisce la connessione Wi-Fi e monitora lo stato della rete per avviare riconnessioni automatiche.
+6. **Modulo Diagnostic LED**: Controlla il LED RGB (WS2812/NeoPixel) per fornire un feedback visivo immediato sullo stato di sistema.
 
 ### Stack Tecnologico
 
 | Livello | Tecnologia | Versione | Motivazione |
 |---|---|---|---|
 | Linguaggio | C++ | C++17 | Linguaggio nativo supportato dal framework Arduino su ESP32, ideale per controllo a basso livello e performance. |
-| Framework Backend | PlatformIO / Arduino ESP32 Core | v3.0.x | Fornisce le astrazioni necessarie per la gestione Wi-Fi e TCP, mantenendo l'accesso alle API USB Host native di ESP-IDF (v5.1). |
-| Framework Frontend | N/A | N/A | Nessuna interfaccia frontend prevista nell'MVP |
+| Framework Backend | PlatformIO / Arduino ESP32 Core | v3.0.x | Fornisce le astrazioni necessarie per la gestione Wi-Fi e TCP, mantenendo l'accesso alle API USB Host native di ESP-IDF. Include `ArduinoJson` e `Adafruit NeoPixel`. |
+| Framework Frontend | HTML/CSS/JS (Vanilla) | | Interfaccia utente minimalista incorporata (embedded assets) per il Captive Portal di configurazione. |
 | Database | N/A | N/A | N/A |
 | ORM | N/A | N/A | |
 | Autenticazione | N/A | | |
@@ -212,7 +216,7 @@ Visual Studio Code con estensione PlatformIO IDE su sistema operativo Windows/ma
 
 **Pipeline:** GitHub Actions per verificare la compilazione del codice su ogni commit/push.
 
-**Deployment:** Flash del firmware e dell'immagine LittleFS tramite porta USB-to-UART dell'ESP32-S3 usando `esptool.py` (integrato in PlatformIO).
+**Deployment:** Installazione iniziale (Flash) del firmware e dell'immagine LittleFS tramite porta USB-to-UART dell'ESP32-S3 usando `esptool.py` (integrato in PlatformIO). I successivi aggiornamenti del firmware avvengono via rete (OTA) caricando il file binario compilato direttamente dall'interfaccia web.
 
 **Infrastruttura target:** Scheda di sviluppo ESP32-S3 (es. ESP32-S3-DevKitC-1 o clone equivalente dotato di due porte USB).
 
@@ -245,8 +249,10 @@ Visual Studio Code con estensione PlatformIO IDE su sistema operativo Windows/ma
 * **FR-010**: Il server deve gestire almeno due connessioni client TCP simultanee (es. Home Assistant e un client di debug da riga di comando).
 
 ### 4. Configurazione e Diagnostica
-* **FR-011**: All'avvio, il firmware deve leggere il file `/config.json` memorizzato nel file system LittleFS per ricavare credenziali Wi-Fi, credenziali NUT ed eventuali parametri dell'UPS.
-* **FR-012**: Il firmware deve utilizzare il LED di stato dell'ESP32-S3 per indicare visivamente lo stato corrente (es. lampeggio lento = connessione Wi-Fi in corso; fisso = operativo e connesso a UPS; lampeggio rapido = errore USB/UPS).
+* **FR-011**: Il firmware deve esporre un Web Captive Portal per permettere all'utente di configurare facilmente le credenziali Wi-Fi e i parametri del server NUT, salvando il tutto in un file `/config.json` su LittleFS.
+* **FR-012**: All'avvio, il sistema ripristina la configurazione dal file `/config.json`. In assenza di configurazione, avvia automaticamente la modalità Access Point.
+* **FR-013**: Il firmware deve utilizzare il LED RGB integrato dell'ESP32-S3 (NeoPixel) per indicare visivamente lo stato corrente attraverso un codice colori (es. blu = config mode; verde = connesso; rosso/lampeggio = errore).
+* **FR-014**: Il firmware deve supportare l'aggiornamento Over-The-Air (OTA) permettendo all'utente di caricare un nuovo file binario tramite l'interfaccia web.
 
 ---
 
