@@ -347,7 +347,7 @@ void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t len
         case 0x10:
             if (length - offset >= 1) {
                 uint8_t chemIdx = data[offset];
-                if (chemIdx > 0 && chemIdx != _chemStrIdx) {
+                if (chemIdx > 0 && (chemIdx != _chemStrIdx || _ups_data.batteryType == "")) {
                     _chemStrIdx = chemIdx;
                     requestStringDescriptor(chemIdx);
                 }

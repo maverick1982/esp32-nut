@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-026
+title: Fix lettura parametro Chimica della Batteria
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 1
+status: REVIEW
+body: |-
+  #### US-026: Fix lettura parametro Chimica della Batteria
+
+  **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del server NUT o di Home Assistant,
+  Voglio che il parametro "Chimica della batteria" (es. `battery.type` o lettura USB corrispondente) sia letto ed esposto correttamente,
+  in modo da avere a disposizione il valore reale anziché la dicitura "Non disponibile".
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il server NUT e l'ESP32 restituiranno un valore valido per il tipo di chimica (es. `PbAc`, `LiIon`) e non apparirà più come sconosciuto o non disponibile nei log e nei client.
+
+  **Acceptance Criteria**
+  - [ ] La logica che esegue il parsing del report HID USB o l'assegnazione della stringa di chimica viene corretta.
+  - [ ] Il parametro viene correttamente registrato ed esposto tra le variabili disponibili del server NUT.
+  - [ ] Un test unitario o diagnostico verifica che il valore decodificato sia presente e non nullo.
+history:
+  - status: TODO
+    at: "2026-07-17T21:03:05Z"
+  - status: PLANNED
+    at: "2026-07-17T21:06:09Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T21:07:29Z"
+  - status: REVIEW
+    at: "2026-07-17T21:09:36Z"

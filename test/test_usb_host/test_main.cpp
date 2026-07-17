@@ -108,6 +108,25 @@ void test_decode_string_descriptor(void) {
     TEST_ASSERT_EQUAL_STRING("", test_usb_ups.getUPSData().serialNumber.c_str());
 }
 
+void test_decode_battery_chemistry(void) {
+    // Simuliamo ricezione report 0x10 con indice descrittore 5
+    uint8_t report10[] = {0x10, 5};
+    test_usb_ups._chemStrIdx = 0;
+    test_usb_ups.getUPSData().batteryType = "";
+    test_usb_ups.decodeReport(0x10, report10, sizeof(report10));
+    TEST_ASSERT_EQUAL_UINT8(5, test_usb_ups._chemStrIdx);
+
+    // Simuliamo la risposta del descrittore di stringa "PbAc" all'indice 5
+    uint8_t data_chem[] = {10, 0x03, 'P', 0, 'b', 0, 'A', 0, 'c', 0};
+    test_usb_ups.parseStringDescriptor(5, data_chem, sizeof(data_chem));
+    TEST_ASSERT_EQUAL_STRING("PbAc", test_usb_ups.getUPSData().batteryType.c_str());
+
+    // Verifichiamo che il retry della decodeReport non alteri lo stato se la stringa era vuota
+    test_usb_ups.getUPSData().batteryType = "";
+    test_usb_ups.decodeReport(0x10, report10, sizeof(report10));
+    TEST_ASSERT_EQUAL_UINT8(5, test_usb_ups._chemStrIdx);
+}
+
 void setup() {
     // Delay per stabilizzare la connessione seriale e permettere al monitor di agganciarsi
     delay(2000);
@@ -120,6 +139,7 @@ void setup() {
     RUN_TEST(test_decode_input_voltage);
     RUN_TEST(test_dev_gone);
     RUN_TEST(test_decode_string_descriptor);
+    RUN_TEST(test_decode_battery_chemistry);
     UNITY_END();
 }
 

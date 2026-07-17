@@ -1,0 +1,36 @@
+schema: archetipo/plan/v2
+spec_code: US-026
+body: "Il problema deriva dalla modalità con cui viene richiesto il descrittore di stringa per la chimica della batteria (`batteryType`). Attualmente, l'indice della stringa viene letto all'interno di `decodeReport` (report ID `0x10`) e la richiesta (`requestStringDescriptor`) parte solo la prima volta che si scopre un nuovo indice (`chemIdx != _chemStrIdx`). \n\nPoiché `decodeReport` avviene spesso contestualmente a una callback asincrona (in risposta ai Bulk IN / Interrupt IN), o se il device impiega tempo a rispondere, la richiesta di controllo (`requestStringDescriptor`) può andare persa. Siccome `_chemStrIdx` viene aggiornato subito, il sistema non riproverà mai più a chiedere la stringa se questa va a vuoto. \n\nLa soluzione è rafforzare la condizione in `decodeReport`, ritentando la `requestStringDescriptor` non solo se l'indice cambia, ma anche se la variabile `_ups_data.batteryType` risulta ancora vuota (`\"\"`). In questo modo, le poll successive riproveranno a estrarre la stringa finché non andrà a buon fine.\n\n### Test Strategy\n- **Unit Test**: Verrà aggiunto un test in `test_main.cpp` che simula la mancata risposta e la ricezione successiva del report `0x10`, verificando che la chimica della batteria venga decodificata correttamente e la richiesta rinvocata."
+tasks:
+  - id: TASK-01
+    title: Rendere resiliente la richiesta del descrittore di chimica
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Modificare `decodeReport` in `USBHostUPS.cpp` per ritentare `requestStringDescriptor` se `_ups_data.batteryType` è vuota, anche se l'indice `chemIdx` non è cambiato rispetto a `_chemStrIdx`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Nel `case 0x10:`, la condizione diventa `if (chemIdx > 0 && (chemIdx != _chemStrIdx || _ups_data.batteryType == ""))`.
+      - [ ] La stringa viene popolata correttamente alla ricezione del descrittore.
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiornamento unit test per batteria
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere un test in `test_usb_host` per simulare l'arrivo del report `0x10` e la conseguente chiamata di decodifica della stringa.
+
+      ## File Coinvolti
+      - `test/test_usb_host/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Esiste un nuovo caso di test `test_decode_battery_chemistry` o simile.
+      - [ ] Il test passa chiamando il parser della stringa e validando `_ups_data.batteryType`.
+    ref: TASK-02
