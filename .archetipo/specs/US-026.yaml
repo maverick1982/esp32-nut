@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 1
-status: REVIEW
+status: DONE
 body: |-
   #### US-026: Fix lettura parametro Chimica della Batteria
 
@@ -34,3 +34,5 @@ history:
     at: "2026-07-17T21:07:29Z"
   - status: REVIEW
     at: "2026-07-17T21:09:36Z"
+  - status: DONE
+    at: "2026-07-17T21:13:03Z"
