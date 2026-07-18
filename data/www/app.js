@@ -38,9 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Imposta il titolo iniziale
     const activeTab = document.querySelector('.tab.active');
     if (activeTab && pageTitle) {
-        let text = activeTab.textContent.trim();
-        if (activeTab.getAttribute('data-target') === 'ups') text = 'UPS Telemetry';
-        pageTitle.textContent = text;
+        pageTitle.textContent = activeTab.textContent.trim();
     }
 
     tabs.forEach(tab => {
@@ -59,9 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Aggiorna il titolo della pagina
             if (pageTitle) {
-                let text = tab.textContent.trim();
-                if (target === 'ups') text = 'UPS Telemetry';
-                pageTitle.textContent = text;
+                pageTitle.textContent = tab.textContent.trim();
             }
         });
     });

@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-029
+title: Indicatori di stato separati per Wi-Fi e UPS in tempo reale nella Web UI
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+body: |-
+  #### US-029: Indicatori di stato separati per Wi-Fi e UPS in tempo reale nella Web UI
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 2 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web,
+  Voglio poter visualizzare due indicatori di stato separati e in tempo reale (uno per il Wi-Fi e uno per l'UPS),
+  anziché un singolo testo statico,
+  così da poter monitorare in modo distinto e chiaro le connessioni di rete e lo stato del dispositivo UPS.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, nella parte inferiore della sidebar (o nel footer) della Web UI saranno presenti due indicatori di stato distinti, aggiornati asincronamente dal frontend:
+  - **WiFi:** Mostrerà stati come "Connecting", "Connected (<SSID>)" oppure "AP Mode Active".
+  - **UPS:** Mostrerà stati come "Connecting", "Connected (<ups.model>)" oppure "Disconnected".
+  Questi indicatori sostituiranno l'attuale voce fissa "AP Mode Active".
+
+  **Acceptance Criteria**
+  - [ ] L'interfaccia HTML/CSS è aggiornata per mostrare due indicatori di stato separati per Wi-Fi e UPS.
+  - [ ] Il backend espone le informazioni necessarie (stato Wi-Fi, SSID, stato UPS, modello UPS) tramite un endpoint API.
+  - [ ] Il frontend JavaScript (es. in `app.js`) interroga regolarmente l'endpoint e aggiorna dinamicamente il testo dei due indicatori.
+  - [ ] L'indicatore WiFi mostra correttamente "Connecting", "Connected (<SSID>)" oppure "AP Mode Active" in base allo stato reale.
+  - [ ] L'indicatore UPS mostra correttamente "Connecting", "Connected (<ups.model>)" oppure "Disconnected" in base allo stato reale.
+  - [ ] Il testo statico "AP Mode Active" originale viene rimosso definitivamente.
+history:
+  - status: TODO
+    at: "2026-07-18T11:46:07Z"
