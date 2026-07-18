@@ -36,18 +36,18 @@ void setup() {
 
     // Setup fallback AP trigger
     network_mgr.onFallback([]() {
-        AppLogger::log("INFO", "[MAIN] Fallback rilevato, avvio WebConfigServer in modalità AP.");
+        AppLogger::log("INFO", "[MAIN] Fallback detected, starting WebConfigServer in AP mode.");
         web_server.setUPS(&usb_ups);
         web_server.begin(true);
     });
 
     // Inizializzazione di ConfigManager
     if (!config_mgr.begin()) {
-        AppLogger::log("ERROR", "[MAIN] ERRORE: Caricamento configurazione fallito! Avvio in modalità sicura...");
+        AppLogger::log("ERROR", "[MAIN] ERROR: Configuration load failed! Starting in safe mode...");
         network_mgr.beginAP("NUT_ESP32_Config", "12345678");
         web_server.begin(true);
     } else {
-        AppLogger::log("INFO", "[MAIN] Configurazione caricata con successo.");
+        AppLogger::log("INFO", "[MAIN] Configuration loaded successfully.");
         // Stampa parametri per verifica
         WifiConfig wifi = config_mgr.getWifiConfig();
         NutConfig nut = config_mgr.getNutConfig();
@@ -63,18 +63,18 @@ void setup() {
     // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
     if (config_mgr.isValid()) {
         if (!usb_ups.begin()) {
-            AppLogger::log("ERROR", "[MAIN] ERRORE: Inizializzazione USBHostUPS fallita!");
+            AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
         } else {
-            AppLogger::log("INFO", "[MAIN] USBHostUPS inizializzato correttamente.");
+            AppLogger::log("INFO", "[MAIN] USBHostUPS initialized correctly.");
         }
 
         // Inizializzazione NUTServer
         NutConfig nut_config = config_mgr.getNutConfig();
         NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
-            AppLogger::log("ERROR", "[MAIN] ERRORE: Inizializzazione NUTServer fallita!");
+            AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {
-            AppLogger::log("INFO", "[MAIN] NUTServer avviato correttamente sulla porta 3493.");
+            AppLogger::log("INFO", "[MAIN] NUTServer started correctly on port 3493.");
         }
     }
 }
@@ -89,7 +89,7 @@ void loop() {
         uint32_t now = millis();
         if (now - last_safe_print >= 5000) {
             last_safe_print = now;
-            AppLogger::log("WARN", "[MAIN] ATTENZIONE: Sistema in attesa sicura. Configurazione mancante o non valida!");
+            AppLogger::log("WARN", "[MAIN] WARNING: System in safe waiting mode. Configuration missing or invalid!");
         }
         
         diagnostic_led.setState(computeSystemState(network_mgr.isConnected(), false));
@@ -105,7 +105,7 @@ void loop() {
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
-        AppLogger::log("INFO", "[DIAG] UPS Info: Batteria = %d%% | Stato = %s | Tensione = %.1f V\n",
+        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V\n",
                       usb_ups.getUPSData().remainingCapacity,
                       usb_ups.getUPSStatusString().c_str(),
                       (float)usb_ups.getUPSData().outputVoltage);

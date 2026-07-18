@@ -31,7 +31,7 @@ bool NUTServer::begin(const NUTServerConfig& config, USBHostUPS* usb_ups, uint16
     _server.begin();
     
     _initialized = true;
-    Serial.printf("[NUTServer] Server in ascolto sulla porta %d\n", _port);
+    Serial.printf("[NUTServer] Server listening on port %d\n", _port);
     return true;
 }
 
@@ -45,7 +45,7 @@ void NUTServer::closeSession(int slot) {
         _clientLastActivity[slot] = 0;
         _clientBuffer[slot] = "";
         _clientUsername[slot] = "";
-        Serial.printf("[NUTServer] Sessione dello slot %d chiusa.\n", slot);
+        Serial.printf("[NUTServer] Session for slot %d closed.\n", slot);
     }
 }
 
@@ -104,10 +104,10 @@ void NUTServer::loop() {
                 _clientBuffer[slot] = "";
                 _clientBuffer[slot].reserve(256);
                 _clientUsername[slot] = "";
-                Serial.printf("[NUTServer] Client connesso allo slot %d da %s:%d\n", 
+                Serial.printf("[NUTServer] Client connected to slot %d from %s:%d\n", 
                               slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
             } else {
-                Serial.println("[NUTServer] Rifiutata connessione: raggiunto limite massimo di client");
+                Serial.println("[NUTServer] Connection rejected: max clients reached");
                 newClient.print("ERR FAILED - Max clients reached\n");
                 newClient.stop();
             }
@@ -124,7 +124,7 @@ void NUTServer::loop() {
 
             // Verifica timeout di inattività (60 secondi)
             if (millis() - _clientLastActivity[i] > NUT_TIMEOUT_MS) {
-                Serial.printf("[NUTServer] Timeout inattività per lo slot %d. Disconnessione in corso.\n", i);
+                Serial.printf("[NUTServer] Inactivity timeout for slot %d. Disconnecting.\n", i);
                 _clients[i].print("ERR ACCESS-DENIED\n");
                 closeSession(i);
                 continue;

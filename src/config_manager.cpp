@@ -17,7 +17,7 @@ bool ConfigManager::begin() {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, config_json);
     if (error) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Parsing JSON fallito da NVS. Dettagli: %s\n", error.c_str());
+        AppLogger::log("ERROR", "[CONFIG] ERROR: JSON parsing from NVS failed. Details: %s\n", error.c_str());
         return false;
     }
     
@@ -27,7 +27,7 @@ bool ConfigManager::begin() {
         wifi_config.ssid = wifi["ssid"].as<String>();
         wifi_config.password = wifi["password"].as<String>();
     } else {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Sezione 'wifi' mancante o non valida nel file JSON.");
+        AppLogger::log("ERROR", "[CONFIG] ERROR: 'wifi' section missing or invalid in JSON.");
         return false;
     }
     
@@ -38,14 +38,14 @@ bool ConfigManager::begin() {
         nut_config.password = nut["password"].as<String>();
         nut_config.ups_name = nut["ups_name"].as<String>();
     } else {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Sezione 'nut' mancante o non valida nel file JSON.");
+        AppLogger::log("ERROR", "[CONFIG] ERROR: 'nut' section missing or invalid in JSON.");
         return false;
     }
     
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
     
-    AppLogger::log("INFO", "[CONFIG] Configurazione caricata correttamente da NVS.");
+    AppLogger::log("INFO", "[CONFIG] Configuration successfully loaded from NVS.");
     
     return true;
 }
@@ -84,17 +84,17 @@ bool ConfigManager::save() {
     
     String jsonString;
     if (serializeJson(doc, jsonString) == 0) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile serializzare il JSON.");
+        AppLogger::log("ERROR", "[CONFIG] ERROR: Cannot serialize JSON.");
         return false;
     }
     
     preferences.begin("nutos", false);
     size_t written = preferences.putString("config_json", jsonString);
     if (written == 0) {
-        AppLogger::log("ERROR", "[CONFIG] ERRORE: Impossibile scrivere la configurazione in NVS.");
+        AppLogger::log("ERROR", "[CONFIG] ERROR: Cannot write configuration to NVS.");
         return false;
     }
     
-    AppLogger::log("INFO", "[CONFIG] Configurazione salvata correttamente in NVS.");
+    AppLogger::log("INFO", "[CONFIG] Configuration successfully saved to NVS.");
     return true;
 }

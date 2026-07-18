@@ -83,7 +83,7 @@ void WebConfigServer::begin(bool isAPMode) {
     });
 
     server.begin();
-    AppLogger::log("INFO", "[WEB] Server avviato sulla porta 80");
+    AppLogger::log("INFO", "[WEB] Server started on port 80");
 }
 
 void WebConfigServer::loop() {
@@ -273,7 +273,7 @@ void WebConfigServer::handleOTAPage() {
 void WebConfigServer::handleOTAUpload() {
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
-        AppLogger::log("INFO", String("[OTA] Inizio upload: ") + upload.filename);
+        AppLogger::log("INFO", String("[OTA] Upload started: ") + upload.filename);
         uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         if (!Update.begin(maxSketchSpace, U_FLASH)) { //start with max available size
             Update.printError(Serial);
@@ -282,7 +282,7 @@ void WebConfigServer::handleOTAUpload() {
         // Validazione magic byte E9 sul primo chunk
         if (upload.totalSize == 0 && upload.currentSize > 0) {
             if (upload.buf[0] != 0xE9) {
-                AppLogger::log("ERROR", "[OTA] Magic byte non valido");
+                AppLogger::log("ERROR", "[OTA] Invalid magic byte");
                 Update.abort();
                 return;
             }
@@ -292,10 +292,10 @@ void WebConfigServer::handleOTAUpload() {
         }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (Update.end(true)) { //true to set the size to the current progress
-            AppLogger::log("INFO", String("[OTA] Successo: ") + String(upload.totalSize) + " bytes");
+            AppLogger::log("INFO", String("[OTA] Success: ") + String(upload.totalSize) + " bytes");
         } else {
             Update.printError(Serial);
-            AppLogger::log("ERROR", "[OTA] Errore alla fine");
+            AppLogger::log("ERROR", "[OTA] Error at the end");
         }
     }
 }

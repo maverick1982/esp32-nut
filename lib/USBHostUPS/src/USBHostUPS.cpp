@@ -43,7 +43,7 @@ void USBHostUPS::usb_host_lib_task(void *arg) {
     USBHostUPS *self = static_cast<USBHostUPS*>(arg);
     (void)self;
 
-    Serial.println("[USBHostUPS] Task gestione eventi USB Host avviato.");
+    Serial.println("[USBHostUPS] USB Host events task started.");
     while (true) {
         uint32_t event_flags;
         esp_err_t err = usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
@@ -60,7 +60,7 @@ void USBHostUPS::usb_host_lib_task(void *arg) {
 
 void USBHostUPS::usb_client_task(void *arg) {
     USBHostUPS *self = static_cast<USBHostUPS*>(arg);
-    Serial.println("[USBHostUPS] Task gestione eventi Client USB Host avviato.");
+    Serial.println("[USBHostUPS] USB Host Client events task started.");
     while (true) {
         if (self->_client_handle != NULL) {
             esp_err_t err = usb_host_client_handle_events(self->_client_handle, portMAX_DELAY);
@@ -82,49 +82,49 @@ void USBHostUPS::client_event_cb(const usb_host_client_event_msg_t *event_msg, v
 void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_msg) {
     switch (event_msg->event) {
         case USB_HOST_CLIENT_EVENT_NEW_DEV: {
-            Serial.printf("[USBHostUPS] Nuovo dispositivo USB connesso. Indirizzo: %d\n", event_msg->new_dev.address);
+            Serial.printf("[USBHostUPS] New USB device connected. Address: %d\n", event_msg->new_dev.address);
             usb_device_handle_t dev_hdl;
             esp_err_t err = usb_host_device_open(_client_handle, event_msg->new_dev.address, &dev_hdl);
             if (err == ESP_OK) {
                 const usb_device_desc_t *desc;
                 err = usb_host_get_device_descriptor(dev_hdl, &desc);
                 if (err == ESP_OK) {
-                    Serial.printf("[USBHostUPS] Info Dispositivo: Address %d, VID %04X, PID %04X\n",
+                    Serial.printf("[USBHostUPS] Device Info: Address %d, VID %04X, PID %04X\n",
                                   event_msg->new_dev.address, desc->idVendor, desc->idProduct);
                     if (desc->idVendor == 0x0463 && desc->idProduct == 0xFFFF) {
-                        Serial.println("[USBHostUPS] UPS Eaton 3S 700 rilevato correttamente! Registrato come HID.");
+                        Serial.println("[USBHostUPS] Eaton 3S 700 UPS detected successfully! Registered as HID.");
                         _dev_handle = dev_hdl;
                         esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
                         if (claim_err == ESP_OK) {
-                            Serial.println("[USBHostUPS] Interfaccia 0 HID reclamata con successo.");
+                            Serial.println("[USBHostUPS] HID Interface 0 claimed successfully.");
                             _last_poll = 0;
                         } else {
-                            Serial.printf("[USBHostUPS] Errore claim interfaccia 0: %d\n", claim_err);
+                            Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                             usb_host_device_close(_client_handle, dev_hdl);
                             _dev_handle = NULL;
                         }
                     } else {
-                        Serial.println("[USBHostUPS] Dispositivo non compatibile.");
+                        Serial.println("[USBHostUPS] Incompatible device.");
                         usb_host_device_close(_client_handle, dev_hdl);
                     }
                 } else {
-                    Serial.printf("[USBHostUPS] Errore lettura descrittore: %d\n", err);
+                    Serial.printf("[USBHostUPS] Error reading descriptor: %d\n", err);
                     usb_host_device_close(_client_handle, dev_hdl);
                 }
             } else {
-                Serial.printf("[USBHostUPS] Errore apertura dispositivo: %d\n", err);
+                Serial.printf("[USBHostUPS] Error opening device: %d\n", err);
             }
             break;
         }
         case USB_HOST_CLIENT_EVENT_DEV_GONE: {
-            Serial.println("[USBHostUPS] Dispositivo USB rimosso.");
+            Serial.println("[USBHostUPS] USB device removed.");
             _ups_data = UPSData(); // reset
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
                 esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
                 if (release_err == ESP_OK) {
-                    Serial.println("[USBHostUPS] Interfaccia 0 HID rilasciata con successo.");
+                    Serial.println("[USBHostUPS] HID Interface 0 released successfully.");
                 } else {
-                    Serial.printf("[USBHostUPS] Errore rilascio interfaccia 0: %d\n", release_err);
+                    Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
                 }
                 usb_host_device_close(_client_handle, _dev_handle);
                 _dev_handle = NULL;
@@ -149,7 +149,7 @@ bool USBHostUPS::begin() {
 
     esp_err_t err = usb_host_install(&host_config);
     if (err != ESP_OK) {
-        Serial.printf("[USBHostUPS] Errore: usb_host_install fallito: %d\n", err);
+        Serial.printf("[USBHostUPS] Error: usb_host_install failed: %d\n", err);
         return false;
     }
 
@@ -164,7 +164,7 @@ bool USBHostUPS::begin() {
     );
 
     if (task_err != pdPASS) {
-        Serial.println("[USBHostUPS] Errore: Impossibile creare il task FreeRTOS per eventi di libreria");
+        Serial.println("[USBHostUPS] Error: Cannot create FreeRTOS task for library events");
         return false;
     }
 
@@ -179,7 +179,7 @@ bool USBHostUPS::begin() {
 
     err = usb_host_client_register(&client_config, &_client_handle);
     if (err != ESP_OK) {
-        Serial.printf("[USBHostUPS] Errore: usb_host_client_register fallito: %d\n", err);
+        Serial.printf("[USBHostUPS] Error: usb_host_client_register failed: %d\n", err);
         return false;
     }
 
@@ -194,12 +194,12 @@ bool USBHostUPS::begin() {
     );
 
     if (task_err != pdPASS) {
-        Serial.println("[USBHostUPS] Errore: Impossibile creare il task FreeRTOS per eventi client");
+        Serial.println("[USBHostUPS] Error: Cannot create FreeRTOS task for client events");
         return false;
     }
 
     _initialized = true;
-    Serial.println("[USBHostUPS] Inizializzazione USB Host e Client completata.");
+    Serial.println("[USBHostUPS] USB Host and Client initialization completed.");
     return true;
 }
 

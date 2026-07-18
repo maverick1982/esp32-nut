@@ -8,11 +8,11 @@
 </head>
 <body style="background-color: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui);">
     <div class="ota-container">
-        <h2>Aggiornamento Firmware OTA</h2>
-        <p>Trascina il file .bin compilato qui sotto o clicca per selezionarlo.</p>
+        <h2>OTA Firmware Update</h2>
+        <p>Drag and drop the compiled .bin file below or click to select.</p>
         
         <div class="dropzone" id="dropzone">
-            <p>Trascina il file .bin qui o clicca per caricare</p>
+            <p>Drag the .bin file here or click to upload</p>
             <input type="file" id="fileInput" accept=".bin">
         </div>
 
@@ -22,7 +22,7 @@
         
         <div class="status" id="statusMessage"></div>
         
-        <a href="/" class="btn-back">&larr; Torna alla Home</a>
+        <a href="/" class="btn-back">&larr; Back to Home</a>
     </div>
 
     <script>
@@ -61,7 +61,7 @@
         function uploadFile() {
             const file = fileInput.files[0];
             if (!file || !file.name.endsWith('.bin')) {
-                showStatus('Per favore seleziona un file .bin valido.', 'error');
+                showStatus('Please select a valid .bin file.', 'error');
                 return;
             }
 
@@ -81,23 +81,23 @@
 
             xhr.onload = () => {
                 if (xhr.status === 200 && xhr.responseText.trim() === 'OK') {
-                    showStatus('Aggiornamento completato! Riavvio in corso...', 'success');
+                    showStatus('Update complete! Rebooting...', 'success');
                     progressBar.style.backgroundColor = '#28a745';
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 5000);
                 } else {
-                    showStatus('Errore durante l\'aggiornamento.', 'error');
+                    showStatus('Error during update.', 'error');
                     progressBar.style.backgroundColor = '#dc3545';
                 }
             };
 
             xhr.onerror = () => {
-                showStatus('Errore di rete durante l\'upload.', 'error');
+                showStatus('Network error during upload.', 'error');
                 progressBar.style.backgroundColor = '#dc3545';
             };
 
-            showStatus('Caricamento in corso...', '');
+            showStatus('Uploading...', '');
             xhr.send(formData);
         }
 
