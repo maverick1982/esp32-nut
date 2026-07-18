@@ -24,6 +24,7 @@ private:
     void handleNutConfig();
     void handleGetConfig();
     void handleUpsVars();
+    void handleSystemStatus();
     
     void handleOTAPage();
     void handleOTAUpload();

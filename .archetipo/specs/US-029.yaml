@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |-
   #### US-029: Indicatori di stato separati per Wi-Fi e UPS in tempo reale nella Web UI
 
@@ -35,3 +35,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-18T11:46:07Z"
+  - status: PLANNED
+    at: "2026-07-18T11:50:05Z"
+  - status: IN PROGRESS
+    at: "2026-07-18T11:51:25Z"
+  - status: REVIEW
+    at: "2026-07-18T11:56:53Z"
+  - status: DONE
+    at: "2026-07-18T12:00:57Z"

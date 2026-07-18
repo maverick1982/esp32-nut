@@ -44,9 +44,15 @@
                 </button>
             </nav>
 
-            <div class="system-status">
-                <div class="status-indicator warning"></div>
-                <span>AP Mode Active</span>
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator warning" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: --</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator warning" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: --</span>
+                </div>
             </div>
         </aside>
 

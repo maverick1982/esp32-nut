@@ -400,4 +400,52 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    // System Status Polling
+    async function fetchSystemStatus() {
+        try {
+            const response = await fetch('/api/system-status');
+            if (!response.ok) return;
+            const data = await response.json();
+            
+            const indWifi = document.getElementById('ind-wifi');
+            const lblWifi = document.getElementById('lbl-wifi');
+            const indUps = document.getElementById('ind-ups');
+            const lblUps = document.getElementById('lbl-ups');
+
+            if (lblWifi && data.wifi) {
+                lblWifi.textContent = 'Wi-Fi: ' + data.wifi.status;
+                if (data.wifi.status.startsWith('Connected')) {
+                    indWifi.className = 'status-indicator success';
+                } else if (data.wifi.status === 'AP Mode Active') {
+                    indWifi.className = 'status-indicator warning';
+                } else {
+                    indWifi.className = 'status-indicator danger';
+                }
+            }
+
+            if (lblUps && data.ups) {
+                lblUps.textContent = 'UPS: ' + data.ups.status;
+                if (data.ups.status.startsWith('Connected')) {
+                    indUps.className = 'status-indicator success';
+                } else {
+                    indUps.className = 'status-indicator danger';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to fetch system status:', error);
+            const indWifi = document.getElementById('ind-wifi');
+            const lblWifi = document.getElementById('lbl-wifi');
+            const indUps = document.getElementById('ind-ups');
+            const lblUps = document.getElementById('lbl-ups');
+            
+            if (lblWifi) lblWifi.textContent = 'Wi-Fi: Offline';
+            if (indWifi) indWifi.className = 'status-indicator danger';
+            if (lblUps) lblUps.textContent = 'UPS: Offline';
+            if (indUps) indUps.className = 'status-indicator danger';
+        }
+    }
+
+    fetchSystemStatus();
+    setInterval(fetchSystemStatus, 3000);
 });

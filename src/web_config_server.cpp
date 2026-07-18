@@ -56,6 +56,7 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
     server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
+    server.on("/api/system-status", HTTP_GET, [this]() { handleSystemStatus(); });
 
     // OTA endpoints
     server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });
@@ -227,6 +228,37 @@ void WebConfigServer::handleUpsVars() {
     doc["outlet.1.switch"] = data.outlet1Switch ? 1 : 0;
     doc["outlet.2.switch"] = data.outlet2Switch ? 1 : 0;
     
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+}
+
+void WebConfigServer::handleSystemStatus() {
+    JsonDocument doc;
+    
+    // Wi-Fi status
+    wl_status_t wifi_status = WiFi.status();
+    String wifi_status_str = "Disconnected";
+    if (is_ap_mode) {
+        wifi_status_str = "AP Mode Active";
+    } else if (wifi_status == WL_CONNECTED) {
+        wifi_status_str = "Connected (" + WiFi.SSID() + ")";
+    } else {
+        wifi_status_str = "Connecting";
+    }
+    doc["wifi"]["status"] = wifi_status_str;
+    
+    // UPS status
+    String ups_status_str = "Disconnected";
+    if (usb_ups && usb_ups->isConnected()) {
+        const UPSData& data = usb_ups->getUPSData();
+        String model = data.product.length() > 0 ? data.product : "Unknown Model";
+        ups_status_str = "Connected (" + model + ")";
+    } else {
+        ups_status_str = "Disconnected";
+    }
+    doc["ups"]["status"] = ups_status_str;
+
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);

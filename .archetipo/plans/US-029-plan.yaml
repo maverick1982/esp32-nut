@@ -1,0 +1,98 @@
+schema: archetipo/plan/v2
+spec_code: US-029
+body: |-
+  ## Architettura e Soluzione
+
+  L'obiettivo è separare l'indicatore di stato statico 'AP Mode Active' in due indicatori dinamici (Wi-Fi e UPS) in tempo reale.
+
+  ### Backend (`WebConfigServer`)
+  Sarà creato un nuovo endpoint REST `/api/system-status` con metodo GET. Questo endpoint fornirà un JSON con lo stato di entrambe le interfacce:
+  - **Wi-Fi**: controllerà lo stato tramite `WiFi.status()`, recuperando l'SSID se connesso, o segnalando 'AP Mode Active' usando la flag interna `is_ap_mode`.
+  - **UPS**: utilizzerà il puntatore `usb_ups` (se presente) e la funzione `isConnected()`. Se connesso, recupererà la stringa `product` (modello) dai dati UPS per restituire uno stato formatato.
+
+  ### Frontend (`index.html`, `app.js`, `shared.css`)
+  - In `index.html`, il blocco `.system-status` attuale verrà suddiviso in due righe (`.status-item`), ciascuna con il proprio `status-indicator` e label (una per Wi-Fi, una per UPS).
+  - In `app.js`, una nuova funzione di polling (es. `fetchSystemStatus()`) effettuerà una richiesta a `/api/system-status` ogni 2-3 secondi per aggiornare testo e colori degli indicatori. Le classi degli indicatori (es. `warning`, `success`, `danger`) verranno aggiornate in base allo stato rilevato.
+  - In `shared.css` verranno inserite minime regole di layout per disporre le due voci all'interno del riquadro esistente.
+
+  ## Strategia di Testing
+
+  ### E2E Testing (Playwright)
+  Il progetto include una Web UI, quindi necessita di un test E2E.
+  - Verrà simulata la pagina web: si verificherà che gli elementi di stato Wi-Fi e UPS siano presenti.
+  - Il mock della chiamata a `/api/system-status` sarà impostato per restituire diverse combinazioni (es. Wi-Fi connesso / UPS disconnesso, poi UPS connesso), verificando che il DOM (testi e classi) si aggiorni correttamente ad ogni poll.
+
+  ### Unit / Integration Testing
+  - Verrà aggiunto un test C++ per verificare che la richiesta HTTP GET a `/api/system-status` restituisca un payload JSON corretto, testando i mock dello stato WiFi (STA vs AP) e dello stato di `USBHostUPS`.
+tasks:
+  - id: TASK-01
+    title: 'Backend: Endpoint /api/system-status'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere il nuovo endpoint `/api/system-status` alla classe `WebConfigServer` che espone lo stato Wi-Fi e UPS.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`: Aggiungere il mapping `server.on("/api/system-status", ...)` e la logica per generare il JSON (stato WiFi e UPS).
+      - `include/web_config_server.h`: Aggiungere la firma per il nuovo handler se creato separatamente.
+
+      ## Criteri di Completamento
+      - [ ] Chiamando l'endpoint viene restituito un JSON con struttura `{ "wifi": { "status": "..." }, "ups": { "status": "..." } }`.
+      - [ ] Gestisce correttamente lo stato Wi-Fi (AP mode, Connesso con SSID, In connessione).
+      - [ ] Gestisce lo stato UPS leggendo il modello se `usb_ups->isConnected()` è true.
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Frontend: Modifiche HTML e CSS per doppi indicatori'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il markup in `index.html` e gli stili in `shared.css` per mostrare due indicatori distinti anziché uno singolo.
+
+      ## File Coinvolti
+      - `data/www/index.html`: Sostituire il contenuto di `.system-status` con due sotto-elementi (`.status-item`) dotati di ID (es. `lbl-wifi`, `ind-wifi`, `lbl-ups`, `ind-ups`).
+      - `data/www/shared.css`: Aggiungere o modificare regole CSS per gestire l'impaginazione dei due elementi, garantendo un aspetto coerente col design attuale.
+
+      ## Criteri di Completamento
+      - [ ] La sidebar mostra due indicatori distinti.
+      - [ ] L'interfaccia è visivamente gradevole e senza artefatti di layout.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Frontend: Logica JS per polling system-status'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Introdurre la logica asincrona in `app.js` per aggiornare costantemente i nuovi indicatori.
+
+      ## File Coinvolti
+      - `data/www/app.js`: Aggiungere la funzione asincrona `fetchSystemStatus()` e un `setInterval` indipendente per eseguirla periodicamente (es. ogni 3 secondi).
+
+      ## Criteri di Completamento
+      - [ ] L'app interroga in background `/api/system-status`.
+      - [ ] Il testo e la classe dell'indicatore per il Wi-Fi vengono aggiornati dinamicamente.
+      - [ ] Il testo e la classe dell'indicatore per l'UPS vengono aggiornati dinamicamente.
+      - [ ] In caso di errore di fetch, gli indicatori segnalano uno stato offline.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test: Verifica dell''endpoint e logica E2E'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Implementare unit test per l'endpoint backend e un test Playwright per verificare che l'interfaccia web si aggiorni al polling.
+
+      ## File Coinvolti
+      - `test/test_web_api/test_system_status.cpp` (o simile file di test per WebConfigServer)
+      - `e2e/system-status.spec.js` (script Playwright)
+
+      ## Criteri di Completamento
+      - [ ] L'endpoint `/api/system-status` passa i test di risposta.
+      - [ ] Il test Playwright verifica il mock dell'endpoint e controlla l'effettivo cambiamento di testo nel DOM.
+    ref: TASK-04
