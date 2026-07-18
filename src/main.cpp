@@ -37,6 +37,7 @@ void setup() {
     // Setup fallback AP trigger
     network_mgr.onFallback([]() {
         AppLogger::log("INFO", "[MAIN] Fallback rilevato, avvio WebConfigServer in modalità AP.");
+        web_server.setUPS(&usb_ups);
         web_server.begin(true);
     });
 
@@ -55,6 +56,7 @@ void setup() {
         
         // Inizializzazione di AppNetworkManager
         network_mgr.begin(wifi.ssid, wifi.password);
+        web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }
 

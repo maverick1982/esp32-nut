@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="shared.css">
+    <link rel="stylesheet" href="ups.css">
 </head>
 <body>
     <div class="app-container">
@@ -28,6 +29,10 @@
                 <button class="tab" data-target="nut">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
                     NUT Server
+                </button>
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    UPS Parameters
                 </button>
                 <button class="tab" data-target="logs">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -113,6 +118,53 @@
                     </form>
                 </div>
             </div>
+
+            <div class="tab-content" id="content-ups">
+                <div class="panel ups-panel">
+                    <div class="panel-header">
+                        <h2>Real-Time Data Feed</h2>
+                        <div class="polling-indicator">
+                            <span class="pulse-dot"></span> Live
+                        </div>
+                    </div>
+                    
+                    <div class="metrics-grid">
+                        <div class="metric-card highlight">
+                            <div class="metric-label">UPS Status</div>
+                            <div class="metric-value status-online" id="ups-status">--</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Battery Charge</div>
+                            <div class="metric-value"><span id="ups-charge">--</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container"><div class="progress-bar" id="bar-charge" style="width: 0%"></div></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">UPS Load</div>
+                            <div class="metric-value"><span id="ups-load">--</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container"><div class="progress-bar load" id="bar-load" style="width: 0%"></div></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Real Power</div>
+                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span></div>
+                        </div>
+                    </div>
+
+                    <div class="details-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Value</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ups-table-body">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <div class="tab-content" id="content-logs">
                 <div class="panel">
                     <div class="logs-actions">

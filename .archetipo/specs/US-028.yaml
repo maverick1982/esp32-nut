@@ -1,0 +1,85 @@
+schema: archetipo/spec/v2
+code: US-028
+title: Visualizzazione parametri UPS nell'interfaccia web con aggiornamento in tempo reale
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-028: Visualizzazione parametri UPS nell'interfaccia web con aggiornamento in tempo reale
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web,
+  Voglio poter visualizzare una pagina dedicata che mostra tutti i parametri e i valori esposti dall'UPS, aggiornati in tempo reale,
+  in modo da poter monitorare lo stato del dispositivo comodamente dal browser senza usare client NUT esterni.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il menu laterale della Web UI presenterà una nuova voce posizionata tra "NUT Server" e "System log" (es. "UPS Parameters"). Cliccandola, verrà mostrata una tabella o lista contenente i parametri dell'UPS (es. stato, carica batteria, carico, ecc.). I valori si aggiorneranno automaticamente ogni pochi secondi senza che l'utente debba ricaricare manualmente la pagina.
+
+  **Acceptance Criteria**
+  - [ ] La Web UI include una nuova sezione accessibile dal menu, posizionata tra "NUT Server" e "System log".
+  - [ ] Il backend espone un nuovo endpoint (es. `/api/ups-vars`) che restituisce la lista dei parametri UPS noti all'ESP32 in formato JSON.
+  - [ ] Il frontend JavaScript (es. in `app.js`) effettua un polling periodico leggero a questo endpoint per recuperare i dati.
+  - [ ] La pagina aggiorna dinamicamente i valori a schermo all'arrivo dei nuovi dati.
+  - [ ] L'operazione di polling non introduce blocchi o timeout sul server web asincrono né interferisce con le operazioni USB dell'UPS.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - La pagina implementata risulta visivamente diversa dal mockup originale.
+  - I valori dei parametri UPS risultano vuoti, come mostrato nell'immagine fornita dall'utente (c:\Users\pasquale\Desktop\UPS parameters.jpg).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - I dati ora vengono popolati correttamente con tutti i parametri necessari, ma c'è ancora un problema di CSS. L'aspetto grafico è ancora molto diverso da quello del mockup (verificare che gli stili specifici del mockup, come ups.css, siano stati inclusi e applicati a index.html).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Aggiungere in alto un nuovo blocco vicino ai 3 già presenti, con la Potenza reale (W) come già modificato nel mockup
+  - **data/www/ups.css** — Eliminare l'effetto lampeggiante (flash) durante l'aggiornamento dei dati perché è troppo invasivo e fastidioso
+  - **data/www/app.js** — Ad ogni aggiornamento dei dati lo scroll della tabella viene riportato in alto rendendo impossibile leggere i dati nella parte bassa. Modificare la logica di aggiornamento (es. DOM diffing o riutilizzo delle righe esistenti anziché innerHTML='') affinché la posizione dello scroll rimanga fissa dopo gli aggiornamenti
+history:
+  - status: TODO
+    at: "2026-07-17T21:43:38Z"
+  - status: PLANNED
+    at: "2026-07-17T21:49:53Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T21:51:48Z"
+  - status: REVIEW
+    at: "2026-07-17T21:57:37Z"
+  - status: TODO
+    at: "2026-07-17T22:03:18Z"
+  - status: PLANNED
+    at: "2026-07-17T22:05:12Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T22:09:53Z"
+  - status: REVIEW
+    at: "2026-07-17T22:14:13Z"
+  - status: TODO
+    at: "2026-07-17T22:18:17Z"
+  - status: PLANNED
+    at: "2026-07-17T22:19:42Z"
+  - status: IN PROGRESS
+    at: "2026-07-17T22:20:45Z"
+  - status: REVIEW
+    at: "2026-07-17T22:24:00Z"
+  - status: TODO
+    at: "2026-07-18T11:11:00Z"
+  - status: PLANNED
+    at: "2026-07-18T11:12:34Z"
+  - status: IN PROGRESS
+    at: "2026-07-18T11:14:06Z"
+  - status: REVIEW
+    at: "2026-07-18T11:15:48Z"
+  - status: DONE
+    at: "2026-07-18T11:20:54Z"

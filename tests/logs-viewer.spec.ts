@@ -22,7 +22,7 @@ test.describe('System Logs View', () => {
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify([
-            { time: 1000, level: 'WARN', msg: 'Mocked warning message' }
+            { id: 1, time: 1000, level: 'WARN', msg: 'Mocked warning message' }
           ])
         });
       } else {

@@ -1,4 +1,35 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const NUT_DESCRIPTIONS = {
+        'ups.status': 'UPS status',
+        'ups.mfr': 'UPS manufacturer',
+        'ups.model': 'UPS model',
+        'ups.serial': 'UPS serial number',
+        'battery.charge': 'Battery charge (percent)',
+        'battery.charge.low': 'Remaining battery level when UPS switches to LB (percent)',
+        'battery.capacity': 'Battery design capacity (Ah)',
+        'battery.charge.full': 'Battery full charge capacity (Ah)',
+        'battery.runtime': 'Battery runtime (seconds)',
+        'output.voltage': 'Output voltage (V)',
+        'input.transfer.high': 'High voltage transfer point (V)',
+        'input.transfer.low': 'Low voltage transfer point (V)',
+        'ups.power.nominal': 'UPS apparent power rating (VA)',
+        'input.frequency.nominal': 'Nominal input line frequency (Hz)',
+        'input.voltage.nominal': 'Nominal input line voltage (V)',
+        'output.voltage.nominal': 'Nominal output voltage (V)',
+        'output.frequency.nominal': 'Nominal output frequency (Hz)',
+        'ups.load': 'Load on UPS (percent)',
+        'ups.realpower': 'Current value of real power (W)',
+        'ups.delay.shutdown': 'Interval to wait after shutdown with delay command (seconds)',
+        'ups.delay.start': 'Interval to wait before (re)starting the load (seconds)',
+        'ups.timer.start': 'Time before the load will be started (seconds)',
+        'ups.timer.shutdown': 'Time before the load will be shutdown (seconds)',
+        'battery.type': 'Battery chemistry',
+        'ups.type': 'UPS type',
+        'ups.beeper.status': 'UPS beeper status',
+        'outlet.1.switch': 'Outlet 1 switch status',
+        'outlet.2.switch': 'Outlet 2 switch status'
+    };
+
     // Tab switching logic
     const tabs = document.querySelectorAll('.tab');
     const contents = document.querySelectorAll('.tab-content');
@@ -7,7 +38,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Imposta il titolo iniziale
     const activeTab = document.querySelector('.tab.active');
     if (activeTab && pageTitle) {
-        pageTitle.textContent = activeTab.textContent.trim();
+        let text = activeTab.textContent.trim();
+        if (activeTab.getAttribute('data-target') === 'ups') text = 'UPS Telemetry';
+        pageTitle.textContent = text;
     }
 
     tabs.forEach(tab => {
@@ -26,7 +59,9 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Aggiorna il titolo della pagina
             if (pageTitle) {
-                pageTitle.textContent = tab.textContent.trim();
+                let text = tab.textContent.trim();
+                if (target === 'ups') text = 'UPS Telemetry';
+                pageTitle.textContent = text;
             }
         });
     });
@@ -269,4 +304,104 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         })
         .catch(err => console.error('Failed to fetch config:', err));
+
+    // UPS Parameters Logic
+    const upsTableBody = document.getElementById('ups-table-body');
+    const elCharge = document.getElementById('ups-charge');
+    const barCharge = document.getElementById('bar-charge');
+    const elLoad = document.getElementById('ups-load');
+    const barLoad = document.getElementById('bar-load');
+    const elStatus = document.getElementById('ups-status');
+    const elRealPower = document.getElementById('ups-realpower');
+
+    let upsPollInterval = null;
+
+    async function fetchUpsVars() {
+        if (!document.getElementById('content-ups').classList.contains('active')) return;
+        
+        try {
+            const response = await fetch('/api/ups-vars');
+            if (!response.ok) throw new Error('Network response was not ok');
+            const data = await response.json();
+            
+            if (data.error) {
+                console.error('UPS Error:', data.error);
+                return;
+            }
+
+            // Update primary metrics
+            if (elStatus) elStatus.innerText = data['ups.status'] || '--';
+            
+            if (elCharge) {
+                const charge = data['battery.charge'] || 0;
+                elCharge.innerText = charge;
+                if (barCharge) barCharge.style.width = `${charge}%`;
+            }
+            
+            if (elLoad) {
+                const load = data['ups.load'] || 0;
+                elLoad.innerText = load;
+                if (barLoad) {
+                    barLoad.style.width = `${load}%`;
+                    if (parseInt(load) > 80) {
+                        barLoad.style.background = 'var(--danger)';
+                        barLoad.style.boxShadow = '0 0 10px var(--danger)';
+                    } else {
+                        barLoad.style.background = 'var(--accent)';
+                        barLoad.style.boxShadow = '0 0 10px var(--accent)';
+                    }
+                }
+            }
+
+            if (elRealPower) {
+                const realPower = data['ups.realpower'] || '--';
+                elRealPower.innerText = realPower;
+            }
+
+            // Update table
+            if (upsTableBody) {
+                for (const [key, value] of Object.entries(data)) {
+                    const rowId = `row-${key.replace(/\./g, '-')}`;
+                    let tr = document.getElementById(rowId);
+                    
+                    if (!tr) {
+                        const desc = NUT_DESCRIPTIONS[key] || '--';
+                        tr = document.createElement('tr');
+                        tr.id = rowId;
+                        tr.innerHTML = `
+                            <td>${key}</td>
+                            <td class="ups-val">${value}</td>
+                            <td>${desc}</td>
+                        `;
+                        upsTableBody.appendChild(tr);
+                    } else {
+                        const valCell = tr.querySelector('.ups-val');
+                        if (valCell && valCell.textContent !== String(value)) {
+                            valCell.textContent = value;
+                        }
+                    }
+                }
+            }
+            
+        } catch (error) {
+            console.error('Failed to fetch UPS vars:', error);
+        }
+    }
+
+    // Start polling when UPS tab is clicked
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (tab.getAttribute('data-target') === 'ups') {
+                if (!upsPollInterval) {
+                    fetchUpsVars();
+                    upsPollInterval = setInterval(fetchUpsVars, 2000);
+                }
+            } else {
+                if (upsPollInterval) {
+                    clearInterval(upsPollInterval);
+                    upsPollInterval = null;
+                }
+            }
+        });
+    });
 });

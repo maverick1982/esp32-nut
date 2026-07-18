@@ -35,6 +35,7 @@ test.describe('NUT Configuration UI', () => {
     await expect(nutTab).toHaveClass(/active/);
 
     // Fill form
+    await page.fill('#nut-upsname', 'eaton');
     await page.fill('#nut-username', 'admin');
     await page.fill('#nut-password', 'secret');
     

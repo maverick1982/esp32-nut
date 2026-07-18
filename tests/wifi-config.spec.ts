@@ -19,7 +19,7 @@ test.describe('Wi-Fi Configuration UI', () => {
     await page.goto('http://esp32.local/');
     
     // Verify title and headers
-    await expect(page.locator('h1')).toHaveText('Network Configuration');
+    await expect(page.locator('h1')).toHaveText('Wi-Fi Config');
     await expect(page.locator('#wifi-form')).toBeVisible();
     await expect(page.locator('#ssid')).toBeVisible();
   });

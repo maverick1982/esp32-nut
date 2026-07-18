@@ -1,0 +1,254 @@
+schema: archetipo/plan/v2
+spec_code: US-028
+body: |-
+  ## Rework Feedback
+
+  1. Aggiungere in alto un nuovo blocco vicino ai 3 già presenti, con la Potenza reale (W) come già modificato nel mockup
+  2. **data/www/ups.css** — Eliminare l'effetto lampeggiante (flash) durante l'aggiornamento dei dati perché è troppo invasivo e fastidioso
+  3. **data/www/app.js** — Ad ogni aggiornamento dei dati lo scroll della tabella viene riportato in alto rendendo impossibile leggere i dati nella parte bassa. Modificare la logica di aggiornamento (es. DOM diffing o riutilizzo delle righe esistenti anziché innerHTML='') affinché la posizione dello scroll rimanga fissa dopo gli aggiornamenti
+
+  ## Soluzione Tecnica
+
+  - **Inclusione metrica 'Real Power'**: Aggiungeremo la card in `index.html` e l'aggiornamento dinamico in `app.js` per il campo `ups.realpower`.
+  - **Rimozione animazione Flash**: Rimuoveremo il codice in `app.js` che applica la classe `.flash` e il relativo CSS in `ups.css` per evitare fastidi visivi.
+  - **Fix Scroll**: Modificheremo `app.js` affinché, invece di svuotare la tabella con `innerHTML = ''`, verifichi se la riga esiste già e ne aggiorni solo il testo, oppure ne crei una nuova se non presente.
+
+  ## Test Strategy
+  - Verrà aggiunto un controllo in Playwright per validare la presenza di `ups-realpower`.
+tasks:
+  - id: TASK-01
+    title: Implementare l'endpoint REST /api/ups-vars nel server web
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-01
+  - id: TASK-02
+    title: Integrare i mockup HTML/CSS nel frontend
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `data/www/index.html`
+      - `data/www/shared.css`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-02
+  - id: TASK-03
+    title: Sviluppare la logica di polling nel frontend
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-03
+  - id: TASK-04
+    title: Configurare framework E2E Playwright
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `package.json`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-04
+  - id: TASK-05
+    title: Scrivere test E2E per il polling e l'aggiornamento real-time
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `tests/ups-parameters.spec.ts`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Fix: Allineare la UI al mockup e mappare tutte le descrizioni'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `data/www/app.js`
+      - `data/www/index.html`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Fix: Esporre tutti i parametri in /api/ups-vars'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Test: Validare ricezione e parsing dei parametri completi'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `tests/ups-parameters.spec.ts`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Fix: Includere e applicare ups.css al frontend'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `data/www/ups.css`
+      - `data/www/index.html`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Fix: Servire ups.css dal web server backend'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Test: Verificare caricamento di ups.css'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      (Completato)
+
+      ## File Coinvolti
+      - `tests/ups-parameters.spec.ts`
+
+      ## Criteri di Completamento
+      - [x] Fatto
+    ref: TASK-11
+  - id: TASK-12
+    title: 'Fix: Aggiungere card Real Power alla UI'
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere il blocco Potenza reale (W) all'interfaccia principale, come richiesto nel feedback e presente nel mockup.
+
+      ## File Coinvolti
+      - `data/www/index.html`
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] `index.html` contiene la nuova `.metric-card` per `ups-realpower`.
+      - [ ] `app.js` aggiorna il valore di questo nodo ad ogni polling.
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Fix: Eliminare effetto flash'
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Rimuovere le animazioni di flash sui dati della tabella perché troppo invasive.
+
+      ## File Coinvolti
+      - `data/www/ups.css`
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] La classe `.flash` e i relativi stili di keyframes sono rimossi da `ups.css`.
+      - [ ] La logica che aggiunge/rimuove la classe `.flash` è rimossa da `app.js`.
+    ref: TASK-13
+  - id: TASK-14
+    title: 'Fix: Mantenere la posizione di scroll fissa (DOM diffing)'
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Sostituire la ricostruzione distruttiva della tabella (`innerHTML = ''`) con un aggiornamento puntuale delle celle.
+
+      ## File Coinvolti
+      - `data/www/app.js`
+
+      ## Criteri di Completamento
+      - [ ] Le righe esistenti vengono aggiornate tramite l'elemento DOM esistente.
+      - [ ] Le nuove righe vengono create e accodate solo se non presenti.
+      - [ ] Lo scroll non salta verso l'alto durante l'aggiornamento periodico.
+    ref: TASK-14
+  - id: TASK-15
+    title: 'Test: Validazione fix UI'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Descrizione
+      Aggiornare il test E2E Playwright per includere la card Real Power.
+
+      ## File Coinvolti
+      - `tests/ups-parameters.spec.ts`
+
+      ## Criteri di Completamento
+      - [ ] Playwright verifica la visibilità e il testo di `ups-realpower`.
+    ref: TASK-15

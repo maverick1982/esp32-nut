@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | UPS Parameters</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="shared.css">
+    <link rel="stylesheet" href="ups.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </div>
+                <div class="brand-name">NUT-OS <span>v1.0</span></div>
+            </div>
+            
+            <nav class="tabs">
+                <button class="tab" data-target="wifi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
+                    Wi-Fi Config
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    NUT Server
+                </button>
+                <button class="tab active" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    UPS Parameters
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status">
+                <div class="status-indicator success"></div>
+                <span>System Online</span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">UPS Telemetry</h1>
+                <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
+            </header>
+
+            <div class="tab-content active" id="content-ups">
+                <div class="panel ups-panel">
+                    <div class="panel-header">
+                        <h2>Real-Time Data Feed</h2>
+                        <div class="polling-indicator">
+                            <span class="pulse-dot"></span> Live
+                        </div>
+                    </div>
+                    
+                    <div class="metrics-grid">
+                        <!-- Primary Metrics -->
+                        <div class="metric-card highlight">
+                            <div class="metric-label">UPS Status</div>
+                            <div class="metric-value status-online" id="ups-status">OL</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Battery Charge</div>
+                            <div class="metric-value"><span id="ups-charge">100</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container"><div class="progress-bar" id="bar-charge" style="width: 100%"></div></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">UPS Load</div>
+                            <div class="metric-value"><span id="ups-load">15</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container"><div class="progress-bar load" id="bar-load" style="width: 15%"></div></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Real Power</div>
+                            <div class="metric-value"><span id="ups-realpower">120</span><span class="unit">W</span></div>
+                        </div>
+                    </div>
+
+                    <div class="details-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Value</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ups-table-body">
+                                <!-- Populated by app.js -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Placeholders -->
+            <div class="tab-content" id="content-wifi">
+                <div class="panel placeholder-panel">
+                    <h2>Wi-Fi Configuration</h2>
+                    <p class="mono">MODULE_READY</p>
+                </div>
+            </div>
+            <div class="tab-content" id="content-nut">
+                <div class="panel placeholder-panel">
+                    <h2>NUT Server Configuration</h2>
+                    <p class="mono">MODULE_READY</p>
+                </div>
+            </div>
+            <div class="tab-content" id="content-logs">
+                <div class="panel placeholder-panel">
+                    <h2>System Telemetry & Logs</h2>
+                    <p class="mono">AWAITING_DATA_STREAM</p>
+                </div>
+            </div>
+            <div class="tab-content" id="content-ota">
+                <div class="panel placeholder-panel">
+                    <h2>Over-The-Air Update</h2>
+                    <p class="mono">SECURE_BOOT_VERIFY</p>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -44,11 +44,18 @@ void WebConfigServer::begin(bool isAPMode) {
         server.send_P(200, "text/css", (const char*)web_asset_shared_css, web_asset_shared_css_len);
     });
 
+    server.on("/ups.css", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/css", (const char*)web_asset_ups_css, web_asset_ups_css_len);
+    });
+
     // REST endpoints
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });
     server.on("/api/logs", HTTP_GET, [this]() { handleLogs(); });
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
+    server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
 
     // OTA endpoints
     server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });
@@ -87,6 +94,10 @@ void WebConfigServer::loop() {
     if (should_restart && (millis() - restart_request_time >= 1000)) {
         ESP.restart();
     }
+}
+
+void WebConfigServer::setUPS(USBHostUPS* ups) {
+    usb_ups = ups;
 }
 
 void WebConfigServer::handleConnect() {
@@ -172,6 +183,49 @@ void WebConfigServer::handleGetConfig() {
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
     nutObj["ups_name"] = config_mgr.getNutConfig().ups_name;
+    
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+}
+
+void WebConfigServer::handleUpsVars() {
+    if (!usb_ups) {
+        server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
+        return;
+    }
+    
+    const UPSData& data = usb_ups->getUPSData();
+    JsonDocument doc;
+    
+    doc["ups.status"] = usb_ups->getUPSStatusString();
+    doc["ups.mfr"] = data.manufacturer.length() > 0 ? data.manufacturer : "Unknown";
+    doc["ups.model"] = data.product.length() > 0 ? data.product : "Unknown";
+    doc["ups.serial"] = data.serialNumber.length() > 0 ? data.serialNumber : "Unknown";
+    doc["battery.charge"] = data.remainingCapacity;
+    doc["battery.charge.low"] = data.remainingCapacityLimit;
+    doc["battery.capacity"] = data.designCapacity;
+    doc["battery.charge.full"] = data.fullChargeCapacity;
+    doc["battery.runtime"] = data.runTimeToEmpty;
+    doc["output.voltage"] = data.outputVoltage;
+    doc["input.transfer.high"] = data.highVoltageTransfer;
+    doc["input.transfer.low"] = data.lowVoltageTransfer;
+    doc["ups.power.nominal"] = data.configApparentPower;
+    doc["input.frequency.nominal"] = data.configFrequency;
+    doc["input.voltage.nominal"] = data.configVoltage;
+    if (data.outputVoltageNominal > 0) doc["output.voltage.nominal"] = data.outputVoltageNominal;
+    if (data.outputFrequencyNominal > 0) doc["output.frequency.nominal"] = data.outputFrequencyNominal;
+    doc["ups.load"] = data.load;
+    doc["ups.realpower"] = data.realPower;
+    if (data.delayShutdown >= 0) doc["ups.delay.shutdown"] = data.delayShutdown;
+    if (data.delayStart >= 0) doc["ups.delay.start"] = data.delayStart;
+    if (data.timerStart >= 0) doc["ups.timer.start"] = data.timerStart;
+    if (data.timerShutdown >= 0) doc["ups.timer.shutdown"] = data.timerShutdown;
+    if (data.batteryType.length() > 0) doc["battery.type"] = data.batteryType;
+    if (data.upsType.length() > 0) doc["ups.type"] = data.upsType;
+    doc["ups.beeper.status"] = data.beeperEnabled ? "enabled" : "disabled";
+    doc["outlet.1.switch"] = data.outlet1Switch ? 1 : 0;
+    doc["outlet.2.switch"] = data.outlet2Switch ? 1 : 0;
     
     String response;
     serializeJson(doc, response);
