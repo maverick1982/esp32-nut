@@ -272,6 +272,11 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 upsName = tokens[2];
             }
             client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
+            if (subcmd == "CMD") {
+                client.printf("CMD %s beeper.enable\n", upsName.c_str());
+                client.printf("CMD %s beeper.disable\n", upsName.c_str());
+                client.printf("CMD %s beeper.toggle\n", upsName.c_str());
+            }
             client.printf("END LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             return;
         }
@@ -296,6 +301,40 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
             client.print("ERR UNKNOWN-COMMAND\n");
             return;
         }
+    }
+
+    if (cmd == "INSTCMD") {
+        if (tokens.size() < 3) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        String upsName = tokens[1];
+        String cmdName = tokens[2];
+        
+        String upsNameLower = upsName;
+        upsNameLower.toLowerCase();
+        String configUpsNameLower = _config.ups_name;
+        configUpsNameLower.toLowerCase();
+        if (upsNameLower != configUpsNameLower) {
+            client.print("ERR UNKNOWN-UPS\n");
+            return;
+        }
+
+        if (cmdName == "beeper.enable") {
+            if (_usb_ups) _usb_ups->setBeeper(true);
+            client.print("OK\n");
+            return;
+        } else if (cmdName == "beeper.disable") {
+            if (_usb_ups) _usb_ups->setBeeper(false);
+            client.print("OK\n");
+            return;
+        } else if (cmdName == "beeper.toggle") {
+            if (_usb_ups) _usb_ups->setBeeper(!_usb_ups->getUPSData().beeperEnabled);
+            client.print("OK\n");
+            return;
+        }
+        client.print("ERR CMD-NOT-SUPPORTED\n");
+        return;
     }
 
     if (cmd == "GET") {

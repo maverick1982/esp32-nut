@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-030
+title: Comando per abilitare e disabilitare il beeper dell'UPS
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: DONE
+body: |-
+  #### US-030: Comando per abilitare e disabilitare il beeper dell'UPS
+
+  **Epic:** EP-003 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web e di Home Assistant,
+  Voglio poter abilitare e disabilitare il beeper dell'UPS tramite un comando esplicito,
+  in modo da poter silenziare l'UPS (o riattivare gli avvisi acustici) comodamente dai miei pannelli di controllo senza agire fisicamente sul dispositivo.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, la Web UI includerà un controllo (es. un pulsante o uno switch) dedicato al beeper dell'UPS. Cliccandolo, il comando verrà inviato all'UPS per silenziare o attivare l'allarme acustico. Inoltre, questo comando sarà esposto correttamente verso Home Assistant, permettendone il controllo remoto (ad esempio come entità `switch` o `button`).
+
+  **Acceptance Criteria**
+  - [ ] La Web UI include un pulsante o switch per controllare lo stato del beeper.
+  - [ ] Il backend ESP32 riceve l'input dalla Web UI ed invia il comando corretto all'UPS (es. tramite protocollo USB HID o i relativi comandi NUT).
+  - [ ] L'integrazione verso Home Assistant viene estesa per esporre il comando del beeper (ad esempio aggiungendolo alle capabilities del server NUT o tramite API).
+  - [ ] L'azione ha effetto immediato sull'UPS senza causare disconnessioni o timeout.
+history:
+  - status: TODO
+    at: "2026-07-19T16:09:57Z"
+  - status: PLANNED
+    at: "2026-07-19T16:14:10Z"
+  - status: IN PROGRESS
+    at: "2026-07-19T16:17:10Z"
+  - status: REVIEW
+    at: "2026-07-19T16:23:42Z"
+  - status: DONE
+    at: "2026-07-19T16:33:34Z"

@@ -281,6 +281,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const toggleBeeper = document.getElementById('toggle-beeper');
+    if (toggleBeeper) {
+        toggleBeeper.addEventListener('change', async (e) => {
+            const isEnabled = e.target.checked;
+            toggleBeeper.disabled = true;
+            try {
+                const res = await fetch('/api/beeper', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enable: isEnabled })
+                });
+                if (!res.ok) {
+                    toggleBeeper.checked = !isEnabled;
+                }
+            } catch (err) {
+                console.error('Beeper API error:', err);
+                toggleBeeper.checked = !isEnabled;
+            }
+            toggleBeeper.disabled = false;
+            fetchUpsVars();
+        });
+    }
+
     // Pre-populate fields
     fetch('/api/config')
         .then(res => res.json())
@@ -377,6 +400,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 }
+            }
+            
+            const beeperToggle = document.getElementById('toggle-beeper');
+            const beeperState = document.getElementById('beeper-state');
+            if (beeperToggle && beeperState && data['ups.beeper.status'] !== undefined) {
+                beeperToggle.disabled = false;
+                const isEnabled = data['ups.beeper.status'] === 'enabled';
+                if (beeperToggle.checked !== isEnabled) {
+                    beeperToggle.checked = isEnabled;
+                }
+                beeperState.textContent = isEnabled ? 'Enabled' : 'Disabled';
+                beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
             }
             
         } catch (error) {

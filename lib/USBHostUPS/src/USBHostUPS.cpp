@@ -39,6 +39,38 @@ bool USBHostUPS::isConnected() const {
     return _initialized && (_dev_handle != NULL);
 }
 
+bool USBHostUPS::setBeeper(bool enable) {
+    if (_dev_handle == NULL) return false;
+
+    usb_transfer_t *transfer = NULL;
+    esp_err_t err = usb_host_transfer_alloc(8 + 2, 0, &transfer);
+    if (err != ESP_OK) return false;
+
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+    setup->bmRequestType = 0x21; // SET_REPORT type
+    setup->bRequest = 0x09;      // SET_REPORT request
+    setup->wValue = (0x03 << 8) | 0x1f; // Feature report, ID 0x1f
+    setup->wIndex = 0;           // Interface 0
+    setup->wLength = 2;
+
+    uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
+    data[0] = 0x1f; 
+    data[1] = enable ? 2 : 1; 
+
+    transfer->device_handle = _dev_handle;
+    transfer->callback = control_transfer_cb;
+    transfer->context = this;
+    transfer->num_bytes = 8 + 2;
+
+    err = usb_host_transfer_submit_control(_client_handle, transfer);
+    if (err != ESP_OK) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
+    _ups_data.beeperEnabled = enable;
+    return true;
+}
+
 void USBHostUPS::usb_host_lib_task(void *arg) {
     USBHostUPS *self = static_cast<USBHostUPS*>(arg);
     (void)self;

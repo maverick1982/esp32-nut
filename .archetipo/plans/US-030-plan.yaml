@@ -1,0 +1,93 @@
+schema: archetipo/plan/v2
+spec_code: US-030
+body: "### Technical Solution\n\n**1. USBHostUPS (Hardware Interaction):**\n- Add a `setBeeper(bool enable)` method to `USBHostUPS` to send a `SET_REPORT` (0x09) via control transfer. \n- The payload will target `Report ID 0x1F` (Feature report) with values `2` (Enabled) or `1` (Disabled/Muted) as per USB HID PDC specs.\n\n**2. Web Interface (Frontend & Config Server):**\n- **Backend**: Add a new REST endpoint `POST /api/beeper` in `WebConfigServer` to receive `{ \"enable\": true/false }` and forward the action to `USBHostUPS::setBeeper()`.\n- **Frontend**: Add a toggle switch in `data/www/index.html` (e.g., within the UPS settings/status panel). Update `data/www/app.js` to initialize its state from the `ups.beeper.status` variable and send a `POST` request to `/api/beeper` when toggled.\n\n**3. NUT Server (Home Assistant Integration):**\n- Extend `NUTServer.cpp` to correctly list available commands by intercepting `LIST CMD <ups>`. It must return `CMD <ups> beeper.enable`, `CMD <ups> beeper.disable`, and `CMD <ups> beeper.toggle`.\n- Implement `INSTCMD` handler in `NUTServer::handleCommand` to parse `INSTCMD <ups> beeper.enable|disable|toggle` and trigger the corresponding `USBHostUPS::setBeeper()` action.\n\n### Test Strategy\n- **Unit/Integration Tests**: The project does not currently have a comprehensive unit test suite for the USB logic, but we must verify that the `NUTServer` string parsing and command dispatch correctly identify `INSTCMD` and `LIST CMD`.\n- **Manual Verification (E2E)**: \n  - Verify the UI button correctly reflects the current beeper state upon loading.\n  - Click the UI button and verify the HTTP POST succeeds.\n  - Use a NUT client (`upscmd`) or Home Assistant to send the `beeper.disable` command and confirm the ESP32 receives and processes it.\n\n*(Note: No new UI mockup generated as this is a minor addition of a single toggle to the existing UPS panel.)*"
+tasks:
+  - id: TASK-01
+    title: Implement USB HID SET_REPORT for Beeper
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere il metodo `setBeeper(bool enable)` per inviare il comando all'UPS via USB tramite `SET_REPORT`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Dichiarare `bool setBeeper(bool enable);`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementare il metodo assemblando un pacchetto `usb_setup_packet_t` con `bRequest = 0x09`, `wValue = (0x03 << 8) | 0x1f` e payload `[0x1f, enable ? 2 : 1]`, per poi inviarlo con `usb_host_transfer_submit_control`.
+
+      ## Criteri di Completamento
+      - [ ] Il metodo `setBeeper` formatta e invia correttamente il control transfer `SET_REPORT`.
+      - [ ] Lo stato locale `_ups_data.beeperEnabled` viene aggiornato in caso di successo.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implement NUT Commands for HA Integration
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere il supporto per il comando `INSTCMD` e aggiornare `LIST CMD` nel server NUT, permettendo a Home Assistant di scoprire e invocare i controlli del beeper.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — In `handleCommand()`, aggiungere la logica per `LIST CMD` in modo che restituisca `beeper.enable`, `beeper.disable`, e `beeper.toggle`. Aggiungere la gestione del comando radice `INSTCMD` per invocare `_usb_ups->setBeeper()` in base al sub-comando richiesto.
+
+      ## Criteri di Completamento
+      - [ ] Il comando `LIST CMD <ups>` elenca i 3 comandi del beeper.
+      - [ ] L'invio di `INSTCMD <ups> beeper.enable` abilita il beeper.
+      - [ ] L'invio di `INSTCMD <ups> beeper.disable` disabilita il beeper.
+    ref: TASK-02
+  - id: TASK-03
+    title: Add Web API Endpoint for Beeper
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiungere un endpoint API nel web server per permettere al frontend di controllare il beeper.
+
+      ## File Coinvolti
+      - `include/web_config_server.h` — Dichiarare il metodo handler `void handleBeeper();`
+      - `src/web_config_server.cpp` — Implementare l'endpoint `POST /api/beeper` che riceve un payload JSON `{"enable": true/false}` e chiama `usb_ups->setBeeper()`.
+
+      ## Criteri di Completamento
+      - [ ] Effettuando una POST a `/api/beeper`, l'azione viene inoltrata alla classe USB.
+      - [ ] L'endpoint risponde HTTP 200 su successo o 400 su JSON malformato.
+    ref: TASK-03
+  - id: TASK-04
+    title: Update Web Interface with Beeper Toggle
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Aggiungere un toggle switch per il beeper nella pagina HTML ed integrarne la logica JS per sincronizzarlo con lo stato letto e azionare l'endpoint API.
+
+      ## File Coinvolti
+      - `data/www/index.html` — Aggiungere il markup HTML per uno switch o pulsante "Beeper" nel tab o nel pannello UPS.
+      - `data/www/app.js` — Leggere `ups.beeper.status` nella routine di polling per impostare lo switch. Aggiungere un event listener allo switch per inviare la POST a `/api/beeper`.
+
+      ## Criteri di Completamento
+      - [ ] Il toggle del beeper appare nel pannello UPS ed è aggiornato in tempo reale col polling.
+      - [ ] Al cambio di stato, viene effettuata la fetch a `/api/beeper`.
+      - [ ] I file compressi in `web_assets.h` verranno automaticamente generati in fase di build dal tool (nessuna azione esplicita in questa task per il gen).
+    ref: TASK-04
+  - id: TASK-05
+    title: Test e2e for Endpoints and NUT commands
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Eseguire un test E2E o manuale guidato per confermare il corretto funzionamento end-to-end del beeper dall'interfaccia e da NUT.
+
+      ## File Coinvolti
+      - `N/A` (Task di verifica e validazione generica)
+
+      ## Criteri di Completamento
+      - [ ] Verificare che un utente possa accendere/spegnere il beeper tramite la Web UI, senza provocare arresti anomali (freeze).
+      - [ ] Verificare che Home Assistant possa inviare `INSTCMD <ups> beeper.toggle` ed ottenere in `GET VAR <ups> ups.beeper.status` il nuovo stato entro pochi secondi.
+    ref: TASK-05

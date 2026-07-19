@@ -57,6 +57,7 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/config", HTTP_GET, [this]() { handleGetConfig(); });
     server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
     server.on("/api/system-status", HTTP_GET, [this]() { handleSystemStatus(); });
+    server.on("/api/beeper", HTTP_POST, [this]() { handleBeeper(); });
 
     // OTA endpoints
     server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });
@@ -262,6 +263,32 @@ void WebConfigServer::handleSystemStatus() {
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);
+}
+
+void WebConfigServer::handleBeeper() {
+    if (server.hasArg("plain") == false) {
+        server.send(400, "application/json", "{\"error\": \"Body not received\"}");
+        return;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+
+    if (error) {
+        server.send(400, "application/json", "{\"error\": \"Invalid JSON\"}");
+        return;
+    }
+
+    if (doc["enable"].is<bool>()) {
+        bool enable = doc["enable"].as<bool>();
+        if (usb_ups) {
+            usb_ups->setBeeper(enable);
+            server.send(200, "application/json", "{\"success\": true}");
+            return;
+        }
+    }
+    
+    server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
 }
 
 void WebConfigServer::handleOTAPage() {

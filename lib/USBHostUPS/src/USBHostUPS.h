@@ -66,6 +66,8 @@ public:
     const UPSData& getUPSData() const;
     String getUPSStatusString() const;
 
+    bool setBeeper(bool enable);
+
     void decodeReport(uint8_t report_id, const uint8_t *data, size_t length);
     bool isConnected() const;
 

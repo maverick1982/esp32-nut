@@ -25,6 +25,7 @@ private:
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
+    void handleBeeper();
     
     void handleOTAPage();
     void handleOTAUpload();
