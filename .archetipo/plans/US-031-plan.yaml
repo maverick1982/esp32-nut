@@ -1,0 +1,140 @@
+schema: archetipo/plan/v2
+spec_code: US-031
+body: "## Soluzione Tecnica\nIn origine era stato pianificato l'uso dell'Interrupt Endpoint USB, ma i test sul dispositivo fisico (Eaton 3S 700) hanno dimostrato che l'hardware è puramente passivo e non emette alcun Report asincrono (né per lo stato, né per batteria o carico). \n\nPer garantire la reattività desiderata (< 1s per AC Present) mantenendo basso l'overhead sul bus USB, adotteremo la medesima strategia a due velocità (polling selettivo) usata dai daemon `usbhid-ups` di Linux:\n1.  **Polling Veloce (ogni 2 secondi):** dedicato unicamente ai parametri dinamici vitali: Stato UPS (0x01), Batteria (0x06) e Carico (0x07).\n2.  **Polling Lento (ogni 30 secondi):** dedicato ai parametri statici (voltaggi nominali, stringhe descrittive, ecc.).\n\n**Rework:**\nIl codice precedentemente scritto per supportare l'Interrupt Endpoint asincrono (scansione in `NEW_DEV`, allocazione, `interrupt_transfer_cb` e i recenti log di debug) si è rivelato inutile e dovrà essere integralmente rimosso per pulizia. Al suo posto verrà implementato il timer di polling veloce a 2000 ms nel `loop()` per le sole interrogazioni dinamiche, abbassando il polling lento da 60 a 30 secondi.\n\n## Strategia di Testing\n*   **Test di Regressione**: Verificare che la compilazione passi senza alcun residuo delle vecchie funzioni interrupt.\n*   **Test Funzionale Hardware**: Eseguire il test fisico (stacco spina) per accertarsi che il cambio di stato venga intercettato entro 2 secondi dal polling veloce."
+tasks:
+  - id: TASK-01
+    title: Aggiunta del supporto all'Interrupt Endpoint in USBHostUPS.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Estendere la classe `USBHostUPS` definendo i membri necessari per mantenere lo stato del trasferimento asincrono di interrupt e le sue callback.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere il puntatore `usb_transfer_t* _int_transfer`, le variabili per indirizzo endpoint (`uint8_t _int_ep_addr`) e dimensione pacchetto (`uint16_t _int_ep_mps`). Aggiungere la dichiarazione del metodo statico `interrupt_transfer_cb` e l'inizializzazione dei nuovi campi nel costruttore.
+
+      ## Criteri di Completamento
+      - [ ] La classe `USBHostUPS` dichiara i nuovi attributi privati e metodi statici.
+      - [ ] La compilazione passa senza errori di sintassi.
+    ref: TASK-01
+  - id: TASK-02
+    title: Identificazione ed avvio del trasferimento Interrupt IN
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Al momento della connessione del dispositivo, scansionare i descrittori per trovare l'Endpoint Interrupt IN, allocare il transfer e sottometterlo per iniziare l'ascolto continuo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Modificare `handle_client_event` (caso `USB_HOST_CLIENT_EVENT_NEW_DEV`) per recuperare il configuration descriptor (`usb_host_get_active_config_descriptor`), trovare l'endpoint Interrupt IN (bEndpointAddress con bit IN impostato, e bmAttributes == Interrupt), estrarne il max packet size. Allocare un trasferimento con `usb_host_transfer_alloc` grande quanto l'MPS, configurare `device_handle`, `bEndpointAddress`, callback e contesto. Infine sottometterlo con `usb_host_transfer_submit`.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Gestire anche il caso `DEV_GONE` assicurandosi di liberare il trasferimento in modo pulito con `usb_host_transfer_free` se `_int_transfer` è allocato.
+
+      ## Criteri di Completamento
+      - [ ] Il Configuration Descriptor viene ispezionato correttamente a run-time.
+      - [ ] L'Endpoint Interrupt IN viene identificato e i suoi parametri salvati.
+      - [ ] Il transfer di interrupt viene allocato, sottomesso all'avvio e liberato senza leak al distacco del cavo USB.
+    ref: TASK-02
+  - id: TASK-03
+    title: Gestione callback Interrupt e aggiornamento dati
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Implementare la logica da eseguire quando si riceve un pacchetto asincrono sull'Interrupt Endpoint.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementare il metodo `interrupt_transfer_cb(usb_transfer_t *transfer)`. Quando lo status è COMPLETED, leggere il Report ID (il primo byte utile, `data_buffer[0]`) e inoltrare i dati a `decodeReport(data_buffer[0], data_buffer, actual_num_bytes)`. Alla fine della callback, indipendentemente dall'esito (se non si tratta di disconnessione / NO_DEV), risottomettere il transfer (`usb_host_transfer_submit`) per ascoltare il pacchetto successivo.
+
+      ## Criteri di Completamento
+      - [ ] La callback legge e processa correttamente il pacchetto passandolo a `decodeReport`.
+      - [ ] Il transfer viene ri-sottomesso per creare un ciclo continuo di ascolto asincrono.
+    ref: TASK-03
+  - id: TASK-04
+    title: Rilassamento del polling periodico per risparmio overhead
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Adattare il ciclo principale in modo da eseguire i GET_REPORT su Endpoint 0 molto meno frequentemente una volta superata la fase di enumerazione, lasciando il lavoro principale all'Interrupt Endpoint.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Nel metodo `loop()`, ritardare notevolmente il polling (es. intervalli di `60000` ms invece dei `5000` ms attuali) mantenendo però i cicli inalterati per non rompere il fallback.
+
+      ## Criteri di Completamento
+      - [ ] La logica di polling di fallback rallenta l'esecuzione dopo l'inizializzazione.
+      - [ ] Non interferisce con l'ascolto asincrono continuo introdotto precedentemente.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verifica della reattività con Interrupt Endpoint
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Eseguire un test manuale per assicurare che il server reagisca agli eventi asincroni generati dall'Interrupt Endpoint (ad es. staccando il cavo di alimentazione all'UPS) e aggiorni le variabili senza dipendere dal ciclo di polling lento.
+
+      ## File Coinvolti
+      - N/A — (Test manuale da terminale / Home Assistant)
+
+      ## Criteri di Completamento
+      - [ ] La disconnessione della corrente causa l'aggiornamento immediato (< 1s) della variabile `ups.status` letta da `GET VAR`.
+      - [ ] Il test di durata (stress test) non evidenzia freeze o riavvii del chip per watchdog, indicando assenza di deadlocks o leak.
+    ref: TASK-05
+  - id: TASK-06
+    title: Rimozione codice Interrupt inutile e pulizia
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Data l'incompatibilità dell'hardware, rimuovere ogni riferimento all'Interrupt IN endpoint (aggiunto in precedenza per tentare l'approccio asincrono).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Rimuovere `_int_transfer`, `_int_ep_addr`, `_int_ep_mps`, `interrupt_transfer_cb`.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Rimuovere l'inizializzazione dei campi nel costruttore. Rimuovere la scansione del config descriptor e l'allocazione/sottomissione in `USB_HOST_CLIENT_EVENT_NEW_DEV`. Rimuovere la liberazione memoria in `USB_HOST_CLIENT_EVENT_DEV_GONE`. Eliminare integralmente la funzione `interrupt_transfer_cb` (inclusi i log di debug aggiunti di recente).
+
+      ## Criteri di Completamento
+      - [ ] Il driver non alloca né sottopone più transfer asincroni.
+      - [ ] La compilazione passa con successo.
+    ref: TASK-06
+  - id: TASK-07
+    title: Implementazione Polling Selettivo in stile NUT
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      Introdurre due logiche di polling distinte all'interno del ciclo `loop()`: una veloce per i parametri vitali (2 secondi) e una lenta per il resto (30 secondi).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere il membro `uint32_t _last_fast_poll;` (tipo di dato appropriato per memorizzare millisecondi).
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Inizializzare la variabile nel costruttore. Nel `loop()`, ridurre l'intervallo del polling lento `_last_poll` da 60000 a 30000 ms. Aggiungere un nuovo blocco `if (now - _last_fast_poll >= 2000)` all'inizio del `loop()`, ed eseguire le interrogazioni veloci: `requestReport(0x01, 0x03, 4)`, `requestReport(0x06, 0x03, 6)` e `requestReport(0x07, 0x03, 8)`.
+
+      ## Criteri di Completamento
+      - [ ] Il polling veloce interroga 0x01, 0x06, 0x07 ogni 2 secondi.
+      - [ ] Il polling lento (tutti gli altri report) scende da 60 a 30 secondi.
+      - [ ] La transizione non causa delay o freeze del firmware.
+    ref: TASK-07
+  - id: TASK-08
+    title: Verifica reattività hardware
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      Eseguire il test hardware (stacco corrente e accensione carico) per verificare l'effettiva reattività.
+
+      ## File Coinvolti
+      - N/A
+
+      ## Criteri di Completamento
+      - [ ] Le variazioni di stato e carico vengono intercettate costantemente entro circa 2 secondi.
+      - [ ] Non si rilevano instabilità dell'interfaccia USB.
+    ref: TASK-08

@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-031
+title: Aggiornamenti in tempo reale tramite USB Interrupt Endpoint
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: DONE
+body: |
+  #### US-031: Aggiornamenti in tempo reale tramite USB Interrupt Endpoint
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del sistema e amministratore di Home Assistant,
+  Voglio che il driver USB riceva le variazioni di stato dell'UPS tramite l'Interrupt Endpoint USB in modo asincrono (invece di fare polling periodico tramite Control Transfers),
+  in modo che Home Assistant e l'interfaccia web riflettano variazioni di carico, batteria e stato quasi istantaneamente come avviene con i server NUT tradizionali su Linux, e riducendo l'overhead sul bus USB.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, disconnettendo l'UPS dalla rete elettrica o variando sensibilmente il carico, il server NUT esporrà il nuovo valore in tempi inferiori al secondo. I messaggi asincroni (Interrupt IN) verranno decodificati aggiornando le variabili in cache. Il sistema continuerà a mantenere un polling ciclico più lasco o un recupero dati iniziale solo come sistema di sicurezza o fallback per i descrittori statici.
+
+  **Acceptance Criteria**
+  - [ ] La classe `USBHostUPS` identifica e rivendica correttamente l'Interrupt IN endpoint esposto dal dispositivo HID.
+  - [ ] Viene implementata una logica o un task dedicato che resta in ascolto asincrono sugli interrupt USB trasferendo i pacchetti alla funzione di decodifica.
+  - [ ] La risposta del polling lato NUTServer / Home Assistant (es. ogni 2 secondi) restituisce dati freschi alimentati dagli interrupt, senza che sia il controller ad aspettare cicli di 5-6 secondi di GET_REPORT.
+  - [ ] Non si verificano disconnessioni USB o memory leak nel ciclo di ascolto continuo degli eventi di interrupt.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - L'aggiornamento dello stato (OL, OB) in seguito a scollegamento/ricollegamento dall'alimentazione di rete richiede molto tempo (tra i 20 e i 30 secondi) invece di essere immediato (< 1s) come richiesto dai criteri di accettazione. I valori di Carico e Potenza reale invece si aggiornano rapidamente.
+history:
+  - status: TODO
+    at: "2026-07-23T15:08:29Z"
+  - status: PLANNED
+    at: "2026-07-23T15:15:55Z"
+  - status: IN PROGRESS
+    at: "2026-07-23T15:22:40Z"
+  - status: REVIEW
+    at: "2026-07-23T15:26:02Z"
+  - status: TODO
+    at: "2026-07-23T15:55:55Z"
+  - status: PLANNED
+    at: "2026-07-23T16:00:24Z"
+  - status: IN PROGRESS
+    at: "2026-07-25T16:05:10Z"
+  - status: REVIEW
+    at: "2026-07-25T16:20:25Z"
+  - status: DONE
+    at: "2026-07-25T16:23:57Z"

@@ -92,6 +92,7 @@ private:
     uint8_t _chemStrIdx;
     uint8_t _poll_step;
     uint32_t _last_step_time;
+    uint32_t _last_fast_poll;
 };
 
 #endif // USB_HOST_UPS_H

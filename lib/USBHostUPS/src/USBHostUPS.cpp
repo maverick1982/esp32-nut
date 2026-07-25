@@ -9,7 +9,8 @@ USBHostUPS::USBHostUPS() :
     _last_poll(0),
     _chemStrIdx(0),
     _poll_step(0),
-    _last_step_time(0) {
+    _last_step_time(0),
+    _last_fast_poll(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -130,6 +131,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                         if (claim_err == ESP_OK) {
                             Serial.println("[USBHostUPS] HID Interface 0 claimed successfully.");
                             _last_poll = 0;
+                            _last_fast_poll = 0;
                         } else {
                             Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                             usb_host_device_close(_client_handle, dev_hdl);
@@ -149,7 +151,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
             break;
         }
         case USB_HOST_CLIENT_EVENT_DEV_GONE: {
-            Serial.println("[USBHostUPS] USB device removed.");
+            Serial.println("[USBHostUPS] Device disconnected.");
             _ups_data = UPSData(); // reset
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
                 esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
@@ -241,8 +243,18 @@ void USBHostUPS::loop() {
     }
 
     uint32_t now = millis();
+    
+    // Polling Veloce (Dinamico)
+    if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+        _last_fast_poll = now != 0 ? now : 1;
+        requestReport(0x01, 0x03, 4);
+        requestReport(0x06, 0x03, 6);
+        requestReport(0x07, 0x03, 8);
+    }
+
+    // Polling Lento (Statico)
     if (_poll_step == 0) {
-        if (now - _last_poll >= 5000 || _last_poll == 0) {
+        if (now - _last_poll >= 30000 || _last_poll == 0) {
             _last_poll = now != 0 ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
@@ -256,10 +268,10 @@ void USBHostUPS::loop() {
                 case 1: if (_ups_data.manufacturer == "") requestStringDescriptor(1); break;
                 case 2: if (_ups_data.product == "") requestStringDescriptor(2); break;
                 case 3: if (_ups_data.serialNumber == "") requestStringDescriptor(4); break;
-                case 4: requestReport(0x01, 0x03, 4); break;
+                case 4: break; // Spostato nel polling veloce
                 case 5: requestReport(0x02, 0x03, 3); break;
-                case 6: requestReport(0x06, 0x03, 6); break;
-                case 7: requestReport(0x07, 0x03, 8); break;
+                case 6: break; // Spostato nel polling veloce
+                case 7: break; // Spostato nel polling veloce
                 case 8: requestReport(0x08, 0x03, 2); break;
                 case 9: requestReport(0x09, 0x03, 5); break;
                 case 10: requestReport(0x0a, 0x03, 5); break;
