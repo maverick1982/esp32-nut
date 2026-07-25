@@ -16,6 +16,20 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
 
+## 📸 Screenshot
+
+| Configurazione Wi-Fi | Server NUT |
+| :---: | :---: |
+| [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) | [![Server NUT](docs/images/ui-nut.png)](docs/images/ui-nut.png) |
+
+| Telemetria UPS | Log di Sistema |
+| :---: | :---: |
+| [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Log di Sistema](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+
+| Aggiornamento OTA | |
+| :---: | :---: |
+| [![Aggiornamento OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
+
 ## 🛠 Requisiti Hardware
 
 - **Scheda ESP32-S3**: È **obbligatorio** utilizzare una scheda di sviluppo basata su ESP32-S3 poiché supporta l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.

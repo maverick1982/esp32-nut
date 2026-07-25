@@ -16,6 +16,20 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.
 
+## 📸 Screenshots
+
+| Wi-Fi Config | NUT Server |
+| :---: | :---: |
+| [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) | [![NUT Server](docs/images/ui-nut.png)](docs/images/ui-nut.png) |
+
+| UPS Telemetry | System Logs |
+| :---: | :---: |
+| [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![System Logs](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+
+| Firmware OTA | |
+| :---: | :---: |
+| [![Firmware OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
+
 ## 🛠 Hardware Requirements
 
 - **ESP32-S3 Board**: An ESP32-S3 development board is **required** because it features native USB OTG Host capabilities. Standard ESP32 or ESP32-C3 will not work.
