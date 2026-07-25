@@ -243,7 +243,7 @@ void WebConfigServer::handleSystemStatus() {
     if (is_ap_mode) {
         wifi_status_str = "AP Mode Active";
     } else if (wifi_status == WL_CONNECTED) {
-        wifi_status_str = "Connected (" + WiFi.SSID() + ")";
+        wifi_status_str = WiFi.SSID();
     } else {
         wifi_status_str = "Connecting";
     }
@@ -254,7 +254,7 @@ void WebConfigServer::handleSystemStatus() {
     if (usb_ups && usb_ups->isConnected()) {
         const UPSData& data = usb_ups->getUPSData();
         String model = data.product.length() > 0 ? data.product : "Unknown Model";
-        ups_status_str = "Connected (" + model + ")";
+        ups_status_str = model;
     } else {
         ups_status_str = "Disconnected";
     }

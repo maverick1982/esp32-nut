@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-032
+title: Ottimizzazione testo indicatori di stato Wi-Fi e UPS connessi
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 1
+status: DONE
+body: |
+  #### US-032: Ottimizzazione testo indicatori di stato Wi-Fi e UPS connessi
+
+  **Epic:** EP-002 | **Priority:** LOW | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web,
+  voglio che quando il Wi-Fi o l'UPS sono connessi venga visualizzato solo il loro nome senza la dicitura "Connected",
+  e voglio che il colore degli indicatori rifletta lo stato (verde=connesso, blu=AP mode, arancione=in connessione, rosso=disconnesso),
+  in modo da avere un'interfaccia più chiara e recuperare spazio prezioso per l'SSID e il modello UPS.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, controllando l'angolo in basso a sinistra dell'interfaccia web con connessione attiva, il testo mostrerà solo l'SSID del Wi-Fi e il modello dell'UPS (ad esempio "TIM-12345" o "Eaton 3S"). Gli stati di "Connecting" o "Disconnected" rimarranno invariati.
+
+  **Acceptance Criteria**
+  - [ ] La logica di aggiornamento dell'interfaccia web non include più la stringa "Connected" prima del nome quando lo stato è di avvenuta connessione.
+  - [ ] Il nome del Wi-Fi (SSID) e il nome dell'UPS (modello) sono mostrati da soli quando i dispositivi sono connessi.
+  - [ ] I testi per stati transitori o di errore (es. "Connecting...", "Disconnected") vengono mantenuti.
+  - [ ] I colori degli indicatori corrispondono esattamente ai nuovi stati: Verde (Connected), Blu (AP Mode Active), Arancione (Connecting), Rosso (Disconnected).
+history:
+  - status: TODO
+    at: "2026-07-25T16:31:29Z"
+  - status: PLANNED
+    at: "2026-07-25T16:34:20Z"
+  - status: IN PROGRESS
+    at: "2026-07-25T16:35:14Z"
+  - status: REVIEW
+    at: "2026-07-25T16:37:54Z"
+  - status: DONE
+    at: "2026-07-25T17:02:05Z"

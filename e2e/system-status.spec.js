@@ -4,8 +4,8 @@ test('Status indicators update correctly from API', async ({ page }) => {
   // Intercept the API call to mock the response
   await page.route('/api/system-status', async route => {
     const json = {
-      wifi: { status: 'Connected (HomeNetwork)' },
-      ups: { status: 'Connected (Eaton 3S)' }
+      wifi: { status: 'HomeNetwork' },
+      ups: { status: 'Eaton 3S' }
     };
     await route.fulfill({ json });
   });
@@ -17,8 +17,8 @@ test('Status indicators update correctly from API', async ({ page }) => {
   const wifiLabel = page.locator('#lbl-wifi');
   const upsLabel = page.locator('#lbl-ups');
 
-  await expect(wifiLabel).toHaveText('Wi-Fi: Connected (HomeNetwork)');
-  await expect(upsLabel).toHaveText('UPS: Connected (Eaton 3S)');
+  await expect(wifiLabel).toHaveText('Wi-Fi: HomeNetwork');
+  await expect(upsLabel).toHaveText('UPS: Eaton 3S');
   
   const wifiIndicator = page.locator('#ind-wifi');
   await expect(wifiIndicator).toHaveClass(/success/);

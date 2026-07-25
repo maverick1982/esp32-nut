@@ -1,0 +1,62 @@
+schema: archetipo/plan/v2
+spec_code: US-032
+body: |-
+  ## Soluzione Tecnica
+
+  Modifica della logica di composizione delle stringhe di stato nel backend C++ in modo che, quando connesso, venga emesso solo il nome della rete (SSID) o il nome del modello dell'UPS, anziché prefissarlo con `Connected ()`. Di conseguenza, aggiornamento della logica del frontend JavaScript (in `app.js`) per determinare lo stato di connessione (e il colore del LED virtuale) verificando che la stringa non corrisponda agli stati noti di anomalia o transizione (es. `Disconnected`, `Connecting`, `AP Mode Active`).
+
+  ## Strategia di Test (Mina)
+
+  - **E2E Test (Playwright)**: La spec riguarda il comportamento dell'interfaccia utente (UI). L'infrastruttura di test E2E in Playwright è già presente. Sarà necessario aggiornare lo script esistente `e2e/system-status.spec.js` per simulare il nuovo payload (mock) e asserire che i label `lbl-wifi` e `lbl-ups` mostrino solo i nomi e che le classi CSS degli indicatori siano corrette.
+  - **Mockups**: Nessun nuovo mockup generato (si tratta di un aggiornamento di testo su layout esistente).
+tasks:
+  - id: TASK-01
+    title: Aggiornamento Backend Web Config
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Modificare la formattazione dello stato restituito dalle API.
+
+      ## File Coinvolti
+      - `src/web_config_server.cpp` — Modificare l'endpoint `/api/system-status`:
+        - Sostituire `wifi_status_str = "Connected (" + WiFi.SSID() + ")";` con `wifi_status_str = WiFi.SSID();`
+        - Sostituire `ups_status_str = "Connected (" + model + ")";` con `ups_status_str = model;`
+
+      ## Criteri di Completamento
+      - [ ] La risposta dell'API `/api/system-status` restituisce solo SSID e modello senza la parola "Connected".
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiornamento Logica Frontend
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Adattare il frontend al nuovo formato di dati per la corretta colorazione degli indicatori.
+
+      ## File Coinvolti
+      - `data/www/app.js` — All'interno di `fetchSystemStatus()`:
+        - Per il Wi-Fi: Sostituire il controllo `startsWith('Connected')` con una catena `if/else`. Se `data.wifi.status === 'AP Mode Active'` usa `warning`. Se `data.wifi.status === 'Disconnected'` o `'Connecting'` usa `danger`. Altrimenti usa `success`.
+        - Per l'UPS: Sostituire `startsWith('Connected')` con `if (data.ups.status === 'Disconnected' || data.ups.status === 'Connecting')` usa `danger`, altrimenti `success`.
+
+      ## Criteri di Completamento
+      - [ ] I pallini di stato (LED) si colorano di verde quando Wi-Fi o UPS mostrano i loro nomi.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiornamento Test E2E
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Allineare i test Playwright (E2E) alle nuove stringhe attese.
+
+      ## File Coinvolti
+      - `e2e/system-status.spec.js` — Aggiornare l'oggetto di mock json per inviare `'HomeNetwork'` e `'Eaton 3S'`. Modificare gli `expect(wifiLabel).toHaveText(...)` e `upsLabel` rimuovendo `Connected ()` in modo che si aspettino `Wi-Fi: HomeNetwork` e `UPS: Eaton 3S`.
+
+      ## Criteri di Completamento
+      - [ ] I test E2E vengono superati con successo senza falsi negativi.
+    ref: TASK-03

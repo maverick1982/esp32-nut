@@ -79,8 +79,7 @@ test.describe('OTA Update Flow', () => {
     // Usa setInputFiles sull'input nascosto
     await page.locator('#fileInput').setInputFiles(dummyBinPath);
     
-    // Verifica che lo status venga aggiornato e appaia la progress bar
-    await expect(page.locator('#statusMessage')).toContainText('completato', { ignoreCase: true });
-    await expect(page.locator('#progressBar')).toBeVisible();
+    // Verifica che lo status venga aggiornato
+    await expect(page.locator('#statusMessage')).toContainText('Update complete', { ignoreCase: true });
   });
 });

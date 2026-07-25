@@ -58,7 +58,7 @@ test.describe('System Logs View', () => {
     const terminalOutput = page.locator('#terminal-output');
 
     // Assicurati che il toggle (label) sia visibile e l'input checkato di default
-    const switchLabel = page.locator('.switch');
+    const switchLabel = page.locator('.auto-refresh .switch');
     await expect(switchLabel).toBeVisible();
     await expect(toggleAutoRefresh).toBeChecked();
 

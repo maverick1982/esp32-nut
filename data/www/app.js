@@ -450,21 +450,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (lblWifi && data.wifi) {
                 lblWifi.textContent = 'Wi-Fi: ' + data.wifi.status;
-                if (data.wifi.status.startsWith('Connected')) {
-                    indWifi.className = 'status-indicator success';
-                } else if (data.wifi.status === 'AP Mode Active') {
+                if (data.wifi.status === 'AP Mode Active') {
+                    indWifi.className = 'status-indicator info';
+                } else if (data.wifi.status === 'Connecting') {
                     indWifi.className = 'status-indicator warning';
-                } else {
+                } else if (data.wifi.status === 'Disconnected') {
                     indWifi.className = 'status-indicator danger';
+                } else {
+                    indWifi.className = 'status-indicator success';
                 }
             }
 
             if (lblUps && data.ups) {
                 lblUps.textContent = 'UPS: ' + data.ups.status;
-                if (data.ups.status.startsWith('Connected')) {
-                    indUps.className = 'status-indicator success';
-                } else {
+                if (data.ups.status === 'Connecting') {
+                    indUps.className = 'status-indicator warning';
+                } else if (data.ups.status === 'Disconnected') {
                     indUps.className = 'status-indicator danger';
+                } else {
+                    indUps.className = 'status-indicator success';
                 }
             }
         } catch (error) {

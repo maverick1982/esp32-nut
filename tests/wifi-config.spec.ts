@@ -47,6 +47,6 @@ test.describe('Wi-Fi Configuration UI', () => {
     
     // Verify the UI changes state
     await expect(page.locator('#btn-connect')).toHaveText(/Saved & Connecting/i);
-    await expect(page.locator('.system-status span')).toHaveText('Restarting...');
+    await expect(page.locator('#lbl-wifi')).toHaveText('Restarting...');
   });
 });
