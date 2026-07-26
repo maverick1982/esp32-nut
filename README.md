@@ -38,7 +38,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 ### Typical Dual USB-C Board Setup (e.g., Generic ESP32-S3 DevKit)
 Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the back to enable Host mode. To achieve a clean setup without manually soldering wires to GPIOs:
 1. **Solder the "USB-OTG" pads**: Find the two pads labeled `USB-OTG` on the back of the board and bridge them with solder. This routes 5V power to the `USB` port, enabling it to act as a Host to power the UPS USB interface.
-2. **Solder the "RGB" pads**: Bridge the `RGB` pads to enable the built-in status LED.
+2. **Solder the "RGB" pads (Optional)**: Bridge the `RGB` pads if you want to enable the built-in status LED.
 3. **Power**: Connect a USB wall charger to the port labeled `COM` (or `UART`).
 4. **Data**: Connect a USB-C OTG adapter to the port labeled `USB`, and plug the UPS into it.
 

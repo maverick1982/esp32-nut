@@ -38,7 +38,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 ### Configurazione su Board generiche con doppia USB-C (es. Generic ESP32-S3 DevKit)
 Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (solder pads) sul retro per abilitare la modalità Host. Per ottenere un'installazione pulita senza saldare manualmente fili ai pin GPIO:
 1. **Saldare le piazzole "USB-OTG"**: Sul retro della scheda, trova le due piazzole denominate `USB-OTG` e uniscile con una goccia di stagno. Questo convoglia i 5V alla porta `USB`, permettendole di agire da Host per alimentare l'interfaccia USB dell'UPS.
-2. **Saldare le piazzole "RGB"**: Unisci le piazzole `RGB` per abilitare il LED di stato integrato.
+2. **Saldare le piazzole "RGB" (Facoltativo)**: Unisci le piazzole `RGB` se desideri abilitare il LED di stato integrato.
 3. **Alimentazione**: Collega un alimentatore da muro alla porta etichettata `COM` (o `UART`).
 4. **Dati**: Collega un adattatore USB-C OTG alla porta etichettata `USB` e collegalo all'UPS.
 
