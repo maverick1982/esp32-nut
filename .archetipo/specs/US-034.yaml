@@ -6,7 +6,7 @@ epic:
   title: Fondamenta del Progetto
 priority: HIGH
 points: 3
-status: REVIEW
+status: DONE
 body: |
   #### US-034: Installazione Zero-Click tramite ESP Web Tools
 
@@ -50,3 +50,5 @@ history:
     at: "2026-07-26T15:20:27Z"
   - status: REVIEW
     at: "2026-07-26T15:22:04Z"
+  - status: DONE
+    at: "2026-07-26T15:38:15Z"
