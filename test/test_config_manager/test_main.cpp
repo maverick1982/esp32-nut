@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <unity.h>
 #include <Preferences.h>
-#include "config_manager.h"
+#include "core/config_manager.h"
 
 ConfigManager config_manager;
 Preferences test_preferences;

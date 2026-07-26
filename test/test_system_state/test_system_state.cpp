@@ -13,7 +13,7 @@
 
 #include <Arduino.h>
 #include <unity.h>
-#include "main.h"
+#include "core/main.h"
 
 void setUp(void) {
     // Nessuna inizializzazione necessaria — funzione pura senza stato

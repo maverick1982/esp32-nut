@@ -2,8 +2,10 @@
 #include <unity.h>
 #define private public
 #include "USBHostUPS.h"
+#include "EatonDriver.h"
 #undef private
 USBHostUPS test_usb_ups;
+EatonDriver test_driver;
 
 void setUp(void) {
     // Predisposizione per ciascun test
@@ -21,24 +23,24 @@ void test_usb_host_initialization(void) {
 void test_decode_battery_charge(void) {
     // Test con Report ID incluso nel buffer (85%)
     uint8_t data_with_id[] = {0x01, 85};
-    test_usb_ups.decodeReport(0x01, data_with_id, sizeof(data_with_id));
-    TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getBatteryCharge());
+    test_driver.decodeReport(&test_usb_ups, 0x01, data_with_id, sizeof(data_with_id), test_usb_ups._ups_data);
+    TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getUPSData().remainingCapacity);
 
     // Test senza Report ID nel buffer (solo payload) (92%)
     uint8_t data_raw[] = {92};
-    test_usb_ups.decodeReport(0x01, data_raw, sizeof(data_raw));
-    TEST_ASSERT_EQUAL_UINT8(92, test_usb_ups.getBatteryCharge());
+    test_driver.decodeReport(&test_usb_ups, 0x01, data_raw, sizeof(data_raw), test_usb_ups._ups_data);
+    TEST_ASSERT_EQUAL_UINT8(92, test_usb_ups.getUPSData().remainingCapacity);
 }
 
 void test_decode_status(void) {
     // Test OL con Report ID incluso nel buffer
     uint8_t data_ol[] = {0x02, 1};
-    test_usb_ups.decodeReport(0x02, data_ol, sizeof(data_ol));
+    test_driver.decodeReport(&test_usb_ups, 0x02, data_ol, sizeof(data_ol), test_usb_ups._ups_data);
     TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatusString().c_str());
 
     // Test OB senza Report ID nel buffer (solo payload)
     uint8_t data_ob[] = {2};
-    test_usb_ups.decodeReport(0x02, data_ob, sizeof(data_ob));
+    test_driver.decodeReport(&test_usb_ups, 0x02, data_ob, sizeof(data_ob), test_usb_ups._ups_data);
     TEST_ASSERT_EQUAL_STRING("OB", test_usb_ups.getUPSStatusString().c_str());
 }
 
@@ -60,24 +62,24 @@ void test_suppress_chrg_at_100(void) {
 void test_decode_input_voltage(void) {
     // Test tensione 230.0V (2300 decivolt) con Report ID incluso. 2300 = 0x08FC.
     uint8_t data_volt_id[] = {0x03, 0xFC, 0x08};
-    test_usb_ups.decodeReport(0x03, data_volt_id, sizeof(data_volt_id));
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 230.0f, test_usb_ups.getInputVoltage());
+    test_driver.decodeReport(&test_usb_ups, 0x03, data_volt_id, sizeof(data_volt_id), test_usb_ups._ups_data);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 230.0f, test_usb_ups.getUPSData().outputVoltage);
 
     // Test tensione 225.5V (2255 decivolt) senza Report ID. 2255 = 0x08CF.
     uint8_t data_volt_raw[] = {0xCF, 0x08};
-    test_usb_ups.decodeReport(0x03, data_volt_raw, sizeof(data_volt_raw));
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 225.5f, test_usb_ups.getInputVoltage());
+    test_driver.decodeReport(&test_usb_ups, 0x03, data_volt_raw, sizeof(data_volt_raw), test_usb_ups._ups_data);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 225.5f, test_usb_ups.getUPSData().outputVoltage);
 }
 
 void test_dev_gone(void) {
     // Impostiamo dei valori
     uint8_t data_ol[] = {0x02, 1};
-    test_usb_ups.decodeReport(0x02, data_ol, sizeof(data_ol));
+    test_driver.decodeReport(&test_usb_ups, 0x02, data_ol, sizeof(data_ol), test_usb_ups._ups_data);
     uint8_t data_charge[] = {0x01, 85};
-    test_usb_ups.decodeReport(0x01, data_charge, sizeof(data_charge));
+    test_driver.decodeReport(&test_usb_ups, 0x01, data_charge, sizeof(data_charge), test_usb_ups._ups_data);
     
     TEST_ASSERT_EQUAL_STRING("OL", test_usb_ups.getUPSStatusString().c_str());
-    TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getBatteryCharge());
+    TEST_ASSERT_EQUAL_UINT8(85, test_usb_ups.getUPSData().remainingCapacity);
 
     // Simuliamo disconnessione
     usb_host_client_event_msg_t event_msg;
@@ -87,44 +89,44 @@ void test_dev_gone(void) {
 
     // Verifichiamo reset
     TEST_ASSERT_EQUAL_STRING("Unknown", test_usb_ups.getUPSStatusString().c_str());
-    TEST_ASSERT_EQUAL_UINT8(0, test_usb_ups.getBatteryCharge());
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, test_usb_ups.getInputVoltage());
+    TEST_ASSERT_EQUAL_UINT8(0, test_usb_ups.getUPSData().remainingCapacity);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, test_usb_ups.getUPSData().outputVoltage);
 }
 
 void test_decode_string_descriptor(void) {
     // UTF-16LE data: length 12, type 0x03, "EATON"
     uint8_t data_mfr[] = {12, 0x03, 'E', 0, 'A', 0, 'T', 0, 'O', 0, 'N', 0};
-    test_usb_ups.parseStringDescriptor(1, data_mfr, sizeof(data_mfr));
+    test_driver.parseStringDescriptor(1, data_mfr, sizeof(data_mfr), test_usb_ups._ups_data);
     TEST_ASSERT_EQUAL_STRING("EATON", test_usb_ups.getUPSData().manufacturer.c_str());
 
     // UTF-16LE data: length 14, type 0x03, "3S UPS"
     uint8_t data_model[] = {14, 0x03, '3', 0, 'S', 0, ' ', 0, 'U', 0, 'P', 0, 'S', 0};
-    test_usb_ups.parseStringDescriptor(2, data_model, sizeof(data_model));
+    test_driver.parseStringDescriptor(2, data_model, sizeof(data_model), test_usb_ups._ups_data);
     TEST_ASSERT_EQUAL_STRING("3S UPS", test_usb_ups.getUPSData().product.c_str());
 
     // Empty string
     uint8_t data_empty[] = {2, 0x03};
-    test_usb_ups.parseStringDescriptor(4, data_empty, sizeof(data_empty));
+    test_driver.parseStringDescriptor(4, data_empty, sizeof(data_empty), test_usb_ups._ups_data);
     TEST_ASSERT_EQUAL_STRING("", test_usb_ups.getUPSData().serialNumber.c_str());
 }
 
 void test_decode_battery_chemistry(void) {
     // Simuliamo ricezione report 0x10 con indice descrittore 5
     uint8_t report10[] = {0x10, 5};
-    test_usb_ups._chemStrIdx = 0;
-    test_usb_ups.getUPSData().batteryType = "";
-    test_usb_ups.decodeReport(0x10, report10, sizeof(report10));
-    TEST_ASSERT_EQUAL_UINT8(5, test_usb_ups._chemStrIdx);
+    test_driver._chemStrIdx = 0;
+    test_usb_ups._ups_data.batteryType = "";
+    test_driver.decodeReport(&test_usb_ups, 0x10, report10, sizeof(report10), test_usb_ups._ups_data);
+    TEST_ASSERT_EQUAL_UINT8(5, test_driver._chemStrIdx);
 
     // Simuliamo la risposta del descrittore di stringa "PbAc" all'indice 5
     uint8_t data_chem[] = {10, 0x03, 'P', 0, 'b', 0, 'A', 0, 'c', 0};
-    test_usb_ups.parseStringDescriptor(5, data_chem, sizeof(data_chem));
-    TEST_ASSERT_EQUAL_STRING("PbAc", test_usb_ups.getUPSData().batteryType.c_str());
+    test_driver.parseStringDescriptor(5, data_chem, sizeof(data_chem), test_usb_ups._ups_data);
+    TEST_ASSERT_EQUAL_STRING("PbAc", test_usb_ups._ups_data.batteryType.c_str());
 
     // Verifichiamo che il retry della decodeReport non alteri lo stato se la stringa era vuota
-    test_usb_ups.getUPSData().batteryType = "";
-    test_usb_ups.decodeReport(0x10, report10, sizeof(report10));
-    TEST_ASSERT_EQUAL_UINT8(5, test_usb_ups._chemStrIdx);
+    test_usb_ups._ups_data.batteryType = "";
+    test_driver.decodeReport(&test_usb_ups, 0x10, report10, sizeof(report10), test_usb_ups._ups_data);
+    TEST_ASSERT_EQUAL_UINT8(5, test_driver._chemStrIdx);
 }
 
 void setup() {

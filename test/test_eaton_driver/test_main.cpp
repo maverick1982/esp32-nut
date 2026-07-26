@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <unity.h>
+#include "core/main.h"
 #include "EatonDriver.h"
 
 EatonDriver driver;

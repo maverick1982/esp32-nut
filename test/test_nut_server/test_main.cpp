@@ -1,12 +1,16 @@
 #include <Arduino.h>
 #include <unity.h>
 #include <WiFi.h>
-#include "config_manager.h"
+#include "core/config_manager.h"
+#define private public
 #include "USBHostUPS.h"
+#undef private
+#include "EatonDriver.h"
 #include "NUTServer.h"
 
 ConfigManager test_config;
 USBHostUPS test_ups;
+EatonDriver test_driver;
 NUTServer test_server;
 
 void setUp(void) {
@@ -139,15 +143,15 @@ void test_auth_and_commands(void) {
     // 6. Configura dati fittizi in USBHostUPS tramite decodeReport
     // report 0x01: battery.charge = 85
     uint8_t r1[2] = {0x01, 85};
-    test_ups.decodeReport(0x01, r1, 2);
+    test_driver.decodeReport(&test_ups, 0x01, r1, 2, test_ups._ups_data);
 
     // report 0x02: ups.status = 1 (OL)
     uint8_t r2[2] = {0x02, 1};
-    test_ups.decodeReport(0x02, r2, 2);
+    test_driver.decodeReport(&test_ups, 0x02, r2, 2, test_ups._ups_data);
 
     // report 0x0e: output.voltage = 230V
     uint8_t r3[3] = {0x0e, 0xE6, 0x00}; // 230 in hex is 0x00E6 (little-endian: E6 00)
-    test_ups.decodeReport(0x0e, r3, 3);
+    test_driver.decodeReport(&test_ups, 0x0e, r3, 3, test_ups._ups_data);
 
     // 7. Richiedi una singola variabile: battery.charge
     client.println("GET VAR eaton battery.charge");
@@ -420,50 +424,50 @@ void test_comprehensive_variables(void) {
     
     // report 0x01: acPresent (bit 0) = 1
     uint8_t r1[] = {0x01, 0x01, 0x00, 0x00}; 
-    test_ups.decodeReport(0x01, r1, sizeof(r1));
+    test_driver.decodeReport(&test_ups, 0x01, r1, sizeof(r1), test_ups._ups_data);
 
     // report 0x02: outlet.1.switch, outlet.2.switch
     uint8_t r2[] = {0x02, 0x01, 0x00}; // outlet1 = 1, outlet2 = 0
-    test_ups.decodeReport(0x02, r2, sizeof(r2));
+    test_driver.decodeReport(&test_ups, 0x02, r2, sizeof(r2), test_ups._ups_data);
 
     // report 0x06: remainingCapacity (offset 1), runTimeToEmpty (offset 2..5, 4 bytes)
     // cap = 100 (0x64), runtime = 1800 (0x00000708)
     uint8_t r6[] = {0x06, 0x64, 0x08, 0x07, 0x00, 0x00};
-    test_ups.decodeReport(0x06, r6, sizeof(r6));
+    test_driver.decodeReport(&test_ups, 0x06, r6, sizeof(r6), test_ups._ups_data);
 
     // report 0x08: remainingCapacityLimit
     uint8_t r8[] = {0x08, 0x14}; // 20%
-    test_ups.decodeReport(0x08, r8, sizeof(r8));
+    test_driver.decodeReport(&test_ups, 0x08, r8, sizeof(r8), test_ups._ups_data);
 
     // report 0x0c: designCapacity, fullChargeCapacity (offset 4, 5)
     uint8_t r0c[] = {0x0c, 0, 0, 0, 0, 100, 100}; 
-    test_ups.decodeReport(0x0c, r0c, sizeof(r0c));
+    test_driver.decodeReport(&test_ups, 0x0c, r0c, sizeof(r0c), test_ups._ups_data);
 
     // report 0x0d: configApparentPower (offset 1..2), configFrequency (offset 3)
     // 700 VA (0x02BC) little endian -> BC 02
     // 50 Hz (0x32)
     uint8_t r0d[] = {0x0d, 0xBC, 0x02, 0x32};
-    test_ups.decodeReport(0x0d, r0d, sizeof(r0d));
+    test_driver.decodeReport(&test_ups, 0x0d, r0d, sizeof(r0d), test_ups._ups_data);
 
     // report 0x0e: outputVoltage (offset 1..2)
     // 230V -> 0x00E6 -> E6 00
     uint8_t r0e[] = {0x0e, 0xE6, 0x00};
-    test_ups.decodeReport(0x0e, r0e, sizeof(r0e));
+    test_driver.decodeReport(&test_ups, 0x0e, r0e, sizeof(r0e), test_ups._ups_data);
 
     // report 0x12: configVoltage
     // 230
     uint8_t r12[] = {0x12, 230};
-    test_ups.decodeReport(0x12, r12, sizeof(r12));
+    test_driver.decodeReport(&test_ups, 0x12, r12, sizeof(r12), test_ups._ups_data);
 
     // report 0x13: highVoltageTransfer
     // 264V -> 0x0108 -> 08 01
     uint8_t r13[] = {0x13, 0x08, 0x01};
-    test_ups.decodeReport(0x13, r13, sizeof(r13));
+    test_driver.decodeReport(&test_ups, 0x13, r13, sizeof(r13), test_ups._ups_data);
 
     // report 0x14: lowVoltageTransfer
     // 161V
     uint8_t r14[] = {0x14, 161};
-    test_ups.decodeReport(0x14, r14, sizeof(r14));
+    test_driver.decodeReport(&test_ups, 0x14, r14, sizeof(r14), test_ups._ups_data);
 
     // VERIFY ALL VARS via GET VAR eaton
     const char* vars[] = {

@@ -1,0 +1,92 @@
+schema: archetipo/plan/v2
+spec_code: US-038
+body: "## Analisi del Rework e Soluzione Tecnica\nL'obiettivo di questa spec è riordinare la struttura del repository per migliorare la manutenibilità e chiarezza, eliminando duplicati e modularizzando il codice sorgente C++.\n\n### 1. Unificazione dei Test E2E\nAttualmente i test Playwright sono divisi tra la vecchia cartella `tests/` e la nuova cartella `e2e/`. Sposteremo tutti i test TypeScript E2E da `tests/` a `e2e/` (che è il `testDir` corretto in `playwright.config.ts`) e rimuoveremo la cartella `tests/` (incluso lo script javascript orfano `test_nut_tcp.js` se non usato, oppure spostandolo in e2e).\n\n### 2. Pulizia della Root (Assets)\nLa cartella `images/` attualmente nella root verrà spostata all'interno di `docs/`. I file `README.md` e `README.it.md` verranno aggiornati con i nuovi path relativi delle immagini.\n\n### 3. Modularizzazione di `src/` e `include/`\nAttualmente, i file centrali dell'applicazione sono tutti piatti. \nCreeremo due domini all'interno di `src/` e `include/`:\n- **`core/`**: conterrà `main`, `config_manager`, `app_logger`.\n- **`network/`**: conterrà `network_manager`, `web_config_server` e `web_assets.h`.\n(Nota: i driver UPS e NUT sono già modularizzati correttamente come librerie locali sotto `lib/` e non verranno toccati).\n\nL'inclusione dei file dovrà riflettere la nuova struttura (es. `#include \"core/config_manager.h\"`).\n\n## Strategia di Testing\n- **Unit/Integration Test**: Esecuzione della suite PlatformIO (`pio test`). Questo garantirà che il compilatore riesca a risolvere correttamente tutti i nuovi percorsi e che non si sia rotto alcun linkaggio.\n- **E2E Test**: Esecuzione dei test Playwright (`npx playwright test`). Questo garantirà che i test si avviino correttamente dalla cartella unificata `e2e/` e passino con successo."
+tasks:
+  - id: TASK-01
+    title: Unificazione cartelle test e2e
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Spostare tutti i file di test da `tests/` alla directory `e2e/`. Eliminare la cartella `tests/` vuota.
+
+      ## File Coinvolti
+      - `tests/*` -> `e2e/*`
+
+      ## Criteri di Completamento
+      - [ ] La cartella `tests/` non esiste più in root.
+      - [ ] Tutti gli spec di playwright si trovano ora all'interno di `e2e/`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Spostamento cartella images e refactor README
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Spostare la directory `images/` all'interno di `docs/` e aggiornare tutti i riferimenti markdown per riflettere il nuovo percorso.
+
+      ## File Coinvolti
+      - `images/*` -> `docs/images/*`
+      - `README.md` — Modificare i path delle immagini.
+      - `README.it.md` — Modificare i path delle immagini.
+
+      ## Criteri di Completamento
+      - [ ] La cartella `images/` non è più nella root.
+      - [ ] Le immagini sono renderizzate correttamente su GitHub in entrambi i README.
+    ref: TASK-02
+  - id: TASK-03
+    title: Modularizzazione cartelle src e include
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare le sottocartelle `core/` e `network/` dentro `src/` e `include/`. Spostare i rispettivi file .cpp e .h.
+      Core riceverà: app_logger, config_manager, main.
+      Network riceverà: network_manager, web_config_server, web_assets.h.
+
+      ## File Coinvolti
+      - `src/` e `include/`
+
+      ## Criteri di Completamento
+      - [ ] I file sono stati spostati con successo nelle nuove directory.
+    ref: TASK-03
+  - id: TASK-04
+    title: Refactoring delle inclusioni C++
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Aggiornare tutte le direttive `#include` nei file `.cpp` e `.h` in `src/` e `include/` (e ovunque sia necessario, ad esempio nei file in `test/`) affinché puntino correttamente alle nuove directory (es. `#include "core/config_manager.h"` o `#include "network/network_manager.h"`).
+
+      ## File Coinvolti
+      - `src/core/*.cpp`
+      - `src/network/*.cpp`
+      - `include/core/*.h`
+      - `include/network/*.h`
+      - `test/*/*.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Non ci sono errori di inclusione o dipendenze rotte.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verifica compilazione e testing
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Eseguire la build completa del progetto PlatformIO, eseguire i test integrati e i test e2e per assicurarsi che il refactoring non abbia generato regressioni.
+
+      ## File Coinvolti
+      - Nessuno specifico.
+
+      ## Criteri di Completamento
+      - [ ] `pio run` termina con SUCCESS.
+      - [ ] `pio test` termina con SUCCESS.
+      - [ ] `npx playwright test` passa regolarmente.
+    ref: TASK-05

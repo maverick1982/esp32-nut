@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-038
+title: Refactoring Struttura del Progetto e Modularizzazione Sorgenti
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: MEDIUM
+points: 5
+status: DONE
+body: |-
+  #### US-038: Refactoring Struttura del Progetto e Modularizzazione Sorgenti
+
+  **Epic:** EP-000 | **Priority:** MEDIUM | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  As un developer del progetto,
+  I want riorganizzare la root directory (spostando test, immagini e asset nei posti corretti) e suddividere i file sorgenti in cartelle logiche (`core/`, `network/`, `ups/`),
+  so that il codice sia più manutenibile, facile da navigare e la root risulti professionale e pulita man mano che il progetto cresce.
+
+  **Demonstrates**
+  After implementing this spec, il progetto compilerà con successo senza errori in PlatformIO. La root sarà pulita, senza cartelle duplicate per i test (`test/` vs `tests/`). I file sorgenti e header (.cpp e .h) saranno raggruppati nei rispettivi sottomoduli. Tutti i test (inclusi quelli E2E) e le pipeline CI/CD continueranno a funzionare correttamente con la nuova struttura.
+
+  **Acceptance Criteria**
+  - [ ] Il progetto compila con successo in PlatformIO senza errori di dipendenze o `#include` mancanti.
+  - [ ] I file in `src/` e `include/` sono separati in sotto-cartelle per dominio (es. `core/`, `network/`, `ups/`).
+  - [ ] Le ridondanze in root (come `test/` vs `tests/`) sono unificate nella directory standard `test/`.
+  - [ ] File e cartelle collaterali (es. `images/`) sono state riposizionate correttamente in `docs/` o in percorsi dedicati.
+  - [ ] I test esistenti E2E e unitari passano regolarmente.
+history:
+  - status: TODO
+    at: "2026-07-26T15:44:46Z"
+  - status: PLANNED
+    at: "2026-07-26T15:54:36Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T15:59:01Z"
+  - status: REVIEW
+    at: "2026-07-26T16:27:07Z"
+  - status: DONE
+    at: "2026-07-26T16:49:02Z"

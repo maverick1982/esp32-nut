@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <unity.h>
-#include "network_manager.h"
+#include "network/network_manager.h"
 
 AppNetworkManager net_manager;
 

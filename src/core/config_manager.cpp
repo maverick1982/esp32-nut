@@ -1,6 +1,6 @@
-#include "config_manager.h"
+#include "core/config_manager.h"
 #include <ArduinoJson.h>
-#include "app_logger.h"
+#include "core/app_logger.h"
 
 ConfigManager::ConfigManager() : is_valid(false) {}
 

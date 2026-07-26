@@ -3,7 +3,7 @@
 
 #include <WebServer.h>
 #include <DNSServer.h>
-#include "config_manager.h"
+#include "core/config_manager.h"
 #include "USBHostUPS.h"
 
 class WebConfigServer {

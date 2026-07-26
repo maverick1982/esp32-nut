@@ -4,7 +4,7 @@ import gzip
 
 def embed_files():
     data_dir = "data/www"
-    out_file = "include/web_assets.h"
+    out_file = "include/network/web_assets.h"
     
     if not os.path.exists(data_dir):
         print(f"Directory {data_dir} not found. Skipping web embed.")

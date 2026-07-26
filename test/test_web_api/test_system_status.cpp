@@ -1,5 +1,5 @@
 #include <unity.h>
-#include "web_config_server.h"
+#include "network/web_config_server.h"
 
 // Note: This is a placeholder for the actual test. 
 // A real integration test would mock WiFi and USBHostUPS 

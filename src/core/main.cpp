@@ -1,7 +1,7 @@
-#include "main.h"
+#include "core/main.h"
 #include "USBHostUPS.h"
-#include "web_config_server.h"
-#include "app_logger.h"
+#include "network/web_config_server.h"
+#include "core/app_logger.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;

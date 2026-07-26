@@ -1,8 +1,8 @@
-#include "web_config_server.h"
+#include "network/web_config_server.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include "app_logger.h"
-#include "web_assets.h"
+#include "core/app_logger.h"
+#include "network/web_assets.h"
 #include <Update.h>
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 

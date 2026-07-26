@@ -1,4 +1,4 @@
-#include "app_logger.h"
+#include "core/app_logger.h"
 #include <stdarg.h>
 
 LogMessage AppLogger::logBuffer[AppLogger::MAX_LOGS];

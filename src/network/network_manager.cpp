@@ -1,5 +1,5 @@
-#include "network_manager.h"
-#include "app_logger.h"
+#include "network/network_manager.h"
+#include "core/app_logger.h"
 
 AppNetworkManager::AppNetworkManager() 
     : m_lastStatus(WL_IDLE_STATUS), 

@@ -2,8 +2,8 @@
 #define MAIN_H
 
 #include <Arduino.h>
-#include "config_manager.h"
-#include "network_manager.h"
+#include "core/config_manager.h"
+#include "network/network_manager.h"
 #include "NUTServer.h"
 #include "DiagnosticLED.h"
 
