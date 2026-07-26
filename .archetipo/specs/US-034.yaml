@@ -7,7 +7,7 @@ epic:
 priority: HIGH
 points: 3
 status: REVIEW
-body: |-
+body: |
   #### US-034: Installazione Zero-Click tramite ESP Web Tools
 
   **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
@@ -27,6 +27,12 @@ body: |-
   - [ ] Viene creata una GitHub Action (o documentato uno script) per estrarre e servire i file compilati (`.bin`) ad ogni nuova release affinché la pagina web possa utilizzarli.
   - [ ] Il file README.md viene aggiornato con un evidente link e bottone "Install via Browser".
   - [ ] L'installazione di test su un ESP32-S3 pulito usando Chrome/Edge completa con successo e il captive portal appare.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - C'è un errore nell'URL della pagina dell'installer web nei file readme. L'URL corretto è https://maverick1982.github.io/esp32-nut/ . Correggilo in entrambi i README (inglese e italiano).
 history:
   - status: TODO
     at: "2026-07-25T19:49:33Z"
@@ -36,3 +42,11 @@ history:
     at: "2026-07-26T14:43:30Z"
   - status: REVIEW
     at: "2026-07-26T14:50:53Z"
+  - status: TODO
+    at: "2026-07-26T15:17:50Z"
+  - status: PLANNED
+    at: "2026-07-26T15:19:24Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T15:20:27Z"
+  - status: REVIEW
+    at: "2026-07-26T15:22:04Z"

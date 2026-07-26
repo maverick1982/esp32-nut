@@ -57,7 +57,7 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 
 **Opzione A: Installazione Zero-Click via Browser (Consigliato)**
 Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun programma!
-👉 <a href="https://maverick1982.github.io/esp32-nut/web-installer/" target="_blank">**Installa via Browser**</a>
+👉 <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Installa via Browser**</a>
 
 **Opzione B: Compilazione Manuale tramite PlatformIO**
 1. Clona questo repository.

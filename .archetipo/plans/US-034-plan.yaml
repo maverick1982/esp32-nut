@@ -1,26 +1,6 @@
 schema: archetipo/plan/v2
 spec_code: US-034
-body: |-
-  ## Soluzione Tecnica
-
-  **Panoramica:**
-  L'obiettivo è fornire una pagina web statica per l'installazione zero-click del firmware ESP32 NUT Server, ospitata su GitHub Pages. La pagina integrerà il componente `<esp-web-install-button>` standard, consentendo agli utenti di flashare l'ESP32 via browser tramite la Web Serial API, senza installare tool di sviluppo.
-
-  **Design e Struttura:**
-  - Verrà creata una cartella `web-installer` che sarà servita da GitHub Pages.
-  - La pagina `index.html` conterrà l'interfaccia utente (basata sul mockup US-034) e integrerà l'hub ESP Web Tools.
-  - Sarà predisposto un file `manifest.json` contenente i riferimenti e gli offset corretti per le partizioni dell'ESP32-S3 (Bootloader `0x0`, Partitions `0x8000`, Firmware `0x10000`).
-
-  **Integrazione CI/CD:**
-  - L'automazione della release, inclusa la compilazione dei binari e il loro packaging per GitHub Pages/Release, sarà gestita interamente dalla **US-037**.
-  - Aggiunta documentazione sul file README per linkare il web installer.
-
-  ## Strategia di Test
-
-  **E2E (End-to-End):**
-  Poiché la spec introduce un'interfaccia web (installer), è necessaria una strategia E2E.
-  Utilizzeremo **Playwright** per servire la cartella statica `web-installer` e verificare che il DOM renderizzi correttamente il componente `<esp-web-install-button>` e le istruzioni utente, nonché validare che il `manifest.json` sia esposto correttamente e sintatticamente valido.
-  Il progetto attualmente non include l'infrastruttura Playwright, quindi il primo step sarà l'installazione e configurazione tramite il comando `archetipo e2e ensure`.
+body: "## Soluzione Tecnica\nL'infrastruttura del Web Installer è stata implementata con successo. Include la configurazione del componente `esp-web-install-button`, la generazione automatica dei binari via GitHub Actions, il deploy su GitHub Pages e i test E2E. \n\n**Rework:** È emerso un errore negli URL indicati nei due file README. L'URL corretto della pagina ospitata su GitHub Pages deve essere senza la subdirectory finale, ovvero `https://maverick1982.github.io/esp32-nut/` anziché con `/web-installer/` alla fine. Provvederemo a fixarlo.\n\n## Strategia di Testing\n- I test E2E già creati con Playwright validano l'infrastruttura.\n- La modifica dell'URL nei markdown richiede una semplice verifica visiva dell'HTML renderizzato e dei link."
 tasks:
   - id: TASK-01
     title: Creazione pagina HTML per Web Installer
@@ -103,3 +83,19 @@ tasks:
       - [ ] I test playwright passano verificando la presenza di `<esp-web-install-button>`.
       - [ ] Playwright riesce a scaricare e validare il contenuto del file manifest.
     ref: TASK-06
+  - id: TASK-07
+    title: Fix URL Web Installer nei README
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Durante la review è stato segnalato che l'URL per il Web Installer è errato nei file di documentazione. Dobbiamo correggere i link affinché puntino alla root corretta su GitHub Pages.
+      Modificare il link dell'installer da `https://maverick1982.github.io/esp32-nut/web-installer/` a `https://maverick1982.github.io/esp32-nut/` in entrambi i file markdown.
+
+      ## File Coinvolti
+      - `README.md` — Aggiornare l'href del tag `<a>` nell'opzione di installazione via browser.
+      - `README.it.md` — Aggiornare l'href del tag `<a>` nell'opzione di installazione via browser.
+
+      ## Criteri di Completamento
+      - [ ] Entrambi i file README puntano al nuovo URL corretto senza la stringa `/web-installer/` finale.
+    ref: TASK-07

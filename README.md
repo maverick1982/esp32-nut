@@ -57,7 +57,7 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 
 **Option A: Zero-Click Install via Browser (Recommended)**
 You can install the firmware directly from your browser without downloading any tools!
-👉 <a href="https://maverick1982.github.io/esp32-nut/web-installer/" target="_blank">**Install via Browser**</a>
+👉 <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Install via Browser**</a>
 
 **Option B: Manual Build via PlatformIO**
 1. Clone this repository.
