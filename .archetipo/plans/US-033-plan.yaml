@@ -1,0 +1,91 @@
+schema: archetipo/plan/v2
+spec_code: US-033
+body: "## Soluzione Tecnica\n\nL'obiettivo è separare la gestione del bus USB (enumerazione, task FreeRTOS, gestione claim/release) dalla logica di dominio dell'UPS (polling dei report specifici e decodifica dei dati HID). \n\n1.  **Definizione Interfaccia `IUPSDriver`**:\n    Si introdurrà una classe astratta `IUPSDriver` che dichiara il contratto per i driver. Questo includerà metodi per l'inizializzazione (reset dello stato), il polling periodico (veloce e lento) e la decodifica dei report HID. Il driver riceverà un riferimento/puntatore a `USBHostUPS` (o ad una interfaccia più stretta) per inoltrare le richieste di `requestReport` e `requestStringDescriptor` sul bus USB, e riceverà un riferimento alla struttura `UPSData` per aggiornarla.\n\n2.  **Implementazione `EatonDriver`**:\n    Verrà creata la classe concreta `EatonDriver` (implementazione di `IUPSDriver`). Tutto lo `switch (report_id)` attualmente in `USBHostUPS::decodeReport`, assieme alle variabili di stato del polling (`_poll_step`, `_chemStrIdx`, ecc.), verrà spostato in questa classe.\n\n3.  **Refactoring `USBHostUPS`**:\n    `USBHostUPS` diventerà agnostica rispetto al vendor. \n    - Al momento dell'enumerazione in `handle_client_event`, verificherà il `desc->idVendor`. Se corrisponde a `0x0463` (Eaton), istanzierà un `EatonDriver` e lo assegnerà ad un puntatore polimorfico `IUPSDriver* _driver`.\n    - Nel suo `loop()`, delegherà il polling chiamando `_driver->loop(...)`.\n    - Nel suo `control_transfer_cb`, delegherà il parsing chiamando `_driver->decodeReport(...)` o `_driver->parseStringDescriptor(...)`.\n    - In caso di disconnessione, il puntatore `_driver` verrà distrutto.\n\n## Strategia di Testing\n\nEssendo una modifica strutturale del backend senza impatto sull'interfaccia utente (nessun nuovo componente visivo), la strategia di test si concentra sui **Test di Integrazione e Unit Test**:\n\n-   **Unit Test `EatonDriver`**: Verranno scritti test isolati in C++ (es. tramite Unity) che passano buffer finti `uint8_t[]` corrispondenti a report HID noti al metodo `decodeReport`, per verificare che le strutture `UPSData` vengano valorizzate correttamente, prevenendo regressioni sul bit-masking.\n-   **Test di Integrazione**: Si testerà l'hot-plugging dell'UPS reale e si verificherà tramite log seriali o query a `NUTServer` che le metriche restino identiche rispetto alla versione non rifattorizzata."
+tasks:
+  - id: TASK-01
+    title: Definizione interfaccia IUPSDriver
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare il file header per l'interfaccia base astratta `IUPSDriver` che definisce i metodi virtuali puri necessari per il polling e la decodifica dei report HID.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUPSDriver.h` (nuovo) — Dichiarazione di `IUPSDriver` con i metodi virtuali `setup()`, `loop(USBHostUPS* host, UPSData& data, uint32_t now)`, `decodeReport(...)` e `parseStringDescriptor(...)`.
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Modifiche minori per forward declaration se necessarie.
+
+      ## Criteri di Completamento
+      - [ ] Compilazione senza errori con l'header incluso.
+      - [ ] Interfaccia correttamente definita.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementazione classe EatonDriver
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare la classe `EatonDriver` che eredita da `IUPSDriver`. Spostare la decodifica dei report e lo stato del polling in questa classe.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/EatonDriver.h` (nuovo)
+      - `lib/USBHostUPS/src/EatonDriver.cpp` (nuovo) — Spostare il corpo dello `switch` contenuto in `USBHostUPS::decodeReport`. Spostare la logica dello state-machine di polling presente in `USBHostUPS::loop()`.
+
+      ## Criteri di Completamento
+      - [ ] Tutta la logica dei report Eaton è incapsulata in `EatonDriver`.
+      - [ ] Compila correttamente, e la logica del bit-masking rimane invariata.
+    ref: TASK-02
+  - id: TASK-03
+    title: Unit Test EatonDriver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere gli unit test per verificare che `EatonDriver::decodeReport` modifichi correttamente l'oggetto `UPSData` passandogli report fittizi.
+
+      ## File Coinvolti
+      - `test/test_eaton_driver/test_main.cpp` (nuovo) — Funzioni di test che verificano il parsing dei buffer HID per report noti.
+
+      ## Criteri di Completamento
+      - [ ] Vengono testati almeno due report fondamentali.
+      - [ ] I test passano con successo in ambiente di testing locale o PlatformIO.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrazione instanziazione dinamica in USBHostUPS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Modificare `USBHostUPS` per mantenere il puntatore `IUPSDriver* _driver` e istanziare l'oggetto specifico in base al Vendor ID letto al momento dell'enumerazione.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere il membro `IUPSDriver* _driver`.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — In `handle_client_event()`, instanziare `new EatonDriver()` se `idVendor == 0x0463`. Delezione di `_driver` su disconnessione.
+
+      ## Criteri di Completamento
+      - [ ] Nessun memory leak su disconnessione e riconnessione.
+      - [ ] Corretta inizializzazione dell'interfaccia basata sul VID.
+    ref: TASK-04
+  - id: TASK-05
+    title: Refactoring del loop e delle callback di USBHostUPS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Rimuovere definitivamente da `USBHostUPS` la logica di decoding e polling specifica per Eaton, demandando completamente a `_driver`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Rimuovere `decodeReport`, `_poll_step` e altre variabili di stato trasferite nel driver.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — In `loop()`, invocare `_driver->loop(...)`. In `control_transfer_cb`, invocare la decodifica delegandola a `_driver`.
+
+      ## Criteri di Completamento
+      - [ ] `USBHostUPS.cpp` è privo di hardcoding specifico per l'Eaton (tranne per la factory).
+      - [ ] Il firmware compila senza errori ed il polling funziona perfettamente come prima.
+    ref: TASK-05

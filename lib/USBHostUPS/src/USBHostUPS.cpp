@@ -1,4 +1,5 @@
 #include "USBHostUPS.h"
+#include "EatonDriver.h"
 
 USBHostUPS::USBHostUPS() : 
     _usb_task_handle(NULL), 
@@ -6,14 +7,14 @@ USBHostUPS::USBHostUPS() :
     _client_handle(NULL), 
     _dev_handle(NULL), 
     _initialized(false),
-    _last_poll(0),
-    _chemStrIdx(0),
-    _poll_step(0),
-    _last_step_time(0),
-    _last_fast_poll(0) {
+    _driver(nullptr) {
 }
 
 USBHostUPS::~USBHostUPS() {
+    if (_driver) {
+        delete _driver;
+        _driver = nullptr;
+    }
 }
 
 const UPSData& USBHostUPS::getUPSData() const {
@@ -130,8 +131,8 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                         esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
                         if (claim_err == ESP_OK) {
                             Serial.println("[USBHostUPS] HID Interface 0 claimed successfully.");
-                            _last_poll = 0;
-                            _last_fast_poll = 0;
+                            _driver = new EatonDriver();
+                            _driver->setup();
                         } else {
                             Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                             usb_host_device_close(_client_handle, dev_hdl);
@@ -153,6 +154,10 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
         case USB_HOST_CLIENT_EVENT_DEV_GONE: {
             Serial.println("[USBHostUPS] Device disconnected.");
             _ups_data = UPSData(); // reset
+            if (_driver) {
+                delete _driver;
+                _driver = nullptr;
+            }
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
                 esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
                 if (release_err == ESP_OK) {
@@ -243,189 +248,11 @@ void USBHostUPS::loop() {
     }
 
     uint32_t now = millis();
-    
-    // Polling Veloce (Dinamico)
-    if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-        _last_fast_poll = now != 0 ? now : 1;
-        requestReport(0x01, 0x03, 4);
-        requestReport(0x06, 0x03, 6);
-        requestReport(0x07, 0x03, 8);
-    }
-
-    // Polling Lento (Statico)
-    if (_poll_step == 0) {
-        if (now - _last_poll >= 30000 || _last_poll == 0) {
-            _last_poll = now != 0 ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
-        }
-    }
-
-    if (_poll_step > 0) {
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
-            _last_step_time = now;
-            switch (_poll_step) {
-                case 1: if (_ups_data.manufacturer == "") requestStringDescriptor(1); break;
-                case 2: if (_ups_data.product == "") requestStringDescriptor(2); break;
-                case 3: if (_ups_data.serialNumber == "") requestStringDescriptor(4); break;
-                case 4: break; // Spostato nel polling veloce
-                case 5: requestReport(0x02, 0x03, 3); break;
-                case 6: break; // Spostato nel polling veloce
-                case 7: break; // Spostato nel polling veloce
-                case 8: requestReport(0x08, 0x03, 2); break;
-                case 9: requestReport(0x09, 0x03, 5); break;
-                case 10: requestReport(0x0a, 0x03, 5); break;
-                case 11: requestReport(0x0c, 0x03, 8); break;
-                case 12: requestReport(0x0d, 0x03, 4); break;
-                case 13: requestReport(0x0e, 0x03, 3); break;
-                case 14: requestReport(0x10, 0x03, 9); break;
-                case 15: requestReport(0x12, 0x03, 2); break;
-                case 16: requestReport(0x13, 0x03, 3); break;
-                case 17: requestReport(0x14, 0x03, 2); break;
-                case 18: requestReport(0x1f, 0x03, 2); break;
-                default: 
-                    _poll_step = 0; 
-                    return;
-            }
-            _poll_step++;
-        }
+    if (_driver) {
+        _driver->loop(this, _ups_data, now);
     }
 }
-void USBHostUPS::decodeReport(uint8_t report_id, const uint8_t *data, size_t length) {
-    if (length == 0 || data == NULL) return;
 
-    size_t offset = 0; // The ESP-IDF driver may or may not strip the Report ID
-    if (length > 1 && data[0] == report_id) {
-        offset = 1;
-    }
-
-    switch (report_id) {
-        case 0x01:
-            if (length - offset >= 1) {
-                _ups_data.acPresent = data[offset] & (1 << 0);
-                _ups_data.belowRemainingCapacityLimit = data[offset] & (1 << 1);
-                _ups_data.charging = data[offset] & (1 << 2);
-                _ups_data.communicationLost = data[offset] & (1 << 3);
-                _ups_data.discharging = data[offset] & (1 << 4);
-                _ups_data.good = data[offset] & (1 << 5);
-                _ups_data.internalFailure = data[offset] & (1 << 6);
-                _ups_data.needReplacement = data[offset] & (1 << 7);
-            }
-            if (length - offset >= 2) {
-                _ups_data.overload = data[offset + 1] != 0;
-            }
-            if (length - offset >= 3) {
-                _ups_data.shutdownImminent = data[offset + 2] != 0;
-            }
-            break;
-
-        case 0x02:
-            if (length - offset >= 2) {
-                _ups_data.outlet1Switch = data[offset] != 0;
-                _ups_data.outlet2Switch = data[offset + 1] != 0;
-            }
-            break;
-
-        case 0x06:
-            if (length - offset >= 1) {
-                _ups_data.remainingCapacity = data[offset];
-                if (_ups_data.remainingCapacity > 100) _ups_data.remainingCapacity = 100;
-            }
-            if (length - offset >= 5) {
-                _ups_data.runTimeToEmpty = (uint32_t)data[offset + 1] |
-                                           ((uint32_t)data[offset + 2] << 8) |
-                                           ((uint32_t)data[offset + 3] << 16) |
-                                           ((uint32_t)data[offset + 4] << 24);
-            }
-            break;
-
-        case 0x07:
-            if (length - offset >= 6) {
-                _ups_data.load = data[offset + 5];
-                if (_ups_data.configApparentPower > 0) {
-                    _ups_data.realPower = (uint16_t)(((uint32_t)_ups_data.configApparentPower * 60 * _ups_data.load) / 10000);
-                }
-            }
-            break;
-
-        case 0x08:
-            if (length - offset >= 1) {
-                _ups_data.remainingCapacityLimit = data[offset];
-            }
-            break;
-
-        case 0x09:
-            if (length - offset >= 4) {
-                _ups_data.delayShutdown = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
-            }
-            break;
-
-        case 0x0a:
-            if (length - offset >= 4) {
-                _ups_data.delayStart = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
-            }
-            break;
-
-        case 0x0c:
-            if (length - offset >= 6) {
-                _ups_data.designCapacity = data[offset + 4];
-                _ups_data.fullChargeCapacity = data[offset + 5];
-            }
-            break;
-
-        case 0x0d:
-            if (length - offset >= 2) {
-                _ups_data.configApparentPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            if (length - offset >= 3) {
-                _ups_data.configFrequency = data[offset + 2];
-            }
-            break;
-
-        case 0x0e:
-            if (length - offset >= 2) {
-                _ups_data.outputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            break;
-
-        case 0x10:
-            if (length - offset >= 1) {
-                uint8_t chemIdx = data[offset];
-                if (chemIdx > 0 && (chemIdx != _chemStrIdx || _ups_data.batteryType == "")) {
-                    _chemStrIdx = chemIdx;
-                    requestStringDescriptor(chemIdx);
-                }
-            }
-            break;
-
-        case 0x12:
-            if (length - offset >= 1) {
-                _ups_data.configVoltage = data[offset];
-            }
-            break;
-
-        case 0x13:
-            if (length - offset >= 2) {
-                _ups_data.highVoltageTransfer = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            break;
-
-        case 0x14:
-            if (length - offset >= 1) {
-                _ups_data.lowVoltageTransfer = data[offset];
-            }
-            break;
-
-        case 0x1f:
-            if (length - offset >= 1) {
-                _ups_data.beeperEnabled = (data[offset] == 2);
-            }
-            break;
-
-        default:
-            break;
-    }
-}
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
@@ -493,28 +320,19 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
 
             if (setup->bmRequestType == 0x80 && setup->bRequest == 0x06 && (setup->wValue >> 8) == 0x03) {
                 if (actual_length > 2 && data[1] == 0x03) {
-                    self->parseStringDescriptor(setup->wValue & 0xFF, data, actual_length);
+                    if (self->_driver) {
+                        self->_driver->parseStringDescriptor(setup->wValue & 0xFF, data, actual_length, self->_ups_data);
+                    }
                 }
             } else if (setup->bmRequestType == 0xA1 && setup->bRequest == 0x01) {
                 uint8_t report_id = setup->wValue & 0xFF;
-                self->decodeReport(report_id, data, actual_length);
+                if (self->_driver) {
+                    self->_driver->decodeReport(self, report_id, data, actual_length, self->_ups_data);
+                }
             }
         }
     }
     usb_host_transfer_free(transfer);
 }
 
-void USBHostUPS::parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length) {
-    if (length < 2 || data[1] != 0x03) return;
-    uint8_t str_len = data[0];
-    String str = "";
-    for (int i = 2; i < str_len && i < length; i += 2) {
-        if (data[i] != 0) { // Safety check to skip null characters if they happen to appear in the low byte, though UTF-16LE has ascii in low byte.
-            str += (char)data[i];
-        }
-    }
-    if (index == 1) _ups_data.manufacturer = str;
-    else if (index == 2) _ups_data.product = str;
-    else if (index == 4) _ups_data.serialNumber = str;
-    else if (_chemStrIdx > 0 && index == _chemStrIdx) _ups_data.batteryType = str;
-}
+

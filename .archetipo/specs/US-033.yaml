@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 5
-status: TODO
+status: DONE
 body: |-
   #### US-033: Astrazione parser USB in driver a profili
 
@@ -30,3 +30,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-07-25T18:41:12Z"
+  - status: PLANNED
+    at: "2026-07-26T09:09:51Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T09:14:50Z"
+  - status: REVIEW
+    at: "2026-07-26T09:19:55Z"
+  - status: DONE
+    at: "2026-07-26T09:24:56Z"

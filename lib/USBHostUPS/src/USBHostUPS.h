@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "usb/usb_host.h"
+#include "IUPSDriver.h"
 
 struct UPSData {
     bool acPresent = false;
@@ -68,7 +69,9 @@ public:
 
     bool setBeeper(bool enable);
 
-    void decodeReport(uint8_t report_id, const uint8_t *data, size_t length);
+    bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8);
+    bool requestStringDescriptor(uint8_t string_index);
+
     bool isConnected() const;
 
 private:
@@ -76,10 +79,7 @@ private:
     static void usb_client_task(void *arg);
     static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg);
     static void control_transfer_cb(usb_transfer_t *transfer);
-    void parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length);
     void handle_client_event(const usb_host_client_event_msg_t *event_msg);
-    bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8);
-    bool requestStringDescriptor(uint8_t string_index);
 
     TaskHandle_t _usb_task_handle;
     TaskHandle_t _client_task_handle;
@@ -88,11 +88,7 @@ private:
     bool _initialized;
 
     UPSData _ups_data;
-    uint32_t _last_poll;
-    uint8_t _chemStrIdx;
-    uint8_t _poll_step;
-    uint32_t _last_step_time;
-    uint32_t _last_fast_poll;
+    IUPSDriver* _driver;
 };
 
 #endif // USB_HOST_UPS_H
