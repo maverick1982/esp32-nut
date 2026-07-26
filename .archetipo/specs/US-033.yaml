@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-033
+title: Astrazione parser USB in driver a profili
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-033: Astrazione parser USB in driver a profili
+
+  **Epic:** EP-001 | **Priority:** MEDIUM | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come sviluppatore che mantiene il motore USB,
+  voglio che la logica di parsing dei report HID sia estratta dietro un'interfaccia `IUPSDriver` con un'implementazione concreta `EatonDriver`,
+  in modo che in futuro si possano supportare nuove marche di UPS semplicemente aggiungendo un nuovo profilo (es. `APCDriver`), senza toccare il motore USB host centrale.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il comportamento a runtime e l'esposizione dei parametri a Home Assistant o Web UI rimarranno invariati. Tuttavia, ispezionando il codice di `USBHostUPS`, non ci saranno più offset hard-coded per l'Eaton. Il sistema utilizzerà un'interfaccia a oggetti, istanziando dinamicamente `EatonDriver` basandosi sul Vendor ID (VID) rilevato durante l'enumerazione USB.
+
+  **Acceptance Criteria**
+  - [ ] Viene creata un'interfaccia base astratta (es. `IUPSDriver`) che definisce il contratto per decodificare i dati grezzi USB HID nella struttura `ups_data_t` interna.
+  - [ ] Tutta l'attuale logica di decodifica hard-coded (switch sui Report ID e bit-masking) viene spostata in una nuova classe `EatonDriver`.
+  - [ ] La classe principale `USBHostUPS` legge il Vendor ID dell'UPS connesso e instanzia il driver corretto (es. `EatonDriver` per VID 0x0463).
+  - [ ] Tutti i parametri attualmente supportati (capacità, allarmi, runtime, ecc.) continuano a funzionare senza alcuna regressione.
+  - [ ] Il sistema è strutturalmente pronto per accogliere un futuro `GenericDriver` o driver di terze parti.
+history:
+  - status: TODO
+    at: "2026-07-25T18:41:12Z"

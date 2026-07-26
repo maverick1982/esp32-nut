@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-035
+title: Nuovi pattern LED per stato Operativo e Access Point
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: LOW
+points: 2
+status: DONE
+body: |
+  #### US-035: Nuovi pattern LED per stato Operativo e Access Point
+
+  **Epic:** EP-000 | **Priority:** LOW | **Points:** 2 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del dispositivo,
+  voglio che il LED diagnostico mostri un pattern più discreto durante il normale funzionamento (OPERATIONAL) e un pattern distintivo in modalità configurazione (AP Mode),
+  in modo da non avere una luce fissa costantemente accesa e distinguere chiaramente la modalità di attesa configurazione da un normale tentativo di connessione Wi-Fi.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, avviando il dispositivo senza Wi-Fi, entrerà in modalità Access Point e il LED lampeggerà alternando blu e rosso in modo veloce per 4 secondi, seguito da una pausa di 4 secondi, ciclicamente. Una volta connesso al Wi-Fi e all'UPS (stato OPERATIONAL), il LED invece di essere fisso effettuerà un lampeggio veloce di 200ms seguito da una lunga pausa di 4 secondi.
+
+  **Acceptance Criteria**
+  - [ ] Nello stato `OPERATIONAL` il LED verde non è più fisso ma esegue un breve flash di 200ms seguito da una pausa di 4000ms.
+  - [ ] Viene introdotto un nuovo stato `AP_MODE` distinto da `CONNECTING` nella classe `DiagnosticLED`.
+  - [ ] Nello stato `AP_MODE`, il LED esegue un'animazione: alternanza veloce Blu/Rosso per 4 secondi, poi spento per 4 secondi, in loop.
+  - [ ] La funzione `computeSystemState` assegna lo stato `AP_MODE` quando il dispositivo è in modalità Access Point, mantenendo `CONNECTING` per i tentativi di connessione alla rete di casa.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Nello stato OPERATIONAL, ridurre il lampeggio verde a 100ms e aumentare la pausa a 5000ms.
+history:
+  - status: TODO
+    at: "2026-07-26T08:28:41Z"
+  - status: PLANNED
+    at: "2026-07-26T08:33:51Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T08:37:06Z"
+  - status: REVIEW
+    at: "2026-07-26T08:39:49Z"
+  - status: TODO
+    at: "2026-07-26T08:49:21Z"
+  - status: PLANNED
+    at: "2026-07-26T08:50:56Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T08:52:26Z"
+  - status: REVIEW
+    at: "2026-07-26T08:53:45Z"
+  - status: DONE
+    at: "2026-07-26T08:57:25Z"

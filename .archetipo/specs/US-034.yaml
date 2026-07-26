@@ -1,0 +1,32 @@
+schema: archetipo/spec/v2
+code: US-034
+title: Installazione Zero-Click tramite ESP Web Tools
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: HIGH
+points: 3
+status: TODO
+body: |-
+  #### US-034: Installazione Zero-Click tramite ESP Web Tools
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente non programmatore,
+  voglio poter installare il firmware esp32-nut direttamente dal mio browser (Chrome/Edge) collegando la scheda via USB,
+  così da non dover installare VSCode, PlatformIO o dover compilare manualmente il codice sorgente C++.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il repository includerà una pagina web statica (es. per GitHub Pages) che utilizza il componente `<esp-web-install-button>`. Un utente potrà collegare un ESP32-S3 vergine al computer, cliccare il bottone sulla pagina web, selezionare la porta seriale dal popup del browser (WebSerial API) e veder flashato l'intero firmware in automatico in un paio di minuti, senza mai toccare una riga di codice.
+
+  **Acceptance Criteria**
+  - [ ] Viene creata una pagina HTML contenente l'integrazione di ESP Web Tools.
+  - [ ] Viene creato il file `manifest.json` necessario a Web Tools, configurato con i percorsi corretti (offset) per i binari dell'ESP32-S3 (bootloader, partitions, firmware).
+  - [ ] Viene creata una GitHub Action (o documentato uno script) per estrarre e servire i file compilati (`.bin`) ad ogni nuova release affinché la pagina web possa utilizzarli.
+  - [ ] Il file README.md viene aggiornato con un evidente link e bottone "Install via Browser".
+  - [ ] L'installazione di test su un ESP32-S3 pulito usando Chrome/Edge completa con successo e il captive portal appare.
+history:
+  - status: TODO
+    at: "2026-07-25T19:49:33Z"

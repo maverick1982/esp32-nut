@@ -1,0 +1,100 @@
+schema: archetipo/plan/v2
+spec_code: US-035
+body: |-
+  ## Soluzione Tecnica
+  L'obiettivo è migliorare il feedback visivo del LED diagnostico in due situazioni: normale funzionamento (OPERATIONAL) e attesa configurazione Wi-Fi (AP Mode).
+
+  1.  **Stato OPERATIONAL**: Attualmente il LED è fisso sul colore verde, consumando energia e generando potenziale fastidio luminoso. Modificheremo la logica in `DiagnosticLED::update()` introducendo un pattern asincrono basato su `millis()`, che terrà il LED verde acceso per 200ms e spento per 4000ms.
+  2.  **Stato AP_MODE**: Invece di usare il generico stato `CONNECTING`, introdurremo un nuovo `LedState::AP_MODE`. La funzione `computeSystemState` in `main.cpp` assegnerà questo stato quando `network_mgr.isAPModeActive()` è vero. In `DiagnosticLED::update()`, implementeremo l'animazione richiesta per questo stato: un ciclo totale di 8 secondi, diviso in una prima metà (4 secondi) con lampeggio alternato veloce (es. ogni 125ms o 250ms) tra blu e rosso, e una seconda metà (4 secondi) di spegnimento totale del LED.
+
+  ## Rework
+  In fase di review è stato richiesto di ridurre il lampeggio in stato OPERATIONAL a 100ms e aumentare la pausa a 5000ms.
+
+  ## Strategia di Test
+  - **Test di Unità**: Verranno aggiornati `test_diagnostic_led.cpp` (per validare il nuovo stato `AP_MODE` e il rework su OPERATIONAL) e `test_system_state.cpp` (per verificare la logica di `computeSystemState` in relazione all'AP Mode).
+  - **Test E2E**: Questo progetto hardware non dispone di un framework E2E automatizzato tradizionale per i pin, per cui il test e2e sarà di tipo manuale-visivo, coperto dalla registrazione della demo (indicata nella sezione Demonstrates della spec). Verrà verificato visivamente l'avvio della board senza rete Wi-Fi (attivazione AP_MODE e animazione blu/rosso) e il funzionamento normale con Wi-Fi/UPS connessi (flash verde).
+tasks:
+  - id: TASK-01
+    title: Aggiunta stato AP_MODE e aggiornamento logica di stato
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Introdurre il nuovo stato `AP_MODE` e aggiornare la funzione di calcolo dello stato del sistema per restituirlo quando il dispositivo è in modalità Access Point.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h` — Aggiungere `AP_MODE` all'enum `LedState`. Aggiungere le costanti di colore per blu e rosso.
+      - `src/main.cpp` — Modificare `computeSystemState` per ritornare `LedState::AP_MODE` quando `network_mgr.isAPModeActive()` è true, mantenendo i check successivi invariati.
+
+      ## Criteri di Completamento
+      - [ ] `LedState` contiene il valore `AP_MODE`.
+      - [ ] `computeSystemState` restituisce `AP_MODE` in modalità AP invece di `CONNECTING`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementazione nuovi pattern LED per OPERATIONAL e AP_MODE
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Aggiornare la funzione `update()` della classe `DiagnosticLED` per implementare i nuovi pattern asincroni (200ms on / 4000ms off per OPERATIONAL; 4s fast alternate blue/red / 4s off per AP_MODE).
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.h` — (Opzionale) Aggiungere variabili per la temporizzazione asimmetrica se necessario.
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp` — In `update()`, modificare il case `OPERATIONAL` introducendo l'asimmetria del timer (200ms acceso, 4000ms spento). Aggiungere il case `AP_MODE` che sfrutta un ciclo calcolato con `millis() % 8000` per gestire 4s di alternanza colore veloce e 4s di spegnimento totale.
+
+      ## Criteri di Completamento
+      - [ ] Nello stato `OPERATIONAL` il LED esegue un flash verde di 200ms seguito da 4 secondi di spegnimento.
+      - [ ] Nello stato `AP_MODE` il LED alterna blu e rosso per 4 secondi, seguiti da 4 secondi di pausa totale.
+      - [ ] Le animazioni sfruttano `millis()` e non bloccano il ciclo di esecuzione principale.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiornamento dei Test di Unità
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiornare le suite di test per riflettere l'introduzione dello stato `AP_MODE` e la nuova logica di calcolo dello stato.
+
+      ## File Coinvolti
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp` — Aggiungere un test per verificare l'impostazione dello stato `AP_MODE` e il reset del timer iniziale.
+      - `test/test_system_state/test_system_state.cpp` — Aggiungere o modificare il test per verificare che quando la modalità AP è attiva, `computeSystemState` restituisca `AP_MODE`.
+
+      ## Criteri di Completamento
+      - [ ] I test per la classe `DiagnosticLED` passano con successo.
+      - [ ] I test per la logica di `computeSystemState` passano con successo.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Fix: Aggiorna pattern LED OPERATIONAL (100ms on / 5000ms off)'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il timer nello stato OPERATIONAL per eseguire un flash di 100ms seguito da una pausa di 5000ms, come richiesto in fase di review.
+
+      ## File Coinvolti
+      - `lib/DiagnosticLED/src/DiagnosticLED.cpp` — In `update()`, case `OPERATIONAL`, cambiare i valori del timer: 100 per lo stato di accensione, 5000 per lo stato di spegnimento.
+
+      ## Criteri di Completamento
+      - [ ] Il flash verde dura 100ms e la pausa 5000ms.
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Fix: Aggiorna test per pattern LED OPERATIONAL'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Aggiornare i test unitari per riflettere i nuovi tempi (100ms/5000ms) del pattern OPERATIONAL.
+
+      ## File Coinvolti
+      - `test/test_diagnostic_led/test_diagnostic_led.cpp` — Modificare i delay in `test_operational_blink_asymmetric`, `test_setState_same_state_is_noop` e `test_transition_from_operational_resets_led` per allinearsi al nuovo ciclo di spegnimento (5000ms) e accensione (100ms).
+
+      ## Criteri di Completamento
+      - [ ] I test del LED passano con i nuovi timer asimmetrici.
+    ref: TASK-05

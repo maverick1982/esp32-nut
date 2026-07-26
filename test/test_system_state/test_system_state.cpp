@@ -57,6 +57,17 @@ void test_wifi_connesso_ups_connesso_ritorna_operational(void) {
     TEST_ASSERT_EQUAL(LedState::OPERATIONAL, computeSystemState(true, true));
 }
 
+// ---------------------------------------------------------------------------
+// 5. Modalità Access Point (AP Mode) attiva → AP_MODE
+//    Indipendentemente dagli altri stati, se AP mode è attivo, ritorna AP_MODE.
+// ---------------------------------------------------------------------------
+extern AppNetworkManager network_mgr;
+void test_ap_mode_attiva_ritorna_ap_mode(void) {
+    network_mgr.beginAP("test_ap", "12345678");
+    TEST_ASSERT_EQUAL(LedState::AP_MODE, computeSystemState(true, true));
+    TEST_ASSERT_EQUAL(LedState::AP_MODE, computeSystemState(false, false));
+}
+
 void setup() {
     delay(2000);  // Stabilizzazione porta seriale
 
@@ -65,6 +76,7 @@ void setup() {
     RUN_TEST(test_wifi_disconnesso_ups_connesso_ritorna_connecting);
     RUN_TEST(test_wifi_connesso_ups_disconnesso_ritorna_error);
     RUN_TEST(test_wifi_connesso_ups_connesso_ritorna_operational);
+    RUN_TEST(test_ap_mode_attiva_ritorna_ap_mode);
     UNITY_END();
 }
 

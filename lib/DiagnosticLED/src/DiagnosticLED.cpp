@@ -64,10 +64,39 @@ void DiagnosticLED::update() {
             break;
 
         case OPERATIONAL:
-            // Nello stato OPERATIONAL il LED rimane fisso, nessun toggle
-            if (!_ledOn) {
-                _ledOn = true;
-                setPixelColorAndShow(COLOR_OPERATIONAL);
+            if (_ledOn) {
+                if (currentMillis - _previousMillis >= 100) {
+                    _previousMillis = currentMillis;
+                    _ledOn = false;
+                    setPixelColorAndShow(COLOR_OFF);
+                }
+            } else {
+                if (currentMillis - _previousMillis >= 5000) {
+                    _previousMillis = currentMillis;
+                    _ledOn = true;
+                    setPixelColorAndShow(COLOR_OPERATIONAL);
+                }
+            }
+            break;
+
+        case AP_MODE:
+            {
+                unsigned long phase = (currentMillis - _previousMillis) % 8000;
+                if (phase < 4000) {
+                    if ((phase / 125) % 2 == 0) {
+                        if (_currentColor != COLOR_AP_MODE_BLUE) {
+                            setPixelColorAndShow(COLOR_AP_MODE_BLUE);
+                        }
+                    } else {
+                        if (_currentColor != COLOR_AP_MODE_RED) {
+                            setPixelColorAndShow(COLOR_AP_MODE_RED);
+                        }
+                    }
+                } else {
+                    if (_currentColor != COLOR_OFF) {
+                        setPixelColorAndShow(COLOR_OFF);
+                    }
+                }
             }
             break;
 

@@ -13,7 +13,7 @@ WebConfigServer web_server(config_mgr);
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
 LedState computeSystemState(bool wifiConnected, bool upsConnected) {
     if (network_mgr.isAPModeActive()) {
-        return LedState::CONNECTING; // AP mode = Connecting
+        return LedState::AP_MODE; // AP mode = AP_MODE
     }
     if (!wifiConnected) {
         return LedState::CONNECTING;

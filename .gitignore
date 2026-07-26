@@ -7,6 +7,7 @@ data/config.json.pwd
 node_modules/
 test-results/
 playwright-report/
+docs/no-commit/
 
 # OS generated files
 .DS_Store
