@@ -1,5 +1,8 @@
 #include "USBHostUPS.h"
 #include "EatonDriver.h"
+#include "APCDriver.h"
+#include "CyberPowerDriver.h"
+#include "GenericDriver.h"
 
 USBHostUPS::USBHostUPS() : 
     _usb_task_handle(NULL), 
@@ -7,7 +10,8 @@ USBHostUPS::USBHostUPS() :
     _client_handle(NULL), 
     _dev_handle(NULL), 
     _initialized(false),
-    _driver(nullptr) {
+    _driver(nullptr),
+    _log_cb(nullptr) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -15,6 +19,10 @@ USBHostUPS::~USBHostUPS() {
         delete _driver;
         _driver = nullptr;
     }
+}
+
+void USBHostUPS::setLogCallback(LogCallback cb) {
+    _log_cb = cb;
 }
 
 const UPSData& USBHostUPS::getUPSData() const {
@@ -125,22 +133,41 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 if (err == ESP_OK) {
                     Serial.printf("[USBHostUPS] Device Info: Address %d, VID %04X, PID %04X\n",
                                   event_msg->new_dev.address, desc->idVendor, desc->idProduct);
-                    if (desc->idVendor == 0x0463 && desc->idProduct == 0xFFFF) {
-                        Serial.println("[USBHostUPS] Eaton 3S 700 UPS detected successfully! Registered as HID.");
-                        _dev_handle = dev_hdl;
-                        esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
-                        if (claim_err == ESP_OK) {
-                            Serial.println("[USBHostUPS] HID Interface 0 claimed successfully.");
-                            _driver = new EatonDriver();
-                            _driver->setup();
-                        } else {
-                            Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
-                            usb_host_device_close(_client_handle, dev_hdl);
-                            _dev_handle = NULL;
+                    _dev_handle = dev_hdl;
+                    esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
+                    if (claim_err == ESP_OK) {
+                        Serial.println("[USBHostUPS] HID Interface 0 claimed successfully.");
+                        switch(desc->idVendor) {
+                            case 0x0463:
+                                if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: Eaton");
+                                Serial.println("[USBHostUPS] Recognized vendor: Eaton");
+                                _driver = new EatonDriver();
+                                break;
+                            case 0x051d:
+                                if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: APC");
+                                Serial.println("[USBHostUPS] Recognized vendor: APC");
+                                _driver = new APCDriver();
+                                break;
+                            case 0x0764:
+                                if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: CyberPower");
+                                Serial.println("[USBHostUPS] Recognized vendor: CyberPower");
+                                _driver = new CyberPowerDriver();
+                                break;
+                            default:
+                                {
+                                    char buf[64];
+                                    snprintf(buf, sizeof(buf), "[USBHostUPS] Unknown vendor: %04X", desc->idVendor);
+                                    if (_log_cb) _log_cb("INFO", buf);
+                                }
+                                Serial.printf("[USBHostUPS] Unknown vendor: %04X\n", desc->idVendor);
+                                _driver = new GenericDriver();
+                                break;
                         }
+                        _driver->setup();
                     } else {
-                        Serial.println("[USBHostUPS] Incompatible device.");
+                        Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                         usb_host_device_close(_client_handle, dev_hdl);
+                        _dev_handle = NULL;
                     }
                 } else {
                     Serial.printf("[USBHostUPS] Error reading descriptor: %d\n", err);

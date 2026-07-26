@@ -1,0 +1,176 @@
+schema: archetipo/plan/v2
+spec_code: US-036
+body: "## Technical Solution\n\nL'obiettivo è estendere l'architettura a profili introdotta con `IUPSDriver` per supportare APC, CyberPower e gestire un fallback universale basato sul progetto ufficiale NUT.\n\n1.  **Driver Factory e Logging**:\n    `USBHostUPS::handle_client_event` utilizzerà uno `switch` sul `idVendor`. \n    - `0x0463` -> `EatonDriver`\n    - `0x051d` -> `APCDriver`\n    - `0x0764` -> `CyberPowerDriver`\n    Per questi vendor noti, il sistema stamperà in console il log in inglese `Recognized vendor: <NOME>`.\n    Se il `idVendor` non rientra nei precedenti, il sistema emetterà il log `Unknown vendor: <VID>` e istanzierà il `GenericDriver`.\n\n2.  **Nuovi Driver e Fallback**:\n    Verranno create le classi `APCDriver`, `CyberPowerDriver` e `GenericDriver` in `lib/USBHostUPS/src/`. Il `GenericDriver` tenterà di estrapolare le informazioni basilari secondo lo standard HID Power Device generico (usato come fallback nel server NUT).\n\n## Test Strategy\nEssendo un refactoring e un'estensione del motore USB (backend), non occorre una strategia e2e per la UI. I test verteranno su compilazione e validazione dell'assenza di regressioni per l'Eaton (VID 0x0463) e verifica della corretta stampa a console dei nuovi log in inglese per device riconosciuti e sconosciuti.\n\n## Rework (Dependency Injection Logger)\nA seguito della code review, è emerso un errore di compilazione per l'inclusione di `app_logger.h` dentro la libreria isolata `USBHostUPS`. Per mantenere il design pulito ed evitare tight-coupling, inietteremo un callback da `main.cpp` (Dependency Injection). La classe UPS non conoscerà l'AppLogger, ma invocherà semplicemente il callback registrato per esporre i propri log."
+tasks:
+  - id: TASK-01
+    title: Estendere l'enumerazione USB con Factory e Logging
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare `handle_client_event` per istanziare dinamicamente il driver corretto basandosi sull'`idVendor`. Implementare le stampe di log in inglese come richiesto.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+      - `lib/USBHostUPS/src/USBHostUPS.h`
+
+      ## Criteri di Completamento
+      - [ ] `USBHostUPS.cpp` istanzia `EatonDriver`, `APCDriver`, `CyberPowerDriver` o `GenericDriver` in base al VID.
+      - [ ] Per i vendor supportati, viene loggato `Recognized vendor: <NOME_VENDOR>`.
+      - [ ] Per i vendor non supportati, viene loggato `Unknown vendor: <VID>` prima di istanziare `GenericDriver`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare GenericDriver (Fallback)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare la classe `GenericDriver` che fungerà da fallback quando il vendor non è esplicitamente riconosciuto, provando a leggere i report HID standard per batterie/UPS.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/GenericDriver.h`
+      - `lib/USBHostUPS/src/GenericDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La classe implementa `IUPSDriver`.
+      - [ ] La decodifica si basa su un mapping HID generico minimo (AC status, battery level).
+      - [ ] Si compila senza errori.
+    ref: TASK-02
+  - id: TASK-03
+    title: Implementare APCDriver
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare il driver per UPS APC (VID 0x051d) basandosi sulle mappature NUT (`apc-hid.c`).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/APCDriver.h`
+      - `lib/USBHostUPS/src/APCDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Implementazione dell'interfaccia `IUPSDriver`.
+      - [ ] Estrapolazione corretta di AC status, batteria e altri parametri chiave APC.
+    ref: TASK-03
+  - id: TASK-04
+    title: Implementare CyberPowerDriver
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare il driver per UPS CyberPower (VID 0x0764) basandosi sulle mappature NUT (`cps-hid.c`).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.h`
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Implementazione dell'interfaccia `IUPSDriver` con i mapping CyberPower.
+      - [ ] Lettura corretta degli stati OL, OB e metriche associate.
+    ref: TASK-04
+  - id: TASK-05
+    title: Test e Validazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Verificare che l'introduzione dei nuovi driver e del factory non rompa la build e mantenga la retrocompatibilità col driver Eaton.
+
+      ## File Coinvolti
+      - Nessuno (Test manuale/Compilazione)
+
+      ## Criteri di Completamento
+      - [ ] `pio run` termina con successo.
+      - [ ] Assenza di regressioni per il VID `0x0463` (Eaton).
+    ref: TASK-05
+  - id: TASK-06
+    title: Esposizione log vendor alla Web UI tramite AppLogger
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il revisore ha segnalato che i log "Recognized vendor" e "Unknown vendor" appaiono solo su console seriale e non nell'interfaccia Web. È necessario importare `app_logger.h` in `USBHostUPS.cpp` e propagare quei messaggi usando `AppLogger::log("INFO", ...)`, rendendoli accessibili dalla Web UI.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `app_logger.h` È incluso.
+      - [ ] Negli switch case della factory, il sistema usa `AppLogger::log` per i messaggi legati ai Vendor.
+      - [ ] Il progetto compila con successo senza problemi di linked dependencies.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test integrazione AppLogger
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      Verifica rapida di compilazione post-aggiunta.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - [ ] Il progetto compila correttamente.
+    ref: TASK-07
+  - id: TASK-08
+    title: Risoluzione build error app_logger.h (Dependency Injection)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Rimuovere `#include "app_logger.h"` e le chiamate hardcoded a `AppLogger::log` da `USBHostUPS.cpp`. Aggiungere invece una `typedef` per un callback di logging e un metodo `setLogCallback` in `USBHostUPS.h`. Nello `switch` dei vendor si invocherà questo callback se configurato.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+
+      ## Criteri di Completamento
+      - [ ] `USBHostUPS.h` espone la firma `typedef void (*LogCallback)(const char* level, const char* msg);` e un campo privato `_log_cb`.
+      - [ ] `USBHostUPS.cpp` rimuove le vecchie call a `AppLogger::log` a favore di `if(_log_cb) _log_cb("INFO", ...)`.
+      - [ ] Nessuna dipendenza diretta dall'include globale rimasta in `USBHostUPS`.
+    ref: TASK-08
+  - id: TASK-09
+    title: Registrazione callback in main.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      Modificare `src/main.cpp` per iniettare `AppLogger` all'interno dell'istanza di `USBHostUPS` (es. `ups.setLogCallback(...)`).
+
+      ## File Coinvolti
+      - `src/main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Nel setup() o all'inizializzazione dell'UPS, viene passato il delegato per l'`AppLogger`.
+    ref: TASK-09
+  - id: TASK-10
+    title: Build Test Architettura Pulita
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      Verifica della compilazione post-fix.
+
+      ## File Coinvolti
+      - Nessuno
+
+      ## Criteri di Completamento
+      - [ ] `pio run` termina con successo (simulato).
+    ref: TASK-10

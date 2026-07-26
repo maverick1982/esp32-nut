@@ -16,6 +16,15 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
 
+## 🔌 UPS Supportati
+
+Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (NUT) e supporta automaticamente diversi produttori:
+
+- **Eaton** (Testato con la serie Eaton 3S)
+- **APC** (Mappato tramite lo standard NUT `apc-hid`)
+- **CyberPower** (Mappato tramite lo standard NUT `cps-hid`)
+- **Generici / Altre Marche**: Qualsiasi UPS che implementi la classe standard USB HID Power Device utilizzerà un driver di fallback generico, capace di leggere le statistiche basilari (es. Livello Batteria, Stato AC).
+
 ## 📸 Screenshot
 
 | Configurazione Wi-Fi | Server NUT |

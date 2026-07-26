@@ -16,6 +16,15 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.
 
+## 🔌 Supported UPS Devices
+
+The firmware uses the official Network UPS Tools (NUT) HID mappings and supports multiple vendors automatically:
+
+- **Eaton** (Tested with Eaton 3S series)
+- **APC** (Mapped via standard NUT `apc-hid`)
+- **CyberPower** (Mapped via standard NUT `cps-hid`)
+- **Generic / Other Brands**: Any UPS that implements the standard USB HID Power Device class will use a generic fallback driver capable of reading basic stats (e.g., Battery Level, AC Status).
+
 ## 📸 Screenshots
 
 | Wi-Fi Config | NUT Server |

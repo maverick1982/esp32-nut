@@ -7,6 +7,8 @@
 #include "usb/usb_host.h"
 #include "IUPSDriver.h"
 
+typedef void (*LogCallback)(const char* level, const char* msg);
+
 struct UPSData {
     bool acPresent = false;
     bool belowRemainingCapacityLimit = false;
@@ -68,6 +70,7 @@ public:
     String getUPSStatusString() const;
 
     bool setBeeper(bool enable);
+    void setLogCallback(LogCallback cb);
 
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8);
     bool requestStringDescriptor(uint8_t string_index);
@@ -89,6 +92,7 @@ private:
 
     UPSData _ups_data;
     IUPSDriver* _driver;
+    LogCallback _log_cb;
 };
 
 #endif // USB_HOST_UPS_H

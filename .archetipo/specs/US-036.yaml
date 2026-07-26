@@ -1,0 +1,69 @@
+schema: archetipo/spec/v2
+code: US-036
+title: Implementazione driver UPS multi-marca basati su mappature NUT
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: DONE
+body: |
+  #### US-036: Implementazione driver UPS multi-marca basati su mappature NUT
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente finale,
+  voglio che il sistema supporti e riconosca automaticamente UPS di diverse marche e modelli (es. APC, CyberPower, ecc.) basandosi sulle mappature ufficiali del progetto NUT,
+  in modo da poter collegare il mio UPS al dispositivo ed avere immediatamente i dati a disposizione senza dover fare configurazioni manuali.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, collegando un UPS di una marca diversa da Eaton (ad esempio un APC) alla porta USB, il firmware leggerà le informazioni USB di base (Vendor ID, Product ID, ecc.) per identificare il dispositivo, e istanzierà in automatico la classe del driver specifico (es. `APCDriver`). Qualora l'UPS sia di una marca non esplicitamente mappata, verrà istanziato un `GenericDriver` di default basato sulle implementazioni generiche di NUT. Le mappature dei dati dell'UPS verranno decodificate seguendo i riferimenti ufficiali del progetto NUT, in modo che l'interfaccia continui a mostrare i parametri corretti (batteria, runtime, ecc.) indipendentemente dal modello collegato.
+
+  **Acceptance Criteria**
+  - [ ] La logica di enumerazione USB (`USBHostUPS`) viene estesa per identificare univocamente gli UPS tramite Vendor ID (VID) ed eventualmente Product ID (PID), scegliendo il driver corretto (es. APC, CyberPower, Eaton).
+  - [ ] Al momento del riconoscimento, il sistema deve registrare nel log in lingua inglese il successo del riconoscimento (es. "Recognized vendor: APC").
+  - [ ] Vengono implementate nuove classi driver (es. `APCDriver`, `CyberPowerDriver`) che implementano l'interfaccia definita nella US-033.
+  - [ ] Le mappature HID (Report ID, offset, bitmask) nei nuovi driver vengono ricavate consultando il codice sorgente del driver `usbhid-ups` del progetto ufficiale NUT (https://github.com/networkupstools/nut).
+  - [ ] Qualora venga collegato un UPS sconosciuto, il sistema deve registrare nel log in lingua inglese il mancato riconoscimento (es. "Unknown vendor: [VID]"), indicando l'ID e l'eventuale nome se disponibile, per poi utilizzare come fallback un driver generico (es. `GenericDriver`) basato sul driver di default del server NUT.
+  - [ ] La validazione di base conferma che i nuovi driver si compilano correttamente all'interno dell'architettura modulare introdotta in precedenza.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - I log sull'identificazione del vendor (es. 'Recognized vendor: APC' e 'Unknown vendor') attualmente vengono inviati solo alla console seriale (tramite Serial.println/printf). È necessario assicurarsi che tali log vengano emessi o inoltrati anche verso l'interfaccia Web (es. tramite WebMonitor o l'apposita classe di logging web del progetto), in modo che l'utente finale possa visualizzarli direttamente dalla UI web.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Errore di compilazione: il file `lib/USBHostUPS/src/USBHostUPS.cpp` non riesce a trovare `app_logger.h` (`fatal error: app_logger.h: No such file or directory`). Questo accade perché i componenti in `lib/` non ereditano automaticamente il path di `include/` del progetto base in PlatformIO senza una configurazione specifica (es. `build_flags` o includendolo tramite path relativo). È necessario risolvere questo problema di compilazione.
+history:
+  - status: TODO
+    at: "2026-07-26T09:30:26Z"
+  - status: PLANNED
+    at: "2026-07-26T09:33:48Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T09:51:19Z"
+  - status: REVIEW
+    at: "2026-07-26T09:55:00Z"
+  - status: TODO
+    at: "2026-07-26T10:03:28Z"
+  - status: PLANNED
+    at: "2026-07-26T10:06:13Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T10:07:24Z"
+  - status: REVIEW
+    at: "2026-07-26T10:08:18Z"
+  - status: TODO
+    at: "2026-07-26T10:10:27Z"
+  - status: PLANNED
+    at: "2026-07-26T10:12:01Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T10:16:27Z"
+  - status: REVIEW
+    at: "2026-07-26T10:17:51Z"
+  - status: DONE
+    at: "2026-07-26T10:21:15Z"

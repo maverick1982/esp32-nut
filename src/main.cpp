@@ -62,6 +62,9 @@ void setup() {
 
     // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
     if (config_mgr.isValid()) {
+        usb_ups.setLogCallback([](const char* level, const char* msg) {
+            AppLogger::log(level, msg);
+        });
         if (!usb_ups.begin()) {
             AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
         } else {
