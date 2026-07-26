@@ -30,10 +30,17 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 | :---: | :---: |
 | [![Aggiornamento OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
 
-## 🛠 Requisiti Hardware
+## 🛠 Requisiti Hardware & Cablaggio
 
 - **Scheda ESP32-S3**: È **obbligatorio** utilizzare una scheda di sviluppo basata su ESP32-S3 poiché supporta l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.
-- **Cavo USB OTG**: Necessario per collegare il cavo USB dell'UPS ai pin USB nativi dell'ESP32-S3 (solitamente indicati come `USB` o `D+`/`D-`, collegati ai GPIO19 e GPIO20).
+- **Cavo USB OTG**: Un adattatore per collegare il cavo USB dell'UPS all'ESP32.
+
+### Configurazione su Board generiche con doppia USB-C (es. Generic ESP32-S3 DevKit)
+Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (solder pads) sul retro per abilitare la modalità Host. Per ottenere un'installazione pulita senza saldare manualmente fili ai pin GPIO:
+1. **Saldare le piazzole "USB-OTG"**: Sul retro della scheda, trova le due piazzole denominate `USB-OTG` e uniscile con una goccia di stagno. Questo convoglia i 5V alla porta `USB`, permettendole di agire da Host per alimentare l'interfaccia USB dell'UPS.
+2. **Saldare le piazzole "RGB"**: Unisci le piazzole `RGB` per abilitare il LED di stato integrato.
+3. **Alimentazione**: Collega un alimentatore da muro alla porta etichettata `COM` (o `UART`).
+4. **Dati**: Collega un adattatore USB-C OTG alla porta etichettata `USB` e collegalo all'UPS.
 
 ## 🚀 Guida all'uso
 

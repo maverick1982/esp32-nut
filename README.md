@@ -30,10 +30,17 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 | :---: | :---: |
 | [![Firmware OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
 
-## 🛠 Hardware Requirements
+## 🛠 Hardware Requirements & Wiring
 
 - **ESP32-S3 Board**: An ESP32-S3 development board is **required** because it features native USB OTG Host capabilities. Standard ESP32 or ESP32-C3 will not work.
-- **USB OTG Cable**: To connect the UPS USB cable to the ESP32-S3 native USB pins (usually labeled `USB` or `D+`/`D-`, connected to GPIO19 and GPIO20).
+- **USB OTG Cable**: An adapter to plug the UPS USB cable into the ESP32.
+
+### Typical Dual USB-C Board Setup (e.g., Generic ESP32-S3 DevKit)
+Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the back to enable Host mode. To achieve a clean setup without manually soldering wires to GPIOs:
+1. **Solder the "USB-OTG" pads**: Find the two pads labeled `USB-OTG` on the back of the board and bridge them with solder. This routes 5V power to the `USB` port, enabling it to act as a Host to power the UPS USB interface.
+2. **Solder the "RGB" pads**: Bridge the `RGB` pads to enable the built-in status LED.
+3. **Power**: Connect a USB wall charger to the port labeled `COM` (or `UART`).
+4. **Data**: Connect a USB-C OTG adapter to the port labeled `USB`, and plug the UPS into it.
 
 ## 🚀 Getting Started
 
