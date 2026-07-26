@@ -54,8 +54,12 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 ## 🚀 Getting Started
 
 ### 1. Flashing the Firmware
-The project is built using [PlatformIO](https://platformio.org/).
 
+**Option A: Zero-Click Install via Browser (Recommended)**
+You can install the firmware directly from your browser without downloading any tools!
+👉 <a href="https://maverick1982.github.io/esp32-nut/web-installer/" target="_blank">**Install via Browser**</a>
+
+**Option B: Manual Build via PlatformIO**
 1. Clone this repository.
 2. Open the project folder in VSCode with the PlatformIO extension.
 3. Connect your ESP32-S3 to your PC (using the UART/UART-Prog USB port).

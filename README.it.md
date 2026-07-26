@@ -54,8 +54,12 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 ## 🚀 Guida all'uso
 
 ### 1. Caricare il Firmware (Flashing)
-Il progetto è basato su [PlatformIO](https://platformio.org/).
 
+**Opzione A: Installazione Zero-Click via Browser (Consigliato)**
+Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun programma!
+👉 <a href="https://maverick1982.github.io/esp32-nut/web-installer/" target="_blank">**Installa via Browser**</a>
+
+**Opzione B: Compilazione Manuale tramite PlatformIO**
 1. Clona questo repository.
 2. Apri la cartella del progetto in VSCode con l'estensione PlatformIO installata.
 3. Collega il tuo ESP32-S3 al PC (utilizzando la porta USB UART/Prog).

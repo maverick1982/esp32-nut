@@ -25,7 +25,7 @@ tasks:
   - id: TASK-01
     title: Creazione pagina HTML per Web Installer
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       Creare la struttura della pagina `index.html` all'interno della directory `web-installer`, integrando il design del mockup e il componente `<esp-web-install-button>` da un CDN.
@@ -37,10 +37,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Il componente `<esp-web-install-button>` viene caricato correttamente nella pagina.
       - [ ] La UI corrisponde al design minimalista hi-tech scelto per il progetto.
+    ref: TASK-01
   - id: TASK-02
     title: Configurazione manifest.json per ESP Web Tools
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -53,11 +54,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] File json validato sintatticamente.
       - [ ] Offset corretti per il microcontrollore esp32s3.
-
+    ref: TASK-02
   - id: TASK-04
     title: Aggiornamento Documentazione
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       Aggiornare il `README.md` principale del progetto con un link evidente e un bottone per accedere al Web Installer.
@@ -67,10 +68,11 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] Il link è prominente all'inizio o nella sezione di installazione del README.
+    ref: TASK-04
   - id: TASK-05
     title: Configurazione infrastruttura e2e (Playwright)
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       Inizializzare l'ambiente di test E2E eseguendo il comando `archetipo e2e ensure` per installare Playwright, configurando il framework nel repository.
@@ -81,10 +83,11 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] L'infrastruttura Playwright è pronta per l'uso.
+    ref: TASK-05
   - id: TASK-06
     title: Test E2E Web Installer
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-02
@@ -99,3 +102,4 @@ tasks:
       ## Criteri di Completamento
       - [ ] I test playwright passano verificando la presenza di `<esp-web-install-button>`.
       - [ ] Playwright riesce a scaricare e validare il contenuto del file manifest.
+    ref: TASK-06

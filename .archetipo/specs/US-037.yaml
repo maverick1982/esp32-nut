@@ -6,7 +6,7 @@ epic:
   title: CI/CD e Automazione
 priority: HIGH
 points: 5
-status: REVIEW
+status: DONE
 body: |-
   #### US-037: Automazione Release e Versionamento tramite GitHub Actions
 
@@ -37,3 +37,5 @@ history:
     at: "2026-07-26T14:28:48Z"
   - status: REVIEW
     at: "2026-07-26T14:30:32Z"
+  - status: DONE
+    at: "2026-07-26T14:42:24Z"

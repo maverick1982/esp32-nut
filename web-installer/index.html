@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-NUT Installer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+    <div class="installer-container">
+        <div class="brand-header">
+            <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+            </svg>
+            <div class="brand-name">ESP32-NUT <span>INSTALLER</span></div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Firmware Installation</h2>
+            </div>
+            
+            <div class="instructions">
+                <ol>
+                    <li>Connect your ESP32 board to the computer via USB cable.</li>
+                    <li>Make sure to use a data cable (not just for charging).</li>
+                    <li>Click the button below and select the serial port corresponding to your device.</li>
+                </ol>
+            </div>
+
+            <div class="install-action">
+                <!-- Standard ESP Web Install Button -->
+                <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+            </div>
+            
+            <div class="support-text">
+                <p class="mono">Supported browsers: Chrome, Edge, Opera.</p>
+                <p class="mono">Requirements: Web Serial API enabled.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</body>
+</html>

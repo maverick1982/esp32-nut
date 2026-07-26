@@ -62,3 +62,14 @@ jobs:
         with:
           generate_release_notes: true
           files: release.zip
+
+      - name: Prepare Web Installer
+        run: |
+          cp release-pkg/*.bin web-installer/
+          cp release-pkg/manifest.json web-installer/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web-installer
