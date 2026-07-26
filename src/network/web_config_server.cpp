@@ -50,6 +50,19 @@ void WebConfigServer::begin(bool isAPMode) {
         server.send_P(200, "text/css", (const char*)web_asset_ups_css, web_asset_ups_css_len);
     });
 
+    server.on("/logo.png", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "image/png", (const char*)web_asset_logo_png, web_asset_logo_png_len);
+    });
+
+    server.on("/favicon.ico", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "image/x-icon", (const char*)web_asset_favicon_ico, web_asset_favicon_ico_len);
+    });
+
+
     // REST endpoints
     server.on("/api/wifi/connect", HTTP_POST, [this]() { handleConnect(); });
     server.on("/api/nut/config", HTTP_POST, [this]() { handleNutConfig(); });

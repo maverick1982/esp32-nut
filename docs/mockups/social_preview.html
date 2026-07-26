@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-NUT Social Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Orbitron:wght@700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #06090e;
+            --accent: #00f0ff;
+            --text-primary: #e0e6ed;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-base);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 1280px;
+            height: 640px;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            position: relative;
+        }
+
+        /* Techy background grid */
+        body::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: 
+                linear-gradient(rgba(45, 60, 90, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(45, 60, 90, 0.1) 1px, transparent 1px);
+            background-size: 40px 40px;
+            z-index: 0;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            gap: 60px;
+            padding: 40px;
+            background: linear-gradient(135deg, rgba(14, 20, 31, 0.9) 0%, rgba(6, 9, 14, 0.95) 100%);
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            border-radius: 20px;
+            box-shadow: 0 0 40px rgba(0, 240, 255, 0.05);
+        }
+
+        .logo-container {
+            width: 320px;
+            height: 320px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            filter: drop-shadow(0 0 20px rgba(0, 240, 255, 0.4));
+        }
+
+        .logo-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .text-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 110px;
+            color: var(--text-primary);
+            margin: 0;
+            line-height: 1.1;
+            letter-spacing: 4px;
+        }
+
+        h2 {
+            font-family: 'Inter', sans-serif;
+            font-size: 38px;
+            font-weight: 400;
+            color: var(--accent);
+            margin: 0;
+            letter-spacing: 1px;
+        }
+
+        .accent-line {
+            width: 150px;
+            height: 6px;
+            background-color: var(--accent);
+            margin-top: 15px;
+            box-shadow: 0 0 15px var(--accent);
+            border-radius: 3px;
+        }
+
+        /* Decorative tech lines */
+        .deco-line {
+            position: absolute;
+            background: rgba(0, 240, 255, 0.2);
+        }
+        .deco-line.v { width: 1px; height: 100%; top: 0; left: 100px; }
+        .deco-line.h { height: 1px; width: 100%; bottom: 60px; left: 0; }
+    </style>
+</head>
+<body>
+    <div class="deco-line v"></div>
+    <div class="deco-line h"></div>
+
+    <div class="container">
+        <div class="logo-container">
+            <img src="../images/logo.png" alt="ESP32-NUT Logo">
+        </div>
+        <div class="text-container">
+            <h1>ESP32-NUT</h1>
+            <h2>Network UPS Tools Server Bridge</h2>
+            <div class="accent-line"></div>
+        </div>
+    </div>
+</body>
+</html>
