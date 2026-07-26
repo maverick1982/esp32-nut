@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-037
+title: Automazione Release e Versionamento tramite GitHub Actions
+epic:
+  code: EP-004
+  title: CI/CD e Automazione
+priority: HIGH
+points: 5
+status: REVIEW
+body: |-
+  #### US-037: Automazione Release e Versionamento tramite GitHub Actions
+
+  **Epic:** EP-004 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come maintainer del progetto,
+  voglio una pipeline GitHub Actions che si attivi automaticamente alla creazione di un tag di versione (es. `v1.0.0`),
+  in modo da compilare automaticamente il progetto, autogenerare le note di rilascio e pubblicare una Release su GitHub con tutti gli artefatti necessari per l'installazione completa (anche tramite ESP Web Tools).
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, pushando un tag (es. `git tag v1.0.0 && git push origin v1.0.0`), una GitHub Action compilerà con successo il progetto e produrrà una Release su GitHub. La release includerà il changelog auto-generato, un pacchetto completo con `firmware.bin`, `bootloader.bin`, `partitions.bin` e il `manifest.json` già pronto per l'installazione via browser o flash tool.
+
+  **Acceptance Criteria**
+  - [ ] Il workflow è configurato in `.github/workflows/release.yml` ed è triggerato esclusivamente al push di un tag (es. `refs/tags/v*`).
+  - [ ] Il job compila il codice per il target ESP32-S3 utilizzando PlatformIO CLI.
+  - [ ] Il workflow recupera dalla cartella di build di PlatformIO (e raggruppa in un archivio zip unico) tutti i binari necessari: `firmware.bin`, `bootloader.bin` e `partitions.bin`.
+  - [ ] Viene generato e incluso nell'archivio un file `manifest.json` con i corretti offset di memoria per essere direttamente compatibile con ESP Web Tools (US-034).
+  - [ ] Le note di rilascio vengono autogenerate dai commit usando le feature standard di GitHub Release.
+  - [ ] La pipeline crea la Release e vi allega il pacchetto zip pronto all'uso, operando unicamente all'interno delle quota gratuite di GitHub.
+history:
+  - status: TODO
+    at: "2026-07-26T13:54:00Z"
+  - status: PLANNED
+    at: "2026-07-26T14:26:06Z"
+  - status: IN PROGRESS
+    at: "2026-07-26T14:28:48Z"
+  - status: REVIEW
+    at: "2026-07-26T14:30:32Z"

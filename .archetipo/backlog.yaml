@@ -9,6 +9,8 @@ epics:
     title: Connettività di Rete e Configurazione
   - code: EP-003
     title: Server NUT
+  - code: EP-004
+    title: CI/CD e Automazione
 order:
   - US-000
   - US-001
@@ -47,3 +49,4 @@ order:
   - US-035
   - US-033
   - US-036
+  - US-037

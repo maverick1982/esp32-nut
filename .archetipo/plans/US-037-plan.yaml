@@ -1,0 +1,37 @@
+schema: archetipo/plan/v2
+spec_code: US-037
+body: "## Architettura della Soluzione\n\nPer automatizzare il processo di rilascio, verrà creato un nuovo workflow GitHub Actions in `.github/workflows/release.yml`. Il workflow verrà attivato esclusivamente dal push di tag che iniziano con `v*` (es. `v1.0.0`).\n\nIl workflow eseguirà i seguenti passi:\n1. **Checkout del codice**: Recupero del repository.\n2. **Setup di PlatformIO**: Installazione di Python e di PlatformIO CLI tramite `pip`.\n3. **Compilazione**: Esecuzione di `pio run` per compilare il firmware per il target `esp32-s3-devkitc-1`.\n4. **Preparazione Artefatti**: \n   - Creazione di una directory temporanea (es. `release-pkg`).\n   - Copia dei file `.pio/build/esp32-s3-devkitc-1/firmware.bin`, `bootloader.bin` e `partitions.bin` nella directory temporanea.\n   - Generazione dinamica di un file `manifest.json` compatibile con ESP Web Tools, popolato con il nome del tag corrente (es. `${{ github.ref_name }}`) e i corretti offset per ESP32-S3 (Bootloader: `0x0`, Partitions: `0x8000`, Firmware: `0x10000`).\n5. **Creazione dell'Archivio Zip**: Compressione dei quattro file in un unico `release.zip`.\n6. **Pubblicazione della Release**: Utilizzo dell'azione `softprops/action-gh-release` per creare la release associata al tag, caricare `release.zip` come asset allegato e attivare `generate_release_notes: true` per compilare automaticamente il changelog partendo dai messaggi di commit.\n\nÈ fondamentale configurare i permessi del job (`permissions: contents: write`) affinché l'azione possa creare e modificare la release nel repository.\n\n## Strategia di Testing\n\nPoiché la spec riguarda l'infrastruttura di CI/CD, non è applicabile il framework di testing E2E della UI (Playwright).\nIl testing si concentrerà su:\n- **Verifica Sintassi**: Validazione del file YAML tramite tool locali o revisione attenta.\n- **Test di Esecuzione**: Creazione di un tag di test sul repository per verificare l'intera pipeline. Si dovrà controllare che:\n  1. Il job venga triggerato correttamente al push del tag.\n  2. Il job completi con successo la compilazione PlatformIO.\n  3. La release su GitHub venga creata con le note generate automaticamente e l'asset `.zip` allegato.\n  4. L'archivio zip contenga effettivamente i tre binari e un `manifest.json` formattato correttamente."
+tasks:
+  - id: TASK-01
+    title: Creazione Workflow GitHub Actions per Release Automatica
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Implementare il workflow di CI/CD per la generazione automatica delle release su GitHub. Il workflow compilerà il codice ESP32-S3 tramite PlatformIO, genererà il pacchetto zip contenente i binari compilati e il `manifest.json` per ESP Web Tools, e pubblicherà la release usando le funzionalità native di GitHub.
+
+      ## File Coinvolti
+      - `.github/workflows/release.yml` — Creare il nuovo file YAML definendo il trigger su push di tag `v*`, i permessi di scrittura e i vari step descritti nella soluzione (setup PlatformIO, build, preparazione artefatti, zippatura, e pubblicazione release con note autogenerate).
+
+      ## Criteri di Completamento
+      - [ ] Il file `.github/workflows/release.yml` esiste e rispetta la sintassi di GitHub Actions.
+      - [ ] Il workflow si attiva solo per i tag `v*`.
+      - [ ] Vengono usati `platformio` per la compilazione e un'azione GitHub per la pubblicazione.
+      - [ ] Il `manifest.json` generato all'interno del workflow contiene gli offset giusti per ESP32-S3 (`0` per bootloader, `32768` o `0x8000` per partitions, `65536` o `0x10000` per firmware).
+    ref: TASK-01
+  - id: TASK-02
+    title: Testing del Workflow di Release
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Verificare il funzionamento del workflow di rilascio assicurandosi che la pipeline si completi correttamente.
+
+      ## File Coinvolti
+      - `.github/workflows/release.yml` — Validare la sintassi e l'esecuzione.
+
+      ## Criteri di Completamento
+      - [ ] La sintassi del workflow YAML è valida e non presenta errori (verificata, ad esempio, tramite actionlint o un test push di tag su un branch separato).
+    ref: TASK-02

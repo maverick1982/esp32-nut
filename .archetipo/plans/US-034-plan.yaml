@@ -1,0 +1,101 @@
+schema: archetipo/plan/v2
+spec_code: US-034
+body: |-
+  ## Soluzione Tecnica
+
+  **Panoramica:**
+  L'obiettivo è fornire una pagina web statica per l'installazione zero-click del firmware ESP32 NUT Server, ospitata su GitHub Pages. La pagina integrerà il componente `<esp-web-install-button>` standard, consentendo agli utenti di flashare l'ESP32 via browser tramite la Web Serial API, senza installare tool di sviluppo.
+
+  **Design e Struttura:**
+  - Verrà creata una cartella `web-installer` che sarà servita da GitHub Pages.
+  - La pagina `index.html` conterrà l'interfaccia utente (basata sul mockup US-034) e integrerà l'hub ESP Web Tools.
+  - Sarà predisposto un file `manifest.json` contenente i riferimenti e gli offset corretti per le partizioni dell'ESP32-S3 (Bootloader `0x0`, Partitions `0x8000`, Firmware `0x10000`).
+
+  **Integrazione CI/CD:**
+  - L'automazione della release, inclusa la compilazione dei binari e il loro packaging per GitHub Pages/Release, sarà gestita interamente dalla **US-037**.
+  - Aggiunta documentazione sul file README per linkare il web installer.
+
+  ## Strategia di Test
+
+  **E2E (End-to-End):**
+  Poiché la spec introduce un'interfaccia web (installer), è necessaria una strategia E2E.
+  Utilizzeremo **Playwright** per servire la cartella statica `web-installer` e verificare che il DOM renderizzi correttamente il componente `<esp-web-install-button>` e le istruzioni utente, nonché validare che il `manifest.json` sia esposto correttamente e sintatticamente valido.
+  Il progetto attualmente non include l'infrastruttura Playwright, quindi il primo step sarà l'installazione e configurazione tramite il comando `archetipo e2e ensure`.
+tasks:
+  - id: TASK-01
+    title: Creazione pagina HTML per Web Installer
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      Creare la struttura della pagina `index.html` all'interno della directory `web-installer`, integrando il design del mockup e il componente `<esp-web-install-button>` da un CDN.
+
+      ## File Coinvolti
+      - `web-installer/index.html` — Struttura pagina e tag script di ESP Web Tools
+      - `web-installer/shared.css` — Fogli di stile base
+
+      ## Criteri di Completamento
+      - [ ] Il componente `<esp-web-install-button>` viene caricato correttamente nella pagina.
+      - [ ] La UI corrisponde al design minimalista hi-tech scelto per il progetto.
+  - id: TASK-02
+    title: Configurazione manifest.json per ESP Web Tools
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Creare il file `manifest.json` necessario a Web Tools, configurato con i corretti offset di memoria per l'ESP32-S3: bootloader (0x0), partitions (0x8000), e firmware (0x10000).
+
+      ## File Coinvolti
+      - `web-installer/manifest.json` — Definizione del nome del chip, del progetto e dell'array di build.
+
+      ## Criteri di Completamento
+      - [ ] File json validato sintatticamente.
+      - [ ] Offset corretti per il microcontrollore esp32s3.
+
+  - id: TASK-04
+    title: Aggiornamento Documentazione
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      Aggiornare il `README.md` principale del progetto con un link evidente e un bottone per accedere al Web Installer.
+
+      ## File Coinvolti
+      - `README.md` — Aggiunta link "Install via Browser".
+
+      ## Criteri di Completamento
+      - [ ] Il link è prominente all'inizio o nella sezione di installazione del README.
+  - id: TASK-05
+    title: Configurazione infrastruttura e2e (Playwright)
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      Inizializzare l'ambiente di test E2E eseguendo il comando `archetipo e2e ensure` per installare Playwright, configurando il framework nel repository.
+
+      ## File Coinvolti
+      - `package.json` — Aggiornamento dipendenze.
+      - `playwright.config.ts` — Configurazione del framework.
+
+      ## Criteri di Completamento
+      - [ ] L'infrastruttura Playwright è pronta per l'uso.
+  - id: TASK-06
+    title: Test E2E Web Installer
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-05
+    body: |-
+      ## Descrizione
+      Scrivere i test E2E con Playwright per verificare che l'installer web venga servito correttamente e che la pagina contenga i pulsanti attesi e il manifest sia raggiungibile.
+
+      ## File Coinvolti
+      - `e2e/installer.spec.ts` — Test e2e sulla cartella `web-installer`.
+
+      ## Criteri di Completamento
+      - [ ] I test playwright passano verificando la presenza di `<esp-web-install-button>`.
+      - [ ] Playwright riesce a scaricare e validare il contenuto del file manifest.

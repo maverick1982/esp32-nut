@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Build firmware
+        run: pio run -e esp32-s3-devkitc-1
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir release-pkg
+          cp .pio/build/esp32-s3-devkitc-1/firmware.bin release-pkg/
+          cp .pio/build/esp32-s3-devkitc-1/bootloader.bin release-pkg/
+          cp .pio/build/esp32-s3-devkitc-1/partitions.bin release-pkg/
+          
+          # Creazione manifest.json
+          cat <<EOF > release-pkg/manifest.json
+          {
+            "name": "ESP32 NUT Server",
+            "version": "${{ github.ref_name }}",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          EOF
+          
+          cd release-pkg
+          zip -r ../release.zip *
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release.zip
