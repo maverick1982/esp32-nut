@@ -51,6 +51,18 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 3. **Alimentazione**: Collega un alimentatore da muro alla porta etichettata `COM` (o `UART`).
 4. **Dati**: Collega un adattatore USB-C OTG alla porta etichettata `USB` e collegalo all'UPS.
 
+### Case in Stampa 3D (Opzionale)
+
+Trasforma la tua scheda ESP32-S3 nuda in un prodotto finito! Abbiamo disegnato un case elegante da stampare in 3D.
+
+<img src="hardware/case/images/case-front-green-light.jpg" width="400" alt="Case in Stampa 3D">
+
+Scarica i file pronti per la stampa dalla tua piattaforma preferita:
+- [**Printables**](https://www.printables.com/model/1794471-case-esp32-nut-server-bridge)
+- [**Thingiverse**](https://www.thingiverse.com/thing:7389257)
+
+I file sorgente `.3mf`, il progetto CAD originale `.f3d` e altre foto sono disponibili nella cartella [`hardware/case`](hardware/case).
+
 ## 🚀 Guida all'uso
 
 ### 1. Caricare il Firmware (Flashing)

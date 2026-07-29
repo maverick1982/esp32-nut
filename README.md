@@ -51,6 +51,18 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 3. **Power**: Connect a USB wall charger to the port labeled `COM` (or `UART`).
 4. **Data**: Connect a USB-C OTG adapter to the port labeled `USB`, and plug the UPS into it.
 
+### 3D Printed Case (Optional)
+
+Turn your bare ESP32-S3 board into a finished product! We have designed a sleek 3D-printable case for this project.
+
+<img src="hardware/case/images/case-front-green-light.jpg" width="400" alt="3D Printed Case Front">
+
+Download the ready-to-print files from your favorite platform:
+- [**Printables**](https://www.printables.com/model/1794471-case-esp32-nut-server-bridge)
+- [**Thingiverse**](https://www.thingiverse.com/thing:7389257)
+
+Source `.3mf` models, original `.f3d` CAD files, and additional photos are available in the [`hardware/case`](hardware/case) directory.
+
 ## 🚀 Getting Started
 
 ### 1. Flashing the Firmware
