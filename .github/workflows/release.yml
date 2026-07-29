@@ -55,13 +55,13 @@ jobs:
           EOF
           
           cd release-pkg
-          zip -r ../release.zip *
+          zip -r ../esp32-nut-${{ github.ref_name }}.zip *
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release.zip
+          files: esp32-nut-${{ github.ref_name }}.zip
 
       - name: Prepare Web Installer
         run: |
