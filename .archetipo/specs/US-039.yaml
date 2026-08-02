@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-039
+title: Completamento decodifica dati UPS CyberPower
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: REVIEW
+body: |-
+  #### US-039: Completamento decodifica dati UPS CyberPower
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente finale con un UPS CyberPower,
+  voglio che il driver del mio dispositivo decodifichi correttamente e completamente tutti i parametri operativi (come Voltaggio, percentuale di Batteria, Carico, e tutti gli altri gestiti già dal driver Eaton),
+  così da avere nel sistema un supporto paritario rispetto alle altre marche, con dati esatti al posto degli 0.0V generati dal codice incompleto della US-036.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il driver `CyberPowerDriver` sostituirà il suo codice stub attuale. Collegando un UPS CyberPower supportato e inviando i report USB, i dati mappati dal codice C++ (similmente al file `cps-hid.c` di NUT) permetteranno di estrapolare la totalità dei parametri dell'UPS che oggi sono gestiti dal driver Eaton, abilitando la visualizzazione corretta sulla Web UI di batteria, voltaggio in ingresso, carico, e reale stato operativo (e non un finto OL hardcoded).
+
+  **Acceptance Criteria**
+  - [ ] Il metodo `decodeReport` in `CyberPowerDriver.cpp` estrapola da CyberPower *tutti* i parametri attualmente estratti per gli UPS Eaton (es. Batteria, Voltaggio, Carico, stato AC/DC, e altri campi previsti dal modello dati) usando i giusti offset (rif. `cps-hid.c`).
+  - [ ] Il fallback hardcoded `ups_data.acPresent = true;` (introdotto come placeholder) è rimosso o sostituito dalla lettura corretta del flag HID.
+  - [ ] Il codice compila senza errori e non introduce regressioni negli altri driver (Eaton, APC, Generic).
+history:
+  - status: TODO
+    at: "2026-08-02T07:42:02Z"
+  - status: PLANNED
+    at: "2026-08-02T07:48:52Z"
+  - status: IN PROGRESS
+    at: "2026-08-02T07:52:50Z"
+  - status: REVIEW
+    at: "2026-08-02T08:19:07Z"

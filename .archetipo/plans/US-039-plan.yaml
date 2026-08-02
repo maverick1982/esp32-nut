@@ -1,0 +1,65 @@
+schema: archetipo/plan/v2
+spec_code: US-039
+body: |-
+  ## Technical Solution
+
+  Per garantire che il `CyberPowerDriver` raggiunga la parità di funzionalità con l'`EatonDriver`, è necessario estrarre e popolare tutti i parametri pertinenti della struct `UPSData` (es. `acPresent`, `discharging`, `remainingCapacity`, `load`, `outputVoltage`, ecc.).
+
+  Poiché i dispositivi HID espongono le informazioni su report differenti, il driver CyberPower dovrà:
+  1. Implementare nel metodo `loop()` una macchina a stati temporizzata (simile a quella usata in `EatonDriver`) per richiedere ciclicamente i vari Report ID supportati da CyberPower.
+  2. Implementare nel metodo `decodeReport()` il parsing dei dati grezzi ricevuti via USB, usando come mappa di riferimento il sorgente `cps-hid.c` (del progetto NUT) per tradurre correttamente i bit e i byte in valori significativi nella struct `UPSData`.
+  3. Rimuovere lo stub temporaneo (`ups_data.acPresent = true;`).
+
+  ## Test Strategy
+  Essendo un'estensione del livello hardware/driver (backend USB), non è prevista una test strategy e2e sulla Web UI in questa spec. Il collaudo si baserà su unit testing/compilazione per garantire l'assenza di memory leak o crash, e sull'esame del codice per accertare la corretta implementazione della mappa HID.
+tasks:
+  - id: TASK-01
+    title: Implementare polling report in CyberPowerDriver::loop
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il metodo `loop()` per implementare una macchina a stati (polling lento/veloce) che inoltri periodicamente al `host` le richieste (`requestReport`, `requestStringDescriptor`) necessarie a interrogare i parametri del CyberPower, basandosi su quali report ID contengono i dati in `cps-hid.c`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.h` — Aggiungere eventuali variabili di stato per il polling (es. step, timestamp).
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp` — Implementare il polling nel metodo `loop()`.
+
+      ## Criteri di Completamento
+      - [ ] La logica di polling ciclico per i report CyberPower è implementata.
+    ref: TASK-01
+  - id: TASK-02
+    title: Decodifica report HID e popolamento UPSData
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Rimuovere il codice placeholder `ups_data.acPresent = true;`. Implementare in `decodeReport` lo switch sui `report_id` per mappare i byte estratti nei campi di `UPSData` (es. batteria, carico, voltaggi, stati operativi come OL/OB/Charging). Fare lo stesso per `parseStringDescriptor` se servono stringhe. Riferirsi ai mapping presenti in `cps-hid.c` di NUT.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp` — Mappare i parametri ricevuti nella struct `ups_data` in base ai vari ID di report.
+
+      ## Criteri di Completamento
+      - [ ] Placeholder eliminato.
+      - [ ] `decodeReport` estrapola la percentuale batteria, voltaggio, carico, runtime (ove disponibili) e gli stati AC/DC.
+      - [ ] Tutti i parametri estratti da Eaton che esistono anche nel report CyberPower sono mappati (copertura paritaria).
+    ref: TASK-02
+  - id: TASK-03
+    title: Test di Build e Nessuna Regressione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Verificare che i cambiamenti nel driver CyberPower non abbiano impattato il resto dell'architettura e che tutto compili con successo.
+
+      ## File Coinvolti
+      - Nessuno (solo compilazione)
+
+      ## Criteri di Completamento
+      - [ ] `pio run` (o task di build) termina senza errori.
+      - [ ] I driver Eaton e APC continuano a compilare intatti.
+    ref: TASK-03
