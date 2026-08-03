@@ -24,10 +24,11 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
         _last_fast_poll = now != 0 ? now : 1;
         host->requestReport(0x01, 0x03, 4); // Eaton/Generic status
         host->requestReport(0x0B, 0x03, 2); // CyberPower status
-        host->requestReport(0x06, 0x03, 6); // Battery
-        host->requestReport(0x07, 0x03, 8); // Load
-        host->requestReport(0x0F, 0x03, 2); // Input Voltage
-        host->requestReport(0x12, 0x03, 2); // Output Voltage
+        host->requestReport(0x08, 0x03, 6); // Battery Capacity & Runtime (CyberPower)
+        host->requestReport(0x13, 0x03, 2); // PercentLoad (CyberPower)
+        host->requestReport(0x0F, 0x03, 3); // Input Voltage (CyberPower)
+        host->requestReport(0x12, 0x03, 3); // Output Voltage (CyberPower)
+        host->requestReport(0x0a, 0x03, 2); // Battery Voltage (CyberPower)
     }
 
     // Polling Lento (Statico)
