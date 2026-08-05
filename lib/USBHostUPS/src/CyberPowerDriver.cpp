@@ -97,27 +97,33 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             }
             break;
 
-        case 0x06: // Battery Capacity & Runtime
+        case 0x08: // Battery Capacity & Runtime (CyberPower)
             if (length - offset >= 1) {
                 ups_data.remainingCapacity = data[offset];
                 if (ups_data.remainingCapacity > 100) ups_data.remainingCapacity = 100;
             }
+            if (length - offset >= 3) {
+                ups_data.runTimeToEmpty = (uint32_t)data[offset + 1] | ((uint32_t)data[offset + 2] << 8);
+            }
             if (length - offset >= 5) {
-                ups_data.runTimeToEmpty = (uint32_t)data[offset + 1] |
-                                           ((uint32_t)data[offset + 2] << 8) |
-                                           ((uint32_t)data[offset + 3] << 16) |
-                                           ((uint32_t)data[offset + 4] << 24);
+                ups_data.remainingCapacityLimit = data[offset + 3];
             }
             break;
 
-        case 0x07: // Load
-            if (length - offset >= 6) { // To support Eaton-like format where load is at offset 5
-                ups_data.load = data[offset + 5];
-            } else if (length - offset >= 1) {
+        case 0x13: // PercentLoad
+            if (length - offset >= 1) {
                 ups_data.load = data[offset];
             }
             if (ups_data.configApparentPower > 0) {
                 ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
+            }
+            break;
+
+        case 0x0F: // Input Voltage
+            if (length - offset >= 2) {
+                ups_data.inputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            } else if (length - offset >= 1) {
+                ups_data.inputVoltage = data[offset];
             }
             break;
 
@@ -127,6 +133,12 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
                 ups_data.outputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             } else if (length - offset >= 1) {
                 ups_data.outputVoltage = data[offset];
+            }
+            break;
+
+        case 0x0a: // Battery Voltage
+            if (length - offset >= 1) {
+                ups_data.batteryVoltage = data[offset];
             }
             break;
 
@@ -155,31 +167,39 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             }
             break;
 
-        case 0x08: // Capacity Limit
+        case 0x07: // Capacity Limit (fallback)
             if (length - offset >= 1) {
                 ups_data.remainingCapacityLimit = data[offset];
             }
             break;
 
-        case 0x09: // Delay Shutdown
-            if (length - offset >= 4) {
-                ups_data.delayShutdown = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
+        case 0x09: // Config Voltage
+            if (length - offset >= 1) {
+                ups_data.configVoltage = data[offset];
             }
             break;
 
-        case 0x0A: // Delay Start
-            if (length - offset >= 4) {
-                ups_data.delayStart = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
+        case 0x15: // Delay Shutdown
+            if (length - offset >= 2) {
+                ups_data.delayShutdown = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8));
             }
             break;
 
-        case 0x0C: // Design / Full capacity
+        case 0x16: // Delay Start
+            if (length - offset >= 2) {
+                ups_data.delayStart = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8));
+            }
+            break;
+
+        case 0x0C: // Design / Full capacity or Audible Alarm
             if (length - offset >= 6) {
                 ups_data.designCapacity = data[offset + 4];
                 ups_data.fullChargeCapacity = data[offset + 5];
             } else if (length - offset >= 2) {
                 ups_data.designCapacity = data[offset];
                 ups_data.fullChargeCapacity = data[offset + 1];
+            } else if (length - offset >= 1) {
+                ups_data.beeperEnabled = (data[offset] == 1);
             }
             break;
 
