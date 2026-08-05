@@ -3,15 +3,16 @@ spec_code: US-039
 body: |-
   ## Technical Solution
 
-  Per garantire che il `CyberPowerDriver` raggiunga la parità di funzionalità con l'`EatonDriver`, è necessario estrarre e popolare tutti i parametri pertinenti della struct `UPSData` (es. `acPresent`, `discharging`, `remainingCapacity`, `load`, `outputVoltage`, ecc.).
+  **Rework**: Questa iterazione corregge i difetti di parsing segnalati dall'utente (Real Power errata, Battery Capacity in Ah errata, e voltaggio/frequenza nominali mancanti/errati).
 
-  Poiché i dispositivi HID espongono le informazioni su report differenti, il driver CyberPower dovrà:
-  1. Implementare nel metodo `loop()` una macchina a stati temporizzata (simile a quella usata in `EatonDriver`) per richiedere ciclicamente i vari Report ID supportati da CyberPower.
-  2. Implementare nel metodo `decodeReport()` il parsing dei dati grezzi ricevuti via USB, usando come mappa di riferimento il sorgente `cps-hid.c` (del progetto NUT) per tradurre correttamente i bit e i byte in valori significativi nella struct `UPSData`.
-  3. Rimuovere lo stub temporaneo (`ups_data.acPresent = true;`).
+  1. **Real Power (Watt)**:
+  Il report `0x18` restituisce il `Config Active Power` in Watt. Nel calcolo attuale (`(configApparentPower * 60 * load) / 10000`) si applica inavvertitamente un power factor dello 0.6 a un valore che è già in Watt, abbassando così il valore riportato di circa il 40% rispetto al reale (spiegando i ~100W in meno segnalati). La formula va corretta in `(ActivePower * load) / 100`.
 
-  ## Test Strategy
-  Essendo un'estensione del livello hardware/driver (backend USB), non è prevista una test strategy e2e sulla Web UI in questa spec. Il collaudo si baserà su unit testing/compilazione per garantire l'assenza di memory leak o crash, e sull'esame del codice per accertare la corretta implementazione della mappa HID.
+  2. **Battery Ah Capacity**:
+  Il report `0x07` (Capacity Info) mappa i valori di batteria in base alla percentuale, ma il driver sta scrivendo il valore `100` (100%) dentro `designCapacity` e `fullChargeCapacity`, che invece dovrebbero rappresentare gli Ampere-Ora (Ah). Questo porta l'interfaccia a mostrare '100 Ah'. Per i CyberPower via HID, se il valore reale in Ah non è esposto nei report standard o è incerto, è meglio non valorizzare `designCapacity` piuttosto che mostrare un 100 Ah fuorviante. Rimuoveremo il mapping su questi campi per il report `0x07`.
+
+  3. **Input Frequency e Voltage Nominal**:
+  Nel polling è presente `host->requestReport(0x0E, 0x03, 2);` per l'Input Config Voltage, ma manca la gestione del case `0x0E` nel metodo `decodeReport`. Inoltre, il case `0x09` (Config Voltage) sta catturando un valore che per l'utente USA risulta essere 240V (probabilmente una lettura errata, oppure un valore a 16-bit letto come 8-bit, o un report non standard per questo modello). Infine, manca la richiesta e il decode per la frequenza nominale (che va aggiunta, tipicamente `0x0C` o simile in base a `cps-hid.c`, o semplicemente mappando il report corretto su `configFrequency`).
 tasks:
   - id: TASK-01
     title: Implementare polling report in CyberPowerDriver::loop
@@ -63,3 +64,54 @@ tasks:
       - [ ] `pio run` (o task di build) termina senza errori.
       - [ ] I driver Eaton e APC continuano a compilare intatti.
     ref: TASK-03
+  - id: TASK-04
+    title: Fix calcolo Real Power (Watt)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il feedback segnala: "Il parametro Real Power (Watt) calcolato è errato, risulta più basso di circa 100W rispetto al display dell'UPS."
+      Il report `0x18` è Config Active Power (in Watt). Nel `case 0x13:` si applica inavvertitamente un declassamento (`val * 60 / 10000`), trattandolo come VA.
+      Occorre correggere il calcolo della `realPower` sostituendo la formula errata con `(ups_data.configApparentPower * ups_data.load) / 100;`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] La formula nel `case 0x13` viene corretta in modo da non applicare il fattore di conversione VA->W (0.6), moltiplicando solo per la percentuale di carico e dividendo per 100.
+    ref: TASK-04
+  - id: TASK-05
+    title: Fix mappatura Battery Ah capacity
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il feedback segnala: "Il parametro Battery Ah capacity riporta 100, che non è un valore corretto per la capacità della batteria."
+      Nel `case 0x07` di `decodeReport`, il valore estratto rappresenta molto probabilmente la percentuale (100) ma viene assegnato erroneamente a `designCapacity` e `fullChargeCapacity` che sono in Ah.
+      Rimuovere le assegnazioni a `designCapacity` e `fullChargeCapacity` in modo da non riportare un falso valore di 100Ah alla Web UI.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Il report `0x07` non valorizza più `ups_data.designCapacity` né `ups_data.fullChargeCapacity`.
+    ref: TASK-05
+  - id: TASK-06
+    title: Fix frequenza e voltaggio nominale
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il feedback segnala: "La frequenza nominale non viene trasmessa (riporta 0) e la tensione nominale è errata (riporta 240V, ma in USA dovrebbe essere 120V e 60Hz)."
+      - Nel polling di `loop()` è richiesto `0x0E` (Input Config Voltage) ma manca in `decodeReport`.
+      - Il `case 0x09` legge probabilmente un valore errato o 16-bit per il voltaggio.
+      - Occorre identificare e richiedere il report per la frequenza nominale (es. aggiungendolo alla sequenza di polling lento o veloce) ed estrarlo in `decodeReport` valorizzando `ups_data.configFrequency`.
+      - Occorre correggere il parsing di `0x0E` e `0x09` per catturare correttamente la tensione nominale (120V nei modelli USA).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Il metodo `loop()` richiede il report corretto per la frequenza nominale (se supportato) e `decodeReport` lo estrae in `configFrequency`.
+      - [ ] Il metodo `decodeReport` implementa il caso `0x0E` e converte correttamente i byte in `configVoltage` (gestendo correttamente l'offset se il valore fosse little-endian a 16 bit, es. 120).
+    ref: TASK-06

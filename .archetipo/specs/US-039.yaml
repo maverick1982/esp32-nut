@@ -7,7 +7,7 @@ epic:
 priority: HIGH
 points: 3
 status: REVIEW
-body: |-
+body: |
   #### US-039: Completamento decodifica dati UPS CyberPower
 
   **Epic:** EP-001 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
@@ -25,6 +25,14 @@ body: |-
   - [ ] Il metodo `decodeReport` in `CyberPowerDriver.cpp` estrapola da CyberPower *tutti* i parametri attualmente estratti per gli UPS Eaton (es. Batteria, Voltaggio, Carico, stato AC/DC, e altri campi previsti dal modello dati) usando i giusti offset (rif. `cps-hid.c`).
   - [ ] Il fallback hardcoded `ups_data.acPresent = true;` (introdotto come placeholder) è rimosso o sostituito dalla lettura corretta del flag HID.
   - [ ] Il codice compila senza errori e non introduce regressioni negli altri driver (Eaton, APC, Generic).
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il parametro Real Power (Watt) calcolato è errato, risulta più basso di circa 100W rispetto al display dell'UPS.
+  - Il parametro Battery Ah capacity riporta 100, che non è un valore corretto per la capacità della batteria.
+  - La frequenza nominale non viene trasmessa (riporta 0) e la tensione nominale è errata (riporta 240V, ma in USA dovrebbe essere 120V e 60Hz). Verificare se sono hardcoded o se vanno estratti correttamente.
 history:
   - status: TODO
     at: "2026-08-02T07:42:02Z"
@@ -34,3 +42,11 @@ history:
     at: "2026-08-02T07:52:50Z"
   - status: REVIEW
     at: "2026-08-02T08:19:07Z"
+  - status: TODO
+    at: "2026-08-05T17:50:51Z"
+  - status: PLANNED
+    at: "2026-08-05T17:54:34Z"
+  - status: IN PROGRESS
+    at: "2026-08-05T18:25:35Z"
+  - status: REVIEW
+    at: "2026-08-05T18:30:33Z"
