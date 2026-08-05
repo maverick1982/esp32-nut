@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-040
+title: Completamento decodifica dati UPS APC
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: REVIEW
+body: |-
+  #### US-040: Completamento decodifica dati UPS APC
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente finale con un UPS APC (es. BE600M1),
+  voglio che il driver del mio dispositivo decodifichi correttamente e completamente tutti i parametri operativi (come Voltaggio, percentuale di Batteria, Carico, ecc.),
+  così da avere nel sistema un supporto paritario rispetto alle altre marche. In passato il driver usava Report ID errati (mutuati da specifiche generiche o da Eaton) causando la mancata visualizzazione dei dati e sollevando dubbi su possibili instabilità. L'instabilità (blocchi o LED lampeggiante giallo) lamentata dagli utenti su GitHub si è poi rivelata dovuta a un partizionamento/bootloader corrotto dopo aggiornamenti OTA incompleti o flash parziali tramite PlatformIO, ma la telemetria necessitava comunque di ID reali.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il driver `APCDriver` sostituisce l'implementazione basata su ID presunti con i Report ID esatti dedotti da un dump HID reale (fornito dall'utente su GitHub: `apc-ups.txt`). I nuovi parametri mappati includono: `0x0C` (RemainingCapacity, RunTimeToEmpty), `0x31` (Input Voltage), `0x50` (PercentLoad), `0x16` (PresentStatus bitfield completo) e vari ID statici (`0x08`, `0x0D`, `0x0E`, `0x11`, `0x18`, `0x40`, `0x42`). Questo permette di estrapolare la totalità dei parametri dell'UPS previsti dal modello.
+
+  **Acceptance Criteria**
+  - [x] Il metodo `decodeReport` (e il polling in `loop`) in `APCDriver.cpp` estrapolano da APC *tutti* i parametri attualmente estratti per gli UPS Eaton, usando gli ID corretti analizzati dal log reale.
+  - [x] I Report ID errati preesistenti sono stati rimossi e l'architettura di base è stata mantenuta allineata agli altri driver (Eaton, CyberPower) senza trick per lo stalling, rivelatisi non necessari.
+  - [x] Il codice compila senza errori e il commit è stato integrato.
+  - [ ] Consigliare all'utente su GitHub di effettuare un flash completo "Erase All" / "Factory" per risolvere i crash dovuti al bootloader non allineato.
+history:
+  - status: TODO
+    at: "2026-08-03T14:40:13Z"
+  - status: PLANNED
+    at: "2026-08-03T14:49:39Z"
+  - status: IN PROGRESS
+    at: "2026-08-03T14:51:53Z"
+  - status: REVIEW
+    at: "2026-08-03T15:00:07Z"

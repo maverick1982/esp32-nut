@@ -1,0 +1,61 @@
+schema: archetipo/plan/v2
+spec_code: US-040
+body: |-
+  ## Technical Solution
+  Per supportare appieno la telemetria degli UPS APC, il driver `APCDriver` verrà espanso rimuovendo il codice di fallback (stub) e adottando la struttura a macchina a stati usata dagli altri driver.
+  1. **Polling:** Il metodo `loop()` implementerà un polling veloce per i dati dinamici e un polling lento per quelli statici/configurazione, utilizzando i Report ID esatti estratti dal dump HID dell'utente (es. 0x06, 0x16, 0x0C, 0x31, 0x50, 0x08, ecc.).
+  2. **Decoding:** Il metodo `decodeReport()` mapperà i byte ricevuti tramite lo switch sui Report ID specifici APC confermati dal log, con i relativi offset, verso la struct `UPSData`.
+
+  ## Test Strategy
+  Il testing si concentrerà sulla corretta compilazione del progetto (`pio run`) per garantire l'assenza di regressioni. Non vi sono modifiche UI. La validazione end-to-end completa del flusso dati USB avverrà poi sul campo.
+tasks:
+  - id: TASK-01
+    title: Implementare polling report in APCDriver::loop
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il driver APC per eseguire richieste regolari verso l'host USB per recuperare i Report ID di stato, batteria, tensioni e carico.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/APCDriver.h` — Aggiungere variabili per il polling (`_last_fast_poll`, `_poll_step`, ecc.)
+      - `lib/USBHostUPS/src/APCDriver.cpp` — Implementare la logica nel `loop()` per `requestReport` e `requestStringDescriptor`.
+
+      ## Criteri di Completamento
+      - [ ] Variabili di stato aggiunte all'header.
+      - [ ] Il metodo `loop` inoltra periodicamente richieste di polling per i report pertinenti.
+    ref: TASK-01
+  - id: TASK-02
+    title: Decodifica report HID APC
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Sostituire lo stub nel metodo `decodeReport` con un mapping reale che estrapoli percentuale batteria, carico, voltaggi, runtime e lo stato AC/DC, mappando i campi della struct `UPSData`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/APCDriver.cpp` — Implementare lo `switch(report_id)` all'interno di `decodeReport` per aggiornare i campi in `ups_data`.
+
+      ## Criteri di Completamento
+      - [ ] Il placeholder hardcoded (`acPresent = true`) è rimosso.
+      - [ ] I parametri estratti da Eaton che esistono anche nel report APC sono decodificati usando i giusti offset e Report ID standard/APC.
+    ref: TASK-02
+  - id: TASK-03
+    title: Test di Build e Nessuna Regressione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Assicurarsi che l'implementazione del driver APC non causi errori di compilazione nel firmware globale.
+
+      ## File Coinvolti
+      - Intero progetto
+
+      ## Criteri di Completamento
+      - [ ] Il comando `pio run` termina con successo (SUCCESS).
+      - [ ] Non vi sono warning di compilazione o errori introdotti dalle nuove implementazioni in APCDriver.
+    ref: TASK-03
