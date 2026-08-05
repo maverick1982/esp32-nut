@@ -17,8 +17,8 @@ public:
 private:
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
+    uint8_t  _poll_step;
     uint32_t _last_step_time;
-    uint8_t _poll_step;
 };
 
 #endif // APC_DRIVER_H
