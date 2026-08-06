@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: PLANNED
+status: DONE
 body: |
   #### US-039: Completamento decodifica dati UPS CyberPower
 
@@ -60,3 +60,9 @@ history:
     at: "2026-08-06T19:03:02Z"
   - status: PLANNED
     at: "2026-08-06T19:14:51Z"
+  - status: IN PROGRESS
+    at: "2026-08-06T20:20:22Z"
+  - status: REVIEW
+    at: "2026-08-06T20:24:21Z"
+  - status: DONE
+    at: "2026-08-06T20:32:22Z"

@@ -29,6 +29,7 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] La logica di polling ciclico per i report CyberPower è implementata.
+    ref: TASK-01
   - id: TASK-02
     title: Decodifica report HID e popolamento UPSData
     type: Impl
@@ -46,6 +47,7 @@ tasks:
       - [ ] Placeholder eliminato.
       - [ ] `decodeReport` estrapola la percentuale batteria, voltaggio, carico, runtime (ove disponibili) e gli stati AC/DC.
       - [ ] Tutti i parametri estratti da Eaton che esistono anche nel report CyberPower sono mappati (copertura paritaria).
+    ref: TASK-02
   - id: TASK-03
     title: Test di Build e Nessuna Regressione
     type: Test
@@ -62,6 +64,7 @@ tasks:
       ## Criteri di Completamento
       - [ ] `pio run` (o task di build) termina senza errori.
       - [ ] I driver Eaton e APC continuano a compilare intatti.
+    ref: TASK-03
   - id: TASK-04
     title: Fix calcolo Real Power (Watt)
     type: Impl
@@ -77,6 +80,7 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] La formula nel `case 0x13` viene corretta in modo da non applicare il fattore di conversione VA->W (0.6), moltiplicando solo per la percentuale di carico e dividendo per 100.
+    ref: TASK-04
   - id: TASK-05
     title: Fix mappatura Battery Ah capacity
     type: Impl
@@ -92,6 +96,7 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] Il report `0x07` non valorizza più `ups_data.designCapacity` né `ups_data.fullChargeCapacity`.
+    ref: TASK-05
   - id: TASK-06
     title: Fix frequenza e voltaggio nominale
     type: Impl
@@ -110,8 +115,21 @@ tasks:
       ## Criteri di Completamento
       - [ ] Il metodo `loop()` richiede il report corretto per la frequenza nominale (se supportato) e `decodeReport` lo estrae in `configFrequency`.
       - [ ] Il metodo `decodeReport` implementa il caso `0x0E` e converte correttamente i byte in `configVoltage` (gestendo correttamente l'offset se il valore fosse little-endian a 16 bit, es. 120).
+    ref: TASK-06
   - id: TASK-07
     title: Rimozione parsing errato della frequenza su Report 0x0D
     type: Impl
-    status: TODO
-    body: "## Descrizione\nIl feedback segnala: \"Il valore della frequenza estrapolato è errato: riporta 3 invece di 60 Hz\".\nL'analisi approfondita del dump HID ha rivelato che il report `0x0D` per i CyberPower corrisponde a `iManufacturer` (indice della stringa del produttore), il cui valore è 3. Inoltre, il dump conferma che l'UPS in questione non espone `UPS.Input.Frequency` né `UPS.Output.Frequency`.\nL'assegnazione di `configFrequency` all'interno del `case 0x0D` nel metodo `decodeReport` è quindi un residuo errato copiato dal driver Eaton e va rimosso.\n\n## File Coinvolti\n- `lib/USBHostUPS/src/CyberPowerDriver.cpp`\n\n## Criteri di Completamento\n- [ ] L'assegnazione di `ups_data.configFrequency = data[offset];` viene rimossa dal `case 0x0D`.\n- [ ] La Web UI smetterà di mostrare il valore fittizio '3 Hz'."
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il feedback segnala: "Il valore della frequenza estrapolato è errato: riporta 3 invece di 60 Hz".
+      L'analisi approfondita del dump HID ha rivelato che il report `0x0D` per i CyberPower corrisponde a `iManufacturer` (indice della stringa del produttore), il cui valore è 3. Inoltre, il dump conferma che l'UPS in questione non espone `UPS.Input.Frequency` né `UPS.Output.Frequency`.
+      L'assegnazione di `configFrequency` all'interno del `case 0x0D` nel metodo `decodeReport` è quindi un residuo errato copiato dal driver Eaton e va rimosso.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+
+      ## Criteri di Completamento
+      - [ ] L'assegnazione di `ups_data.configFrequency = data[offset];` viene rimossa dal `case 0x0D`.
+      - [ ] La Web UI smetterà di mostrare il valore fittizio '3 Hz'.
+    ref: TASK-07

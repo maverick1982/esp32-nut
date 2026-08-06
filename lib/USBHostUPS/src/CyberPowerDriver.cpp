@@ -173,10 +173,7 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             }
             break;
 
-        case 0x0D: // Config Frequency
-            if (length - offset >= 1) {
-                ups_data.configFrequency = data[offset];
-            }
+        case 0x0D: // Report 0x0D is iManufacturer (string index), not frequency
             break;
 
         case 0x15: // Delay Shutdown
