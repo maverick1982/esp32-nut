@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 3
-status: PLANNED
+status: REVIEW
 body: |-
   #### US-041: Fix bug Access Denied sui client NUT
 
@@ -30,3 +30,7 @@ history:
     at: "2026-08-06T19:56:01Z"
   - status: PLANNED
     at: "2026-08-06T20:09:09Z"
+  - status: IN PROGRESS
+    at: "2026-08-06T22:20:13Z"
+  - status: REVIEW
+    at: "2026-08-06T22:24:20Z"

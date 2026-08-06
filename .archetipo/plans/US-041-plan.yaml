@@ -17,7 +17,7 @@ tasks:
   - id: TASK-01
     title: Rimozione blocco globale auth e implementazione LOGIN in NUTServer
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       Il server non deve rifiutare a priori tutte le connessioni non autenticate, e deve supportare la sequenza formale di login dei client.
@@ -28,10 +28,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Il comando `LIST` e `GET` funzionano sempre (comportamento pubblico predefinito di NUT) anche se configurata password.
       - [ ] Il comando `LOGIN` è implementato e restituisce `OK` o errore opportuno a seconda dell'autenticazione.
+    ref: TASK-01
   - id: TASK-02
     title: Test della corretta gestione dell'autenticazione NUT
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -44,3 +45,4 @@ tasks:
       ## Criteri di Completamento
       - [ ] Il test passa assicurandosi che senza credenziali `LIST UPS` torni correttamente la lista.
       - [ ] Il test assicura che `LOGIN` restituisca `OK` quando fornito dopo user e password validi.
+    ref: TASK-02
