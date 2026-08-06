@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: REVIEW
+status: PLANNED
 body: |
   #### US-039: Completamento decodifica dati UPS CyberPower
 
@@ -33,6 +33,12 @@ body: |
   - Il parametro Real Power (Watt) calcolato è errato, risulta più basso di circa 100W rispetto al display dell'UPS.
   - Il parametro Battery Ah capacity riporta 100, che non è un valore corretto per la capacità della batteria.
   - La frequenza nominale non viene trasmessa (riporta 0) e la tensione nominale è errata (riporta 240V, ma in USA dovrebbe essere 120V e 60Hz). Verificare se sono hardcoded o se vanno estratti correttamente.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il valore della frequenza estrapolato è errato: riporta 3 invece di 60 Hz (per un utente americano). Verificare e correggere il calcolo o l'offset per la frequenza.
 history:
   - status: TODO
     at: "2026-08-02T07:42:02Z"
@@ -50,3 +56,7 @@ history:
     at: "2026-08-05T18:25:35Z"
   - status: REVIEW
     at: "2026-08-05T18:30:33Z"
+  - status: TODO
+    at: "2026-08-06T19:03:02Z"
+  - status: PLANNED
+    at: "2026-08-06T19:14:51Z"
