@@ -30,8 +30,8 @@ def embed_files():
             with open(filepath, "rb") as bf:
                 content = bf.read()
                 
-            # Compress content
-            compressed = gzip.compress(content)
+            # Compress content deterministically by setting mtime=0
+            compressed = gzip.compress(content, mtime=0)
             
             rel_path = os.path.relpath(filepath, data_dir).replace("\\", "/")
             var_name = "web_asset_" + rel_path.replace("/", "_").replace(".", "_").replace("-", "_")
