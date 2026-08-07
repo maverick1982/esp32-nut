@@ -188,8 +188,28 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
         return;
     }
 
-    if (authRequired && !_clientAuthenticated[slot]) {
-        client.print("ERR ACCESS-DENIED\n");
+    if (cmd == "LOGIN") {
+        if (tokens.size() < 2) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        String upsName = tokens[1];
+        String upsNameLower = upsName;
+        upsNameLower.toLowerCase();
+        String configUpsNameLower = _config.ups_name;
+        configUpsNameLower.toLowerCase();
+
+        if (upsNameLower != configUpsNameLower) {
+            client.print("ERR UNKNOWN-UPS\n");
+            return;
+        }
+
+        if (authRequired && !_clientAuthenticated[slot]) {
+            client.print("ERR ACCESS-DENIED\n");
+            return;
+        }
+
+        client.print("OK\n");
         return;
     }
 
@@ -306,6 +326,10 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
     }
 
     if (cmd == "INSTCMD") {
+        if (authRequired && !_clientAuthenticated[slot]) {
+            client.print("ERR ACCESS-DENIED\n");
+            return;
+        }
         if (tokens.size() < 3) {
             client.print("ERR INVALID-ARGUMENT\n");
             return;

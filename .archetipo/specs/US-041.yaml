@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-041
+title: Fix bug Access Denied sui client NUT
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-041: Fix bug Access Denied sui client NUT
+
+  **Epic:** EP-003 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del firmware,
+  voglio potermi connettere al server NUT utilizzando qualsiasi client standard (nutify, upsc, node.js nut-client) senza ricevere un errore di "Access Denied",
+  così che io possa monitorare l'UPS in modo affidabile da sistemi esterni.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, i client NUT esterni (come `upsc` o `nut-client` su node.js) riusciranno ad autenticarsi con successo utilizzando le credenziali corrette (UPS name, Username e Password) senza ricevere errori di "Access Denied". I comandi di lettura dei dati andranno a buon fine senza essere bloccati.
+
+  **Acceptance Criteria**
+  - [ ] Il bug di autenticazione o parsing che causa "Access Denied" sui client standard NUT (upsc, nutify, nut-client) è stato identificato e risolto.
+  - [ ] L'autenticazione accetta correttamente le credenziali (UPS name, Username, Password) e non rigetta le richieste valide.
+  - [ ] Viene verificato il corretto funzionamento con un client NUT (es. `upsc`) per garantire che i parametri possano essere letti senza errori di accesso.
+history:
+  - status: TODO
+    at: "2026-08-06T19:56:01Z"
+  - status: PLANNED
+    at: "2026-08-06T20:09:09Z"
+  - status: IN PROGRESS
+    at: "2026-08-06T22:20:13Z"
+  - status: REVIEW
+    at: "2026-08-06T22:24:20Z"
+  - status: DONE
+    at: "2026-08-07T17:43:37Z"

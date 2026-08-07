@@ -65,7 +65,7 @@ void test_auth_and_commands(void) {
     test_server.loop();
     delay(50);
 
-    // 1. Invia un comando prima dell'autenticazione -> deve fallire con ERR ACCESS-DENIED
+    // 1. Invia un comando prima dell'autenticazione -> non deve fallire (bug fix US-041)
     client.println("LIST UPS");
     client.flush();
     
@@ -77,6 +77,25 @@ void test_auth_and_commands(void) {
     
     TEST_ASSERT_TRUE(client.available());
     String resp = client.readStringUntil('\n');
+    resp.trim();
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST UPS", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n');
+    resp.trim();
+    TEST_ASSERT_EQUAL_STRING("UPS eaton \"ESP32-S3 UPS Bridge\"", resp.c_str());
+
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n');
+    resp.trim();
+    TEST_ASSERT_EQUAL_STRING("END LIST UPS", resp.c_str());
+
+    // 1b. Invia comando LOGIN prima dell'autenticazione -> deve fallire con ERR ACCESS-DENIED
+    client.println("LOGIN eaton");
+    client.flush();
+    for (int i = 0; i < 5; i++) { test_server.loop(); delay(10); }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n');
     resp.trim();
     TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED", resp.c_str());
 
@@ -111,6 +130,15 @@ void test_auth_and_commands(void) {
         test_server.loop();
         delay(10);
     }
+    TEST_ASSERT_TRUE(client.available());
+    resp = client.readStringUntil('\n');
+    resp.trim();
+    TEST_ASSERT_EQUAL_STRING("OK", resp.c_str());
+
+    // 4b. Invia LOGIN dopo autenticazione -> deve avere successo
+    client.println("LOGIN eaton");
+    client.flush();
+    for (int i = 0; i < 5; i++) { test_server.loop(); delay(10); }
     TEST_ASSERT_TRUE(client.available());
     resp = client.readStringUntil('\n');
     resp.trim();

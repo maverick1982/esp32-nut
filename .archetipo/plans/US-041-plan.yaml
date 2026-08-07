@@ -1,0 +1,48 @@
+schema: archetipo/plan/v2
+spec_code: US-041
+body: |-
+  ## Architettura e Soluzione
+
+  Attualmente, `NUTServer.cpp` blocca tutte le comunicazioni (inclusi i comandi di base come `LIST` e `GET`) se nel firmware sono stati configurati uno username e una password (`authRequired == true`). Questo comportamento viola il protocollo NUT standard, secondo il quale le operazioni di sola lettura (monitoraggio) non richiedono l'autenticazione. Solo l'esecuzione di comandi (es. `INSTCMD`, `SET` o l'avvio della sessione master/slave tramite `LOGIN`) dovrebbe richiedere credenziali. Inoltre, il server non implementa affatto il comando `LOGIN`, fondamentale per i client che decidono di autenticarsi.
+
+  La soluzione prevede di:
+  1. Rimuovere il blocco globale all'inizio del dispatcher dei comandi per `authRequired`.
+  2. Permettere l'accesso pubblico (non autenticato) ai comandi `LIST` e `GET`.
+  3. Implementare il supporto al comando `LOGIN <upsname>`, rispondendo con `OK` se il client si è precedentemente autenticato con successo (tramite `USERNAME` e `PASSWORD`) oppure con `ERR ACCESS-DENIED` o `ERR UNKNOWN-UPS` se l'autenticazione è fallita o l'UPS non esiste.
+
+  ## Strategia di Test
+
+  - **Test Unitari/Integrazione**: Aggiungere o modificare test per confermare che una connessione non autenticata possa inviare comandi `LIST` e `GET` anche con credenziali configurate, e che una sequenza `LOGIN` restituisca `OK` dopo l'autenticazione.
+tasks:
+  - id: TASK-01
+    title: Rimozione blocco globale auth e implementazione LOGIN in NUTServer
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il server non deve rifiutare a priori tutte le connessioni non autenticate, e deve supportare la sequenza formale di login dei client.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — Rimuovere il blocco globale `if (authRequired && !_clientAuthenticated[slot]) { ... }`. Aggiungere la gestione di `if (cmd == "LOGIN")`, verificando che il parametro corrisponda a `_config.ups_name` e che il client sia autenticato (o che non sia richiesta autenticazione).
+
+      ## Criteri di Completamento
+      - [ ] Il comando `LIST` e `GET` funzionano sempre (comportamento pubblico predefinito di NUT) anche se configurata password.
+      - [ ] Il comando `LOGIN` è implementato e restituisce `OK` o errore opportuno a seconda dell'autenticazione.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test della corretta gestione dell'autenticazione NUT
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Scrivere un test per convalidare il corretto funzionamento del protocollo e verificare che il bug sia stato risolto.
+
+      ## File Coinvolti
+      - `test/test_nut_server.cpp` (o simile) — Aggiungere un test che simuli la richiesta di un client `upsc` senza password e uno con password.
+
+      ## Criteri di Completamento
+      - [ ] Il test passa assicurandosi che senza credenziali `LIST UPS` torni correttamente la lista.
+      - [ ] Il test assicura che `LOGIN` restituisca `OK` quando fornito dopo user e password validi.
+    ref: TASK-02
