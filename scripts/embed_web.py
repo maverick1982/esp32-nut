@@ -19,6 +19,7 @@ def embed_files():
         f.write("#include <Arduino.h>\n\n")
         
         files = glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True)
+        files.sort()
         for filepath in files:
             if not os.path.isfile(filepath):
                 continue
