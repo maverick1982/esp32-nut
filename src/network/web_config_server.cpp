@@ -50,6 +50,12 @@ void WebConfigServer::begin(bool isAPMode) {
         server.send_P(200, "text/css", (const char*)web_asset_ups_css, web_asset_ups_css_len);
     });
 
+    server.on("/mobile.css", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/css", (const char*)web_asset_mobile_css, web_asset_mobile_css_len);
+    });
+
     server.on("/logo.png", HTTP_GET, [this]() {
         server.sendHeader("Cache-Control", "public, max-age=31536000");
         server.sendHeader("Content-Encoding", "gzip");

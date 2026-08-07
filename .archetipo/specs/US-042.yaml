@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-042
+title: Interfaccia Web responsive per dispositivi mobile
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-042: Interfaccia Web responsive per dispositivi mobile
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del dispositivo,
+  Voglio che l'interfaccia web sia responsive e si adatti perfettamente alla visualizzazione su schermi piccoli (come gli smartphone),
+  Così da poter configurare e monitorare l'UPS comodamente dal telefono senza dover fare zoom manuale, mantenendo rigorosamente inalterata l'esperienza su PC o Notebook.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, aprendo l'interfaccia web da uno smartphone (o ridimensionando la finestra del browser a dimensioni ridotte), il layout si adatterà automaticamente. I container si compatteranno (ad esempio diventando a singola colonna) per evitare lo scroll orizzontale. Su schermi di dimensioni desktop, la UI risulterà invariata (pixel-perfect) rispetto all'implementazione attuale.
+
+  **Acceptance Criteria**
+  - [ ] L'interfaccia web utilizza meta tag viewport e media queries CSS (`@media`) per implementare l'adattamento mobile.
+  - [ ] Nessun elemento fuoriesce dallo schermo in orizzontale (nessuno scroll orizzontale necessario su smartphone).
+  - [ ] L'aspetto visivo e strutturale su schermi desktop rimane identico alla versione precedente a questa spec.
+  - [ ] Tutti i form di configurazione, i menu e le dashboard dei sensori risultano navigabili e leggibili su touch-screen.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/network/web_config_server.cpp** — Aggiungere la rotta per servire il file `mobile.css`. Attualmente la pagina richiede il file ma il server C++ non lo espone (risponde 404). Serve aggiungere `server->on("/mobile.css", HTTP_GET, ...)` utilizzando l'asset `web_asset_mobile_css` generato da `embed_web.py` e assicurarsi che venga servito con l'header `Content-Encoding: gzip` e tipo `text/css`.
+history:
+  - status: TODO
+    at: "2026-08-07T06:27:56Z"
+  - status: PLANNED
+    at: "2026-08-07T06:36:20Z"
+  - status: IN PROGRESS
+    at: "2026-08-07T06:41:22Z"
+  - status: REVIEW
+    at: "2026-08-07T06:51:39Z"
+  - status: TODO
+    at: "2026-08-07T07:17:20Z"
+  - status: PLANNED
+    at: "2026-08-07T07:54:12Z"
+  - status: IN PROGRESS
+    at: "2026-08-07T07:55:49Z"
+  - status: REVIEW
+    at: "2026-08-07T07:58:34Z"
+  - status: DONE
+    at: "2026-08-07T08:12:36Z"

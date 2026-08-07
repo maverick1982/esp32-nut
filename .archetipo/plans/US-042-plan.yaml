@@ -1,0 +1,70 @@
+schema: archetipo/plan/v2
+spec_code: US-042
+body: "## Technical Solution\n\nL'obiettivo è rendere responsiva l'interfaccia web senza alterare in alcun modo l'aspetto o le funzionalità su schermi desktop (pixel-perfect rispetto alla situazione attuale).\n\nL'approccio tecnico, derivato dai mockups (design skill), prevede l'estrazione delle regole responsive in un file CSS dedicato (`mobile.css`). Le modifiche principali all'interno delle `@media` queries si concentreranno su:\n- **Sidebar**: spostata in alto con i tab disposti su più righe flessibili.\n- **Pannelli (Form/Log)**: rimozione del layout a griglia multi-colonna in favore di un layout a colonna singola.\n- **Tabelle Dati (Dashboard UPS)**: le tabelle verranno scomposte e mostrate come schede sovrapposte (stacking) nascondendo gli header tradizionali, rendendo ogni riga un blocco leggibile senza scroll orizzontale.\n\nQuesto file verrà caricato sia da `index.html` che da `update.html` (interfaccia OTA).\n\n## Test Strategy\n\nLa spec è prettamente visuale, la strategia si baserà quindi su End-to-End testing della UI:\n\n- **E2E con Playwright:** Essendo Playwright già configurato, aggiungeremo un test dedicato (es. in `e2e/responsive.spec.ts`). Il test istanzierà un browser con una viewport mobile (es. 375x812), caricherà la pagina e verificherà tramite assertion che il layout si sia compattato (verificando la larghezza dei container principali) e che lo scroll orizzontale della pagina (document.documentElement.scrollWidth) non superi la viewport.\n\n---\n**\U0001F504 Rework (2026-08-07):** In seguito alla review, è stato rilevato che il nuovo file `mobile.css` sebbene embedded correttamente in `web_assets.h` non veniva servito dal server web C++. Aggiungeremo la rotta necessaria per risolvere l'errore 404."
+tasks:
+  - id: TASK-01
+    title: Aggiunta mobile.css per layout responsivo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Implementare le regole CSS `@media (max-width: 768px)` per garantire la corretta visualizzazione su smartphone. Fare riferimento al file `mobile.css` generato nei mockup sotto `docs/mockups/US-042/`.
+
+      ## File Coinvolti
+      - `data/www/mobile.css` — Nuovo file CSS. Inserire le direttive per impilare sidebar, form e trasformare la `.data-table` in blocchi sovrapposti.
+
+      ## Criteri di Completamento
+      - [ ] Il file contiene direttive esclusive all'interno di media queries.
+      - [ ] Tutti i container principali sono gestiti in modo da evitare lo scroll orizzontale su viewport piccoli.
+    ref: TASK-01
+  - id: TASK-02
+    title: Integrazione stylesheet in HTML
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Caricare il nuovo file `mobile.css` nelle due pagine Web del dispositivo, senza alterare la struttura del DOM.
+
+      ## File Coinvolti
+      - `data/www/index.html` — Aggiunta link al foglio di stile mobile all'interno del tag `<head>`.
+      - `data/www/update.html` — Aggiunta link al foglio di stile mobile all'interno del tag `<head>`.
+
+      ## Criteri di Completamento
+      - [ ] `mobile.css` viene incluso dopo `shared.css` e `ups.css`.
+      - [ ] Aprendo la pagina, restringere la finestra del browser attiva istantaneamente le regole.
+    ref: TASK-02
+  - id: TASK-03
+    title: Test E2E responsive via Playwright
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Introdurre un test automatizzato con Playwright che simuli l'accesso alla dashboard tramite dispositivo mobile.
+
+      ## File Coinvolti
+      - `e2e/responsive.spec.ts` (o file di test E2E esistente dedicato alla UI)
+
+      ## Criteri di Completamento
+      - [ ] Il test carica l'interfaccia con una viewport mobile (es. larghezza 375px o 400px).
+      - [ ] Asserzione che verifica l'assenza di scroll orizzontale globale.
+      - [ ] La suite Playwright completa i test con successo sia per desktop che per mobile.
+    ref: TASK-03
+  - id: TASK-04
+    title: Aggiunta rotta backend per mobile.css
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il server web non sta esponendo il nuovo file CSS, causando un errore 404. Dobbiamo aggiungere una nuova rotta per servire `mobile.css` utilizzando l'asset `web_asset_mobile_css` generato in fase di pre-compilazione.
+
+      ## File Coinvolti
+      - `src/network/web_config_server.cpp` — Aggiungere all'interno del metodo di inizializzazione delle rotte `server->on("/mobile.css", HTTP_GET, ...)` con l'header `Content-Encoding: gzip` e tipo di contenuto `text/css`.
+
+      ## Criteri di Completamento
+      - [ ] Il server risponde con status 200 alle richieste GET su `/mobile.css`.
+      - [ ] L'aggiornamento OTA espone correttamente il CSS ai client.
+    ref: TASK-04
