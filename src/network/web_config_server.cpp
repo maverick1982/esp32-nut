@@ -5,6 +5,10 @@
 #include "network/web_assets.h"
 #include <Update.h>
 
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
+
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
 
@@ -269,6 +273,8 @@ void WebConfigServer::handleUpsVars() {
 
 void WebConfigServer::handleSystemStatus() {
     JsonDocument doc;
+    
+    doc["version"] = FIRMWARE_VERSION;
     
     // Wi-Fi status
     wl_status_t wifi_status = WiFi.status();

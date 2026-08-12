@@ -31,6 +31,8 @@ jobs:
 
       - name: Build firmware
         run: pio run -e esp32-s3-devkitc-1
+        env:
+          PLATFORMIO_BUILD_FLAGS: '-DFIRMWARE_VERSION=\"${{ github.ref_name }}\"'
 
       - name: Prepare Artifacts
         run: |

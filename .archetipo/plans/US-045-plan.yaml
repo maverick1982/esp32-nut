@@ -1,0 +1,72 @@
+schema: archetipo/plan/v2
+spec_code: US-045
+body: "### Technical Solution\n\nTo make the firmware version dynamic and reflective of the GitHub release tag, we will establish a data flow from the CI/CD pipeline down to the frontend UI:\n\n1.  **Build System & Backend:** We will use the `PLATFORMIO_BUILD_FLAGS` environment variable in the GitHub Actions release workflow (`.github/workflows/release.yml`) to inject the `FIRMWARE_VERSION` macro using `${{ github.ref_name }}`. In `src/network/web_config_server.cpp`, we will provide a fallback definition (`#define FIRMWARE_VERSION \"dev\"`) for local builds. The `/api/system-status` endpoint will include `doc[\"version\"] = FIRMWARE_VERSION;` in its response.\n2.  **Frontend (HTML/JS):** In `data/www/index.html`, we will remove the hardcoded `v1.0` from the `.brand-name` span and assign it an ID (`fw-version`). In `data/www/app.js`, the `fetchSystemStatus()` polling function will update this span with the version received from the backend.\n\n### Test Strategy\n\n-   **E2E (UI):** Since this involves the user interface, we will implement an End-to-End testing strategy. \n    -   **Framework:** Playwright (Node.js).\n    -   **Setup:** As no E2E infrastructure currently exists, we will initialize it using `archetipo e2e ensure`.\n    -   **Scenario:** A test will load the web interface and verify that the firmware version element (`#fw-version`) is visible and contains a valid version string (e.g., \"dev\" in the local test environment)."
+tasks:
+  - id: TASK-01
+    title: Backend and CI/CD Version Injection
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiornare il workflow di rilascio GitHub per iniettare il tag della release come variabile di compilazione, ed esporre questo valore tramite l'API di stato del sistema.
+
+      ## File Coinvolti
+      - `.github/workflows/release.yml` — Aggiungere `env: PLATFORMIO_BUILD_FLAGS: '-DFIRMWARE_VERSION="\"${{ github.ref_name }}\""'` allo step `Build firmware`.
+      - `src/network/web_config_server.cpp` — Aggiungere un `#ifndef FIRMWARE_VERSION` con fallback a `"dev"`. Modificare `handleSystemStatus()` per aggiungere `doc["version"] = FIRMWARE_VERSION;`.
+
+      ## Criteri di Completamento
+      - [ ] La compilazione locale non fallisce e usa il fallback `"dev"`.
+      - [ ] La risposta a `/api/system-status` include la chiave `version`.
+      - [ ] Il workflow CI inietta correttamente la variabile.
+    ref: TASK-01
+  - id: TASK-02
+    title: Frontend Dynamic Version Binding
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Modificare l'interfaccia web per rimuovere la versione statica e popolarla dinamicamente con i dati ricevuti dall'API.
+
+      ## File Coinvolti
+      - `data/www/index.html` — Rimuovere `v1.0` e aggiungere `id="fw-version"` allo span nella sidebar.
+      - `data/www/app.js` — All'interno di `fetchSystemStatus()`, leggere `data.version` e aggiornare il `textContent` dell'elemento `#fw-version`.
+
+      ## Criteri di Completamento
+      - [ ] La stringa `v1.0` hardcoded non è più presente in `index.html`.
+      - [ ] L'interfaccia mostra "dev" (o la versione corretta) dopo che i dati di stato del sistema vengono caricati.
+    ref: TASK-02
+  - id: TASK-03
+    title: E2E Framework Setup
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      Installare e configurare l'infrastruttura di test end-to-end necessaria per verificare la Web UI, dal momento che non è ancora presente nel progetto.
+
+      ## File Coinvolti
+      - `e2e/` (creato ex novo) — Eseguire `archetipo e2e ensure` per generare lo scaffolding di Playwright.
+
+      ## Criteri di Completamento
+      - [ ] Il comando `archetipo e2e ensure` viene eseguito con successo.
+      - [ ] L'infrastruttura Playwright è pronta all'uso nel progetto.
+    ref: TASK-03
+  - id: TASK-04
+    title: E2E Test for Dynamic Version
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      Scrivere un test end-to-end per verificare che il numero di versione venga renderizzato correttamente nell'interfaccia web.
+
+      ## File Coinvolti
+      - `e2e/tests/version.spec.ts` (o file simile generato dal setup) — Scrivere un test che naviga alla pagina principale, attende il completamento della chiamata API `/api/system-status`, e verifica che l'elemento `#fw-version` contenga testo (es. "dev").
+
+      ## Criteri di Completamento
+      - [ ] Il test Playwright passa eseguendolo localmente sul server web simulato o reale.
+      - [ ] Il test verifica esplicitamente l'assenza di valori vuoti o del vecchio `v1.0` hardcoded.
+    ref: TASK-04

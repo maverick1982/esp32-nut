@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: REVIEW
+status: DONE
 body: |-
   #### US-040: Completamento decodifica dati UPS APC
 
@@ -35,3 +35,5 @@ history:
     at: "2026-08-03T14:51:53Z"
   - status: REVIEW
     at: "2026-08-03T15:00:07Z"
+  - status: DONE
+    at: "2026-08-12T15:12:34Z"

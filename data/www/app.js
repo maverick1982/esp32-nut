@@ -490,6 +490,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     indUps.className = 'status-indicator success';
                 }
             }
+            
+            if (data.version) {
+                const fwVersion = document.getElementById('fw-version');
+                if (fwVersion) fwVersion.textContent = data.version;
+            }
         } catch (error) {
             console.error('Failed to fetch system status:', error);
             const indWifi = document.getElementById('ind-wifi');

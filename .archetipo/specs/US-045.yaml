@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-045
+title: Numero di Versione Dinamico nella Web UI
+epic:
+  code: EP-004
+  title: CI/CD e Automazione
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-045: Numero di Versione Dinamico nella Web UI
+
+  **Epic:** EP-004 | **Priority:** MEDIUM | **Points:** 2 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente dell'interfaccia web,
+  Voglio vedere il numero di versione reale del firmware nell'angolo in alto a sinistra,
+  Così da sapere esattamente quale versione sto eseguendo senza doverlo indovinare.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il numero di versione mostrato nell'interfaccia web in alto a sinistra (attualmente hardcoded a "v1.0") verrà popolato dinamicamente. Se l'utente flasha una release creata da GitHub (es. v1.2.3), l'interfaccia web mostrerà "v1.2.3". Durante la compilazione locale mostrerà un fallback appropriato (es. "dev").
+
+  **Acceptance Criteria**
+  - [ ] Rimozione del valore hardcoded "v1.0" (o simili) dall'interfaccia web.
+  - [ ] Meccanismo per propagare la versione dal sistema di build (PlatformIO / GitHub Actions) al codice C++ e, di conseguenza, al frontend.
+  - [ ] L'interfaccia web aggiorna l'etichetta della versione usando il valore dinamico (es. restituito tramite un endpoint dedicato o iniettato nel template).
+  - [ ] Gestione del fallback (es. "dev") se compilato fuori da GitHub Actions.
+history:
+  - status: TODO
+    at: "2026-08-12T14:35:35Z"
+  - status: PLANNED
+    at: "2026-08-12T14:40:18Z"
+  - status: IN PROGRESS
+    at: "2026-08-12T14:43:45Z"
+  - status: REVIEW
+    at: "2026-08-12T14:49:54Z"
+  - status: DONE
+    at: "2026-08-12T15:08:47Z"
