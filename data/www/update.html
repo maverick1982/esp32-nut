@@ -7,6 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f0ff' stroke-width='2'%3E%3Cpath d='M13 2L3 14h9l-1 8 10-12h-9l1-8z'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="shared.css">
     <link rel="stylesheet" href="mobile.css">
+    <script src="fflate.min.js"></script>
 </head>
 <body style="background-color: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui);">
     <div class="ota-container">
@@ -14,8 +15,8 @@
         <p>Drag and drop the compiled .bin file below or click to select.</p>
         
         <div class="dropzone" id="dropzone">
-            <p>Drag the .bin file here or click to upload</p>
-            <input type="file" id="fileInput" accept=".bin">
+            <p>Drag the .bin or .zip file here or click to upload</p>
+            <input type="file" id="fileInput" accept=".bin,.zip">
         </div>
 
         <div class="progress-bar-container" id="progressContainer">
@@ -62,11 +63,43 @@
 
         function uploadFile() {
             const file = fileInput.files[0];
-            if (!file || !file.name.endsWith('.bin')) {
-                showStatus('Please select a valid .bin file.', 'error');
-                return;
-            }
+            if (!file) return;
 
+            if (file.name.endsWith('.zip')) {
+                showStatus('Extracting firmware.bin...', '');
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const buffer = new Uint8Array(e.target.result);
+                    try {
+                        const unzipped = fflate.unzipSync(buffer);
+                        let binBuffer = null;
+                        
+                        // find firmware.bin or any .bin if firmware.bin doesn't exist, but spec says "firmware.bin"
+                        if (unzipped['firmware.bin']) {
+                            binBuffer = unzipped['firmware.bin'];
+                        }
+                        
+                        if (binBuffer) {
+                            const binBlob = new Blob([binBuffer], { type: 'application/octet-stream' });
+                            const binFile = new File([binBlob], 'firmware.bin', { type: 'application/octet-stream' });
+                            performUpload(binFile);
+                        } else {
+                            showStatus('Il file .zip non contiene alcun firmware.bin', 'error');
+                        }
+                    } catch (err) {
+                        showStatus('Error: Invalid ZIP file.', 'error');
+                    }
+                };
+                reader.onerror = () => showStatus('Error reading ZIP file.', 'error');
+                reader.readAsArrayBuffer(file);
+            } else if (file.name.endsWith('.bin')) {
+                performUpload(file);
+            } else {
+                showStatus('Please select a valid .bin or .zip file.', 'error');
+            }
+        }
+
+        function performUpload(file) {
             const formData = new FormData();
             formData.append('update', file);
 

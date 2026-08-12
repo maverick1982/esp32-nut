@@ -1,0 +1,54 @@
+schema: archetipo/spec/v2
+code: US-044
+title: Estrazione Automatica firmware.bin da File ZIP per Aggiornamento OTA
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-044: Estrazione Automatica firmware.bin da File ZIP per Aggiornamento OTA
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del firmware,
+  Voglio poter caricare direttamente il file `.zip` della release GitHub nell'interfaccia di aggiornamento OTA,
+  Così che io non debba estrarre manualmente il file `firmware.bin` prima di caricarlo, semplificando notevolmente la procedura.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, un utente può navigare nella tab "Firmware Update", selezionare o trascinare un file `.zip` contenente una release (es. `esp32-nut-v1.1.0.zip`). Il codice JavaScript (frontend) leggerà il contenuto dello ZIP localmente, estrarrà in memoria il file `firmware.bin` e invierà quest'ultimo al backend ESP32 per completare la procedura di aggiornamento, mostrando all'utente l'avanzamento.
+
+  **Acceptance Criteria**
+  - [ ] La form di aggiornamento OTA accetta anche file con estensione `.zip` oltre a `.bin`.
+  - [ ] Integrazione di una libreria JS per la decompressione (es. fflate o JSZip), preferibilmente locale per funzionare offline.
+  - [ ] Il frontend JavaScript analizza il file `.zip` e ne estrae il file `firmware.bin` prima di avviare l'upload.
+  - [ ] Il caricamento dei file `.bin` classici continua a funzionare.
+  - [ ] Viene mostrato un avviso chiaro all'utente se il file `.zip` non contiene alcun `firmware.bin`.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Il file `fflate.min.js` non viene servito correttamente dall'ESP32 e restituisce un errore 404 (Not Found) nella console del browser. Verificare che il file venga incluso nell'immagine del filesystem (LittleFS/SPIFFS) e che il server web C++ (es. `server.serveStatic()`) lo esponga correttamente.
+history:
+  - status: TODO
+    at: "2026-08-12T11:49:08Z"
+  - status: PLANNED
+    at: "2026-08-12T12:10:33Z"
+  - status: IN PROGRESS
+    at: "2026-08-12T12:15:48Z"
+  - status: REVIEW
+    at: "2026-08-12T12:25:39Z"
+  - status: TODO
+    at: "2026-08-12T12:30:43Z"
+  - status: PLANNED
+    at: "2026-08-12T12:34:40Z"
+  - status: IN PROGRESS
+    at: "2026-08-12T12:36:18Z"
+  - status: REVIEW
+    at: "2026-08-12T12:37:09Z"
+  - status: DONE
+    at: "2026-08-12T12:42:14Z"

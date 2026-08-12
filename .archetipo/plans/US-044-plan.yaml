@@ -1,0 +1,63 @@
+schema: archetipo/plan/v2
+spec_code: US-044
+body: |-
+  ## Rework
+  Il server C++ utilizza route esplicite per servire gli asset statici che vengono precompilati in PROGMEM da `scripts/embed_web.py`. È necessario aggiungere la route `/fflate.min.js` in `src/network/web_config_server.cpp` per esporre `web_asset_fflate_min_js` al client.
+tasks:
+  - id: TASK-01
+    title: Aggiunta libreria di decompressione fflate
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Scaricare la versione minimizzata della libreria JS per la decompressione (es. fflate) e aggiungerla alla directory dei file serviti dall'ESP32, per essere usata offline.
+
+      ## File Coinvolti
+      - `data/www/fflate.min.js` — Creare il file e incollare il codice minimizzato della libreria.
+      - `data/www/update.html` — Includere la libreria (`<script src="fflate.min.js"></script>`).
+
+      ## Criteri di Completamento
+      - [ ] La libreria fflate è salvata fisicamente nel progetto e referenziata in `update.html`.
+      - [ ] La libreria si carica correttamente offline.
+    ref: TASK-01
+  - id: TASK-02
+    title: Integrazione decompressione ZIP e upload
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: "## Descrizione\nAggiornare la logica di caricamento in `update.html` per accettare e processare i file `.zip`, estraendo il `.bin` prima dell'upload. \n\n## File Coinvolti\n- `data/www/update.html` — Modificare `<input accept=\".bin,.zip\">`. Aggiornare la funzione `uploadFile()`: se l'estensione è `.zip`, leggere il file come ArrayBuffer, decomprimerlo, cercare `firmware.bin`, e, in caso di successo, creare un Blob da inviare via FormData al backend.\n\n## Criteri di Completamento\n- [ ] Il drag & drop e il selettore file accettano `.zip` e `.bin`.\n- [ ] Un file `.zip` valido viene decompresso a runtime nel browser; il file `firmware.bin` estratto viene inviato correttamente all'ESP32.\n- [ ] Se il file `.zip` non contiene `firmware.bin`, viene mostrato un messaggio di errore all'utente e l'upload viene bloccato.\n- [ ] Il comportamento per i normali file `.bin` rimane inalterato."
+    ref: TASK-02
+  - id: TASK-03
+    title: Test e2e OTA via ZIP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere un test end-to-end usando Playwright per validare i flussi di caricamento firmware via file ZIP.
+
+      ## File Coinvolti
+      - `e2e/ota_zip.spec.ts` (o file di test Playwright simile) — Aggiungere i nuovi test.
+
+      ## Criteri di Completamento
+      - [ ] Test scritto per l'upload di un `.bin` standard (regressione).
+      - [ ] Test scritto per l'upload di un `.zip` valido (con intercettazione della rotta `/update` per validare che l'estrazione lato client abbia inviato correttamente il file).
+      - [ ] Test scritto per `.zip` non valido (senza `firmware.bin`) con asserzione sul messaggio di errore nell'UI.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Fix: Esposizione route per fflate.min.js'
+    type: Fix
+    status: DONE
+    body: |-
+      ## Descrizione
+      Il feedback della review segnala un errore 404 per `fflate.min.js`. Il progetto incorpora le risorse web in `include/network/web_assets.h` tramite `scripts/embed_web.py`, ma `web_config_server.cpp` usa route esplicite per servire ogni singolo file. Dobbiamo aggiungere una nuova direttiva `server.on` per esporre la risorsa `web_asset_fflate_min_js` generata.
+
+      ## File Coinvolti
+      - `src/network/web_config_server.cpp` — Aggiungere la route per `/fflate.min.js` servendo la costante `web_asset_fflate_min_js` come `application/javascript` (con gzip encoding).
+
+      ## Criteri di Completamento
+      - [ ] Il backend C++ dichiara esplicitamente la route `/fflate.min.js`.
+      - [ ] Il frontend scarica con successo la libreria in fase di build firmware integrata e non restituisce errore 404.
+    ref: TASK-04

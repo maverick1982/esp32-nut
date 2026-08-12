@@ -38,6 +38,12 @@ void WebConfigServer::begin(bool isAPMode) {
         server.send_P(200, "application/javascript", (const char*)web_asset_app_js, web_asset_app_js_len);
     });
 
+    server.on("/fflate.min.js", HTTP_GET, [this]() {
+        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "application/javascript", (const char*)web_asset_fflate_min_js, web_asset_fflate_min_js_len);
+    });
+
     server.on("/shared.css", HTTP_GET, [this]() {
         server.sendHeader("Cache-Control", "public, max-age=31536000");
         server.sendHeader("Content-Encoding", "gzip");
