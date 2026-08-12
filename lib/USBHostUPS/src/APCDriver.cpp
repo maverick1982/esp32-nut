@@ -27,6 +27,7 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
         host->requestReport(0x16, 0x03, 3);  // PresentStatus (ACPresent, Charging, Overload, etc)
         host->requestReport(0x0c, 0x03, 8);  // RemainingCapacity e RunTimeToEmpty
         host->requestReport(0x31, 0x03, 3);  // Input Voltage
+        host->requestReport(0x09, 0x03, 3);  // Battery Voltage
         host->requestReport(0x50, 0x03, 2);  // PercentLoad
     }
 
@@ -53,6 +54,9 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                 case 8: host->requestReport(0x18, 0x03, 2); break; // Audible Alarm Control
                 case 9: host->requestReport(0x42, 0x03, 3); break; // Delay Before Shutdown
                 case 10: host->requestReport(0x40, 0x03, 2); break; // Delay Before Reboot
+                case 11: host->requestReport(0x32, 0x03, 3); break; // Low Voltage Transfer
+                case 12: host->requestReport(0x33, 0x03, 3); break; // High Voltage Transfer
+                case 13: host->requestReport(0x52, 0x03, 3); break; // Config Active Power
                 default: 
                     _poll_step = 0; 
                     return;
@@ -82,8 +86,11 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
                 ups_data.discharging = data[offset] & (1 << 1);
                 ups_data.acPresent = data[offset] & (1 << 2);
                 ups_data.belowRemainingCapacityLimit = data[offset] & (1 << 4);
+                ups_data.shutdownImminent = data[offset] & (1 << 5);
+                ups_data.communicationLost = data[offset] & (1 << 7);
             }
             if (length - offset >= 2) {
+                ups_data.needReplacement = data[offset + 1] & (1 << 0);
                 ups_data.overload = data[offset + 1] & (1 << 1);
             }
             break;
@@ -101,7 +108,7 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
 
         case 0x31: // Input Voltage
             if (length - offset >= 2) {
-                ups_data.outputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+                ups_data.inputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             break;
 
@@ -112,8 +119,8 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
             break;
 
         case 0x08: // Config Voltage
-            if (length - offset >= 1) {
-                ups_data.configVoltage = data[offset];
+            if (length - offset >= 2) {
+                ups_data.configVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             break;
 
@@ -150,6 +157,30 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
         case 0x40: // Delay Before Reboot (start)
             if (length - offset >= 1) {
                 ups_data.delayStart = data[offset];
+            }
+            break;
+
+        case 0x09: // Battery Voltage
+            if (length - offset >= 2) {
+                ups_data.batteryVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            }
+            break;
+
+        case 0x32: // Low Voltage Transfer
+            if (length - offset >= 2) {
+                ups_data.lowVoltageTransfer = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            }
+            break;
+
+        case 0x33: // High Voltage Transfer
+            if (length - offset >= 2) {
+                ups_data.highVoltageTransfer = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            }
+            break;
+
+        case 0x52: // Config Active Power
+            if (length - offset >= 2) {
+                ups_data.realPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             break;
 
