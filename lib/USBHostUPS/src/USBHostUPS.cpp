@@ -419,7 +419,14 @@ String USBHostUPS::dumpUSBDiagnostics() {
         };
         transfer->num_bytes = 8 + 512;
 
-        err = usb_host_transfer_submit_control(_client_handle, transfer);
+        int retries = 10;
+        do {
+            err = usb_host_transfer_submit_control(_client_handle, transfer);
+            if (err == ESP_OK) break;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            retries--;
+        } while (retries > 0);
+
         if (err == ESP_OK) {
             int timeout = 200; // 2 seconds
             while (!ctx.done && timeout > 0) {
