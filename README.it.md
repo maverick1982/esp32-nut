@@ -23,7 +23,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - **Eaton** (Testato con la serie Eaton 3S)
 - **APC** (Mappato tramite lo standard NUT `apc-hid`)
 - **CyberPower** (Mappato tramite lo standard NUT `cps-hid`)
-- **Generici / Altre Marche**: Qualsiasi UPS che implementi la classe standard USB HID Power Device utilizzerà un driver di fallback generico, capace di leggere le statistiche basilari (es. Livello Batteria, Stato AC).
+- **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, ti invitiamo ad aprire una Issue su GitHub fornendo i log USB per richiederne il supporto dedicato.
 
 ## 📸 Screenshot
 
