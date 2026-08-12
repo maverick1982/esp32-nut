@@ -33,14 +33,14 @@ struct UPSData {
 
     uint16_t configApparentPower = 0;
     uint8_t configFrequency = 0;
-    uint8_t configVoltage = 0;
+    uint16_t configVoltage = 0;
 
     uint16_t outputVoltage = 0;
     uint16_t inputVoltage = 0;
     uint16_t batteryVoltage = 0;
 
     uint16_t highVoltageTransfer = 0;
-    uint8_t lowVoltageTransfer = 0;
+    uint16_t lowVoltageTransfer = 0;
 
     String manufacturer = "";
     String product = "";
