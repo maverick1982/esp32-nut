@@ -1,0 +1,84 @@
+schema: archetipo/plan/v2
+spec_code: US-043
+body: "## Technical Solution\n\n- **Backend - USB Diagnostics**: In `GenericDriver::setup()`, set `ups_data.upsType = \"Generic\"` to identify the fallback driver. Modify `USBHostUPS` to include a method for dumping diagnostics. The method will retrieve VID, PID, String Descriptors (already requested during setup or requested on demand) and perform a Control Transfer (GET_DESCRIPTOR, Report Descriptor 0x2200) to fetch the raw HID descriptor. Since `usb_host_transfer` is asynchronous in ESP-IDF, the driver could fetch and cache this descriptor during the initial connection phase to avoid blocking the HTTP server, or use a FreeRTOS EventGroup to wait for the transfer to complete during the API call. The data will be formatted as a JSON string containing the hex array.\n- **Backend - API Endpoint**: In `WebConfigServer`, add the `/api/usb/dump` endpoint. It will fetch the diagnostic JSON from `USBHostUPS` and serve it with the `Content-Disposition: attachment; filename=\"usb_diagnostics.json\"` header to force a file download.\n- **Frontend**: Update `index.html` to add the `Export USB Diagnostics` button in the System Logs tab. In the UPS Telemetry tab, add a hidden banner. In `app.js`, within `fetchUpsVars`, check `data['ups.type']`. If it equals `\"Generic\"`, make the banner visible. Bind the export button to `window.location.href = '/api/usb/dump';`.\n\n## Test Strategy\n\n- **E2E Testing (Playwright)**: \n  - Modify or create Playwright tests to intercept `/api/ups-vars` and mock the response.\n  - Scenario 1: `ups.type` is `\"Generic\"`. Verify the banner is visible and contains the correct GitHub link.\n  - Scenario 2: `ups.type` is `\"Eaton\"`. Verify the banner is not visible.\n  - Scenario 3: Navigate to System Logs, click the `Export USB Diagnostics` button and verify a download event is triggered to `/api/usb/dump`.\n  - Note: Playwright is already configured in the project (`e2e/`)."
+tasks:
+  - id: TASK-01
+    title: Set Generic Driver Type
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Impostare il tipo di driver a "Generic" quando viene usato il driver di fallback, in modo che il frontend possa riconoscerlo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/GenericDriver.cpp` — in `setup()`, impostare `ups_data.upsType = "Generic";`
+
+      ## Criteri di Completamento
+      - [ ] L'API `/api/ups-vars` restituisce `ups.type: "Generic"` quando nessun UPS supportato è collegato.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implement USB Diagnostics Fetch
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Recuperare il Report Descriptor HID raw tramite Control Transfer ed esporre un metodo per generare il JSON diagnostico.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere metodo `String dumpUSBDiagnostics()`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementare la logica per allocare e inviare un `usb_host_transfer_t` per richiedere il GET_DESCRIPTOR (0x22). Strutturare il risultato in JSON con VID, PID, String Descriptors e l'array esadecimale del report HID.
+
+      ## Criteri di Completamento
+      - [ ] Il metodo restituisce un JSON formattato correttamente con VID, PID e i byte del descrittore in esadecimale.
+    ref: TASK-02
+  - id: TASK-03
+    title: Add API Endpoint for Dump
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Esporre l'endpoint REST che scarica il file JSON diagnostico.
+
+      ## File Coinvolti
+      - `src/network/web_config_server.cpp` — Aggiungere il route `/api/usb/dump` che chiama `dumpUSBDiagnostics()` e imposta l'header `Content-Disposition: attachment; filename="usb_diagnostics.json"`.
+
+      ## Criteri di Completamento
+      - [ ] Chiamando l'endpoint via browser, viene avviato il download del file JSON.
+    ref: TASK-03
+  - id: TASK-04
+    title: Frontend UI Updates
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Aggiungere il bottone di esportazione e il banner condizionale nell'interfaccia utente.
+
+      ## File Coinvolti
+      - `data/www/index.html` — Aggiungere `<button id="btn-export-usb">` nella tab System Logs. Aggiungere il div del banner nella tab UPS Telemetry (nascosto di default).
+      - `data/www/app.js` — Nel metodo `fetchUpsVars`, mostrare il banner se `data['ups.type'] === 'Generic'`. Aggiungere l'event listener sul bottone per fare redirect a `/api/usb/dump`.
+
+      ## Criteri di Completamento
+      - [ ] Il banner compare solo con UPS non supportati.
+      - [ ] Il click sul bottone scarica il file.
+      - [ ] Tutti i testi in inglese e link a GitHub corretto.
+    ref: TASK-04
+  - id: TASK-05
+    title: E2E Tests for Diagnostics UI
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Scrivere test Playwright per verificare il comportamento della UI.
+
+      ## File Coinvolti
+      - `e2e/ups-telemetry.spec.ts` (o file simile) — Testare la comparsa del banner.
+      - `e2e/logs-viewer.spec.ts` — Testare il click sul bottone di export.
+
+      ## Criteri di Completamento
+      - [ ] I test mockano la risposta `/api/ups-vars` e verificano la visibilità del banner nei due scenari.
+      - [ ] Il test verifica che il download venga richiesto all'URL corretto.
+    ref: TASK-05

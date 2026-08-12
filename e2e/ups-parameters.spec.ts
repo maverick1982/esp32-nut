@@ -83,4 +83,29 @@ test.describe('UPS Parameters UI', () => {
     const chargeWidth = await page.locator('#bar-charge').evaluate((el) => el.style.width);
     expect(chargeWidth).toBe('95%');
   });
+
+  test('shows generic banner for Generic UPS', async ({ page }) => {
+    let mockData = {
+      "ups.status": "OL",
+      "ups.type": "Generic"
+    };
+
+    await page.route('**/api/ups-vars', async route => {
+      await route.fulfill({ json: mockData });
+    });
+
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target="ups"]');
+    
+    await expect(page.locator('#generic-ups-banner')).toBeVisible();
+
+    // Change to supported UPS
+    mockData = {
+      "ups.status": "OL",
+      "ups.type": "Eaton"
+    };
+    
+    // Wait for the next poll
+    await expect(page.locator('#generic-ups-banner')).toBeHidden({ timeout: 3500 });
+  });
 });

@@ -13,6 +13,12 @@ test.describe('Generate Screenshots', () => {
     await page.route('http://esp32.local/ups.css', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
     });
+    await page.route('http://esp32.local/mobile.css', async route => {
+      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/mobile.css') });
+    });
+    await page.route('http://esp32.local/logo.png', async route => {
+      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/logo.png') });
+    });
     await page.route('http://esp32.local/app.js', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
     });

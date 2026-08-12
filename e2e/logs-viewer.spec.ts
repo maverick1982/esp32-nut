@@ -74,4 +74,30 @@ test.describe('System Logs View', () => {
     // Verifica che appaia "Auto-refresh enabled"
     await expect(terminalOutput).toContainText('Auto-refresh enabled');
   });
+
+  test('should trigger USB diagnostics download', async ({ page }) => {
+    await page.route('**/api/usb/dump', async route => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Disposition': 'attachment; filename="usb_diagnostics.json"'
+        },
+        body: JSON.stringify({ driver: "Generic", vid: "0x1234", pid: "0x5678" })
+      });
+    });
+
+    await page.goto('http://esp32.local/');
+    await page.click('[data-target="logs"]');
+
+    const btnExportUsb = page.locator('#btn-export-usb');
+    await expect(btnExportUsb).toBeVisible();
+
+    const requestPromise = page.waitForRequest(request => request.url().includes('/api/usb/dump'));
+    await btnExportUsb.click();
+    await requestPromise;
+
+    const terminalOutput = page.locator('#terminal-output');
+    await expect(terminalOutput).toContainText('Downloading USB diagnostics...');
+  });
 });

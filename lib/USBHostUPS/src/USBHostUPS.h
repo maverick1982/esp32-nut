@@ -70,6 +70,7 @@ public:
 
     const UPSData& getUPSData() const;
     String getUPSStatusString() const;
+    String dumpUSBDiagnostics();
 
     bool setBeeper(bool enable);
     void setLogCallback(LogCallback cb);
