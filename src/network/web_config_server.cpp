@@ -77,6 +77,14 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
     server.on("/api/system-status", HTTP_GET, [this]() { handleSystemStatus(); });
     server.on("/api/beeper", HTTP_POST, [this]() { handleBeeper(); });
+    server.on("/api/usb/dump", HTTP_GET, [this]() {
+        if (!usb_ups) {
+            server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
+            return;
+        }
+        server.sendHeader("Content-Disposition", "attachment; filename=\"usb_diagnostics.json\"");
+        server.send(200, "application/json", usb_ups->dumpUSBDiagnostics());
+    });
 
     // OTA endpoints
     server.on("/update", HTTP_GET, [this]() { handleOTAPage(); });

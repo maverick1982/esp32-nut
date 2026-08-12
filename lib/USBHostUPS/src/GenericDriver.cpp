@@ -9,6 +9,9 @@ void GenericDriver::setup() {
 }
 
 void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
+    if (data.upsType != "Generic") {
+        data.upsType = "Generic";
+    }
     if (now - _last_poll > 5000) {
         _last_poll = now;
         // Basic fallback polling

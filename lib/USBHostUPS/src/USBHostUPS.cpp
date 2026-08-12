@@ -3,7 +3,7 @@
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "GenericDriver.h"
-
+#include <ArduinoJson.h>
 USBHostUPS::USBHostUPS() : 
     _usb_task_handle(NULL), 
     _client_task_handle(NULL), 
@@ -360,6 +360,93 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
         }
     }
     usb_host_transfer_free(transfer);
+}
+
+struct DiagContext {
+    volatile bool done;
+    uint8_t data[512];
+    size_t len;
+};
+
+String USBHostUPS::dumpUSBDiagnostics() {
+    JsonDocument doc;
+    doc["driver"] = _ups_data.upsType.length() > 0 ? _ups_data.upsType : "Unknown";
+    
+    if (_dev_handle == NULL) {
+        doc["error"] = "No device connected";
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+    const usb_device_desc_t *desc;
+    if (usb_host_get_device_descriptor(_dev_handle, &desc) == ESP_OK) {
+        char hex[10];
+        sprintf(hex, "0x%04X", desc->idVendor);
+        doc["vid"] = hex;
+        sprintf(hex, "0x%04X", desc->idProduct);
+        doc["pid"] = hex;
+    }
+
+    doc["manufacturer"] = _ups_data.manufacturer;
+    doc["product"] = _ups_data.product;
+
+    usb_transfer_t *transfer = NULL;
+    esp_err_t err = usb_host_transfer_alloc(8 + 512, 0, &transfer);
+    if (err == ESP_OK) {
+        usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+        setup->bmRequestType = 0x81;
+        setup->bRequest = 0x06;
+        setup->wValue = 0x2200;
+        setup->wIndex = 0;
+        setup->wLength = 512;
+
+        DiagContext ctx;
+        ctx.done = false;
+        ctx.len = 0;
+        
+        transfer->device_handle = _dev_handle;
+        transfer->context = &ctx;
+        transfer->callback = [](usb_transfer_t *t) {
+            DiagContext *c = (DiagContext*)t->context;
+            if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
+                c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+                if (c->len > 512) c->len = 512;
+                memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+            }
+            c->done = true;
+            usb_host_transfer_free(t);
+        };
+        transfer->num_bytes = 8 + 512;
+
+        err = usb_host_transfer_submit_control(_client_handle, transfer);
+        if (err == ESP_OK) {
+            int timeout = 200; // 2 seconds
+            while (!ctx.done && timeout > 0) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                timeout--;
+            }
+            if (ctx.done && ctx.len > 0) {
+                JsonArray raw = doc["report_descriptor_hex"].to<JsonArray>();
+                for (size_t i = 0; i < ctx.len; i++) {
+                    char hexb[5];
+                    sprintf(hexb, "0x%02X", ctx.data[i]);
+                    raw.add(hexb);
+                }
+            } else if (!ctx.done) {
+                doc["error"] = "Control transfer timeout";
+            }
+        } else {
+            usb_host_transfer_free(transfer);
+            doc["error"] = "Failed to submit control transfer";
+        }
+    } else {
+        doc["error"] = "Failed to allocate transfer";
+    }
+
+    String out;
+    serializeJson(doc, out);
+    return out;
 }
 
 

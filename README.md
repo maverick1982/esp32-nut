@@ -23,7 +23,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - **Eaton** (Tested with Eaton 3S series)
 - **APC** (Mapped via standard NUT `apc-hid`)
 - **CyberPower** (Mapped via standard NUT `cps-hid`)
-- **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, please open an issue on GitHub providing the USB logs to request dedicated support.
+- **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, you can use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`). Please attach this file when opening an issue on GitHub to request dedicated support or report bugs on existing drivers.
 
 ## 📸 Screenshots
 

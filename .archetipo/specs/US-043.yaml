@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |-
   #### US-043: Esportazione Diagnostica USB (Dump HID) via Web UI
 
@@ -19,13 +19,25 @@ body: |-
   Così da poterlo fornire agli sviluppatori su GitHub per l'implementazione del driver senza dover usare console seriali o sistemi Linux esterni.
 
   **Demonstrates**
-  Dopo aver implementato questa spec, nella Web UI sarà presente un pulsante "Export USB Diagnostics (for Support)". Cliccandolo, il browser scaricherà un file (es. JSON o log) contenente i dati grezzi del dispositivo USB connesso: VID, PID, String Descriptors e soprattutto l'intero HID Report Descriptor (richiesto tramite `GET_DESCRIPTOR` e salvato in hex), permettendo a un developer di fare il reverse engineering della mappa dati.
+  Dopo aver implementato questa spec, l'interfaccia web si comporterà come segue:
+  1. Nella tab "System Logs" sarà presente un nuovo pulsante "Export USB Diagnostics" vicino ai controlli esistenti.
+  2. Se l'ESP32 utilizza il driver di fallback ("Generic"), nella tab "UPS Telemetry" apparirà un banner di avviso visibile che recita: "Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an issue on GitHub to request support.", includendo un link diretto cliccabile a `https://github.com/maverick1982/esp32-nut/issues`.
+  3. Cliccando il pulsante di esportazione, il browser scaricherà un file contenente i dati diagnostici grezzi (VID, PID, String Descriptors e l'intero HID Report Descriptor in esadecimale). Tutti i testi della UI devono rigorosamente essere in inglese.
 
   **Acceptance Criteria**
-  - [ ] La Web UI include un pulsante/azione per esportare il log diagnostico USB.
+  - [ ] Aggiunta del pulsante "Export USB Diagnostics" nella tab "System Logs".
+  - [ ] Aggiunta di un banner di avviso condizionale nella tab "UPS Telemetry", mostrato solo se è in uso il driver generico, con link diretto a GitHub.
   - [ ] Il firmware espone un endpoint (es. `/api/usb/dump`) che restituisce VID, PID e String Descriptors.
   - [ ] L'endpoint effettua una Control Transfer USB (tipo `0x22`) per leggere il raw HID Report Descriptor del dispositivo e lo include nel file esportato come array esadecimale.
   - [ ] Il download del file non interferisce in modo permanente con il normale polling del driver USB.
 history:
   - status: TODO
     at: "2026-08-12T07:20:22Z"
+  - status: PLANNED
+    at: "2026-08-12T10:06:49Z"
+  - status: IN PROGRESS
+    at: "2026-08-12T10:10:01Z"
+  - status: REVIEW
+    at: "2026-08-12T10:18:46Z"
+  - status: DONE
+    at: "2026-08-12T11:05:59Z"

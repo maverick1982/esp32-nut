@@ -136,6 +136,10 @@
                         </div>
                     </div>
                     
+                    <div id="generic-ups-banner" style="display: none; background: var(--danger); color: white; padding: 10px 15px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-weight: 500;">
+                        Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an issue on <a href="https://github.com/maverick1982/esp32-nut/issues" target="_blank" style="color: white; text-decoration: underline;">GitHub</a> to request support.
+                    </div>
+                    
                     <div class="metrics-grid">
                         <div class="metric-card highlight">
                             <div class="metric-label">UPS Status</div>
@@ -207,6 +211,10 @@
                             <button class="btn btn-primary" id="btn-download">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                                 Export
+                            </button>
+                            <button class="btn btn-outline" id="btn-export-usb">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                                Export USB Diagnostics
                             </button>
                         </div>
                     </div>

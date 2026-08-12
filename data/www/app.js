@@ -210,6 +210,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const btnExportUsb = document.getElementById('btn-export-usb');
+    if(btnExportUsb) {
+        btnExportUsb.addEventListener('click', () => {
+            addLogEntry('INFO', 'Downloading USB diagnostics...');
+            window.location.href = '/api/usb/dump';
+        });
+    }
+
+
     function addLogEntry(level, msg) {
         if(!terminalOutput) return;
         const now = new Date();
@@ -347,6 +356,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error('UPS Error:', data.error);
                 return;
             }
+
+            const genericBanner = document.getElementById('generic-ups-banner');
+            if (genericBanner) {
+                if (data['ups.type'] === 'Generic') {
+                    genericBanner.style.display = 'block';
+                } else {
+                    genericBanner.style.display = 'none';
+                }
+            }
+
 
             // Update primary metrics
             if (elStatus) elStatus.innerText = data['ups.status'] || '--';
