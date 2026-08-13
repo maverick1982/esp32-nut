@@ -39,24 +39,24 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             switch (_poll_step) {
                 // Fast poll (every 2s)
-                case 1: host->requestReport(0x01, 0x03, 4); break;
+                case 1: host->requestReport(0x01, 0x03, 2); break;
                 case 2: host->requestReport(0x0B, 0x03, 2); break;
                 case 3: host->requestReport(0x08, 0x03, 6); break;
                 case 4: host->requestReport(0x13, 0x03, 2); break;
                 case 5: host->requestReport(0x0F, 0x03, 3); break;
                 case 6: host->requestReport(0x12, 0x03, 3); break;
-                case 7: host->requestReport(0x0a, 0x03, 2); break;
+                case 7: host->requestReport(0x0a, 0x03, 3); break;
 
                 // Slow poll (every 30s)
                 case 8: if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1); break;
                 case 9: if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2); break;
                 case 10: if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(3); break;
                 case 11: if (_slow_poll_counter == 0) host->requestReport(0x10, 0x03, 5); break; // Low/High Voltage Transfer
-                case 12: if (_slow_poll_counter == 0) host->requestReport(0x18, 0x03, 3); break; // Config Active Power
+                case 12: if (_slow_poll_counter == 0) host->requestReport(0x18, 0x03, 5); break; // Config Active Power
                 case 13: if (_slow_poll_counter == 0) host->requestReport(0x07, 0x03, 7); break; // Capacity Info
                 case 14: if (_slow_poll_counter == 0) host->requestReport(0x15, 0x03, 3); break; // Delay Shutdown
                 case 15: if (_slow_poll_counter == 0) host->requestReport(0x16, 0x03, 3); break; // Delay Start
-                case 16: if (_slow_poll_counter == 0) host->requestReport(0x09, 0x03, 2); break; // Config Voltage
+                case 16: if (_slow_poll_counter == 0) host->requestReport(0x09, 0x03, 3); break; // Config Voltage
                 case 17: if (_slow_poll_counter == 0) host->requestReport(0x0C, 0x03, 2); break; // Audible Alarm
                 case 18: if (_slow_poll_counter == 0) host->requestReport(0x0E, 0x03, 2); break; // Input Config Voltage
                 case 19: if (_slow_poll_counter == 0) host->requestReport(0x17, 0x03, 2); break; // Boost / Overload
@@ -137,7 +137,9 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             break;
 
         case 0x0a: // Battery Voltage
-            if (length - offset >= 1) {
+            if (length - offset >= 2) {
+                ups_data.batteryVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            } else if (length - offset >= 1) {
                 ups_data.batteryVoltage = data[offset];
             }
             break;
@@ -151,9 +153,12 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             }
             break;
 
-        case 0x18: // Config Active Power
+        case 0x18: // Config Active/Apparent Power
             if (length - offset >= 2) {
-                ups_data.configApparentPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+                ups_data.realPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            }
+            if (length - offset >= 4) {
+                ups_data.configApparentPower = (uint16_t)data[offset + 2] | ((uint16_t)data[offset + 3] << 8);
             }
             break;
 
@@ -164,7 +169,9 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             break;
 
         case 0x09: // Config Voltage
-            if (length - offset >= 1) {
+            if (length - offset >= 2) {
+                ups_data.configVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+            } else if (length - offset >= 1) {
                 ups_data.configVoltage = data[offset];
             }
             break;
