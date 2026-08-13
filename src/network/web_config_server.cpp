@@ -37,43 +37,43 @@ void WebConfigServer::begin(bool isAPMode) {
     });
 
     server.on("/app.js", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "application/javascript", (const char*)web_asset_app_js, web_asset_app_js_len);
     });
 
     server.on("/fflate.min.js", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "application/javascript", (const char*)web_asset_fflate_min_js, web_asset_fflate_min_js_len);
     });
 
     server.on("/shared.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "text/css", (const char*)web_asset_shared_css, web_asset_shared_css_len);
     });
 
     server.on("/ups.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "text/css", (const char*)web_asset_ups_css, web_asset_ups_css_len);
     });
 
     server.on("/mobile.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "text/css", (const char*)web_asset_mobile_css, web_asset_mobile_css_len);
     });
 
     server.on("/logo.png", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "image/png", (const char*)web_asset_logo_png, web_asset_logo_png_len);
     });
 
     server.on("/favicon.ico", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "public, max-age=31536000");
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         server.sendHeader("Content-Encoding", "gzip");
         server.send_P(200, "image/x-icon", (const char*)web_asset_favicon_ico, web_asset_favicon_ico_len);
     });

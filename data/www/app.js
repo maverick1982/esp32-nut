@@ -210,11 +210,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const btnExportUsb = document.getElementById('btn-export-usb');
-    if(btnExportUsb) {
-        btnExportUsb.addEventListener('click', () => {
+    const linkExportUsb = document.getElementById('link-export-usb');
+    if(linkExportUsb) {
+        linkExportUsb.addEventListener('click', () => {
             addLogEntry('INFO', 'Downloading USB diagnostics...');
-            window.location.href = '/api/usb/dump';
         });
     }
 
