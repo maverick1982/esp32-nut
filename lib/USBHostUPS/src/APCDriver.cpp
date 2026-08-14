@@ -119,6 +119,11 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
             if (length - offset >= 1) {
                 ups_data.load = data[offset];
             }
+            if (ups_data.configActivePower > 0) {
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
+            } else if (ups_data.configApparentPower > 0) {
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
+            }
             break;
 
         case 0x08: // Config Voltage
@@ -183,7 +188,7 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
 
         case 0x52: // Config Active Power
             if (length - offset >= 2) {
-                ups_data.realPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+                ups_data.configActivePower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             break;
 

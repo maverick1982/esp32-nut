@@ -115,8 +115,11 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
             if (length - offset >= 1) {
                 ups_data.load = data[offset];
             }
-            if (ups_data.configApparentPower > 0) {
-                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * ups_data.load) / 100);
+            if (ups_data.configActivePower > 0) {
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
+            } else if (ups_data.configApparentPower > 0) {
+                // Fallback to assuming PF = 0.6 if active power is unknown
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
             }
             break;
 
@@ -155,7 +158,7 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const u
 
         case 0x18: // Config Active/Apparent Power
             if (length - offset >= 2) {
-                ups_data.realPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+                ups_data.configActivePower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             if (length - offset >= 4) {
                 ups_data.configApparentPower = (uint16_t)data[offset + 2] | ((uint16_t)data[offset + 3] << 8);

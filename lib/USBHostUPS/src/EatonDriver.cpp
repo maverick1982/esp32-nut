@@ -120,7 +120,9 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_
         case 0x07:
             if (length - offset >= 6) {
                 ups_data.load = data[offset + 5];
-                if (ups_data.configApparentPower > 0) {
+                if (ups_data.configActivePower > 0) {
+                    ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
+                } else if (ups_data.configApparentPower > 0) {
                     ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
                 }
             }
