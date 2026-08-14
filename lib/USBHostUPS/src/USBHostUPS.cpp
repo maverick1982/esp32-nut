@@ -142,16 +142,19 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: Eaton");
                                 Serial.println("[USBHostUPS] Recognized vendor: Eaton");
                                 _driver = new EatonDriver();
+                                _ups_data.upsType = "Eaton";
                                 break;
                             case 0x051d:
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: APC");
                                 Serial.println("[USBHostUPS] Recognized vendor: APC");
                                 _driver = new APCDriver();
+                                _ups_data.upsType = "APC";
                                 break;
                             case 0x0764:
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: CyberPower");
                                 Serial.println("[USBHostUPS] Recognized vendor: CyberPower");
                                 _driver = new CyberPowerDriver();
+                                _ups_data.upsType = "CyberPower";
                                 break;
                             default:
                                 {
@@ -161,6 +164,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 }
                                 Serial.printf("[USBHostUPS] Unknown vendor: %04X\n", desc->idVendor);
                                 _driver = new GenericDriver();
+                                _ups_data.upsType = "Generic";
                                 break;
                         }
                         _driver->setup();
@@ -419,7 +423,14 @@ String USBHostUPS::dumpUSBDiagnostics() {
         };
         transfer->num_bytes = 8 + 512;
 
-        err = usb_host_transfer_submit_control(_client_handle, transfer);
+        int retries = 10;
+        do {
+            err = usb_host_transfer_submit_control(_client_handle, transfer);
+            if (err == ESP_OK) break;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            retries--;
+        } while (retries > 0);
+
         if (err == ESP_OK) {
             int timeout = 200; // 2 seconds
             while (!ctx.done && timeout > 0) {

@@ -32,6 +32,7 @@ struct UPSData {
     uint8_t fullChargeCapacity = 0;
 
     uint16_t configApparentPower = 0;
+    uint16_t configActivePower = 0;
     uint8_t configFrequency = 0;
     uint16_t configVoltage = 0;
 

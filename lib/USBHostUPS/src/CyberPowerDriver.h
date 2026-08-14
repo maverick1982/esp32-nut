@@ -19,6 +19,7 @@ private:
     uint32_t _last_fast_poll;
     uint32_t _last_step_time;
     uint8_t _poll_step;
+    uint8_t _slow_poll_counter;
 };
 
 #endif // CYBERPOWER_DRIVER_H

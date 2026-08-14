@@ -20,6 +20,7 @@ private:
     uint8_t _poll_step;
     uint32_t _last_step_time;
     uint32_t _last_fast_poll;
+    uint8_t _slow_poll_counter;
 };
 
 #endif // EATON_DRIVER_H

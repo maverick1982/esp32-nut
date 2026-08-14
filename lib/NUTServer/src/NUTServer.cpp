@@ -267,6 +267,7 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data.highVoltageTransfer);
                 client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data.lowVoltageTransfer);
                 client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
+                if (data.configActivePower > 0) client.printf("VAR %s ups.realpower.nominal \"%d\"\n", upsName.c_str(), data.configActivePower);
                 client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
                 client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data.configVoltage);
                 if (data.outputVoltageNominal > 0) client.printf("VAR %s output.voltage.nominal \"%d\"\n", upsName.c_str(), data.outputVoltageNominal);
@@ -433,6 +434,8 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data.lowVoltageTransfer);
             } else if (varNameLower == "ups.power.nominal") {
                 client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
+            } else if (varNameLower == "ups.realpower.nominal" && data.configActivePower > 0) {
+                client.printf("VAR %s ups.realpower.nominal \"%d\"\n", upsName.c_str(), data.configActivePower);
             } else if (varNameLower == "input.frequency.nominal") {
                 client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data.configFrequency);
             } else if (varNameLower == "input.voltage.nominal") {

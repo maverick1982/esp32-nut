@@ -4,8 +4,9 @@
 APCDriver::APCDriver() : 
     _last_poll(0),
     _last_fast_poll(0),
+    _last_step_time(0),
     _poll_step(0),
-    _last_step_time(0) {
+    _slow_poll_counter(0) {
 }
 
 void APCDriver::setup() {
@@ -13,30 +14,23 @@ void APCDriver::setup() {
     _last_fast_poll = 0;
     _poll_step = 0;
     _last_step_time = 0;
+    _slow_poll_counter = 0;
     Serial.println("[APCDriver] Setup started.");
 }
 
 void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    // Polling Veloce (Dinamico)
-    if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-        _last_fast_poll = now != 0 ? now : 1;
-        // Tipici report per APC BE600M1
-        host->requestReport(0x06, 0x03, 4);  // Fallback status (Charging/Discharging/StatusFlag)
-        host->requestReport(0x16, 0x03, 3);  // PresentStatus (ACPresent, Charging, Overload, etc)
-        host->requestReport(0x0c, 0x03, 8);  // RemainingCapacity e RunTimeToEmpty
-        host->requestReport(0x31, 0x03, 3);  // Input Voltage
-        host->requestReport(0x09, 0x03, 3);  // Battery Voltage
-        host->requestReport(0x50, 0x03, 2);  // PercentLoad
-    }
-
-    // Polling Lento (Statico)
     if (_poll_step == 0) {
-        if (now - _last_poll >= 30000 || _last_poll == 0) {
-            _last_poll = now != 0 ? now : 1;
+        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+            _last_fast_poll = now != 0 ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
+            
+            _slow_poll_counter++;
+            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
+                _slow_poll_counter = 0;
+            }
         }
     }
 
@@ -44,19 +38,28 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
         if (now - _last_step_time >= 50 || _poll_step == 1) {
             _last_step_time = now;
             switch (_poll_step) {
-                case 1: if (data.manufacturer == "") host->requestStringDescriptor(1); break;
-                case 2: if (data.product == "") host->requestStringDescriptor(2); break;
-                case 3: if (data.serialNumber == "") host->requestStringDescriptor(3); break;
-                case 4: host->requestReport(0x08, 0x03, 3); break; // Config Voltage
-                case 5: host->requestReport(0x0d, 0x03, 2); break; // Design Capacity
-                case 6: host->requestReport(0x0e, 0x03, 2); break; // Full Charge Capacity
-                case 7: host->requestReport(0x11, 0x03, 2); break; // Remaining Capacity Limit
-                case 8: host->requestReport(0x18, 0x03, 2); break; // Audible Alarm Control
-                case 9: host->requestReport(0x42, 0x03, 3); break; // Delay Before Shutdown
-                case 10: host->requestReport(0x40, 0x03, 2); break; // Delay Before Reboot
-                case 11: host->requestReport(0x32, 0x03, 3); break; // Low Voltage Transfer
-                case 12: host->requestReport(0x33, 0x03, 3); break; // High Voltage Transfer
-                case 13: host->requestReport(0x52, 0x03, 3); break; // Config Active Power
+                // Fast poll
+                case 1: host->requestReport(0x06, 0x03, 4); break; // Fallback status
+                case 2: host->requestReport(0x16, 0x03, 3); break; // PresentStatus
+                case 3: host->requestReport(0x0c, 0x03, 8); break; // RemainingCapacity e RunTimeToEmpty
+                case 4: host->requestReport(0x31, 0x03, 3); break; // Input Voltage
+                case 5: host->requestReport(0x09, 0x03, 3); break; // Battery Voltage
+                case 6: host->requestReport(0x50, 0x03, 2); break; // PercentLoad
+
+                // Slow poll
+                case 7: if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1); break;
+                case 8: if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2); break;
+                case 9: if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(3); break;
+                case 10: if (_slow_poll_counter == 0) host->requestReport(0x08, 0x03, 3); break; // Config Voltage
+                case 11: if (_slow_poll_counter == 0) host->requestReport(0x0d, 0x03, 2); break; // Design Capacity
+                case 12: if (_slow_poll_counter == 0) host->requestReport(0x0e, 0x03, 2); break; // Full Charge Capacity
+                case 13: if (_slow_poll_counter == 0) host->requestReport(0x11, 0x03, 2); break; // Remaining Capacity Limit
+                case 14: if (_slow_poll_counter == 0) host->requestReport(0x18, 0x03, 2); break; // Audible Alarm Control
+                case 15: if (_slow_poll_counter == 0) host->requestReport(0x42, 0x03, 3); break; // Delay Before Shutdown
+                case 16: if (_slow_poll_counter == 0) host->requestReport(0x40, 0x03, 2); break; // Delay Before Reboot
+                case 17: if (_slow_poll_counter == 0) host->requestReport(0x32, 0x03, 3); break; // Low Voltage Transfer
+                case 18: if (_slow_poll_counter == 0) host->requestReport(0x33, 0x03, 3); break; // High Voltage Transfer
+                case 19: if (_slow_poll_counter == 0) host->requestReport(0x52, 0x03, 3); break; // Config Active Power
                 default: 
                     _poll_step = 0; 
                     return;
@@ -115,6 +118,11 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
         case 0x50: // PercentLoad
             if (length - offset >= 1) {
                 ups_data.load = data[offset];
+            }
+            if (ups_data.configActivePower > 0) {
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
+            } else if (ups_data.configApparentPower > 0) {
+                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
             }
             break;
 
@@ -180,7 +188,7 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t 
 
         case 0x52: // Config Active Power
             if (length - offset >= 2) {
-                ups_data.realPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
+                ups_data.configActivePower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
             }
             break;
 

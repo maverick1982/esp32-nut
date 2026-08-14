@@ -6,7 +6,8 @@ EatonDriver::EatonDriver() :
     _chemStrIdx(0),
     _poll_step(0),
     _last_step_time(0),
-    _last_fast_poll(0) {
+    _last_fast_poll(0),
+    _slow_poll_counter(0) {
 }
 
 void EatonDriver::setup() {
@@ -15,25 +16,22 @@ void EatonDriver::setup() {
     _poll_step = 0;
     _last_step_time = 0;
     _last_fast_poll = 0;
+    _slow_poll_counter = 0;
 }
 
 void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    // Polling Veloce (Dinamico)
-    if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-        _last_fast_poll = now != 0 ? now : 1;
-        host->requestReport(0x01, 0x03, 4);
-        host->requestReport(0x06, 0x03, 6);
-        host->requestReport(0x07, 0x03, 8);
-    }
-
-    // Polling Lento (Statico)
     if (_poll_step == 0) {
-        if (now - _last_poll >= 30000 || _last_poll == 0) {
-            _last_poll = now != 0 ? now : 1;
+        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+            _last_fast_poll = now != 0 ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
+
+            _slow_poll_counter++;
+            if (_slow_poll_counter >= 15) {
+                _slow_poll_counter = 0;
+            }
         }
     }
 
@@ -41,24 +39,27 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
         if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
             _last_step_time = now;
             switch (_poll_step) {
-                case 1: if (data.manufacturer == "") host->requestStringDescriptor(1); break;
-                case 2: if (data.product == "") host->requestStringDescriptor(2); break;
-                case 3: if (data.serialNumber == "") host->requestStringDescriptor(4); break;
-                case 4: break; // Spostato nel polling veloce
-                case 5: host->requestReport(0x02, 0x03, 3); break;
-                case 6: break; // Spostato nel polling veloce
-                case 7: break; // Spostato nel polling veloce
-                case 8: host->requestReport(0x08, 0x03, 2); break;
-                case 9: host->requestReport(0x09, 0x03, 5); break;
-                case 10: host->requestReport(0x0a, 0x03, 5); break;
-                case 11: host->requestReport(0x0c, 0x03, 8); break;
-                case 12: host->requestReport(0x0d, 0x03, 4); break;
-                case 13: host->requestReport(0x0e, 0x03, 3); break;
-                case 14: host->requestReport(0x10, 0x03, 9); break;
-                case 15: host->requestReport(0x12, 0x03, 2); break;
-                case 16: host->requestReport(0x13, 0x03, 3); break;
-                case 17: host->requestReport(0x14, 0x03, 2); break;
-                case 18: host->requestReport(0x1f, 0x03, 2); break;
+                // Fast poll
+                case 1: host->requestReport(0x01, 0x03, 4); break;
+                case 2: host->requestReport(0x06, 0x03, 6); break;
+                case 3: host->requestReport(0x07, 0x03, 8); break;
+
+                // Slow poll
+                case 4: if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1); break;
+                case 5: if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2); break;
+                case 6: if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(4); break;
+                case 7: if (_slow_poll_counter == 0) host->requestReport(0x02, 0x03, 3); break;
+                case 8: if (_slow_poll_counter == 0) host->requestReport(0x08, 0x03, 2); break;
+                case 9: if (_slow_poll_counter == 0) host->requestReport(0x09, 0x03, 5); break;
+                case 10: if (_slow_poll_counter == 0) host->requestReport(0x0a, 0x03, 5); break;
+                case 11: if (_slow_poll_counter == 0) host->requestReport(0x0c, 0x03, 8); break;
+                case 12: if (_slow_poll_counter == 0) host->requestReport(0x0d, 0x03, 4); break;
+                case 13: if (_slow_poll_counter == 0) host->requestReport(0x0e, 0x03, 3); break;
+                case 14: if (_slow_poll_counter == 0) host->requestReport(0x10, 0x03, 9); break;
+                case 15: if (_slow_poll_counter == 0) host->requestReport(0x12, 0x03, 2); break;
+                case 16: if (_slow_poll_counter == 0) host->requestReport(0x13, 0x03, 3); break;
+                case 17: if (_slow_poll_counter == 0) host->requestReport(0x14, 0x03, 2); break;
+                case 18: if (_slow_poll_counter == 0) host->requestReport(0x1f, 0x03, 2); break;
                 default: 
                     _poll_step = 0; 
                     return;
@@ -119,7 +120,9 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_
         case 0x07:
             if (length - offset >= 6) {
                 ups_data.load = data[offset + 5];
-                if (ups_data.configApparentPower > 0) {
+                if (ups_data.configActivePower > 0) {
+                    ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
+                } else if (ups_data.configApparentPower > 0) {
                     ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
                 }
             }
