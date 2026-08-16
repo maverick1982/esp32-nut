@@ -41,15 +41,16 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             
             if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1);
+                if (_slow_poll_counter == 0 && data.manufacturer == "") if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
             } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2);
+                if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(3);
+                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else {
                 const auto& usages = host->_hid_parser.getUsages();
                 std::vector<uint16_t> rids;
                 for (const auto& u : usages) {
+                    if (u.report_type == 2) continue; // Skip OUTPUT reports
                     uint16_t pair = (u.report_type << 8) | u.report_id;
                     bool found = false;
                     for (uint16_t id : rids) {
@@ -187,8 +188,8 @@ void CyberPowerDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, co
             str += c;
         }
     }
-    if (index == 1) ups_data.manufacturer = str;
-    else if (index == 2) ups_data.product = str;
+    if (index == host->_iManufacturer) ups_data.manufacturer = str;
+    else if (index == host->_iProduct) ups_data.product = str;
     else if (index == 3 || index == 4) ups_data.serialNumber = str;
 }
 

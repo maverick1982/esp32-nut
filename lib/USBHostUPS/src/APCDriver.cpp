@@ -102,6 +102,11 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
             if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
         }},
+        { "UPS.PowerConverter.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.load = (uint8_t)v;
+            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
+            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+        }},
         
         { "UPS.Input.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.inputVoltage = v; } },
         { "UPS.Output.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltage = v; } },
@@ -117,6 +122,8 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
         
         { "UPS.PowerConverter.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
         { "UPS.Output.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
+        { "UPS.PowerConverter.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configApparentPower = (uint16_t)v; } },
+        { "UPS.Output.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configApparentPower = (uint16_t)v; } },
         
         { "UPS.Input.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configVoltage = (uint16_t)v; } },
         { "UPS.Output.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltageNominal = (uint16_t)v; } },

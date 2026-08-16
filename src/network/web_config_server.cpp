@@ -247,9 +247,12 @@ void WebConfigServer::handleUpsVars() {
     if (data.fullChargeCapacity > 0) doc["battery.capacity.full"] = data.fullChargeCapacity;
     if (data.runTimeToEmpty > 0) doc["battery.runtime"] = data.runTimeToEmpty;
     doc["output.voltage"] = data.outputVoltage;
+    doc["input.voltage"] = data.inputVoltage;
+    doc["battery.voltage"] = data.batteryVoltage;
     if (data.highVoltageTransfer > 0) doc["input.transfer.high"] = data.highVoltageTransfer;
     if (data.lowVoltageTransfer > 0) doc["input.transfer.low"] = data.lowVoltageTransfer;
     if (data.configApparentPower > 0) doc["ups.power.nominal"] = data.configApparentPower;
+    if (data.configActivePower > 0) doc["ups.realpower.nominal"] = data.configActivePower;
     if (data.configFrequency > 0) doc["input.frequency.nominal"] = data.configFrequency;
     if (data.configVoltage > 0) doc["input.voltage.nominal"] = data.configVoltage;
     if (data.outputVoltageNominal > 0) doc["output.voltage.nominal"] = data.outputVoltageNominal;

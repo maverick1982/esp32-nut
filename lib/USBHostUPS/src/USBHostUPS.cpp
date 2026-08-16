@@ -21,7 +21,10 @@ USBHostUPS::USBHostUPS() :
     _is_ready_to_poll(false),
     _driver(nullptr),
     _log_cb(nullptr),
-    _quirks(0) {
+    _quirks(0),
+    _iManufacturer(0),
+    _iProduct(0),
+    _iSerialNumber(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -232,6 +235,11 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 if (err == ESP_OK) {
                     Serial.printf("[USBHostUPS] Device Info: Address %d, VID %04X, PID %04X\n",
                                   event_msg->new_dev.address, desc->idVendor, desc->idProduct);
+                    
+                    _iManufacturer = desc->iManufacturer;
+                    _iProduct = desc->iProduct;
+                    _iSerialNumber = desc->iSerialNumber;
+                    
                     _dev_handle = dev_hdl;
                     esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
                     if (claim_err == ESP_OK) {
