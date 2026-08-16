@@ -35,17 +35,21 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             
             const auto& usages = host->_hid_parser.getUsages();
-            std::vector<uint8_t> rids;
+            std::vector<uint16_t> rids;
             for (const auto& u : usages) {
+                uint16_t pair = (u.report_type << 8) | u.report_id;
                 bool found = false;
-                for (uint8_t id : rids) {
-                    if (id == u.report_id) { found = true; break; }
+                for (uint16_t id : rids) {
+                    if (id == pair) { found = true; break; }
                 }
-                if (!found && u.report_id != 0) rids.push_back(u.report_id);
+                if (!found && u.report_id != 0) rids.push_back(pair);
             }
             
-            if (_poll_step - 1 < rids.size()) {
-                host->requestReport(rids[_poll_step - 1], 0x03, 8); // Polling dynamically
+            int index = _poll_step - 1;
+            if (index >= 0 && index < rids.size()) {
+                uint8_t r_type = rids[index] >> 8;
+                uint8_t r_id = rids[index] & 0xFF;
+                host->requestReport(r_id, r_type, 64);
             } else {
                 _poll_step = 0; // Done
                 return;
@@ -59,37 +63,70 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
-        uint32_t usage;
+        String path;
         void (*apply)(UPSData&, double);
     };
 
     static const Mapping mappings[] = {
-        { HID_USAGE_UPS_ACPRAESENT, [](UPSData& d, double v) { d.acPresent = v != 0; } },
-        { HID_USAGE_UPS_DISCHARGING, [](UPSData& d, double v) { d.discharging = v != 0; } },
-        { HID_USAGE_UPS_CHARGING, [](UPSData& d, double v) { d.charging = v != 0; } },
-        { HID_USAGE_UPS_BELOWREMCAP, [](UPSData& d, double v) { d.belowRemainingCapacityLimit = v != 0; } },
-        { HID_USAGE_UPS_NEEDREPLACE, [](UPSData& d, double v) { d.needReplacement = v != 0; } },
-        { HID_USAGE_UPS_OVERLOAD, [](UPSData& d, double v) { d.overload = v != 0; } },
-        { HID_USAGE_UPS_SHUTDOWNIMMINENT, [](UPSData& d, double v) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.ACPresent", [](UPSData& d, double v) { d.acPresent = v != 0; } },
+        { "UPS.PowerSummary.ACPresent", [](UPSData& d, double v) { d.acPresent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Discharging", [](UPSData& d, double v) { d.discharging = v != 0; } },
+        { "UPS.PowerSummary.Discharging", [](UPSData& d, double v) { d.discharging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Charging", [](UPSData& d, double v) { d.charging = v != 0; } },
+        { "UPS.PowerSummary.Charging", [](UPSData& d, double v) { d.charging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](UPSData& d, double v) { d.belowRemainingCapacityLimit = v != 0; } },
+        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](UPSData& d, double v) { d.belowRemainingCapacityLimit = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](UPSData& d, double v) { d.needReplacement = v != 0; } },
+        { "UPS.PowerSummary.NeedReplacement", [](UPSData& d, double v) { d.needReplacement = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Overload", [](UPSData& d, double v) { d.overload = v != 0; } },
+        { "UPS.PowerSummary.Overload", [](UPSData& d, double v) { d.overload = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](UPSData& d, double v) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.ShutdownImminent", [](UPSData& d, double v) { d.shutdownImminent = v != 0; } },
         
-        { HID_USAGE_UPS_LOAD, [](UPSData& d, double v) {
+        { "UPS.PowerSummary.PercentLoad", [](UPSData& d, double v) {
             d.load = (uint8_t)v;
             if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
         }},
-        { HID_USAGE_UPS_INVOLTAGE, [](UPSData& d, double v) { d.inputVoltage = v; } },
-        { HID_USAGE_UPS_OUTVOLTAGE, [](UPSData& d, double v) { d.outputVoltage = v; } },
+        { "UPS.Output.PercentLoad", [](UPSData& d, double v) {
+            d.load = (uint8_t)v;
+            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
+            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+        }},
         
-        { HID_USAGE_BAT_VOLTAGE, [](UPSData& d, double v) { d.batteryVoltage = v; } },
-        { HID_USAGE_BAT_REMCAPACITY, [](UPSData& d, double v) { d.remainingCapacity = (uint8_t)v; } },
-        { HID_USAGE_BAT_RUNTIMETOEMPTY, [](UPSData& d, double v) { d.runTimeToEmpty = (uint32_t)v; } },
+        { "UPS.Input.Voltage", [](UPSData& d, double v) { d.inputVoltage = v; } },
+        { "UPS.Output.Voltage", [](UPSData& d, double v) { d.outputVoltage = v; } },
+        
+        { "UPS.Battery.Voltage", [](UPSData& d, double v) { d.batteryVoltage = v; } },
+        { "UPS.PowerSummary.Voltage", [](UPSData& d, double v) { d.batteryVoltage = v; } },
+        
+        { "UPS.PowerSummary.RemainingCapacity", [](UPSData& d, double v) { d.remainingCapacity = (uint8_t)v; } },
+        { "UPS.PowerSummary.RemainingCapacityLimit", [](UPSData& d, double v) { d.remainingCapacityLimit = (uint8_t)v; } },
+        
+        { "UPS.Battery.RunTimeToEmpty", [](UPSData& d, double v) { d.runTimeToEmpty = (uint32_t)v; } },
+        { "UPS.PowerSummary.RunTimeToEmpty", [](UPSData& d, double v) { d.runTimeToEmpty = (uint32_t)v; } },
+        
+        { "UPS.PowerConverter.ConfigActivePower", [](UPSData& d, double v) { d.configActivePower = (uint16_t)v; } },
+        { "UPS.Output.ConfigActivePower", [](UPSData& d, double v) { d.configActivePower = (uint16_t)v; } },
+        
+        { "UPS.Input.ConfigVoltage", [](UPSData& d, double v) { d.configVoltage = (uint16_t)v; } },
+        { "UPS.Output.ConfigVoltage", [](UPSData& d, double v) { d.outputVoltageNominal = (uint16_t)v; } },
+        
+        { "UPS.Output.LowVoltageTransfer", [](UPSData& d, double v) { d.lowVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Input.LowVoltageTransfer", [](UPSData& d, double v) { d.lowVoltageTransfer = (uint16_t)v; } },
+        
+        { "UPS.Output.HighVoltageTransfer", [](UPSData& d, double v) { d.highVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Input.HighVoltageTransfer", [](UPSData& d, double v) { d.highVoltageTransfer = (uint16_t)v; } },
     };
 
-    for (const auto& m : mappings) {
-        const HIDUsageDef* def = host->getUsageDef(m.usage);
-        if (def && def->report_id == report_id) {
-            double val = HIDParser::extractUsage(def, report_id, data, length);
-            m.apply(ups_data, val);
+    for (const auto& u : host->_hid_parser.getUsages()) {
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        for (const auto& m : mappings) {
+            if (u.path == m.path) {
+                double val = HIDParser::extractUsage(&u, report_id, data, length);
+                m.apply(ups_data, val);
+                break;
+            }
         }
     }
 }
