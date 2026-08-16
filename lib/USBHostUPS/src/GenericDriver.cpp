@@ -14,7 +14,7 @@ void GenericDriver::setup() {
     _last_fast_poll = 0;
     _poll_step = 0;
     _last_step_time = 0;
-    _slow_poll_counter = 0;
+    _slow_poll_counter = 14;
     Serial.println("[GenericDriver] Setup started.");
 }
 

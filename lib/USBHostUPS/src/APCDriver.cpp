@@ -11,7 +11,7 @@ void APCDriver::setup() {
     _poll_step = 0;
     _last_step_time = 0;
     _last_fast_poll = 0;
-    _slow_poll_counter = 0;
+    _slow_poll_counter = 14;
 }
 
 void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
@@ -34,25 +34,33 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
         if (now - _last_step_time >= 50 || _poll_step == 1) {
             _last_step_time = now;
             
-            const auto& usages = host->_hid_parser.getUsages();
-            std::vector<uint16_t> rids;
-            for (const auto& u : usages) {
-                uint16_t pair = (u.report_type << 8) | u.report_id;
-                bool found = false;
-                for (uint16_t id : rids) {
-                    if (id == pair) { found = true; break; }
-                }
-                if (!found && u.report_id != 0) rids.push_back(pair);
-            }
-            
-            int index = _poll_step - 1;
-            if (index >= 0 && index < rids.size()) {
-                uint8_t r_type = rids[index] >> 8;
-                uint8_t r_id = rids[index] & 0xFF;
-                host->requestReport(r_id, r_type, 64);
+            if (_poll_step == 1) {
+                if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1);
+            } else if (_poll_step == 2) {
+                if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2);
+            } else if (_poll_step == 3) {
+                if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(3);
             } else {
-                _poll_step = 0; // Done
-                return;
+                const auto& usages = host->_hid_parser.getUsages();
+                std::vector<uint16_t> rids;
+                for (const auto& u : usages) {
+                    uint16_t pair = (u.report_type << 8) | u.report_id;
+                    bool found = false;
+                    for (uint16_t id : rids) {
+                        if (id == pair) { found = true; break; }
+                    }
+                    if (!found && u.report_id != 0) rids.push_back(pair);
+                }
+                
+                int index = _poll_step - 4;
+                if (index >= 0 && index < rids.size()) {
+                    uint8_t r_type = rids[index] >> 8;
+                    uint8_t r_id = rids[index] & 0xFF;
+                    host->requestReport(r_id, r_type, 64);
+                } else {
+                    _poll_step = 0; // Done
+                    return;
+                }
             }
             _poll_step++;
         }

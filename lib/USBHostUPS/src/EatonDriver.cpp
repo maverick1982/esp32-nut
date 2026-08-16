@@ -16,7 +16,7 @@ void EatonDriver::setup() {
     _poll_step = 0;
     _last_step_time = 0;
     _last_fast_poll = 0;
-    _slow_poll_counter = 0;
+    _slow_poll_counter = 14;
 }
 
 void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
