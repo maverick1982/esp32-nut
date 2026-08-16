@@ -59,36 +59,125 @@ bool USBHostUPS::isConnected() const {
     return _initialized && (_dev_handle != NULL);
 }
 
+String USBHostUPS::getActiveBeeperPath() const {
+    for (const auto& u : _hid_parser.getUsages()) {
+        if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
+            u.path == "UPS.BatterySystem.Battery.AudibleAlarmControl" || 
+            u.path == "UPS.AudibleAlarmControl") {
+            return u.path;
+        }
+    }
+    return "";
+}
+
 bool USBHostUPS::setBeeper(bool enable) {
     if (_dev_handle == NULL) return false;
 
+    uint8_t report_id = 0x1f; // Fallback
+    uint16_t bit_size = 8;
+    uint16_t bit_offset = 0;
+    String active_path = getActiveBeeperPath();
+    if (active_path == "") return false;
+
+    for (const auto& u : _hid_parser.getUsages()) {
+        if (u.path == active_path) {
+            report_id = u.report_id;
+            bit_size = u.bit_size;
+            bit_offset = u.bit_offset;
+            break;
+        }
+    }
+
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 2, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + 256, 0, &transfer);
     if (err != ESP_OK) return false;
 
+    // STEP 1: GET_REPORT
     usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
-    setup->bmRequestType = 0x21; // SET_REPORT type
-    setup->bRequest = 0x09;      // SET_REPORT request
-    setup->wValue = (0x03 << 8) | 0x1f; // Feature report, ID 0x1f
-    setup->wIndex = 0;           // Interface 0
-    setup->wLength = 2;
+    setup->bmRequestType = 0xA1; // GET_REPORT
+    setup->bRequest = 0x01;
+    setup->wValue = (0x03 << 8) | report_id;
+    setup->wIndex = 0;
+    setup->wLength = 255;
 
-    uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
-    data[0] = 0x1f; 
-    data[1] = enable ? 2 : 1; 
+    DiagContext ctx;
+    ctx.done = false;
+    ctx.len = 0;
 
     transfer->device_handle = _dev_handle;
-    transfer->callback = control_transfer_cb;
-    transfer->context = this;
-    transfer->num_bytes = 8 + 2;
+    transfer->context = &ctx;
+    transfer->callback = [](usb_transfer_t *t) {
+        DiagContext *c = (DiagContext*)t->context;
+        if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
+            c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+            if (c->len > sizeof(c->data)) c->len = sizeof(c->data);
+            memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+        }
+        c->done = true;
+    };
+    transfer->num_bytes = 8 + 255;
+    transfer->timeout_ms = 1000;
 
-    err = usb_host_transfer_submit_control(_client_handle, transfer);
-    if (err != ESP_OK) {
+    if (usb_host_transfer_submit_control(_client_handle, transfer) != ESP_OK) {
         usb_host_transfer_free(transfer);
         return false;
     }
-    _ups_data.beeperEnabled = enable;
-    return true;
+
+    int timeout = 150;
+    while (!ctx.done && timeout > 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout--;
+    }
+
+    if (!ctx.done || ctx.len == 0) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
+
+    // STEP 2: MODIFY BUFFER
+    uint16_t byte_idx = (bit_offset / 8) + (report_id != 0 ? 1 : 0);
+    uint8_t bit_shift = bit_offset % 8;
+
+    if (byte_idx < ctx.len) {
+        uint8_t val = enable ? 2 : 1;
+        if (bit_size == 1) val = enable ? 1 : 0;
+        
+        uint8_t mask = (1 << bit_size) - 1;
+        ctx.data[byte_idx] &= ~(mask << bit_shift);
+        ctx.data[byte_idx] |= (val & mask) << bit_shift;
+    }
+
+    // STEP 3: SET_REPORT
+    setup->bmRequestType = 0x21; // SET_REPORT
+    setup->bRequest = 0x09;
+    setup->wValue = (0x03 << 8) | report_id;
+    setup->wIndex = 0;
+    setup->wLength = ctx.len;
+
+    uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
+    memcpy(data, ctx.data, ctx.len);
+
+    ctx.done = false; // Reset for SET_REPORT
+    transfer->num_bytes = 8 + ctx.len;
+    
+    if (usb_host_transfer_submit_control(_client_handle, transfer) != ESP_OK) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
+
+    timeout = 150;
+    while (!ctx.done && timeout > 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout--;
+    }
+
+    usb_host_transfer_free(transfer);
+    
+    if (ctx.done) {
+        _ups_data.beeperEnabled = enable;
+        return true;
+    }
+    return false;
 }
 
 void USBHostUPS::usb_host_lib_task(void *arg) {

@@ -21,6 +21,7 @@ private:
     uint32_t _last_step_time;
     uint32_t _last_fast_poll;
     uint8_t _slow_poll_counter;
+    String _active_beeper;
 };
 
 #endif // EATON_DRIVER_H

@@ -77,6 +77,7 @@ public:
     String dumpUSBDiagnostics();
 
     bool setBeeper(bool enable);
+    String getActiveBeeperPath() const;
     void setLogCallback(LogCallback cb);
 
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8);
