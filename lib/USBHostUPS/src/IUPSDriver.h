@@ -33,7 +33,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 
     /**
      * @brief Parses a received String Descriptor
@@ -43,7 +43,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 };
 
 #endif // I_UPS_DRIVER_H

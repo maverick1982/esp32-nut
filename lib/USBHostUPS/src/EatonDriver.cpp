@@ -38,176 +38,118 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (_poll_step > 0) {
         if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
             _last_step_time = now;
-            switch (_poll_step) {
-                // Fast poll
-                case 1: host->requestReport(0x01, 0x03, 4); break;
-                case 2: host->requestReport(0x06, 0x03, 6); break;
-                case 3: host->requestReport(0x07, 0x03, 8); break;
-
-                // Slow poll
-                case 4: if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1); break;
-                case 5: if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2); break;
-                case 6: if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(4); break;
-                case 7: if (_slow_poll_counter == 0) host->requestReport(0x02, 0x03, 3); break;
-                case 8: if (_slow_poll_counter == 0) host->requestReport(0x08, 0x03, 2); break;
-                case 9: if (_slow_poll_counter == 0) host->requestReport(0x09, 0x03, 5); break;
-                case 10: if (_slow_poll_counter == 0) host->requestReport(0x0a, 0x03, 5); break;
-                case 11: if (_slow_poll_counter == 0) host->requestReport(0x0c, 0x03, 8); break;
-                case 12: if (_slow_poll_counter == 0) host->requestReport(0x0d, 0x03, 4); break;
-                case 13: if (_slow_poll_counter == 0) host->requestReport(0x0e, 0x03, 3); break;
-                case 14: if (_slow_poll_counter == 0) host->requestReport(0x10, 0x03, 9); break;
-                case 15: if (_slow_poll_counter == 0) host->requestReport(0x12, 0x03, 2); break;
-                case 16: if (_slow_poll_counter == 0) host->requestReport(0x13, 0x03, 3); break;
-                case 17: if (_slow_poll_counter == 0) host->requestReport(0x14, 0x03, 2); break;
-                case 18: if (_slow_poll_counter == 0) host->requestReport(0x1f, 0x03, 2); break;
-                default: 
-                    _poll_step = 0; 
+            
+            if (_poll_step == 1) {
+                if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1);
+            } else if (_poll_step == 2) {
+                if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2);
+            } else if (_poll_step == 3) {
+                if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(4);
+            } else {
+                const auto& usages = host->_hid_parser.getUsages();
+                std::vector<uint16_t> rids;
+                for (const auto& u : usages) {
+                    uint16_t pair = (u.report_type << 8) | u.report_id;
+                    bool found = false;
+                    for (uint16_t id : rids) {
+                        if (id == pair) { found = true; break; }
+                    }
+                    if (!found) rids.push_back(pair);
+                }
+                
+                int index = _poll_step - 4;
+                if (index >= 0 && index < rids.size()) {
+                    uint8_t r_type = rids[index] >> 8;
+                    uint8_t r_id = rids[index] & 0xFF;
+                    host->requestReport(r_id, r_type, 64);
+                } else {
+                    _poll_step = 0;
                     return;
+                }
             }
             _poll_step++;
         }
     }
 }
 
-void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length == 0 || data == NULL) return;
+void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+    if (length == 0 || data == NULL || !host) return;
 
-    size_t offset = 0; // The ESP-IDF driver may or may not strip the Report ID
-    if (length > 1 && data[0] == report_id) {
-        offset = 1;
-    }
+    struct Mapping {
+        const char* path;
+        void (*apply)(EatonDriver*, UPSData&, double);
+    };
 
-    switch (report_id) {
-        case 0x01:
-            if (length - offset >= 1) {
-                ups_data.acPresent = data[offset] & (1 << 0);
-                ups_data.belowRemainingCapacityLimit = data[offset] & (1 << 1);
-                ups_data.charging = data[offset] & (1 << 2);
-                ups_data.communicationLost = data[offset] & (1 << 3);
-                ups_data.discharging = data[offset] & (1 << 4);
-                ups_data.good = data[offset] & (1 << 5);
-                ups_data.internalFailure = data[offset] & (1 << 6);
-                ups_data.needReplacement = data[offset] & (1 << 7);
-            }
-            if (length - offset >= 2) {
-                ups_data.overload = data[offset + 1] != 0;
-            }
-            if (length - offset >= 3) {
-                ups_data.shutdownImminent = data[offset + 2] != 0;
-            }
-            break;
+    static const Mapping mappings[] = {
+        { "UPS.PowerSummary.PresentStatus.ACPresent", [](EatonDriver*, UPSData& d, double v) { d.acPresent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Discharging", [](EatonDriver*, UPSData& d, double v) { d.discharging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Charging", [](EatonDriver*, UPSData& d, double v) { d.charging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](EatonDriver*, UPSData& d, double v) { d.belowRemainingCapacityLimit = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](EatonDriver*, UPSData& d, double v) { d.needReplacement = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Overload", [](EatonDriver*, UPSData& d, double v) { d.overload = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](EatonDriver*, UPSData& d, double v) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](EatonDriver*, UPSData& d, double v) { d.communicationLost = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v) { d.good = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v) { d.internalFailure = v != 0; } },
+        
+        { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v) { d.outlet1Switch = v != 0; d.outlet2Switch = v != 0; } },
+        
+        { "UPS.PowerSummary.PercentLoad", [](EatonDriver*, UPSData& d, double v) {
+            d.load = (uint8_t)v;
+            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100);
+            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000);
+        }},
+        { "UPS.PowerConverter.Input.Voltage", [](EatonDriver*, UPSData& d, double v) { d.inputVoltage = v; } },
+        { "UPS.PowerConverter.Output.Voltage", [](EatonDriver*, UPSData& d, double v) { d.outputVoltage = v; } },
+        
+        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v) { d.batteryVoltage = v; } },
+        { "UPS.BatterySystem.Voltage", [](EatonDriver*, UPSData& d, double v) { d.batteryVoltage = v; } },
+        { "UPS.PowerSummary.RemainingCapacity", [](EatonDriver*, UPSData& d, double v) { d.remainingCapacity = v > 100 ? 100 : (uint8_t)v; } },
+        { "UPS.PowerSummary.RemainingCapacityLimit", [](EatonDriver*, UPSData& d, double v) { d.remainingCapacityLimit = (uint8_t)v; } },
+        { "UPS.PowerSummary.RunTimeToEmpty", [](EatonDriver*, UPSData& d, double v) { d.runTimeToEmpty = (uint32_t)v; } },
+        
+        { "UPS.BatterySystem.Battery.DesignCapacity", [](EatonDriver*, UPSData& d, double v) { d.designCapacity = (uint8_t)(v / 3600.0); } },
+        
+        { "UPS.Flow.ConfigApparentPower", [](EatonDriver*, UPSData& d, double v) { d.configApparentPower = (uint16_t)v; } },
+        { "UPS.Flow.ConfigActivePower", [](EatonDriver*, UPSData& d, double v) { d.configActivePower = (uint16_t)v; } },
+        { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v) { d.configFrequency = (uint8_t)v; d.outputFrequencyNominal = (uint16_t)v; } },
+        { "UPS.Flow.ConfigVoltage", [](EatonDriver*, UPSData& d, double v) { d.configVoltage = (uint16_t)v; d.outputVoltageNominal = (uint16_t)v; } },
+        
+        { "UPS.PowerConverter.Output.HighVoltageTransfer", [](EatonDriver*, UPSData& d, double v) { d.highVoltageTransfer = (uint16_t)v; } },
+        { "UPS.PowerConverter.Output.LowVoltageTransfer", [](EatonDriver*, UPSData& d, double v) { d.lowVoltageTransfer = (uint16_t)v; } },
+        
+        { "UPS.PowerSummary.AudibleAlarmControl", [](EatonDriver*, UPSData& d, double v) { d.beeperEnabled = (v != 1); } },
+        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](EatonDriver*, UPSData& d, double v) { d.beeperEnabled = (v != 1); } },
+        { "UPS.AudibleAlarmControl", [](EatonDriver*, UPSData& d, double v) { d.beeperEnabled = (v != 1); } },
+        
+        { "UPS.PowerSummary.DelayBeforeShutdown", [](EatonDriver*, UPSData& d, double v) { d.delayShutdown = (int32_t)v; d.timerShutdown = (int32_t)v; } },
+        { "UPS.PowerSummary.DelayBeforeStartup", [](EatonDriver*, UPSData& d, double v) { d.delayStart = (int32_t)v; d.timerStart = (int32_t)v; } },
+        
+        { "UPS.PowerConverter.ConverterType", [](EatonDriver*, UPSData& d, double v) { 
+            int type = (int)v;
+            if (type == 1) d.upsType = "offline / line interactive";
+            else if (type == 2) d.upsType = "online";
+            else if (type == 3) d.upsType = "online - unitary/parallel";
+            else if (type == 4) d.upsType = "online - parallel with hot standy";
+            else if (type == 5) d.upsType = "online - hot standby redundancy";
+        } },
+        
+        { "UPS.PowerSummary.iDeviceChemistry", [](EatonDriver* drv, UPSData&, double v) { drv->_chemStrIdx = (uint8_t)v; } }
+    };
 
-        case 0x02:
-            if (length - offset >= 2) {
-                ups_data.outlet1Switch = data[offset] != 0;
-                ups_data.outlet2Switch = data[offset + 1] != 0;
+    for (const auto& u : host->_hid_parser.getUsages()) {
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        for (const auto& m : mappings) {
+            if (u.path == m.path) {
+                double val = HIDParser::extractUsage(&u, report_id, data, length);
+                m.apply(this, ups_data, val);
+                break;
             }
-            break;
-
-        case 0x06:
-            if (length - offset >= 1) {
-                ups_data.remainingCapacity = data[offset];
-                if (ups_data.remainingCapacity > 100) ups_data.remainingCapacity = 100;
-            }
-            if (length - offset >= 5) {
-                ups_data.runTimeToEmpty = (uint32_t)data[offset + 1] |
-                                           ((uint32_t)data[offset + 2] << 8) |
-                                           ((uint32_t)data[offset + 3] << 16) |
-                                           ((uint32_t)data[offset + 4] << 24);
-            }
-            break;
-
-        case 0x07:
-            if (length - offset >= 6) {
-                ups_data.load = data[offset + 5];
-                if (ups_data.configActivePower > 0) {
-                    ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
-                } else if (ups_data.configApparentPower > 0) {
-                    ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
-                }
-            }
-            break;
-
-        case 0x08:
-            if (length - offset >= 1) {
-                ups_data.remainingCapacityLimit = data[offset];
-            }
-            break;
-
-        case 0x09:
-            if (length - offset >= 4) {
-                ups_data.delayShutdown = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
-            }
-            break;
-
-        case 0x0a:
-            if (length - offset >= 4) {
-                ups_data.delayStart = (int32_t)((uint32_t)data[offset] | ((uint32_t)data[offset + 1] << 8) | ((uint32_t)data[offset + 2] << 16) | ((uint32_t)data[offset + 3] << 24));
-            }
-            break;
-
-        case 0x0c:
-            if (length - offset >= 6) {
-                ups_data.designCapacity = data[offset + 4];
-                ups_data.fullChargeCapacity = data[offset + 5];
-            }
-            break;
-
-        case 0x0d:
-            if (length - offset >= 2) {
-                ups_data.configApparentPower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            if (length - offset >= 3) {
-                ups_data.configFrequency = data[offset + 2];
-            }
-            break;
-
-        case 0x0e:
-            if (length - offset >= 2) {
-                ups_data.outputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            break;
-
-        case 0x10:
-            if (length - offset >= 1) {
-                uint8_t chemIdx = data[offset];
-                if (chemIdx > 0 && (chemIdx != _chemStrIdx || ups_data.batteryType == "")) {
-                    _chemStrIdx = chemIdx;
-                    if (host) host->requestStringDescriptor(chemIdx);
-                }
-            }
-            break;
-
-        case 0x12:
-            if (length - offset >= 1) {
-                ups_data.configVoltage = data[offset];
-            }
-            break;
-
-        case 0x13:
-            if (length - offset >= 2) {
-                ups_data.highVoltageTransfer = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            break;
-
-        case 0x14:
-            if (length - offset >= 1) {
-                ups_data.lowVoltageTransfer = data[offset];
-            }
-            break;
-
-        case 0x1f:
-            if (length - offset >= 1) {
-                ups_data.beeperEnabled = (data[offset] == 2);
-            }
-            break;
-
-        default:
-            break;
+        }
     }
 }
 
-void EatonDriver::parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EatonDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";
@@ -221,3 +163,4 @@ void EatonDriver::parseStringDescriptor(uint8_t index, const uint8_t *data, size
     else if (index == 4) ups_data.serialNumber = str;
     else if (_chemStrIdx > 0 && index == _chemStrIdx) ups_data.batteryType = str;
 }
+
