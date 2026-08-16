@@ -107,6 +107,9 @@ private:
     usb_device_handle_t _dev_handle;
     bool _initialized;
     bool _is_ready_to_poll;
+    volatile bool _is_fetching;
+    volatile bool _pending_dev_close;
+    usb_device_handle_t _dev_to_close;
 
     UPSData _ups_data;
     IUPSDriver* _driver;

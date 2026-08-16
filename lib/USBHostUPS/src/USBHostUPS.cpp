@@ -19,6 +19,9 @@ USBHostUPS::USBHostUPS() :
     _dev_handle(NULL), 
     _initialized(false),
     _is_ready_to_poll(false),
+    _is_fetching(false),
+    _pending_dev_close(false),
+    _dev_to_close(NULL),
     _driver(nullptr),
     _log_cb(nullptr),
     _quirks(0),
@@ -286,6 +289,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                         
                         xTaskCreate([](void* arg) {
                             USBHostUPS* self = (USBHostUPS*)arg;
+                            self->_is_fetching = true;
                             usb_transfer_t *transfer = NULL;
                             if (usb_host_transfer_alloc(8 + 1024, 0, &transfer) == ESP_OK) {
                                 uint16_t report_len = 1024;
@@ -393,8 +397,9 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 self->_driver->setup();
                             }
                             self->_is_ready_to_poll = true;
+                            self->_is_fetching = false;
                             vTaskDelete(NULL);
-                        }, "fetch_desc", 4096, this, 5, NULL);
+                        }, "fetch_desc", 8192, this, 5, NULL);
                     } else {
                         Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                         usb_host_device_close(_client_handle, dev_hdl);
@@ -423,10 +428,12 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 } else {
                     Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
                 }
-                usb_host_device_close(_client_handle, _dev_handle);
+                _dev_to_close = _dev_handle;
+                _pending_dev_close = true;
                 _dev_handle = NULL;
             } else {
-                usb_host_device_close(_client_handle, event_msg->dev_gone.dev_hdl);
+                _dev_to_close = event_msg->dev_gone.dev_hdl;
+                _pending_dev_close = true;
             }
             break;
         }
@@ -501,6 +508,12 @@ bool USBHostUPS::begin() {
 }
 
 void USBHostUPS::loop() {
+    if (_pending_dev_close && !_is_fetching) {
+        usb_host_device_close(_client_handle, _dev_to_close);
+        _pending_dev_close = false;
+        _dev_to_close = NULL;
+    }
+
     if (!_initialized || _dev_handle == NULL || !_is_ready_to_poll) {
         return;
     }
