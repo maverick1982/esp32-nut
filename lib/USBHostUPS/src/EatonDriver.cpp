@@ -100,6 +100,7 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t repo
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000);
         }},
         { "UPS.PowerConverter.Input.Voltage", [](EatonDriver*, UPSData& d, double v) { d.inputVoltage = v; } },
+        { "UPS.Flow.Voltage", [](EatonDriver*, UPSData& d, double v) { d.inputVoltage = v; } },
         { "UPS.PowerConverter.Output.Voltage", [](EatonDriver*, UPSData& d, double v) { d.outputVoltage = v; } },
         
         { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v) { d.batteryVoltage = v; } },
@@ -114,6 +115,7 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t repo
         { "UPS.Flow.ConfigActivePower", [](EatonDriver*, UPSData& d, double v) { d.configActivePower = (uint16_t)v; } },
         { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v) { d.configFrequency = (uint8_t)v; d.outputFrequencyNominal = (uint16_t)v; } },
         { "UPS.Flow.ConfigVoltage", [](EatonDriver*, UPSData& d, double v) { d.configVoltage = (uint16_t)v; d.outputVoltageNominal = (uint16_t)v; } },
+        { "UPS.PowerConverter.Output.ConfigVoltage", [](EatonDriver*, UPSData& d, double v) { d.outputVoltageNominal = (uint16_t)v; } },
         
         { "UPS.PowerConverter.Output.HighVoltageTransfer", [](EatonDriver*, UPSData& d, double v) { d.highVoltageTransfer = (uint16_t)v; } },
         { "UPS.PowerConverter.Output.LowVoltageTransfer", [](EatonDriver*, UPSData& d, double v) { d.lowVoltageTransfer = (uint16_t)v; } },
