@@ -112,6 +112,12 @@ private:
     volatile bool _pending_dev_close;
     usb_device_handle_t _dev_to_close;
 
+    uint8_t _int_in_ep;
+    uint16_t _int_in_mps;
+    usb_transfer_t* _int_in_transfer;
+    static void int_in_cb(usb_transfer_t *transfer);
+    void handle_int_in(usb_transfer_t *transfer);
+
     UPSData _ups_data;
     IUPSDriver* _driver;
     LogCallback _log_cb;

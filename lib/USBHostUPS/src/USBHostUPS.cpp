@@ -22,6 +22,9 @@ USBHostUPS::USBHostUPS() :
     _is_fetching(false),
     _pending_dev_close(false),
     _dev_to_close(NULL),
+    _int_in_ep(0),
+    _int_in_mps(0),
+    _int_in_transfer(NULL),
     _driver(nullptr),
     _log_cb(nullptr),
     _quirks(0),
@@ -344,7 +347,14 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                         if (len == 0) break;
                                         if (type == 0x21 && len >= 9 && offset + 8 < max_len) {
                                             report_len = p[offset + 7] | (p[offset + 8] << 8);
-                                            break;
+                                        } else if (type == 0x05 && len >= 7 && offset + 6 < max_len) { // Endpoint Descriptor
+                                            uint8_t ep_addr = p[offset + 2];
+                                            uint8_t ep_attr = p[offset + 3];
+                                            uint16_t ep_mps = p[offset + 4] | (p[offset + 5] << 8);
+                                            if ((ep_addr & 0x80) && (ep_attr & 0x03) == 0x03) { // IN and Interrupt
+                                                self->_int_in_ep = ep_addr;
+                                                self->_int_in_mps = ep_mps;
+                                            }
                                         }
                                         offset += len;
                                     }
@@ -395,6 +405,21 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                             }
                             if (self->_driver) {
                                 self->_driver->setup();
+                            }
+                            if (self->_int_in_ep != 0 && self->_int_in_mps != 0) {
+                                Serial.printf("[USBHostUPS] Starting Interrupt IN polling on EP 0x%02X (MPS: %d)\n", self->_int_in_ep, self->_int_in_mps);
+                                if (usb_host_transfer_alloc(self->_int_in_mps, 0, &self->_int_in_transfer) == ESP_OK) {
+                                    self->_int_in_transfer->device_handle = self->_dev_handle;
+                                    self->_int_in_transfer->bEndpointAddress = self->_int_in_ep;
+                                    self->_int_in_transfer->callback = USBHostUPS::int_in_cb;
+                                    self->_int_in_transfer->context = self;
+                                    self->_int_in_transfer->num_bytes = self->_int_in_mps;
+                                    if (usb_host_transfer_submit(self->_int_in_transfer) != ESP_OK) {
+                                        Serial.println("[USBHostUPS] Failed to submit Interrupt IN transfer");
+                                        usb_host_transfer_free(self->_int_in_transfer);
+                                        self->_int_in_transfer = NULL;
+                                    }
+                                }
                             }
                             self->_is_ready_to_poll = true;
                             self->_is_fetching = false;
@@ -750,3 +775,27 @@ String USBHostUPS::dumpUSBDiagnostics() {
 }
 
 
+void USBHostUPS::int_in_cb(usb_transfer_t *transfer) {
+    USBHostUPS* self = (USBHostUPS*)transfer->context;
+    if (self) self->handle_int_in(transfer);
+}
+
+void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
+    if (transfer->status == USB_TRANSFER_STATUS_COMPLETED && transfer->actual_num_bytes > 0 && _driver) {
+        bool has_report_ids = false;
+        for (const auto& u : _hid_parser.getUsages()) {
+            if (u.report_id != 0) { has_report_ids = true; break; }
+        }
+        uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
+        _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
+    }
+    
+    // Resubmit transfer if device is still active
+    if (!_pending_dev_close && _dev_handle != NULL) {
+        transfer->num_bytes = _int_in_mps;
+        esp_err_t err = usb_host_transfer_submit(transfer);
+        if (err != ESP_OK) {
+            Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
+        }
+    }
+}
