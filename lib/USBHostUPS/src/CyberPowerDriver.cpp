@@ -58,6 +58,20 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                     }
                     if (!found && u.report_id != 0) rids.push_back(pair);
                 }
+                for (auto it = rids.begin(); it != rids.end(); ) {
+                    if ((*it >> 8) == 1) { // If Input report
+                        uint8_t id = *it & 0xFF;
+                        bool has_feature = false;
+                        for (uint16_t pair : rids) {
+                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                        }
+                        if (has_feature) {
+                            it = rids.erase(it);
+                            continue;
+                        }
+                    }
+                    ++it;
+                }
                 
                 int index = _poll_step - 4;
                 if (index >= 0 && index < rids.size()) {
@@ -104,6 +118,9 @@ void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t
             d.load = (uint8_t)v;
             if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+        }},
+        { "UPS.Battery.Temperature", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
         }},
         { "UPS.Output.PercentLoad", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.load = (uint8_t)v;
@@ -190,6 +207,6 @@ void CyberPowerDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, co
     }
     if (index == host->_iManufacturer) ups_data.manufacturer = str;
     else if (index == host->_iProduct) ups_data.product = str;
-    else if (index == 3 || index == 4) ups_data.serialNumber = str;
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.serialNumber = str;
 }
 

@@ -40,6 +40,7 @@ struct UPSData {
     float outputVoltage = 0.0f;
     float inputVoltage = 0.0f;
     float batteryVoltage = 0.0f;
+    float batteryTemperature = 0.0f;
 
     uint16_t highVoltageTransfer = 0;
     uint16_t lowVoltageTransfer = 0;

@@ -259,6 +259,7 @@ void WebConfigServer::handleUpsVars() {
     if (data.outputFrequencyNominal > 0) doc["output.frequency.nominal"] = data.outputFrequencyNominal;
     doc["ups.load"] = data.load;
     if (data.configApparentPower > 0 || data.configActivePower > 0) doc["ups.realpower"] = data.realPower;
+    if (data.batteryTemperature > 0.0f) doc["battery.temperature"] = serialized(String(data.batteryTemperature, 1));
     if (data.delayShutdown >= 0) doc["ups.delay.shutdown"] = data.delayShutdown;
     if (data.delayStart >= 0) doc["ups.delay.start"] = data.delayStart;
     if (data.timerStart >= 0) doc["ups.timer.start"] = data.timerStart;

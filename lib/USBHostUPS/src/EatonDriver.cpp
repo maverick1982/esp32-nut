@@ -45,7 +45,7 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 2) {
                 if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(4);
+                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else {
                 const auto& usages = host->_hid_parser.getUsages();
                 std::vector<uint16_t> rids;
@@ -57,6 +57,20 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                         if (id == pair) { found = true; break; }
                     }
                     if (!found) rids.push_back(pair);
+                }
+                for (auto it = rids.begin(); it != rids.end(); ) {
+                    if ((*it >> 8) == 1) { // If Input report
+                        uint8_t id = *it & 0xFF;
+                        bool has_feature = false;
+                        for (uint16_t pair : rids) {
+                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                        }
+                        if (has_feature) {
+                            it = rids.erase(it);
+                            continue;
+                        }
+                    }
+                    ++it;
                 }
                 
                 int index = _poll_step - 4;
@@ -100,6 +114,9 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t repo
             d.load = (uint8_t)v;
             if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100);
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000);
+        }},
+        { "UPS.Battery.Temperature", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
         }},
         { "UPS.PowerConverter.Input.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.inputVoltage = v; } },
         { "UPS.Flow.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.inputVoltage = v; } },
@@ -185,7 +202,7 @@ void EatonDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const u
     }
     if (index == host->_iManufacturer) ups_data.manufacturer = str;
     else if (index == host->_iProduct) ups_data.product = str;
-    else if (index == 4) ups_data.serialNumber = str;
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.serialNumber = str;
     else if (_chemStrIdx > 0 && index == _chemStrIdx) ups_data.batteryType = str;
 }
 
