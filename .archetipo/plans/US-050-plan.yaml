@@ -1,0 +1,37 @@
+schema: archetipo/plan/v2
+spec_code: US-050
+body: "## Soluzione Tecnica\nL'aggiornamento della tabella dei parametri dell'UPS avviene tramite la funzione `fetchUpsVars()` in `data/www/app.js`. Attualmente, la funzione itera sui campi del payload JSON restituito da `/api/ups-vars` nell'ordine in cui arrivano. \n\nPer garantire l'ordine alfabetico costante anche con gli aggiornamenti in tempo reale:\n- Estrarremo le chiavi dell'oggetto `data` e le ordineremo alfabeticamente con `Object.keys(data).sort()`.\n- Durante la generazione o l'aggiornamento delle righe della tabella (`tr`), utilizzeremo la tecnica di DOM reordering: verificheremo se l'elemento corrente si trova all'indice atteso nel contenitore `upsTableBody`. Se non lo è, utilizzeremo `insertBefore` per posizionarlo correttamente.\n- Questo approccio previene il flickering visivo (evitando di svuotare e ricreare il DOM) e garantisce che nuovi parametri aggiunti dinamicamente vengano inseriti nel punto esatto dell'elenco ordinato.\n\n## Strategia di Testing (E2E)\n- **Scenario Utente:** L'utente accede alla pagina, visualizza la tabella \"UPS telemetry\" e verifica che le righe (parametri) siano presentate in stretto ordine alfabetico. Quando i dati vengono aggiornati, l'ordinamento rimane invariato.\n- **Framework:** Utilizzeremo **Playwright** (già configurato nel progetto sotto la directory `e2e/`).\n- **Implementazione:** Verrà aggiunto un nuovo test in `e2e/ups-parameters.spec.ts` che estrarrà il testo della prima colonna di tutte le righe della tabella e asserirà che l'array di stringhe estratto sia esattamente uguale alla sua versione ordinata alfabeticamente.\n- **Dimostrazione:** L'incremento non richiede la registrazione di un video demo, in quanto puramente tecnico (ordinamento UI) e già validato dai test end-to-end.\n\n*Nota: Non è stata richiesta la generazione di alcun mockup, in quanto la modifica riguarda l'ordinamento di un componente (tabella) già esistente e strutturato.*"
+tasks:
+  - id: TASK-01
+    title: Ordinamento righe tabella in app.js
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Modificare il rendering della tabella in modo che i parametri siano ordinati alfabeticamente per nome (chiave) mantenendo alte le performance ed evitando sfarfallii visivi.
+
+      ## File Coinvolti
+      - `data/www/app.js` — All'interno di `fetchUpsVars()`, sostituire il ciclo `for (const [key, value] of Object.entries(data))` con un ciclo basato sulle chiavi ordinate: `const sortedKeys = Object.keys(data).sort();`. Utilizzare una variabile di tracciamento dell'indice (`currentIndex = 0`) e `upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null)` alla fine del ciclo per garantire che ogni riga sia esattamente nell'ordine previsto all'interno del DOM (sia alla creazione che agli aggiornamenti successivi).
+
+      ## Criteri di Completamento
+      - [ ] La tabella renderizza i parametri in ordine alfabetico (A-Z).
+      - [ ] Nessuno sfarfallio visivo quando arrivano nuovi dati tramite polling.
+      - [ ] L'ordine è mantenuto se dovesse apparire un nuovo parametro durante il tempo di esecuzione.
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiunta test E2E per ordinamento tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Verificare tramite Playwright che la UI rispetti l'ordinamento alfabetico dei parametri in tabella.
+
+      ## File Coinvolti
+      - `e2e/ups-parameters.spec.ts` — Aggiungere un'asserzione (all'interno di un test esistente o di uno nuovo) che attenda il render della tabella, selezioni tutte le celle della prima colonna (`#ups-table-body tr td:first-child`), estragga il loro contenuto testuale e verifichi che l'array risultante sia ordinato alfabeticamente e in ordine crescente.
+
+      ## Criteri di Completamento
+      - [ ] I test E2E coprono l'ordinamento alfabetico della tabella UPS.
+      - [ ] L'esecuzione locale di `npx playwright test e2e/ups-parameters.spec.ts` passa con successo.
+    ref: TASK-02

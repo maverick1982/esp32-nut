@@ -108,4 +108,36 @@ test.describe('UPS Parameters UI', () => {
     // Wait for the next poll
     await expect(page.locator('#generic-ups-banner')).toBeHidden({ timeout: 3500 });
   });
+
+  test('sorts table rows alphabetically by parameter name', async ({ page }) => {
+    const mockData = {
+      "ups.status": "OL",
+      "battery.charge": "100",
+      "ups.mfr": "Eaton",
+      "input.voltage.nominal": "230",
+      "battery.runtime": "3240",
+      "output.voltage": "230.1"
+    };
+
+    await page.route('**/api/ups-vars', async route => {
+      await route.fulfill({ json: mockData });
+    });
+
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target="ups"]');
+
+    // Wait for the table to render
+    await page.waitForSelector('#ups-table-body tr');
+
+    // Extract all parameter names from the first column
+    const paramCells = page.locator('#ups-table-body tr td:first-child');
+    await expect(paramCells.first()).toBeVisible();
+    
+    const params = await paramCells.allInnerTexts();
+    
+    // Check they are not empty and are sorted
+    expect(params.length).toBeGreaterThan(0);
+    const expectedSorted = [...params].sort();
+    expect(params).toEqual(expectedSorted);
+  });
 });

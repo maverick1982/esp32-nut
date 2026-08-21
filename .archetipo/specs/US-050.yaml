@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-050
+title: Ordinamento alfabetico tabella parametri UPS Telemetry
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 1
+status: DONE
+body: |-
+  #### US-050: Ordinamento alfabetico tabella parametri UPS Telemetry
+
+  **Epic:** EP-002 | **Priority:** LOW | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente della Web UI,
+  voglio che la tabella dei parametri nel tab "UPS telemetry" sia ordinata in ordine alfabetico crescente in base alla colonna Parameter,
+  così da poter individuare più rapidamente i parametri di interesse durante la consultazione.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, visualizzando il tab "UPS telemetry", le righe della tabella risulteranno sempre ordinate alfabeticamente (A-Z) in base al nome del parametro, anche durante gli aggiornamenti in tempo reale dei dati.
+
+  **Acceptance Criteria**
+  - [ ] I parametri nella tabella "UPS telemetry" sono ordinati alfabeticamente in modo crescente (A-Z) usando la colonna "Parameter".
+  - [ ] L'ordinamento viene mantenuto coerente anche quando i valori della tabella si aggiornano in tempo reale.
+history:
+  - status: TODO
+    at: "2026-08-21T16:15:09Z"
+  - status: PLANNED
+    at: "2026-08-21T16:17:56Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T16:22:56Z"
+  - status: REVIEW
+    at: "2026-08-21T16:25:50Z"
+  - status: DONE
+    at: "2026-08-21T16:31:25Z"

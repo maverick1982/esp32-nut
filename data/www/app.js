@@ -397,7 +397,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Update table
             if (upsTableBody) {
-                for (const [key, value] of Object.entries(data)) {
+                const sortedKeys = Object.keys(data).sort();
+                let currentIndex = 0;
+                
+                for (const key of sortedKeys) {
+                    const value = data[key];
                     const rowId = `row-${key.replace(/\./g, '-')}`;
                     let tr = document.getElementById(rowId);
                     
@@ -410,13 +414,18 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td class="ups-val">${value}</td>
                             <td>${desc}</td>
                         `;
-                        upsTableBody.appendChild(tr);
                     } else {
                         const valCell = tr.querySelector('.ups-val');
                         if (valCell && valCell.textContent !== String(value)) {
                             valCell.textContent = value;
                         }
                     }
+                    
+                    // Enforce DOM order
+                    if (upsTableBody.children[currentIndex] !== tr) {
+                        upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null);
+                    }
+                    currentIndex++;
                 }
             }
             
