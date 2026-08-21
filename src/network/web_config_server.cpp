@@ -13,13 +13,17 @@ WebConfigServer::WebConfigServer(ConfigManager& config_mgr)
     : server(80), config_mgr(config_mgr), is_ap_mode(false) {}
 
 void WebConfigServer::begin(bool isAPMode) {
-    is_ap_mode = isAPMode;
+    this->is_ap_mode = isAPMode;
     
     if (is_ap_mode) {
         // Start DNS Server for Captive Portal
         dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
         dnsServer.start(53, "*", WiFi.softAPIP());
     }
+
+    static bool _handlers_registered = false;
+    if (_handlers_registered) return;
+    _handlers_registered = true;
 
     // Serve explicitly the index.html on root
     server.on("/", HTTP_GET, [this]() {

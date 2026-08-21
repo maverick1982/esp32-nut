@@ -198,6 +198,15 @@ void CyberPowerDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, co
         invert = true;
     }
     
+    // Auto-detect inverted strings by checking the high byte of the first UTF-16 character
+    if (str_len >= 4 && length >= 4) {
+        if (data[3] == 0xFF) {
+            invert = true;
+        } else if (data[3] == 0x00) {
+            invert = false;
+        }
+    }
+    
     for (int i = 2; i < str_len && i < length; i += 2) {
         if (data[i] != 0) {
             char c = (char)data[i];

@@ -326,12 +326,10 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                     transfer->timeout_ms = 1000;
                                     
                                     if (usb_host_transfer_submit_control(self->_client_handle, transfer) == ESP_OK) {
-                                        int timeout = 150;
-                                        while (!ctx_cfg.done && timeout > 0) {
+                                        while (!ctx_cfg.done) {
                                             vTaskDelay(pdMS_TO_TICKS(10));
-                                            timeout--;
                                         }
-                                        if (ctx_cfg.done && ctx_cfg.len >= 9) {
+                                        if (ctx_cfg.len >= 9) {
                                             config_desc = (const usb_config_desc_t *)ctx_cfg.data;
                                         }
                                     }
@@ -389,12 +387,10 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 
                                 esp_err_t err_transfer = usb_host_transfer_submit_control(self->_client_handle, transfer);
                                 if (err_transfer == ESP_OK) {
-                                    int timeout = 600;
-                                    while (!ctx.done && timeout > 0) {
+                                    while (!ctx.done) {
                                         vTaskDelay(pdMS_TO_TICKS(10));
-                                        timeout--;
                                     }
-                                    if (ctx.done && ctx.len > 0) {
+                                    if (ctx.len > 0) {
                                         Serial.printf("[USBHostUPS] Report Descriptor fetched, len %d\n", ctx.len);
                                         self->_hid_parser.parseReportDescriptor(ctx.data, ctx.len);
                                     } else {
@@ -687,13 +683,10 @@ String USBHostUPS::dumpUSBDiagnostics() {
                 c->done = true;
             };
             transfer->num_bytes = 8 + 512;
-            transfer->timeout_ms = 1000;
             
             if (usb_host_transfer_submit_control(_client_handle, transfer) == ESP_OK) {
-                int timeout = 150;
-                while (!ctx_cfg.done && timeout > 0) {
+                while (!ctx_cfg.done) {
                     vTaskDelay(pdMS_TO_TICKS(10));
-                    timeout--;
                 }
                 if (ctx_cfg.done && ctx_cfg.len >= 9) {
                     config_desc = (const usb_config_desc_t *)ctx_cfg.data;
@@ -748,10 +741,8 @@ String USBHostUPS::dumpUSBDiagnostics() {
 
         err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
-            int timeout = 600;
-            while (!ctx.done && timeout > 0) {
+            while (!ctx.done) {
                 vTaskDelay(pdMS_TO_TICKS(10));
-                timeout--;
             }
             if (ctx.done && ctx.len > 0) {
                 JsonArray raw = doc["report_descriptor_hex"].to<JsonArray>();
