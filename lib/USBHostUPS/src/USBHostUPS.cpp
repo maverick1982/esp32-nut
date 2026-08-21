@@ -1,17 +1,36 @@
 #include "USBHostUPS.h"
+#include "IUPSDriver.h"
 #include "EatonDriver.h"
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "GenericDriver.h"
 #include <ArduinoJson.h>
+
+struct DiagContext {
+    volatile bool done;
+    uint8_t data[1024];
+    size_t len;
+};
+
 USBHostUPS::USBHostUPS() : 
     _usb_task_handle(NULL), 
     _client_task_handle(NULL), 
     _client_handle(NULL), 
     _dev_handle(NULL), 
     _initialized(false),
+    _is_ready_to_poll(false),
+    _is_fetching(false),
+    _pending_dev_close(false),
+    _dev_to_close(NULL),
+    _int_in_ep(0),
+    _int_in_mps(0),
+    _int_in_transfer(NULL),
     _driver(nullptr),
-    _log_cb(nullptr) {
+    _log_cb(nullptr),
+    _quirks(0),
+    _iManufacturer(0),
+    _iProduct(0),
+    _iSerialNumber(0) {
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -49,36 +68,125 @@ bool USBHostUPS::isConnected() const {
     return _initialized && (_dev_handle != NULL);
 }
 
+String USBHostUPS::getActiveBeeperPath() const {
+    for (const auto& u : _hid_parser.getUsages()) {
+        if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
+            u.path == "UPS.BatterySystem.Battery.AudibleAlarmControl" || 
+            u.path == "UPS.AudibleAlarmControl") {
+            return u.path;
+        }
+    }
+    return "";
+}
+
 bool USBHostUPS::setBeeper(bool enable) {
     if (_dev_handle == NULL) return false;
 
+    uint8_t report_id = 0x1f; // Fallback
+    uint16_t bit_size = 8;
+    uint16_t bit_offset = 0;
+    String active_path = getActiveBeeperPath();
+    if (active_path == "") return false;
+
+    for (const auto& u : _hid_parser.getUsages()) {
+        if (u.path == active_path) {
+            report_id = u.report_id;
+            bit_size = u.bit_size;
+            bit_offset = u.bit_offset;
+            break;
+        }
+    }
+
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 2, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + 256, 0, &transfer);
     if (err != ESP_OK) return false;
 
+    // STEP 1: GET_REPORT
     usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
-    setup->bmRequestType = 0x21; // SET_REPORT type
-    setup->bRequest = 0x09;      // SET_REPORT request
-    setup->wValue = (0x03 << 8) | 0x1f; // Feature report, ID 0x1f
-    setup->wIndex = 0;           // Interface 0
-    setup->wLength = 2;
+    setup->bmRequestType = 0xA1; // GET_REPORT
+    setup->bRequest = 0x01;
+    setup->wValue = (0x03 << 8) | report_id;
+    setup->wIndex = 0;
+    setup->wLength = 255;
 
-    uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
-    data[0] = 0x1f; 
-    data[1] = enable ? 2 : 1; 
+    DiagContext ctx;
+    ctx.done = false;
+    ctx.len = 0;
 
     transfer->device_handle = _dev_handle;
-    transfer->callback = control_transfer_cb;
-    transfer->context = this;
-    transfer->num_bytes = 8 + 2;
+    transfer->context = &ctx;
+    transfer->callback = [](usb_transfer_t *t) {
+        DiagContext *c = (DiagContext*)t->context;
+        if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
+            c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+            if (c->len > sizeof(c->data)) c->len = sizeof(c->data);
+            memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+        }
+        c->done = true;
+    };
+    transfer->num_bytes = 8 + 255;
+    transfer->timeout_ms = 1000;
 
-    err = usb_host_transfer_submit_control(_client_handle, transfer);
-    if (err != ESP_OK) {
+    if (usb_host_transfer_submit_control(_client_handle, transfer) != ESP_OK) {
         usb_host_transfer_free(transfer);
         return false;
     }
-    _ups_data.beeperEnabled = enable;
-    return true;
+
+    int timeout = 150;
+    while (!ctx.done && timeout > 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout--;
+    }
+
+    if (!ctx.done || ctx.len == 0) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
+
+    // STEP 2: MODIFY BUFFER
+    uint16_t byte_idx = (bit_offset / 8) + (report_id != 0 ? 1 : 0);
+    uint8_t bit_shift = bit_offset % 8;
+
+    if (byte_idx < ctx.len) {
+        uint8_t val = enable ? 2 : 1;
+        if (bit_size == 1) val = enable ? 1 : 0;
+        
+        uint8_t mask = (1 << bit_size) - 1;
+        ctx.data[byte_idx] &= ~(mask << bit_shift);
+        ctx.data[byte_idx] |= (val & mask) << bit_shift;
+    }
+
+    // STEP 3: SET_REPORT
+    setup->bmRequestType = 0x21; // SET_REPORT
+    setup->bRequest = 0x09;
+    setup->wValue = (0x03 << 8) | report_id;
+    setup->wIndex = 0;
+    setup->wLength = ctx.len;
+
+    uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
+    memcpy(data, ctx.data, ctx.len);
+
+    ctx.done = false; // Reset for SET_REPORT
+    transfer->num_bytes = 8 + ctx.len;
+    
+    if (usb_host_transfer_submit_control(_client_handle, transfer) != ESP_OK) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
+
+    timeout = 150;
+    while (!ctx.done && timeout > 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout--;
+    }
+
+    usb_host_transfer_free(transfer);
+    
+    if (ctx.done) {
+        _ups_data.beeperEnabled = enable;
+        return true;
+    }
+    return false;
 }
 
 void USBHostUPS::usb_host_lib_task(void *arg) {
@@ -133,6 +241,11 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 if (err == ESP_OK) {
                     Serial.printf("[USBHostUPS] Device Info: Address %d, VID %04X, PID %04X\n",
                                   event_msg->new_dev.address, desc->idVendor, desc->idProduct);
+                    
+                    _iManufacturer = desc->iManufacturer;
+                    _iProduct = desc->iProduct;
+                    _iSerialNumber = desc->iSerialNumber;
+                    
                     _dev_handle = dev_hdl;
                     esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
                     if (claim_err == ESP_OK) {
@@ -167,7 +280,151 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 _ups_data.upsType = "Generic";
                                 break;
                         }
-                        _driver->setup();
+
+                        _quirks = 0;
+                        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+                            if (UPS_QUIRKS[q].vid == desc->idVendor && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == desc->idProduct)) {
+                                _quirks |= UPS_QUIRKS[q].flags;
+                            }
+                        }
+                        
+                        _is_ready_to_poll = false;
+                        
+                        xTaskCreate([](void* arg) {
+                            USBHostUPS* self = (USBHostUPS*)arg;
+                            self->_is_fetching = true;
+                            usb_transfer_t *transfer = NULL;
+                            if (usb_host_transfer_alloc(8 + 1024, 0, &transfer) == ESP_OK) {
+                                uint16_t report_len = 1024;
+                                const usb_config_desc_t *config_desc = NULL;
+                                esp_err_t cfg_err = usb_host_get_active_config_descriptor(self->_dev_handle, &config_desc);
+                                
+                                DiagContext ctx_cfg;
+                                if (cfg_err != ESP_OK || config_desc == NULL) {
+                                    usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+                                    setup->bmRequestType = 0x80;
+                                    setup->bRequest = 0x06;
+                                    setup->wValue = 0x0200; // Config Descriptor, index 0
+                                    setup->wIndex = 0;
+                                    setup->wLength = 512;
+                                    
+                                    ctx_cfg.done = false;
+                                    ctx_cfg.len = 0;
+                                    
+                                    transfer->device_handle = self->_dev_handle;
+                                    transfer->context = &ctx_cfg;
+                                    transfer->callback = [](usb_transfer_t *t) {
+                                        DiagContext *c = (DiagContext*)t->context;
+                                        if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
+                                            c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+                                            if (c->len > 1024) c->len = 1024;
+                                            if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+                                        }
+                                        c->done = true;
+                                    };
+                                    transfer->num_bytes = 8 + 512;
+                                    transfer->timeout_ms = 1000;
+                                    
+                                    if (usb_host_transfer_submit_control(self->_client_handle, transfer) == ESP_OK) {
+                                        int timeout = 150;
+                                        while (!ctx_cfg.done && timeout > 0) {
+                                            vTaskDelay(pdMS_TO_TICKS(10));
+                                            timeout--;
+                                        }
+                                        if (ctx_cfg.done && ctx_cfg.len >= 9) {
+                                            config_desc = (const usb_config_desc_t *)ctx_cfg.data;
+                                        }
+                                    }
+                                }
+
+                                if (config_desc != NULL) {
+                                    const uint8_t* p = (const uint8_t*)config_desc;
+                                    size_t offset = 0;
+                                    size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg.len;
+                                    while (offset < max_len && offset + 1 < max_len) {
+                                        uint8_t len = p[offset];
+                                        uint8_t type = p[offset + 1];
+                                        if (len == 0) break;
+                                        if (type == 0x21 && len >= 9 && offset + 8 < max_len) {
+                                            report_len = p[offset + 7] | (p[offset + 8] << 8);
+                                        } else if (type == 0x05 && len >= 7 && offset + 6 < max_len) { // Endpoint Descriptor
+                                            uint8_t ep_addr = p[offset + 2];
+                                            uint8_t ep_attr = p[offset + 3];
+                                            uint16_t ep_mps = p[offset + 4] | (p[offset + 5] << 8);
+                                            if ((ep_addr & 0x80) && (ep_attr & 0x03) == 0x03) { // IN and Interrupt
+                                                self->_int_in_ep = ep_addr;
+                                                self->_int_in_mps = ep_mps;
+                                            }
+                                        }
+                                        offset += len;
+                                    }
+                                }
+                                if (report_len == 0 || report_len > 1024) report_len = 1024;
+
+
+                                usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+                                setup->bmRequestType = 0x81;
+                                setup->bRequest = 0x06;
+                                setup->wValue = 0x2200; // Report Descriptor
+                                setup->wIndex = 0;
+                                setup->wLength = report_len;
+                                
+                                DiagContext ctx;
+                                ctx.done = false;
+                                ctx.len = 0;
+                                
+                                transfer->device_handle = self->_dev_handle;
+                                transfer->context = &ctx;
+                                transfer->callback = [](usb_transfer_t *t) {
+                                    DiagContext *c = (DiagContext*)t->context;
+                                    if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
+                                        c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+                                        if (c->len > 1024) c->len = 1024;
+                                        if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+                                    }
+                                    c->done = true;
+                                };
+                                transfer->num_bytes = 8 + report_len;
+                                transfer->timeout_ms = 5000;
+                                
+                                esp_err_t err_transfer = usb_host_transfer_submit_control(self->_client_handle, transfer);
+                                if (err_transfer == ESP_OK) {
+                                    int timeout = 600;
+                                    while (!ctx.done && timeout > 0) {
+                                        vTaskDelay(pdMS_TO_TICKS(10));
+                                        timeout--;
+                                    }
+                                    if (ctx.done && ctx.len > 0) {
+                                        Serial.printf("[USBHostUPS] Report Descriptor fetched, len %d\n", ctx.len);
+                                        self->_hid_parser.parseReportDescriptor(ctx.data, ctx.len);
+                                    } else {
+                                        Serial.printf("[USBHostUPS] Report Descriptor fetch failed. status=%d, len=%d\n", ctx.done, ctx.len);
+                                    }
+                                }
+                                usb_host_transfer_free(transfer);
+                            }
+                            if (self->_driver) {
+                                self->_driver->setup();
+                            }
+                            if (self->_int_in_ep != 0 && self->_int_in_mps != 0) {
+                                Serial.printf("[USBHostUPS] Starting Interrupt IN polling on EP 0x%02X (MPS: %d)\n", self->_int_in_ep, self->_int_in_mps);
+                                if (usb_host_transfer_alloc(self->_int_in_mps, 0, &self->_int_in_transfer) == ESP_OK) {
+                                    self->_int_in_transfer->device_handle = self->_dev_handle;
+                                    self->_int_in_transfer->bEndpointAddress = self->_int_in_ep;
+                                    self->_int_in_transfer->callback = USBHostUPS::int_in_cb;
+                                    self->_int_in_transfer->context = self;
+                                    self->_int_in_transfer->num_bytes = self->_int_in_mps;
+                                    if (usb_host_transfer_submit(self->_int_in_transfer) != ESP_OK) {
+                                        Serial.println("[USBHostUPS] Failed to submit Interrupt IN transfer");
+                                        usb_host_transfer_free(self->_int_in_transfer);
+                                        self->_int_in_transfer = NULL;
+                                    }
+                                }
+                            }
+                            self->_is_ready_to_poll = true;
+                            self->_is_fetching = false;
+                            vTaskDelete(NULL);
+                        }, "fetch_desc", 8192, this, 5, NULL);
                     } else {
                         Serial.printf("[USBHostUPS] Error claiming interface 0: %d\n", claim_err);
                         usb_host_device_close(_client_handle, dev_hdl);
@@ -196,10 +453,12 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 } else {
                     Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
                 }
-                usb_host_device_close(_client_handle, _dev_handle);
+                _dev_to_close = _dev_handle;
+                _pending_dev_close = true;
                 _dev_handle = NULL;
             } else {
-                usb_host_device_close(_client_handle, event_msg->dev_gone.dev_hdl);
+                _dev_to_close = event_msg->dev_gone.dev_hdl;
+                _pending_dev_close = true;
             }
             break;
         }
@@ -274,7 +533,13 @@ bool USBHostUPS::begin() {
 }
 
 void USBHostUPS::loop() {
-    if (!_initialized || _dev_handle == NULL) {
+    if (_pending_dev_close && !_is_fetching) {
+        usb_host_device_close(_client_handle, _dev_to_close);
+        _pending_dev_close = false;
+        _dev_to_close = NULL;
+    }
+
+    if (!_initialized || _dev_handle == NULL || !_is_ready_to_poll) {
         return;
     }
 
@@ -352,25 +617,19 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
             if (setup->bmRequestType == 0x80 && setup->bRequest == 0x06 && (setup->wValue >> 8) == 0x03) {
                 if (actual_length > 2 && data[1] == 0x03) {
                     if (self->_driver) {
-                        self->_driver->parseStringDescriptor(setup->wValue & 0xFF, data, actual_length, self->_ups_data);
+                        self->_driver->parseStringDescriptor(self, setup->wValue & 0xFF, data, actual_length, self->_ups_data);
                     }
                 }
             } else if (setup->bmRequestType == 0xA1 && setup->bRequest == 0x01) {
                 uint8_t report_id = setup->wValue & 0xFF;
                 if (self->_driver) {
-                    self->_driver->decodeReport(self, report_id, data, actual_length, self->_ups_data);
+                    uint8_t rep_type = (setup->wValue >> 8) & 0xFF; self->_driver->decodeReport(self, report_id, rep_type, data, actual_length, self->_ups_data);
                 }
             }
         }
     }
     usb_host_transfer_free(transfer);
 }
-
-struct DiagContext {
-    volatile bool done;
-    uint8_t data[512];
-    size_t len;
-};
 
 String USBHostUPS::dumpUSBDiagnostics() {
     JsonDocument doc;
@@ -396,14 +655,76 @@ String USBHostUPS::dumpUSBDiagnostics() {
     doc["product"] = _ups_data.product;
 
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 512, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + 1024, 0, &transfer);
     if (err == ESP_OK) {
+        uint16_t report_len = 1024;
+        const usb_config_desc_t *config_desc = NULL;
+        esp_err_t cfg_err = usb_host_get_active_config_descriptor(_dev_handle, &config_desc);
+        
+        DiagContext ctx_cfg;
+        if (cfg_err != ESP_OK || config_desc == NULL) {
+            usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
+            setup->bmRequestType = 0x80;
+            setup->bRequest = 0x06;
+            setup->wValue = 0x0200; // Config Descriptor
+            setup->wIndex = 0;
+            setup->wLength = 512;
+            
+            ctx_cfg.done = false;
+            ctx_cfg.len = 0;
+            
+            transfer->device_handle = _dev_handle;
+            transfer->context = &ctx_cfg;
+            transfer->callback = [](usb_transfer_t *t) {
+                DiagContext *c = (DiagContext*)t->context;
+                if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
+                    c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
+                    if (c->len > 1024) c->len = 1024;
+                    memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+                }
+                c->done = true;
+            };
+            transfer->num_bytes = 8 + 512;
+            transfer->timeout_ms = 1000;
+            
+            if (usb_host_transfer_submit_control(_client_handle, transfer) == ESP_OK) {
+                int timeout = 150;
+                while (!ctx_cfg.done && timeout > 0) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    timeout--;
+                }
+                if (ctx_cfg.done && ctx_cfg.len >= 9) {
+                    config_desc = (const usb_config_desc_t *)ctx_cfg.data;
+                }
+            }
+        }
+        
+        doc["cfg_err"] = cfg_err;
+        if (config_desc != NULL) {
+            size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg.len;
+            doc["cfg_total_len"] = max_len;
+            const uint8_t* p = (const uint8_t*)config_desc;
+            size_t offset = 0;
+            while (offset < max_len && offset + 1 < max_len) {
+                uint8_t len = p[offset];
+                uint8_t type = p[offset + 1];
+                if (len == 0) break;
+                if (type == 0x21 && len >= 9 && offset + 8 < max_len) {
+                    report_len = p[offset + 7] | (p[offset + 8] << 8);
+                    break;
+                }
+                offset += len;
+            }
+        }
+        if (report_len == 0 || report_len > 1024) report_len = 1024;
+        doc["report_len_req"] = report_len;
+
         usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
         setup->bmRequestType = 0x81;
         setup->bRequest = 0x06;
-        setup->wValue = 0x2200;
+        setup->wValue = 0x2200; // Report Descriptor
         setup->wIndex = 0;
-        setup->wLength = 512;
+        setup->wLength = report_len;
 
         DiagContext ctx;
         ctx.done = false;
@@ -413,26 +734,19 @@ String USBHostUPS::dumpUSBDiagnostics() {
         transfer->context = &ctx;
         transfer->callback = [](usb_transfer_t *t) {
             DiagContext *c = (DiagContext*)t->context;
-            if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
+            if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                 c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-                if (c->len > 512) c->len = 512;
-                memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
+                if (c->len > 1024) c->len = 1024;
+                if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
             }
             c->done = true;
-            usb_host_transfer_free(t);
         };
-        transfer->num_bytes = 8 + 512;
+        transfer->num_bytes = 8 + report_len;
+        transfer->timeout_ms = 5000;
 
-        int retries = 10;
-        do {
-            err = usb_host_transfer_submit_control(_client_handle, transfer);
-            if (err == ESP_OK) break;
-            vTaskDelay(pdMS_TO_TICKS(50));
-            retries--;
-        } while (retries > 0);
-
+        err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
-            int timeout = 200; // 2 seconds
+            int timeout = 600;
             while (!ctx.done && timeout > 0) {
                 vTaskDelay(pdMS_TO_TICKS(10));
                 timeout--;
@@ -444,13 +758,13 @@ String USBHostUPS::dumpUSBDiagnostics() {
                     sprintf(hexb, "0x%02X", ctx.data[i]);
                     raw.add(hexb);
                 }
-            } else if (!ctx.done) {
-                doc["error"] = "Control transfer timeout";
+            } else {
+                doc["error"] = "Report Descriptor timeout";
             }
         } else {
-            usb_host_transfer_free(transfer);
-            doc["error"] = "Failed to submit control transfer";
+            doc["error"] = "Failed to submit Report Descriptor transfer";
         }
+        usb_host_transfer_free(transfer);
     } else {
         doc["error"] = "Failed to allocate transfer";
     }
@@ -461,3 +775,27 @@ String USBHostUPS::dumpUSBDiagnostics() {
 }
 
 
+void USBHostUPS::int_in_cb(usb_transfer_t *transfer) {
+    USBHostUPS* self = (USBHostUPS*)transfer->context;
+    if (self) self->handle_int_in(transfer);
+}
+
+void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
+    if (transfer->status == USB_TRANSFER_STATUS_COMPLETED && transfer->actual_num_bytes > 0 && _driver) {
+        bool has_report_ids = false;
+        for (const auto& u : _hid_parser.getUsages()) {
+            if (u.report_id != 0) { has_report_ids = true; break; }
+        }
+        uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
+        _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
+    }
+    
+    // Resubmit transfer if device is still active
+    if (!_pending_dev_close && _dev_handle != NULL) {
+        transfer->num_bytes = _int_in_mps;
+        esp_err_t err = usb_host_transfer_submit(transfer);
+        if (err != ESP_OK) {
+            Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
+        }
+    }
+}

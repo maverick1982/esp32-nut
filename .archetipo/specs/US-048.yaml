@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-048
+title: Parsing Dinamico HID e Sistema a Quirks
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: REVIEW
+body: |
+  #### US-048: Parsing Dinamico HID e Sistema a Quirks
+  
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 5 | **Status:** REVIEW
+  **Blocked by:** -
+  
+  **User Story**
+  Come sviluppatore del driver UPS,
+  Voglio sostituire gli offset hardcoded con il parsing dinamico dell'HID Report Descriptor e un sistema di Quirks basato su PID, adottando la stessa architettura ibrida presente nel progetto ufficiale NUT (Network UPS Tools),
+  in modo che il driver possa supportare in modo affidabile dispositivi UPS standard e correggere le anomalie sfruttando l'enorme knowledge base di NUT sui vari vendor, modelli e varianti (come eccezioni hardware e stringhe invertite).
+  
+  **Demonstrates**
+  Dopo aver implementato questa spec, un collaudo del driver (o un test di regressione) mostrerà che i dispositivi UPS precedenti vengono riconosciuti correttamente e il parser HID estrae i parametri corretti leggendo l'albero HID. Inoltre, le correzioni per le stringhe invertite verranno applicate automaticamente in base al PID del dispositivo tramite la tabella dei Quirks.
+  
+  **Acceptance Criteria**
+  - [x] Il driver estrae dinamicamente i parametri leggendo l'HID Report Descriptor, eliminando l'uso di offset hardcoded.
+  - [x] È implementata una tabella dei Quirks (ispirata o importata dai sub-driver del progetto ufficiale NUT) che applica correzioni hardware basandosi sul Product ID (PID) del dispositivo collegato.
+  - [x] Regression guard: il driver continua a funzionare con i dispositivi UPS precedentemente supportati, validato tramite log del parser o suite di test.
+history:
+  - status: TODO
+    at: "2026-08-15T19:53:39Z"
+  - status: PLANNED
+    at: "2026-08-15T20:05:00Z"
+  - status: IN_PROGRESS
+    at: "2026-08-15T20:10:00Z"
+  - status: REVIEW
+    at: "2026-08-15T20:17:00Z"

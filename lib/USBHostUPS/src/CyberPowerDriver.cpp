@@ -6,7 +6,8 @@ CyberPowerDriver::CyberPowerDriver() :
     _last_fast_poll(0), 
     _last_step_time(0), 
     _poll_step(0),
-    _slow_poll_counter(0) {
+    _slow_poll_counter(0),
+    _active_beeper("") {
 }
 
 void CyberPowerDriver::setup() {
@@ -14,7 +15,8 @@ void CyberPowerDriver::setup() {
     _last_fast_poll = 0;
     _poll_step = 0;
     _last_step_time = 0;
-    _slow_poll_counter = 0;
+    _slow_poll_counter = 14;
+    _active_beeper = "";
     Serial.println("[CyberPowerDriver] Setup started.");
 }
 
@@ -37,192 +39,174 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (_poll_step > 0) {
         if (now - _last_step_time >= 50 || _poll_step == 1) {
             _last_step_time = now;
-            switch (_poll_step) {
-                // Fast poll (every 2s)
-                case 1: host->requestReport(0x01, 0x03, 2); break;
-                case 2: host->requestReport(0x0B, 0x03, 2); break;
-                case 3: host->requestReport(0x08, 0x03, 6); break;
-                case 4: host->requestReport(0x13, 0x03, 2); break;
-                case 5: host->requestReport(0x0F, 0x03, 3); break;
-                case 6: host->requestReport(0x12, 0x03, 3); break;
-                case 7: host->requestReport(0x0a, 0x03, 3); break;
-
-                // Slow poll (every 30s)
-                case 8: if (_slow_poll_counter == 0 && data.manufacturer == "") host->requestStringDescriptor(1); break;
-                case 9: if (_slow_poll_counter == 0 && data.product == "") host->requestStringDescriptor(2); break;
-                case 10: if (_slow_poll_counter == 0 && data.serialNumber == "") host->requestStringDescriptor(3); break;
-                case 11: if (_slow_poll_counter == 0) host->requestReport(0x10, 0x03, 5); break; // Low/High Voltage Transfer
-                case 12: if (_slow_poll_counter == 0) host->requestReport(0x18, 0x03, 5); break; // Config Active Power
-                case 13: if (_slow_poll_counter == 0) host->requestReport(0x07, 0x03, 7); break; // Capacity Info
-                case 14: if (_slow_poll_counter == 0) host->requestReport(0x15, 0x03, 3); break; // Delay Shutdown
-                case 15: if (_slow_poll_counter == 0) host->requestReport(0x16, 0x03, 3); break; // Delay Start
-                case 16: if (_slow_poll_counter == 0) host->requestReport(0x09, 0x03, 3); break; // Config Voltage
-                case 17: if (_slow_poll_counter == 0) host->requestReport(0x0C, 0x03, 2); break; // Audible Alarm
-                case 18: if (_slow_poll_counter == 0) host->requestReport(0x0E, 0x03, 2); break; // Input Config Voltage
-                case 19: if (_slow_poll_counter == 0) host->requestReport(0x17, 0x03, 2); break; // Boost / Overload
-                case 20: if (_slow_poll_counter == 0) host->requestReport(0x0D, 0x03, 2); break; // Config Frequency
-                default: 
-                    _poll_step = 0; 
+            
+            if (_poll_step == 1) {
+                if (_slow_poll_counter == 0 && data.manufacturer == "") if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
+            } else if (_poll_step == 2) {
+                if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
+            } else if (_poll_step == 3) {
+                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+            } else {
+                const auto& usages = host->_hid_parser.getUsages();
+                std::vector<uint16_t> rids;
+                for (const auto& u : usages) {
+                    if (u.report_type == 2) continue; // Skip OUTPUT reports
+                    uint16_t pair = (u.report_type << 8) | u.report_id;
+                    bool found = false;
+                    for (uint16_t id : rids) {
+                        if (id == pair) { found = true; break; }
+                    }
+                    if (!found && u.report_id != 0) rids.push_back(pair);
+                }
+                for (auto it = rids.begin(); it != rids.end(); ) {
+                    if ((*it >> 8) == 1) { // If Input report
+                        uint8_t id = *it & 0xFF;
+                        bool has_feature = false;
+                        for (uint16_t pair : rids) {
+                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                        }
+                        if (has_feature) {
+                            it = rids.erase(it);
+                            continue;
+                        }
+                    }
+                    ++it;
+                }
+                
+                int index = _poll_step - 4;
+                if (index >= 0 && index < rids.size()) {
+                    uint8_t r_type = rids[index] >> 8;
+                    uint8_t r_id = rids[index] & 0xFF;
+                    host->requestReport(r_id, r_type, 64);
+                } else {
+                    _poll_step = 0;
                     return;
+                }
             }
             _poll_step++;
         }
     }
 }
 
-void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length == 0 || data == NULL) return;
+void CyberPowerDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+    if (length == 0 || data == NULL || !host) return;
 
-    size_t offset = 0;
-    if (length > 1 && data[0] == report_id) {
-        offset = 1;
+    struct Mapping {
+        String path;
+        void (*apply)(CyberPowerDriver*, UPSData&, double, const HIDUsageDef*);
+    };
+
+    static const Mapping mappings[] = {
+        { "UPS.PowerSummary.PresentStatus.ACPresent", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.acPresent = v != 0; } },
+        { "UPS.PowerSummary.ACPresent", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.acPresent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Discharging", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.discharging = v != 0; } },
+        { "UPS.PowerSummary.Discharging", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.discharging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Charging", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.charging = v != 0; } },
+        { "UPS.PowerSummary.Charging", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.charging = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.belowRemainingCapacityLimit = v != 0; } },
+        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.belowRemainingCapacityLimit = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.needReplacement = v != 0; } },
+        { "UPS.PowerSummary.NeedReplacement", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.needReplacement = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.overload = v != 0; } },
+        { "UPS.PowerSummary.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.overload = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.ShutdownImminent", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.communicationLost = v != 0; } },
+        { "UPS.PowerSummary.CommunicationLost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.communicationLost = v != 0; } },
+        
+        { "UPS.PowerSummary.PercentLoad", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.load = (uint8_t)v;
+            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
+            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+        }},
+        { "UPS.Battery.Temperature", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
+        }},
+        { "UPS.Output.PercentLoad", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            d.load = (uint8_t)v;
+            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
+            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+        }},
+        
+        { "UPS.Input.Voltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.inputVoltage = v; } },
+        { "UPS.Output.Voltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltage = v; } },
+        
+        { "UPS.PowerSummary.Voltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.batteryVoltage = v; } },
+        
+        { "UPS.PowerSummary.RemainingCapacity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.remainingCapacity = v > 100 ? 100 : v; } },
+        { "UPS.PowerSummary.RemainingCapacityLimit", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.remainingCapacityLimit = (uint8_t)v; } },
+        
+        { "UPS.PowerSummary.RunTimeToEmpty", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.runTimeToEmpty = (uint32_t)v; } },
+        
+        { "UPS.PowerConverter.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
+        { "UPS.Output.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
+        
+        { "UPS.PowerSummary.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { /* mapped to battery.voltage.nominal in cps-hid */ } },
+        { "UPS.Input.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configVoltage = (uint16_t)v; } },
+        { "UPS.Output.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltageNominal = (uint16_t)v; } },
+        
+        { "UPS.Output.LowVoltageTransfer", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.lowVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Input.LowVoltageTransfer", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.lowVoltageTransfer = (uint16_t)v; } },
+        
+        { "UPS.Output.HighVoltageTransfer", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.highVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Input.HighVoltageTransfer", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.highVoltageTransfer = (uint16_t)v; } },
+        
+        { "UPS.PowerSummary.AudibleAlarmControl", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
+            if (def && def->path != drv->_active_beeper) return;
+            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
+            else if (v == 1) d.beeperEnabled = false; 
+            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+        } },
+        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
+            if (def && def->path != drv->_active_beeper) return;
+            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
+            else if (v == 1) d.beeperEnabled = false; 
+            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+        } },
+        { "UPS.AudibleAlarmControl", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
+            if (def && def->path != drv->_active_beeper) return;
+            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
+            else if (v == 1) d.beeperEnabled = false; 
+            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+        } }
+    };
+
+    if (_active_beeper == "") {
+        _active_beeper = host->getActiveBeeperPath();
+        if (_active_beeper == "") _active_beeper = "none";
     }
 
-    switch (report_id) {
-        case 0x01: // Status fallback (Eaton-like)
-            if (length - offset >= 1) {
-                ups_data.acPresent = data[offset] & (1 << 0);
-                ups_data.belowRemainingCapacityLimit = data[offset] & (1 << 1);
-                ups_data.charging = data[offset] & (1 << 2);
-                ups_data.communicationLost = data[offset] & (1 << 3);
-                ups_data.discharging = data[offset] & (1 << 4);
-                ups_data.good = data[offset] & (1 << 5);
-                ups_data.internalFailure = data[offset] & (1 << 6);
-                ups_data.needReplacement = data[offset] & (1 << 7);
+    for (const auto& u : host->_hid_parser.getUsages()) {
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        for (const auto& m : mappings) {
+            if (u.path == m.path) {
+                double val = HIDParser::extractUsage(&u, report_id, data, length);
+                m.apply(this, ups_data, val, &u);
+                break;
             }
-            break;
-
-        case 0x0B: // Status CyberPower specific
-            if (length - offset >= 1) {
-                ups_data.acPresent = data[offset] & (1 << 0);
-                ups_data.charging = data[offset] & (1 << 1);
-                ups_data.discharging = data[offset] & (1 << 2);
-                ups_data.belowRemainingCapacityLimit = data[offset] & (1 << 3);
-            }
-            break;
-
-        case 0x08: // Battery Capacity & Runtime (CyberPower)
-            if (length - offset >= 1) {
-                ups_data.remainingCapacity = data[offset];
-                if (ups_data.remainingCapacity > 100) ups_data.remainingCapacity = 100;
-            }
-            if (length - offset >= 3) {
-                ups_data.runTimeToEmpty = (uint32_t)data[offset + 1] | ((uint32_t)data[offset + 2] << 8);
-            }
-            break;
-
-        case 0x13: // PercentLoad
-            if (length - offset >= 1) {
-                ups_data.load = data[offset];
-            }
-            if (ups_data.configActivePower > 0) {
-                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configActivePower * ups_data.load) / 100);
-            } else if (ups_data.configApparentPower > 0) {
-                // Fallback to assuming PF = 0.6 if active power is unknown
-                ups_data.realPower = (uint16_t)(((uint32_t)ups_data.configApparentPower * 60 * ups_data.load) / 10000);
-            }
-            break;
-
-        case 0x0F: // Input Voltage
-            if (length - offset >= 2) {
-                ups_data.inputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            } else if (length - offset >= 1) {
-                ups_data.inputVoltage = data[offset];
-            }
-            break;
-
-        case 0x12: // Output Voltage
-            if (length - offset >= 2) {
-                ups_data.outputVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            } else if (length - offset >= 1) {
-                ups_data.outputVoltage = data[offset];
-            }
-            break;
-
-        case 0x0a: // Battery Voltage
-            if (length - offset >= 2) {
-                ups_data.batteryVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            } else if (length - offset >= 1) {
-                ups_data.batteryVoltage = data[offset];
-            }
-            break;
-
-        case 0x10: // Low & High Voltage Transfer
-            if (length - offset >= 2) {
-                ups_data.lowVoltageTransfer = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            if (length - offset >= 4) {
-                ups_data.highVoltageTransfer = (uint16_t)data[offset + 2] | ((uint16_t)data[offset + 3] << 8);
-            }
-            break;
-
-        case 0x18: // Config Active/Apparent Power
-            if (length - offset >= 2) {
-                ups_data.configActivePower = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            }
-            if (length - offset >= 4) {
-                ups_data.configApparentPower = (uint16_t)data[offset + 2] | ((uint16_t)data[offset + 3] << 8);
-            }
-            break;
-
-        case 0x07: // Capacity Info (CyberPower)
-            if (length - offset >= 5) {
-                ups_data.remainingCapacityLimit = data[offset + 4];
-            }
-            break;
-
-        case 0x09: // Config Voltage
-            if (length - offset >= 2) {
-                ups_data.configVoltage = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            } else if (length - offset >= 1) {
-                ups_data.configVoltage = data[offset];
-            }
-            break;
-
-        case 0x0E: // Input Config Voltage
-            if (length - offset >= 2) {
-                ups_data.configVoltage = (uint8_t)data[offset];
-            } else if (length - offset >= 1) {
-                ups_data.configVoltage = data[offset];
-            }
-            break;
-
-        case 0x0D: // Report 0x0D is iManufacturer (string index), not frequency
-            break;
-
-        case 0x15: // Delay Shutdown
-            if (length - offset >= 2) {
-                ups_data.delayShutdown = (int16_t)((uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8));
-            }
-            break;
-
-        case 0x16: // Delay Start
-            if (length - offset >= 2) {
-                ups_data.delayStart = (int16_t)((uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8));
-            }
-            break;
-
-        case 0x0C: // Audible Alarm
-            if (length - offset >= 1) {
-                ups_data.beeperEnabled = (data[offset] == 1);
-            }
-            break;
-
-        default:
-            break;
+        }
     }
 }
 
-void CyberPowerDriver::parseStringDescriptor(uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void CyberPowerDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";
+    
+    bool invert = false;
+    if (host && (host->getQuirks() & QUIRK_INVERT_STRINGS)) {
+        invert = true;
+    }
+    
     for (int i = 2; i < str_len && i < length; i += 2) {
         if (data[i] != 0) {
-            str += (char)data[i];
+            char c = (char)data[i];
+            if (invert) c = ~c;
+            str += c;
         }
     }
-    if (index == 1) ups_data.manufacturer = str;
-    else if (index == 2) ups_data.product = str;
-    else if (index == 3 || index == 4) ups_data.serialNumber = str;
+    if (index == host->_iManufacturer) ups_data.manufacturer = str;
+    else if (index == host->_iProduct) ups_data.product = str;
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.serialNumber = str;
 }
+

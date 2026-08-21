@@ -1,0 +1,102 @@
+schema: archetipo/plan/v2
+spec_code: US-048
+body: "### Technical Solution\n\nPer sostituire gli offset hardcoded e implementare un sistema a Quirks basato su PID, adotteremo un'architettura ibrida in `USBHostUPS` simile al driver `usbhid-ups` di NUT:\n\n1. **Strutture Dati e Quirks**: Introdurremo un dizionario `Quirks` per mappare VID/PID a flag specifici (es. `QUIRK_INVERT_STRINGS`, `QUIRK_IGNORE_BATTERY`) necessari per correggere le non-conformità hardware. Definiremo inoltre le strutture per mappare le variabili NUT (es. `ups.load`) agli HID Usages standard (es. `0x00840004` per UPS Load).\n2. **Parsing Dinamico dell'HID Report Descriptor**: Modificheremo `USBHostUPS` affinché, subito dopo l'enumération del dispositivo, richieda e faccia il parsing del Report Descriptor completo. Verrà costruita una mappa interna per ogni Usage supportato indicando: `Report ID`, `Offset (in bit)`, `Dimensione (in bit)` e `Fattore di scala`.\n3. **Refactoring dei Driver**: Le classi dei driver (es. `APCDriver`, `CyberPowerDriver`) vedranno semplificato il loro `decodeReport`. Al posto dei blocchi `switch` con byte offset hardcoded, estrarranno il valore richiesto consultando la mappa dinamica costruita durante l'inizializzazione per il `Report ID` ricevuto. I quirk verranno applicati per filtrare o trasformare i dati grezzi estratti (es. stringhe o conversioni BCD).\n\n### Test Strategy\n\nPoiché questa spec non introduce nuove interfacce utente ma si concentra interamente sul livello driver interno, la strategia di test si basa interamente su test unitari e di regressione:\n\n- **Unit Tests del Parser HID**: Verranno aggiunti test unitari che forniscono raw HID Report Descriptor catturati in precedenza da UPS reali (es. dump di APC o CyberPower) al nuovo parser, asserendo che calcoli correttamente gli offset per Usages chiave come batteria e voltaggio.\n- **Unit Tests dei Quirks**: Verrà testato che, fornendo un Vendor/Product ID mappato a un Quirk (es. stringhe invertite), il driver applichi la logica condizionale prevista sulla stringa grezza decodificata.\n- **Test di Regressione**: Il refactoring non deve variare l'output per i dispositivi attualmente testati via mock o buffer fisici. I test valideranno che l'oggetto `UPSData` popolato dal parser dinamico coincida con quello popolato dai driver hardcoded originali."
+tasks:
+  - id: TASK-01
+    title: Definizione Strutture Dati HID Usages e Quirks
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      Creare le definizioni base per il nuovo sistema dinamico: tabella dei Quirks e le costanti per mappare le metriche dell'UPS agli Usage ID HID standard (es. Page 0x84 UPS, Page 0x85 Battery System).
+      
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/Quirks.h` (nuovo) — Definire struttura `QuirkDef` (vid, pid, flags) e le costanti `QUIRK_*`.
+      - `lib/USBHostUPS/src/HIDUsages.h` (nuovo) — Definire gli Usage e la struttura per mappare `UPSData` ai campi HID (es. `HID_USAGE_BATTERY_CAPACITY`).
+      
+      ## Criteri di Completamento
+      - [ ] Le strutture dati supportano la definizione del formato (dimensione, report ID, offset).
+      - [ ] La tabella Quirks è estensibile per futuri modelli.
+  - id: TASK-02
+    title: Implementazione dell'HID Report Descriptor Parser
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Modificare la classe base USBHostUPS per richiedere il Report Descriptor durante il setup e farne il parsing, individuando posizione (bit) e dimensione per ogni Usage ID di nostro interesse.
+      
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/USBHostUPS.h` — Aggiungere strutture e puntatori per la mappa degli Usage.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — Implementare la richiesta dell'HID Report Descriptor e un parser a stati per leggere i tag (Main, Global, Local) e calcolare bit-offset e bit-size.
+      
+      ## Criteri di Completamento
+      - [ ] `USBHostUPS` estrae e salva correttamente gli offset per gli Usage supportati.
+      - [ ] Il parser rileva correttamente le collezioni nidificate (Application, Logical).
+  - id: TASK-03
+    title: Unit Test per l'HID Parser
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Verificare isolatamente che l'algoritmo di parsing del Report Descriptor funzioni correttamente su dump reali.
+      
+      ## File Coinvolti
+      - `test/test_hid_parser/test_hid_parser.cpp` (nuovo) — Aggiungere test nativi che passino buffer statici contenenti descriptor reali di UPS e verifichino che la mappa degli Usage riporti gli offset corretti.
+      
+      ## Criteri di Completamento
+      - [ ] I test passano con successo su PlatformIO in ambiente `native`.
+      - [ ] Vengono testati almeno un dump APC e uno CyberPower.
+  - id: TASK-04
+    title: Refactoring APCDriver con Parser Dinamico
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Modificare `APCDriver` per utilizzare la mappa dinamica costruita da `USBHostUPS` per estrarre i dati dai report, rimuovendo gli offset hardcoded da `decodeReport`.
+      
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/APCDriver.cpp` — Sostituire lo `switch` con letture bit a bit basate sulla mappa. Implementare eventuali logiche legate ai Quirks APC.
+      
+      ## Criteri di Completamento
+      - [ ] Il metodo `decodeReport` è generico e usa la maschera/offset calcolati.
+      - [ ] I controlli non si basano più su numeri di report o byte fissi (salvo particolarità non-HID).
+  - id: TASK-05
+    title: Refactoring Altri Driver e Quirks
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      Applicare il refactoring a `CyberPowerDriver`, `EatonDriver` e `GenericDriver`. Applicare logiche di Quirk globali (es. stringhe invertite per vecchi modelli CyberPower) in fase di fetch.
+      
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`
+      - `lib/USBHostUPS/src/EatonDriver.cpp`
+      - `lib/USBHostUPS/src/GenericDriver.cpp`
+      
+      ## Criteri di Completamento
+      - [ ] Tutti i driver sono migrati al parsing dinamico.
+      - [ ] I Quirks vengono controllati correttamente (es. per `parseStringDescriptor`).
+  - id: TASK-06
+    title: Test di Regressione Decodifica Report
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      Aggiungere test unitari che passano interi buffer di report HID e verificano che la struttura `UPSData` venga popolata con gli stessi valori esatti pre-refactoring.
+      
+      ## File Coinvolti
+      - `test/test_usb_decode/test_usb_decode.cpp` (o simile) — Iniezione di report raw e verifica asseverazioni su `UPSData`.
+      
+      ## Criteri di Completamento
+      - [ ] I test coprono report di stato batteria, voltaggi e allarmi per i vari UPS, verificando la correttezza dell'estrazione bit a bit.
