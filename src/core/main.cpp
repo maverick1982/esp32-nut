@@ -140,10 +140,15 @@ void loop() {
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
-        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V\n",
-                      usb_ups.getUPSData().remainingCapacity,
-                      usb_ups.getUPSStatusString().c_str(),
-                      (float)usb_ups.getUPSData().outputVoltage);
+        uint32_t freeHeap = ESP.getFreeHeap();
+        uint32_t minFreeHeap = ESP.getMinFreeHeap();
+        
+        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V", 
+            usb_ups.getUPSData().remainingCapacity, 
+            usb_ups.getUPSStatusString().c_str(), 
+            (float)usb_ups.getUPSData().outputVoltage);
+            
+        AppLogger::log("INFO", "[DIAG] Memory: Free = %u bytes | Min Free = %u bytes", freeHeap, minFreeHeap);
     }
 
     // Aggiornamento stato LED diagnostico
