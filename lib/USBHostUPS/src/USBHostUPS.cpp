@@ -21,6 +21,7 @@ USBHostUPS::USBHostUPS() :
     _is_ready_to_poll(false),
     _is_fetching(false),
     _pending_dev_close(false),
+    _control_pending(false),
     _dev_to_close(NULL),
     _int_in_ep(0),
     _int_in_mps(0),
@@ -556,6 +557,7 @@ void USBHostUPS::loop() {
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
+    if (_control_pending) return false;
 
     // Allocate 255 bytes for data to avoid HCD asserts if device sends more bytes or rounds to MPS
     uint16_t alloc_length = 255;
@@ -578,8 +580,10 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     transfer->num_bytes = 8 + alloc_length;
     transfer->timeout_ms = 1000;
 
+    _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
+        _control_pending = false;
         usb_host_transfer_free(transfer);
         return false;
     }
@@ -588,6 +592,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     if (_dev_handle == NULL) return false;
+    if (_control_pending) return false;
 
     usb_transfer_t *transfer = NULL;
     esp_err_t err = usb_host_transfer_alloc(8 + 255, 0, &transfer);
@@ -606,8 +611,10 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     transfer->num_bytes = 8 + 255;
     transfer->timeout_ms = 1000;
 
+    _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
+        _control_pending = false;
         usb_host_transfer_free(transfer);
         return false;
     }
@@ -617,6 +624,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
 void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
     USBHostUPS *self = static_cast<USBHostUPS*>(transfer->context);
     if (self != NULL) {
+        self->_control_pending = false;
         if (transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
             usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
             uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
@@ -801,10 +809,10 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         if (err != ESP_OK) {
             Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
             usb_host_transfer_free(transfer);
-            if (transfer == _int_in_transfer) _int_in_transfer = NULL;
+            _int_in_transfer = NULL;
         }
     } else {
         usb_host_transfer_free(transfer);
-        if (transfer == _int_in_transfer) _int_in_transfer = NULL;
+        _int_in_transfer = NULL;
     }
 }

@@ -24,20 +24,20 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+        if (now - _last_fast_poll >= 30000 || _last_fast_poll == 0) {
             _last_fast_poll = now != 0 ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
             
             _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
+            if (_slow_poll_counter >= 2) {
                 _slow_poll_counter = 0;
             }
         }
     }
 
     if (_poll_step > 0) {
-        if (now - _last_step_time >= 50 || _poll_step == 1) {
+        if (now - _last_step_time >= 200 || _poll_step == 1) {
             _last_step_time = now;
             
             if (_poll_step == 1) {
