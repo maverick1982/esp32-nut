@@ -6,13 +6,13 @@ test.describe('UPS Parameters UI', () => {
     await page.route('http://esp32.local/', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
     });
-    await page.route('http://esp32.local/shared.css', async route => {
+    await page.route('**/*shared.css*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
     });
-    await page.route('http://esp32.local/app.js', async route => {
+    await page.route('**/*app.js*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
     });
-    await page.route('http://esp32.local/ups.css', async route => {
+    await page.route('**/*ups.css*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
     });
     // Mock the global config so app.js doesn't fail fetching it

@@ -7,10 +7,10 @@ test.describe('NUT Configuration UI', () => {
     await page.route('http://esp32.local/', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
     });
-    await page.route('http://esp32.local/shared.css', async route => {
+    await page.route('**/*shared.css*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
     });
-    await page.route('http://esp32.local/app.js', async route => {
+    await page.route('**/*app.js*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
     });
   });

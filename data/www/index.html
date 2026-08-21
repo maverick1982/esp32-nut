@@ -24,17 +24,17 @@
             </div>
             
             <nav class="tabs">
-                <button class="tab active" data-target="wifi">
+                <button class="tab active" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="wifi">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
                     Wi-Fi Config
                 </button>
                 <button class="tab" data-target="nut">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
                     NUT Server
-                </button>
-                <button class="tab" data-target="ups">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-                    UPS Telemetry
                 </button>
                 <button class="tab" data-target="logs">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -65,7 +65,7 @@
                 <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
             </header>
 
-            <div class="tab-content active" id="content-wifi">
+            <div class="tab-content" id="content-wifi">
                 <div class="panel config-panel">
                     <div class="panel-header">
                         <h2>Connection Setup</h2>
@@ -127,7 +127,7 @@
                 </div>
             </div>
 
-            <div class="tab-content" id="content-ups">
+            <div class="tab-content active" id="content-ups">
                 <div class="panel ups-panel">
                     <div class="panel-header">
                         <h2>Real-Time Data Feed</h2>

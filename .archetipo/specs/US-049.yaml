@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-049
+title: Tab "UPS telemetry" come predefinito e primo nella Web UI
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 1
+status: DONE
+body: |-
+  #### US-049: Tab "UPS telemetry" come predefinito e primo nella Web UI
+
+  **Epic:** EP-002 | **Priority:** MEDIUM | **Points:** 1 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente della Web UI,
+  voglio che il tab "UPS telemetry" sia il primo in alto e selezionato di default all'apertura dell'interfaccia,
+  così da avere accesso immediato e primario ai parametri operativi dell'UPS senza dover cambiare scheda.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, aprendo l'interfaccia web si vedrà il tab "UPS telemetry" posizionato come primo elemento in alto nella lista dei tab, e i suoi contenuti saranno visibili immediatamente (tab attivo) senza alcun clic aggiuntivo.
+
+  **Acceptance Criteria**
+  - [ ] Il tab "UPS telemetry" è spostato al primo posto nell'ordine di visualizzazione.
+  - [ ] Il tab "UPS telemetry" è impostato come attivo/selezionato di default al caricamento della pagina.
+  - [ ] La logica di routing o inizializzazione JavaScript (se presente) rispetta la nuova selezione di default.
+history:
+  - status: TODO
+    at: "2026-08-21T15:28:50Z"
+  - status: PLANNED
+    at: "2026-08-21T15:32:34Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T15:34:34Z"
+  - status: REVIEW
+    at: "2026-08-21T15:48:25Z"
+  - status: DONE
+    at: "2026-08-21T15:54:19Z"

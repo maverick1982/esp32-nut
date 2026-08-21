@@ -1,0 +1,67 @@
+schema: archetipo/plan/v2
+spec_code: US-049
+body: |-
+  ## Approccio Tecnico
+  La modifica richiede l'aggiornamento dell'interfaccia utente in `data/www/index.html` per riposizionare il tab "UPS Telemetry" come primo elemento della navigazione e per assegnargli la classe `active` al posto del tab Wi-Fi. Coerentemente, anche il content panel `div#content-ups` dovrà ricevere la classe `active` di default.
+
+  Lato JavaScript, il polling dei dati dell'UPS in `data/www/app.js` viene attualmente avviato solo all'evento `click` sul tab. Poiché il tab UPS sarà attivo al caricamento della pagina, l'inizializzazione del polling dovrà essere triggerata anche all'avvio (es. simulando un click o controllando il tab attivo al termine del caricamento del DOM).
+
+  ## Strategia di Testing
+  L'intervento modifica l'esperienza utente principale, pertanto richiede una copertura end-to-end (E2E) con Playwright.
+  La strategia E2E verificherà che:
+  - Al caricamento della home page, il tab "UPS Telemetry" sia selezionato.
+  - Il pannello dei dati dell'UPS sia visibile di default.
+  - Le chiamate di rete verso le API dell'UPS partano immediatamente all'apertura, senza necessità di interazione dell'utente.
+tasks:
+  - id: TASK-01
+    title: Modifica ordine tab e selezione di default in index.html
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Spostare il pulsante del tab "UPS Telemetry" al primo posto nella lista dei tab della sidebar. Spostare la classe `active` dal tab Wi-Fi e dal pannello Wi-Fi al tab UPS e al pannello UPS.
+
+      ## File Coinvolti
+      - `data/www/index.html`: Spostare `<button class="tab" data-target="ups">` in cima a `<nav class="tabs">`. Aggiungere la classe `active` a questo pulsante e rimuoverla dal pulsante `wifi`. Rimuovere `active` da `<div class="tab-content active" id="content-wifi">` e aggiungerla a `<div class="tab-content" id="content-ups">`.
+
+      ## Criteri di Completamento
+      - [ ] Il tab UPS è il primo nella sidebar.
+      - [ ] Il tab UPS ha la classe `active`.
+      - [ ] Il pannello dei dati UPS ha la classe `active`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Avvio automatico polling in app.js
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Modificare il file JavaScript dell'applicazione per avviare il polling dei dati dell'UPS al termine del caricamento della pagina, dato che il tab UPS è ora quello di default.
+
+      ## File Coinvolti
+      - `data/www/app.js`: In coda all'evento `DOMContentLoaded`, o subito dopo la definizione del polling, controllare se il tab attivo ha `data-target="ups"`. In caso affermativo, chiamare `fetchUpsVars()` e avviare il `setInterval` per `upsPollInterval`.
+
+      ## Criteri di Completamento
+      - [ ] All'apertura della Web UI, i dati dell'UPS vengono richiesti automaticamente.
+      - [ ] La logica di polling preesistente legata al click sui tab continua a funzionare correttamente (il polling si ferma cambiando scheda e riprende tornando su UPS).
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiunta test end-to-end per tab di default
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Aggiungere un test Playwright per verificare che il tab UPS sia quello selezionato di default all'avvio e che il polling venga avviato correttamente.
+
+      ## File Coinvolti
+      - `e2e/default-tab.spec.js`: Creare il file di test e implementare le verifiche necessarie (presenza classe active, visibilità pannello UPS, verifica chiamate di rete automatiche verso `/api/ups-vars`).
+
+      ## Criteri di Completamento
+      - [ ] Il test E2E verifica che il tab "UPS Telemetry" abbia la classe `.active`.
+      - [ ] Il test E2E verifica che la richiesta verso `/api/ups-vars` avvenga senza clic aggiuntivi.
+      - [ ] Tutti i test passano.
+    ref: TASK-03

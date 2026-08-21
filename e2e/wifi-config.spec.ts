@@ -7,16 +7,17 @@ test.describe('Wi-Fi Configuration UI', () => {
     await page.route('http://esp32.local/', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
     });
-    await page.route('http://esp32.local/shared.css', async route => {
+    await page.route('**/*shared.css*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
     });
-    await page.route('http://esp32.local/app.js', async route => {
+    await page.route('**/*app.js*', async route => {
       await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
     });
   });
 
   test('renders the main interface correctly', async ({ page }) => {
     await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"wifi\"]');
     
     // Verify title and headers
     await expect(page.locator('h1')).toHaveText('Wi-Fi Config');
@@ -37,6 +38,7 @@ test.describe('Wi-Fi Configuration UI', () => {
     });
 
     await page.goto('http://esp32.local/');
+    await page.click('button[data-target=\"wifi\"]');
     
     // Fill SSID and password manually
     await page.fill('#ssid', 'MyNetwork');

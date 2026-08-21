@@ -454,6 +454,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Start polling immediately if UPS tab is active on load
+    if (activeTab && activeTab.getAttribute('data-target') === 'ups') {
+        if (!upsPollInterval) {
+            fetchUpsVars();
+            upsPollInterval = setInterval(fetchUpsVars, 2000);
+        }
+    }
+
     // System Status Polling
     async function fetchSystemStatus() {
         try {

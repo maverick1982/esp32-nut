@@ -45,11 +45,11 @@ test.describe('OTA Update via ZIP', () => {
             await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/fflate.min.js') });
         });
 
-        await page.route('http://esp32.local/shared.css', async route => {
+        await page.route('**/*shared.css*', async route => {
             await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
         });
         
-        await page.route('http://esp32.local/mobile.css', async route => {
+        await page.route('**/*mobile.css*', async route => {
             await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/mobile.css') });
         });
 
