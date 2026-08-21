@@ -78,7 +78,8 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 4. Clicca su **Build** e poi su **Upload**.
 
 ### 2. Primo Avvio e Configurazione
-1. Al primo avvio (o se non trova una rete Wi-Fi conosciuta), l'ESP32 creerà un Access Point chiamato **`NUT_ESP32_Config`** (Password: `12345678`).
+1. Al primo avvio (o in assenza di una configurazione Wi-Fi salvata), l'ESP32 creerà un Access Point chiamato **`NUT_ESP32_Config`** (Password: `12345678`).
+   > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale).
 2. Connetti il tuo telefono o PC a questa rete Wi-Fi.
 3. Si aprirà automaticamente un Captive Portal. In caso contrario, naviga su `http://192.168.4.1`.
 4. Inserisci le credenziali del Wi-Fi di casa e imposta un nome utente/password per il Server NUT.

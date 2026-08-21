@@ -78,7 +78,8 @@ You can install the firmware directly from your browser without downloading any 
 4. Click **Build** and then **Upload**.
 
 ### 2. First Boot & Configuration
-1. On first boot (or if it cannot find a known Wi-Fi network), the ESP32 will create an Access Point named **`NUT_ESP32_Config`** (Password: `12345678`).
+1. On first boot (or if no valid Wi-Fi configuration is saved), the ESP32 will create an Access Point named **`NUT_ESP32_Config`** (Password: `12345678`).
+   > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss).
 2. Connect your phone or PC to this Wi-Fi network.
 3. A captive portal should automatically open. If not, navigate to `http://192.168.4.1`.
 4. Enter your home Wi-Fi credentials and set your preferred NUT Server username/password.

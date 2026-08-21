@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-051
+title: Attivazione manuale modalità Access Point (AP) Wi-Fi
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 3
+status: DONE
+body: |
+  #### US-051: Attivazione manuale modalità Access Point (AP) Wi-Fi
+
+  **Epic:** EP-002 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente del dispositivo,
+  Voglio attivare la modalità Access Point (AP) in modo manuale (accendendo e spegnendo l'ESP32 entro 3 secondi) oppure all'avvio in assenza di configurazione,
+  In modo da avere un controllo esplicito sull'esposizione della rete di configurazione ed evitare l'avvio indesiderato dell'AP.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, il dispositivo non attiverà più l'AP come meccanismo di fallback automatico in caso di semplice disconnessione. L'AP verrà esposto solo se non c'è una configurazione di rete valida salvata, oppure se l'utente esegue la sequenza manuale accendendo il dispositivo e togliendo l'alimentazione entro 3 secondi (impostando un flag persistente che scatena l'AP al riavvio successivo).
+
+  **Acceptance Criteria**
+  - [ ] La precedente logica di fallback o attivazione automatica della modalità AP (es. per timeout di connessione) è stata rimossa dal codice.
+  - [ ] Il dispositivo avvia immediatamente la modalità AP se all'avvio non rileva una configurazione Wi-Fi valida salvata in memoria.
+  - [ ] Se il dispositivo viene acceso e poi spento/resettato entro 3 secondi, un flag viene salvato in memoria non volatile (RTC memory o NVS).
+  - [ ] Al successivo avvio, se il flag è presente, il dispositivo entra in modalità AP indipendentemente dalla configurazione Wi-Fi, dopodiché azzera il flag.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Modificare i file README per allinearli al nuovo comportamento della modalità AP (rimozione fallback automatico 30s e aggiunta trigger manuale entro 3 secondi dall'avvio).
+history:
+  - status: TODO
+    at: "2026-08-21T16:58:34Z"
+  - status: PLANNED
+    at: "2026-08-21T17:06:12Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T17:11:04Z"
+  - status: REVIEW
+    at: "2026-08-21T17:17:24Z"
+  - status: TODO
+    at: "2026-08-21T17:23:17Z"
+  - status: PLANNED
+    at: "2026-08-21T17:25:15Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T17:27:09Z"
+  - status: REVIEW
+    at: "2026-08-21T17:28:22Z"
+  - status: DONE
+    at: "2026-08-21T17:58:40Z"

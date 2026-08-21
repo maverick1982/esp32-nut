@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <functional>
 
 class AppNetworkManager {
 public:
@@ -18,8 +17,6 @@ public:
     
     // Ritorna true se la connessione è attiva
     bool isConnected() const;
-    bool isAPModeActive() const;
-    void onFallback(std::function<void()> callback);
 
 private:
     String m_ssid;
@@ -28,8 +25,6 @@ private:
     uint32_t m_lastConnectionAttempt;
     uint32_t m_lastDisconnectTime;
     bool m_isStarted;
-    bool m_apFallbackActive;
-    std::function<void()> m_fallbackCallback;
 };
 
 #endif // NETWORK_MANAGER_H

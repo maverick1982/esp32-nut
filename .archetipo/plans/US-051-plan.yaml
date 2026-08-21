@@ -1,0 +1,82 @@
+schema: archetipo/plan/v2
+spec_code: US-051
+body: |-
+  ## Soluzione Tecnica
+
+  Per soddisfare i requisiti della spec US-051, la logica di fallback automatico (timeout di 30 secondi) verrà rimossa dalla classe `AppNetworkManager` e sostituita da una logica di rilevamento esplicito all'avvio nel `main.cpp`.
+
+  Poiché lo spegnimento entro 3 secondi comporta una disconnessione fisica dell'alimentazione, non è possibile usare la memoria RTC (che sopravvive solo ai reset software). Verrà pertanto utilizzata la memoria flash NVS tramite la libreria standard `Preferences` per memorizzare un flag temporaneo `manual_ap`.
+
+  **Rework:** Aggiunto un task per allineare i file `README.md` e `README.it.md` in modo che documentino l'assenza del vecchio timeout e spieghino la procedura manuale basata su ciclo di alimentazione in 3 secondi.
+
+  ## Strategia di Test
+  - **Unit Test**: Adeguamento dei test di `AppNetworkManager` (se presenti) per assicurarsi che non invochi più lo stato AP in caso di timeout, ma si limiti a tentare la riconnessione.
+  - Poiché la spec non introduce nuovi elementi UI ma modifica solo l'attivazione backend, l'e2e test non è strettamente applicabile alla UI dell'AP (che rimane invariata), ma si faranno test di integrazione per verificare il corretto avvio in base allo stato del flag NVS.
+tasks:
+  - id: TASK-01
+    title: Rimozione logica fallback automatico in AppNetworkManager
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Rimuovere da `AppNetworkManager` tutta la logica che attivava la modalità AP in automatico dopo 30 secondi di assenza connessione, garantendo che il dispositivo continui semplicemente a tentare la riconnessione.
+
+      ## File Coinvolti
+      - `include/network/network_manager.h` — rimuovere `m_apFallbackActive`, `m_fallbackCallback`, `onFallback()` e `isAPModeActive()`.
+      - `src/network/network_manager.cpp` — rimuovere l'implementazione dei metodi eliminati e il blocco in `loop()` che passa a `WIFI_AP_STA` dopo 30000ms.
+
+      ## Criteri di Completamento
+      - [ ] La classe non gestisce più il fallback in Access Point e non ha timeout per cambiare la modalità Wi-Fi.
+      - [ ] La disconnessione prolungata causa solo log di avviso e tentativi di riconnessione.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementazione logica Access Point manuale nel main
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare il meccanismo dei 3 secondi nel file principale. All'avvio, si legge un flag NVS per determinare se forzare la modalità AP e, in caso di avvio normale, si alza il flag per i primi 3 secondi.
+
+      ## File Coinvolti
+      - `src/core/main.cpp` — introdurre un'istanza locale di `Preferences boot_prefs`. In `setup()`, leggere il flag `manual_ap`. Se true, resettarlo e impostare una variabile locale per forzare l'AP. Se false, settarlo a true e avviare un timer. In `loop()`, se il timer supera i 3000ms, riportare il flag a false. Aggiornare l'inizializzazione di rete per avviare l'AP se il flag è stato rilevato o se `config_mgr` non è valido.
+
+      ## Criteri di Completamento
+      - [ ] Se l'ESP32 viene scollegato entro 3 secondi dall'avvio, il flag `manual_ap` rimane memorizzato e al boot successivo avvia la rete `NUT_ESP32_Config`.
+      - [ ] Il dispositivo si avvia regolarmente come STA se passano più di 3 secondi.
+      - [ ] La modalità AP si avvia anche in assenza di configurazione valida (`!config_mgr.isValid()`).
+    ref: TASK-02
+  - id: TASK-03
+    title: Test di verifica assenza fallback automatico in rete
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Verificare che l'assenza di connessione per periodi prolungati non causi più il ripiegamento in modalità AP nel network manager.
+
+      ## File Coinvolti
+      - `test/test_network_manager.cpp` (creare o modificare)
+
+      ## Criteri di Completamento
+      - [ ] Verificato tramite unit test o ispezione manuale strutturata che il dispositivo non entri in modalità Access Point dopo 30 secondi dalla disconnessione della rete.
+    ref: TASK-03
+  - id: TASK-04
+    title: Aggiornamento documentazione per nuova logica AP
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Risolvere il feedback del rework modificando i README per documentare il nuovo meccanismo di attivazione manuale (power cycle entro 3 secondi) ed eliminare riferimenti al fallback temporizzato.
+
+      ## File Coinvolti
+      - `README.md` — aggiornare la sezione "First Boot & Configuration"
+      - `README.it.md` — aggiornare la sezione "Primo Avvio e Configurazione"
+
+      ## Criteri di Completamento
+      - [ ] I README spiegano come avviare intenzionalmente l'Access Point staccando la presa entro 3 secondi dal boot.
+      - [ ] È chiaro che l'AP non si avvia più in automatico alla disconnessione.
+    ref: TASK-04

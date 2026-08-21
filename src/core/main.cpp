@@ -2,6 +2,7 @@
 #include "USBHostUPS.h"
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
+#include <Preferences.h>
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -10,9 +11,14 @@ NUTServer nut_server;
 DiagnosticLED diagnostic_led;
 WebConfigServer web_server(config_mgr);
 
+Preferences boot_prefs;
+bool is_ap_mode = false;
+bool clear_ap_flag_pending = false;
+uint32_t boot_time_ms = 0;
+
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
 LedState computeSystemState(bool wifiConnected, bool upsConnected) {
-    if (network_mgr.isAPModeActive()) {
+    if (is_ap_mode) {
         return LedState::AP_MODE; // AP mode = AP_MODE
     }
     if (!wifiConnected) {
@@ -34,19 +40,30 @@ void setup() {
     // Inizializzazione del LED diagnostico
     diagnostic_led.begin(LED_BUILTIN_PIN);
 
-    // Setup fallback AP trigger
-    network_mgr.onFallback([]() {
-        AppLogger::log("INFO", "[MAIN] Fallback detected, starting WebConfigServer in AP mode.");
-        web_server.setUPS(&usb_ups);
-        web_server.begin(true);
-    });
+    // Gestione NVS flag per AP manuale
+    boot_prefs.begin("boot_state", false);
+    bool manual_ap_triggered = boot_prefs.getBool("manual_ap", false);
+
+    if (manual_ap_triggered) {
+        boot_prefs.putBool("manual_ap", false);
+        AppLogger::log("INFO", "[MAIN] Manual AP trigger detected!");
+    } else {
+        boot_prefs.putBool("manual_ap", true);
+        clear_ap_flag_pending = true;
+        boot_time_ms = millis();
+    }
 
     // Inizializzazione di ConfigManager
-    if (!config_mgr.begin()) {
-        AppLogger::log("ERROR", "[MAIN] ERROR: Configuration load failed! Starting in safe mode...");
+    bool config_ok = config_mgr.begin() && config_mgr.isValid();
+    
+    if (!config_ok || manual_ap_triggered) {
+        is_ap_mode = true;
+        AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
         network_mgr.beginAP("NUT_ESP32_Config", "12345678");
+        web_server.setUPS(&usb_ups);
         web_server.begin(true);
     } else {
+        is_ap_mode = false;
         AppLogger::log("INFO", "[MAIN] Configuration loaded successfully.");
         // Stampa parametri per verifica
         WifiConfig wifi = config_mgr.getWifiConfig();
@@ -61,7 +78,7 @@ void setup() {
     }
 
     // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
-    if (config_mgr.isValid()) {
+    if (config_ok) {
         usb_ups.setLogCallback([](const char* level, const char* msg) {
             AppLogger::log(level, msg);
         });
@@ -83,13 +100,21 @@ void setup() {
 }
 
 void loop() {
+    uint32_t now = millis();
+
+    // Check timer per azzeramento flag manual_ap
+    if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
+        boot_prefs.putBool("manual_ap", false);
+        clear_ap_flag_pending = false;
+        AppLogger::log("INFO", "[MAIN] Manual AP trigger window closed.");
+    }
+
     web_server.loop();
     network_mgr.loop();
 
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura
     if (!config_mgr.isValid()) {
         static uint32_t last_safe_print = 0;
-        uint32_t now = millis();
         if (now - last_safe_print >= 5000) {
             last_safe_print = now;
             AppLogger::log("WARN", "[MAIN] WARNING: System in safe waiting mode. Configuration missing or invalid!");
@@ -104,7 +129,6 @@ void loop() {
     usb_ups.loop();
     nut_server.loop();
 
-    uint32_t now = millis();
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
@@ -121,5 +145,3 @@ void loop() {
     delay(10);
 }
 #endif
-
-
