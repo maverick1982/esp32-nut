@@ -443,12 +443,6 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 _driver = nullptr;
             }
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
-                esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
-                if (release_err == ESP_OK) {
-                    Serial.println("[USBHostUPS] HID Interface 0 released successfully.");
-                } else {
-                    Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
-                }
                 _dev_to_close = _dev_handle;
                 _pending_dev_close = true;
                 _dev_handle = NULL;
@@ -530,6 +524,20 @@ bool USBHostUPS::begin() {
 
 void USBHostUPS::loop() {
     if (_pending_dev_close && !_is_fetching) {
+        if (_int_in_transfer != NULL) return; // Wait until transfer is freed
+        
+        esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_to_close, 0);
+        if (release_err == ESP_ERR_INVALID_STATE) {
+            // Endpoints might still have transfers in flight
+            return;
+        }
+        
+        if (release_err == ESP_OK) {
+            Serial.println("[USBHostUPS] HID Interface 0 released successfully.");
+        } else {
+            Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
+        }
+
         usb_host_device_close(_client_handle, _dev_to_close);
         _pending_dev_close = false;
         _dev_to_close = NULL;
@@ -568,6 +576,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     transfer->callback = control_transfer_cb;
     transfer->context = this;
     transfer->num_bytes = 8 + alloc_length;
+    transfer->timeout_ms = 1000;
 
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
@@ -595,6 +604,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     transfer->callback = control_transfer_cb;
     transfer->context = this;
     transfer->num_bytes = 8 + 255;
+    transfer->timeout_ms = 1000;
 
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
@@ -683,6 +693,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
                 c->done = true;
             };
             transfer->num_bytes = 8 + 512;
+            transfer->timeout_ms = 1000;
             
             if (usb_host_transfer_submit_control(_client_handle, transfer) == ESP_OK) {
                 while (!ctx_cfg.done) {
@@ -789,6 +800,11 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         esp_err_t err = usb_host_transfer_submit(transfer);
         if (err != ESP_OK) {
             Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
+            usb_host_transfer_free(transfer);
+            if (transfer == _int_in_transfer) _int_in_transfer = NULL;
         }
+    } else {
+        usb_host_transfer_free(transfer);
+        if (transfer == _int_in_transfer) _int_in_transfer = NULL;
     }
 }
