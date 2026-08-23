@@ -733,21 +733,28 @@ String USBHostUPS::dumpUSBDiagnostics() {
         }
         
         doc["cfg_err"] = cfg_err;
+        uint16_t setup_wIndex = 0;
         if (config_desc != NULL) {
             size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg->len;
             doc["cfg_total_len"] = max_len;
             const uint8_t* p = (const uint8_t*)config_desc;
             size_t offset = 0;
+            uint8_t current_iface = 0;
             while (offset < max_len && offset + 1 < max_len) {
                 uint8_t len = p[offset];
                 uint8_t type = p[offset + 1];
                 if (len == 0) break;
+                if (type == 0x04 && len >= 9) { // Interface Descriptor
+                    current_iface = p[offset + 2]; // bInterfaceNumber
+                }
                 if (type == 0x21 && len >= 9 && offset + 8 < max_len) {
                     report_len = p[offset + 7] | (p[offset + 8] << 8);
                     break;
                 }
                 offset += len;
             }
+            // Use the interface number where we found the HID descriptor (or default 0)
+            setup_wIndex = current_iface;
         }
         if (report_len == 0 || report_len > 1024) report_len = 1024;
         doc["report_len_req"] = report_len;
@@ -756,7 +763,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
         setup->bmRequestType = 0x81;
         setup->bRequest = 0x06;
         setup->wValue = 0x2200; // Report Descriptor
-        setup->wIndex = 0;
+        setup->wIndex = setup_wIndex;
         setup->wLength = report_len;
 
         AsyncDiagContext *ctx = new AsyncDiagContext();
@@ -779,12 +786,12 @@ String USBHostUPS::dumpUSBDiagnostics() {
             }
         };
         transfer->num_bytes = 8 + report_len;
-        transfer->timeout_ms = 5000;
+        transfer->timeout_ms = 1000;
 
         err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
             uint32_t start = millis();
-            while (ctx->state == 0 && (millis() - start < 5000)) {
+            while (ctx->state == 0 && (millis() - start < 1500)) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
             int expected = 0;
