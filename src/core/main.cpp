@@ -82,6 +82,14 @@ void setup() {
         usb_ups.setLogCallback([](const char* level, const char* msg) {
             AppLogger::log(level, msg);
         });
+
+        // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize
+        // Many UPS devices (like APC) take a few seconds to properly handle USB requests after power on.
+        uint32_t wait_until = 3000;
+        while (millis() < wait_until) {
+            delay(10);
+        }
+
         if (!usb_ups.begin()) {
             AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
         } else {
