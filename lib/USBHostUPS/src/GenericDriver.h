@@ -21,6 +21,7 @@ private:
     uint8_t _poll_step;
     uint8_t _slow_poll_counter;
     String _active_beeper;
+    uint8_t _batteryDateStringIndex;
 };
 
 #endif // GENERIC_DRIVER_H

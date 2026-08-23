@@ -49,6 +49,8 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                 if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
                 if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+            } else if (_poll_step == 4) {
+                if (_slow_poll_counter == 0 && data.batteryMfrDate == "" && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
                 const auto& usages = host->_hid_parser.getUsages();
                 std::vector<uint16_t> rids;
@@ -76,7 +78,7 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                     ++it;
                 }
                 
-                int index = _poll_step - 4;
+                int index = _poll_step - 5;
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
@@ -137,6 +139,12 @@ void GenericDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t re
             d.load = (uint8_t)v;
             if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100);
             else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000);
+        }},
+        { "UPS.BatterySystem.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
+            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
+        }},
+        { "UPS.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
+            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
         }},
         { "UPS.Battery.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
@@ -229,6 +237,7 @@ void GenericDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const
     }
     if (index == host->_iManufacturer) ups_data.manufacturer = str;
     else if (index == host->_iProduct) ups_data.product = str;
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.serialNumber = str;
+    else if (index == host->_iSerialNumber) ups_data.serialNumber = str;
+    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) ups_data.batteryMfrDate = str;
 }
 

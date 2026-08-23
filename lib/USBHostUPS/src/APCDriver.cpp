@@ -3,7 +3,7 @@
 #include "HIDUsages.h"
 #include <string.h>
 
-APCDriver::APCDriver() : _poll_step(0), _last_step_time(0), _last_fast_poll(0), _slow_poll_counter(0), _last_poll(0) {}
+APCDriver::APCDriver() : _poll_step(0), _last_step_time(0), _last_fast_poll(0), _slow_poll_counter(0), _last_poll(0), _batteryDateStringIndex(0) {}
 
 
 void APCDriver::setup() {
@@ -41,6 +41,8 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                 if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
                 if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+            } else if (_poll_step == 4) {
+                if (_slow_poll_counter == 0 && data.batteryMfrDate == "" && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
                 const auto& usages = host->_hid_parser.getUsages();
                 std::vector<uint16_t> rids;
@@ -69,7 +71,7 @@ void APCDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                     ++it;
                 }
                 
-                int index = _poll_step - 4;
+                int index = _poll_step - 5;
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
@@ -115,6 +117,12 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
         }},
         { "UPS.Battery.Temperature", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
+        }},
+        { "UPS.BatterySystem.Battery.Date", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
+            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
+        }},
+        { "UPS.Battery.Date", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
+            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
         }},
         { "UPS.Output.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.load = (uint8_t)v;
@@ -202,5 +210,6 @@ void APCDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uin
     if (index == host->_iManufacturer) ups_data.manufacturer = str;
     else if (index == host->_iProduct) ups_data.product = str;
     else if (index == host->_iSerialNumber) ups_data.serialNumber = str;
+    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) ups_data.batteryMfrDate = str;
 }
 

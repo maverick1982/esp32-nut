@@ -553,8 +553,10 @@ void USBHostUPS::loop() {
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
 
+    // Allocate 255 bytes for data to avoid HCD asserts if device sends more bytes or rounds to MPS
+    uint16_t alloc_length = 255;
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + expected_length, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + alloc_length, 0, &transfer);
     if (err != ESP_OK) {
         return false;
     }
@@ -569,7 +571,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     transfer->device_handle = _dev_handle;
     transfer->callback = control_transfer_cb;
     transfer->context = this;
-    transfer->num_bytes = 8 + expected_length;
+    transfer->num_bytes = 8 + alloc_length;
 
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {

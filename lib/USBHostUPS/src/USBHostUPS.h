@@ -48,6 +48,7 @@ struct UPSData {
     String manufacturer = "";
     String product = "";
     String serialNumber = "";
+    String batteryMfrDate = "";
 
     uint8_t load = 0;
     uint16_t realPower = 0;
