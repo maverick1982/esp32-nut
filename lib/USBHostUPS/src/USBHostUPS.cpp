@@ -5,6 +5,7 @@
 #include "CyberPowerDriver.h"
 #include "GenericDriver.h"
 #include <ArduinoJson.h>
+#include <atomic>
 
 struct DiagContext {
     volatile bool done;
@@ -647,6 +648,12 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
     usb_host_transfer_free(transfer);
 }
 
+struct AsyncDiagContext {
+    std::atomic<int> state; // 0: PENDING, 1: COMPLETED, 2: TIMED_OUT
+    size_t len;
+    uint8_t data[1024];
+};
+
 String USBHostUPS::dumpUSBDiagnostics() {
     JsonDocument doc;
     doc["driver"] = _ups_data.upsType.length() > 0 ? _ups_data.upsType : "Unknown";
@@ -677,7 +684,10 @@ String USBHostUPS::dumpUSBDiagnostics() {
         const usb_config_desc_t *config_desc = NULL;
         esp_err_t cfg_err = usb_host_get_active_config_descriptor(_dev_handle, &config_desc);
         
-        DiagContext ctx_cfg;
+        AsyncDiagContext *ctx_cfg = new AsyncDiagContext();
+        ctx_cfg->state = 0;
+        ctx_cfg->len = 0;
+        
         if (cfg_err != ESP_OK || config_desc == NULL) {
             usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
             setup->bmRequestType = 0x80;
@@ -686,36 +696,45 @@ String USBHostUPS::dumpUSBDiagnostics() {
             setup->wIndex = 0;
             setup->wLength = 512;
             
-            ctx_cfg.done = false;
-            ctx_cfg.len = 0;
-            
             transfer->device_handle = _dev_handle;
-            transfer->context = &ctx_cfg;
+            transfer->context = ctx_cfg;
             transfer->callback = [](usb_transfer_t *t) {
-                DiagContext *c = (DiagContext*)t->context;
+                AsyncDiagContext *c = (AsyncDiagContext*)t->context;
                 if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
                     c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
                     if (c->len > 1024) c->len = 1024;
                     memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
                 }
-                c->done = true;
+                int expected = 0;
+                if (!c->state.compare_exchange_strong(expected, 1)) {
+                    delete c;
+                    usb_host_transfer_free(t);
+                }
             };
             transfer->num_bytes = 8 + 512;
             transfer->timeout_ms = 1000;
             
             if (usb_host_transfer_submit_control(_client_handle, transfer) == ESP_OK) {
-                while (!ctx_cfg.done) {
+                uint32_t start = millis();
+                while (ctx_cfg->state == 0 && (millis() - start < 1500)) {
                     vTaskDelay(pdMS_TO_TICKS(10));
                 }
-                if (ctx_cfg.done && ctx_cfg.len >= 9) {
-                    config_desc = (const usb_config_desc_t *)ctx_cfg.data;
+                int expected = 0;
+                if (ctx_cfg->state.compare_exchange_strong(expected, 2)) {
+                    doc["cfg_err"] = "Config Descriptor timeout";
+                    String out;
+                    serializeJson(doc, out);
+                    return out; // Transfer is leaked safely to the callback
+                }
+                if (ctx_cfg->state == 1 && ctx_cfg->len >= 9) {
+                    config_desc = (const usb_config_desc_t *)ctx_cfg->data;
                 }
             }
         }
         
         doc["cfg_err"] = cfg_err;
         if (config_desc != NULL) {
-            size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg.len;
+            size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg->len;
             doc["cfg_total_len"] = max_len;
             const uint8_t* p = (const uint8_t*)config_desc;
             size_t offset = 0;
@@ -740,42 +759,60 @@ String USBHostUPS::dumpUSBDiagnostics() {
         setup->wIndex = 0;
         setup->wLength = report_len;
 
-        DiagContext ctx;
-        ctx.done = false;
-        ctx.len = 0;
+        AsyncDiagContext *ctx = new AsyncDiagContext();
+        ctx->state = 0;
+        ctx->len = 0;
         
         transfer->device_handle = _dev_handle;
-        transfer->context = &ctx;
+        transfer->context = ctx;
         transfer->callback = [](usb_transfer_t *t) {
-            DiagContext *c = (DiagContext*)t->context;
+            AsyncDiagContext *c = (AsyncDiagContext*)t->context;
             if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                 c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
                 if (c->len > 1024) c->len = 1024;
                 if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
             }
-            c->done = true;
+            int expected = 0;
+            if (!c->state.compare_exchange_strong(expected, 1)) {
+                delete c;
+                usb_host_transfer_free(t);
+            }
         };
         transfer->num_bytes = 8 + report_len;
         transfer->timeout_ms = 5000;
 
         err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
-            while (!ctx.done) {
+            uint32_t start = millis();
+            while (ctx->state == 0 && (millis() - start < 5000)) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
-            if (ctx.done && ctx.len > 0) {
+            int expected = 0;
+            if (ctx->state.compare_exchange_strong(expected, 2)) {
+                doc["error"] = "Report Descriptor timeout";
+                delete ctx_cfg; // Clean up config context before returning
+                String out;
+                serializeJson(doc, out);
+                return out; // Transfer is leaked safely to the callback
+            }
+            
+            if (ctx->state == 1 && ctx->len > 0) {
                 JsonArray raw = doc["report_descriptor_hex"].to<JsonArray>();
-                for (size_t i = 0; i < ctx.len; i++) {
+                for (size_t i = 0; i < ctx->len; i++) {
                     char hexb[5];
-                    sprintf(hexb, "0x%02X", ctx.data[i]);
+                    sprintf(hexb, "0x%02X", ctx->data[i]);
                     raw.add(hexb);
                 }
             } else {
-                doc["error"] = "Report Descriptor timeout";
+                doc["error"] = "Report Descriptor empty or failed";
             }
         } else {
             doc["error"] = "Failed to submit Report Descriptor transfer";
         }
+        
+        // Clean up memory only if not leaked to callback
+        delete ctx;
+        delete ctx_cfg;
         usb_host_transfer_free(transfer);
     } else {
         doc["error"] = "Failed to allocate transfer";
