@@ -24,20 +24,22 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+        if (now - _last_fast_poll >= 30000 || _last_fast_poll == 0) {
             _last_fast_poll = now != 0 ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
             
             _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
+            if (_slow_poll_counter >= 2) {
                 _slow_poll_counter = 0;
             }
         }
     }
 
     if (_poll_step > 0) {
-        if (now - _last_step_time >= 50 || _poll_step == 1) {
+        if (host->isControlPending()) return;
+
+        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
             _last_step_time = now;
             
             if (_poll_step == 1) {
@@ -196,6 +198,15 @@ void CyberPowerDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, co
     bool invert = false;
     if (host && (host->getQuirks() & QUIRK_INVERT_STRINGS)) {
         invert = true;
+    }
+    
+    // Auto-detect inverted strings by checking the high byte of the first UTF-16 character
+    if (str_len >= 4 && length >= 4) {
+        if (data[3] == 0xFF) {
+            invert = true;
+        } else if (data[3] == 0x00) {
+            invert = false;
+        }
     }
     
     for (int i = 2; i < str_len && i < length; i += 2) {

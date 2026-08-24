@@ -5,6 +5,7 @@
 #include "CyberPowerDriver.h"
 #include "GenericDriver.h"
 #include <ArduinoJson.h>
+#include <atomic>
 
 struct DiagContext {
     volatile bool done;
@@ -21,6 +22,7 @@ USBHostUPS::USBHostUPS() :
     _is_ready_to_poll(false),
     _is_fetching(false),
     _pending_dev_close(false),
+    _control_pending(false),
     _dev_to_close(NULL),
     _int_in_ep(0),
     _int_in_mps(0),
@@ -326,12 +328,10 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                     transfer->timeout_ms = 1000;
                                     
                                     if (usb_host_transfer_submit_control(self->_client_handle, transfer) == ESP_OK) {
-                                        int timeout = 150;
-                                        while (!ctx_cfg.done && timeout > 0) {
+                                        while (!ctx_cfg.done) {
                                             vTaskDelay(pdMS_TO_TICKS(10));
-                                            timeout--;
                                         }
-                                        if (ctx_cfg.done && ctx_cfg.len >= 9) {
+                                        if (ctx_cfg.len >= 9) {
                                             config_desc = (const usb_config_desc_t *)ctx_cfg.data;
                                         }
                                     }
@@ -389,12 +389,10 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 
                                 esp_err_t err_transfer = usb_host_transfer_submit_control(self->_client_handle, transfer);
                                 if (err_transfer == ESP_OK) {
-                                    int timeout = 600;
-                                    while (!ctx.done && timeout > 0) {
+                                    while (!ctx.done) {
                                         vTaskDelay(pdMS_TO_TICKS(10));
-                                        timeout--;
                                     }
-                                    if (ctx.done && ctx.len > 0) {
+                                    if (ctx.len > 0) {
                                         Serial.printf("[USBHostUPS] Report Descriptor fetched, len %d\n", ctx.len);
                                         self->_hid_parser.parseReportDescriptor(ctx.data, ctx.len);
                                     } else {
@@ -447,12 +445,6 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                 _driver = nullptr;
             }
             if (_dev_handle != NULL && event_msg->dev_gone.dev_hdl == _dev_handle) {
-                esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_handle, 0);
-                if (release_err == ESP_OK) {
-                    Serial.println("[USBHostUPS] HID Interface 0 released successfully.");
-                } else {
-                    Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
-                }
                 _dev_to_close = _dev_handle;
                 _pending_dev_close = true;
                 _dev_handle = NULL;
@@ -534,6 +526,20 @@ bool USBHostUPS::begin() {
 
 void USBHostUPS::loop() {
     if (_pending_dev_close && !_is_fetching) {
+        if (_int_in_transfer != NULL) return; // Wait until transfer is freed
+        
+        esp_err_t release_err = usb_host_interface_release(_client_handle, _dev_to_close, 0);
+        if (release_err == ESP_ERR_INVALID_STATE) {
+            // Endpoints might still have transfers in flight
+            return;
+        }
+        
+        if (release_err == ESP_OK) {
+            Serial.println("[USBHostUPS] HID Interface 0 released successfully.");
+        } else {
+            Serial.printf("[USBHostUPS] Error releasing interface 0: %d\n", release_err);
+        }
+
         usb_host_device_close(_client_handle, _dev_to_close);
         _pending_dev_close = false;
         _dev_to_close = NULL;
@@ -552,6 +558,7 @@ void USBHostUPS::loop() {
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
+    if (_control_pending) return false;
 
     // Allocate 255 bytes for data to avoid HCD asserts if device sends more bytes or rounds to MPS
     uint16_t alloc_length = 255;
@@ -572,9 +579,12 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     transfer->callback = control_transfer_cb;
     transfer->context = this;
     transfer->num_bytes = 8 + alloc_length;
+    transfer->timeout_ms = 1000;
 
+    _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
+        _control_pending = false;
         usb_host_transfer_free(transfer);
         return false;
     }
@@ -583,6 +593,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     if (_dev_handle == NULL) return false;
+    if (_control_pending) return false;
 
     usb_transfer_t *transfer = NULL;
     esp_err_t err = usb_host_transfer_alloc(8 + 255, 0, &transfer);
@@ -599,9 +610,12 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     transfer->callback = control_transfer_cb;
     transfer->context = this;
     transfer->num_bytes = 8 + 255;
+    transfer->timeout_ms = 1000;
 
+    _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
+        _control_pending = false;
         usb_host_transfer_free(transfer);
         return false;
     }
@@ -611,6 +625,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
 void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
     USBHostUPS *self = static_cast<USBHostUPS*>(transfer->context);
     if (self != NULL) {
+        self->_control_pending = false;
         if (transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
             usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
             uint8_t *data = transfer->data_buffer + sizeof(usb_setup_packet_t);
@@ -632,6 +647,12 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
     }
     usb_host_transfer_free(transfer);
 }
+
+struct AsyncDiagContext {
+    std::atomic<int> state; // 0: PENDING, 1: COMPLETED, 2: TIMED_OUT
+    size_t len;
+    uint8_t data[1024];
+};
 
 String USBHostUPS::dumpUSBDiagnostics() {
     JsonDocument doc;
@@ -663,7 +684,10 @@ String USBHostUPS::dumpUSBDiagnostics() {
         const usb_config_desc_t *config_desc = NULL;
         esp_err_t cfg_err = usb_host_get_active_config_descriptor(_dev_handle, &config_desc);
         
-        DiagContext ctx_cfg;
+        AsyncDiagContext *ctx_cfg = new AsyncDiagContext();
+        ctx_cfg->state = 0;
+        ctx_cfg->len = 0;
+        
         if (cfg_err != ESP_OK || config_desc == NULL) {
             usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
             setup->bmRequestType = 0x80;
@@ -672,51 +696,65 @@ String USBHostUPS::dumpUSBDiagnostics() {
             setup->wIndex = 0;
             setup->wLength = 512;
             
-            ctx_cfg.done = false;
-            ctx_cfg.len = 0;
-            
             transfer->device_handle = _dev_handle;
-            transfer->context = &ctx_cfg;
+            transfer->context = ctx_cfg;
             transfer->callback = [](usb_transfer_t *t) {
-                DiagContext *c = (DiagContext*)t->context;
+                AsyncDiagContext *c = (AsyncDiagContext*)t->context;
                 if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
                     c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
                     if (c->len > 1024) c->len = 1024;
                     memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
                 }
-                c->done = true;
+                int expected = 0;
+                if (!c->state.compare_exchange_strong(expected, 1)) {
+                    delete c;
+                    usb_host_transfer_free(t);
+                }
             };
             transfer->num_bytes = 8 + 512;
             transfer->timeout_ms = 1000;
             
             if (usb_host_transfer_submit_control(_client_handle, transfer) == ESP_OK) {
-                int timeout = 150;
-                while (!ctx_cfg.done && timeout > 0) {
+                uint32_t start = millis();
+                while (ctx_cfg->state == 0 && (millis() - start < 1500)) {
                     vTaskDelay(pdMS_TO_TICKS(10));
-                    timeout--;
                 }
-                if (ctx_cfg.done && ctx_cfg.len >= 9) {
-                    config_desc = (const usb_config_desc_t *)ctx_cfg.data;
+                int expected = 0;
+                if (ctx_cfg->state.compare_exchange_strong(expected, 2)) {
+                    doc["cfg_err"] = "Config Descriptor timeout";
+                    String out;
+                    serializeJson(doc, out);
+                    return out; // Transfer is leaked safely to the callback
+                }
+                if (ctx_cfg->state == 1 && ctx_cfg->len >= 9) {
+                    config_desc = (const usb_config_desc_t *)ctx_cfg->data;
                 }
             }
         }
         
         doc["cfg_err"] = cfg_err;
+        uint16_t setup_wIndex = 0;
         if (config_desc != NULL) {
-            size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg.len;
+            size_t max_len = (cfg_err == ESP_OK) ? config_desc->wTotalLength : ctx_cfg->len;
             doc["cfg_total_len"] = max_len;
             const uint8_t* p = (const uint8_t*)config_desc;
             size_t offset = 0;
+            uint8_t current_iface = 0;
             while (offset < max_len && offset + 1 < max_len) {
                 uint8_t len = p[offset];
                 uint8_t type = p[offset + 1];
                 if (len == 0) break;
+                if (type == 0x04 && len >= 9) { // Interface Descriptor
+                    current_iface = p[offset + 2]; // bInterfaceNumber
+                }
                 if (type == 0x21 && len >= 9 && offset + 8 < max_len) {
                     report_len = p[offset + 7] | (p[offset + 8] << 8);
                     break;
                 }
                 offset += len;
             }
+            // Use the interface number where we found the HID descriptor (or default 0)
+            setup_wIndex = current_iface;
         }
         if (report_len == 0 || report_len > 1024) report_len = 1024;
         doc["report_len_req"] = report_len;
@@ -725,47 +763,63 @@ String USBHostUPS::dumpUSBDiagnostics() {
         setup->bmRequestType = 0x81;
         setup->bRequest = 0x06;
         setup->wValue = 0x2200; // Report Descriptor
-        setup->wIndex = 0;
+        setup->wIndex = setup_wIndex;
         setup->wLength = report_len;
 
-        DiagContext ctx;
-        ctx.done = false;
-        ctx.len = 0;
+        AsyncDiagContext *ctx = new AsyncDiagContext();
+        ctx->state = 0;
+        ctx->len = 0;
         
         transfer->device_handle = _dev_handle;
-        transfer->context = &ctx;
+        transfer->context = ctx;
         transfer->callback = [](usb_transfer_t *t) {
-            DiagContext *c = (DiagContext*)t->context;
+            AsyncDiagContext *c = (AsyncDiagContext*)t->context;
             if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                 c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
                 if (c->len > 1024) c->len = 1024;
                 if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
             }
-            c->done = true;
+            int expected = 0;
+            if (!c->state.compare_exchange_strong(expected, 1)) {
+                delete c;
+                usb_host_transfer_free(t);
+            }
         };
         transfer->num_bytes = 8 + report_len;
-        transfer->timeout_ms = 5000;
+        transfer->timeout_ms = 1000;
 
         err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
-            int timeout = 600;
-            while (!ctx.done && timeout > 0) {
+            uint32_t start = millis();
+            while (ctx->state == 0 && (millis() - start < 1500)) {
                 vTaskDelay(pdMS_TO_TICKS(10));
-                timeout--;
             }
-            if (ctx.done && ctx.len > 0) {
+            int expected = 0;
+            if (ctx->state.compare_exchange_strong(expected, 2)) {
+                doc["error"] = "Report Descriptor timeout";
+                delete ctx_cfg; // Clean up config context before returning
+                String out;
+                serializeJson(doc, out);
+                return out; // Transfer is leaked safely to the callback
+            }
+            
+            if (ctx->state == 1 && ctx->len > 0) {
                 JsonArray raw = doc["report_descriptor_hex"].to<JsonArray>();
-                for (size_t i = 0; i < ctx.len; i++) {
+                for (size_t i = 0; i < ctx->len; i++) {
                     char hexb[5];
-                    sprintf(hexb, "0x%02X", ctx.data[i]);
+                    sprintf(hexb, "0x%02X", ctx->data[i]);
                     raw.add(hexb);
                 }
             } else {
-                doc["error"] = "Report Descriptor timeout";
+                doc["error"] = "Report Descriptor empty or failed";
             }
         } else {
             doc["error"] = "Failed to submit Report Descriptor transfer";
         }
+        
+        // Clean up memory only if not leaked to callback
+        delete ctx;
+        delete ctx_cfg;
         usb_host_transfer_free(transfer);
     } else {
         doc["error"] = "Failed to allocate transfer";
@@ -798,6 +852,11 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         esp_err_t err = usb_host_transfer_submit(transfer);
         if (err != ESP_OK) {
             Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
+            usb_host_transfer_free(transfer);
+            _int_in_transfer = NULL;
         }
+    } else {
+        usb_host_transfer_free(transfer);
+        _int_in_transfer = NULL;
     }
 }

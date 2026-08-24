@@ -94,6 +94,8 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const { return _hid_parser.getUsageDef(usage); }
     uint32_t getQuirks() const { return _quirks; }
 
+    bool isControlPending() const { return _control_pending; }
+
     HIDParser _hid_parser;
 
 private:
@@ -111,6 +113,7 @@ private:
     bool _is_ready_to_poll;
     volatile bool _is_fetching;
     volatile bool _pending_dev_close;
+    volatile bool _control_pending;
     usb_device_handle_t _dev_to_close;
 
     uint8_t _int_in_ep;

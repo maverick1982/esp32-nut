@@ -32,5 +32,15 @@ Quando si implementa un nuovo driver (es. `RielloDriver.cpp`), eseguire questi c
 - [ ] Le unità di misura (Hz, V, W, %, Ah, sec) esposte nel JSON rispecchiano lo standard globale atteso dalla UI senza doppi moltiplicatori?
 - [ ] I campi opzionali non supportati scompaiono dal JSON senza forzare il valore a 0?
 
+## 5. String Descriptors (Manufacturer, Product, Serial)
+La lettura delle stringhe identificative dell'UPS (Manufacturer, Product, Serial) deve rispettare il formato standard USB e non deve mai assumere indici "hardcoded" (es. 1, 2, 3).
+*   **Comportamento di NUT (usbhid-ups):** NUT legge le stringhe interrogando gli indici `iManufacturer`, `iProduct` e `iSerialNumber` forniti dinamicamente dal Device Descriptor primario al momento della connessione (`dev_desc.iManufacturer`).
+*   **Implementazione ESP32:** I driver devono utilizzare `host->_iManufacturer`, `host->_iProduct` e `host->_iSerialNumber` popolati automaticamente da `USBHostUPS` durante l'handshake iniziale. *Qualsiasi tentativo di leggere stringhe con indici arbitrari potrebbe portare a timeout, errori di parsing o valori "garbled" e incrociati (es. seriale al posto del produttore).*
+
+## 6. Polling dei Report e Gestione STALL
+Per mantenere l'integrità del bus USB e prevenire errori di `STALL` critici, è tassativo rispettare la direzionalità dei report HID.
+*   **Comportamento di NUT (usbhid-ups):** Durante la funzione di aggiornamento (polling), NUT esegue richieste di lettura (`GET_REPORT`) *esclusivamente* verso i report di tipo **Input** (1) e, all'occorrenza, **Feature** (3). NUT non richiede **mai** la lettura dei report di **Output** (2), in quanto per lo standard HID sono riservati alla scrittura (Host verso Device).
+*   **Implementazione ESP32:** Il ciclo `loop()` di ogni driver deve filtrare la lista degli endpoint e saltare rigorosamente i report di tipo 2 prima di invocare `host->requestReport()`. Leggere un report di Output causerà un rigetto con `STALL` da parte dell'UPS, che interromperà il flusso USB bloccando l'aggiornamento dei successivi parametri vitali (come Voltaggi o Stati di Rete). Usare sempre il check: `if (u.report_type == 2) continue; // Skip OUTPUT reports`.
+
 ---
-*Documento generato sulla base delle analisi di aderenza a NUT del 16 Agosto 2026.*
+*Documento generato e aggiornato sulla base delle analisi di aderenza a NUT del 16 Agosto 2026.*

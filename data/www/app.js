@@ -527,4 +527,49 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fetchSystemStatus();
     setInterval(fetchSystemStatus, 3000);
+
+    const exportUsbBtn = document.getElementById('link-export-usb');
+    if (exportUsbBtn) {
+        exportUsbBtn.addEventListener('click', async (e) => {
+            if (exportUsbBtn.classList.contains('disabled')) {
+                e.preventDefault();
+                return;
+            }
+            e.preventDefault();
+            const originalHTML = exportUsbBtn.innerHTML;
+            const currentWidth = exportUsbBtn.offsetWidth;
+            
+            exportUsbBtn.style.width = currentWidth + 'px';
+            exportUsbBtn.classList.add('disabled');
+            exportUsbBtn.style.pointerEvents = 'none';
+            exportUsbBtn.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                Exporting...
+            `;
+            
+            try {
+                const response = await fetch(exportUsbBtn.href);
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = exportUsbBtn.getAttribute('download') || 'usb_diagnostics.json';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                } else {
+                    console.error('Export failed with status:', response.status);
+                }
+            } catch (err) {
+                console.error('Export failed:', err);
+            } finally {
+                exportUsbBtn.classList.remove('disabled');
+                exportUsbBtn.style.pointerEvents = 'auto';
+                exportUsbBtn.style.width = '';
+                exportUsbBtn.innerHTML = originalHTML;
+            }
+        });
+    }
 });

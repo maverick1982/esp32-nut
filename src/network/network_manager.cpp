@@ -59,6 +59,10 @@ void AppNetworkManager::loop() {
         m_lastStatus = currentStatus;
     }
     
+    if (currentStatus == WL_CONNECTED) {
+        m_lastConnectionAttempt = now; // Reset attempt timer while connected
+    }
+    
     // Gestione riconnessione e fallback
     if (currentStatus != WL_CONNECTED) {
         if (now - m_lastConnectionAttempt >= 15000) {
