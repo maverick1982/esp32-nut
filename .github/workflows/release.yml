@@ -30,16 +30,16 @@ jobs:
           pip install platformio
 
       - name: Build firmware
-        run: pio run -e esp32-s3-devkitc-1
+        run: pio run -e esp32-s3-standard
         env:
           PLATFORMIO_BUILD_FLAGS: '-DFIRMWARE_VERSION=\"${{ github.ref_name }}\"'
 
       - name: Prepare Artifacts
         run: |
           mkdir release-pkg
-          cp .pio/build/esp32-s3-devkitc-1/firmware.bin release-pkg/
-          cp .pio/build/esp32-s3-devkitc-1/bootloader.bin release-pkg/
-          cp .pio/build/esp32-s3-devkitc-1/partitions.bin release-pkg/
+          cp .pio/build/esp32-s3-standard/firmware.bin release-pkg/
+          cp .pio/build/esp32-s3-standard/bootloader.bin release-pkg/
+          cp .pio/build/esp32-s3-standard/partitions.bin release-pkg/
           
           # Creazione manifest.json
           cat <<EOF > release-pkg/manifest.json
