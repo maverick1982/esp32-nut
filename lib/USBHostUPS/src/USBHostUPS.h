@@ -94,6 +94,8 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const { return _hid_parser.getUsageDef(usage); }
     uint32_t getQuirks() const { return _quirks; }
 
+    bool isControlPending() const { return _control_pending; }
+
     HIDParser _hid_parser;
 
 private:

@@ -37,7 +37,9 @@ void CyberPowerDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     }
 
     if (_poll_step > 0) {
-        if (now - _last_step_time >= 200 || _poll_step == 1) {
+        if (host->isControlPending()) return;
+
+        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
             _last_step_time = now;
             
             if (_poll_step == 1) {
