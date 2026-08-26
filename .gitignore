@@ -8,6 +8,7 @@ node_modules/
 test-results/
 playwright-report/
 docs/no-commit/
+nut_repo/
 
 # OS generated files
 .DS_Store

@@ -505,7 +505,7 @@ void test_comprehensive_variables(void) {
         "battery.charge", "100",
         "battery.charge.low", "20",
         "battery.capacity", "100",
-        "battery.charge.full", "100",
+        "battery.capacity.full", "100",
         "battery.runtime", "1800",
         "output.voltage", "230",
         "input.transfer.high", "264",

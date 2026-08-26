@@ -259,11 +259,12 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 if (data.has.remainingCapacity) client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data.remainingCapacity);
                 if (data.has.remainingCapacityLimit) client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data.remainingCapacityLimit);
                 if (data.has.designCapacity) client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data.designCapacity);
-                if (data.has.fullChargeCapacity) client.printf("VAR %s battery.charge.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
+                if (data.has.fullChargeCapacity) client.printf("VAR %s battery.capacity.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
                 if (data.has.runTimeToEmpty) client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data.runTimeToEmpty);
                 if (data.has.outputVoltage) client.printf("VAR %s output.voltage \"%.1f\"\n", upsName.c_str(), data.outputVoltage);
                 if (data.has.inputVoltage) client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data.inputVoltage);
                 if (data.has.batteryVoltage) client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data.batteryVoltage);
+                if (data.has.batteryTemperature) client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data.batteryTemperature);
                 if (data.has.highVoltageTransfer) client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data.highVoltageTransfer);
                 if (data.has.lowVoltageTransfer) client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data.lowVoltageTransfer);
                 if (data.has.configApparentPower) client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data.configApparentPower);
@@ -433,8 +434,8 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data.remainingCapacityLimit);
             } else if (varNameLower == "battery.capacity" && data.has.designCapacity) {
                 client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data.designCapacity);
-            } else if (varNameLower == "battery.charge.full" && data.has.fullChargeCapacity) {
-                client.printf("VAR %s battery.charge.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
+            } else if (varNameLower == "battery.capacity.full" && data.has.fullChargeCapacity) {
+                client.printf("VAR %s battery.capacity.full \"%d\"\n", upsName.c_str(), data.fullChargeCapacity);
             } else if (varNameLower == "battery.runtime" && data.has.runTimeToEmpty) {
                 client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data.runTimeToEmpty);
             } else if (varNameLower == "output.voltage" && data.has.outputVoltage) {
@@ -443,6 +444,8 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
                 client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data.inputVoltage);
             } else if (varNameLower == "battery.voltage" && data.has.batteryVoltage) {
                 client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data.batteryVoltage);
+            } else if (varNameLower == "battery.temperature" && data.has.batteryTemperature) {
+                client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data.batteryTemperature);
             } else if (varNameLower == "input.transfer.high" && data.has.highVoltageTransfer) {
                 client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data.highVoltageTransfer);
             } else if (varNameLower == "input.transfer.low" && data.has.lowVoltageTransfer) {
