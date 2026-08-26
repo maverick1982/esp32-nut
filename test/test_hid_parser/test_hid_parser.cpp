@@ -53,12 +53,32 @@ void test_extract_usage(void) {
     TEST_ASSERT_EQUAL(1, val3);
 }
 
+void test_extract_short_report(void) {
+    HIDUsageDef def;
+    def.usage = 0x00840030; // Voltage
+    def.report_id = 0x20;
+    def.bit_offset = 0;
+    def.bit_size = 32;
+    def.type = 0x81;
+    def.exponent = 0;
+    def.unit = 0;
+    def.found = true;
+    
+    // Buggy UPS sends only 2 bytes of payload for a 32-bit field.
+    // Length is 3 (1 byte report ID + 2 bytes payload)
+    // Values: ID=0x20, payload=0xFC, 0x08 (which is 2300 or 0x08FC in little endian)
+    uint8_t data[] = { 0x20, 0xFC, 0x08 };
+    int32_t val = HIDParser::extractUsage(&def, 0x20, data, sizeof(data));
+    TEST_ASSERT_EQUAL(2300, val);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
     RUN_TEST(test_extract_usage);
+    RUN_TEST(test_extract_short_report);
     return UNITY_END();
 }
 #else
@@ -66,6 +86,7 @@ void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_hid_parser_basic);
     RUN_TEST(test_extract_usage);
+    RUN_TEST(test_extract_short_report);
     UNITY_END();
 }
 void loop() {}

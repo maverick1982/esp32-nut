@@ -9,9 +9,20 @@
 
 struct DiagContext {
     volatile bool done;
-    uint8_t data[1024];
+    uint8_t* data;
     size_t len;
+    size_t capacity;
+
+    DiagContext(size_t cap = 4096) : done(false), len(0), capacity(cap) {
+        data = (uint8_t*)malloc(capacity);
+    }
+
+    ~DiagContext() {
+        if (data) free(data);
+    }
 };
+
+
 
 USBHostUPS::USBHostUPS() : 
     _usb_task_handle(NULL), 
@@ -52,14 +63,15 @@ const UPSData& USBHostUPS::getUPSData() const {
 
 String USBHostUPS::getUPSStatusString() const {
     String status = "";
-    if (_ups_data.acPresent && !_ups_data.discharging) status += "OL ";
-    if (_ups_data.discharging) status += "OB ";
-    if (_ups_data.belowRemainingCapacityLimit) status += "LB ";
-    if (_ups_data.charging && !(_ups_data.remainingCapacity == 100 && _ups_data.acPresent)) status += "CHRG ";
-    if (_ups_data.needReplacement) status += "RB ";
-    if (_ups_data.overload) status += "OVER ";
-    if (_ups_data.shutdownImminent) status += "FSD ";
-    if (_ups_data.communicationLost) status += "COMM_LOST ";
+    if (_ups_data.has.acPresent && _ups_data.acPresent && (!_ups_data.has.discharging || !_ups_data.discharging)) status += "OL ";
+    else if (_ups_data.has.good && _ups_data.good) status += "OL ";
+    if (_ups_data.has.discharging && _ups_data.discharging) status += "OB ";
+    if (_ups_data.has.belowRemainingCapacityLimit && _ups_data.belowRemainingCapacityLimit) status += "LB ";
+    if (_ups_data.has.charging && _ups_data.charging && !(_ups_data.remainingCapacity == 100 && _ups_data.has.acPresent && _ups_data.acPresent)) status += "CHRG ";
+    if (_ups_data.has.needReplacement && _ups_data.needReplacement) status += "RB ";
+    if (_ups_data.has.overload && _ups_data.overload) status += "OVER ";
+    if (_ups_data.has.shutdownImminent && _ups_data.shutdownImminent) status += "FSD ";
+    if (_ups_data.has.communicationLost && _ups_data.communicationLost) status += "COMM_LOST ";
     
     if (status.length() == 0) status = "Unknown";
     status.trim();
@@ -121,7 +133,7 @@ bool USBHostUPS::setBeeper(bool enable) {
         DiagContext *c = (DiagContext*)t->context;
         if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
             c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-            if (c->len > sizeof(c->data)) c->len = sizeof(c->data);
+            if (c->len > c->capacity) c->len = c->capacity;
             memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
         }
         c->done = true;
@@ -257,19 +269,19 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: Eaton");
                                 Serial.println("[USBHostUPS] Recognized vendor: Eaton");
                                 _driver = new EatonDriver();
-                                _ups_data.upsType = "Eaton";
+                                _ups_data.has.upsType = true; _ups_data.upsType = "Eaton";
                                 break;
                             case 0x051d:
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: APC");
                                 Serial.println("[USBHostUPS] Recognized vendor: APC");
                                 _driver = new APCDriver();
-                                _ups_data.upsType = "APC";
+                                _ups_data.has.upsType = true; _ups_data.upsType = "APC";
                                 break;
                             case 0x0764:
                                 if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: CyberPower");
                                 Serial.println("[USBHostUPS] Recognized vendor: CyberPower");
                                 _driver = new CyberPowerDriver();
-                                _ups_data.upsType = "CyberPower";
+                                _ups_data.has.upsType = true; _ups_data.upsType = "CyberPower";
                                 break;
                             default:
                                 {
@@ -279,7 +291,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 }
                                 Serial.printf("[USBHostUPS] Unknown vendor: %04X\n", desc->idVendor);
                                 _driver = new GenericDriver();
-                                _ups_data.upsType = "Generic";
+                                _ups_data.has.upsType = true; _ups_data.upsType = "Generic";
                                 break;
                         }
 
@@ -296,8 +308,8 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                             USBHostUPS* self = (USBHostUPS*)arg;
                             self->_is_fetching = true;
                             usb_transfer_t *transfer = NULL;
-                            if (usb_host_transfer_alloc(8 + 1024, 0, &transfer) == ESP_OK) {
-                                uint16_t report_len = 1024;
+                            if (usb_host_transfer_alloc(8 + 4096, 0, &transfer) == ESP_OK) {
+                                uint16_t report_len = 4096;
                                 const usb_config_desc_t *config_desc = NULL;
                                 esp_err_t cfg_err = usb_host_get_active_config_descriptor(self->_dev_handle, &config_desc);
                                 
@@ -319,7 +331,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                         DiagContext *c = (DiagContext*)t->context;
                                         if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                                             c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-                                            if (c->len > 1024) c->len = 1024;
+                                            if (c->len > c->capacity) c->len = c->capacity;
                                             if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
                                         }
                                         c->done = true;
@@ -359,7 +371,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                         offset += len;
                                     }
                                 }
-                                if (report_len == 0 || report_len > 1024) report_len = 1024;
+                                if (report_len == 0 || report_len > 4000) report_len = 4000;
 
 
                                 usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
@@ -379,7 +391,7 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                     DiagContext *c = (DiagContext*)t->context;
                                     if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                                         c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-                                        if (c->len > 1024) c->len = 1024;
+                                        if (c->len > c->capacity) c->len = c->capacity;
                                         if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
                                     }
                                     c->done = true;
@@ -558,13 +570,23 @@ void USBHostUPS::loop() {
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (_dev_handle == NULL) return false;
-    if (_control_pending) return false;
-
-    // Allocate 255 bytes for data to avoid HCD asserts if device sends more bytes or rounds to MPS
-    uint16_t alloc_length = 255;
+    
+    uint16_t exact_len = 0;
+    for (const auto& u : _hid_parser.getUsages()) {
+        if (u.report_id == report_id && u.report_type == report_type) {
+            uint16_t byte_end = (u.bit_offset + u.bit_size + 7) / 8;
+            if (byte_end > exact_len) exact_len = byte_end;
+        }
+    }
+    if (exact_len > 0) expected_length = exact_len + 1;
+    
+    uint16_t alloc_length = (expected_length + 63) & ~63;
     usb_transfer_t *transfer = NULL;
     esp_err_t err = usb_host_transfer_alloc(8 + alloc_length, 0, &transfer);
-    if (err != ESP_OK) {
+    if (err != ESP_OK) return false;
+
+    if (_control_pending) {
+        usb_host_transfer_free(transfer);
         return false;
     }
 
@@ -581,6 +603,8 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     transfer->num_bytes = 8 + alloc_length;
     transfer->timeout_ms = 1000;
 
+
+
     _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
     if (err != ESP_OK) {
@@ -593,11 +617,16 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     if (_dev_handle == NULL) return false;
-    if (_control_pending) return false;
-
+    
+    uint16_t alloc_length = 256;
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 255, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + alloc_length, 0, &transfer);
     if (err != ESP_OK) return false;
+
+    if (_control_pending) {
+        usb_host_transfer_free(transfer);
+        return false;
+    }
 
     usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
     setup->bmRequestType = 0x80; 
@@ -609,8 +638,10 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     transfer->device_handle = _dev_handle;
     transfer->callback = control_transfer_cb;
     transfer->context = this;
-    transfer->num_bytes = 8 + 255;
+    transfer->num_bytes = 8 + alloc_length;
     transfer->timeout_ms = 1000;
+
+
 
     _control_pending = true;
     err = usb_host_transfer_submit_control(_client_handle, transfer);
@@ -651,7 +682,16 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
 struct AsyncDiagContext {
     std::atomic<int> state; // 0: PENDING, 1: COMPLETED, 2: TIMED_OUT
     size_t len;
-    uint8_t data[1024];
+    uint8_t* data;
+    size_t capacity;
+
+    AsyncDiagContext(size_t cap = 4096) : state(0), len(0), capacity(cap) {
+        data = (uint8_t*)malloc(capacity);
+    }
+    
+    ~AsyncDiagContext() {
+        if (data) free(data);
+    }
 };
 
 String USBHostUPS::dumpUSBDiagnostics() {
@@ -664,6 +704,22 @@ String USBHostUPS::dumpUSBDiagnostics() {
         serializeJson(doc, out);
         return out;
     }
+
+    struct PollingPause {
+        USBHostUPS* host;
+        bool was_ready;
+        PollingPause(USBHostUPS* h) : host(h) {
+            was_ready = host->_is_ready_to_poll;
+            host->_is_ready_to_poll = false;
+            uint32_t start = millis();
+            while (host->_control_pending && (millis() - start < 2000)) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+        ~PollingPause() {
+            host->_is_ready_to_poll = was_ready;
+        }
+    } pause(this);
 
     const usb_device_desc_t *desc;
     if (usb_host_get_device_descriptor(_dev_handle, &desc) == ESP_OK) {
@@ -678,9 +734,9 @@ String USBHostUPS::dumpUSBDiagnostics() {
     doc["product"] = _ups_data.product;
 
     usb_transfer_t *transfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(8 + 1024, 0, &transfer);
+    esp_err_t err = usb_host_transfer_alloc(8 + 4096, 0, &transfer);
     if (err == ESP_OK) {
-        uint16_t report_len = 1024;
+        uint16_t report_len = 4096;
         const usb_config_desc_t *config_desc = NULL;
         esp_err_t cfg_err = usb_host_get_active_config_descriptor(_dev_handle, &config_desc);
         
@@ -702,7 +758,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
                 AsyncDiagContext *c = (AsyncDiagContext*)t->context;
                 if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
                     c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-                    if (c->len > 1024) c->len = 1024;
+                    if (c->len > c->capacity) c->len = c->capacity;
                     memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
                 }
                 int expected = 0;
@@ -756,7 +812,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
             // Use the interface number where we found the HID descriptor (or default 0)
             setup_wIndex = current_iface;
         }
-        if (report_len == 0 || report_len > 1024) report_len = 1024;
+        if (report_len == 0 || report_len > 4000) report_len = 4000;
         doc["report_len_req"] = report_len;
 
         usb_setup_packet_t *setup = (usb_setup_packet_t *)transfer->data_buffer;
@@ -776,7 +832,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
             AsyncDiagContext *c = (AsyncDiagContext*)t->context;
             if (t->status == USB_TRANSFER_STATUS_COMPLETED || t->actual_num_bytes > sizeof(usb_setup_packet_t)) {
                 c->len = t->actual_num_bytes - sizeof(usb_setup_packet_t);
-                if (c->len > 1024) c->len = 1024;
+                if (c->len > c->capacity) c->len = c->capacity;
                 if (c->len > 0) memcpy(c->data, t->data_buffer + sizeof(usb_setup_packet_t), c->len);
             }
             int expected = 0;
@@ -786,12 +842,12 @@ String USBHostUPS::dumpUSBDiagnostics() {
             }
         };
         transfer->num_bytes = 8 + report_len;
-        transfer->timeout_ms = 1000;
+        transfer->timeout_ms = 5000;
 
         err = usb_host_transfer_submit_control(_client_handle, transfer);
         if (err == ESP_OK) {
             uint32_t start = millis();
-            while (ctx->state == 0 && (millis() - start < 1500)) {
+            while (ctx->state == 0 && (millis() - start < 6000)) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
             int expected = 0;

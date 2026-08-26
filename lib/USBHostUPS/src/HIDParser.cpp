@@ -151,7 +151,9 @@ double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const 
         bit_offset += 8;
     }
     
-    if ((bit_offset + def->bit_size) > (length * 8)) return 0.0;
+    // Some UPS devices (e.g. APC) have buggy descriptors that declare a larger
+    // size (like 32 bits for input voltage) than the actual payload returned.
+    // We tolerate short reports by allowing the loop below to read up to 'length'.
     
     uint16_t byte_idx = bit_offset / 8;
     uint8_t bit_shift = bit_offset % 8;

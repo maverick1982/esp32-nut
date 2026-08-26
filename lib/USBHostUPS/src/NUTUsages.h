@@ -180,6 +180,7 @@ static const NUTUsageDef nut_usages[] = {
     { "ChargerSpec",			0x008500f1 },
     { "Level2",				0x008500f2 },
     { "Level3",				0x008500f3 },
+    { "APCBattReplaceDate", 0xff860016 },
     { NULL, 0 }
 };
 

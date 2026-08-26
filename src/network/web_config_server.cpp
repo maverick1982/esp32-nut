@@ -242,37 +242,43 @@ void WebConfigServer::handleUpsVars() {
     JsonDocument doc;
     
     doc["ups.status"] = usb_ups->getUPSStatusString();
-    doc["ups.mfr"] = data.manufacturer.length() > 0 ? data.manufacturer : "Unknown";
-    doc["ups.model"] = data.product.length() > 0 ? data.product : "Unknown";
-    doc["ups.serial"] = data.serialNumber.length() > 0 ? data.serialNumber : "Unknown";
-    doc["battery.charge"] = data.remainingCapacity;
-    if (data.remainingCapacityLimit > 0) doc["battery.charge.low"] = data.remainingCapacityLimit;
-    if (data.designCapacity > 0) doc["battery.capacity"] = data.designCapacity;
-    if (data.fullChargeCapacity > 0) doc["battery.capacity.full"] = data.fullChargeCapacity;
-    if (data.runTimeToEmpty > 0) doc["battery.runtime"] = data.runTimeToEmpty;
-    doc["output.voltage"] = data.outputVoltage;
-    doc["input.voltage"] = data.inputVoltage;
-    doc["battery.voltage"] = data.batteryVoltage;
-    if (data.highVoltageTransfer > 0) doc["input.transfer.high"] = data.highVoltageTransfer;
-    if (data.lowVoltageTransfer > 0) doc["input.transfer.low"] = data.lowVoltageTransfer;
-    if (data.configApparentPower > 0) doc["ups.power.nominal"] = data.configApparentPower;
-    if (data.configActivePower > 0) doc["ups.realpower.nominal"] = data.configActivePower;
-    if (data.configFrequency > 0) doc["input.frequency.nominal"] = data.configFrequency;
-    if (data.configVoltage > 0) doc["input.voltage.nominal"] = data.configVoltage;
-    if (data.outputVoltageNominal > 0) doc["output.voltage.nominal"] = data.outputVoltageNominal;
-    if (data.outputFrequencyNominal > 0) doc["output.frequency.nominal"] = data.outputFrequencyNominal;
-    doc["ups.load"] = data.load;
-    if (data.configApparentPower > 0 || data.configActivePower > 0) doc["ups.realpower"] = data.realPower;
-    if (data.batteryTemperature > 0.0f) doc["battery.temperature"] = serialized(String(data.batteryTemperature, 1));
-    if (data.delayShutdown >= 0) doc["ups.delay.shutdown"] = data.delayShutdown;
-    if (data.delayStart >= 0) doc["ups.delay.start"] = data.delayStart;
-    if (data.timerStart >= 0) doc["ups.timer.start"] = data.timerStart;
-    if (data.timerShutdown >= 0) doc["ups.timer.shutdown"] = data.timerShutdown;
-    if (data.batteryType.length() > 0) doc["battery.type"] = data.batteryType;
-    if (data.upsType.length() > 0) doc["ups.type"] = data.upsType;
-    doc["ups.beeper.status"] = data.beeperEnabled ? "enabled" : "disabled";
-    doc["outlet.1.switch"] = data.outlet1Switch ? 1 : 0;
-    doc["outlet.2.switch"] = data.outlet2Switch ? 1 : 0;
+    if (data.has.manufacturer) doc["ups.mfr"] = data.manufacturer;
+    if (data.has.product) doc["ups.model"] = data.product;
+    if (data.has.serialNumber) doc["ups.serial"] = data.serialNumber;
+    
+    if (data.has.remainingCapacity) doc["battery.charge"] = data.remainingCapacity;
+    if (data.has.remainingCapacityLimit) doc["battery.charge.low"] = data.remainingCapacityLimit;
+    if (data.has.designCapacity) doc["battery.capacity"] = data.designCapacity;
+    if (data.has.fullChargeCapacity) doc["battery.capacity.full"] = data.fullChargeCapacity;
+    if (data.has.runTimeToEmpty) doc["battery.runtime"] = data.runTimeToEmpty;
+    
+    if (data.has.outputVoltage) doc["output.voltage"] = data.outputVoltage;
+    if (data.has.inputVoltage) doc["input.voltage"] = data.inputVoltage;
+    if (data.has.batteryVoltage) doc["battery.voltage"] = data.batteryVoltage;
+    
+    if (data.has.highVoltageTransfer) doc["input.transfer.high"] = data.highVoltageTransfer;
+    if (data.has.lowVoltageTransfer) doc["input.transfer.low"] = data.lowVoltageTransfer;
+    
+    if (data.has.configApparentPower) doc["ups.power.nominal"] = data.configApparentPower;
+    if (data.has.configActivePower) doc["ups.realpower.nominal"] = data.configActivePower;
+    if (data.has.configFrequency) doc["input.frequency.nominal"] = data.configFrequency;
+    if (data.has.configVoltage) doc["input.voltage.nominal"] = data.configVoltage;
+    
+    if (data.has.outputVoltageNominal) doc["output.voltage.nominal"] = data.outputVoltageNominal;
+    if (data.has.outputFrequencyNominal) doc["output.frequency.nominal"] = data.outputFrequencyNominal;
+    
+    if (data.has.load) doc["ups.load"] = data.load;
+    if (data.has.realPower) doc["ups.realpower"] = data.realPower;
+    if (data.has.batteryTemperature) doc["battery.temperature"] = serialized(String(data.batteryTemperature, 1));
+    if (data.has.delayShutdown) doc["ups.delay.shutdown"] = data.delayShutdown;
+    if (data.has.delayStart) doc["ups.delay.start"] = data.delayStart;
+    if (data.has.timerStart) doc["ups.timer.start"] = data.timerStart;
+    if (data.has.timerShutdown) doc["ups.timer.shutdown"] = data.timerShutdown;
+    if (data.has.batteryType) doc["battery.type"] = data.batteryType;
+    if (data.has.upsType) doc["ups.type"] = data.upsType;
+    if (data.has.beeperEnabled) doc["ups.beeper.status"] = data.beeperEnabled ? "enabled" : "disabled";
+    if (data.has.outlet1Switch) doc["outlet.1.switch"] = data.outlet1Switch ? 1 : 0;
+    if (data.has.outlet2Switch) doc["outlet.2.switch"] = data.outlet2Switch ? 1 : 0;
     
     String response;
     serializeJson(doc, response);
@@ -300,7 +306,7 @@ void WebConfigServer::handleSystemStatus() {
     String ups_status_str = "Disconnected";
     if (usb_ups && usb_ups->isConnected()) {
         const UPSData& data = usb_ups->getUPSData();
-        String model = data.product.length() > 0 ? data.product : "Unknown Model";
+        String model = data.has.product ? data.product : "Unknown Model";
         ups_status_str = model;
     } else {
         ups_status_str = "Disconnected";

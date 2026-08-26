@@ -97,28 +97,28 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
     };
 
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.ACPresent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.acPresent = v != 0; } },
-        { "UPS.PowerSummary.ACPresent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.acPresent = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.Discharging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.discharging = v != 0; } },
-        { "UPS.PowerSummary.Discharging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.discharging = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.Charging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.charging = v != 0; } },
-        { "UPS.PowerSummary.Charging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.charging = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.belowRemainingCapacityLimit = v != 0; } },
-        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.belowRemainingCapacityLimit = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.needReplacement = v != 0; } },
-        { "UPS.PowerSummary.NeedReplacement", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.needReplacement = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.Overload", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.overload = v != 0; } },
-        { "UPS.PowerSummary.Overload", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.overload = v != 0; } },
-        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.shutdownImminent = v != 0; } },
-        { "UPS.PowerSummary.ShutdownImminent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.shutdownImminent = v != 0; } },
+        { "UPS.PowerSummary.PresentStatus.ACPresent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.acPresent = true; d.acPresent = v != 0; } } },
+        { "UPS.PowerSummary.ACPresent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.acPresent = true; d.acPresent = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.Discharging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.discharging = true; d.discharging = v != 0; } } },
+        { "UPS.PowerSummary.Discharging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.discharging = true; d.discharging = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.Charging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.charging = true; d.charging = v != 0; } } },
+        { "UPS.PowerSummary.Charging", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.charging = true; d.charging = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.belowRemainingCapacityLimit = true; d.belowRemainingCapacityLimit = v != 0; } } },
+        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.belowRemainingCapacityLimit = true; d.belowRemainingCapacityLimit = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.needReplacement = true; d.needReplacement = v != 0; } } },
+        { "UPS.PowerSummary.NeedReplacement", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.needReplacement = true; d.needReplacement = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.Overload", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.overload = true; d.overload = v != 0; } } },
+        { "UPS.PowerSummary.Overload", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.overload = true; d.overload = v != 0; } } },
+        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.shutdownImminent = true; d.shutdownImminent = v != 0; } } },
+        { "UPS.PowerSummary.ShutdownImminent", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.shutdownImminent = true; d.shutdownImminent = v != 0; } } },
         
         { "UPS.PowerSummary.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.load = (uint8_t)v;
-            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
-            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+            { d.has.load = true; d.load = (uint8_t)v; }
+            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100); }
+            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000); }
         }},
         { "UPS.Battery.Temperature", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v;
+            { d.has.batteryTemperature = true; d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v; }
         }},
         { "UPS.BatterySystem.Battery.Date", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
@@ -126,60 +126,80 @@ void APCDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report
         { "UPS.Battery.Date", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
         }},
+        { "UPS.PowerSummary.APCBattReplaceDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            long date = (long)v;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "20%02ld/%02ld/%02ld",
+                (date & 0x0F) + ((date >> 4) & 0x0F) * 10,
+                ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
+                ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
+        }},
+        { "UPS.Battery.APCBattReplaceDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            long date = (long)v;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "20%02ld/%02ld/%02ld",
+                (date & 0x0F) + ((date >> 4) & 0x0F) * 10,
+                ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
+                ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
+        }},
         { "UPS.Output.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.load = (uint8_t)v;
-            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
-            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+            { d.has.load = true; d.load = (uint8_t)v; }
+            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100); }
+            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000); }
         }},
         { "UPS.PowerConverter.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.load = (uint8_t)v;
-            if (d.configActivePower > 0) d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100);
-            else if (d.configApparentPower > 0) d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000);
+            { d.has.load = true; d.load = (uint8_t)v; }
+            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100); }
+            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000); }
         }},
         
-        { "UPS.Input.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.inputVoltage = v; } },
-        { "UPS.Output.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltage = v; } },
+        { "UPS.Input.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.inputVoltage = true; d.inputVoltage = v; } } },
+        { "UPS.Output.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outputVoltage = true; d.outputVoltage = v; } } },
         
-        { "UPS.Battery.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.batteryVoltage = v; } },
-        { "UPS.PowerSummary.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.batteryVoltage = v; } },
+        { "UPS.Battery.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.batteryVoltage = true; d.batteryVoltage = v; } } },
+        { "UPS.PowerSummary.Voltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.batteryVoltage = true; d.batteryVoltage = v; } } },
         
-        { "UPS.PowerSummary.RemainingCapacity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.remainingCapacity = (uint8_t)v; } },
-        { "UPS.PowerSummary.RemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.remainingCapacityLimit = (uint8_t)v; } },
+        { "UPS.PowerSummary.RemainingCapacity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.remainingCapacity = true; d.remainingCapacity = (uint8_t)v; } } },
+        { "UPS.PowerSummary.RemainingCapacityLimit", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.remainingCapacityLimit = true; d.remainingCapacityLimit = (uint8_t)v; } } },
         
-        { "UPS.Battery.RunTimeToEmpty", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.runTimeToEmpty = (uint32_t)v; } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.runTimeToEmpty = (uint32_t)v; } },
+        { "UPS.Battery.RunTimeToEmpty", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } } },
+        { "UPS.PowerSummary.RunTimeToEmpty", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } } },
         
-        { "UPS.PowerConverter.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
-        { "UPS.Output.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configActivePower = (uint16_t)v; } },
-        { "UPS.PowerConverter.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configApparentPower = (uint16_t)v; } },
-        { "UPS.Output.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configApparentPower = (uint16_t)v; } },
+        { "UPS.PowerConverter.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; } } },
+        { "UPS.Output.ConfigActivePower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; } } },
+        { "UPS.PowerConverter.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configApparentPower = true; d.configApparentPower = (uint16_t)v; } } },
+        { "UPS.Output.ConfigApparentPower", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configApparentPower = true; d.configApparentPower = (uint16_t)v; } } },
         
-        { "UPS.Input.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.configVoltage = (uint16_t)v; } },
-        { "UPS.Output.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.outputVoltageNominal = (uint16_t)v; } },
+        { "UPS.Input.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configVoltage = true; d.configVoltage = (uint16_t)v; } } },
+        { "UPS.Output.ConfigVoltage", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outputVoltageNominal = true; d.outputVoltageNominal = (uint16_t)v; } } },
         
-        { "UPS.Output.LowVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.lowVoltageTransfer = (uint16_t)v; } },
-        { "UPS.Input.LowVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.lowVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Output.LowVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.lowVoltageTransfer = true; d.lowVoltageTransfer = (uint16_t)v; } } },
+        { "UPS.Input.LowVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.lowVoltageTransfer = true; d.lowVoltageTransfer = (uint16_t)v; } } },
         
-        { "UPS.Output.HighVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.highVoltageTransfer = (uint16_t)v; } },
-        { "UPS.Input.HighVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.highVoltageTransfer = (uint16_t)v; } },
+        { "UPS.Output.HighVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.highVoltageTransfer = true; d.highVoltageTransfer = (uint16_t)v; } } },
+        { "UPS.Input.HighVoltageTransfer", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.highVoltageTransfer = true; d.highVoltageTransfer = (uint16_t)v; } } },
         
         { "UPS.PowerSummary.AudibleAlarmControl", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
-            else if (v == 1) d.beeperEnabled = false; 
-            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
+            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
+            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
-            else if (v == 1) d.beeperEnabled = false; 
-            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
+            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
+            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
         } },
         { "UPS.AudibleAlarmControl", [](APCDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) d.beeperEnabled = (v != 0);
-            else if (v == 1) d.beeperEnabled = false; 
-            else if (v == 2 || v == 3) d.beeperEnabled = true; 
+            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
+            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
+            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
         } }
     };
 
@@ -209,9 +229,9 @@ void APCDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uin
             str += (char)data[i];
         }
     }
-    if (index == host->_iManufacturer) ups_data.manufacturer = str;
-    else if (index == host->_iProduct) ups_data.product = str;
-    else if (index == host->_iSerialNumber) ups_data.serialNumber = str;
-    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) ups_data.batteryMfrDate = str;
+    if (index == host->_iManufacturer) { ups_data.has.manufacturer = true; ups_data.manufacturer = str; }
+    else if (index == host->_iProduct) { ups_data.has.product = true; ups_data.product = str; }
+    else if (index == host->_iSerialNumber) { ups_data.has.serialNumber = true; ups_data.serialNumber = str; }
+    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.has.batteryMfrDate = true; ups_data.batteryMfrDate = str; }
 }
 

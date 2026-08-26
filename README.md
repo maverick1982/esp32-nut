@@ -10,7 +10,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 
 ## 🌟 Features
 
-- **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton 3S).
+- **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton, APC, CyberPower).
 - **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients.
 - **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
@@ -20,8 +20,8 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 
 The firmware uses the official Network UPS Tools (NUT) HID mappings and supports multiple vendors automatically:
 
-- **Eaton** (Tested with Eaton 3S series)
-- **APC** (Mapped via standard NUT `apc-hid`)
+- **Eaton** (Tested with Eaton 3S series, Eaton 5P 1U)
+- **APC** (Tested with APC Back-UPS CS 500, APC BackUPS Pro 900)
 - **CyberPower** (Tested with CyberPower UT650EG)
 - **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, you can use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`). Please attach this file when opening an issue on GitHub to request dedicated support or report bugs on existing drivers.
 
