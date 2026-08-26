@@ -10,7 +10,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 
 ## 🌟 Funzionalità
 
-- **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton 3S).
+- **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton, APC, CyberPower).
 - **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti.
 - **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
@@ -20,8 +20,8 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 
 Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (NUT) e supporta automaticamente diversi produttori:
 
-- **Eaton** (Testato con la serie Eaton 3S)
-- **APC** (Mappato tramite lo standard NUT `apc-hid`)
+- **Eaton** (Testato con la serie Eaton 3S, Eaton 5P 1U)
+- **APC** (Testato con APC Back-UPS CS 500, APC BackUPS Pro 900)
 - **CyberPower** (Testato con CyberPower UT650EG)
 - **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, puoi usare il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`). Allega questo file quando apri una Issue su GitHub per richiedere il supporto dedicato o segnalare problemi sui driver esistenti.
 
