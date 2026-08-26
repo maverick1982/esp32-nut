@@ -47,10 +47,55 @@ USBHostUPS::USBHostUPS() :
 }
 
 USBHostUPS::~USBHostUPS() {
+    end();
     if (_driver) {
         delete _driver;
         _driver = nullptr;
     }
+}
+
+void USBHostUPS::end() {
+    if (!_initialized) {
+        return;
+    }
+
+    _is_ready_to_poll = false;
+    _initialized = false;
+
+    // Release interface and close device if open
+    if (_dev_handle != NULL) {
+        if (_int_in_transfer != NULL) {
+            // Give brief time for transfer to finish or free
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        usb_host_interface_release(_client_handle, _dev_handle, 0);
+        usb_host_device_close(_client_handle, _dev_handle);
+        _dev_handle = NULL;
+    }
+
+    if (_dev_to_close != NULL) {
+        usb_host_interface_release(_client_handle, _dev_to_close, 0);
+        usb_host_device_close(_client_handle, _dev_to_close);
+        _dev_to_close = NULL;
+    }
+
+    if (_client_handle != NULL) {
+        usb_host_client_deregister(_client_handle);
+        _client_handle = NULL;
+    }
+
+    if (_client_task_handle != NULL) {
+        vTaskDelete(_client_task_handle);
+        _client_task_handle = NULL;
+    }
+
+    if (_usb_task_handle != NULL) {
+        vTaskDelete(_usb_task_handle);
+        _usb_task_handle = NULL;
+    }
+
+    usb_host_uninstall();
+    Serial.println("[USBHostUPS] USB Host uninstalled.");
 }
 
 void USBHostUPS::setLogCallback(LogCallback cb) {

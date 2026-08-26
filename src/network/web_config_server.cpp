@@ -135,6 +135,10 @@ void WebConfigServer::loop() {
     server.handleClient();
 
     if (should_restart && (millis() - restart_request_time >= 1000)) {
+        if (usb_ups) {
+            usb_ups->end();
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         ESP.restart();
     }
 }

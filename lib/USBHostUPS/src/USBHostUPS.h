@@ -117,6 +117,7 @@ public:
     ~USBHostUPS();
 
     bool begin();
+    void end();
     void loop();
 
     const UPSData& getUPSData() const;
