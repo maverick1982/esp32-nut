@@ -93,7 +93,7 @@ void test_apc_power_summary_status(void) {
 }
 
 void test_apc_battery_replace_date_packed_bcd(void) {
-    // APC packed BCD date format: 0x052324 -> 2024/05/23
+    // APC packed BCD date format: 0x052324 -> 2024/05/23 (APCBattReplaceDate)
     HIDUsageDef u_date;
     u_date.report_id = 0x07;
     u_date.report_type = 3;
@@ -111,6 +111,45 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     driver.decodeReport(&mockHost, 0x07, 3, r_date, sizeof(r_date), ups_data);
     TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
     TEST_ASSERT_EQUAL_STRING("2024/05/23", ups_data.batteryMfrDate.c_str());
+
+    // Test standard path UPS.PowerSummary.ManufacturerDate
+    ups_data.has.batteryMfrDate = false;
+    ups_data.batteryMfrDate = "";
+    HIDUsageDef u_mfr_date;
+    u_mfr_date.report_id = 0x09;
+    u_mfr_date.report_type = 3;
+    u_mfr_date.bit_offset = 0;
+    u_mfr_date.bit_size = 16;
+    u_mfr_date.exponent = 0;
+    u_mfr_date.unit = 0;
+    u_mfr_date.path = "UPS.PowerSummary.ManufacturerDate";
+    u_mfr_date.found = true;
+
+    mockHost._usages.push_back(u_mfr_date);
+
+    // Date packed 16-bit: 0x2324 -> 2024/00/23
+    uint8_t r_mfr_date[] = { 0x09, 0x24, 0x23 };
+    driver.decodeReport(&mockHost, 0x09, 3, r_mfr_date, sizeof(r_mfr_date), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
+
+    // Test UPS.Battery.APCBattReplaceDate -> battery.date
+    HIDUsageDef u_batt_date;
+    u_batt_date.report_id = 0x0A;
+    u_batt_date.report_type = 3;
+    u_batt_date.bit_offset = 0;
+    u_batt_date.bit_size = 24;
+    u_batt_date.exponent = 0;
+    u_batt_date.unit = 0;
+    u_batt_date.path = "UPS.Battery.APCBattReplaceDate";
+    u_batt_date.found = true;
+
+    mockHost._usages.push_back(u_batt_date);
+
+    // 2025/01/10: year=25 (0x25), month=01, day=10 -> Little endian: 0x25, 0x10, 0x01
+    uint8_t r_batt_date[] = { 0x0A, 0x25, 0x10, 0x01 };
+    driver.decodeReport(&mockHost, 0x0A, 3, r_batt_date, sizeof(r_batt_date), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.batteryDate);
+    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.batteryDate.c_str());
 }
 
 void test_apc_load_and_real_power_calculation(void) {

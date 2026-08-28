@@ -111,5 +111,20 @@
     "0x15", "0x00", "0x25", "0x01", "0x81", "0xA2", "0x09", "0x44", "0xB1", "0xA2",
     "0x09", "0x45", "0x81", "0xA2", "0x09", "0x45", "0xB1", "0xA2", "0x09", "0xD0",
     "0x81", "0xA2", "0x09", "0xD0"
+  ],
+  "scenarios": [
+    {
+      "description": "APC CS 500 Battery Replace Date Decode",
+      "reports": [
+        {
+          "report_id": 69,
+          "report_type": 3,
+          "data_hex": "45242305"
+        }
+      ],
+      "expected_ups_data": {
+        "batteryDate": "2024/05/23"
+      }
+    }
   ]
 }

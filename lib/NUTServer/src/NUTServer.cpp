@@ -293,6 +293,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 if (data.has.timerShutdown) client.printf("VAR %s ups.timer.shutdown \"%d\"\n", upsName.c_str(), data.timerShutdown);
                 if (data.has.batteryType) client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data.batteryType.c_str());
                 if (data.has.batteryMfrDate) client.printf("VAR %s battery.mfr.date \"%s\"\n", upsName.c_str(), data.batteryMfrDate.c_str());
+                if (data.has.batteryDate) client.printf("VAR %s battery.date \"%s\"\n", upsName.c_str(), data.batteryDate.c_str());
                 if (data.has.upsType) client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data.upsType.c_str());
                 if (data.has.beeperEnabled) client.printf("VAR %s ups.beeper.status \"%s\"\n", upsName.c_str(), data.beeperEnabled ? "enabled" : "disabled");
                 if (data.has.outlet1Switch) client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data.outlet1Switch ? 1 : 0);
@@ -490,6 +491,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data.batteryType.c_str());
             } else if (varNameLower == "battery.mfr.date" && data.has.batteryMfrDate) {
                 client.printf("VAR %s battery.mfr.date \"%s\"\n", upsName.c_str(), data.batteryMfrDate.c_str());
+            } else if (varNameLower == "battery.date" && data.has.batteryDate) {
+                client.printf("VAR %s battery.date \"%s\"\n", upsName.c_str(), data.batteryDate.c_str());
             } else if (varNameLower == "ups.type" && data.has.upsType) {
                 client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data.upsType.c_str());
             } else if (varNameLower == "ups.beeper.status" && data.has.beeperEnabled) {

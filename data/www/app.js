@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'battery.voltage': 'Battery voltage (V)',
         'battery.temperature': 'Battery temperature (degrees C)',
         'battery.mfr.date': 'Battery manufacturing date',
+        'battery.date': 'Battery replacement date',
         'input.voltage': 'Input voltage (V)',
         'output.voltage': 'Output voltage (V)',
         'input.transfer.high': 'High voltage transfer point (V)',

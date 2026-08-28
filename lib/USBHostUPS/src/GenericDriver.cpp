@@ -147,6 +147,32 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100); }
             else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000); }
         }},
+        { "UPS.PowerSummary.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = (date & 0x0F) + ((date >> 4) & 0x0F) * 10;
+            year = (year >= 70) ? (1900 + year) : (2000 + year);
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld",
+                year,
+                ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
+                ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
+        }},
+        { "UPS.Battery.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = (date & 0x0F) + ((date >> 4) & 0x0F) * 10;
+            year = (year >= 70) ? (1900 + year) : (2000 + year);
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld",
+                year,
+                ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
+                ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
+        }},
         { "UPS.BatterySystem.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
         }},
