@@ -1,5 +1,7 @@
 #include "EatonDriver.h"
-#include "USBHostUPS.h"
+#include "IUSBHostUPS.h"
+#include "HIDParser.h"
+#include "HIDUsages.h"
 
 EatonDriver::EatonDriver() :
     _last_poll(0),
@@ -20,7 +22,7 @@ void EatonDriver::setup() {
     _active_beeper = "";
 }
 
-void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
+void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     if (_poll_step == 0) {
@@ -49,7 +51,7 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 3) {
                 if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else {
-                const auto& usages = host->_hid_parser.getUsages();
+                const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
                 for (const auto& u : usages) {
                     if (u.report_type == 2) continue; // Skip OUTPUT reports
@@ -91,7 +93,7 @@ void EatonDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     }
 }
 
-void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
@@ -182,7 +184,7 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t repo
         if (_active_beeper == "") _active_beeper = "none";
     }
 
-    for (const auto& u : host->_hid_parser.getUsages()) {
+    for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
             if (u.path == m.path) {
@@ -194,7 +196,7 @@ void EatonDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t repo
     }
 }
 
-void EatonDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EatonDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";

@@ -3,8 +3,11 @@
 NUTServer::NUTServer() : 
     _usb_ups(nullptr), 
     _port(NUT_DEFAULT_PORT), 
-    _initialized(false),
-    _server(NUT_DEFAULT_PORT) {
+    _initialized(false)
+#ifndef PIO_UNIT_TESTING
+    , _server(NUT_DEFAULT_PORT)
+#endif
+{
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         _clientActive[i] = false;
         _clientAuthenticated[i] = false;
@@ -15,20 +18,24 @@ NUTServer::NUTServer() :
 }
 
 NUTServer::~NUTServer() {
+#ifndef PIO_UNIT_TESTING
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         if (_clientActive[i]) {
             _clients[i].stop();
         }
     }
+#endif
 }
 
-bool NUTServer::begin(const NUTServerConfig& config, USBHostUPS* usb_ups, uint16_t port) {
+bool NUTServer::begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint16_t port) {
     _config = config;
     _usb_ups = usb_ups;
     _port = port;
 
+#ifndef PIO_UNIT_TESTING
     _server = WiFiServer(_port);
     _server.begin();
+#endif
     
     _initialized = true;
     Serial.printf("[NUTServer] Server listening on port %d\n", _port);
@@ -37,9 +44,11 @@ bool NUTServer::begin(const NUTServerConfig& config, USBHostUPS* usb_ups, uint16
 
 void NUTServer::closeSession(int slot) {
     if (slot >= 0 && slot < NUT_MAX_CLIENTS) {
+#ifndef PIO_UNIT_TESTING
         if (_clients[slot]) {
             _clients[slot].stop();
         }
+#endif
         _clientActive[slot] = false;
         _clientAuthenticated[slot] = false;
         _clientLastActivity[slot] = 0;
@@ -77,6 +86,7 @@ void NUTServer::loop() {
         return;
     }
 
+#ifndef PIO_UNIT_TESTING
     // 1. Accetta nuove connessioni client
     if (_server.hasClient()) {
         WiFiClient newClient = _server.accept();
@@ -94,9 +104,6 @@ void NUTServer::loop() {
                     _clients[slot].stop();
                 }
                 _clients[slot] = newClient;
-                
-                // Il timeout di 200ms è rimosso per evitare troncamento dei dati
-                // _clients[slot].setTimeout(200);
                 
                 _clientActive[slot] = true;
                 _clientAuthenticated[slot] = false;
@@ -148,9 +155,16 @@ void NUTServer::loop() {
             }
         }
     }
+#endif
 }
 
 void NUTServer::handleCommand(int slot, const String& cmdLine) {
+#ifndef PIO_UNIT_TESTING
+    processCommand(_clients[slot], slot, cmdLine);
+#endif
+}
+
+void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     std::vector<String> tokens = splitTokens(cmdLine);
     if (tokens.empty()) {
         return;
@@ -158,8 +172,6 @@ void NUTServer::handleCommand(int slot, const String& cmdLine) {
 
     String cmd = tokens[0];
     cmd.toUpperCase();
-
-    WiFiClient& client = _clients[slot];
 
     bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
 

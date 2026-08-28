@@ -40,10 +40,10 @@ USBHostUPS::USBHostUPS() :
     _int_in_transfer(NULL),
     _driver(nullptr),
     _log_cb(nullptr),
-    _quirks(0),
-    _iManufacturer(0),
-    _iProduct(0),
-    _iSerialNumber(0) {
+    _quirks(0) {
+    _iManufacturer = 0;
+    _iProduct = 0;
+    _iSerialNumber = 0;
 }
 
 USBHostUPS::~USBHostUPS() {
@@ -107,20 +107,7 @@ const UPSData& USBHostUPS::getUPSData() const {
 }
 
 String USBHostUPS::getUPSStatusString() const {
-    String status = "";
-    if (_ups_data.has.acPresent && _ups_data.acPresent && (!_ups_data.has.discharging || !_ups_data.discharging)) status += "OL ";
-    else if (_ups_data.has.good && _ups_data.good) status += "OL ";
-    if (_ups_data.has.discharging && _ups_data.discharging) status += "OB ";
-    if (_ups_data.has.belowRemainingCapacityLimit && _ups_data.belowRemainingCapacityLimit) status += "LB ";
-    if (_ups_data.has.charging && _ups_data.charging && !(_ups_data.remainingCapacity == 100 && _ups_data.has.acPresent && _ups_data.acPresent)) status += "CHRG ";
-    if (_ups_data.has.needReplacement && _ups_data.needReplacement) status += "RB ";
-    if (_ups_data.has.overload && _ups_data.overload) status += "OVER ";
-    if (_ups_data.has.shutdownImminent && _ups_data.shutdownImminent) status += "FSD ";
-    if (_ups_data.has.communicationLost && _ups_data.communicationLost) status += "COMM_LOST ";
-    
-    if (status.length() == 0) status = "Unknown";
-    status.trim();
-    return status;
+    return UPSData::computeUPSStatusString(_ups_data);
 }
 
 bool USBHostUPS::isConnected() const {

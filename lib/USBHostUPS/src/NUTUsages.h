@@ -163,7 +163,7 @@ static const NUTUsageDef nut_usages[] = {
     { "InhibitCharge",			0x008500c0 },
     { "EnablePolling",			0x008500c1 },
     { "ResetToZero",			0x008500c2 },
-    { "ACPresent",				0x008500d0 },
+    { "ACPresent", 0x008500d0 },
     { "BatteryPresent",			0x008500d1 },
     { "PowerFail",				0x008500d2 },
     { "AlarmInhibited",			0x008500d3 },

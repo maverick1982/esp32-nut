@@ -10,9 +10,9 @@ public:
     virtual ~CyberPowerDriver() = default;
 
     void setup() override;
-    void loop(USBHostUPS* host, UPSData& data, uint32_t now) override;
-    void decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) override;
+    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
 private:
     uint32_t _last_poll;

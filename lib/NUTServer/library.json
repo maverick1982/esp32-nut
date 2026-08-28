@@ -1,0 +1,5 @@
+{
+  "name": "NUTServer",
+  "version": "1.0.0",
+  "platforms": ["espressif32"]
+}

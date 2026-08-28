@@ -1,5 +1,8 @@
 #include "GenericDriver.h"
-#include "USBHostUPS.h"
+#include "IUSBHostUPS.h"
+#include "HIDParser.h"
+#include "HIDUsages.h"
+#include "Quirks.h"
 
 GenericDriver::GenericDriver() : 
     _last_poll(0),
@@ -19,7 +22,7 @@ void GenericDriver::setup() {
     Serial.println("[GenericDriver] Setup started.");
 }
 
-void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
+void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     if (data.upsType != "Generic") {
@@ -55,7 +58,7 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 4) {
                 if (_slow_poll_counter == 0 && data.batteryMfrDate == "" && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
-                const auto& usages = host->_hid_parser.getUsages();
+                const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
                 for (const auto& u : usages) {
                     if (u.report_type == 2) continue; // Skip OUTPUT reports
@@ -64,8 +67,9 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                     for (uint16_t id : rids) {
                         if (id == pair) { found = true; break; }
                     }
-                    if (!found) rids.push_back(pair);
+                    if (!found && u.report_id != 0) rids.push_back(pair);
                 }
+                
                 for (auto it = rids.begin(); it != rids.end(); ) {
                     if ((*it >> 8) == 1) { // If Input report
                         uint8_t id = *it & 0xFF;
@@ -87,7 +91,7 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
                     uint8_t r_id = rids[index] & 0xFF;
                     host->requestReport(r_id, r_type, 64);
                 } else {
-                    _poll_step = 0;
+                    _poll_step = 0; // Done
                     return;
                 }
             }
@@ -96,7 +100,7 @@ void GenericDriver::loop(USBHostUPS* host, UPSData& data, uint32_t now) {
     }
 }
 
-void GenericDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
@@ -209,7 +213,7 @@ void GenericDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t re
         if (_active_beeper == "") _active_beeper = "none";
     }
 
-    for (const auto& u : host->_hid_parser.getUsages()) {
+    for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
             if (u.path == m.path) {
@@ -221,7 +225,7 @@ void GenericDriver::decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t re
     }
 }
 
-void GenericDriver::parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";

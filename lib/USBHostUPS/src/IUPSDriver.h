@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 struct UPSData;
-class USBHostUPS;
+class IUSBHostUPS;
 
 class IUPSDriver {
 public:
@@ -23,7 +23,7 @@ public:
      * @param data Reference to the UPS data structure to update
      * @param now Current time in milliseconds
      */
-    virtual void loop(USBHostUPS* host, UPSData& data, uint32_t now) = 0;
+    virtual void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) = 0;
 
     /**
      * @brief Decodes a received HID report
@@ -33,7 +33,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void decodeReport(USBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 
     /**
      * @brief Parses a received String Descriptor
@@ -43,7 +43,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void parseStringDescriptor(USBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 };
 
 #endif // I_UPS_DRIVER_H
