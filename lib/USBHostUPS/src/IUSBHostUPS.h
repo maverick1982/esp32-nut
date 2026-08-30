@@ -14,6 +14,7 @@ public:
     virtual String getUPSStatusString() const = 0;
     virtual bool setBeeper(bool enable) = 0;
     virtual bool isConnected() const = 0;
+    virtual bool supportsBeeperToggle() const { return true; }
 
     virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
@@ -22,6 +23,8 @@ public:
     virtual bool isControlPending() const = 0;
     virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
     virtual bool requestStringDescriptor(uint8_t string_index) = 0;
+    virtual uint16_t getVID() const { return 0; }
+    virtual uint16_t getPID() const { return 0; }
 
     uint8_t _iManufacturer = 0;
     uint8_t _iProduct = 0;

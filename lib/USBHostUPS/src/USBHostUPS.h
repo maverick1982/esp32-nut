@@ -29,6 +29,7 @@ public:
 
     bool setBeeper(bool enable) override;
     bool isConnected() const override;
+    bool supportsBeeperToggle() const override;
     
     void setLogCallback(LogCallback cb);
 
@@ -39,6 +40,8 @@ public:
     bool isControlPending() const override { return _control_pending; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
     bool requestStringDescriptor(uint8_t string_index) override;
+    uint16_t getVID() const override { return _vid; }
+    uint16_t getPID() const override { return _pid; }
 
     HIDParser _hid_parser;
 
@@ -56,6 +59,8 @@ private:
     usb_device_handle_t _dev_handle;
     
     String _cached_report_descriptor_hex;
+    uint16_t _vid;
+    uint16_t _pid;
     bool _initialized;
     bool _is_ready_to_poll;
     volatile bool _is_fetching;

@@ -436,16 +436,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             
+            const beeperActions = document.querySelector('.ups-actions');
             const beeperToggle = document.getElementById('toggle-beeper');
             const beeperState = document.getElementById('beeper-state');
-            if (beeperToggle && beeperState && data['ups.beeper.status'] !== undefined) {
-                beeperToggle.disabled = false;
-                const isEnabled = data['ups.beeper.status'] === 'enabled';
-                if (beeperToggle.checked !== isEnabled) {
-                    beeperToggle.checked = isEnabled;
+            
+            if (beeperActions) {
+                if (data['ups.beeper.switchable'] === true && data['ups.beeper.status'] !== undefined) {
+                    beeperActions.style.display = 'flex';
+                    if (beeperToggle && beeperState) {
+                        beeperToggle.disabled = false;
+                        const isEnabled = data['ups.beeper.status'] === 'enabled';
+                        if (beeperToggle.checked !== isEnabled) {
+                            beeperToggle.checked = isEnabled;
+                        }
+                        beeperState.textContent = isEnabled ? 'Enabled' : 'Disabled';
+                        beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
+                    }
+                } else {
+                    beeperActions.style.display = 'none';
                 }
-                beeperState.textContent = isEnabled ? 'Enabled' : 'Disabled';
-                beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
             }
             
         } catch (error) {

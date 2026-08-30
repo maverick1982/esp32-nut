@@ -142,6 +142,16 @@ const HIDUsageDef* HIDParser::getUsageDef(uint32_t usage) const {
     return nullptr;
 }
 
+bool HIDParser::hasFeatureBeeperControl() const {
+    for (const auto& u : _usages) {
+        if ((u.usage == 0x0084005A || u.usage == 0x0085005A || u.path.indexOf("AudibleAlarmControl") >= 0)
+            && (u.report_type == 0x03 || u.report_type == 0x02)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length) {
     if (!def || !def->found || !data) return 0.0;
     

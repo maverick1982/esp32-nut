@@ -115,6 +115,13 @@ bool USBHostUPS::isConnected() const {
     return _initialized && (_dev_handle != NULL);
 }
 
+bool USBHostUPS::supportsBeeperToggle() const {
+    if (_quirks & QUIRK_NO_BEEPER_CONTROL) {
+        return false;
+    }
+    return _hid_parser.hasFeatureBeeperControl();
+}
+
 String USBHostUPS::getActiveBeeperPath() const {
     for (const auto& u : _hid_parser.getUsages()) {
         if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
@@ -291,6 +298,8 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                     _iManufacturer = desc->iManufacturer;
                     _iProduct = desc->iProduct;
                     _iSerialNumber = desc->iSerialNumber;
+                    _vid = desc->idVendor;
+                    _pid = desc->idProduct;
                     
                     _dev_handle = dev_hdl;
                     esp_err_t claim_err = usb_host_interface_claim(_client_handle, _dev_handle, 0, 0);
@@ -960,9 +969,20 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         transfer->num_bytes = _int_in_mps;
         esp_err_t err = usb_host_transfer_submit(transfer);
         if (err != ESP_OK) {
-            Serial.printf("[USBHostUPS] Error resubmitting INT IN transfer: %d\n", err);
-            usb_host_transfer_free(transfer);
-            _int_in_transfer = NULL;
+            // Do not permanently free/destroy the transfer on transient errors unless device is disconnecting
+            if (err == ESP_ERR_NOT_FOUND || _pending_dev_close) {
+                Serial.printf("[USBHostUPS] INT IN stopped: %d\n", err);
+                usb_host_transfer_free(transfer);
+                _int_in_transfer = NULL;
+            } else {
+                // For other transient errors, retry submission
+                esp_err_t retry_err = usb_host_transfer_submit(transfer);
+                if (retry_err != ESP_OK) {
+                    Serial.printf("[USBHostUPS] INT IN submit failed: %d\n", retry_err);
+                    usb_host_transfer_free(transfer);
+                    _int_in_transfer = NULL;
+                }
+            }
         }
     } else {
         usb_host_transfer_free(transfer);

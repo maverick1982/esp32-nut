@@ -283,7 +283,10 @@ void WebConfigServer::handleUpsVars() {
     if (data.has.batteryMfrDate) doc["battery.mfr.date"] = data.batteryMfrDate;
     if (data.has.batteryDate) doc["battery.date"] = data.batteryDate;
     if (data.has.upsType) doc["ups.type"] = data.upsType;
-    if (data.has.beeperEnabled) doc["ups.beeper.status"] = data.beeperEnabled ? "enabled" : "disabled";
+    if (data.has.beeperEnabled) {
+        doc["ups.beeper.status"] = data.beeperEnabled ? "enabled" : "disabled";
+    }
+    doc["ups.beeper.switchable"] = usb_ups->supportsBeeperToggle();
     if (data.has.outlet1Switch) doc["outlet.1.switch"] = data.outlet1Switch ? 1 : 0;
     if (data.has.outlet2Switch) doc["outlet.2.switch"] = data.outlet2Switch ? 1 : 0;
     

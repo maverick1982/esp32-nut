@@ -11,6 +11,7 @@
 
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"
+#include "Quirks.h"
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
@@ -35,6 +36,10 @@ public:
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
     uint32_t getQuirks() const override { return _quirks; }
     bool isControlPending() const override { return false; }
+    bool supportsBeeperToggle() const override {
+        if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
+        return _parser.hasFeatureBeeperControl();
+    }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
         return true;
@@ -102,6 +107,8 @@ public:
         // 1. Read Device Meta
         std::string vidStr = doc["vid"].as<std::string>();
         uint16_t vid = (uint16_t)strtol(vidStr.c_str(), nullptr, 16);
+        std::string pidStr = doc["pid"] | "0x0000";
+        uint16_t pid = (uint16_t)strtol(pidStr.c_str(), nullptr, 16);
 
         ReplayMockHost host;
         UPSData ups_data;
@@ -141,6 +148,21 @@ public:
             default:
                 driver = new GenericDriver();
                 break;
+        }
+
+        // Match quirks
+        host._quirks = 0;
+        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+            if (UPS_QUIRKS[q].vid == vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == pid)) {
+                host._quirks |= UPS_QUIRKS[q].flags;
+            }
+        }
+
+        // Validate supportsBeeperToggle: if Powercom (VID 0x0D9F, PID 0x0004), quirk suppresses toggle
+        if (vid == 0x0D9F && pid == 0x0004) {
+            TEST_ASSERT_FALSE_MESSAGE(host.supportsBeeperToggle(), "Powercom SPD-750U must have supportsBeeperToggle == false due to quirk");
+        } else if (host._parser.hasFeatureBeeperControl()) {
+            TEST_ASSERT_TRUE_MESSAGE(host.supportsBeeperToggle(), "Device with Feature beeper and no quirk must have supportsBeeperToggle == true");
         }
 
         TEST_ASSERT_NOT_NULL_MESSAGE(driver, "Failed to instantiate driver for fixture");

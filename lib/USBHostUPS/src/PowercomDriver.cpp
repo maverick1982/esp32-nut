@@ -9,7 +9,10 @@ PowercomDriver::PowercomDriver() :
     _last_step_time(0),
     _last_0xa4_poll(0),
     _poll_step(0),
-    _slow_poll_counter(0) {
+    _slow_poll_counter(0),
+    _mfr_retries(0),
+    _prod_retries(0),
+    _serial_retries(0) {
 }
 
 void PowercomDriver::setup() {
@@ -18,7 +21,10 @@ void PowercomDriver::setup() {
     _last_step_time = 0;
     _last_0xa4_poll = 0;
     _slow_poll_counter = 14;
-    Serial.println("[PowercomDriver] Setup started.");
+    _mfr_retries = 0;
+    _prod_retries = 0;
+    _serial_retries = 0;
+    Serial.println("[PowercomDriver] Setup completed (NUT 2.0s Quick-Poll & 30s Full-Poll mode).");
 }
 
 void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
@@ -27,13 +33,32 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (data.upsType != "Powercom") {
         data.upsType = "Powercom";
     }
+    if (data.manufacturer == "") {
+        data.manufacturer = "Powercom";
+    }
 
+    if (data.product == "") {
+        uint16_t pid = host->getPID();
+        switch (pid) {
+            case 0x00a2: data.product = "IMPERIAL Series"; break;
+            case 0x00a3: data.product = "Smart King Pro"; break;
+            case 0x00a4: data.product = "WOW Series"; break;
+            case 0x00a5: data.product = "Vanguard Series"; break;
+            case 0x00a6: data.product = "Black Knight Pro"; break;
+            case 0x0004: data.product = "SPD / Vanguard / BNT"; break;
+            case 0x0001: data.product = "Powercom UPS"; break;
+            default:     data.product = "Powercom HID UPS"; break;
+        }
+    }
+
+    // Quick-Poll: Every 2.0s trigger status keep-alive (Report 0x0A)
+    // Full-Poll: Every 30.0s query voltages and load (Reports 0x1D, 0x21, 0x1F)
     if (_poll_step == 0) {
         if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-            _last_fast_poll = now != 0 ? now : 1;
+            _last_fast_poll = (now != 0) ? now : 1;
             _poll_step = 1;
             _last_step_time = now;
-            
+
             _slow_poll_counter++;
             if (_slow_poll_counter >= 15) { // 30s / 2s = 15
                 _slow_poll_counter = 0;
@@ -42,60 +67,29 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     }
 
     if (_poll_step > 0) {
-        if (host->isControlPending()) return;
+        if (host->isControlPending()) return; // Non-overlapping guard
 
         if (now - _last_step_time >= 50 || _poll_step == 1) {
             _last_step_time = now;
-            
+
             if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && data.manufacturer == "") if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
-            } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
-            } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
-            } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found) rids.push_back(pair);
-                }
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                        }
-                        if (has_feature) {
-                            it = rids.erase(it);
-                            continue;
-                        }
-                    }
-                    ++it;
-                }
-                
-                int index = _poll_step - 4;
-                if (index >= 0 && index < rids.size()) {
-                    uint8_t r_type = rids[index] >> 8;
-                    uint8_t r_id = rids[index] & 0xFF;
-                    if (r_id >= 0xA0 && r_id <= 0xAF) {
-                        host->requestReport(r_id, r_type, 8);
-                    } else {
-                        host->requestReport(r_id, r_type, 64);
-                    }
-                } else if (index == rids.size()) {
-                    // Feature Report 0xA4 for Powercom battery voltage hack
-                    host->requestReport(0xA4, 3, 8);
+                // Step 1: Quick-Poll (Report 0x0A / ACPresent)
+                host->requestReport(0x0A, 3, 8);
+            } else if (_slow_poll_counter == 0) {
+                // Steps 2..4 only during the 30s cycle
+                if (_poll_step == 2) {
+                    host->requestReport(0x1D, 3, 8); // input.voltage
+                } else if (_poll_step == 3) {
+                    host->requestReport(0x21, 3, 8); // output.voltage
+                } else if (_poll_step == 4) {
+                    host->requestReport(0x1F, 3, 8); // ups.load
                 } else {
                     _poll_step = 0;
                     return;
                 }
+            } else {
+                _poll_step = 0;
+                return;
             }
             _poll_step++;
         }
@@ -104,6 +98,16 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
 void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
+
+    if (report_type == 1) { // Interrupt IN report
+        String hex = "";
+        for (size_t i = 0; i < length && i < 16; i++) {
+            char b[4];
+            sprintf(b, "%02X ", data[i]);
+            hex += b;
+        }
+        Serial.printf("[PowercomDriver] INT IN (len %d, id 0x%02X): %s\n", (int)length, report_id, hex.c_str());
+    }
 
     // Save fields before GenericDriver so Powercom custom mappings can handle them
     float saved_voltage = ups_data.batteryVoltage;
@@ -122,9 +126,13 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
 
     if (report_id == 0xA4 && report_type == 3) {
         String msg = "";
-        for (size_t i = 1; i < length && i < 8; i++) {
+        // Check if report ID is prepended at data[0] or if payload starts directly at data[0]
+        size_t start_idx = (data[0] == 0xA4) ? 1 : 0;
+        for (size_t i = start_idx; i < length && i < 8; i++) {
             msg += (char)data[i];
         }
+        Serial.printf("[PowercomDriver] 0xA4 raw bytes: %d, text: '%s'\n", (int)length, msg.c_str());
+
         int start = -1;
         for (int i = 0; i < msg.length(); i++) {
             if (std::isdigit((unsigned char)msg[i]) || msg[i] == '.') {
