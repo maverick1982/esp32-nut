@@ -159,8 +159,8 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
                 year,
                 ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
                 ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
-            d.has.batteryMfrDate = true;
-            d.batteryMfrDate = String(buf);
+            d.has.batteryDate = true;
+            d.batteryDate = String(buf);
         }},
         { "UPS.Battery.APCBattReplaceDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             if (v <= 0) return;
