@@ -116,9 +116,8 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
         { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outlet1Switch = true; d.outlet1Switch = v != 0; } { d.has.outlet2Switch = true; d.outlet2Switch = v != 0; } } },
         
         { "UPS.PowerSummary.PercentLoad", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            { d.has.load = true; d.load = (uint8_t)v; }
-            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100); }
-            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000); }
+            d.has.load = true; d.load = (uint8_t)v;
+            d.updateRealPower();
         }},
         { "UPS.Battery.Temperature", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) {
             { d.has.batteryTemperature = true; d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v; }
@@ -135,8 +134,8 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
         
         { "UPS.BatterySystem.Battery.DesignCapacity", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.designCapacity = true; d.designCapacity = (uint8_t)(v / 3600.0); } } },
         
-        { "UPS.Flow.ConfigApparentPower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configApparentPower = true; d.configApparentPower = (uint16_t)v; } } },
-        { "UPS.Flow.ConfigActivePower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; } } },
+        { "UPS.Flow.ConfigApparentPower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configApparentPower = true; d.configApparentPower = (uint16_t)v; d.updateRealPower(); } } },
+        { "UPS.Flow.ConfigActivePower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; d.updateRealPower(); } } },
         { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configFrequency = true; d.configFrequency = (uint8_t)v; } { d.has.outputFrequencyNominal = true; d.outputFrequencyNominal = (uint16_t)v; } } },
         { "UPS.Flow.ConfigVoltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configVoltage = true; d.configVoltage = (uint16_t)v; } { d.has.outputVoltageNominal = true; d.outputVoltageNominal = (uint16_t)v; } } },
         { "UPS.PowerConverter.Output.ConfigVoltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outputVoltageNominal = true; d.outputVoltageNominal = (uint16_t)v; } } },

@@ -148,6 +148,42 @@ void test_eaton_loop_polling_and_string_requests(void) {
     TEST_ASSERT_EQUAL_UINT8(3, mockHost._requestedStrings[2]);
 }
 
+void test_eaton_realpower_recalculated_when_config_arrives_after_load(void) {
+    HIDUsageDef u_load;
+    u_load.report_id = 0x01;
+    u_load.report_type = 1;
+    u_load.bit_offset = 0;
+    u_load.bit_size = 8;
+    u_load.path = "UPS.PowerSummary.PercentLoad";
+    u_load.found = true;
+
+    HIDUsageDef u_cap;
+    u_cap.report_id = 0x02;
+    u_cap.report_type = 3;
+    u_cap.bit_offset = 0;
+    u_cap.bit_size = 16;
+    u_cap.path = "UPS.Flow.ConfigActivePower";
+    u_cap.found = true;
+
+    mockHost._usages.push_back(u_load);
+    mockHost._usages.push_back(u_cap);
+
+    // 1. Load arrives first (40%)
+    uint8_t r_load[] = { 0x01, 40 };
+    driver.decodeReport(&mockHost, 0x01, 1, r_load, sizeof(r_load), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.load);
+    TEST_ASSERT_FALSE(ups_data.has.realPower);
+
+    // 2. ConfigActivePower arrives after (1000W = 0x03E8 -> 0xE8, 0x03)
+    uint8_t r_cap[] = { 0x02, 0xE8, 0x03 };
+    driver.decodeReport(&mockHost, 0x02, 3, r_cap, sizeof(r_cap), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
+    TEST_ASSERT_EQUAL_UINT16(1000, ups_data.configActivePower);
+    // 40% of 1000W = 400W
+    TEST_ASSERT_TRUE(ups_data.has.realPower);
+    TEST_ASSERT_EQUAL_UINT16(400, ups_data.realPower);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -156,6 +192,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
+    RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     return UNITY_END();
 }
 #else
@@ -165,6 +202,7 @@ void setup() {
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
+    RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     UNITY_END();
 }
 void loop() {}

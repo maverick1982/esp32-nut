@@ -36,6 +36,10 @@ void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json");
 }
 
+void test_replay_cyberpower_cp1350c(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json");
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -48,6 +52,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_cyberpower_cp1350c);
     return UNITY_END();
 }
 #else
@@ -61,6 +66,7 @@ void setup() {
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_cyberpower_cp1350c);
     UNITY_END();
 }
 void loop() {}

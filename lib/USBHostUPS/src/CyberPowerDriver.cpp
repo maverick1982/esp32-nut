@@ -119,17 +119,15 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
         { "UPS.PowerSummary.CommunicationLost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.communicationLost = true; d.communicationLost = v != 0; } } },
         
         { "UPS.PowerSummary.PercentLoad", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            { d.has.load = true; d.load = (uint8_t)v; }
-            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100); }
-            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000); }
+            d.has.load = true; d.load = (uint8_t)v;
+            d.updateRealPower();
         }},
         { "UPS.Battery.Temperature", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
             { d.has.batteryTemperature = true; d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v; }
         }},
         { "UPS.Output.PercentLoad", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            { d.has.load = true; d.load = (uint8_t)v; }
-            if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint8_t)v) / 100); }
-            else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint8_t)v) / 10000); }
+            d.has.load = true; d.load = (uint8_t)v;
+            d.updateRealPower();
         }},
         
         { "UPS.Input.Voltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.inputVoltage = true; d.inputVoltage = v; } } },
@@ -142,8 +140,8 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
         
         { "UPS.PowerSummary.RunTimeToEmpty", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } } },
         
-        { "UPS.PowerConverter.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; } } },
-        { "UPS.Output.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; } } },
+        { "UPS.PowerConverter.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; d.updateRealPower(); } } },
+        { "UPS.Output.ConfigActivePower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; d.updateRealPower(); } } },
         
         { "UPS.PowerSummary.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { /* mapped to battery.voltage.nominal in cps-hid */ } },
         { "UPS.Input.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configVoltage = true; d.configVoltage = (uint16_t)v; } } },

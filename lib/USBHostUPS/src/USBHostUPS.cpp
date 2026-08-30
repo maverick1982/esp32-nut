@@ -716,22 +716,10 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
                     }
                 }
             } else if (setup->bmRequestType == 0xA1 && setup->bRequest == 0x01) {
-                bool all_zeros = true;
-                bool has_report_ids = false;
-                for (const auto& u : self->_hid_parser.getUsages()) {
-                    if (u.report_id != 0) { has_report_ids = true; break; }
-                }
-                size_t start_idx = has_report_ids ? 1 : 0;
-                for (size_t i = start_idx; i < actual_length; i++) {
-                    if (data[i] != 0) { all_zeros = false; break; }
-                }
-                
-                if (!all_zeros) {
+                if (actual_length > 0 && self->_driver) {
                     uint8_t report_id = setup->wValue & 0xFF;
-                    if (self->_driver) {
-                        uint8_t rep_type = (setup->wValue >> 8) & 0xFF; 
-                        self->_driver->decodeReport(self, report_id, rep_type, data, actual_length, self->_ups_data);
-                    }
+                    uint8_t rep_type = (setup->wValue >> 8) & 0xFF; 
+                    self->_driver->decodeReport(self, report_id, rep_type, data, actual_length, self->_ups_data);
                 }
             }
         }
@@ -963,20 +951,8 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         for (const auto& u : _hid_parser.getUsages()) {
             if (u.report_id != 0) { has_report_ids = true; break; }
         }
-        
-        bool all_zeros = true;
-        size_t start_idx = has_report_ids ? 1 : 0;
-        for (size_t i = start_idx; i < transfer->actual_num_bytes; i++) {
-            if (transfer->data_buffer[i] != 0) {
-                all_zeros = false;
-                break;
-            }
-        }
-        
-        if (!all_zeros) {
-            uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
-            _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
-        }
+        uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
+        _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
     }
     
     // Resubmit transfer if device is still active

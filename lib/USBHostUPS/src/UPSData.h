@@ -121,6 +121,17 @@ struct UPSData {
         status.trim();
         return status;
     }
+
+    void updateRealPower() {
+        if (!has.load) return;
+        if (has.configActivePower && configActivePower > 0) {
+            has.realPower = true;
+            realPower = (uint16_t)(((uint32_t)configActivePower * load) / 100);
+        } else if (has.configApparentPower && configApparentPower > 0) {
+            has.realPower = true;
+            realPower = (uint16_t)(((uint32_t)configApparentPower * 60 * load) / 10000);
+        }
+    }
 };
 
 #endif // UPS_DATA_H
