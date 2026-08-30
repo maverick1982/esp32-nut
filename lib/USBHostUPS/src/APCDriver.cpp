@@ -130,13 +130,22 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
         { "UPS.PowerSummary.ManufacturerDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             if (v <= 0) return;
             long date = (long)v;
-            long year = (date & 0x0F) + ((date >> 4) & 0x0F) * 10;
-            year = (year >= 70) ? (1900 + year) : (2000 + year);
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
             char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld",
-                year,
-                ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
-                ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
+        }},
+        { "UPS.Battery.ManufacturerDate", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
             d.has.batteryMfrDate = true;
             d.batteryMfrDate = String(buf);
         }},

@@ -112,7 +112,7 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
     TEST_ASSERT_EQUAL_STRING("2024/05/23", ups_data.batteryMfrDate.c_str());
 
-    // Test standard path UPS.PowerSummary.ManufacturerDate
+    // Test standard USB HID PDC path UPS.PowerSummary.ManufacturerDate: 2026/08/07 (val 23815 = 0x5D07)
     ups_data.has.batteryMfrDate = false;
     ups_data.batteryMfrDate = "";
     HIDUsageDef u_mfr_date;
@@ -127,10 +127,11 @@ void test_apc_battery_replace_date_packed_bcd(void) {
 
     mockHost._usages.push_back(u_mfr_date);
 
-    // Date packed 16-bit: 0x2324 -> 2024/00/23
-    uint8_t r_mfr_date[] = { 0x09, 0x24, 0x23 };
+    // 0x5D07 in Little-Endian: 0x07, 0x5D
+    uint8_t r_mfr_date[] = { 0x09, 0x07, 0x5D };
     driver.decodeReport(&mockHost, 0x09, 3, r_mfr_date, sizeof(r_mfr_date), ups_data);
     TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
+    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.batteryMfrDate.c_str());
 
     // Test UPS.Battery.APCBattReplaceDate -> battery.date
     HIDUsageDef u_batt_date;
