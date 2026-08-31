@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'ups.mfr': 'UPS manufacturer',
         'ups.model': 'UPS model',
         'ups.serial': 'UPS serial number',
+        'ups.mfr.date': 'UPS manufacturing date',
         'battery.charge': 'Battery charge (percent)',
         'battery.charge.low': 'Remaining battery level when UPS switches to LB (percent)',
         'battery.capacity': 'Battery design capacity (Ah)',

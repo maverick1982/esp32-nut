@@ -279,6 +279,7 @@ void WebConfigServer::handleUpsVars() {
     if (data.has.timerStart) doc["ups.timer.start"] = data.timerStart;
     if (data.has.timerShutdown) doc["ups.timer.shutdown"] = data.timerShutdown;
     if (data.has.batteryType) doc["battery.type"] = data.batteryType;
+    if (data.has.upsMfrDate) doc["ups.mfr.date"] = data.upsMfrDate;
     if (data.has.batteryMfrDate) doc["battery.mfr.date"] = data.batteryMfrDate;
     if (data.has.batteryDate) doc["battery.date"] = data.batteryDate;
     if (data.has.upsType) doc["ups.type"] = data.upsType;

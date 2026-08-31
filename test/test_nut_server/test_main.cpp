@@ -153,6 +153,8 @@ void test_get_var_compliance(void) {
     mockHost.data.fullChargeCapacity = 100;
     mockHost.data.has.batteryMfrDate = true;
     mockHost.data.batteryMfrDate = "2024/05/23";
+    mockHost.data.has.upsMfrDate = true;
+    mockHost.data.upsMfrDate = "2006/09/15";
     mockHost.data.has.batteryDate = true;
     mockHost.data.batteryDate = "2025/01/10";
     mockHost.data.has.outputVoltage = true;
@@ -169,6 +171,11 @@ void test_get_var_compliance(void) {
     printer.clear();
     server.processCommand(printer, 0, "GET VAR testups battery.mfr.date");
     TEST_ASSERT_EQUAL_STRING("VAR testups battery.mfr.date \"2024/05/23\"\n", printer.getOutput().c_str());
+
+    // Supported var: ups.mfr.date
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.mfr.date");
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.mfr.date \"2006/09/15\"\n", printer.getOutput().c_str());
 
     // Supported var: battery.date
     printer.clear();

@@ -41,6 +41,7 @@ struct UPSData {
     String manufacturer = "";
     String product = "";
     String serialNumber = "";
+    String upsMfrDate = "";
     String batteryMfrDate = "";
     String batteryDate = "";
 
@@ -99,6 +100,7 @@ struct UPSData {
         bool serialNumber : 1;
         bool outputVoltageNominal : 1;
         bool outputFrequencyNominal : 1;
+        bool upsMfrDate : 1;
         bool batteryMfrDate : 1;
         bool batteryDate : 1;
     } has = {0};

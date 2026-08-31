@@ -155,8 +155,19 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             long day = date & 0x1F;
             char buf[20];
             snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.has.batteryMfrDate = true;
-            d.batteryMfrDate = String(buf);
+            d.has.upsMfrDate = true;
+            d.upsMfrDate = String(buf);
+        }},
+        { "UPS.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
+            d.has.upsMfrDate = true;
+            d.upsMfrDate = String(buf);
         }},
         { "UPS.Battery.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
             if (v <= 0) return;
