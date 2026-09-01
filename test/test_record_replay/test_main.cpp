@@ -32,6 +32,10 @@ void test_replay_apc_smartups750_issue13(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json");
 }
 
+void test_replay_powercom_spd750u(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json");
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -43,6 +47,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_xs700u);
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_replay_apc_smartups750_issue13);
+    RUN_TEST(test_replay_powercom_spd750u);
     return UNITY_END();
 }
 #else
@@ -55,6 +60,7 @@ void setup() {
     RUN_TEST(test_replay_apc_xs700u);
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_replay_apc_smartups750_issue13);
+    RUN_TEST(test_replay_powercom_spd750u);
     UNITY_END();
 }
 void loop() {}

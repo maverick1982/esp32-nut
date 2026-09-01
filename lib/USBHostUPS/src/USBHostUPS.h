@@ -51,8 +51,11 @@ private:
 
     TaskHandle_t _usb_task_handle;
     TaskHandle_t _client_task_handle;
+    
     usb_host_client_handle_t _client_handle;
     usb_device_handle_t _dev_handle;
+    
+    String _cached_report_descriptor_hex;
     bool _initialized;
     bool _is_ready_to_poll;
     volatile bool _is_fetching;

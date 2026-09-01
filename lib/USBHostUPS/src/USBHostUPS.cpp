@@ -4,6 +4,7 @@
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "GenericDriver.h"
+#include "PowercomDriver.h"
 #include <ArduinoJson.h>
 #include <atomic>
 
@@ -194,8 +195,7 @@ bool USBHostUPS::setBeeper(bool enable) {
     uint8_t bit_shift = bit_offset % 8;
 
     if (byte_idx < ctx.len) {
-        uint8_t val = enable ? 2 : 1;
-        if (bit_size == 1) val = enable ? 1 : 0;
+        uint8_t val = _driver ? _driver->encodeBeeperValue(enable, bit_size) : (bit_size == 1 ? (enable ? 1 : 0) : (enable ? 2 : 1));
         
         uint8_t mask = (1 << bit_size) - 1;
         ctx.data[byte_idx] &= ~(mask << bit_shift);
@@ -314,6 +314,12 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                 Serial.println("[USBHostUPS] Recognized vendor: CyberPower");
                                 _driver = new CyberPowerDriver();
                                 _ups_data.has.upsType = true; _ups_data.upsType = "CyberPower";
+                                break;
+                            case 0x0D9F:
+                                if (_log_cb) _log_cb("INFO", "[USBHostUPS] Recognized vendor: Powercom");
+                                Serial.println("[USBHostUPS] Recognized vendor: Powercom");
+                                _driver = new PowercomDriver();
+                                _ups_data.upsType = "Powercom";
                                 break;
                             default:
                                 {
@@ -439,6 +445,15 @@ void USBHostUPS::handle_client_event(const usb_host_client_event_msg_t *event_ms
                                     if (ctx.len > 0) {
                                         Serial.printf("[USBHostUPS] Report Descriptor fetched, len %d\n", ctx.len);
                                         self->_hid_parser.parseReportDescriptor(ctx.data, ctx.len);
+                                        
+                                        DynamicJsonDocument temp_doc(4096);
+                                        JsonArray arr = temp_doc.to<JsonArray>();
+                                        for (size_t i = 0; i < ctx.len; i++) {
+                                            char hexb[5];
+                                            sprintf(hexb, "0x%02X", ctx.data[i]);
+                                            arr.add(hexb);
+                                        }
+                                        serializeJson(temp_doc, self->_cached_report_descriptor_hex);
                                     } else {
                                         Serial.printf("[USBHostUPS] Report Descriptor fetch failed. status=%d, len=%d\n", ctx.done, ctx.len);
                                     }
@@ -701,9 +716,22 @@ void USBHostUPS::control_transfer_cb(usb_transfer_t *transfer) {
                     }
                 }
             } else if (setup->bmRequestType == 0xA1 && setup->bRequest == 0x01) {
-                uint8_t report_id = setup->wValue & 0xFF;
-                if (self->_driver) {
-                    uint8_t rep_type = (setup->wValue >> 8) & 0xFF; self->_driver->decodeReport(self, report_id, rep_type, data, actual_length, self->_ups_data);
+                bool all_zeros = true;
+                bool has_report_ids = false;
+                for (const auto& u : self->_hid_parser.getUsages()) {
+                    if (u.report_id != 0) { has_report_ids = true; break; }
+                }
+                size_t start_idx = has_report_ids ? 1 : 0;
+                for (size_t i = start_idx; i < actual_length; i++) {
+                    if (data[i] != 0) { all_zeros = false; break; }
+                }
+                
+                if (!all_zeros) {
+                    uint8_t report_id = setup->wValue & 0xFF;
+                    if (self->_driver) {
+                        uint8_t rep_type = (setup->wValue >> 8) & 0xFF; 
+                        self->_driver->decodeReport(self, report_id, rep_type, data, actual_length, self->_ups_data);
+                    }
                 }
             }
         }
@@ -898,6 +926,11 @@ String USBHostUPS::dumpUSBDiagnostics() {
                     sprintf(hexb, "0x%02X", ctx->data[i]);
                     raw.add(hexb);
                 }
+            } else if (_cached_report_descriptor_hex.length() > 0) {
+                DynamicJsonDocument temp_doc(4096);
+                deserializeJson(temp_doc, _cached_report_descriptor_hex);
+                doc["report_descriptor_hex"] = temp_doc.as<JsonArray>();
+                doc["error"] = "Report Descriptor live fetch timeout, using cached descriptor";
             } else {
                 doc["error"] = "Report Descriptor empty or failed";
             }
@@ -930,8 +963,20 @@ void USBHostUPS::handle_int_in(usb_transfer_t *transfer) {
         for (const auto& u : _hid_parser.getUsages()) {
             if (u.report_id != 0) { has_report_ids = true; break; }
         }
-        uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
-        _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
+        
+        bool all_zeros = true;
+        size_t start_idx = has_report_ids ? 1 : 0;
+        for (size_t i = start_idx; i < transfer->actual_num_bytes; i++) {
+            if (transfer->data_buffer[i] != 0) {
+                all_zeros = false;
+                break;
+            }
+        }
+        
+        if (!all_zeros) {
+            uint8_t report_id = has_report_ids ? transfer->data_buffer[0] : 0;
+            _driver->decodeReport(this, report_id, 1, transfer->data_buffer, transfer->actual_num_bytes, _ups_data);
+        }
     }
     
     // Resubmit transfer if device is still active

@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-052
+title: Implementazione PowercomDriver per SPD-750U (e compatibili)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: REVIEW
+body: |-
+  #### US-052: Implementazione PowercomDriver per SPD-750L (e compatibili)
+
+  **Epic:** EP-001 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come utente con un UPS Powercom (es. SPD-750U),
+  Voglio che il firmware estragga correttamente la tensione della batteria e gli altri parametri bypassando le stranezze hardware dell'UPS,
+  Così da avere una corretta integrazione con Home Assistant coerente con il comportamento del driver NUT ufficiale.
+
+  **Demonstrates**
+  Dopo aver implementato questa spec, collegando un UPS Powercom (VID 0x0D9F), il sistema istanzierà il `PowercomDriver`. Il valore `battery.voltage` non segnerà `0.0V`, ma mostrerà il valore corretto estratto tramite la lettura esplicita del Feature Report `0xa4` (analogamente all'hack usato da NUT). I campi opzionali non supportati verranno omessi dal JSON anziché forzati a 0, rispettando la `NUT_COMPLIANCE_CHECKLIST.md`.
+
+  **Acceptance Criteria**
+  - [ ] Il driver `PowercomDriver.cpp` viene implementato e istanziato in `USBHostUPS.cpp` all'inserimento di un dispositivo con VID `0x0D9F`.
+  - [ ] La tensione della batteria viene prelevata tramite un Control Transfer verso il Feature Report `0xa4` e validata/estratta via parser testuale.
+  - [ ] I timer proprietari e le funzioni di test o allarme rispettano le procedure del subdriver `powercom-hid.c` di NUT.
+  - [ ] Unità di misura e visibilità dei campi JSON rispettano rigorosamente le regole descritte in `NUT_COMPLIANCE_CHECKLIST.md`.
+  - [ ] Il driver estrae dall'UPS tutti i dati gestiti da `UPSData` che sono effettivamente forniti dall'hardware dell'UPS.
+history:
+  - status: TODO
+    at: "2026-08-22T12:00:48Z"
+  - status: PLANNED
+    at: "2026-08-22T12:09:11Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T12:11:42Z"
+  - status: REVIEW
+    at: "2026-08-22T12:16:19Z"

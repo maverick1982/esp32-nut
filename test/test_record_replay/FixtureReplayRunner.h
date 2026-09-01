@@ -14,6 +14,7 @@
 #include "APCDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
+#include "PowercomDriver.h"
 #include "GenericDriver.h"
 
 class ReplayMockHost : public IUSBHostUPS {
@@ -133,6 +134,9 @@ public:
                 break;
             case 0x0764:
                 driver = new CyberPowerDriver();
+                break;
+            case 0x0D9F:
+                driver = new PowercomDriver();
                 break;
             default:
                 driver = new GenericDriver();

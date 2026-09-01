@@ -1,0 +1,87 @@
+schema: archetipo/plan/v2
+spec_code: US-052
+body: |-
+  ### Technical Solution
+
+  The `PowercomDriver` will be introduced to handle Powercom UPS devices (VID `0x0D9F`). It will implement the `IUPSDriver` interface to be compatible with `USBHostUPS`.
+
+  **Key Decisions:**
+  - **Feature Report 0xa4:** The driver's `loop()` will periodically perform a synchronous or asynchronous Control Transfer to request Feature Report `0xa4`. The response will be parsed as a string, extracting the floating-point value for `battery.voltage` using the exact string-skipping logic found in NUT's `powercom-hid.c`.
+  - **Mapping & Decoding:** Standard parameters (like input voltage, load, etc.) will be decoded in `decodeReport()` reusing mapping paths similar to `GenericDriver`, but customized for Powercom-specific delays and timer values (e.g. `PowercomDelayBeforeShutdown`). Scaling and value mapping for these parameters will strictly match NUT's implementation.
+  - **Compliance:** As per `NUT_COMPLIANCE_CHECKLIST.md`, any value not provided by the UPS will not be forced to 0, leaving it uninitialized so the Web UI will natively omit it. The beeper/alarm functions will respect the values defined in `powercom-hid.c` (e.g. 1=enabled, 2=disabled).
+
+  ### Test Strategy
+
+  - **Unit Tests:** Add tests to verify the robust parsing of the `0xa4` report string. We will mock different buffer responses (`" 13.7 2"`, malformed strings, and empty payloads) and assert the correct float conversion for `batteryVoltage`.
+  - **Integration:** No specific UI/e2e tests are required as this is purely a backend driver component. The integration can be tested with a real or mocked Powercom device triggering the instantiation in `USBHostUPS.cpp`.
+tasks:
+  - id: TASK-01
+    title: Create PowercomDriver skeleton and instantiate it
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      Creare la classe `PowercomDriver` implementando l'interfaccia `IUPSDriver`. Modificare `USBHostUPS.cpp` per riconoscere il vendor ID `0x0D9F` e instanziare il driver.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/PowercomDriver.h` — nuova classe derivata da `IUPSDriver`
+      - `lib/USBHostUPS/src/PowercomDriver.cpp` — implementazione vuota/di base
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — aggiunta dello switch case per `0x0D9F`
+
+      ## Criteri di Completamento
+      - [ ] Il driver compila correttamente.
+      - [ ] L'istanza di `PowercomDriver` viene creata quando viene connesso un dispositivo Powercom (VID `0x0D9F`).
+    ref: TASK-01
+  - id: TASK-02
+    title: Implement Feature Report 0xa4 fetching and parsing
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare in `PowercomDriver::loop()` la logica per eseguire un Control Transfer periodico per leggere il Feature Report `0xa4`. Aggiungere la funzione per estrarre la stringa e parsare la tensione della batteria ignorando i caratteri extra, come in `powercom-hid.c`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/PowercomDriver.cpp` — logica in `loop()` per il report 0xa4 e funzione di parsing stringa
+
+      ## Criteri di Completamento
+      - [ ] Viene eseguita la richiesta USB control al report 0xa4.
+      - [ ] La stringa viene estratta e validata.
+      - [ ] Il parametro `batteryVoltage` di `UPSData` viene valorizzato con il valore corretto (es. 13.7).
+    ref: TASK-02
+  - id: TASK-03
+    title: Implement standard HID decoding and Powercom specifics
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      Implementare il resto del polling (`requestReport`) e la `decodeReport()` per estrarre input/output voltage, load e le costanti proprietarie come beeper (enabled/disabled) e timer usando i valori definiti per i Powercom.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/PowercomDriver.cpp` — implementazione della mappatura per `decodeReport()`
+
+      ## Criteri di Completamento
+      - [ ] Vengono letti regolarmente i report di base.
+      - [ ] Voltaggi, potenze, e timer vengono scalati/estrapolati fedelmente a NUT.
+      - [ ] Le metriche opzionali rimangono disabilitate se non supportate.
+    ref: TASK-03
+  - id: TASK-04
+    title: Unit tests per il parser di tensione (Report 0xa4)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      Scrivere unit test per verificare che la funzione di estrazione del voltaggio da buffer 0xa4 funzioni correttamente e non provochi buffer overflow o eccezioni in caso di input inaspettato.
+
+      ## File Coinvolti
+      - `test/test_parser.cpp` (o nuovo file `test_powercom.cpp`) — aggiungere i test_cases per le stringhe mockate.
+
+      ## Criteri di Completamento
+      - [ ] Test con input valido (" 13.7 2") passante con valore 13.7.
+      - [ ] Test con input non formattato correttamente passa ritornando errore o ignorandolo, senza crash.
+    ref: TASK-04

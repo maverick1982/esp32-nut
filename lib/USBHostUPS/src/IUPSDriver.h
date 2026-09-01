@@ -44,6 +44,18 @@ public:
      * @param ups_data Reference to the UPS data structure to update
      */
     virtual void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+
+    /**
+     * @brief Encodes boolean beeper state into device-specific HID value
+     * 
+     * @param enable Desired beeper state
+     * @param bit_size Size of the HID usage field in bits
+     * @return Encoded value to write into HID report
+     */
+    virtual uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const {
+        if (bit_size == 1) return enable ? 1 : 0;
+        return enable ? 2 : 1; // Default standard HID PDC (1 = disabled, 2 = enabled)
+    }
 };
 
 #endif // I_UPS_DRIVER_H
