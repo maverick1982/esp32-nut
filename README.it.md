@@ -20,10 +20,36 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 
 Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (NUT) e supporta automaticamente diversi produttori:
 
-- **Eaton** (Testato con la serie Eaton 3S, Eaton 5P 1U)
-- **APC** (Testato con APC Back-UPS CS 500, APC BackUPS Pro 900)
-- **CyberPower** (Testato con CyberPower UT650EG)
+<details>
+<summary><b>Eaton</b> (Clicca per espandere i modelli testati)</summary>
+
+- Serie Eaton 3S
+- Eaton 5P 1U
+</details>
+
+<details>
+<summary><b>APC</b> (Clicca per espandere i modelli testati)</summary>
+
+- APC Back-UPS CS 500
+- APC BackUPS Pro 900
+- APC Back-UPS XS 700U
+- APC Smart-UPS 750
+</details>
+
+<details>
+<summary><b>CyberPower</b> (Clicca per espandere i modelli testati)</summary>
+
+- CyberPower UT650EG
+- CyberPower CP 1350C / CP1350AVRLCD
+- CyberPower CP1500AVRLCDa
+</details>
+
+<br>
+
 - **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, puoi usare il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`). Allega questo file quando apri una Issue su GitHub per richiedere il supporto dedicato o segnalare problemi sui driver esistenti.
+
+> [!NOTE]
+> **Requisito Protocollo USB HID:** Questo firmware supporta attualmente solo UPS conformi allo standard **USB HID Power Device Class** (`usbhid-ups`). I gruppi di continuità che comunicano tramite convertitori USB-Seriale o protocolli seriali proprietari (es. Megatec/Q1, serial over USB CDC) non sono attualmente supportati.
 
 ## 📸 Screenshot
 

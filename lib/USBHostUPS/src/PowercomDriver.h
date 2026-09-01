@@ -21,6 +21,9 @@ private:
     uint32_t _last_0xa4_poll;
     uint8_t _poll_step;
     uint8_t _slow_poll_counter;
+    uint8_t _mfr_retries;
+    uint8_t _prod_retries;
+    uint8_t _serial_retries;
 
     String fetchVoltageHack(IUSBHostUPS* host);
 };

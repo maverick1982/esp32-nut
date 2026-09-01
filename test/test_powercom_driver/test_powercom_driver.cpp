@@ -18,6 +18,8 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
     uint32_t getQuirks() const override { return 0; }
+    uint16_t _pid = 0x0004;
+    uint16_t getPID() const override { return _pid; }
     bool isControlPending() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
@@ -131,6 +133,44 @@ void test_powercom_beeper_mapping(void) {
     TEST_ASSERT_EQUAL_UINT8(0, driver.encodeBeeperValue(false, 1));
 }
 
+void test_powercom_loop_polling_nut_alignment(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+    host._pid = 0x0004;
+    driver.setup();
+
+    // Loop execution assigns vendor and product and sends 0x0A keep-alive report (step 1)
+    driver.loop(&host, ups_data, 100);
+    TEST_ASSERT_EQUAL_STRING("Powercom", ups_data.manufacturer.c_str());
+    TEST_ASSERT_EQUAL_STRING("SPD / Vanguard / BNT", ups_data.product.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x0A, host._requestedReports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(3, host._requestedReports[0].second); // Feature report
+    TEST_ASSERT_EQUAL_UINT32(0, host._requestedStrings.size());
+
+    // Step 2: input.voltage (0x1D)
+    driver.loop(&host, ups_data, 200);
+    TEST_ASSERT_EQUAL_UINT32(2, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x1D, host._requestedReports[1].first);
+
+    // Step 3: output.voltage (0x21)
+    driver.loop(&host, ups_data, 300);
+    TEST_ASSERT_EQUAL_UINT32(3, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x21, host._requestedReports[2].first);
+
+    // Step 4: ups.load (0x1F)
+    driver.loop(&host, ups_data, 400);
+    TEST_ASSERT_EQUAL_UINT32(4, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x1F, host._requestedReports[3].first);
+
+    // Test another PID mapping
+    host._pid = 0x00a3;
+    ups_data.product = "";
+    driver.loop(&host, ups_data, 500);
+    TEST_ASSERT_EQUAL_STRING("Smart King Pro", ups_data.product.c_str());
+}
+
 #include "HIDParser.h"
 #include <fstream>
 #include <sstream>
@@ -180,6 +220,7 @@ void test_powercom_real_descriptor_parsing(void) {
     TEST_ASSERT_TRUE_MESSAGE(found_remaining_capacity, "RemainingCapacity usage should be present");
     TEST_ASSERT_TRUE_MESSAGE(found_run_time_to_empty, "RunTimeToEmpty usage should be present");
     TEST_ASSERT_TRUE_MESSAGE(found_beeper, "AudibleAlarmControl usage should be present");
+    TEST_ASSERT_TRUE_MESSAGE(parser.hasFeatureBeeperControl(), "Powercom SPD-750U descriptor contains Feature report for beeper");
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -191,6 +232,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
+    RUN_TEST(test_powercom_loop_polling_nut_alignment);
     RUN_TEST(test_powercom_real_descriptor_parsing);
     return UNITY_END();
 }
@@ -202,6 +244,7 @@ void setup() {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
+    RUN_TEST(test_powercom_loop_polling_nut_alignment);
     RUN_TEST(test_powercom_real_descriptor_parsing);
     UNITY_END();
 }

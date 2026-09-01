@@ -3,12 +3,15 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+.agents/mcp_config.json
 data/config.json.pwd
-node_modules/
-test-results/
-playwright-report/
 docs/no-commit/
+docs/issues/
+firmware-to-test/
+node_modules/
 nut_repo/
+playwright-report/
+test-results/
 
 # OS generated files
 .DS_Store

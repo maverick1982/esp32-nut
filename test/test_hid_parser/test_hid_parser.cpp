@@ -197,6 +197,56 @@ void test_null_or_corrupted_buffer_tolerance(void) {
     TEST_ASSERT_EQUAL_FLOAT(0.0, HIDParser::extractUsage(&def, 0x01, dummy, 0));
 }
 
+void test_has_feature_beeper_control(void) {
+    // 1. Descriptor with AudibleAlarmControl in Feature Report (0xB1 = Feature)
+    const uint8_t desc_feature_beeper[] = {
+        0x05, 0x84, // Usage Page (UPS)
+        0x09, 0x04, // Usage (UPS)
+        0xA1, 0x01, // Collection (Application)
+        0x85, 0x13, // Report ID (19)
+        0x09, 0x5A, // Usage (AudibleAlarmControl)
+        0x75, 0x08, // Report Size (8)
+        0x95, 0x01, // Report Count (1)
+        0xB1, 0x02, // Feature (Data,Var,Abs)
+        0xC0        // End Collection
+    };
+    HIDParser parser1;
+    TEST_ASSERT_TRUE(parser1.parseReportDescriptor(desc_feature_beeper, sizeof(desc_feature_beeper)));
+    TEST_ASSERT_TRUE(parser1.hasFeatureBeeperControl());
+
+    // 2. Descriptor with AudibleAlarmControl in Input Report only (0x81 = Input)
+    const uint8_t desc_input_beeper[] = {
+        0x05, 0x84, // Usage Page (UPS)
+        0x09, 0x04, // Usage (UPS)
+        0xA1, 0x01, // Collection (Application)
+        0x85, 0x01, // Report ID (1)
+        0x09, 0x5A, // Usage (AudibleAlarmControl)
+        0x75, 0x08, // Report Size (8)
+        0x95, 0x01, // Report Count (1)
+        0x81, 0x02, // Input (Data,Var,Abs)
+        0xC0        // End Collection
+    };
+    HIDParser parser2;
+    TEST_ASSERT_TRUE(parser2.parseReportDescriptor(desc_input_beeper, sizeof(desc_input_beeper)));
+    TEST_ASSERT_FALSE(parser2.hasFeatureBeeperControl());
+
+    // 3. Descriptor without AudibleAlarmControl
+    const uint8_t desc_no_beeper[] = {
+        0x05, 0x84, // Usage Page (UPS)
+        0x09, 0x04, // Usage (UPS)
+        0xA1, 0x01, // Collection (Application)
+        0x85, 0x01, // Report ID (1)
+        0x09, 0xD0, // Usage (AC Present)
+        0x75, 0x01, // Report Size (1)
+        0x95, 0x01, // Report Count (1)
+        0x81, 0x02, // Input (Data,Var,Abs)
+        0xC0        // End Collection
+    };
+    HIDParser parser3;
+    TEST_ASSERT_TRUE(parser3.parseReportDescriptor(desc_no_beeper, sizeof(desc_no_beeper)));
+    TEST_ASSERT_FALSE(parser3.hasFeatureBeeperControl());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -208,6 +258,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_report_id_mismatch_and_no_report_id);
     RUN_TEST(test_extract_short_report_tolerance);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
+    RUN_TEST(test_has_feature_beeper_control);
     return UNITY_END();
 }
 #else
@@ -220,6 +271,7 @@ void setup() {
     RUN_TEST(test_report_id_mismatch_and_no_report_id);
     RUN_TEST(test_extract_short_report_tolerance);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
+    RUN_TEST(test_has_feature_beeper_control);
     UNITY_END();
 }
 void loop() {}

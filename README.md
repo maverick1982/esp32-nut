@@ -20,10 +20,36 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 
 The firmware uses the official Network UPS Tools (NUT) HID mappings and supports multiple vendors automatically:
 
-- **Eaton** (Tested with Eaton 3S series, Eaton 5P 1U)
-- **APC** (Tested with APC Back-UPS CS 500, APC BackUPS Pro 900)
-- **CyberPower** (Tested with CyberPower UT650EG)
+<details>
+<summary><b>Eaton</b> (Click to expand tested models)</summary>
+
+- Eaton 3S series
+- Eaton 5P 1U
+</details>
+
+<details>
+<summary><b>APC</b> (Click to expand tested models)</summary>
+
+- APC Back-UPS CS 500
+- APC BackUPS Pro 900
+- APC Back-UPS XS 700U
+- APC Smart-UPS 750
+</details>
+
+<details>
+<summary><b>CyberPower</b> (Click to expand tested models)</summary>
+
+- CyberPower UT650EG
+- CyberPower CP 1350C / CP1350AVRLCD
+- CyberPower CP1500AVRLCDa
+</details>
+
+<br>
+
 - **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, you can use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`). Please attach this file when opening an issue on GitHub to request dedicated support or report bugs on existing drivers.
+
+> [!NOTE]
+> **USB HID Protocol Requirement:** This firmware currently supports only UPS models using the standard **USB HID Power Device Class** (`usbhid-ups`). UPS units communicating via USB-to-Serial protocols (such as Megatec/Q1, USB CDC/serial bridges, or proprietary serial protocols) are not currently supported.
 
 ## 📸 Screenshots
 

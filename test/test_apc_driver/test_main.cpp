@@ -209,6 +209,42 @@ void test_apc_loop_polling_and_string_requests(void) {
     TEST_ASSERT_EQUAL_STRING("APC by ", ups_data.manufacturer.c_str());
 }
 
+void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
+    HIDUsageDef u_load;
+    u_load.report_id = 0x08;
+    u_load.report_type = 1;
+    u_load.bit_offset = 0;
+    u_load.bit_size = 8;
+    u_load.path = "UPS.PowerSummary.PercentLoad";
+    u_load.found = true;
+
+    HIDUsageDef u_cap;
+    u_cap.report_id = 0x14;
+    u_cap.report_type = 3;
+    u_cap.bit_offset = 0;
+    u_cap.bit_size = 16;
+    u_cap.path = "UPS.Flow.ConfigActivePower";
+    u_cap.found = true;
+
+    mockHost._usages.push_back(u_load);
+    mockHost._usages.push_back(u_cap);
+
+    // 1. Load arrives first (30%)
+    uint8_t r_load[] = { 0x08, 30 };
+    driver.decodeReport(&mockHost, 0x08, 1, r_load, sizeof(r_load), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.load);
+    TEST_ASSERT_FALSE(ups_data.has.realPower);
+
+    // 2. ConfigActivePower arrives after (700W = 0x02BC -> 0xBC, 0x02)
+    uint8_t r_cap[] = { 0x14, 0xBC, 0x02 };
+    driver.decodeReport(&mockHost, 0x14, 3, r_cap, sizeof(r_cap), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
+    TEST_ASSERT_EQUAL_UINT16(700, ups_data.configActivePower);
+    // 30% of 700W = 210W
+    TEST_ASSERT_TRUE(ups_data.has.realPower);
+    TEST_ASSERT_EQUAL_UINT16(210, ups_data.realPower);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -217,6 +253,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_battery_replace_date_packed_bcd);
     RUN_TEST(test_apc_load_and_real_power_calculation);
     RUN_TEST(test_apc_loop_polling_and_string_requests);
+    RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
     return UNITY_END();
 }
 #else
@@ -226,6 +263,7 @@ void setup() {
     RUN_TEST(test_apc_battery_replace_date_packed_bcd);
     RUN_TEST(test_apc_load_and_real_power_calculation);
     RUN_TEST(test_apc_loop_polling_and_string_requests);
+    RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
     UNITY_END();
 }
 void loop() {}
