@@ -20,7 +20,6 @@ void CyberPowerDriver::setup() {
     _last_step_time = 0;
     _slow_poll_counter = 14;
     _active_beeper = "";
-    Serial.println("[CyberPowerDriver] Setup started.");
 }
 
 void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {

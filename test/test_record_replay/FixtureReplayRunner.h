@@ -218,6 +218,11 @@ public:
                 TEST_ASSERT_TRUE_MESSAGE(ups_data.has.batteryMfrDate, scName.c_str());
                 TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.batteryMfrDate.c_str(), scName.c_str());
             }
+            if (exp["upsMfrDate"].is<std::string>()) {
+                std::string expDate = exp["upsMfrDate"].as<std::string>();
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.upsMfrDate, scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.upsMfrDate.c_str(), scName.c_str());
+            }
             if (exp["batteryDate"].is<std::string>()) {
                 std::string expDate = exp["batteryDate"].as<std::string>();
                 TEST_ASSERT_TRUE_MESSAGE(ups_data.has.batteryDate, scName.c_str());
