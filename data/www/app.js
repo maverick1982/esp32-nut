@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'battery.type': 'Battery chemistry',
         'ups.type': 'UPS type',
         'ups.beeper.status': 'UPS beeper status',
+        'ups.beeper.switchable': 'UPS beeper toggle capability',
         'outlet.1.switch': 'Outlet 1 switch status',
         'outlet.2.switch': 'Outlet 2 switch status'
     };
