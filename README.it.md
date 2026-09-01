@@ -10,7 +10,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 
 ## 🌟 Funzionalità
 
-- **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton, APC, CyberPower).
+- **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton, APC, CyberPower, Powercom).
 - **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti.
 - **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
@@ -44,6 +44,12 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - CyberPower CP1500AVRLCDa
 </details>
 
+<details>
+<summary><b>Powercom</b> (Clicca per espandere i modelli testati)</summary>
+
+- Powercom SPD-750U
+</details>
+
 <br>
 
 - **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, puoi usare il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`). Allega questo file quando apri una Issue su GitHub per richiedere il supporto dedicato o segnalare problemi sui driver esistenti.
@@ -53,13 +59,13 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 ## 📸 Screenshot
 
-| Configurazione Wi-Fi | Server NUT |
+| Telemetria UPS | Configurazione Wi-Fi |
 | :---: | :---: |
-| [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) | [![Server NUT](docs/images/ui-nut.png)](docs/images/ui-nut.png) |
+| [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
 
-| Telemetria UPS | Log di Sistema |
+| Server NUT | Log di Sistema |
 | :---: | :---: |
-| [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Log di Sistema](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+| [![Server NUT](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![Log di Sistema](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
 
 | Aggiornamento OTA | |
 | :---: | :---: |

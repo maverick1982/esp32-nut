@@ -10,7 +10,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 
 ## 🌟 Features
 
-- **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton, APC, CyberPower).
+- **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton, APC, CyberPower, Powercom).
 - **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients.
 - **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
@@ -44,6 +44,12 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - CyberPower CP1500AVRLCDa
 </details>
 
+<details>
+<summary><b>Powercom</b> (Click to expand tested models)</summary>
+
+- Powercom SPD-750U
+</details>
+
 <br>
 
 - **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, you can use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`). Please attach this file when opening an issue on GitHub to request dedicated support or report bugs on existing drivers.
@@ -53,13 +59,13 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 ## 📸 Screenshots
 
-| Wi-Fi Config | NUT Server |
+| UPS Telemetry | Wi-Fi Config |
 | :---: | :---: |
-| [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) | [![NUT Server](docs/images/ui-nut.png)](docs/images/ui-nut.png) |
+| [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
 
-| UPS Telemetry | System Logs |
+| NUT Server | System Logs |
 | :---: | :---: |
-| [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![System Logs](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+| [![NUT Server](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![System Logs](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
 
 | Firmware OTA | |
 | :---: | :---: |
