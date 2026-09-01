@@ -35,17 +35,17 @@
 #define HID_USAGE_BAT_FULLCHGCAPACITY        (HID_PAGE_BATTERY | 0x0067)
 
 struct HIDUsageDef {
-    uint32_t usage;
-    uint8_t report_id;
-    uint8_t report_type;
-    uint16_t bit_offset;
-    uint16_t bit_size;
-    bool found;
-    int32_t logical_min;
-    int32_t logical_max;
-    int8_t exponent;
-    uint32_t unit;
-    String path;
+    uint32_t usage = 0;
+    uint8_t report_id = 0;
+    uint8_t report_type = 0;
+    uint16_t bit_offset = 0;
+    uint16_t bit_size = 0;
+    bool found = false;
+    int32_t logical_min = 0;
+    int32_t logical_max = 0;
+    int8_t exponent = 0;
+    uint32_t unit = 0;
+    String path = "";
 };
 
 #endif // HID_USAGES_H
