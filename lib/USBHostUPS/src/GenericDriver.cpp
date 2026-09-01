@@ -19,7 +19,6 @@ void GenericDriver::setup() {
     _last_step_time = 0;
     _slow_poll_counter = 14;
     _active_beeper = "";
-    Serial.println("[GenericDriver] Setup started.");
 }
 
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
@@ -146,6 +145,39 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             d.has.load = true; d.load = (uint8_t)v;
             if (d.has.configActivePower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configActivePower * (uint32_t)v) / 100); }
             else if (d.has.configApparentPower) { d.has.realPower = true; d.realPower = (uint16_t)(((uint32_t)d.configApparentPower * 60 * (uint32_t)v) / 10000); }
+        }},
+        { "UPS.PowerSummary.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
+            d.has.upsMfrDate = true;
+            d.upsMfrDate = String(buf);
+        }},
+        { "UPS.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
+            d.has.upsMfrDate = true;
+            d.upsMfrDate = String(buf);
+        }},
+        { "UPS.Battery.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
+            if (v <= 0) return;
+            long date = (long)v;
+            long year = 1980 + (date >> 9);
+            long month = (date >> 5) & 0x0F;
+            long day = date & 0x1F;
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
+            d.has.batteryMfrDate = true;
+            d.batteryMfrDate = String(buf);
         }},
         { "UPS.BatterySystem.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;

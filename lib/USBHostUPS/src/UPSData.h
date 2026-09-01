@@ -41,7 +41,9 @@ struct UPSData {
     String manufacturer = "";
     String product = "";
     String serialNumber = "";
+    String upsMfrDate = "";
     String batteryMfrDate = "";
+    String batteryDate = "";
 
     uint8_t load = 0;
     uint16_t realPower = 0;
@@ -98,7 +100,9 @@ struct UPSData {
         bool serialNumber : 1;
         bool outputVoltageNominal : 1;
         bool outputFrequencyNominal : 1;
+        bool upsMfrDate : 1;
         bool batteryMfrDate : 1;
+        bool batteryDate : 1;
     } has = {0};
 
     static String computeUPSStatusString(const UPSData& d) {

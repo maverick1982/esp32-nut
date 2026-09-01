@@ -93,7 +93,7 @@ void test_apc_power_summary_status(void) {
 }
 
 void test_apc_battery_replace_date_packed_bcd(void) {
-    // APC packed BCD date format: 0x052324 -> 2024/05/23
+    // APC packed BCD date format: 0x011025 -> 2025/01/10 (UPS.Battery.APCBattReplaceDate -> battery.date)
     HIDUsageDef u_date;
     u_date.report_id = 0x07;
     u_date.report_type = 3;
@@ -101,16 +101,59 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     u_date.bit_size = 24;
     u_date.exponent = 0;
     u_date.unit = 0;
-    u_date.path = "UPS.PowerSummary.APCBattReplaceDate";
+    u_date.path = "UPS.Battery.APCBattReplaceDate";
     u_date.found = true;
 
     mockHost._usages.push_back(u_date);
 
-    // Date packed: 0x052324 (Little endian: 0x24, 0x23, 0x05)
-    uint8_t r_date[] = { 0x07, 0x24, 0x23, 0x05 };
-    driver.decodeReport(&mockHost, 0x07, 3, r_date, sizeof(r_date), ups_data);
+    // Standard USB HID PDC path UPS.PowerSummary.ManufacturerDate -> ups.mfr.date: 2006/09/15 (val 13615 = 0x352F)
+    HIDUsageDef u_ups_mfr_date;
+    u_ups_mfr_date.report_id = 0x09;
+    u_ups_mfr_date.report_type = 3;
+    u_ups_mfr_date.bit_offset = 0;
+    u_ups_mfr_date.bit_size = 16;
+    u_ups_mfr_date.exponent = 0;
+    u_ups_mfr_date.unit = 0;
+    u_ups_mfr_date.path = "UPS.PowerSummary.ManufacturerDate";
+    u_ups_mfr_date.found = true;
+
+    mockHost._usages.push_back(u_ups_mfr_date);
+
+    // Standard USB HID PDC path UPS.Battery.ManufacturerDate -> battery.mfr.date: 2026/08/07 (val 23815 = 0x5D07)
+    HIDUsageDef u_batt_mfr_date;
+    u_batt_mfr_date.report_id = 0x0B;
+    u_batt_mfr_date.report_type = 3;
+    u_batt_mfr_date.bit_offset = 0;
+    u_batt_mfr_date.bit_size = 16;
+    u_batt_mfr_date.exponent = 0;
+    u_batt_mfr_date.unit = 0;
+    u_batt_mfr_date.path = "UPS.Battery.ManufacturerDate";
+    u_batt_mfr_date.found = true;
+
+    mockHost._usages.push_back(u_batt_mfr_date);
+
+    // 1. Decode UPS.PowerSummary.ManufacturerDate (2006/09/15: 0x352F -> 0x2F, 0x35)
+    uint8_t r_ups_mfr_date[] = { 0x09, 0x2F, 0x35 };
+    driver.decodeReport(&mockHost, 0x09, 3, r_ups_mfr_date, sizeof(r_ups_mfr_date), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.upsMfrDate);
+    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.upsMfrDate.c_str());
+
+    // 2. Decode UPS.Battery.ManufacturerDate (2026/08/07: 0x5D07 -> 0x07, 0x5D)
+    uint8_t r_batt_mfr_date[] = { 0x0B, 0x07, 0x5D };
+    driver.decodeReport(&mockHost, 0x0B, 3, r_batt_mfr_date, sizeof(r_batt_mfr_date), ups_data);
     TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
-    TEST_ASSERT_EQUAL_STRING("2024/05/23", ups_data.batteryMfrDate.c_str());
+    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.batteryMfrDate.c_str());
+
+    // 3. Decode Battery.APCBattReplaceDate (2025/01/10: 0x011025 -> LE: 0x25, 0x10, 0x01)
+    uint8_t r_batt_date[] = { 0x07, 0x25, 0x10, 0x01 };
+    driver.decodeReport(&mockHost, 0x07, 3, r_batt_date, sizeof(r_batt_date), ups_data);
+    TEST_ASSERT_TRUE(ups_data.has.batteryDate);
+    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.batteryDate.c_str());
+
+    // Verify all 3 dates coexist without collision or overwriting
+    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.upsMfrDate.c_str());
+    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.batteryMfrDate.c_str());
+    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.batteryDate.c_str());
 }
 
 void test_apc_load_and_real_power_calculation(void) {
