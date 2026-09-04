@@ -1,5 +1,17 @@
 #include "NUTServer.h"
 
+// Shared by LIST UPS and GET UPSDESC so the two cannot drift.
+static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
+
+// Injected at build time from the release tag; "dev" for local builds, matching
+// src/network/web_config_server.cpp.
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
+
+// Protocol level the implemented command subset targets, as upsd reports it.
+static const char* NUT_PROTOCOL_VERSION = "1.3";
+
 NUTServer::NUTServer() : 
     _usb_ups(nullptr), 
     _port(NUT_DEFAULT_PORT), 
@@ -175,6 +187,16 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
     bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
 
+    if (cmd == "VER") {
+        client.printf("Network UPS Tools esp32-nut %s\n", FIRMWARE_VERSION);
+        return;
+    }
+
+    if (cmd == "NETVER") {
+        client.printf("%s\n", NUT_PROTOCOL_VERSION);
+        return;
+    }
+
     if (cmd == "USERNAME") {
         if (tokens.size() < 2) {
             client.print("ERR INVALID-ARGUMENT\n");
@@ -241,7 +263,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
         if (subcmd == "UPS") {
             client.print("BEGIN LIST UPS\n");
-            client.printf("UPS %s \"ESP32-S3 UPS Bridge\"\n", _config.ups_name.c_str());
+            client.printf("UPS %s \"%s\"\n", _config.ups_name.c_str(), NUT_UPS_DESCRIPTION);
             client.print("END LIST UPS\n");
             return;
         } 
@@ -303,7 +325,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             client.printf("END LIST VAR %s\n", upsName.c_str());
             return;
         }
-        else if (subcmd == "CMD" || subcmd == "RW") {
+        else if (subcmd == "CMD" || subcmd == "RW" || subcmd == "CLIENT") {
             String upsName;
             if (tokens.size() < 3) {
                 upsName = _config.ups_name;
@@ -506,6 +528,69 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data.outlet2Switch ? 1 : 0);
             } else {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
+            }
+            return;
+        }
+        else if (subcmd == "DESC" || subcmd == "CMDDESC" || subcmd == "TYPE") {
+            String upsName;
+            String varName;
+            if (tokens.size() < 3) {
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
+            } else if (tokens.size() == 3) {
+                upsName = _config.ups_name;
+                varName = tokens[2];
+            } else {
+                upsName = tokens[2];
+                varName = tokens[3];
+            }
+
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
+                client.print("ERR UNKNOWN-UPS\n");
+                return;
+            }
+
+            if (subcmd == "TYPE") {
+                // Every variable the bridge exposes is read-only (LIST RW is
+                // empty) and goes out as a quoted string. Never answer a bare
+                // "RW": clients read the token after it as the type.
+                client.printf("TYPE %s %s STRING:64\n", upsName.c_str(), varName.c_str());
+            } else {
+                // DESC and CMDDESC share a shape. upsd answers "Unavailable"
+                // when no description database is installed; this bridge
+                // carries none for either variables or commands.
+                client.printf("%s %s %s \"Unavailable\"\n", subcmd.c_str(),
+                              upsName.c_str(), varName.c_str());
+            }
+            return;
+        }
+        else if (subcmd == "UPSDESC" || subcmd == "NUMLOGINS") {
+            String upsName;
+            if (tokens.size() < 3) {
+                upsName = _config.ups_name;
+            } else {
+                upsName = tokens[2];
+            }
+
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
+                client.print("ERR UNKNOWN-UPS\n");
+                return;
+            }
+
+            if (subcmd == "UPSDESC") {
+                client.printf("UPSDESC %s \"%s\"\n", upsName.c_str(), NUT_UPS_DESCRIPTION);
+            } else {
+                // This bridge exposes telemetry only; it tracks no upsmon LOGIN
+                // sessions, so the count of logged-in clients is always zero.
+                client.printf("NUMLOGINS %s 0\n", upsName.c_str());
             }
             return;
         }
