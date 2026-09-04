@@ -122,6 +122,20 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 - **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).
 - **Client NUT**: Configura Home Assistant o il tuo NAS per connettersi all'IP dell'ESP32 sulla porta `3493` utilizzando le credenziali definite in precedenza.
 
+## 🛠 Supporta il Progetto
+
+Questo progetto è completamente open-source e gratuito. 
+Se ti è stato utile per integrare il tuo UPS nella domotica o nel tuo server rack, prendi in considerazione l'idea di supportarne lo sviluppo!
+
+Le donazioni verranno utilizzate per l'acquisto di nuovi modelli di UPS da testare, schede di sviluppo ESP32 e altri strumenti hardware necessari per migliorare il codice e garantire la compatibilità con un numero sempre maggiore di dispositivi.
+
+Puoi supportare il progetto tramite:
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/maverick1982)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/pasqualecuorpo)
+
+Grazie di cuore a chiunque decida di contribuire! 🚀
+
 ## 📄 Licenza
 
 Questo progetto è rilasciato sotto licenza MIT. Consulta il file [LICENSE](LICENSE) per maggiori dettagli.

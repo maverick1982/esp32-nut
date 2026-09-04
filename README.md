@@ -122,6 +122,20 @@ You can install the firmware directly from your browser without downloading any 
 - **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
 - **NUT Client**: Configure your Home Assistant or NAS to connect to the ESP32's IP on port `3493` using the credentials you defined.
 
+## 🛠 Support the Project
+
+This project is entirely open-source and free to use. 
+If it helped you integrate your UPS into your smart home or server rack, please consider supporting its ongoing development! 
+
+Donations will be explicitly used to purchase new UPS models for testing, ESP32 development boards, and other hardware tools necessary to improve the code and expand compatibility with a wider range of devices.
+
+You can support the project via:
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/maverick1982)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/pasqualecuorpo)
+
+Thank you to everyone who supports this project! 🚀
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
