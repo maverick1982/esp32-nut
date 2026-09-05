@@ -113,7 +113,7 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         if (loadPct < 0.0) loadPct = 0.0;
         
         ups_data.has.load = true;
-        ups_data.load = (uint8_t)loadPct;
+        ups_data.load = (uint8_t)round(loadPct);
         
         ups_data.updateRealPower();
     }
