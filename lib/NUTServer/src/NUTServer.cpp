@@ -296,8 +296,11 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 if (data->has.fullChargeCapacity) client.printf("VAR %s battery.capacity.full \"%d\"\n", upsName.c_str(), data->fullChargeCapacity);
                 if (data->has.runTimeToEmpty) client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data->runTimeToEmpty);
                 if (data->has.outputVoltage) client.printf("VAR %s output.voltage \"%.1f\"\n", upsName.c_str(), data->outputVoltage);
+                if (data->has.outputCurrent) client.printf("VAR %s output.current \"%.3f\"\n", upsName.c_str(), data->outputCurrent);
                 if (data->has.inputVoltage) client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data->inputVoltage);
+                if (data->has.inputCurrent) client.printf("VAR %s input.current \"%.3f\"\n", upsName.c_str(), data->inputCurrent);
                 if (data->has.batteryVoltage) client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data->batteryVoltage);
+                if (data->has.batteryCurrent) client.printf("VAR %s battery.current \"%.3f\"\n", upsName.c_str(), data->batteryCurrent);
                 if (data->has.batteryTemperature) client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data->batteryTemperature);
                 if (data->has.highVoltageTransfer) client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data->highVoltageTransfer);
                 if (data->has.lowVoltageTransfer) client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data->lowVoltageTransfer);
@@ -476,10 +479,16 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data->runTimeToEmpty);
             } else if (varNameLower == "output.voltage" && data->has.outputVoltage) {
                 client.printf("VAR %s output.voltage \"%.1f\"\n", upsName.c_str(), data->outputVoltage);
+            } else if (varNameLower == "output.current" && data->has.outputCurrent) {
+                client.printf("VAR %s output.current \"%.3f\"\n", upsName.c_str(), data->outputCurrent);
             } else if (varNameLower == "input.voltage" && data->has.inputVoltage) {
                 client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data->inputVoltage);
+            } else if (varNameLower == "input.current" && data->has.inputCurrent) {
+                client.printf("VAR %s input.current \"%.3f\"\n", upsName.c_str(), data->inputCurrent);
             } else if (varNameLower == "battery.voltage" && data->has.batteryVoltage) {
                 client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data->batteryVoltage);
+            } else if (varNameLower == "battery.current" && data->has.batteryCurrent) {
+                client.printf("VAR %s battery.current \"%.3f\"\n", upsName.c_str(), data->batteryCurrent);
             } else if (varNameLower == "battery.temperature" && data->has.batteryTemperature) {
                 client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data->batteryTemperature);
             } else if (varNameLower == "input.transfer.high" && data->has.highVoltageTransfer) {

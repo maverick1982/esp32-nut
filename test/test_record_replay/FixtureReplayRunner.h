@@ -17,6 +17,7 @@
 #include "EatonDriver.h"
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
+#include "OpenUPSDriver.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -146,6 +147,9 @@ public:
                 break;
             case 0x0D9F:
                 driver = new PowercomDriver();
+                break;
+            case 0x04D8:
+                driver = new OpenUPSDriver();
                 break;
             default:
                 driver = new GenericDriver();

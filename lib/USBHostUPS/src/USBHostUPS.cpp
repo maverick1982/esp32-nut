@@ -5,6 +5,7 @@
 #include "PowercomDriver.h"
 #include "EatonDriver.h"
 #include "CyberPowerDriver.h"
+#include "OpenUPSDriver.h"
 #include <ArduinoJson.h>
 
 #ifndef FIRMWARE_VERSION
@@ -131,6 +132,8 @@ void USBHostUPS::handle_driver_event(hid_host_device_handle_t hid_device_handle,
             _driver = new EatonDriver();
         } else if (_vid == 0x0d9f) {
             _driver = new PowercomDriver();
+        } else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) {
+            _driver = new OpenUPSDriver();
         } else {
             _driver = new GenericDriver();
         }

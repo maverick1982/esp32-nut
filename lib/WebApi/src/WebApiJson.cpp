@@ -29,8 +29,11 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     if (data->has.runTimeToEmpty) doc["battery.runtime"] = data->runTimeToEmpty;
     
     if (data->has.outputVoltage) doc["output.voltage"] = data->outputVoltage;
+    if (data->has.outputCurrent) doc["output.current"] = data->outputCurrent;
     if (data->has.inputVoltage) doc["input.voltage"] = data->inputVoltage;
+    if (data->has.inputCurrent) doc["input.current"] = data->inputCurrent;
     if (data->has.batteryVoltage) doc["battery.voltage"] = data->batteryVoltage;
+    if (data->has.batteryCurrent) doc["battery.current"] = data->batteryCurrent;
     
     if (data->has.highVoltageTransfer) doc["input.transfer.high"] = data->highVoltageTransfer;
     if (data->has.lowVoltageTransfer) doc["input.transfer.low"] = data->lowVoltageTransfer;

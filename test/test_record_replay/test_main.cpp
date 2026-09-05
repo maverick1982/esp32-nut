@@ -40,6 +40,10 @@ void test_replay_cyberpower_cp1350c(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json");
 }
 
+void test_replay_openups_wallecube_w150(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json");
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -53,6 +57,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
+    RUN_TEST(test_replay_openups_wallecube_w150);
     return UNITY_END();
 }
 #else
@@ -67,6 +72,7 @@ void setup() {
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
+    RUN_TEST(test_replay_openups_wallecube_w150);
     UNITY_END();
 }
 void loop() {}
