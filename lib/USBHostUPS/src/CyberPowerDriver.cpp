@@ -113,6 +113,14 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
             // Override the generic mapping by clearing the input one and setting battery.
             d.set("input.voltage.nominal", ""); 
             d.set("battery.voltage.nominal", String((int)v));
+        } },
+        { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
+        { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
+        { "UPS.Output.CPSInputSensitivity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            int val = (int)v;
+            if (val == 1) d.set("input.sensitivity", "low");
+            else if (val == 2) d.set("input.sensitivity", "medium");
+            else if (val == 3) d.set("input.sensitivity", "high");
         } }
     };
 

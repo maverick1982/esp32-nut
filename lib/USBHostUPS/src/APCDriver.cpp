@@ -51,6 +51,17 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
                 ((date >> 16) & 0x0F) + ((date >> 20) & 0x0F) * 10,
                 ((date >> 8) & 0x0F) + ((date >> 12) & 0x0F) * 10);
             d.set("battery.date", String(buf));
+        }},
+        { "UPS.APCGeneralCollection.APCDelayBeforeStartup", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.start", String((int)v)); d.set("ups.timer.start", String((int)v)); } },
+        { "UPS.APCGeneralCollection.APCDelayBeforeShutdown", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.shutdown", String((int)v)); d.set("ups.timer.shutdown", String((int)v)); } },
+        { "UPS.APCGeneralCollection.APCDelayBeforeReboot", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.reboot", String((int)v)); } },
+        { "UPS.APCEnvironment.APCProbe1.Temperature", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.temperature", String((v > 200.0) ? (v - 273.15) : v, 1)); } },
+        { "UPS.APCEnvironment.APCProbe1.Humidity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ambient.humidity", String(v, 1)); } },
+        { "UPS.Input.APCSensitivity", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            int val = (int)v;
+            if (val == 1) d.set("input.sensitivity", "low");
+            else if (val == 2) d.set("input.sensitivity", "medium");
+            else if (val == 3) d.set("input.sensitivity", "high");
         }}
     };
 
