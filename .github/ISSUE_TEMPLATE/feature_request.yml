@@ -1,0 +1,57 @@
+﻿name: "💡 Feature / Improvement Request"
+description: Propose a new feature, Web UI improvement, or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make esp32-nut better? Let us know!
+        *(Note: If you want to request support for a new UPS model, please use the dedicated **New UPS Support Request** form instead).*
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Area of Improvement
+      description: Which part of the project does this request affect?
+      options:
+        - Web UI / Dashboard
+        - NUT Protocol & Server
+        - WiFi / Networking / Security
+        - Core / System
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Summary of Feature / Improvement
+      description: Clear and concise description of what you want to add or improve.
+      placeholder: "Describe the feature or change you'd like to see..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Motivation & Use Case
+      description: Why would this be useful? What problem does it solve?
+      placeholder: "This would help users because..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested_solution
+    attributes:
+      label: Suggested Solution / Technical Notes
+      description: Any technical implementation ideas, APIs, or architectural suggestions (if any).
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Mockups / Screenshots
+      description: Attach UI mockups, screenshots, or diagram references here.
+    validations:
+      required: false

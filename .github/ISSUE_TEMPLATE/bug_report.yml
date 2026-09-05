@@ -1,0 +1,92 @@
+﻿name: "🐛 Bug Report"
+description: Report a bug, crash, or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide the details below so we can investigate and reproduce the problem.
+
+  - type: input
+    id: firmware_version
+    attributes:
+      label: Firmware Version
+      description: What firmware version or commit hash are you using?
+      placeholder: "e.g., v1.0.0 or 5a1a479"
+    validations:
+      required: true
+
+  - type: input
+    id: ups_model
+    attributes:
+      label: UPS Brand & Model
+      description: What UPS brand and model is connected?
+      placeholder: "e.g., APC Back-UPS 700, Eaton Ellipse ECO 650"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem_description
+    attributes:
+      label: Problem Description
+      description: A clear and concise description of what the bug is.
+      placeholder: "Describe what went wrong..."
+    validations:
+      required: true
+
+  - type: input
+    id: esp32_board
+    attributes:
+      label: ESP32 Board Model
+      description: Which ESP32 board / devkit are you using?
+      placeholder: "e.g., LILYGO T-S2, ESP32-S3 DevKitC-1, custom board"
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Boot the ESP32
+        2. Plug in the UPS
+        3. Open Web UI / NUT Client
+        4. See error...
+    validations:
+      required: false
+
+  - type: textarea
+    id: usb_diagnostics
+    attributes:
+      label: USB Diagnostics File
+      description: |
+        If the issue is related to USB recognition or telemetry, go to the **System Logs** tab in the Web UI, click **"Export USB Diagnostics"**, and upload the downloaded .json file here.
+      placeholder: "Drag and drop the exported JSON file here..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: serial_logs
+    attributes:
+      label: Serial Logs
+      description: If the device crashes (Guru Meditation Error) or restarts unexpectedly, paste the Serial Monitor output here.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: usb_connection
+    attributes:
+      label: USB Connection Type
+      options:
+        - label: The UPS is connected via an external USB Hub (not directly plugged into the ESP32)
+          required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots / Additional Context
+      description: Add any other context, photos, or screenshots (e.g. Web UI issues) here.
+    validations:
+      required: false

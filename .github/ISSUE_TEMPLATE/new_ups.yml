@@ -1,0 +1,55 @@
+﻿name: "🔌 New UPS Support Request"
+description: Request support for a new or unhandled UPS model
+labels: ["enhancement", "new-ups"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping expand support for more UPS models!
+        To implement or adjust drivers for your device, the USB HID report descriptor is strictly required.
+
+  - type: input
+    id: ups_brand_model
+    attributes:
+      label: UPS Brand & Model
+      description: What is the exact brand and model of your UPS?
+      placeholder: "e.g., Powercom SPD-750U, CyberPower CP1500PFCLCD"
+    validations:
+      required: true
+
+  - type: textarea
+    id: usb_diagnostics
+    attributes:
+      label: USB Diagnostics File (Required)
+      description: |
+        Please connect the UPS to the ESP32, open the Web UI, go to the **System Logs** tab, and click the **"Export USB Diagnostics"** button to download the .json diagnostic file.
+        **Upload the downloaded .json file here** by dragging and dropping it into this box (or using the file attachment link below).
+      placeholder: "Drag and drop the exported JSON file here..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current Behavior
+      description: What happens when you currently plug this UPS into the ESP32?
+      placeholder: "e.g., Detected as GenericDriver but shows 0% load and no battery status, or not recognized at all."
+    validations:
+      required: true
+
+  - type: input
+    id: product_url
+    attributes:
+      label: Product / Datasheet Link
+      description: Link to the manufacturer's product page or manual (if available).
+      placeholder: "https://..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_info
+    attributes:
+      label: Additional Information / NUT Driver
+      description: Any extra details, e.g. which official Linux NUT driver is usually used for this UPS (usbhid-ups, bcmxcp_usb, etc.).
+    validations:
+      required: false
