@@ -7,6 +7,10 @@
 #include "CyberPowerDriver.h"
 #include <ArduinoJson.h>
 
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
+
 USBHostUPS::USBHostUPS() :
     _hid_dev_handle(NULL), _dev_handle(NULL),
     _vid(0), _pid(0),
@@ -338,6 +342,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
     
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
+        doc["firmware_version"] = FIRMWARE_VERSION;
         doc["vid"] = String(_vid, HEX);
         doc["pid"] = String(_pid, HEX);
         doc["manufacturer"] = _ups_data.manufacturer;
