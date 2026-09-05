@@ -34,6 +34,9 @@ struct UPSData {
     float inputVoltage = 0.0f;
     float batteryVoltage = 0.0f;
     float batteryTemperature = 0.0f;
+    float inputCurrent = 0.0f;
+    float outputCurrent = 0.0f;
+    float batteryCurrent = 0.0f;
 
     uint16_t highVoltageTransfer = 0;
     uint16_t lowVoltageTransfer = 0;
@@ -84,6 +87,9 @@ struct UPSData {
         bool inputVoltage : 1;
         bool batteryVoltage : 1;
         bool batteryTemperature : 1;
+        bool inputCurrent : 1;
+        bool outputCurrent : 1;
+        bool batteryCurrent : 1;
         bool highVoltageTransfer : 1;
         bool lowVoltageTransfer : 1;
         bool load : 1;

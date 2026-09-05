@@ -65,6 +65,7 @@ private:
     void handle_driver_event(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event);
     void handle_interface_event(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event);
     
+    std::vector<hid_host_device_handle_t> _pending_interfaces;
     hid_host_device_handle_t _hid_dev_handle;
     usb_device_handle_t _dev_handle;
     

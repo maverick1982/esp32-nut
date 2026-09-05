@@ -5,6 +5,7 @@
 #include "PowercomDriver.h"
 #include "EatonDriver.h"
 #include "CyberPowerDriver.h"
+#include "OpenUPSDriver.h"
 #include <ArduinoJson.h>
 
 #ifndef FIRMWARE_VERSION
@@ -109,51 +110,8 @@ void USBHostUPS::handle_driver_event(hid_host_device_handle_t hid_device_handle,
             return;
         }
 
-        hid_host_dev_info_t dev_info;
-        if (hid_host_get_device_info(hid_device_handle, &dev_info) != ESP_OK) {
-            if (_log_cb) _log_cb("ERROR", "hid_host_get_device_info failed");
-            hid_host_device_close(hid_device_handle);
-            return;
-        }
-
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        _vid = dev_info.VID;
-        _pid = dev_info.PID;
-        _hid_dev_handle = hid_device_handle;
-
-        if (_driver) { delete _driver; _driver = nullptr; }
-
-        if (_vid == 0x051D) {
-            _driver = new APCDriver();
-        } else if (_vid == 0x0764) {
-            _driver = new CyberPowerDriver();
-        } else if (_vid == 0x0463) {
-            _driver = new EatonDriver();
-        } else if (_vid == 0x0d9f) {
-            _driver = new PowercomDriver();
-        } else {
-            _driver = new GenericDriver();
-        }
-
-        _quirks = 0;
-        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
-            if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
-                _quirks |= UPS_QUIRKS[q].flags;
-            }
-        }
-        _driver->setup();
-
-        populateStringsFromDeviceInfo(dev_info, _ups_data);
-        
-        char dbg_str[256];
-        snprintf(dbg_str, sizeof(dbg_str), "STRINGS: Mfr='%s', Prod='%s', Serial='%s'", 
-                 _ups_data.manufacturer.c_str(), 
-                 _ups_data.product.c_str(), 
-                 _ups_data.serialNumber.c_str());
-        if (_log_cb) _log_cb("INFO", dbg_str);
-
-        // Defer descriptor fetching to loop() to avoid deadlock in client event task!
-        // _hid_dev_handle is set, _is_ready_to_poll remains false.
+        _pending_interfaces.push_back(hid_device_handle);
     }
 }
 
@@ -191,28 +149,77 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
 }
 
 void USBHostUPS::loop() {
-    if (!_is_ready_to_poll && _hid_dev_handle != NULL) {
-        // Fetch descriptor here, in the main task, so we don't deadlock the USB host client task!
+    if (!_pending_interfaces.empty()) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_pending_interfaces.empty()) return;
+        
+        hid_host_device_handle_t handle = _pending_interfaces.front();
+        _pending_interfaces.erase(_pending_interfaces.begin());
+
         size_t desc_len = 0;
-        uint8_t *desc = hid_host_get_report_descriptor(_hid_dev_handle, &desc_len);
+        uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
+        
+        bool is_ups = false;
+        HIDParser temp_parser;
         if (desc) {
+            temp_parser.parseReportDescriptor(desc, desc_len);
+            for (const auto& u : temp_parser.getUsages()) {
+                if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
+                    is_ups = true;
+                    break;
+                }
+            }
+        }
+
+        if (is_ups) {
+            if (_hid_dev_handle != NULL) {
+                // If we already have a bound UPS interface, keep it or replace it?
+                // For now, close the new one if we already have one, OR replace?
+                // Let's replace just in case.
+                hid_host_device_close(_hid_dev_handle);
+            }
+            
+            _hid_dev_handle = handle;
+            _hid_parser = temp_parser;
+            
             _cached_report_descriptor_hex = "";
             for (size_t i = 0; i < desc_len; i++) {
                 char hex[4];
                 snprintf(hex, sizeof(hex), "%02X", desc[i]);
                 _cached_report_descriptor_hex += hex;
             }
-            _hid_parser.parseReportDescriptor(desc, desc_len);
-            
-            char desc_log[128];
-            snprintf(desc_log, sizeof(desc_log), "Parsed %d usages", _hid_parser.getUsages().size());
-            if (_log_cb) _log_cb("INFO", desc_log);
+
+            hid_host_dev_info_t dev_info;
+            if (hid_host_get_device_info(handle, &dev_info) == ESP_OK) {
+                _vid = dev_info.VID;
+                _pid = dev_info.PID;
+
+                if (_driver) { delete _driver; _driver = nullptr; }
+                if (_vid == 0x051D) { _driver = new APCDriver(); }
+                else if (_vid == 0x0764) { _driver = new CyberPowerDriver(); }
+                else if (_vid == 0x0463) { _driver = new EatonDriver(); }
+                else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
+                else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
+                else { _driver = new GenericDriver(); }
+
+                _quirks = 0;
+                for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+                    if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
+                        _quirks |= UPS_QUIRKS[q].flags;
+                    }
+                }
+                _driver->setup();
+                populateStringsFromDeviceInfo(dev_info, _ups_data);
+            }
             
             hid_host_device_start(_hid_dev_handle);
             _is_ready_to_poll = true;
+            
+            if (_log_cb) _log_cb("INFO", "UPS interface claimed and ready.");
         } else {
-            if (_log_cb) _log_cb("WARN", "Failed to fetch Report Descriptor (timeout?), retrying...");
-            vTaskDelay(pdMS_TO_TICKS(500));
+            // Not a UPS! Close it!
+            if (_log_cb) _log_cb("INFO", "Ignoring non-UPS interface.");
+            hid_host_device_close(handle);
         }
         return;
     }
