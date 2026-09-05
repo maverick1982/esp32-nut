@@ -44,7 +44,7 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         data.set("ups.type", "Powercom");
     }
     if (!data.hasKey("ups.mfr")) {
-        data.set("ups.mfr", "Powercom");
+        data.set("ups.mfr", "POWERCOM Co.,LTD");
     }
 
     if (!data.hasKey("ups.model")) {
@@ -193,10 +193,15 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         if (u.report_id != report_id || u.report_type != report_type) continue;
         double val = HIDParser::extractUsage(&u, report_id, data, length);
         
+        // Powercom proprietary fallback for battery temperature (Usage Page 0x0002, ID 0x0036)
+        if (u.path.endsWith("0x00020036")) {
+            ups_data.set("battery.temperature", String(val, 1));
+        }
+
         for (const auto& m : mappings) {
-            if (strcmp(u.path.c_str(), m.path) == 0) {
+            if (u.path == String(m.path)) {
                 m.apply(this, ups_data, val, &u);
-                break; // handled by string mappings
+                break;
             }
         }
         
