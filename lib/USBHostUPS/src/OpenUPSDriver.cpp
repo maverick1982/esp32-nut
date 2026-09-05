@@ -92,4 +92,29 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     }
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
+
+    if (ups_data.has.outputVoltage && ups_data.has.outputCurrent) {
+        double power = ups_data.outputVoltage * ups_data.outputCurrent;
+        
+        int nominalPower = 0;
+        if (ups_data.has.product) {
+            int wIndex = ups_data.product.indexOf('W');
+            if (wIndex >= 0) {
+                nominalPower = ups_data.product.substring(wIndex + 1).toInt();
+            }
+        }
+        if (nominalPower <= 0) nominalPower = 150;
+        
+        ups_data.has.configActivePower = true;
+        ups_data.configActivePower = nominalPower;
+        
+        double loadPct = (power / nominalPower) * 100.0;
+        if (loadPct > 100.0) loadPct = 100.0;
+        if (loadPct < 0.0) loadPct = 0.0;
+        
+        ups_data.has.load = true;
+        ups_data.load = (uint8_t)loadPct;
+        
+        ups_data.updateRealPower();
+    }
 }
