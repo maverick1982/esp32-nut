@@ -4,6 +4,15 @@
 #include "HIDUsages.h"
 #include "Quirks.h"
 
+/**
+ * @brief Generic HID UPS Driver Implementation
+ * 
+ * ADR 0003 COMPLIANCE:
+ * This driver faithfully mirrors the official NUT behavior for generic USB PDC devices.
+ * - Reference: nut_repo/drivers/usbhid-ups.c and nut_repo/drivers/libhid.c
+ * - HID Usages: Strict adherence to NUT's usbhid-ups mappings for UPS.PowerSummary, UPS.BatterySystem, etc.
+ */
+
 GenericDriver::GenericDriver() : 
     _last_poll(0),
     _last_fast_poll(0),
@@ -24,9 +33,9 @@ void GenericDriver::setup() {
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.upsType != "Generic") {
+    if (data.upsType != getDriverName()) {
         data.has.upsType = true;
-        data.upsType = "Generic";
+        data.upsType = getDriverName();
     }
 
     if (_poll_step == 0) {

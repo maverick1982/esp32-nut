@@ -16,7 +16,7 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
-private:
+protected:
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
     uint32_t _last_step_time;

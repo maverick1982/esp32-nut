@@ -3,27 +3,30 @@
 #include "HIDParser.h"
 #include "HIDUsages.h"
 
-EatonDriver::EatonDriver() :
-    _last_poll(0),
-    _chemStrIdx(0),
-    _poll_step(0),
-    _last_step_time(0),
-    _last_fast_poll(0),
-    _slow_poll_counter(0) {
-}
+/**
+ * @brief Eaton (MGE) Driver Implementation
+ * 
+ * ADR 0003 COMPLIANCE:
+ * This sub-driver faithfully mirrors the official NUT behavior for Eaton/MGE HID devices.
+ * - Reference: nut_repo/drivers/mge-hid.c
+ * - Quirk 254/255: Mirrored from nut_repo/drivers/libhid.c (skip reports 254/255 to prevent freeze).
+ * - iDeviceChemistry: Specific mapping for batteryType.
+ */
+
+EatonDriver::EatonDriver() : _chemStrIdx(0) {}
 
 void EatonDriver::setup() {
-    _last_poll = 0;
+    GenericDriver::setup();
     _chemStrIdx = 0;
-    _poll_step = 0;
-    _last_step_time = 0;
-    _last_fast_poll = 0;
-    _slow_poll_counter = 14;
-    _active_beeper = "";
 }
 
 void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
+
+    if (data.upsType != getDriverName()) {
+        data.has.upsType = true;
+        data.upsType = getDriverName();
+    }
 
     if (_poll_step == 0) {
         if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
@@ -50,6 +53,8 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
                 if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+            } else if (_poll_step == 4) {
+                if (_slow_poll_counter == 0 && _chemStrIdx > 0 && data.batteryType == "") host->requestStringDescriptor(_chemStrIdx);
             } else {
                 const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
@@ -78,7 +83,7 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     ++it;
                 }
                 
-                int index = _poll_step - 4;
+                int index = _poll_step - 5;
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
@@ -96,75 +101,19 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
+    GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
+
     struct Mapping {
         const char* path;
         void (*apply)(EatonDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.ACPresent", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.acPresent = true; d.acPresent = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.Discharging", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.discharging = true; d.discharging = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.Charging", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.charging = true; d.charging = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.belowRemainingCapacityLimit = true; d.belowRemainingCapacityLimit = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.needReplacement = true; d.needReplacement = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.Overload", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.overload = true; d.overload = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.shutdownImminent = true; d.shutdownImminent = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.communicationLost = true; d.communicationLost = v != 0; } } },
         { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.good = true; d.good = v != 0; } } },
         { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.internalFailure = true; d.internalFailure = v != 0; } } },
-        
         { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outlet1Switch = true; d.outlet1Switch = v != 0; } { d.has.outlet2Switch = true; d.outlet2Switch = v != 0; } } },
-        
-        { "UPS.PowerSummary.PercentLoad", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.has.load = true; d.load = (uint8_t)v;
-            d.updateRealPower();
-        }},
-        { "UPS.Battery.Temperature", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            { d.has.batteryTemperature = true; d.batteryTemperature = (v > 200.0) ? (v - 273.15) : v; }
-        }},
-        { "UPS.PowerConverter.Input.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.inputVoltage = true; d.inputVoltage = v; } } },
-        { "UPS.PowerConverter.Output.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outputVoltage = true; d.outputVoltage = v; } } },
-        
-        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) { d.has.batteryVoltage = true; { d.has.batteryVoltage = true; d.batteryVoltage = v; } } } },
-
-        { "UPS.BatterySystem.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.batteryVoltage = true; d.batteryVoltage = v; } } },
-        { "UPS.PowerSummary.RemainingCapacity", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.remainingCapacity = true; d.remainingCapacity = v > 100 ? 100 : (uint8_t)v; } } },
-        { "UPS.PowerSummary.RemainingCapacityLimit", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.remainingCapacityLimit = true; d.remainingCapacityLimit = (uint8_t)v; } } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } } },
-        
-        { "UPS.BatterySystem.Battery.DesignCapacity", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.designCapacity = true; d.designCapacity = (uint8_t)(v / 3600.0); } } },
-        
-        { "UPS.Flow.ConfigApparentPower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configApparentPower = true; d.configApparentPower = (uint16_t)v; d.updateRealPower(); } } },
-        { "UPS.Flow.ConfigActivePower", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configActivePower = true; d.configActivePower = (uint16_t)v; d.updateRealPower(); } } },
+        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) { d.has.batteryVoltage = true; d.batteryVoltage = v; } } },
         { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configFrequency = true; d.configFrequency = (uint8_t)v; } { d.has.outputFrequencyNominal = true; d.outputFrequencyNominal = (uint16_t)v; } } },
-        { "UPS.Flow.ConfigVoltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configVoltage = true; d.configVoltage = (uint16_t)v; } { d.has.outputVoltageNominal = true; d.outputVoltageNominal = (uint16_t)v; } } },
-        { "UPS.PowerConverter.Output.ConfigVoltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outputVoltageNominal = true; d.outputVoltageNominal = (uint16_t)v; } } },
-        
-        { "UPS.PowerConverter.Output.HighVoltageTransfer", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.highVoltageTransfer = true; d.highVoltageTransfer = (uint16_t)v; } } },
-        { "UPS.PowerConverter.Output.LowVoltageTransfer", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.lowVoltageTransfer = true; d.lowVoltageTransfer = (uint16_t)v; } } },
-        
-        { "UPS.PowerSummary.AudibleAlarmControl", [](EatonDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
-            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
-            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
-        } },
-        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](EatonDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
-            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
-            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
-        } },
-        { "UPS.AudibleAlarmControl", [](EatonDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
-            if (def && def->bit_size == 1) { d.has.beeperEnabled = true; d.beeperEnabled = (v != 0); }
-            else if (v == 1) { d.has.beeperEnabled = true; d.beeperEnabled = false; } 
-            else if (v == 2 || v == 3) { d.has.beeperEnabled = true; d.beeperEnabled = true; } 
-        } },
-        
-        { "UPS.PowerSummary.DelayBeforeShutdown", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.delayShutdown = true; d.delayShutdown = (int32_t)v; } { d.has.timerShutdown = true; d.timerShutdown = (int32_t)v; } } },
-        { "UPS.PowerSummary.DelayBeforeStartup", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.delayStart = true; d.delayStart = (int32_t)v; } { d.has.timerStart = true; d.timerStart = (int32_t)v; } } },
-        
         { "UPS.PowerConverter.ConverterType", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             int type = (int)v;
             if (type == 1) { d.has.upsType = true; d.upsType = "offline / line interactive"; }
@@ -173,20 +122,13 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
             else if (type == 4) { d.has.upsType = true; d.upsType = "online - parallel with hot standy"; }
             else if (type == 5) { d.has.upsType = true; d.upsType = "online - hot standby redundancy"; }
         } },
-        
         { "UPS.PowerSummary.iDeviceChemistry", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_chemStrIdx = (uint8_t)v; } }
     };
-
-    if (_active_beeper == "") {
-        _active_beeper = host->getActiveBeeperPath();
-        // If it's still empty, we don't have a beeper
-        if (_active_beeper == "") _active_beeper = "none";
-    }
 
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == m.path) {
+            if (u.path == String(m.path)) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;
@@ -196,17 +138,16 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
 }
 
 void EatonDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+    GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
+    
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";
     for (int i = 2; i < str_len && i < length; i += 2) {
-        if (data[i] != 0) { // Safety check
+        if (data[i] != 0) {
             str += (char)data[i];
         }
     }
-    if (index == host->_iManufacturer) { ups_data.has.manufacturer = true; ups_data.manufacturer = str; }
-    else if (index == host->_iProduct) { ups_data.has.product = true; ups_data.product = str; }
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.has.serialNumber = true; ups_data.serialNumber = str; }
-    else if (_chemStrIdx > 0 && index == _chemStrIdx) { ups_data.has.batteryType = true; ups_data.batteryType = str; }
+    
+    if (_chemStrIdx > 0 && index == _chemStrIdx) { ups_data.has.batteryType = true; ups_data.batteryType = str; }
 }
-

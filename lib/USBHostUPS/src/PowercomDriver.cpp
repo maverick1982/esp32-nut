@@ -1,3 +1,13 @@
+/**
+ * @brief Powercom Driver Implementation
+ * 
+ * ADR 0003 COMPLIANCE:
+ * This sub-driver faithfully mirrors the official NUT behavior for Powercom HID devices.
+ * - Reference: nut_repo/drivers/powercom-hid.c
+ * - Report 0xA4 / 0x0A Quirks: Uses powercom_poll_0xa4 and powercom_poll_0x0a structures.
+ * - Standard Field Overrides: Reverts PDC mapped voltage/beeper fields as Powercom sends garbage values.
+ */
+
 #include "PowercomDriver.h"
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"
