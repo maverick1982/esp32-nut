@@ -50,6 +50,12 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - Powercom SPD-750U
 </details>
 
+<details>
+<summary><b>WalleCube</b> (Clicca per espandere i modelli testati)</summary>
+
+- WalleCube Smart UPS W150
+</details>
+
 <br>
 
 - **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, puoi usare il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`). Allega questo file quando apri una Issue su GitHub per richiedere il supporto dedicato o segnalare problemi sui driver esistenti.
