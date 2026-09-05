@@ -47,15 +47,13 @@ void test_powercom_0xa4_valid(void) {
     
     driver.decodeReport(&host, 0xA4, 3, data, sizeof(data), ups_data);
     
-    TEST_ASSERT_EQUAL_FLOAT(13.7f, ups_data.batteryVoltage);
-    TEST_ASSERT_TRUE(ups_data.has.batteryVoltage);
+    TEST_ASSERT_EQUAL_FLOAT(13.7f, ups_data.getFloat("battery.voltage"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("battery.voltage"));
 }
 
 void test_powercom_0xa4_invalid_no_dot(void) {
     PowercomDriver driver;
     UPSData ups_data;
-    ups_data.batteryVoltage = 0.0f;
-    ups_data.has.batteryVoltage = false;
     MockPowercomHost host;
     
     uint8_t data[] = { 0xA4, ' ', '1', '3', '7', ' ', '2', ' ' };
@@ -63,15 +61,12 @@ void test_powercom_0xa4_invalid_no_dot(void) {
     driver.decodeReport(&host, 0xA4, 3, data, sizeof(data), ups_data);
     
     // Should not update batteryVoltage if no dot is present
-    TEST_ASSERT_EQUAL_FLOAT(0.0f, ups_data.batteryVoltage);
-    TEST_ASSERT_FALSE(ups_data.has.batteryVoltage);
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.voltage"));
 }
 
 void test_powercom_0xa4_invalid_empty(void) {
     PowercomDriver driver;
     UPSData ups_data;
-    ups_data.batteryVoltage = 0.0f;
-    ups_data.has.batteryVoltage = false;
     MockPowercomHost host;
     
     uint8_t data[] = { 0xA4, ' ', ' ', ' ', ' ', ' ', ' ', ' ' };
@@ -79,15 +74,12 @@ void test_powercom_0xa4_invalid_empty(void) {
     driver.decodeReport(&host, 0xA4, 3, data, sizeof(data), ups_data);
     
     // Should not crash and not update batteryVoltage
-    TEST_ASSERT_EQUAL_FLOAT(0.0f, ups_data.batteryVoltage);
-    TEST_ASSERT_FALSE(ups_data.has.batteryVoltage);
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.voltage"));
 }
 
 void test_powercom_0xa4_invalid_garbage(void) {
     PowercomDriver driver;
     UPSData ups_data;
-    ups_data.batteryVoltage = 0.0f;
-    ups_data.has.batteryVoltage = false;
     MockPowercomHost host;
     
     uint8_t data[] = { 0xA4, 'a', 'b', 'c', 'd', 'e', 'f', 'g' };
@@ -95,8 +87,7 @@ void test_powercom_0xa4_invalid_garbage(void) {
     driver.decodeReport(&host, 0xA4, 3, data, sizeof(data), ups_data);
     
     // Should not crash and not update batteryVoltage
-    TEST_ASSERT_EQUAL_FLOAT(0.0f, ups_data.batteryVoltage);
-    TEST_ASSERT_FALSE(ups_data.has.batteryVoltage);
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.voltage"));
 }
 
 void test_powercom_beeper_mapping(void) {
@@ -120,13 +111,13 @@ void test_powercom_beeper_mapping(void) {
 
     uint8_t data_enable[] = { 0x1F, 0x01 };
     driver.decodeReport(&host, 0x1F, 3, data_enable, sizeof(data_enable), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.beeperEnabled);
-    TEST_ASSERT_TRUE(ups_data.beeperEnabled);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.beeper.status"));
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
 
     uint8_t data_disable[] = { 0x1F, 0x02 };
     driver.decodeReport(&host, 0x1F, 3, data_disable, sizeof(data_disable), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.beeperEnabled);
-    TEST_ASSERT_FALSE(ups_data.beeperEnabled);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.beeper.status"));
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
 
     // Test encodeBeeperValue
     TEST_ASSERT_EQUAL_UINT8(1, driver.encodeBeeperValue(true, 8));
@@ -144,8 +135,8 @@ void test_powercom_loop_polling_nut_alignment(void) {
 
     // Loop execution assigns vendor and product and sends 0x0A keep-alive report (step 1)
     driver.loop(&host, ups_data, 100);
-    TEST_ASSERT_EQUAL_STRING("Powercom", ups_data.manufacturer.c_str());
-    TEST_ASSERT_EQUAL_STRING("SPD / Vanguard / BNT", ups_data.product.c_str());
+    TEST_ASSERT_EQUAL_STRING("Powercom", ups_data.get("ups.mfr").c_str());
+    TEST_ASSERT_EQUAL_STRING("SPD / Vanguard / BNT", ups_data.get("ups.model").c_str());
     TEST_ASSERT_EQUAL_UINT32(1, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x0A, host._requestedReports[0].first);
     TEST_ASSERT_EQUAL_UINT8(3, host._requestedReports[0].second); // Feature report
@@ -168,9 +159,9 @@ void test_powercom_loop_polling_nut_alignment(void) {
 
     // Test another PID mapping
     host._pid = 0x00a3;
-    ups_data.product = "";
-    driver.loop(&host, ups_data, 500);
-    TEST_ASSERT_EQUAL_STRING("Smart King Pro", ups_data.product.c_str());
+    UPSData ups_data2;
+    driver.loop(&host, ups_data2, 500);
+    TEST_ASSERT_EQUAL_STRING("Smart King Pro", ups_data2.get("ups.model").c_str());
 }
 
 #include "HIDParser.h"

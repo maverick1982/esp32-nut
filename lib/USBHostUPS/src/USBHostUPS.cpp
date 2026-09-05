@@ -317,8 +317,7 @@ bool USBHostUPS::setBeeper(bool enable) {
     
     // Update local state immediately to prevent UI bouncing
     if (err == ESP_OK) {
-        _ups_data.has.beeperEnabled = true;
-        _ups_data.beeperEnabled = enable;
+        _ups_data.set("ups.beeper.status", enable ? "enabled" : "disabled");
     }
     
     return err == ESP_OK;
@@ -352,9 +351,9 @@ String USBHostUPS::dumpUSBDiagnostics() {
         doc["firmware_version"] = FIRMWARE_VERSION;
         doc["vid"] = String(_vid, HEX);
         doc["pid"] = String(_pid, HEX);
-        doc["manufacturer"] = _ups_data.manufacturer;
-        doc["product"] = _ups_data.product;
-        doc["serial_number"] = _ups_data.serialNumber;
+        doc["manufacturer"] = _ups_data.get("ups.mfr");
+        doc["product"] = _ups_data.get("ups.model");
+        doc["serial_number"] = _ups_data.get("ups.serial");
         
         // Format hex string as a custom 10-items-per-line JSON Array
         String arrStr = "[\n";
@@ -408,16 +407,13 @@ void USBHostUPS::logDebug(const String& msg) const {
 void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, UPSData& ups_data) {
     char buf[128];
     wcstombs(buf, dev_info.iManufacturer, sizeof(buf));
-    ups_data.manufacturer = String(buf);
-    if (ups_data.manufacturer.length() > 0) ups_data.has.manufacturer = true;
+    if (String(buf).length() > 0) ups_data.set("ups.mfr", String(buf));
     
     wcstombs(buf, dev_info.iProduct, sizeof(buf));
-    ups_data.product = String(buf);
-    if (ups_data.product.length() > 0) ups_data.has.product = true;
+    if (String(buf).length() > 0) ups_data.set("ups.model", String(buf));
     
     wcstombs(buf, dev_info.iSerialNumber, sizeof(buf));
-    ups_data.serialNumber = String(buf);
-    if (ups_data.serialNumber.length() > 0 && ups_data.serialNumber != "Blank") ups_data.has.serialNumber = true;
+    if (String(buf).length() > 0 && String(buf) != "Blank") ups_data.set("ups.serial", String(buf));
 }
 
 

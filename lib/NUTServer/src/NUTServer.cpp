@@ -287,43 +287,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
-                if (data->has.manufacturer) client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), data->manufacturer.c_str());
-                if (data->has.product) client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), data->product.c_str());
-                if (data->has.serialNumber) client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data->serialNumber.c_str());
-                if (data->has.remainingCapacity) client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data->remainingCapacity);
-                if (data->has.remainingCapacityLimit) client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data->remainingCapacityLimit);
-                if (data->has.designCapacity) client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data->designCapacity);
-                if (data->has.fullChargeCapacity) client.printf("VAR %s battery.capacity.full \"%d\"\n", upsName.c_str(), data->fullChargeCapacity);
-                if (data->has.runTimeToEmpty) client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data->runTimeToEmpty);
-                if (data->has.outputVoltage) client.printf("VAR %s output.voltage \"%.1f\"\n", upsName.c_str(), data->outputVoltage);
-                if (data->has.outputCurrent) client.printf("VAR %s output.current \"%.3f\"\n", upsName.c_str(), data->outputCurrent);
-                if (data->has.inputVoltage) client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data->inputVoltage);
-                if (data->has.inputCurrent) client.printf("VAR %s input.current \"%.3f\"\n", upsName.c_str(), data->inputCurrent);
-                if (data->has.batteryVoltage) client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data->batteryVoltage);
-                if (data->has.batteryCurrent) client.printf("VAR %s battery.current \"%.3f\"\n", upsName.c_str(), data->batteryCurrent);
-                if (data->has.batteryTemperature) client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data->batteryTemperature);
-                if (data->has.highVoltageTransfer) client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data->highVoltageTransfer);
-                if (data->has.lowVoltageTransfer) client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data->lowVoltageTransfer);
-                if (data->has.configApparentPower) client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data->configApparentPower);
-                if (data->has.configActivePower) client.printf("VAR %s ups.realpower.nominal \"%d\"\n", upsName.c_str(), data->configActivePower);
-                if (data->has.configFrequency) client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data->configFrequency);
-                if (data->has.configVoltage) client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data->configVoltage);
-                if (data->has.outputVoltageNominal) client.printf("VAR %s output.voltage.nominal \"%d\"\n", upsName.c_str(), data->outputVoltageNominal);
-                if (data->has.outputFrequencyNominal) client.printf("VAR %s output.frequency.nominal \"%d\"\n", upsName.c_str(), data->outputFrequencyNominal);
-                if (data->has.load) client.printf("VAR %s ups.load \"%d\"\n", upsName.c_str(), data->load);
-                if (data->has.realPower) client.printf("VAR %s ups.realpower \"%d\"\n", upsName.c_str(), data->realPower);
-                if (data->has.delayShutdown) client.printf("VAR %s ups.delay.shutdown \"%d\"\n", upsName.c_str(), data->delayShutdown);
-                if (data->has.delayStart) client.printf("VAR %s ups.delay.start \"%d\"\n", upsName.c_str(), data->delayStart);
-                if (data->has.timerStart) client.printf("VAR %s ups.timer.start \"%d\"\n", upsName.c_str(), data->timerStart);
-                if (data->has.timerShutdown) client.printf("VAR %s ups.timer.shutdown \"%d\"\n", upsName.c_str(), data->timerShutdown);
-                if (data->has.batteryType) client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data->batteryType.c_str());
-                if (data->has.upsMfrDate) client.printf("VAR %s ups.mfr.date \"%s\"\n", upsName.c_str(), data->upsMfrDate.c_str());
-                if (data->has.batteryMfrDate) client.printf("VAR %s battery.mfr.date \"%s\"\n", upsName.c_str(), data->batteryMfrDate.c_str());
-                if (data->has.batteryDate) client.printf("VAR %s battery.date \"%s\"\n", upsName.c_str(), data->batteryDate.c_str());
-                if (data->has.upsType) client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data->upsType.c_str());
-                if (data->has.beeperEnabled) client.printf("VAR %s ups.beeper.status \"%s\"\n", upsName.c_str(), data->beeperEnabled ? "enabled" : "disabled");
-                if (data->has.outlet1Switch) client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data->outlet1Switch ? 1 : 0);
-                if (data->has.outlet2Switch) client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data->outlet2Switch ? 1 : 0);
+                for (const auto& param : data->getAll()) {
+                    if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
+                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
+                }
             }
             client.printf("END LIST VAR %s\n", upsName.c_str());
             return;
@@ -337,7 +304,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             if (subcmd == "CMD" && _usb_ups) {
-                if (_usb_ups->getUPSData()->has.beeperEnabled) {
+                if (_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                     client.printf("CMD %s beeper.enable\n", upsName.c_str());
                     client.printf("CMD %s beeper.disable\n", upsName.c_str());
                     client.printf("CMD %s beeper.toggle\n", upsName.c_str());
@@ -391,7 +358,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
 
         if (cmdName == "beeper.enable") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->has.beeperEnabled) {
+            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
                 _usb_ups->setBeeper(true);
@@ -399,7 +366,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             return;
         } else if (cmdName == "beeper.disable") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->has.beeperEnabled) {
+            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
                 _usb_ups->setBeeper(false);
@@ -407,10 +374,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             return;
         } else if (cmdName == "beeper.toggle") {
-            if (!_usb_ups || !_usb_ups->getUPSData()->has.beeperEnabled) {
+            if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
-                _usb_ups->setBeeper(!_usb_ups->getUPSData()->beeperEnabled);
+                _usb_ups->setBeeper(!_usb_ups->getUPSData()->getBool("ups.beeper.status"));
                 client.print("OK\n");
             }
             return;
@@ -461,80 +428,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
             if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
-            } else if (varNameLower == "ups.mfr" && data->has.manufacturer) {
-                client.printf("VAR %s ups.mfr \"%s\"\n", upsName.c_str(), data->manufacturer.c_str());
-            } else if (varNameLower == "ups.model" && data->has.product) {
-                client.printf("VAR %s ups.model \"%s\"\n", upsName.c_str(), data->product.c_str());
-            } else if (varNameLower == "ups.serial" && data->has.serialNumber) {
-                client.printf("VAR %s ups.serial \"%s\"\n", upsName.c_str(), data->serialNumber.c_str());
-            } else if (varNameLower == "battery.charge" && data->has.remainingCapacity) {
-                client.printf("VAR %s battery.charge \"%d\"\n", upsName.c_str(), data->remainingCapacity);
-            } else if (varNameLower == "battery.charge.low" && data->has.remainingCapacityLimit) {
-                client.printf("VAR %s battery.charge.low \"%d\"\n", upsName.c_str(), data->remainingCapacityLimit);
-            } else if (varNameLower == "battery.capacity" && data->has.designCapacity) {
-                client.printf("VAR %s battery.capacity \"%d\"\n", upsName.c_str(), data->designCapacity);
-            } else if (varNameLower == "battery.capacity.full" && data->has.fullChargeCapacity) {
-                client.printf("VAR %s battery.capacity.full \"%d\"\n", upsName.c_str(), data->fullChargeCapacity);
-            } else if (varNameLower == "battery.runtime" && data->has.runTimeToEmpty) {
-                client.printf("VAR %s battery.runtime \"%d\"\n", upsName.c_str(), data->runTimeToEmpty);
-            } else if (varNameLower == "output.voltage" && data->has.outputVoltage) {
-                client.printf("VAR %s output.voltage \"%.1f\"\n", upsName.c_str(), data->outputVoltage);
-            } else if (varNameLower == "output.current" && data->has.outputCurrent) {
-                client.printf("VAR %s output.current \"%.3f\"\n", upsName.c_str(), data->outputCurrent);
-            } else if (varNameLower == "input.voltage" && data->has.inputVoltage) {
-                client.printf("VAR %s input.voltage \"%.1f\"\n", upsName.c_str(), data->inputVoltage);
-            } else if (varNameLower == "input.current" && data->has.inputCurrent) {
-                client.printf("VAR %s input.current \"%.3f\"\n", upsName.c_str(), data->inputCurrent);
-            } else if (varNameLower == "battery.voltage" && data->has.batteryVoltage) {
-                client.printf("VAR %s battery.voltage \"%.1f\"\n", upsName.c_str(), data->batteryVoltage);
-            } else if (varNameLower == "battery.current" && data->has.batteryCurrent) {
-                client.printf("VAR %s battery.current \"%.3f\"\n", upsName.c_str(), data->batteryCurrent);
-            } else if (varNameLower == "battery.temperature" && data->has.batteryTemperature) {
-                client.printf("VAR %s battery.temperature \"%.1f\"\n", upsName.c_str(), data->batteryTemperature);
-            } else if (varNameLower == "input.transfer.high" && data->has.highVoltageTransfer) {
-                client.printf("VAR %s input.transfer.high \"%d\"\n", upsName.c_str(), data->highVoltageTransfer);
-            } else if (varNameLower == "input.transfer.low" && data->has.lowVoltageTransfer) {
-                client.printf("VAR %s input.transfer.low \"%d\"\n", upsName.c_str(), data->lowVoltageTransfer);
-            } else if (varNameLower == "ups.power.nominal" && data->has.configApparentPower) {
-                client.printf("VAR %s ups.power.nominal \"%d\"\n", upsName.c_str(), data->configApparentPower);
-            } else if (varNameLower == "ups.realpower.nominal" && data->has.configActivePower) {
-                client.printf("VAR %s ups.realpower.nominal \"%d\"\n", upsName.c_str(), data->configActivePower);
-            } else if (varNameLower == "input.frequency.nominal" && data->has.configFrequency) {
-                client.printf("VAR %s input.frequency.nominal \"%d\"\n", upsName.c_str(), data->configFrequency);
-            } else if (varNameLower == "input.voltage.nominal" && data->has.configVoltage) {
-                client.printf("VAR %s input.voltage.nominal \"%d\"\n", upsName.c_str(), data->configVoltage);
-            } else if (varNameLower == "output.voltage.nominal" && data->has.outputVoltageNominal) {
-                client.printf("VAR %s output.voltage.nominal \"%d\"\n", upsName.c_str(), data->outputVoltageNominal);
-            } else if (varNameLower == "output.frequency.nominal" && data->has.outputFrequencyNominal) {
-                client.printf("VAR %s output.frequency.nominal \"%d\"\n", upsName.c_str(), data->outputFrequencyNominal);
-            } else if (varNameLower == "ups.load" && data->has.load) {
-                client.printf("VAR %s ups.load \"%d\"\n", upsName.c_str(), data->load);
-            } else if (varNameLower == "ups.realpower" && data->has.realPower) {
-                client.printf("VAR %s ups.realpower \"%d\"\n", upsName.c_str(), data->realPower);
-            } else if (varNameLower == "ups.delay.shutdown" && data->has.delayShutdown) {
-                client.printf("VAR %s ups.delay.shutdown \"%d\"\n", upsName.c_str(), data->delayShutdown);
-            } else if (varNameLower == "ups.delay.start" && data->has.delayStart) {
-                client.printf("VAR %s ups.delay.start \"%d\"\n", upsName.c_str(), data->delayStart);
-            } else if (varNameLower == "ups.timer.start" && data->has.timerStart) {
-                client.printf("VAR %s ups.timer.start \"%d\"\n", upsName.c_str(), data->timerStart);
-            } else if (varNameLower == "ups.timer.shutdown" && data->has.timerShutdown) {
-                client.printf("VAR %s ups.timer.shutdown \"%d\"\n", upsName.c_str(), data->timerShutdown);
-            } else if (varNameLower == "battery.type" && data->has.batteryType) {
-                client.printf("VAR %s battery.type \"%s\"\n", upsName.c_str(), data->batteryType.c_str());
-            } else if (varNameLower == "ups.mfr.date" && data->has.upsMfrDate) {
-                client.printf("VAR %s ups.mfr.date \"%s\"\n", upsName.c_str(), data->upsMfrDate.c_str());
-            } else if (varNameLower == "battery.mfr.date" && data->has.batteryMfrDate) {
-                client.printf("VAR %s battery.mfr.date \"%s\"\n", upsName.c_str(), data->batteryMfrDate.c_str());
-            } else if (varNameLower == "battery.date" && data->has.batteryDate) {
-                client.printf("VAR %s battery.date \"%s\"\n", upsName.c_str(), data->batteryDate.c_str());
-            } else if (varNameLower == "ups.type" && data->has.upsType) {
-                client.printf("VAR %s ups.type \"%s\"\n", upsName.c_str(), data->upsType.c_str());
-            } else if (varNameLower == "ups.beeper.status" && data->has.beeperEnabled) {
-                client.printf("VAR %s ups.beeper.status \"%s\"\n", upsName.c_str(), data->beeperEnabled ? "enabled" : "disabled");
-            } else if (varNameLower == "outlet.1.switch" && data->has.outlet1Switch) {
-                client.printf("VAR %s outlet.1.switch \"%d\"\n", upsName.c_str(), data->outlet1Switch ? 1 : 0);
-            } else if (varNameLower == "outlet.2.switch" && data->has.outlet2Switch) {
-                client.printf("VAR %s outlet.2.switch \"%d\"\n", upsName.c_str(), data->outlet2Switch ? 1 : 0);
+            } else if (data->hasKey(varNameLower)) {
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
             } else {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
             }

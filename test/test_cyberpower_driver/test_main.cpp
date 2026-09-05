@@ -72,14 +72,14 @@ void test_cyberpower_status_and_voltage(void) {
 
     uint8_t r1[] = { 0x01, 0x01 };
     driver.decodeReport(&mockHost, 0x01, 1, r1, sizeof(r1), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.acPresent);
-    TEST_ASSERT_TRUE(ups_data.acPresent);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.getBool("ups.status.ac_present"));
 
     // 2305 = 0x0901 -> 0x01, 0x09
     uint8_t r2[] = { 0x02, 0x01, 0x09 };
     driver.decodeReport(&mockHost, 0x02, 1, r2, sizeof(r2), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.outputVoltage);
-    TEST_ASSERT_FLOAT_WITHIN(0.05, 230.5, ups_data.outputVoltage);
+    TEST_ASSERT_TRUE(ups_data.hasKey("output.voltage"));
+    TEST_ASSERT_FLOAT_WITHIN(0.05, 230.5, ups_data.getFloat("output.voltage"));
 }
 
 void test_cyberpower_inverted_string_quirk(void) {
@@ -91,15 +91,15 @@ void test_cyberpower_inverted_string_quirk(void) {
     // Manufacturer inverted: "CPS"
     uint8_t desc_inv_mfr[] = { 8, 0x03, (uint8_t)~'C', 0xFF, (uint8_t)~'P', 0xFF, (uint8_t)~'S', 0xFF };
     driver.parseStringDescriptor(&mockHost, 1, desc_inv_mfr, sizeof(desc_inv_mfr), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.manufacturer);
-    TEST_ASSERT_EQUAL_STRING("CPS", ups_data.manufacturer.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr"));
+    TEST_ASSERT_EQUAL_STRING("CPS", ups_data.get("ups.mfr").c_str());
 
     // Auto-detect inverted string (even if quirk flag wasn't set, high byte == 0xFF)
     mockHost._quirks = 0; // reset quirk
     uint8_t desc_inv_prod[] = { 10, 0x03, (uint8_t)~'1', 0xFF, (uint8_t)~'5', 0xFF, (uint8_t)~'0', 0xFF, (uint8_t)~'0', 0xFF };
     driver.parseStringDescriptor(&mockHost, 2, desc_inv_prod, sizeof(desc_inv_prod), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.product);
-    TEST_ASSERT_EQUAL_STRING("1500", ups_data.product.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.model"));
+    TEST_ASSERT_EQUAL_STRING("1500", ups_data.get("ups.model").c_str());
 }
 
 void test_cyberpower_loop_polling_and_string_requests(void) {
@@ -152,24 +152,24 @@ void test_cyberpower_load_and_zero_load_reset(void) {
     // 1. Decode ConfigActivePower = 810 W (0x032A -> 0x2A, 0x03)
     uint8_t r_cap[] = { 0x18, 0x2A, 0x03 };
     driver.decodeReport(&mockHost, 0x18, 3, r_cap, sizeof(r_cap), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
-    TEST_ASSERT_EQUAL_UINT16(810, ups_data.configActivePower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
+    TEST_ASSERT_EQUAL_UINT16(810, ups_data.getFloat("ups.realpower.nominal"));
 
     // 2. Decode Load = 11%
     uint8_t r_load11[] = { 0x13, 0x0B };
     driver.decodeReport(&mockHost, 0x13, 3, r_load11, sizeof(r_load11), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_EQUAL_UINT8(11, ups_data.load);
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16((810 * 11) / 100, ups_data.realPower); // 89 W
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_EQUAL_UINT8(11, ups_data.getFloat("ups.load"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16((810 * 11) / 100, ups_data.getFloat("ups.realpower")); // 89 W
 
     // 3. Decode Load = 0% (zero payload [0x13, 0x00])
     uint8_t r_load0[] = { 0x13, 0x00 };
     driver.decodeReport(&mockHost, 0x13, 3, r_load0, sizeof(r_load0), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_EQUAL_UINT8(0, ups_data.load);
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16(0, ups_data.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_EQUAL_UINT8(0, ups_data.getFloat("ups.load"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16(0, ups_data.getFloat("ups.realpower"));
 }
 
 void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void) {
@@ -196,19 +196,19 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
     // 2. Load arrives FIRST (before configActivePower is known)
     uint8_t r_load[] = { 0x13, 20 }; // 20%
     driver.decodeReport(&mockHost, 0x13, 3, r_load, sizeof(r_load), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_EQUAL_UINT8(20, ups_data.load);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_EQUAL_UINT8(20, ups_data.getFloat("ups.load"));
     // ConfigActivePower not yet known -> realPower should not be valid yet
-    TEST_ASSERT_FALSE(ups_data.has.realPower);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
 
     // 3. ConfigActivePower arrives AFTER load (e.g. 500W = 0x01F4 -> 0xF4, 0x01)
     uint8_t r_cap[] = { 0x18, 0xF4, 0x01 };
     driver.decodeReport(&mockHost, 0x18, 3, r_cap, sizeof(r_cap), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
-    TEST_ASSERT_EQUAL_UINT16(500, ups_data.configActivePower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
+    TEST_ASSERT_EQUAL_UINT16(500, ups_data.getFloat("ups.realpower.nominal"));
     // realPower must be recalculated IMMEDIATELY: 20% of 500W = 100W
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16(100, ups_data.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16(100, ups_data.getFloat("ups.realpower"));
 }
 
 #ifdef PIO_UNIT_TESTING

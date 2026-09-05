@@ -55,8 +55,7 @@ void test_api_disconnected_host() {
 
 void test_api_connected_host_with_data() {
     mockHost.connected = true;
-    mockHost.data.has.manufacturer = true;
-    mockHost.data.manufacturer = "Eaton";
+    mockHost.data.set("ups.mfr", "Eaton");
     
     String out = WebApiJson::generateUpsVars(&mockHost);
     

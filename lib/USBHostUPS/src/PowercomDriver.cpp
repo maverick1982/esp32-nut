@@ -40,24 +40,24 @@ void PowercomDriver::setup() {
 void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.upsType != "Powercom") {
-        data.upsType = "Powercom";
+    if (data.get("ups.type") != "Powercom") {
+        data.set("ups.type", "Powercom");
     }
-    if (data.manufacturer == "") {
-        data.manufacturer = "Powercom";
+    if (!data.hasKey("ups.mfr")) {
+        data.set("ups.mfr", "Powercom");
     }
 
-    if (data.product == "") {
+    if (!data.hasKey("ups.model")) {
         uint16_t pid = host->getPID();
         switch (pid) {
-            case 0x00a2: data.product = "IMPERIAL Series"; break;
-            case 0x00a3: data.product = "Smart King Pro"; break;
-            case 0x00a4: data.product = "WOW Series"; break;
-            case 0x00a5: data.product = "Vanguard Series"; break;
-            case 0x00a6: data.product = "Black Knight Pro"; break;
-            case 0x0004: data.product = "SPD / Vanguard / BNT"; break;
-            case 0x0001: data.product = "Powercom UPS"; break;
-            default:     data.product = "Powercom HID UPS"; break;
+            case 0x00a2: data.set("ups.model", "IMPERIAL Series"); break;
+            case 0x00a3: data.set("ups.model", "Smart King Pro"); break;
+            case 0x00a4: data.set("ups.model", "WOW Series"); break;
+            case 0x00a5: data.set("ups.model", "Vanguard Series"); break;
+            case 0x00a6: data.set("ups.model", "Black Knight Pro"); break;
+            case 0x0004: data.set("ups.model", "SPD / Vanguard / BNT"); break;
+            case 0x0001: data.set("ups.model", "Powercom UPS"); break;
+            default:     data.set("ups.model", "Powercom HID UPS"); break;
         }
     }
 
@@ -120,19 +120,19 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     }
 
     // Save fields before GenericDriver so Powercom custom mappings can handle them
-    float saved_voltage = ups_data.batteryVoltage;
-    bool saved_has_voltage = ups_data.has.batteryVoltage;
-    bool saved_beeper = ups_data.beeperEnabled;
-    bool saved_has_beeper = ups_data.has.beeperEnabled;
+    String saved_voltage = ups_data.get("battery.voltage");
+    bool saved_has_voltage = ups_data.hasKey("battery.voltage");
+    String saved_beeper = ups_data.get("ups.beeper.status");
+    bool saved_has_beeper = ups_data.hasKey("ups.beeper.status");
 
     // Run GenericDriver first for default PDC mappings
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
     // NUT completely ignores standard voltage fields for Powercom because they are often broken/garbage
-    ups_data.batteryVoltage = saved_voltage;
-    ups_data.has.batteryVoltage = saved_has_voltage;
-    ups_data.beeperEnabled = saved_beeper;
-    ups_data.has.beeperEnabled = saved_has_beeper;
+    if (saved_has_voltage) ups_data.set("battery.voltage", saved_voltage);
+    else ups_data.remove("battery.voltage");
+    if (saved_has_beeper) ups_data.set("ups.beeper.status", saved_beeper);
+    else ups_data.remove("ups.beeper.status");
 
     if (report_id == 0xA4 && report_type == 3) {
         String msg = "";
@@ -160,8 +160,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
                 }
             }
             if (valStr.length() > 0 && valStr.indexOf('.') != -1) {
-                ups_data.has.batteryVoltage = true;
-                ups_data.batteryVoltage = valStr.toFloat();
+                ups_data.set("battery.voltage", String(valStr.toFloat(), 2));
             }
         }
         return;
@@ -173,22 +172,20 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     };
 
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.RemainingCapacity", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.remainingCapacity = true; d.remainingCapacity = v > 100 ? 100 : (uint8_t)v; } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } },
-        { "UPS.Battery.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.runTimeToEmpty = true; d.runTimeToEmpty = (uint32_t)v; } },
+        { "UPS.PowerSummary.RemainingCapacity", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge", String((int)(v > 100 ? 100 : v))); } },
+        { "UPS.PowerSummary.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
+        { "UPS.Battery.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
         { "UPS.PowerSummary.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
-            d.has.beeperEnabled = true;
-            if (def && def->bit_size == 1) { d.beeperEnabled = (v != 0); }
-            else if ((int)v == 1) { d.beeperEnabled = true; } // Powercom NUT: 1 = enabled
-            else if ((int)v == 2) { d.beeperEnabled = false; } // Powercom NUT: 2 = disabled
-            else { d.beeperEnabled = (v != 0); }
+            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
+            else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } // Powercom NUT: 1 = enabled
+            else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } // Powercom NUT: 2 = disabled
+            else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } },
         { "UPS.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
-            d.has.beeperEnabled = true;
-            if (def && def->bit_size == 1) { d.beeperEnabled = (v != 0); }
-            else if ((int)v == 1) { d.beeperEnabled = true; } 
-            else if ((int)v == 2) { d.beeperEnabled = false; } 
-            else { d.beeperEnabled = (v != 0); }
+            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
+            else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } 
+            else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } 
+            else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } }
     };
 
@@ -205,38 +202,36 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         
         // Match by usage instead of full path because Powercom uses non-standard Usage Page 0x0002
         if (u.usage == 0x00020030) { // Voltage
-            if (u.path.indexOf("0x0002001A") >= 0) { ups_data.has.inputVoltage = true; ups_data.inputVoltage = val * 4.0; } // Input
-            else if (u.path.indexOf("0x0002001C") >= 0) { ups_data.has.outputVoltage = true; ups_data.outputVoltage = val * 4.0; } // Output
+            if (u.path.indexOf("0x0002001A") >= 0) { ups_data.set("input.voltage", String(val * 4.0f, 1)); } // Input
+            else if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("output.voltage", String(val * 4.0f, 1)); } // Output
         }
         else if (u.usage == 0x00020035) { // PercentLoad
-            if (u.path.indexOf("0x0002001C") >= 0) { ups_data.has.load = true; ups_data.load = (uint8_t)val; }
+            if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("ups.load", String((int)val)); }
         }
         else if (u.usage == 0x00020081) { // InternalChargeController (Status bits 1)
             uint32_t bitmask = (uint32_t)val;
-            ups_data.internalFailure = (bitmask & 0x01) != 0;
-            ups_data.needReplacement = (bitmask & 0x02) != 0;
-            ups_data.shutdownImminent = (bitmask & 0x10) != 0;
+            ups_data.set("ups.status.internal_failure", (bitmask & 0x01) != 0 ? "1" : "0");
+            ups_data.set("ups.status.replace_battery", (bitmask & 0x02) != 0 ? "1" : "0");
+            ups_data.set("ups.status.shutdown_imminent", (bitmask & 0x10) != 0 ? "1" : "0");
         }
         else if (u.usage == 0x00020082) { // PrimaryBatterySupport (Status bits 2)
             uint32_t bitmask = (uint32_t)val;
-            ups_data.acPresent = (bitmask & 0x01) == 0; // 1 = line fail
-            ups_data.discharging = (bitmask & 0x01) != 0; 
-            ups_data.belowRemainingCapacityLimit = (bitmask & 0x02) != 0;
-            ups_data.overload = (bitmask & 0x20) != 0;
+            ups_data.set("ups.status.ac_present", (bitmask & 0x01) == 0 ? "1" : "0"); // 1 = line fail
+            ups_data.set("ups.status.discharging", (bitmask & 0x01) != 0 ? "1" : "0"); 
+            ups_data.set("ups.status.battery_low", (bitmask & 0x02) != 0 ? "1" : "0");
+            ups_data.set("ups.status.overload", (bitmask & 0x20) != 0 ? "1" : "0");
         }
         else if (u.usage == 0x00020032) { // Frequency
             // Could map to input or output depending on collection
         }
         else if (u.usage == 0x00020057) { // DelayBeforeShutdown
             uint16_t i = (uint16_t)val;
-            ups_data.has.delayShutdown = true;
-            ups_data.delayShutdown = 60 * (i >> 8) + (i & 0x00FF);
-            ups_data.has.timerShutdown = true;
-            ups_data.timerShutdown = ups_data.delayShutdown;
+            int32_t delay = 60 * (i >> 8) + (i & 0x00FF);
+            ups_data.set("ups.delay.shutdown", String(delay));
+            ups_data.set("ups.timer.shutdown", String(delay));
         }
         else if (u.usage == 0x00020083) { // DesignCapacity
-            ups_data.has.designCapacity = true;
-            ups_data.designCapacity = (uint8_t)(val / 3600.0);
+            ups_data.set("battery.capacity", String((int)(val / 3600.0)));
         }
     }
 }
@@ -258,9 +253,9 @@ void PowercomDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, con
             str += c;
         }
     }
-    if (index == host->_iManufacturer) ups_data.manufacturer = str;
-    else if (index == host->_iProduct) ups_data.product = str;
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.serialNumber = str;
+    if (index == host->_iManufacturer) ups_data.set("ups.mfr", str);
+    else if (index == host->_iProduct) ups_data.set("ups.model", str);
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.set("ups.serial", str);
 }
 
 String PowercomDriver::fetchVoltageHack(IUSBHostUPS* host) {

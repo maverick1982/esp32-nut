@@ -23,9 +23,8 @@ void EatonDriver::setup() {
 void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.upsType != getDriverName()) {
-        data.has.upsType = true;
-        data.upsType = getDriverName();
+    if (data.get("ups.type") != getDriverName()) {
+        data.set("ups.type", getDriverName());
     }
 
     if (_poll_step == 0) {
@@ -48,13 +47,13 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             
             if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && data.manufacturer == "") if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
             } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else if (_poll_step == 4) {
-                if (_slow_poll_counter == 0 && _chemStrIdx > 0 && data.batteryType == "") host->requestStringDescriptor(_chemStrIdx);
+                if (_slow_poll_counter == 0 && _chemStrIdx > 0 && !data.hasKey("battery.type")) host->requestStringDescriptor(_chemStrIdx);
             } else {
                 const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
@@ -109,18 +108,18 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
     };
 
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.good = true; d.good = v != 0; } } },
-        { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.internalFailure = true; d.internalFailure = v != 0; } } },
-        { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.outlet1Switch = true; d.outlet1Switch = v != 0; } { d.has.outlet2Switch = true; d.outlet2Switch = v != 0; } } },
-        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) { d.has.batteryVoltage = true; d.batteryVoltage = v; } } },
-        { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { { d.has.configFrequency = true; d.configFrequency = (uint8_t)v; } { d.has.outputFrequencyNominal = true; d.outputFrequencyNominal = (uint16_t)v; } } },
+        { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.good", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.internal_failure", v != 0 ? "1" : "0"); } },
+        { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("outlet.1.switch", v != 0 ? "1" : "0"); d.set("outlet.2.switch", v != 0 ? "1" : "0"); } },
+        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) { d.set("battery.voltage", String(v, 2)); } } },
+        { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency.nominal", String((int)v)); d.set("output.frequency.nominal", String((int)v)); } },
         { "UPS.PowerConverter.ConverterType", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             int type = (int)v;
-            if (type == 1) { d.has.upsType = true; d.upsType = "offline / line interactive"; }
-            else if (type == 2) { d.has.upsType = true; d.upsType = "online"; }
-            else if (type == 3) { d.has.upsType = true; d.upsType = "online - unitary/parallel"; }
-            else if (type == 4) { d.has.upsType = true; d.upsType = "online - parallel with hot standy"; }
-            else if (type == 5) { d.has.upsType = true; d.upsType = "online - hot standby redundancy"; }
+            if (type == 1) { d.set("ups.type", "offline / line interactive"); }
+            else if (type == 2) { d.set("ups.type", "online"); }
+            else if (type == 3) { d.set("ups.type", "online - unitary/parallel"); }
+            else if (type == 4) { d.set("ups.type", "online - parallel with hot standy"); }
+            else if (type == 5) { d.set("ups.type", "online - hot standby redundancy"); }
         } },
         { "UPS.PowerSummary.iDeviceChemistry", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_chemStrIdx = (uint8_t)v; } }
     };
@@ -149,5 +148,5 @@ void EatonDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const 
         }
     }
     
-    if (_chemStrIdx > 0 && index == _chemStrIdx) { ups_data.has.batteryType = true; ups_data.batteryType = str; }
+    if (_chemStrIdx > 0 && index == _chemStrIdx) { ups_data.set("battery.type", str); }
 }

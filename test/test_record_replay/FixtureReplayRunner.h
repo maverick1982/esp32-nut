@@ -207,58 +207,58 @@ public:
             }
             if (exp["acPresent"].is<bool>()) {
                 bool expectedAC = exp["acPresent"].as<bool>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.acPresent, scName.c_str());
-                TEST_ASSERT_EQUAL_MESSAGE(expectedAC, ups_data.acPresent, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.status.ac_present"), scName.c_str());
+                TEST_ASSERT_EQUAL_MESSAGE(expectedAC, ups_data.getBool("ups.status.ac_present"), scName.c_str());
             }
             if (exp["discharging"].is<bool>()) {
                 bool expectedDischarging = exp["discharging"].as<bool>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.discharging, scName.c_str());
-                TEST_ASSERT_EQUAL_MESSAGE(expectedDischarging, ups_data.discharging, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.status.discharging"), scName.c_str());
+                TEST_ASSERT_EQUAL_MESSAGE(expectedDischarging, ups_data.getBool("ups.status.discharging"), scName.c_str());
             }
             if (exp["remainingCapacity"].is<uint8_t>()) {
                 uint8_t expCap = exp["remainingCapacity"].as<uint8_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.remainingCapacity, scName.c_str());
-                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expCap, ups_data.remainingCapacity, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.charge"), scName.c_str());
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expCap, (uint8_t)ups_data.getFloat("battery.charge"), scName.c_str());
             }
             if (exp["runTimeToEmpty"].is<uint32_t>()) {
                 uint32_t expRuntime = exp["runTimeToEmpty"].as<uint32_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.runTimeToEmpty, scName.c_str());
-                TEST_ASSERT_EQUAL_UINT32_MESSAGE(expRuntime, ups_data.runTimeToEmpty, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.runtime"), scName.c_str());
+                TEST_ASSERT_EQUAL_UINT32_MESSAGE(expRuntime, (uint32_t)ups_data.getFloat("battery.runtime"), scName.c_str());
             }
             if (exp["load"].is<uint8_t>()) {
                 uint8_t expLoad = exp["load"].as<uint8_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.load, scName.c_str());
-                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expLoad, ups_data.load, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.load"), scName.c_str());
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expLoad, (uint8_t)ups_data.getFloat("ups.load"), scName.c_str());
             }
             if (exp["outputVoltage"].is<float>()) {
                 float expVolt = exp["outputVoltage"].as<float>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.outputVoltage, scName.c_str());
-                TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.1, expVolt, ups_data.outputVoltage, scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("output.voltage"), scName.c_str());
+                TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.1, expVolt, ups_data.getFloat("output.voltage"), scName.c_str());
             }
             if (exp["manufacturer"].is<std::string>()) {
                 std::string expMfr = exp["manufacturer"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.manufacturer, scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expMfr.c_str(), ups_data.manufacturer.c_str(), scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.mfr"), scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expMfr.c_str(), ups_data.get("ups.mfr").c_str(), scName.c_str());
             }
             if (exp["product"].is<std::string>()) {
                 std::string expProd = exp["product"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.product, scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expProd.c_str(), ups_data.product.c_str(), scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.model"), scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expProd.c_str(), ups_data.get("ups.model").c_str(), scName.c_str());
             }
             if (exp["batteryMfrDate"].is<std::string>()) {
                 std::string expDate = exp["batteryMfrDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.batteryMfrDate, scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.batteryMfrDate.c_str(), scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.mfr.date"), scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("battery.mfr.date").c_str(), scName.c_str());
             }
             if (exp["upsMfrDate"].is<std::string>()) {
                 std::string expDate = exp["upsMfrDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.upsMfrDate, scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.upsMfrDate.c_str(), scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.mfr.date"), scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("ups.mfr.date").c_str(), scName.c_str());
             }
             if (exp["batteryDate"].is<std::string>()) {
                 std::string expDate = exp["batteryDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.has.batteryDate, scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.batteryDate.c_str(), scName.c_str());
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.date"), scName.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("battery.date").c_str(), scName.c_str());
             }
         }
 
