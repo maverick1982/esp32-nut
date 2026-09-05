@@ -40,8 +40,10 @@ public:
 
     void end() override {}
 
-    const UPSData& getUPSData() const override {
-        return data;
+    void lock() const override {}
+    void unlock() const override {}
+    UPSDataLock getUPSData() const override {
+        return UPSDataLock(data, this);
     }
 
     String getUPSStatusString() const override {
@@ -396,3 +398,4 @@ void setup() {
 void loop() {}
 #endif
 #endif
+

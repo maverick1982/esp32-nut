@@ -4,7 +4,9 @@
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <mutex>
 #include "usb/usb_host.h"
+#include "usb/hid_host.h"
 #include "Quirks.h"
 #include "HIDParser.h"
 #include "UPSData.h"
@@ -23,7 +25,10 @@ public:
     void end();
     void loop();
 
-    const UPSData& getUPSData() const override;
+    void lock() const override { _mutex.lock(); }
+    void unlock() const override { _mutex.unlock(); }
+
+    UPSDataLock getUPSData() const override;
     String getUPSStatusString() const override;
     String dumpUSBDiagnostics();
 
@@ -32,6 +37,7 @@ public:
     bool supportsBeeperToggle() const override;
     
     void setLogCallback(LogCallback cb);
+    void logDebug(const String& msg) const override;
 
     const std::vector<HIDUsageDef>& getUsages() const override { return _hid_parser.getUsages(); }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _hid_parser.getUsageDef(usage); }
@@ -45,17 +51,21 @@ public:
 
     HIDParser _hid_parser;
 
+public:
+    static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, UPSData& ups_data);
 private:
-    static void usb_host_lib_task(void *arg);
-    static void usb_client_task(void *arg);
-    static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg);
+    mutable std::recursive_mutex _mutex;
+    static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event, void *arg);
+    static void hid_host_interface_event_cb(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event, void *arg);
     static void control_transfer_cb(usb_transfer_t *transfer);
-    void handle_client_event(const usb_host_client_event_msg_t *event_msg);
-
+    static void usb_host_lib_task(void *arg);
     TaskHandle_t _usb_task_handle;
-    TaskHandle_t _client_task_handle;
+    volatile bool _usb_task_run;
     
-    usb_host_client_handle_t _client_handle;
+    void handle_driver_event(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event);
+    void handle_interface_event(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event);
+    
+    hid_host_device_handle_t _hid_dev_handle;
     usb_device_handle_t _dev_handle;
     
     String _cached_report_descriptor_hex;
@@ -64,15 +74,7 @@ private:
     bool _initialized;
     bool _is_ready_to_poll;
     volatile bool _is_fetching;
-    volatile bool _pending_dev_close;
     volatile bool _control_pending;
-    usb_device_handle_t _dev_to_close;
-
-    uint8_t _int_in_ep;
-    uint16_t _int_in_mps;
-    usb_transfer_t* _int_in_transfer;
-    static void int_in_cb(usb_transfer_t *transfer);
-    void handle_int_in(usb_transfer_t *transfer);
 
     UPSData _ups_data;
     IUPSDriver* _driver;

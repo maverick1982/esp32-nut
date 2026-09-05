@@ -9,7 +9,9 @@ public:
     std::vector<uint8_t> _requestedStrings;
     std::vector<std::pair<uint8_t, uint8_t>> _requestedReports;
 
-    const UPSData& getUPSData() const override { return _data; }
+    void lock() const override {}
+    void unlock() const override {}
+    UPSDataLock getUPSData() const override { return UPSDataLock(_data, this); }
     String getUPSStatusString() const override { return "OL"; }
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
@@ -251,3 +253,4 @@ void setup() {
 void loop() {}
 #endif
 #endif
+

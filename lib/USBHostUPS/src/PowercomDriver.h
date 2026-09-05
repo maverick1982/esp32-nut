@@ -6,6 +6,8 @@
 
 class PowercomDriver : public GenericDriver {
 public:
+    const char* getDriverName() const override { return "PowercomDriver"; }
+public:
     PowercomDriver();
     virtual ~PowercomDriver() = default;
 

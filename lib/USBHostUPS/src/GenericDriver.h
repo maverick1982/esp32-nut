@@ -6,6 +6,8 @@
 
 class GenericDriver : public IUPSDriver {
 public:
+    const char* getDriverName() const override { return "GenericDriver"; }
+public:
     GenericDriver();
     virtual ~GenericDriver() = default;
 

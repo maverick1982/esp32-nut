@@ -6,6 +6,8 @@
 
 class APCDriver : public IUPSDriver {
 public:
+    const char* getDriverName() const override { return "APCDriver"; }
+public:
     APCDriver();
     virtual ~APCDriver() = default;
 

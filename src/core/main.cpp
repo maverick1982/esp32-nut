@@ -141,9 +141,9 @@ void loop() {
     if (now - last_print >= 5000) {
         last_print = now;
         AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = %.1f V",
-                      usb_ups.getUPSData().remainingCapacity,
+                      usb_ups.getUPSData()->remainingCapacity,
                       usb_ups.getUPSStatusString().c_str(),
-                      (float)usb_ups.getUPSData().outputVoltage);
+                      (float)usb_ups.getUPSData()->outputVoltage);
     }
 
     // Aggiornamento stato LED diagnostico
@@ -153,3 +153,4 @@ void loop() {
     delay(10);
 }
 #endif
+

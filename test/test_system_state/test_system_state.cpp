@@ -83,3 +83,4 @@ void setup() {
 void loop() {
     // Loop vuoto — i test vengono eseguiti una sola volta in setup()
 }
+

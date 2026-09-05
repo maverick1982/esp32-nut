@@ -6,6 +6,8 @@
 
 class EatonDriver : public IUPSDriver {
 public:
+    const char* getDriverName() const override { return "EatonDriver"; }
+public:
     EatonDriver();
     virtual ~EatonDriver() = default;
 

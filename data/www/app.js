@@ -405,7 +405,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Update table
             if (upsTableBody) {
-                const sortedKeys = Object.keys(data).sort();
+                const sortedKeys = Object.keys(data)
+                    .filter(k => k !== 'ups.beeper.switchable' && (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
+                    .sort();
                 let currentIndex = 0;
                 
                 for (const key of sortedKeys) {
@@ -434,6 +436,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null);
                     }
                     currentIndex++;
+                }
+                
+                // Remove stale rows that are no longer in the payload
+                while (upsTableBody.children.length > currentIndex) {
+                    upsTableBody.removeChild(upsTableBody.lastChild);
                 }
             }
             

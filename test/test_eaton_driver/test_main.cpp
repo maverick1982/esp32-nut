@@ -8,7 +8,9 @@ public:
     std::vector<HIDUsageDef> _usages;
     std::vector<uint8_t> _requestedStrings;
 
-    const UPSData& getUPSData() const override { return _data; }
+    void lock() const override {}
+    void unlock() const override {}
+    UPSDataLock getUPSData() const override { return UPSDataLock(_data, this); }
     String getUPSStatusString() const override { return "OL"; }
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
@@ -208,3 +210,4 @@ void setup() {
 void loop() {}
 #endif
 #endif
+

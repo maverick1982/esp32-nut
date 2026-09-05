@@ -10,6 +10,7 @@ class IUSBHostUPS;
 class IUPSDriver {
 public:
     virtual ~IUPSDriver() = default;
+    virtual const char* getDriverName() const = 0;
 
     /**
      * @brief Called when the device is initialized or connected

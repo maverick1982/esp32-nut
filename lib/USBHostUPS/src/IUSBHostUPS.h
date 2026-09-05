@@ -10,7 +10,30 @@ class IUSBHostUPS {
 public:
     virtual ~IUSBHostUPS() = default;
     virtual void end() {}
-    virtual const UPSData& getUPSData() const = 0;
+    virtual void lock() const = 0;
+    virtual void unlock() const = 0;
+    
+    class UPSDataLock {
+    private:
+        const UPSData& _data;
+        const IUSBHostUPS* _host;
+    public:
+        UPSDataLock(const UPSData& data, const IUSBHostUPS* host) : _data(data), _host(host) {
+            if (_host) _host->lock();
+        }
+        ~UPSDataLock() {
+            if (_host) _host->unlock();
+        }
+        UPSDataLock(const UPSDataLock&) = delete;
+        UPSDataLock& operator=(const UPSDataLock&) = delete;
+        UPSDataLock(UPSDataLock&& other) noexcept : _data(other._data), _host(other._host) {
+            other._host = nullptr;
+        }
+        const UPSData* operator->() const { return &_data; }
+        const UPSData& get() const { return _data; }
+    };
+
+    virtual UPSDataLock getUPSData() const = 0;
     virtual String getUPSStatusString() const = 0;
     virtual bool setBeeper(bool enable) = 0;
     virtual bool isConnected() const = 0;
@@ -25,6 +48,7 @@ public:
     virtual bool requestStringDescriptor(uint8_t string_index) = 0;
     virtual uint16_t getVID() const { return 0; }
     virtual uint16_t getPID() const { return 0; }
+    virtual void logDebug(const String& msg) const {}
 
     uint8_t _iManufacturer = 0;
     uint8_t _iProduct = 0;

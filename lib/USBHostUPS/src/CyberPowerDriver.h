@@ -6,6 +6,8 @@
 
 class CyberPowerDriver : public IUPSDriver {
 public:
+    const char* getDriverName() const override { return "CyberPowerDriver"; }
+public:
     CyberPowerDriver();
     virtual ~CyberPowerDriver() = default;
 
