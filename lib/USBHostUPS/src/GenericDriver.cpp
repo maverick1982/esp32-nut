@@ -72,6 +72,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 std::vector<uint16_t> rids;
                 for (const auto& u : usages) {
                     if (u.report_type == 2) continue; // Skip OUTPUT reports
+                    if (!shouldPollUsage(u.path)) continue;
                     uint16_t pair = (u.report_type << 8) | u.report_id;
                     bool found = false;
                     for (uint16_t id : rids) {
@@ -125,6 +126,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     host->requestReport(r_id, r_type, expected_length);
                 } else {
                     _poll_step = 0; // Done
+                    _last_fast_poll = now != 0 ? now : 1;
                     return;
                 }
             }

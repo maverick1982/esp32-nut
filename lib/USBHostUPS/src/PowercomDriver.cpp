@@ -32,6 +32,7 @@ void PowercomDriver::setup() {
 
 void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
+    _current_pid = host->getPID();
 
     if (data.get("ups.type") != "Powercom") {
         data.set("ups.type", "Powercom");
@@ -195,3 +196,21 @@ uint8_t PowercomDriver::encodeBeeperValue(bool enable, uint16_t bit_size) const 
     if (bit_size == 1) return enable ? 1 : 0;
     return enable ? 1 : 2; // Powercom protocol: 1 = enable, 2 = disable
 }
+
+uint32_t PowercomDriver::getPollPacingMs() { return (_current_pid == 0x0004) ? 800 : 0; }
+uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x0004) ? 5000 : 2000; }
+bool PowercomDriver::shouldPollUsage(const String& path) {
+    if (_current_pid != 0x0004) return true;
+    if (path.indexOf("ACPresent") >= 0) return true;
+    if (path.indexOf("Discharging") >= 0) return true;
+    if (path.indexOf("Charging") >= 0) return true;
+    if (path.indexOf("BelowRemainingCapacityLimit") >= 0) return true;
+    if (path.indexOf("Voltage") >= 0) return true;
+    if (path.indexOf("PercentLoad") >= 0) return true;
+    if (path.indexOf("Temperature") >= 0) return true;
+    if (path.indexOf("RemainingCapacity") >= 0) return true;
+    if (path.indexOf("RunTimeToEmpty") >= 0) return true;
+    if (path.indexOf("AudibleAlarmControl") >= 0) return true;
+    return false;
+}
+

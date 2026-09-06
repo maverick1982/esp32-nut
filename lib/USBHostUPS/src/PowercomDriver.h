@@ -18,10 +18,12 @@ public:
     uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const override;
 
 protected:
-    uint32_t getPollPacingMs() override { return 800; } // Very slow pacing for Powercom MCUs
-    uint32_t getFastPollIntervalMs() override { return 5000; } // Slower fast-poll (5s)
+    uint32_t getPollPacingMs() override;
+    uint32_t getFastPollIntervalMs() override;
+    bool shouldPollUsage(const String& path) override;
 
 private:
+    uint16_t _current_pid = 0;
     uint32_t _last_0xa4_poll;
     uint8_t _mfr_retries;
     uint8_t _prod_retries;

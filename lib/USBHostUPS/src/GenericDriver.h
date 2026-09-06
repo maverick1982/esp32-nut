@@ -19,6 +19,7 @@ public:
 protected:
     virtual uint32_t getPollPacingMs() { return 50; }
     virtual uint32_t getFastPollIntervalMs() { return 2000; }
+    virtual bool shouldPollUsage(const String& path) { return true; }
 
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
