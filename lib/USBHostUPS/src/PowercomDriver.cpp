@@ -93,6 +93,10 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     host->requestReport(0x21, 3, 8); // output.voltage
                 } else if (_poll_step == 4) {
                     host->requestReport(0x1F, 3, 8); // ups.load
+                } else if (_poll_step == 5) {
+                    host->requestReport(0x2C, 3, 8); // ups.temperature
+                } else if (_poll_step == 6) {
+                    host->requestReport(0x2D, 3, 8); // battery.temperature
                 } else {
                     _poll_step = 0;
                     return;
@@ -193,50 +197,11 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         if (u.report_id != report_id || u.report_type != report_type) continue;
         double val = HIDParser::extractUsage(&u, report_id, data, length);
         
-        // Powercom proprietary fallback for battery temperature (Usage Page 0x0002, ID 0x0036)
-        if (u.path.endsWith("0x00020036")) {
-            ups_data.set("battery.temperature", String(val, 1));
-        }
-
         for (const auto& m : mappings) {
             if (u.path == String(m.path)) {
                 m.apply(this, ups_data, val, &u);
                 break;
             }
-        }
-        
-        // Match by usage instead of full path because Powercom uses non-standard Usage Page 0x0002
-        if (u.usage == 0x00020030) { // Voltage
-            if (u.path.indexOf("0x0002001A") >= 0) { ups_data.set("input.voltage", String(val * 4.0f, 1)); } // Input
-            else if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("output.voltage", String(val * 4.0f, 1)); } // Output
-        }
-        else if (u.usage == 0x00020035) { // PercentLoad
-            if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("ups.load", String((int)val)); }
-        }
-        else if (u.usage == 0x00020081) { // InternalChargeController (Status bits 1)
-            uint32_t bitmask = (uint32_t)val;
-            ups_data.set("ups.status.internal_failure", (bitmask & 0x01) != 0 ? "1" : "0");
-            ups_data.set("ups.status.replace_battery", (bitmask & 0x02) != 0 ? "1" : "0");
-            ups_data.set("ups.status.shutdown_imminent", (bitmask & 0x10) != 0 ? "1" : "0");
-        }
-        else if (u.usage == 0x00020082) { // PrimaryBatterySupport (Status bits 2)
-            uint32_t bitmask = (uint32_t)val;
-            ups_data.set("ups.status.ac_present", (bitmask & 0x01) == 0 ? "1" : "0"); // 1 = line fail
-            ups_data.set("ups.status.discharging", (bitmask & 0x01) != 0 ? "1" : "0"); 
-            ups_data.set("ups.status.battery_low", (bitmask & 0x02) != 0 ? "1" : "0");
-            ups_data.set("ups.status.overload", (bitmask & 0x20) != 0 ? "1" : "0");
-        }
-        else if (u.usage == 0x00020032) { // Frequency
-            // Could map to input or output depending on collection
-        }
-        else if (u.usage == 0x00020057) { // DelayBeforeShutdown
-            uint16_t i = (uint16_t)val;
-            int32_t delay = 60 * (i >> 8) + (i & 0x00FF);
-            ups_data.set("ups.delay.shutdown", String(delay));
-            ups_data.set("ups.timer.shutdown", String(delay));
-        }
-        else if (u.usage == 0x00020083) { // DesignCapacity
-            ups_data.set("battery.capacity", String((int)(val / 3600.0)));
         }
     }
 }

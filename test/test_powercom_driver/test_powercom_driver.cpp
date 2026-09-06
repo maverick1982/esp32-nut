@@ -157,38 +157,23 @@ void test_powercom_loop_polling_nut_alignment(void) {
     TEST_ASSERT_EQUAL_UINT32(4, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x1F, host._requestedReports[3].first);
 
-    // Test another PID mapping
+    // Step 5: ups.temperature (0x2C)
+    driver.loop(&host, ups_data, 500);
+    TEST_ASSERT_EQUAL_UINT32(5, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x2C, host._requestedReports[4].first);
+
+    // Step 6: battery.temperature (0x2D)
+    driver.loop(&host, ups_data, 600);
+    TEST_ASSERT_EQUAL_UINT32(6, host._requestedReports.size());
+    TEST_ASSERT_EQUAL_UINT8(0x2D, host._requestedReports[5].first);
+
+    // Test another PID mapping (starts over cycle because we use a new host context if we want, but here we just keep looping)
+    // Actually wait, let's just test the model string assignment
     host._pid = 0x00a3;
     UPSData ups_data2;
-    driver.loop(&host, ups_data2, 500);
+    driver.setup();
+    driver.loop(&host, ups_data2, 700);
     TEST_ASSERT_EQUAL_STRING("Smart King Pro", ups_data2.get("ups.model").c_str());
-}
-
-#include "HIDParser.h"
-void test_powercom_vr_temperature_fallback(void) {
-    PowercomDriver driver;
-    UPSData ups_data;
-    MockPowercomHost host;
-    
-    // Simulate a parsed Usage from HIDParser
-    HIDUsageDef usageDef;
-    usageDef.report_id = 0x22;
-    usageDef.report_type = 3; // Feature
-    usageDef.path = "0x00020010.0x00020036";
-    usageDef.bit_offset = 0;
-    usageDef.bit_size = 8;
-    usageDef.found = true;
-    usageDef.logical_min = 0;
-    usageDef.logical_max = 255;
-    usageDef.exponent = 0;
-    
-    host._usages.push_back(usageDef);
-    
-    uint8_t data_temp[] = { 0x22, 0x1A }; // 0x1A = 26
-    driver.decodeReport(&host, 0x22, 3, data_temp, sizeof(data_temp), ups_data);
-    
-    TEST_ASSERT_TRUE(ups_data.hasKey("battery.temperature"));
-    TEST_ASSERT_EQUAL_STRING("26.0", ups_data.get("battery.temperature").c_str());
 }
 
 #include "HIDParser.h"
@@ -253,7 +238,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
     RUN_TEST(test_powercom_loop_polling_nut_alignment);
-    RUN_TEST(test_powercom_vr_temperature_fallback);
     RUN_TEST(test_powercom_real_descriptor_parsing);
     return UNITY_END();
 }
@@ -266,7 +250,7 @@ void setup() {
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
     RUN_TEST(test_powercom_loop_polling_nut_alignment);
-    RUN_TEST(test_powercom_vr_temperature_fallback);
+    
     RUN_TEST(test_powercom_real_descriptor_parsing);
     UNITY_END();
 }
