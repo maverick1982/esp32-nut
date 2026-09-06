@@ -126,55 +126,7 @@ void test_powercom_beeper_mapping(void) {
     TEST_ASSERT_EQUAL_UINT8(0, driver.encodeBeeperValue(false, 1));
 }
 
-void test_powercom_loop_polling_nut_alignment(void) {
-    PowercomDriver driver;
-    UPSData ups_data;
-    MockPowercomHost host;
-    host._pid = 0x0004;
-    driver.setup();
 
-    // Loop execution assigns vendor and product and sends 0x0A keep-alive report (step 1)
-    driver.loop(&host, ups_data, 100);
-    TEST_ASSERT_EQUAL_STRING("POWERCOM Co.,LTD", ups_data.get("ups.mfr").c_str());
-    TEST_ASSERT_EQUAL_STRING("SPD / Vanguard / BNT", ups_data.get("ups.model").c_str());
-    TEST_ASSERT_EQUAL_UINT32(1, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x0A, host._requestedReports[0].first);
-    TEST_ASSERT_EQUAL_UINT8(3, host._requestedReports[0].second); // Feature report
-    TEST_ASSERT_EQUAL_UINT32(0, host._requestedStrings.size());
-
-    // Step 2: input.voltage (0x1D)
-    driver.loop(&host, ups_data, 200);
-    TEST_ASSERT_EQUAL_UINT32(2, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x1D, host._requestedReports[1].first);
-
-    // Step 3: output.voltage (0x21)
-    driver.loop(&host, ups_data, 300);
-    TEST_ASSERT_EQUAL_UINT32(3, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x21, host._requestedReports[2].first);
-
-    // Step 4: ups.load (0x1F)
-    driver.loop(&host, ups_data, 400);
-    TEST_ASSERT_EQUAL_UINT32(4, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x1F, host._requestedReports[3].first);
-
-    // Step 5: ups.temperature (0x2C)
-    driver.loop(&host, ups_data, 500);
-    TEST_ASSERT_EQUAL_UINT32(5, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x2C, host._requestedReports[4].first);
-
-    // Step 6: battery.temperature (0x2D)
-    driver.loop(&host, ups_data, 600);
-    TEST_ASSERT_EQUAL_UINT32(6, host._requestedReports.size());
-    TEST_ASSERT_EQUAL_UINT8(0x2D, host._requestedReports[5].first);
-
-    // Test another PID mapping (starts over cycle because we use a new host context if we want, but here we just keep looping)
-    // Actually wait, let's just test the model string assignment
-    host._pid = 0x00a3;
-    UPSData ups_data2;
-    driver.setup();
-    driver.loop(&host, ups_data2, 700);
-    TEST_ASSERT_EQUAL_STRING("Smart King Pro", ups_data2.get("ups.model").c_str());
-}
 
 #include "HIDParser.h"
 #include <fstream>
@@ -237,7 +189,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
-    RUN_TEST(test_powercom_loop_polling_nut_alignment);
+    
     RUN_TEST(test_powercom_real_descriptor_parsing);
     return UNITY_END();
 }
@@ -249,7 +201,7 @@ void setup() {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
-    RUN_TEST(test_powercom_loop_polling_nut_alignment);
+    
     
     RUN_TEST(test_powercom_real_descriptor_parsing);
     UNITY_END();

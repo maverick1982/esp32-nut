@@ -61,51 +61,16 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         }
     }
 
-    // Quick-Poll: Every 2.0s trigger status keep-alive (Report 0x0A)
-    // Full-Poll: Every 30.0s query voltages and load (Reports 0x1D, 0x21, 0x1F)
-    if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-            _last_fast_poll = (now != 0) ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
+    // Delegating dynamic PDC walk to GenericDriver (identical to NUT hid_ups_walk)
+    GenericDriver::loop(host, data, now);
 
-            _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
-                _slow_poll_counter = 0;
-            }
-        }
-    }
-
-    if (_poll_step > 0) {
-        if (host->isControlPending()) return; // Non-overlapping guard
-
-        if (now - _last_step_time >= 50 || _poll_step == 1) {
-            _last_step_time = now;
-
-            if (_poll_step == 1) {
-                // Step 1: Quick-Poll (Report 0x0A / ACPresent)
-                host->requestReport(0x0A, 3, 8);
-            } else if (_slow_poll_counter == 0) {
-                // Steps 2..4 only during the 30s cycle
-                if (_poll_step == 2) {
-                    host->requestReport(0x1D, 3, 8); // input.voltage
-                } else if (_poll_step == 3) {
-                    host->requestReport(0x21, 3, 8); // output.voltage
-                } else if (_poll_step == 4) {
-                    host->requestReport(0x1F, 3, 8); // ups.load
-                } else if (_poll_step == 5) {
-                    host->requestReport(0x2C, 3, 8); // ups.temperature
-                } else if (_poll_step == 6) {
-                    host->requestReport(0x2D, 3, 8); // battery.temperature
-                } else {
-                    _poll_step = 0;
-                    return;
-                }
-            } else {
-                _poll_step = 0;
-                return;
-            }
-            _poll_step++;
+    // Legacy Powercom (0xA4 report) fallback polling
+    // Older Powercom models don't use standard PDC reports and only expose an 0xA4 report.
+    // We poll this every 2 seconds if GenericDriver finishes its cycle.
+    if (_poll_step == 0 && (now - _last_0xa4_poll >= 2000 || _last_0xa4_poll == 0)) {
+        if (!host->isControlPending()) {
+            _last_0xa4_poll = now != 0 ? now : 1;
+            host->requestReport(0xA4, 3, 8);
         }
     }
 }
