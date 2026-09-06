@@ -17,6 +17,9 @@ public:
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
 protected:
+    virtual uint32_t getPollPacingMs() { return 50; }
+    virtual uint32_t getFastPollIntervalMs() { return 2000; }
+
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
     uint32_t _last_step_time;

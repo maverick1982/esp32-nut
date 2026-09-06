@@ -17,12 +17,12 @@ public:
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const override;
 
+protected:
+    uint32_t getPollPacingMs() override { return 800; } // Very slow pacing for Powercom MCUs
+    uint32_t getFastPollIntervalMs() override { return 5000; } // Slower fast-poll (5s)
+
 private:
-    uint32_t _last_fast_poll;
-    uint32_t _last_step_time;
     uint32_t _last_0xa4_poll;
-    uint8_t _poll_step;
-    uint8_t _slow_poll_counter;
     uint8_t _mfr_retries;
     uint8_t _prod_retries;
     uint8_t _serial_retries;

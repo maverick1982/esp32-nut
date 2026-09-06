@@ -15,22 +15,15 @@
 #include <cctype>
 
 PowercomDriver::PowercomDriver() : 
-    _last_fast_poll(0),
-    _last_step_time(0),
     _last_0xa4_poll(0),
-    _poll_step(0),
-    _slow_poll_counter(0),
     _mfr_retries(0),
     _prod_retries(0),
     _serial_retries(0) {
 }
 
 void PowercomDriver::setup() {
-    _last_fast_poll = 0;
-    _poll_step = 0;
-    _last_step_time = 0;
+    GenericDriver::setup();
     _last_0xa4_poll = 0;
-    _slow_poll_counter = 14;
     _mfr_retries = 0;
     _prod_retries = 0;
     _serial_retries = 0;
@@ -68,8 +61,9 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     // Older Powercom models don't use standard PDC reports and only expose an 0xA4 report.
     // We poll this every 2 seconds if GenericDriver finishes its cycle.
     if (_poll_step == 0 && (now - _last_0xa4_poll >= 2000 || _last_0xa4_poll == 0)) {
-        if (!host->isControlPending()) {
+        if (!host->isControlPending() && (now - _last_step_time >= getPollPacingMs())) {
             _last_0xa4_poll = now != 0 ? now : 1;
+            _last_step_time = now; // Sync with pacing grid
             host->requestReport(0xA4, 3, 8);
         }
     }

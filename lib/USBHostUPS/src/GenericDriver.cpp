@@ -38,13 +38,16 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     }
 
     if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
+        if (now - _last_fast_poll >= getFastPollIntervalMs() || _last_fast_poll == 0) {
             _last_fast_poll = now != 0 ? now : 1;
             _poll_step = 1;
-            _last_step_time = now;
             
             _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
+            // If the fast poll is > 2s, we adjust the slow counter target to roughly hit 30s.
+            // (30000 / getFastPollIntervalMs())
+            uint32_t slow_target = 30000 / getFastPollIntervalMs();
+            if (slow_target == 0) slow_target = 1;
+            if (_slow_poll_counter >= slow_target) { 
                 _slow_poll_counter = 0;
             }
         }
@@ -53,7 +56,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (_poll_step > 0) {
         if (host->isControlPending()) return;
 
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
+        if (now - _last_step_time >= getPollPacingMs()) { // Strict pacing for all requests
             _last_step_time = now;
             
             if (_poll_step == 1) {
