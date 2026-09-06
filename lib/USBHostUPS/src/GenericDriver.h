@@ -19,13 +19,17 @@ public:
 protected:
     virtual uint32_t getPollPacingMs() { return 50; }
     virtual uint32_t getFastPollIntervalMs() { return 2000; }
+    virtual uint32_t getFullPollIntervalMs() { return 30000; }
     virtual bool shouldPollUsage(const String& path) { return true; }
+    virtual bool isStaticUsage(const String& path);
 
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
+    uint32_t _last_full_poll;
     uint32_t _last_step_time;
     uint8_t _poll_step;
     uint8_t _slow_poll_counter;
+    bool _is_full_walk;
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
 };

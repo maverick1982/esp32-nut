@@ -16,18 +16,37 @@
 GenericDriver::GenericDriver() : 
     _last_poll(0),
     _last_fast_poll(0),
+    _last_full_poll(0),
     _last_step_time(0),
     _poll_step(0),
-    _slow_poll_counter(0) {
+    _slow_poll_counter(0),
+    _is_full_walk(false),
+    _batteryDateStringIndex(0) {
 }
 
 void GenericDriver::setup() {
     _last_poll = 0;
     _last_fast_poll = 0;
+    _last_full_poll = 0;
     _poll_step = 0;
     _last_step_time = 0;
     _slow_poll_counter = 14;
+    _is_full_walk = false;
+    _batteryDateStringIndex = 0;
     _active_beeper = "";
+}
+
+bool GenericDriver::isStaticUsage(const String& path) {
+    if (path.indexOf("ConfigVoltage") >= 0) return true;
+    if (path.indexOf("ConfigActivePower") >= 0) return true;
+    if (path.indexOf("ConfigApparentPower") >= 0) return true;
+    if (path.indexOf("ConfigFrequency") >= 0) return true;
+    if (path.indexOf("HighVoltageTransfer") >= 0) return true;
+    if (path.indexOf("LowVoltageTransfer") >= 0) return true;
+    if (path.indexOf("RemainingCapacityLimit") >= 0) return true;
+    if (path.indexOf("DesignCapacity") >= 0) return true;
+    if (path.indexOf("ManufacturerDate") >= 0) return true;
+    return false;
 }
 
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
@@ -38,18 +57,21 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     }
 
     if (_poll_step == 0) {
-        if (now - _last_fast_poll >= getFastPollIntervalMs() || _last_fast_poll == 0) {
-            _last_fast_poll = now != 0 ? now : 1;
+        bool initial_run = (_last_full_poll == 0);
+        bool full_poll_due = (now - _last_full_poll >= getFullPollIntervalMs());
+        bool fast_poll_due = (now - _last_fast_poll >= getFastPollIntervalMs() || _last_fast_poll == 0);
+
+        if (initial_run || full_poll_due) {
+            _is_full_walk = true;
             _poll_step = 1;
-            
-            _slow_poll_counter++;
-            // If the fast poll is > 2s, we adjust the slow counter target to roughly hit 30s.
-            // (30000 / getFastPollIntervalMs())
-            uint32_t slow_target = 30000 / getFastPollIntervalMs();
-            if (slow_target == 0) slow_target = 1;
-            if (_slow_poll_counter >= slow_target) { 
-                _slow_poll_counter = 0;
-            }
+            _last_fast_poll = now != 0 ? now : 1;
+        } else if (fast_poll_due) {
+            _is_full_walk = false;
+            _last_fast_poll = now != 0 ? now : 1;
+            // Quick update: feature reports are skipped (no traffic on EP0)
+            return;
+        } else {
+            return;
         }
     }
 
@@ -60,13 +82,13 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             
             if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
+                if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
             } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
+                if (!data.hasKey("ups.model") && host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+                if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else if (_poll_step == 4) {
-                if (_slow_poll_counter == 0 && !data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
+                if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
                 const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
@@ -95,9 +117,31 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     }
                     ++it;
                 }
+
+                // If this is a recurring full walk (not initial walk), exclude reports that only contain static usages
+                if (_last_full_poll > 0) {
+                    for (auto it = rids.begin(); it != rids.end(); ) {
+                        uint8_t r_id = *it & 0xFF;
+                        uint8_t r_type = *it >> 8;
+                        bool has_dynamic = false;
+                        for (const auto& u : usages) {
+                            if (u.report_id == r_id && u.report_type == r_type) {
+                                if (!isStaticUsage(u.path)) {
+                                    has_dynamic = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!has_dynamic) {
+                            it = rids.erase(it);
+                            continue;
+                        }
+                        ++it;
+                    }
+                }
                 
                 int index = _poll_step - 5;
-                if (index >= 0 && index < rids.size()) {
+                if (index >= 0 && index < (int)rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
                     
@@ -126,7 +170,9 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     host->requestReport(r_id, r_type, expected_length);
                 } else {
                     _poll_step = 0; // Done
+                    _last_full_poll = now != 0 ? now : 1;
                     _last_fast_poll = now != 0 ? now : 1;
+                    _is_full_walk = false;
                     return;
                 }
             }
@@ -161,19 +207,49 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
         
-        { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Flow.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
+        { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.voltage") && d.isOnline()) return;
+            d.set("input.voltage", String(v, 1)); 
+        } },
+        { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.voltage") && d.isOnline()) return;
+            d.set("input.voltage", String(v, 1)); 
+        } },
+        { "UPS.Flow.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.voltage") && d.isOnline()) return;
+            d.set("input.voltage", String(v, 1)); 
+        } },
         
-        { "UPS.PowerConverter.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Flow.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
+        { "UPS.PowerConverter.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.frequency") && d.isOnline()) return;
+            d.set("input.frequency", String(v, 1)); 
+        } },
+        { "UPS.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.frequency") && d.isOnline()) return;
+            d.set("input.frequency", String(v, 1)); 
+        } },
+        { "UPS.Flow.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("input.frequency") && d.isOnline()) return;
+            d.set("input.frequency", String(v, 1)); 
+        } },
         
-        { "UPS.PowerConverter.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
-        { "UPS.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
+        { "UPS.PowerConverter.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("output.voltage") && d.isOnline()) return;
+            d.set("output.voltage", String(v, 1)); 
+        } },
+        { "UPS.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("output.voltage") && d.isOnline()) return;
+            d.set("output.voltage", String(v, 1)); 
+        } },
         
-        { "UPS.PowerConverter.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
-        { "UPS.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
+        { "UPS.PowerConverter.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("output.frequency") && d.isOnline()) return;
+            d.set("output.frequency", String(v, 1)); 
+        } },
+        { "UPS.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            if (v <= 0.0 && d.hasKey("output.frequency") && d.isOnline()) return;
+            d.set("output.frequency", String(v, 1)); 
+        } },
         
         { "UPS.PowerConverter.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
         { "UPS.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
@@ -231,10 +307,14 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
         }},
         { "UPS.PowerSummary.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
+            double temp = (v > 200.0) ? (v - 273.15) : v;
+            if (temp <= 0.0 && d.hasKey("ups.temperature") && d.isOnline()) return;
+            d.set("ups.temperature", String(temp, 1));
         }},
         { "UPS.Battery.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
+            double temp = (v > 200.0) ? (v - 273.15) : v;
+            if (temp <= 0.0 && d.hasKey("battery.temperature") && d.isOnline()) return;
+            d.set("battery.temperature", String(temp, 1));
         }},
         
         { "UPS.PowerConverter.Output.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
@@ -255,30 +335,33 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         
         { "UPS.Flow.ConfigApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power.nominal", String((int)v)); d.updateRealPower(); } },
         
-        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
+        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) d.set("input.voltage.nominal", String((int)v)); } },
+        { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) d.set("input.voltage.nominal", String((int)v)); } },
+        { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) d.set("input.voltage.nominal", String((int)v)); } },
         
-        { "UPS.PowerConverter.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
-        { "UPS.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
+        { "UPS.PowerConverter.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) d.set("output.voltage.nominal", String((int)v)); } },
+        { "UPS.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) d.set("output.voltage.nominal", String((int)v)); } },
         
         { "UPS.PowerConverter.Output.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } },
         { "UPS.PowerConverter.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
         
         { "UPS.PowerSummary.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->path != drv->_active_beeper) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 

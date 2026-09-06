@@ -60,8 +60,8 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
     // Legacy Powercom (0xA4 report) fallback polling
     // Older Powercom models don't use standard PDC reports and only expose an 0xA4 report.
-    // We poll this every 2 seconds if GenericDriver finishes its cycle.
-    if (_poll_step == 0 && (now - _last_0xa4_poll >= 2000 || _last_0xa4_poll == 0)) {
+    // We poll this once every getFullPollIntervalMs() (or on first run).
+    if (_poll_step == 0 && (now - _last_0xa4_poll >= getFullPollIntervalMs() || _last_0xa4_poll == 0)) {
         if (!host->isControlPending() && (now - _last_step_time >= getPollPacingMs())) {
             _last_0xa4_poll = now != 0 ? now : 1;
             _last_step_time = now; // Sync with pacing grid
@@ -143,12 +143,14 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } // Powercom NUT: 1 = enabled
             else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } // Powercom NUT: 2 = disabled
+            else if ((int)v == 0 && d.hasKey("ups.beeper.status")) { /* keep previous */ }
             else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } },
         { "UPS.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } 
             else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } 
+            else if ((int)v == 0 && d.hasKey("ups.beeper.status")) { /* keep previous */ }
             else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } }
     };

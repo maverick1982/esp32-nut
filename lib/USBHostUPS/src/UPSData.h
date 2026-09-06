@@ -101,6 +101,10 @@ public:
         return status;
     }
 
+    bool isOnline() const {
+        return computeUPSStatusString(*this).indexOf("OL") >= 0;
+    }
+
     void updateRealPower() {
         if (!hasKey("ups.load")) return;
         uint8_t loadPct = (uint8_t)getFloat("ups.load");

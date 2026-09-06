@@ -180,6 +180,164 @@ void test_powercom_real_descriptor_parsing(void) {
     TEST_ASSERT_TRUE_MESSAGE(parser.hasFeatureBeeperControl(), "Powercom SPD-750U descriptor contains Feature report for beeper");
 }
 
+void test_powercom_spurious_zero_ignored_when_online(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+
+    HIDUsageDef u_in_volt;
+    u_in_volt.report_id = 0x12;
+    u_in_volt.report_type = 3;
+    u_in_volt.bit_offset = 0;
+    u_in_volt.bit_size = 16;
+    u_in_volt.exponent = -1;
+    u_in_volt.unit = 0;
+    u_in_volt.path = "UPS.Input.Voltage";
+    u_in_volt.found = true;
+    host._usages.push_back(u_in_volt);
+
+    HIDUsageDef u_out_volt;
+    u_out_volt.report_id = 0x1D;
+    u_out_volt.report_type = 3;
+    u_out_volt.bit_offset = 0;
+    u_out_volt.bit_size = 16;
+    u_out_volt.exponent = -1;
+    u_out_volt.unit = 0;
+    u_out_volt.path = "UPS.Output.Voltage";
+    u_out_volt.found = true;
+    host._usages.push_back(u_out_volt);
+
+    HIDUsageDef u_temp;
+    u_temp.report_id = 0x2C;
+    u_temp.report_type = 3;
+    u_temp.bit_offset = 0;
+    u_temp.bit_size = 8;
+    u_temp.exponent = 0;
+    u_temp.unit = 0;
+    u_temp.path = "UPS.Battery.Temperature";
+    u_temp.found = true;
+    host._usages.push_back(u_temp);
+
+    // Initial valid state: Online (OL), 218V in, 216V out, 30C
+    ups_data.set("ups.status.ac_present", "1");
+    ups_data.set("input.voltage", "218.0");
+    ups_data.set("output.voltage", "216.0");
+    ups_data.set("battery.temperature", "30.0");
+
+    // Simulate empty / zeroed Feature Report responses (0.0V, 0C)
+    uint8_t zero_in_volt[] = { 0x12, 0x00, 0x00 };
+    driver.decodeReport(&host, 0x12, 3, zero_in_volt, sizeof(zero_in_volt), ups_data);
+
+    uint8_t zero_out_volt[] = { 0x1D, 0x00, 0x00 };
+    driver.decodeReport(&host, 0x1D, 3, zero_out_volt, sizeof(zero_out_volt), ups_data);
+
+    uint8_t zero_temp[] = { 0x2C, 0x00 };
+    driver.decodeReport(&host, 0x2C, 3, zero_temp, sizeof(zero_temp), ups_data);
+
+    // Assert: established valid values must NOT be overwritten by spurious zeros when OL
+    TEST_ASSERT_EQUAL_STRING("218.0", ups_data.get("input.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("216.0", ups_data.get("output.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("30.0", ups_data.get("battery.temperature").c_str());
+}
+
+void test_powercom_zero_input_voltage_allowed_when_on_battery(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+
+    HIDUsageDef u_in_volt;
+    u_in_volt.report_id = 0x12;
+    u_in_volt.report_type = 3;
+    u_in_volt.bit_offset = 0;
+    u_in_volt.bit_size = 16;
+    u_in_volt.exponent = -1;
+    u_in_volt.unit = 0;
+    u_in_volt.path = "UPS.Input.Voltage";
+    u_in_volt.found = true;
+    host._usages.push_back(u_in_volt);
+
+    // Initial state: On Battery (OB)
+    ups_data.set("ups.status.ac_present", "0");
+    ups_data.set("ups.status.discharging", "1");
+    ups_data.set("input.voltage", "218.0");
+
+    uint8_t zero_in_volt[] = { 0x12, 0x00, 0x00 };
+    driver.decodeReport(&host, 0x12, 3, zero_in_volt, sizeof(zero_in_volt), ups_data);
+
+    // When on battery, 0.0V is a legitimate real reading and must be updated
+    TEST_ASSERT_EQUAL_STRING("0.0", ups_data.get("input.voltage").c_str());
+}
+
+void test_powercom_two_tier_polling_and_static_skipping(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+
+    // Report 0x11: Nominal Input Voltage (Static)
+    HIDUsageDef u_nom;
+    u_nom.report_id = 0x11;
+    u_nom.report_type = 3;
+    u_nom.bit_offset = 0;
+    u_nom.bit_size = 16;
+    u_nom.path = "UPS.Input.ConfigVoltage";
+    u_nom.found = true;
+    host._usages.push_back(u_nom);
+
+    // Report 0x12: Input Voltage (Dynamic)
+    HIDUsageDef u_dyn;
+    u_dyn.report_id = 0x12;
+    u_dyn.report_type = 3;
+    u_dyn.bit_offset = 0;
+    u_dyn.bit_size = 16;
+    u_dyn.path = "UPS.Input.Voltage";
+    u_dyn.found = true;
+    host._usages.push_back(u_dyn);
+
+    driver.setup();
+
+    // t = 1000: Initial cycle starts full walk
+    driver.loop(&host, ups_data, 1000); // step 1
+    driver.loop(&host, ups_data, 1800); // step 2
+    driver.loop(&host, ups_data, 2600); // step 3
+    driver.loop(&host, ups_data, 3400); // step 4
+    driver.loop(&host, ups_data, 4200); // step 5: Report 0x11
+    driver.loop(&host, ups_data, 5000); // step 6: Report 0x12
+    driver.loop(&host, ups_data, 5800); // step 7: Done initial cycle
+    driver.loop(&host, ups_data, 6600); // Initial 0xA4 report
+
+    // Simulate Report 0x11 decoded
+    ups_data.set("input.voltage.nominal", "220");
+
+    size_t req_count_after_init = host._requestedReports.size();
+    TEST_ASSERT_GREATER_THAN(0, req_count_after_init);
+
+    // Clear recorded reports
+    host._requestedReports.clear();
+
+    // t = 10000: Quick Poll (in between 30s) -> No feature reports should be polled!
+    driver.loop(&host, ups_data, 10000);
+    driver.loop(&host, ups_data, 10800);
+    TEST_ASSERT_EQUAL_UINT32(0, host._requestedReports.size());
+
+    // t = 36000: 30s elapsed -> Full Poll triggers!
+    driver.loop(&host, ups_data, 36000);
+    driver.loop(&host, ups_data, 36800);
+    driver.loop(&host, ups_data, 37600);
+    driver.loop(&host, ups_data, 38400);
+    driver.loop(&host, ups_data, 39200);
+
+    // During this recurring full poll: Report 0x12 (dynamic) should be requested,
+    // but Report 0x11 (static, already populated) must NOT be requested!
+    bool requested_0x11 = false;
+    bool requested_0x12 = false;
+    for (const auto& r : host._requestedReports) {
+        if (r.first == 0x11) requested_0x11 = true;
+        if (r.first == 0x12) requested_0x12 = true;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(requested_0x11, "Static report 0x11 should NOT be polled again in recurring cycle");
+    TEST_ASSERT_TRUE_MESSAGE(requested_0x12, "Dynamic report 0x12 should be polled during recurring full poll");
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -189,8 +347,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
-    
     RUN_TEST(test_powercom_real_descriptor_parsing);
+    RUN_TEST(test_powercom_spurious_zero_ignored_when_online);
+    RUN_TEST(test_powercom_zero_input_voltage_allowed_when_on_battery);
+    RUN_TEST(test_powercom_two_tier_polling_and_static_skipping);
     return UNITY_END();
 }
 #else
@@ -201,9 +361,10 @@ void setup() {
     RUN_TEST(test_powercom_0xa4_invalid_empty);
     RUN_TEST(test_powercom_0xa4_invalid_garbage);
     RUN_TEST(test_powercom_beeper_mapping);
-    
-    
     RUN_TEST(test_powercom_real_descriptor_parsing);
+    RUN_TEST(test_powercom_spurious_zero_ignored_when_online);
+    RUN_TEST(test_powercom_zero_input_voltage_allowed_when_on_battery);
+    RUN_TEST(test_powercom_two_tier_polling_and_static_skipping);
     UNITY_END();
 }
 void loop() {}
