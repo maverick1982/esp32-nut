@@ -52,8 +52,7 @@ public:
 
     bool setBeeper(bool enable) override {
         beeperState = enable;
-        data.beeperEnabled = enable;
-        data.has.beeperEnabled = true;
+        data.set("ups.beeper.status", enable ? "enabled" : "disabled");
         return true;
     }
 
@@ -143,27 +142,16 @@ void test_list_ups(void) {
 void test_get_var_compliance(void) {
     server.setAuthenticated(0, true);
 
-    // Setup UPS data
-    mockHost.data.has.batteryVoltage = true;
-    mockHost.data.batteryVoltage = 13.6f;
-    mockHost.data.has.batteryTemperature = true;
-    mockHost.data.batteryTemperature = 28.5f;
-    mockHost.data.has.remainingCapacity = true;
-    mockHost.data.remainingCapacity = 95;
-    mockHost.data.has.designCapacity = true;
-    mockHost.data.designCapacity = 100;
-    mockHost.data.has.fullChargeCapacity = true;
-    mockHost.data.fullChargeCapacity = 100;
-    mockHost.data.has.batteryMfrDate = true;
-    mockHost.data.batteryMfrDate = "2024/05/23";
-    mockHost.data.has.upsMfrDate = true;
-    mockHost.data.upsMfrDate = "2006/09/15";
-    mockHost.data.has.batteryDate = true;
-    mockHost.data.batteryDate = "2025/01/10";
-    mockHost.data.has.outputVoltage = true;
-    mockHost.data.outputVoltage = 230.0f;
-    mockHost.data.has.manufacturer = true;
-    mockHost.data.manufacturer = "APC";
+    mockHost.data.set("battery.voltage", "13.6");
+    mockHost.data.set("battery.temperature", "28.5");
+    mockHost.data.set("battery.charge", "95");
+    mockHost.data.set("battery.capacity", "100");
+    mockHost.data.set("battery.capacity.full", "100");
+    mockHost.data.set("battery.mfr.date", "2024/05/23");
+    mockHost.data.set("ups.mfr.date", "2006/09/15");
+    mockHost.data.set("battery.date", "2025/01/10");
+    mockHost.data.set("output.voltage", "230.0");
+    mockHost.data.set("ups.mfr", "APC");
 
     // Supported var: battery.voltage
     printer.clear();
@@ -218,7 +206,7 @@ void test_get_var_compliance(void) {
 
 void test_instcmd_beeper(void) {
     server.setAuthenticated(0, true);
-    mockHost.data.has.beeperEnabled = true;
+    mockHost.data.set("ups.beeper.status", "enabled");
 
     // Toggle beeper
     printer.clear();
@@ -257,7 +245,7 @@ void test_list_client_terminates(void) {
 void test_list_cmd_unaffected_by_client(void) {
     // Regression: CLIENT shares a branch with CMD/RW, so the beeper listing must
     // stay behind the CMD guard and must not leak into CLIENT.
-    mockHost.data.has.beeperEnabled = true;
+    mockHost.data.set("ups.beeper.status", "enabled");
 
     printer.clear();
     server.processCommand(printer, 0, "LIST CMD testups");
@@ -337,9 +325,8 @@ void test_gonut_newups_sequence(void) {
     // go.nut's NewUPS() issues exactly these five commands, in this order, and
     // aborts on the first failure. nut_exporter reaches LIST VAR only if every
     // earlier call succeeds, so the whole sequence is the acceptance condition.
-    mockHost.data.has.beeperEnabled = true;
-    mockHost.data.has.batteryVoltage = true;
-    mockHost.data.batteryVoltage = 13.6f;
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.data.set("battery.voltage", "13.6");
 
     const char* sequence[] = {
         "LIST CLIENT testups",

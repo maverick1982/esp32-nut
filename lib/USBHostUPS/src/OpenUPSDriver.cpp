@@ -57,18 +57,17 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     };
 
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.Input.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.inputVoltage = true; d.inputVoltage = v * 0.1f; } },
-        { "UPS.PowerSummary.Input.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.inputCurrent = true; d.inputCurrent = v * 0.1f; } },
+        { "UPS.PowerSummary.Input.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v * 0.1f, 1)); } },
+        { "UPS.PowerSummary.Input.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.current", String(v * 0.1f, 2)); } },
         
-        { "UPS.PowerSummary.Output.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.outputVoltage = true; d.outputVoltage = v * 0.1f; } },
-        { "UPS.PowerSummary.Output.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.outputCurrent = true; d.outputCurrent = v * 0.1f; } },
+        { "UPS.PowerSummary.Output.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v * 0.1f, 1)); } },
+        { "UPS.PowerSummary.Output.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.current", String(v * 0.1f, 2)); } },
         
-        { "UPS.PowerSummary.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.batteryVoltage = true; d.batteryVoltage = v; } },
-        { "UPS.PowerSummary.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.has.batteryCurrent = true; d.batteryCurrent = v; } },
+        { "UPS.PowerSummary.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
+        { "UPS.PowerSummary.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.current", String(v, 2)); } },
         
         { "UPS.PowerSummary.Temperature", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            d.has.batteryTemperature = true; 
-            d.batteryTemperature = calculateTemperature(v);
+            d.set("battery.temperature", String(calculateTemperature(v), 1));
         } },
         
         { "UPS.PowerSummary.iOEMInformation", [](OpenUPSDriver* drv, UPSData&, double v, const HIDUsageDef*) {
@@ -93,28 +92,26 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
-    if (ups_data.has.outputVoltage && ups_data.has.outputCurrent) {
-        double power = ups_data.outputVoltage * ups_data.outputCurrent;
+    if (ups_data.hasKey("output.voltage") && ups_data.hasKey("output.current")) {
+        double power = ups_data.getFloat("output.voltage") * ups_data.getFloat("output.current");
         
         int nominalPower = 0;
-        if (ups_data.has.product) {
-            int wIndex = ups_data.product.indexOf('W');
+        if (ups_data.hasKey("ups.model")) {
+            String product = ups_data.get("ups.model");
+            int wIndex = product.indexOf('W');
             if (wIndex >= 0) {
-                nominalPower = ups_data.product.substring(wIndex + 1).toInt();
+                nominalPower = product.substring(wIndex + 1).toInt();
             }
         }
         if (nominalPower <= 0) nominalPower = 150;
         
-        ups_data.has.configActivePower = true;
-        ups_data.configActivePower = nominalPower;
+        ups_data.set("ups.realpower.nominal", String(nominalPower));
         
         double loadPct = (power / nominalPower) * 100.0;
         if (loadPct > 100.0) loadPct = 100.0;
         if (loadPct < 0.0) loadPct = 0.0;
         
-        ups_data.has.load = true;
-        ups_data.load = (uint8_t)round(loadPct);
-        
+        ups_data.set("ups.load", String((int)round(loadPct)));
         ups_data.updateRealPower();
     }
 }

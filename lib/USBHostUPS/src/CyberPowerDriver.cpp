@@ -25,9 +25,8 @@ void CyberPowerDriver::setup() {
 void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.upsType != getDriverName()) {
-        data.has.upsType = true;
-        data.upsType = getDriverName();
+    if (data.get("ups.type") != getDriverName()) {
+        data.set("ups.type", getDriverName());
     }
 
     if (_poll_step == 0) {
@@ -50,11 +49,11 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             _last_step_time = now;
             
             if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && data.manufacturer == "") if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
             } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && data.product == "") if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
             } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && data.serialNumber == "") if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
+                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
             } else {
                 const auto& usages = host->getUsages();
                 std::vector<uint16_t> rids;
@@ -110,13 +109,18 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             // In cps-hid, this is battery.voltage.nominal. We do NOT want to map it 
-            // to input.configVoltage like GenericDriver does.
-            // If GenericDriver sets it to inputVoltage, we must undo it or ignore it.
-            // Wait, GenericDriver maps UPS.PowerSummary.ConfigVoltage to configVoltage.
-            // So we override it by explicitly clearing it, or we intercept it.
-            // Actually, if GenericDriver already set it, we just reset it here!
-            d.has.configVoltage = false; 
-            d.configVoltage = 0;
+            // to input.voltage.nominal like GenericDriver does.
+            // Override the generic mapping by clearing the input one and setting battery.
+            d.set("input.voltage.nominal", ""); 
+            d.set("battery.voltage.nominal", String((int)v));
+        } },
+        { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
+        { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
+        { "UPS.Output.CPSInputSensitivity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
+            int val = (int)v;
+            if (val == 1) d.set("input.sensitivity", "low");
+            else if (val == 2) d.set("input.sensitivity", "medium");
+            else if (val == 3) d.set("input.sensitivity", "high");
         } }
     };
 

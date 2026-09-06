@@ -86,12 +86,12 @@ void test_apc_power_summary_status(void) {
     // AC Present = 1, Discharging = 0, NeedReplacement = 1 (bits: 1 | 0 | 4 = 0x05)
     uint8_t r1[] = { 0x01, 0x05 };
     driver.decodeReport(&mockHost, 0x01, 1, r1, sizeof(r1), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.acPresent);
-    TEST_ASSERT_TRUE(ups_data.acPresent);
-    TEST_ASSERT_TRUE(ups_data.has.discharging);
-    TEST_ASSERT_FALSE(ups_data.discharging);
-    TEST_ASSERT_TRUE(ups_data.has.needReplacement);
-    TEST_ASSERT_TRUE(ups_data.needReplacement);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.getBool("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.discharging"));
+    TEST_ASSERT_FALSE(ups_data.getBool("ups.status.discharging"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.replace_battery"));
+    TEST_ASSERT_TRUE(ups_data.getBool("ups.status.replace_battery"));
 }
 
 void test_apc_battery_replace_date_packed_bcd(void) {
@@ -137,25 +137,25 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     // 1. Decode UPS.PowerSummary.ManufacturerDate (2006/09/15: 0x352F -> 0x2F, 0x35)
     uint8_t r_ups_mfr_date[] = { 0x09, 0x2F, 0x35 };
     driver.decodeReport(&mockHost, 0x09, 3, r_ups_mfr_date, sizeof(r_ups_mfr_date), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.upsMfrDate);
-    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.upsMfrDate.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr.date"));
+    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.get("ups.mfr.date").c_str());
 
     // 2. Decode UPS.Battery.ManufacturerDate (2026/08/07: 0x5D07 -> 0x07, 0x5D)
     uint8_t r_batt_mfr_date[] = { 0x0B, 0x07, 0x5D };
     driver.decodeReport(&mockHost, 0x0B, 3, r_batt_mfr_date, sizeof(r_batt_mfr_date), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.batteryMfrDate);
-    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.batteryMfrDate.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("battery.mfr.date"));
+    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.get("battery.mfr.date").c_str());
 
     // 3. Decode Battery.APCBattReplaceDate (2025/01/10: 0x011025 -> LE: 0x25, 0x10, 0x01)
     uint8_t r_batt_date[] = { 0x07, 0x25, 0x10, 0x01 };
     driver.decodeReport(&mockHost, 0x07, 3, r_batt_date, sizeof(r_batt_date), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.batteryDate);
-    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.batteryDate.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("battery.date"));
+    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.get("battery.date").c_str());
 
     // Verify all 3 dates coexist without collision or overwriting
-    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.upsMfrDate.c_str());
-    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.batteryMfrDate.c_str());
-    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.batteryDate.c_str());
+    TEST_ASSERT_EQUAL_STRING("2006/09/15", ups_data.get("ups.mfr.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("2026/08/07", ups_data.get("battery.mfr.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("2025/01/10", ups_data.get("battery.date").c_str());
 }
 
 void test_apc_load_and_real_power_calculation(void) {
@@ -172,16 +172,15 @@ void test_apc_load_and_real_power_calculation(void) {
     mockHost._usages.push_back(u_load);
 
     // ConfigActivePower = 600W
-    ups_data.has.configActivePower = true;
-    ups_data.configActivePower = 600;
+    ups_data.set("ups.realpower.nominal", "600");
 
     // Load: 50%
     uint8_t r_load[] = { 0x08, 50 };
     driver.decodeReport(&mockHost, 0x08, 1, r_load, sizeof(r_load), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_EQUAL_UINT8(50, ups_data.load);
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16(300, ups_data.realPower); // 50% di 600W = 300W
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_EQUAL_UINT8(50, ups_data.getFloat("ups.load"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16(300, ups_data.getFloat("ups.realpower")); // 50% di 600W = 300W
 }
 
 void test_apc_loop_polling_and_string_requests(void) {
@@ -207,8 +206,8 @@ void test_apc_loop_polling_and_string_requests(void) {
     // Now simulate descriptor response for Manufacturer
     uint8_t desc_mfr[] = { 18, 0x03, 'A', 0, 'P', 0, 'C', 0, ' ', 0, 'b', 0, 'y', 0, ' ', 0 };
     driver.parseStringDescriptor(&mockHost, 1, desc_mfr, sizeof(desc_mfr), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.manufacturer);
-    TEST_ASSERT_EQUAL_STRING("APC by ", ups_data.manufacturer.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr"));
+    TEST_ASSERT_EQUAL_STRING("APC by ", ups_data.get("ups.mfr").c_str());
 }
 
 void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
@@ -234,17 +233,17 @@ void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
     // 1. Load arrives first (30%)
     uint8_t r_load[] = { 0x08, 30 };
     driver.decodeReport(&mockHost, 0x08, 1, r_load, sizeof(r_load), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_FALSE(ups_data.has.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
 
     // 2. ConfigActivePower arrives after (700W = 0x02BC -> 0xBC, 0x02)
     uint8_t r_cap[] = { 0x14, 0xBC, 0x02 };
     driver.decodeReport(&mockHost, 0x14, 3, r_cap, sizeof(r_cap), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
-    TEST_ASSERT_EQUAL_UINT16(700, ups_data.configActivePower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
+    TEST_ASSERT_EQUAL_UINT16(700, ups_data.getFloat("ups.realpower.nominal"));
     // 30% of 700W = 210W
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16(210, ups_data.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16(210, ups_data.getFloat("ups.realpower"));
 }
 
 #ifdef PIO_UNIT_TESTING

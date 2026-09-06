@@ -66,16 +66,16 @@ void test_eaton_ac_present_and_discharging(void) {
     // 1. Report con AC Present = 1, Discharging = 0
     uint8_t r1[] = { 0x01, 0x01 };
     driver.decodeReport(&mockHost, 0x01, 1, r1, sizeof(r1), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.acPresent);
-    TEST_ASSERT_TRUE(ups_data.acPresent);
-    TEST_ASSERT_TRUE(ups_data.has.discharging);
-    TEST_ASSERT_FALSE(ups_data.discharging);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.getBool("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.discharging"));
+    TEST_ASSERT_FALSE(ups_data.getBool("ups.status.discharging"));
 
     // 2. Report con AC Present = 0, Discharging = 1
     uint8_t r2[] = { 0x01, 0x10 };
     driver.decodeReport(&mockHost, 0x01, 1, r2, sizeof(r2), ups_data);
-    TEST_ASSERT_FALSE(ups_data.acPresent);
-    TEST_ASSERT_TRUE(ups_data.discharging);
+    TEST_ASSERT_FALSE(ups_data.getBool("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(ups_data.getBool("ups.status.discharging"));
 }
 
 void test_eaton_voltage_and_battery(void) {
@@ -105,10 +105,10 @@ void test_eaton_voltage_and_battery(void) {
     // Report ID 0x06: capacity 85% (0x55), runtime 1200 sec (0x000004B0)
     uint8_t r6[] = { 0x06, 0x55, 0xB0, 0x04, 0x00, 0x00 };
     driver.decodeReport(&mockHost, 0x06, 1, r6, sizeof(r6), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.remainingCapacity);
-    TEST_ASSERT_EQUAL_UINT8(85, ups_data.remainingCapacity);
-    TEST_ASSERT_TRUE(ups_data.has.runTimeToEmpty);
-    TEST_ASSERT_EQUAL_UINT32(1200, ups_data.runTimeToEmpty);
+    TEST_ASSERT_TRUE(ups_data.hasKey("battery.charge"));
+    TEST_ASSERT_EQUAL_UINT8(85, ups_data.getFloat("battery.charge"));
+    TEST_ASSERT_TRUE(ups_data.hasKey("battery.runtime"));
+    TEST_ASSERT_EQUAL_UINT32(1200, ups_data.getFloat("battery.runtime"));
 }
 
 void test_eaton_string_descriptors(void) {
@@ -119,14 +119,14 @@ void test_eaton_string_descriptors(void) {
     // String descriptor Eaton (UTF-16LE: "Eaton")
     uint8_t desc_mfr[] = { 12, 0x03, 'E', 0, 'a', 0, 't', 0, 'o', 0, 'n', 0 };
     driver.parseStringDescriptor(&mockHost, 1, desc_mfr, sizeof(desc_mfr), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.manufacturer);
-    TEST_ASSERT_EQUAL_STRING("Eaton", ups_data.manufacturer.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr"));
+    TEST_ASSERT_EQUAL_STRING("Eaton", ups_data.get("ups.mfr").c_str());
 
     // Product "3S 700"
     uint8_t desc_prod[] = { 14, 0x03, '3', 0, 'S', 0, ' ', 0, '7', 0, '0', 0, '0', 0 };
     driver.parseStringDescriptor(&mockHost, 2, desc_prod, sizeof(desc_prod), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.product);
-    TEST_ASSERT_EQUAL_STRING("3S 700", ups_data.product.c_str());
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.model"));
+    TEST_ASSERT_EQUAL_STRING("3S 700", ups_data.get("ups.model").c_str());
 }
 
 void test_eaton_loop_polling_and_string_requests(void) {
@@ -173,17 +173,17 @@ void test_eaton_realpower_recalculated_when_config_arrives_after_load(void) {
     // 1. Load arrives first (40%)
     uint8_t r_load[] = { 0x01, 40 };
     driver.decodeReport(&mockHost, 0x01, 1, r_load, sizeof(r_load), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.load);
-    TEST_ASSERT_FALSE(ups_data.has.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
 
     // 2. ConfigActivePower arrives after (1000W = 0x03E8 -> 0xE8, 0x03)
     uint8_t r_cap[] = { 0x02, 0xE8, 0x03 };
     driver.decodeReport(&mockHost, 0x02, 3, r_cap, sizeof(r_cap), ups_data);
-    TEST_ASSERT_TRUE(ups_data.has.configActivePower);
-    TEST_ASSERT_EQUAL_UINT16(1000, ups_data.configActivePower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
+    TEST_ASSERT_EQUAL_UINT16(1000, ups_data.getFloat("ups.realpower.nominal"));
     // 40% of 1000W = 400W
-    TEST_ASSERT_TRUE(ups_data.has.realPower);
-    TEST_ASSERT_EQUAL_UINT16(400, ups_data.realPower);
+    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
+    TEST_ASSERT_EQUAL_UINT16(400, ups_data.getFloat("ups.realpower"));
 }
 
 #ifdef PIO_UNIT_TESTING

@@ -2,126 +2,99 @@
 #define UPS_DATA_H
 
 #include <Arduino.h>
+#include <vector>
+
+struct UPSParameter {
+    String key;
+    String value;
+};
 
 struct UPSData {
-    bool acPresent = false;
-    bool belowRemainingCapacityLimit = false;
-    bool charging = false;
-    bool communicationLost = false;
-    bool discharging = false;
-    bool good = false;
-    bool internalFailure = false;
-    bool needReplacement = false;
-    bool overload = false;
-    bool shutdownImminent = false;
+private:
+    std::vector<UPSParameter> _parameters;
 
-    bool outlet1Switch = false;
-    bool outlet2Switch = false;
+public:
+    UPSData() {
+        _parameters.reserve(60); // Pre-allocate to prevent heap fragmentation
+    }
 
-    uint8_t remainingCapacity = 0;
-    uint32_t runTimeToEmpty = 0;
+    void set(const String& key, const String& value) {
+        for (auto& param : _parameters) {
+            if (param.key == key) {
+                param.value = value;
+                return;
+            }
+        }
+        _parameters.push_back({key, value});
+    }
 
-    uint8_t remainingCapacityLimit = 0;
-    uint8_t designCapacity = 0;
-    uint8_t fullChargeCapacity = 0;
+    String get(const String& key, const String& defaultValue = "") const {
+        for (const auto& param : _parameters) {
+            if (param.key == key) {
+                return param.value;
+            }
+        }
+        return defaultValue;
+    }
 
-    uint16_t configApparentPower = 0;
-    uint16_t configActivePower = 0;
-    uint8_t configFrequency = 0;
-    uint16_t configVoltage = 0;
+    bool hasKey(const String& key) const {
+        for (const auto& param : _parameters) {
+            if (param.key == key) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-    float outputVoltage = 0.0f;
-    float inputVoltage = 0.0f;
-    float batteryVoltage = 0.0f;
-    float batteryTemperature = 0.0f;
-    float inputCurrent = 0.0f;
-    float outputCurrent = 0.0f;
-    float batteryCurrent = 0.0f;
+    void remove(const String& key) {
+        for (auto it = _parameters.begin(); it != _parameters.end(); ++it) {
+            if (it->key == key) {
+                _parameters.erase(it);
+                return;
+            }
+        }
+    }
 
-    uint16_t highVoltageTransfer = 0;
-    uint16_t lowVoltageTransfer = 0;
+    float getFloat(const String& key, float defaultVal = 0.0f) const {
+        if (!hasKey(key)) return defaultVal;
+        return get(key).toFloat();
+    }
 
-    String manufacturer = "";
-    String product = "";
-    String serialNumber = "";
-    String upsMfrDate = "";
-    String batteryMfrDate = "";
-    String batteryDate = "";
+    bool getBool(const String& key, bool defaultVal = false) const {
+        if (!hasKey(key)) return defaultVal;
+        String val = get(key);
+        return (val == "1" || val == "true" || val == "yes" || val == "enabled");
+    }
 
-    uint8_t load = 0;
-    uint16_t realPower = 0;
-    bool beeperEnabled = true;
-    int32_t delayShutdown = 0;
-    int32_t delayStart = 0;
-    int32_t timerStart = 0;
-    int32_t timerShutdown = 0;
+    const std::vector<UPSParameter>& getAll() const {
+        return _parameters;
+    }
 
-    String batteryType = "";
-    String upsType = "";
-    uint16_t outputVoltageNominal = 0;
-    uint16_t outputFrequencyNominal = 0;
 
-    struct {
-        bool acPresent : 1;
-        bool belowRemainingCapacityLimit : 1;
-        bool charging : 1;
-        bool communicationLost : 1;
-        bool discharging : 1;
-        bool good : 1;
-        bool internalFailure : 1;
-        bool needReplacement : 1;
-        bool overload : 1;
-        bool shutdownImminent : 1;
-        bool outlet1Switch : 1;
-        bool outlet2Switch : 1;
-        bool remainingCapacity : 1;
-        bool runTimeToEmpty : 1;
-        bool remainingCapacityLimit : 1;
-        bool designCapacity : 1;
-        bool fullChargeCapacity : 1;
-        bool configApparentPower : 1;
-        bool configActivePower : 1;
-        bool configFrequency : 1;
-        bool configVoltage : 1;
-        bool outputVoltage : 1;
-        bool inputVoltage : 1;
-        bool batteryVoltage : 1;
-        bool batteryTemperature : 1;
-        bool inputCurrent : 1;
-        bool outputCurrent : 1;
-        bool batteryCurrent : 1;
-        bool highVoltageTransfer : 1;
-        bool lowVoltageTransfer : 1;
-        bool load : 1;
-        bool realPower : 1;
-        bool beeperEnabled : 1;
-        bool delayShutdown : 1;
-        bool delayStart : 1;
-        bool timerStart : 1;
-        bool timerShutdown : 1;
-        bool batteryType : 1;
-        bool upsType : 1;
-        bool manufacturer : 1;
-        bool product : 1;
-        bool serialNumber : 1;
-        bool outputVoltageNominal : 1;
-        bool outputFrequencyNominal : 1;
-        bool upsMfrDate : 1;
-        bool batteryMfrDate : 1;
-        bool batteryDate : 1;
-    } has = {0};
 
+    // --- LOGIC ---
     static String computeUPSStatusString(const UPSData& d) {
         String status = "";
-        if (d.has.acPresent && d.acPresent && (!d.has.discharging || !d.discharging)) status += "OL ";
-        else if (d.has.good && d.good) status += "OL ";
-        if (d.has.discharging && d.discharging) status += "OB ";
-        if (d.has.belowRemainingCapacityLimit && d.belowRemainingCapacityLimit) status += "LB ";
-        if (d.has.charging && d.charging && !(d.remainingCapacity == 100 && d.has.acPresent && d.acPresent)) status += "CHRG ";
-        if (d.has.needReplacement && d.needReplacement) status += "RB ";
-        if (d.has.overload && d.overload) status += "OVER ";
-        if (d.has.shutdownImminent && d.shutdownImminent) status += "FSD ";
-        if (d.has.communicationLost && d.communicationLost) status += "COMM_LOST ";
+        
+        // Read from dictionary
+        bool acPresent = d.getBool("ups.status.ac_present");
+        bool discharging = d.getBool("ups.status.discharging");
+        bool good = d.getBool("ups.status.good");
+        bool charging = d.getBool("ups.status.charging");
+        float batteryCharge = d.getFloat("battery.charge", -1);
+        
+        if (d.hasKey("ups.status.ac_present") && acPresent && (!d.hasKey("ups.status.discharging") || !discharging)) status += "OL ";
+        else if (d.hasKey("ups.status.good") && good) status += "OL ";
+        
+        if (d.hasKey("ups.status.discharging") && discharging) status += "OB ";
+        if (d.getBool("ups.status.battery_low")) status += "LB ";
+        
+        if (d.hasKey("ups.status.charging") && charging && !(batteryCharge == 100.0f && d.hasKey("ups.status.ac_present") && acPresent)) status += "CHRG ";
+        
+        if (d.getBool("ups.status.replace_battery")) status += "RB ";
+        if (d.getBool("ups.status.overload")) status += "OVER ";
+        if (d.getBool("ups.status.shutdown_imminent")) status += "FSD ";
+        if (d.getBool("ups.status.comm_lost")) status += "COMM_LOST ";
         
         if (status.length() == 0) status = "Unknown";
         status.trim();
@@ -129,13 +102,15 @@ struct UPSData {
     }
 
     void updateRealPower() {
-        if (!has.load) return;
-        if (has.configActivePower && configActivePower > 0) {
-            has.realPower = true;
-            realPower = (uint16_t)(((uint32_t)configActivePower * load) / 100);
-        } else if (has.configApparentPower && configApparentPower > 0) {
-            has.realPower = true;
-            realPower = (uint16_t)(((uint32_t)configApparentPower * 60 * load) / 10000);
+        if (!hasKey("ups.load")) return;
+        uint8_t loadPct = (uint8_t)getFloat("ups.load");
+        
+        if (hasKey("ups.realpower.nominal") && getFloat("ups.realpower.nominal") > 0) {
+            uint16_t nominal = (uint16_t)getFloat("ups.realpower.nominal");
+            set("ups.realpower", String((uint16_t)(((uint32_t)nominal * loadPct) / 100)));
+        } else if (hasKey("ups.power.nominal") && getFloat("ups.power.nominal") > 0) {
+            uint16_t apparent = (uint16_t)getFloat("ups.power.nominal");
+            set("ups.realpower", String((uint16_t)(((uint32_t)apparent * 60 * loadPct) / 10000)));
         }
     }
 };
