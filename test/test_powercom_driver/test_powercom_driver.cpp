@@ -240,6 +240,47 @@ void test_powercom_spurious_zero_ignored_when_online(void) {
     TEST_ASSERT_EQUAL_STRING("30.0", ups_data.get("battery.temperature").c_str());
 }
 
+void test_powercom_duplicate_beeper_ignored(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+    
+    // First, GenericDriver runs and locks onto the first beeper it sees
+    HIDUsageDef u_beeper1;
+    u_beeper1.report_id = 0x13;
+    u_beeper1.report_type = 3;
+    u_beeper1.bit_offset = 0;
+    u_beeper1.bit_size = 8;
+    u_beeper1.exponent = 0;
+    u_beeper1.unit = 0;
+    u_beeper1.path = "UPS.PowerSummary.AudibleAlarmControl";
+    u_beeper1.found = true;
+    host._usages.push_back(u_beeper1);
+    
+    HIDUsageDef u_beeper2;
+    u_beeper2.report_id = 0x25;
+    u_beeper2.report_type = 3;
+    u_beeper2.bit_offset = 0;
+    u_beeper2.bit_size = 8;
+    u_beeper2.exponent = 0;
+    u_beeper2.unit = 0;
+    u_beeper2.path = "UPS.AudibleAlarmControl";
+    u_beeper2.found = true;
+    host._usages.push_back(u_beeper2);
+
+    // Initial decode from the "real" report (0x13) returns 1 (enabled)
+    uint8_t data_real[] = { 0x13, 0x01 };
+    driver.decodeReport(&host, 0x13, 3, data_real, sizeof(data_real), ups_data);
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+
+    // Decode from the "dummy/duplicate" report (0x25) returns 2 (disabled)
+    uint8_t data_dummy[] = { 0x25, 0x02 };
+    driver.decodeReport(&host, 0x25, 3, data_dummy, sizeof(data_dummy), ups_data);
+    
+    // Assert: The dummy report must be ignored and not overwrite the real status
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+}
+
 void test_powercom_zero_input_voltage_allowed_when_on_battery(void) {
     PowercomDriver driver;
     UPSData ups_data;
