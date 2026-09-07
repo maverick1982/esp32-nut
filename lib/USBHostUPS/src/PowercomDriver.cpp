@@ -140,17 +140,17 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         { "UPS.PowerSummary.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
         { "UPS.Battery.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
         { "UPS.PowerSummary.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } // Powercom NUT: 1 = enabled
             else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } // Powercom NUT: 2 = disabled
-            else if ((int)v == 0 && d.hasKey("ups.beeper.status")) { /* keep previous */ }
             else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } },
         { "UPS.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } 
             else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } 
-            else if ((int)v == 0 && d.hasKey("ups.beeper.status")) { /* keep previous */ }
             else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
         } }
     };

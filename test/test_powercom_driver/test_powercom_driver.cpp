@@ -429,15 +429,27 @@ void test_powercom_spurious_zero_ignored_when_status_unknown_unless_discharging(
     u_load.found = true;
     host._usages.push_back(u_load);
 
+    HIDUsageDef u_beeper;
+    u_beeper.report_id = 0x2D;
+    u_beeper.report_type = 3;
+    u_beeper.bit_offset = 0;
+    u_beeper.bit_size = 1;
+    u_beeper.exponent = 0;
+    u_beeper.unit = 0;
+    u_beeper.path = "UPS.PowerSummary.AudibleAlarmControl";
+    u_beeper.found = true;
+    host._usages.push_back(u_beeper);
+
     // Initial state: Established readings, but ups.status is "Unknown" (flapping, ac_present=0, discharging=0)
     ups_data.set("input.voltage", "218.0");
     ups_data.set("output.voltage", "216.0");
     ups_data.set("battery.temperature", "30.0");
+    ups_data.set("ups.beeper.status", "enabled");
 
     TEST_ASSERT_EQUAL_STRING("Unknown", UPSData::computeUPSStatusString(ups_data).c_str());
     TEST_ASSERT_FALSE(ups_data.isOnline());
 
-    // Simulate empty / zeroed Feature Report responses (0.0V, 0C)
+    // Simulate empty / zeroed Feature Report responses (0.0V, 0C, disabled beeper)
     uint8_t zero_in_volt[] = { 0x12, 0x00, 0x00 };
     driver.decodeReport(&host, 0x12, 3, zero_in_volt, sizeof(zero_in_volt), ups_data);
 
@@ -447,10 +459,14 @@ void test_powercom_spurious_zero_ignored_when_status_unknown_unless_discharging(
     uint8_t zero_temp[] = { 0x2C, 0x00 };
     driver.decodeReport(&host, 0x2C, 3, zero_temp, sizeof(zero_temp), ups_data);
 
+    uint8_t zero_beeper[] = { 0x2D, 0x00 };
+    driver.decodeReport(&host, 0x2D, 3, zero_beeper, sizeof(zero_beeper), ups_data);
+
     // Assert: Even when status is "Unknown", spurious zeros must NOT overwrite active telemetries unless discharging/shutdown
     TEST_ASSERT_EQUAL_STRING("218.0", ups_data.get("input.voltage").c_str());
     TEST_ASSERT_EQUAL_STRING("216.0", ups_data.get("output.voltage").c_str());
     TEST_ASSERT_EQUAL_STRING("30.0", ups_data.get("battery.temperature").c_str());
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
 }
 
 #ifdef PIO_UNIT_TESTING
