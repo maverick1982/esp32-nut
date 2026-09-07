@@ -203,16 +203,14 @@ uint32_t PowercomDriver::getPollPacingMs() { return (_current_pid == 0x0004) ? 8
 uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x0004) ? 5000 : 2000; }
 bool PowercomDriver::shouldPollUsage(const String& path) {
     if (_current_pid != 0x0004) return true;
-    if (path.indexOf("ACPresent") >= 0) return true;
-    if (path.indexOf("Discharging") >= 0) return true;
-    if (path.indexOf("Charging") >= 0) return true;
-    if (path.indexOf("BelowRemainingCapacityLimit") >= 0) return true;
+    if (isStatusUsage(path)) return false; // Handled 100% by USB Interrupt IN pipe
+    if (path.indexOf("RemainingCapacity") >= 0) return false; // Handled by USB Interrupt IN pipe
+    if (path.indexOf("RunTimeToEmpty") >= 0) return false;   // Handled by USB Interrupt IN pipe
     if (path.indexOf("Voltage") >= 0) return true;
     if (path.indexOf("PercentLoad") >= 0) return true;
     if (path.indexOf("Temperature") >= 0) return true;
-    if (path.indexOf("RemainingCapacity") >= 0) return true;
-    if (path.indexOf("RunTimeToEmpty") >= 0) return true;
     if (path.indexOf("AudibleAlarmControl") >= 0) return true;
     return false;
 }
+
 

@@ -22,6 +22,7 @@ protected:
     virtual uint32_t getFullPollIntervalMs() { return 30000; }
     virtual bool shouldPollUsage(const String& path) { return true; }
     virtual bool isStaticUsage(const String& path);
+    virtual bool isStatusUsage(const String& path);
 
     uint32_t _last_poll;
     uint32_t _last_fast_poll;
