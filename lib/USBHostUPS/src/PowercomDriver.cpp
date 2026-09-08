@@ -90,7 +90,14 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     bool saved_has_beeper = ups_data.hasKey("ups.beeper.status");
 
     // Run GenericDriver first for default PDC mappings
-    GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
+    // Powercom SPD-750U hardware descriptor defines telemetry as Feature reports (Type 3).
+    // Since it streams them over Interrupt IN (Type 1), we override the type to let GenericDriver match them.
+    uint8_t effective_type = report_type;
+    if (_current_pid == 0x0004 && report_type == 1 && report_id != 0) {
+        effective_type = 3;
+    }
+
+    GenericDriver::decodeReport(host, report_id, effective_type, data, length, ups_data);
 
     // NUT completely ignores standard voltage fields for Powercom because they are often broken/garbage
     if (saved_has_voltage) ups_data.set("battery.voltage", saved_voltage);
@@ -98,7 +105,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     if (saved_has_beeper) ups_data.set("ups.beeper.status", saved_beeper);
     else ups_data.remove("ups.beeper.status");
 
-    if (report_id == 0xA4 && report_type == 3) {
+    if (report_id == 0xA4 && effective_type == 3) {
         String msg = "";
         // Check if report ID is prepended at data[0] or if payload starts directly at data[0]
         size_t start_idx = (data[0] == 0xA4) ? 1 : 0;
@@ -158,7 +165,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     };
 
     for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
+        if (u.report_id != report_id || u.report_type != effective_type) continue;
         double val = HIDParser::extractUsage(&u, report_id, data, length);
         
         for (const auto& m : mappings) {
@@ -205,14 +212,7 @@ uint32_t PowercomDriver::getPollPacingMs() { return (_current_pid == 0x0004) ? 8
 uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x0004) ? 5000 : 2000; }
 bool PowercomDriver::shouldPollUsage(const String& path) {
     if (_current_pid != 0x0004) return true;
-    if (isStatusUsage(path)) return false; // Handled 100% by USB Interrupt IN pipe
-    if (path.indexOf("RemainingCapacity") >= 0) return false; // Handled by USB Interrupt IN pipe
-    if (path.indexOf("RunTimeToEmpty") >= 0) return false;   // Handled by USB Interrupt IN pipe
-    if (path.indexOf("Voltage") >= 0) return true;
-    if (path.indexOf("PercentLoad") >= 0) return true;
-    if (path.indexOf("Temperature") >= 0) return true;
-    if (path.indexOf("AudibleAlarmControl") >= 0) return true;
-    return false;
+    return false; // For SPD-750U, rely 100% on Interrupt IN and 0xA4 legacy string. Get_Report crashes the UPS.
 }
 
 
