@@ -215,9 +215,10 @@ bool PowercomDriver::shouldPollUsage(const String& path) {
     
     // The SPD-750U controller will drop the connection or fail to establish telemetry
     // if the host doesn't send periodic Get_Report requests (it acts as a keepalive).
-    // We enable polling ONLY for a single lightweight Feature (AudibleAlarmControl)
-    // to keep the MCU awake without crashing it with the full telemetry barrage.
-    if (path.indexOf("AudibleAlarmControl") >= 0) return true;
+    // To minimize the risk of crashing the MCU after several hours, we use the
+    // Status usages (0x0A) as a keepalive. These are exactly what NUT uses, and 
+    // GenericDriver polls them only once every 30 seconds (Full Walk).
+    if (isStatusUsage(path)) return true;
     
     return false; // Rely 100% on Interrupt IN for Voltage, Load, Temp, etc.
 }
