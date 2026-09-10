@@ -212,7 +212,14 @@ uint32_t PowercomDriver::getPollPacingMs() { return (_current_pid == 0x0004) ? 8
 uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x0004) ? 5000 : 2000; }
 bool PowercomDriver::shouldPollUsage(const String& path) {
     if (_current_pid != 0x0004) return true;
-    return false; // For SPD-750U, rely 100% on Interrupt IN and 0xA4 legacy string. Get_Report crashes the UPS.
+    
+    // The SPD-750U controller will drop the connection or fail to establish telemetry
+    // if the host doesn't send periodic Get_Report requests (it acts as a keepalive).
+    // We enable polling ONLY for a single lightweight Feature (AudibleAlarmControl)
+    // to keep the MCU awake without crashing it with the full telemetry barrage.
+    if (path.indexOf("AudibleAlarmControl") >= 0) return true;
+    
+    return false; // Rely 100% on Interrupt IN for Voltage, Load, Temp, etc.
 }
 
 
