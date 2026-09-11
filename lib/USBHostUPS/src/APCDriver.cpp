@@ -23,7 +23,7 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
 
     // Apply APC specific mappings overrides
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(APCDriver*, UPSData&, double, const HIDUsageDef*);
     };
 

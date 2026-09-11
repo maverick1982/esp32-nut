@@ -102,7 +102,7 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(CyberPowerDriver*, UPSData&, double, const HIDUsageDef*);
     };
 

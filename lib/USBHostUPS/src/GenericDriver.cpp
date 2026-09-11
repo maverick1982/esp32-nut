@@ -134,7 +134,7 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(GenericDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
