@@ -96,7 +96,30 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
-                    host->requestReport(r_id, r_type, 64);
+                    
+                    if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
+                        _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
+                        return;
+                    }
+                    
+                    uint16_t expected_length = 64;
+                    if (host->getQuirks() & QUIRK_MAX_REPORT_SIZE_1) {
+                        expected_length = 1;
+                    } else {
+                        uint16_t max_bit_bound = 0;
+                        for (const auto& u : host->getUsages()) {
+                            if (u.report_id == r_id && u.report_type == r_type) {
+                                if (u.bit_offset + u.bit_size > max_bit_bound) {
+                                    max_bit_bound = u.bit_offset + u.bit_size;
+                                }
+                            }
+                        }
+                        if (max_bit_bound > 0) {
+                            expected_length = (max_bit_bound + 7) / 8;
+                            if (r_id != 0) expected_length += 1;
+                        }
+                    }
+                    host->requestReport(r_id, r_type, expected_length);
                 } else {
                     _poll_step = 0; // Done
                     return;
