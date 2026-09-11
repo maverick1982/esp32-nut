@@ -27,7 +27,10 @@ def embed_files():
         if ext not in [".html", ".css", ".js", ".json", ".svg", ".png", ".ico", ".jpg", ".jpeg"]:
             continue
         with open(filepath, "rb") as bf:
-            hasher.update(bf.read())
+            content = bf.read()
+            if ext in [".html", ".css", ".js", ".json", ".svg"]:
+                content = content.replace(b'\r', b'')
+            hasher.update(content)
             
     current_hash = hasher.hexdigest()
     hash_file = "include/network/.web_assets.hash"
@@ -54,6 +57,8 @@ def embed_files():
             
             with open(filepath, "rb") as bf:
                 content = bf.read()
+                if ext in [".html", ".css", ".js", ".json", ".svg"]:
+                    content = content.replace(b'\r', b'')
                 
             # Compress content deterministically by setting mtime=0
             compressed = bytearray(gzip.compress(content, mtime=0))
