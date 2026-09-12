@@ -58,10 +58,12 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     // Delegating dynamic PDC walk to GenericDriver (identical to NUT hid_ups_walk)
     GenericDriver::loop(host, data, now);
 
-    // Legacy Powercom (0xA4 report) fallback polling
+    // Legacy Powercom (0xA4 report) fallback polling and keepalive
     // Older Powercom models don't use standard PDC reports and only expose an 0xA4 report.
-    // We poll this once every getFullPollIntervalMs() (or on first run).
-    if (_poll_step == 0 && (now - _last_0xa4_poll >= getFullPollIntervalMs() || _last_0xa4_poll == 0)) {
+    // For PID 0x0004 (SPD-750U), we poll this every 3 seconds to act as an EP0 keepalive,
+    // otherwise the MCU drops the connection.
+    uint32_t a4_interval = (_current_pid == 0x0004) ? 3000 : getFullPollIntervalMs();
+    if (_poll_step == 0 && (now - _last_0xa4_poll >= a4_interval || _last_0xa4_poll == 0)) {
         if (!host->isControlPending() && (now - _last_step_time >= getPollPacingMs())) {
             _last_0xa4_poll = now != 0 ? now : 1;
             _last_step_time = now; // Sync with pacing grid
@@ -213,14 +215,9 @@ uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x000
 bool PowercomDriver::shouldPollUsage(const String& path) {
     if (_current_pid != 0x0004) return true;
     
-    // The SPD-750U controller will drop the connection or fail to establish telemetry
-    // if the host doesn't send periodic Get_Report requests (it acts as a keepalive).
-    // To minimize the risk of crashing the MCU after several hours, we use the
-    // Status usages (0x0A) as a keepalive. These are exactly what NUT uses, and 
-    // GenericDriver polls them only once every 30 seconds (Full Walk).
-    if (isStatusUsage(path)) return true;
-    
-    return false; // Rely 100% on Interrupt IN for Voltage, Load, Temp, etc.
+    // For SPD-750U, we completely skip EP0 feature polling (relying 100% on Interrupt IN).
+    // The keepalive is handled exclusively by the 0xA4 legacy poll every 3s in the loop.
+    return false;
 }
 
 
