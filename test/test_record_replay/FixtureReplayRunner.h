@@ -36,7 +36,16 @@ public:
 
     const std::vector<HIDUsageDef>& getUsages() const override { return _parser.getUsages(); }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _parser.getUsageDef(usage); }
-    String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
+    String getActiveBeeperPath() const override {
+        for (const auto& u : _parser.getUsages()) {
+            if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
+                u.path == "UPS.BatterySystem.Battery.AudibleAlarmControl" || 
+                u.path == "UPS.AudibleAlarmControl") {
+                return u.path;
+            }
+        }
+        return "";
+    }
     uint32_t getQuirks() const override { return _quirks; }
     bool isControlPending() const override { return false; }
     bool supportsBeeperToggle() const override {
@@ -55,16 +64,6 @@ public:
 
 class FixtureReplayRunner {
 public:
-    static std::vector<uint8_t> hexStringToBytes(const std::string& hexStr) {
-        std::vector<uint8_t> bytes;
-        for (size_t i = 0; i < hexStr.length(); i += 2) {
-            std::string byteString = hexStr.substr(i, 2);
-            uint8_t byte = (uint8_t)strtol(byteString.c_str(), nullptr, 16);
-            bytes.push_back(byte);
-        }
-        return bytes;
-    }
-
     static std::vector<uint8_t> encodeUtf16Descriptor(const std::string& str) {
         std::vector<uint8_t> desc;
         uint8_t len = (uint8_t)(2 + (str.length() * 2));
@@ -119,6 +118,19 @@ public:
         host._iManufacturer = doc["device_desc"]["iManufacturer"] | 0;
         host._iProduct = doc["device_desc"]["iProduct"] | 0;
         host._iSerialNumber = doc["device_desc"]["iSerialNumber"] | 0;
+
+        if (doc["manufacturer"].is<const char*>()) {
+            std::string mfr = doc["manufacturer"].as<const char*>();
+            if (!mfr.empty()) ups_data.set("ups.mfr", mfr);
+        }
+        if (doc["product"].is<const char*>()) {
+            std::string prod = doc["product"].as<const char*>();
+            if (!prod.empty()) ups_data.set("ups.model", prod);
+        }
+        if (doc["serial_number"].is<const char*>()) {
+            std::string ser = doc["serial_number"].as<const char*>();
+            if (!ser.empty()) ups_data.set("ups.serial", ser);
+        }
 
         // 2. Parse HID Report Descriptor
         std::vector<uint8_t> rawDesc;
@@ -191,74 +203,51 @@ public:
             // Send reports
             JsonArray reports = sc["reports"].as<JsonArray>();
             for (JsonObject rep : reports) {
-                uint8_t r_id = rep["report_id"] | 0;
-                uint8_t r_type = rep["report_type"] | 1;
-                std::string dataHex = rep["data_hex"].as<std::string>();
-                std::vector<uint8_t> rData = hexStringToBytes(dataHex);
+                uint8_t r_id = rep["report_id"].is<uint8_t>() ? rep["report_id"].as<uint8_t>() : (rep["id"] | 0);
+                uint8_t r_type = rep["report_type"].is<uint8_t>() ? rep["report_type"].as<uint8_t>() : (rep["type"] | 1);
+                
+                std::vector<uint8_t> rData;
+                if (rep["data"].is<JsonArray>()) {
+                    JsonArray dataArr = rep["data"].as<JsonArray>();
+                    for (JsonVariant v : dataArr) {
+                        rData.push_back(v.as<uint8_t>());
+                    }
+                }
 
-                driver->decodeReport(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
+                if (!rData.empty()) {
+                    driver->decodeReport(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
+                }
             }
+
+            // Set ups.type directly since loop() isn't called in the replay runner
+            ups_data.set("ups.type", driver->getDriverName());
 
             // Assert Expectations
             JsonObject exp = sc["expected_ups_data"].as<JsonObject>();
-            if (exp["status"].is<std::string>()) {
-                std::string expectedStatus = exp["status"].as<std::string>();
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedStatus.c_str(), UPSData::computeUPSStatusString(ups_data).c_str(), scName.c_str());
-            }
-            if (exp["acPresent"].is<bool>()) {
-                bool expectedAC = exp["acPresent"].as<bool>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.status.ac_present"), scName.c_str());
-                TEST_ASSERT_EQUAL_MESSAGE(expectedAC, ups_data.getBool("ups.status.ac_present"), scName.c_str());
-            }
-            if (exp["discharging"].is<bool>()) {
-                bool expectedDischarging = exp["discharging"].as<bool>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.status.discharging"), scName.c_str());
-                TEST_ASSERT_EQUAL_MESSAGE(expectedDischarging, ups_data.getBool("ups.status.discharging"), scName.c_str());
-            }
-            if (exp["remainingCapacity"].is<uint8_t>()) {
-                uint8_t expCap = exp["remainingCapacity"].as<uint8_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.charge"), scName.c_str());
-                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expCap, (uint8_t)ups_data.getFloat("battery.charge"), scName.c_str());
-            }
-            if (exp["runTimeToEmpty"].is<uint32_t>()) {
-                uint32_t expRuntime = exp["runTimeToEmpty"].as<uint32_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.runtime"), scName.c_str());
-                TEST_ASSERT_EQUAL_UINT32_MESSAGE(expRuntime, (uint32_t)ups_data.getFloat("battery.runtime"), scName.c_str());
-            }
-            if (exp["load"].is<uint8_t>()) {
-                uint8_t expLoad = exp["load"].as<uint8_t>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.load"), scName.c_str());
-                TEST_ASSERT_EQUAL_UINT8_MESSAGE(expLoad, (uint8_t)ups_data.getFloat("ups.load"), scName.c_str());
-            }
-            if (exp["outputVoltage"].is<float>()) {
-                float expVolt = exp["outputVoltage"].as<float>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("output.voltage"), scName.c_str());
-                TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.1, expVolt, ups_data.getFloat("output.voltage"), scName.c_str());
-            }
-            if (exp["manufacturer"].is<std::string>()) {
-                std::string expMfr = exp["manufacturer"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.mfr"), scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expMfr.c_str(), ups_data.get("ups.mfr").c_str(), scName.c_str());
-            }
-            if (exp["product"].is<std::string>()) {
-                std::string expProd = exp["product"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.model"), scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expProd.c_str(), ups_data.get("ups.model").c_str(), scName.c_str());
-            }
-            if (exp["batteryMfrDate"].is<std::string>()) {
-                std::string expDate = exp["batteryMfrDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.mfr.date"), scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("battery.mfr.date").c_str(), scName.c_str());
-            }
-            if (exp["upsMfrDate"].is<std::string>()) {
-                std::string expDate = exp["upsMfrDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("ups.mfr.date"), scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("ups.mfr.date").c_str(), scName.c_str());
-            }
-            if (exp["batteryDate"].is<std::string>()) {
-                std::string expDate = exp["batteryDate"].as<std::string>();
-                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey("battery.date"), scName.c_str());
-                TEST_ASSERT_EQUAL_STRING_MESSAGE(expDate.c_str(), ups_data.get("battery.date").c_str(), scName.c_str());
+            
+            // Iterate all keys to support new direct NUT dictionary format
+            for (JsonPair kv : exp) {
+                std::string key = kv.key().c_str();
+                
+                // Status string is dynamically computed, handle it specially
+                if (key == "ups.status") {
+                    std::string expectedStatus = kv.value().as<std::string>();
+                    TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedStatus.c_str(), UPSData::computeUPSStatusString(ups_data).c_str(), scName.c_str());
+                    continue;
+                }
+                
+                // Dynamic dictionary property assertion
+                std::string expVal;
+                if (kv.value().is<bool>()) {
+                    expVal = kv.value().as<bool>() ? "1" : "0";
+                } else {
+                    expVal = kv.value().as<std::string>();
+                }
+                
+                std::string actualVal = ups_data.get(key);
+                std::string assertMsg = scName + " - key: " + key;
+                TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey(key), assertMsg.c_str());
+                TEST_ASSERT_EQUAL_STRING_MESSAGE(expVal.c_str(), actualVal.c_str(), assertMsg.c_str());
             }
         }
 

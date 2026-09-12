@@ -132,6 +132,13 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
             char dbg[128];
             snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
             if (_log_cb) _log_cb("INFO", dbg);
+
+            if (length > 0) {
+                std::vector<uint8_t> payload(data, data + length);
+                uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
+                _cached_reports[key] = {r_id, 1, payload};
+            }
+
             _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
         }
     } else if (event == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
@@ -240,8 +247,10 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
     if (err == ESP_OK && length > 0) {
+        std::vector<uint8_t> payload(data, data + length);
+        uint16_t key = (report_type << 8) | report_id;
+        _cached_reports[key] = {report_id, report_type, payload};
 
-        
         if (_driver) {
             _driver->decodeReport(this, report_id, report_type, data, length, _ups_data);
         }
@@ -373,6 +382,30 @@ String USBHostUPS::dumpUSBDiagnostics() {
         
         doc["quirks"] = _quirks;
         doc["driver"] = _driver ? _driver->getDriverName() : "None";
+
+        JsonArray scenarios = doc["scenarios"].to<JsonArray>();
+        JsonObject scenario = scenarios.add<JsonObject>();
+        scenario["description"] = "Live ESP32 dump";
+        
+        JsonArray reports = scenario["reports"].to<JsonArray>();
+        for (const auto& kv : _cached_reports) {
+            JsonObject report = reports.add<JsonObject>();
+            report["id"] = kv.second.report_id;
+            report["type"] = kv.second.report_type;
+            
+            String dataStr = "[";
+            for (size_t i = 0; i < kv.second.data.size(); ++i) {
+                if (i > 0) dataStr += ", ";
+                dataStr += String(kv.second.data[i]);
+            }
+            dataStr += "]";
+            report["data"] = serialized(dataStr);
+        }
+        
+        JsonObject expectedData = scenario["expected_ups_data"].to<JsonObject>();
+        for (const auto& param : _ups_data.getAll()) {
+            expectedData[param.key] = param.value;
+        }
     }
 
     String output;

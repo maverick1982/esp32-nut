@@ -1,12 +1,10 @@
 {
-  "driver": "Eaton",
-  "vid": "0x0463",
-  "pid": "0xFFFF",
+  "firmware_version": "dev",
+  "vid": "463",
+  "pid": "ffff",
   "manufacturer": "EATON",
   "product": "Eaton 3S",
-  "cfg_err": 0,
-  "cfg_total_len": 34,
-  "report_len_req": 926,
+  "serial_number": "",
   "report_descriptor_hex": [
     "0x05", "0x84", "0x09", "0x04", "0xA1", "0x01", "0x09", "0x10", "0xA1", "0x00",
     "0x09", "0x12", "0xA1", "0x00", "0x09", "0x5A", "0x85", "0x20", "0x75", "0x08",
@@ -101,5 +99,166 @@
     "0xB1", "0x03", "0xC0", "0x09", "0xE5", "0xA1", "0x00", "0x09", "0x05", "0xA1",
     "0x00", "0x09", "0xF1", "0x85", "0x10", "0xB1", "0x03", "0x09", "0x94", "0x85",
     "0xFD", "0xB1", "0x82", "0xC0", "0xC0", "0xC0"
+  ],
+  "quirks": 0,
+  "driver": "EatonDriver",
+  "scenarios": [
+    {
+      "description": "Live ESP32 dump",
+      "reports": [
+        {
+          "id": 1,
+          "type": 3,
+          "data": [1, 37, 0, 0]
+        },
+        {
+          "id": 2,
+          "type": 3,
+          "data": [2, 1, 1]
+        },
+        {
+          "id": 3,
+          "type": 3,
+          "data": [3, 0, 0, 0, 0]
+        },
+        {
+          "id": 6,
+          "type": 3,
+          "data": [6, 100, 32, 13, 0, 0]
+        },
+        {
+          "id": 7,
+          "type": 3,
+          "data": [7, 2, 2, 1, 0, 9, 5, 2]
+        },
+        {
+          "id": 8,
+          "type": 3,
+          "data": [8, 20]
+        },
+        {
+          "id": 9,
+          "type": 3,
+          "data": [9, 255, 255, 255, 255]
+        },
+        {
+          "id": 10,
+          "type": 3,
+          "data": [10, 255, 255, 255, 255]
+        },
+        {
+          "id": 11,
+          "type": 3,
+          "data": [11, 4, 4, 0, 1, 1, 1, 1, 1, 4, 1]
+        },
+        {
+          "id": 12,
+          "type": 3,
+          "data": [12, 1, 1, 1, 2, 100, 100, 4]
+        },
+        {
+          "id": 13,
+          "type": 3,
+          "data": [13, 188, 2, 50]
+        },
+        {
+          "id": 14,
+          "type": 3,
+          "data": [14, 230, 0]
+        },
+        {
+          "id": 16,
+          "type": 3,
+          "data": [16, 5, 1, 11, 2, 7, 4, 6, 8]
+        },
+        {
+          "id": 18,
+          "type": 3,
+          "data": [18, 230]
+        },
+        {
+          "id": 19,
+          "type": 3,
+          "data": [19, 8, 1]
+        },
+        {
+          "id": 20,
+          "type": 3,
+          "data": [20, 161]
+        },
+        {
+          "id": 21,
+          "type": 3,
+          "data": [21, 0]
+        },
+        {
+          "id": 23,
+          "type": 3,
+          "data": [23, 0, 0, 0, 0, 0]
+        },
+        {
+          "id": 24,
+          "type": 3,
+          "data": [24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        },
+        {
+          "id": 25,
+          "type": 3,
+          "data": [25, 0]
+        },
+        {
+          "id": 31,
+          "type": 3,
+          "data": [31, 2]
+        },
+        {
+          "id": 32,
+          "type": 3,
+          "data": [32, 1]
+        },
+        {
+          "id": 34,
+          "type": 3,
+          "data": [34, 20]
+        },
+        {
+          "id": 253,
+          "type": 3,
+          "data": [253, 41]
+        }
+      ],
+      "expected_ups_data": {
+        "ups.mfr": "EATON",
+        "ups.model": "Eaton 3S",
+        "ups.type": "EatonDriver",
+        "ups.beeper.status": "disabled",
+        "ups.load": "5",
+        "ups.power.nominal": "700",
+        "ups.realpower": "21",
+        "input.frequency.nominal": "50",
+        "output.frequency.nominal": "50",
+        "input.voltage.nominal": "230",
+        "outlet.1.switch": "1",
+        "outlet.2.switch": "1",
+        "input.transfer.high": "264",
+        "input.transfer.low": "161",
+        "output.voltage": "230.0",
+        "ups.delay.shutdown": "-1",
+        "ups.timer.shutdown": "-1",
+        "ups.status.ac_present": "1",
+        "ups.status.battery_low": "0",
+        "ups.status.charging": "1",
+        "ups.status.comm_lost": "0",
+        "ups.status.discharging": "0",
+        "ups.status.replace_battery": "0",
+        "ups.status.overload": "0",
+        "ups.status.shutdown_imminent": "0",
+        "ups.status.good": "1",
+        "ups.status.internal_failure": "0",
+        "battery.charge": "100",
+        "battery.runtime": "3360",
+        "battery.charge.low": "20"
+      }
+    }
   ]
 }

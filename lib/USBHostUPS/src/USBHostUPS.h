@@ -11,6 +11,14 @@
 #include "HIDParser.h"
 #include "UPSData.h"
 #include "IUSBHostUPS.h"
+#include <map>
+#include <vector>
+
+struct CachedReport {
+    uint8_t report_id;
+    uint8_t report_type;
+    std::vector<uint8_t> data;
+};
 
 typedef void (*LogCallback)(const char* level, const char* msg);
 
@@ -80,6 +88,8 @@ private:
     UPSData _ups_data;
     IUPSDriver* _driver;
     LogCallback _log_cb;
+    
+    std::map<uint16_t, CachedReport> _cached_reports;
 
     uint32_t _quirks;
 };

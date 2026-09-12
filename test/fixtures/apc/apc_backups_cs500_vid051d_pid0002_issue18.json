@@ -119,11 +119,11 @@
         {
           "report_id": 69,
           "report_type": 3,
-          "data_hex": "45242305"
+          "data": [69, 36, 35, 5]
         }
       ],
       "expected_ups_data": {
-        "batteryDate": "2024/05/23"
+        "battery.date": "2024/05/23"
       }
     }
   ]
