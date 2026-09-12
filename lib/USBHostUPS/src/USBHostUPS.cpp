@@ -303,18 +303,37 @@ bool USBHostUPS::setBeeper(bool enable) {
         return false;
     }
     
+    uint8_t rep_type = (def->report_type == 2) ? HID_REPORT_TYPE_OUTPUT : HID_REPORT_TYPE_FEATURE;
+    
+    // Calculate full expected length for this report ID to avoid truncating SetReport
+    uint16_t expected_length = 64; // Default fallback
+    if (_quirks & QUIRK_MAX_REPORT_SIZE_1) {
+        expected_length = 1;
+    } else {
+        uint16_t max_bit_bound = 0;
+        for (const auto& u : _hid_parser.getUsages()) {
+            if (u.report_id == def->report_id && u.report_type == def->report_type) {
+                if (u.bit_offset + u.bit_size > max_bit_bound) {
+                    max_bit_bound = u.bit_offset + u.bit_size;
+                }
+            }
+        }
+        if (max_bit_bound > 0) {
+            expected_length = (max_bit_bound + 7) / 8;
+            if (def->report_id != 0) expected_length += 1;
+        }
+    }
+    
     uint8_t buffer[256];
     memset(buffer, 0, sizeof(buffer));
-    size_t fetched_len = sizeof(buffer);
-    
-    uint8_t rep_type = (def->report_type == 2) ? HID_REPORT_TYPE_OUTPUT : HID_REPORT_TYPE_FEATURE;
+    size_t fetched_len = expected_length;
     
     // STEP 1: Fetch current report to preserve other fields
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, rep_type, def->report_id, buffer, &fetched_len);
     
     if (err != ESP_OK || fetched_len == 0) {
         // Fallback for UPSes that reject GET_REPORT on features
-        fetched_len = (def->report_id != 0 ? 1 : 0) + (def->bit_offset / 8) + 1;
+        fetched_len = expected_length;
         if (def->report_id != 0) buffer[0] = def->report_id;
     }
     

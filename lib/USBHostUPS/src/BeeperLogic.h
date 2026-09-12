@@ -15,24 +15,32 @@ public:
         size_t byte_index = has_report_id ? 1 : 0;
         
         // Enlarge if report was unexpectedly small
-        if (byte_index + def->bit_offset / 8 >= fetched_len) {
-            size_t needed = byte_index + def->bit_offset / 8 + 1;
+        size_t needed = byte_index + (def->bit_offset + def->bit_size + 7) / 8;
+        if (needed > fetched_len) {
             if (needed <= 256) fetched_len = needed;
             else return 0; 
         }
         
         // Encode device-specific value
-        uint8_t val = driver ? driver->encodeBeeperValue(enable, def->bit_size) : (def->bit_size == 1 ? (enable ? 1 : 0) : (enable ? 2 : 1));
+        uint32_t val = driver ? driver->encodeBeeperValue(enable, def->bit_size) : (def->bit_size == 1 ? (enable ? 1 : 0) : (enable ? 2 : 1));
         
         // Modify buffer (using exact masking for non-aligned fields)
         uint8_t bit_shift = def->bit_offset % 8;
-        uint8_t target_idx = byte_index + (def->bit_offset / 8);
+        uint32_t mask = (def->bit_size >= 32) ? 0xFFFFFFFF : ((1ULL << def->bit_size) - 1);
         
-        uint8_t mask = (1 << def->bit_size) - 1;
-        if (def->bit_size == 8) mask = 0xFF; // Avoid shift overflow behavior
+        // Apply val to buffer across multiple bytes
+        val &= mask;
+        val <<= bit_shift;
+        mask <<= bit_shift;
         
-        buffer[target_idx] &= ~(mask << bit_shift);
-        buffer[target_idx] |= (val & mask) << bit_shift;
+        size_t target_idx = byte_index + (def->bit_offset / 8);
+        for (int i = 0; i < 4 && target_idx + i < fetched_len; i++) {
+            uint8_t byte_mask = (mask >> (i * 8)) & 0xFF;
+            if (!byte_mask && i > 0) break; // Reached end of mask
+            
+            buffer[target_idx + i] &= ~byte_mask;
+            buffer[target_idx + i] |= ((val >> (i * 8)) & byte_mask);
+        }
         
         return fetched_len;
     }
