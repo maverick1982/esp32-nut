@@ -20,11 +20,16 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
         uint32_t unit;
     };
     std::vector<GlobalState> global_stack;
+    global_stack.reserve(16);
     
     std::map<uint8_t, uint16_t> input_offsets;
     std::map<uint8_t, uint16_t> feature_offsets;
     std::vector<uint32_t> local_usages;
+    local_usages.reserve(16);
     std::vector<String> collection_names;
+    collection_names.reserve(16);
+
+    _usages.reserve(128); // Pre-allocate to prevent heap fragmentation
     
     size_t i = 0;
     while (i < len) {

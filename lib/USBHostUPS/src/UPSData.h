@@ -15,7 +15,7 @@ private:
 
 public:
     UPSData() {
-        _parameters.reserve(60); // Pre-allocate to prevent heap fragmentation
+        _parameters.reserve(128); // Pre-allocate to prevent heap fragmentation
     }
 
     void set(const String& key, const String& value) {
