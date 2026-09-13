@@ -85,6 +85,12 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
+                    
+                    if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
+                        _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
+                        return;
+                    }
+                    
                     host->requestReport(r_id, r_type, 64);
                 } else {
                     _poll_step = 0;

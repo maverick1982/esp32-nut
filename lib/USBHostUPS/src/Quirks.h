@@ -19,8 +19,8 @@ struct QuirkDef {
 
 // Common Quirks table can be extended
 static const QuirkDef UPS_QUIRKS[] = {
-    // CyberPower CP1500PFCLCD inverted strings
-    { 0x0764, 0x0501, QUIRK_INVERT_STRINGS },
+    // CyberPower CP1500PFCLCD inverted strings + avoid GetReport STALL
+    { 0x0764, 0x0501, QUIRK_INVERT_STRINGS | QUIRK_NO_GET_REPORT },
     // Powercom SPD-750U (and BNT series) non-persistent beeper toggle
     { 0x0D9F, 0x0004, QUIRK_NO_BEEPER_CONTROL },
     // APC Back-UPS (e.g. SU750i, ES 525, CS 650)
