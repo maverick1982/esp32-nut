@@ -77,26 +77,26 @@ void setup() {
         web_server.begin(false);
     }
 
-    // Inizializzazione della libreria USBHostUPS e NUTServer (solo se la configurazione è valida)
+    // Inizializzazione della libreria USBHostUPS (sempre attiva)
+    usb_ups.setLogCallback([](const char* level, const char* msg) {
+        AppLogger::log(level, msg);
+    });
+
+    // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize
+    // Many UPS devices (like APC) take a few seconds to properly handle USB requests after power on.
+    uint32_t wait_until = 3000;
+    while (millis() < wait_until) {
+        delay(10);
+    }
+
+    if (!usb_ups.begin()) {
+        AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
+    } else {
+        AppLogger::log("INFO", "[MAIN] USBHostUPS initialized correctly.");
+    }
+
+    // Inizializzazione NUTServer (solo se la configurazione è valida)
     if (config_ok) {
-        usb_ups.setLogCallback([](const char* level, const char* msg) {
-            AppLogger::log(level, msg);
-        });
-
-        // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize
-        // Many UPS devices (like APC) take a few seconds to properly handle USB requests after power on.
-        uint32_t wait_until = 3000;
-        while (millis() < wait_until) {
-            delay(10);
-        }
-
-        if (!usb_ups.begin()) {
-            AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
-        } else {
-            AppLogger::log("INFO", "[MAIN] USBHostUPS initialized correctly.");
-        }
-
-        // Inizializzazione NUTServer
         NutConfig nut_config = config_mgr.getNutConfig();
         NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
@@ -119,6 +119,7 @@ void loop() {
 
     web_server.loop();
     network_mgr.loop();
+    usb_ups.loop();
 
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura
     if (!config_mgr.isValid()) {
@@ -128,13 +129,12 @@ void loop() {
             AppLogger::log("WARN", "[MAIN] WARNING: System in safe waiting mode. Configuration missing or invalid!");
         }
         
-        diagnostic_led.setState(computeSystemState(network_mgr.isConnected(), false));
+        diagnostic_led.setState(computeSystemState(network_mgr.isConnected(), usb_ups.isConnected()));
         diagnostic_led.update();
         delay(10);
         return;
     }
 
-    usb_ups.loop();
     nut_server.loop();
 
     static uint32_t last_print = 0;

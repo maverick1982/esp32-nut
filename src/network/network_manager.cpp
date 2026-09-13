@@ -5,10 +5,12 @@ AppNetworkManager::AppNetworkManager()
     : m_lastStatus(WL_IDLE_STATUS), 
       m_lastConnectionAttempt(0), 
       m_lastDisconnectTime(0),
-      m_isStarted(false) {}
+      m_isStarted(false),
+      m_isApMode(false) {}
 
 void AppNetworkManager::beginAP(const String& ap_ssid, const String& ap_password) {
     m_isStarted = true;
+    m_isApMode = true;
     AppLogger::log("INFO", "[NETWORK] Starting Access Point mode...");
     WiFi.mode(WIFI_AP);
     WiFi.softAP(ap_ssid.c_str(), ap_password.c_str());
@@ -19,6 +21,7 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
     m_ssid = ssid;
     m_password = password;
     m_isStarted = true;
+    m_isApMode = false;
     m_lastStatus = WL_IDLE_STATUS;
     
     AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi...");
@@ -32,7 +35,7 @@ void AppNetworkManager::begin(const String& ssid, const String& password) {
 }
 
 void AppNetworkManager::loop() {
-    if (!m_isStarted) {
+    if (!m_isStarted || m_isApMode) {
         return;
     }
     

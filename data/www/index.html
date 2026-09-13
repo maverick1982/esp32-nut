@@ -5,12 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 NUT Server | Config</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="shared.css?v=1.1.1">
-    <link rel="stylesheet" href="ups.css?v=1.1.1">
-    <link rel="stylesheet" href="mobile.css?v=1.1.1">
+    
+    
+    
+    
+    <link rel="stylesheet" href="bundle.css?v=1.2.0">
 </head>
 <body>
     <div class="app-container">
@@ -102,7 +101,7 @@
                     <form id="nut-form" class="form-container">
                         <div class="form-group">
                             <label for="nut-upsname">UPS Name</label>
-                            <input type="text" id="nut-upsname" placeholder="eaton" required>
+                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$" title="Spaces are not allowed in the UPS Name" required>
                         </div>
                         <div class="form-group">
                             <label for="nut-username">Username</label>
@@ -225,6 +224,6 @@
 
         </main>
     </div>
-    <script src="app.js?v=1.1.1"></script>
+    <script src="bundle.js?v=1.2.0"></script>
 </body>
 </html>

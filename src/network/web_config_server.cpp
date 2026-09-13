@@ -32,55 +32,12 @@ void WebConfigServer::begin(bool isAPMode) {
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
         server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "text/html", (const char*)web_asset_index_html, web_asset_index_html_len);
+        server.send_P(200, "text/html", (const char*)web_asset_index_inlined_html, web_asset_index_inlined_html_len);
     });
 
     server.on("/index.html", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "text/html", (const char*)web_asset_index_html, web_asset_index_html_len);
-    });
-
-    server.on("/app.js", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "application/javascript", (const char*)web_asset_app_js, web_asset_app_js_len);
-    });
-
-    server.on("/fflate.min.js", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "application/javascript", (const char*)web_asset_fflate_min_js, web_asset_fflate_min_js_len);
-    });
-
-    server.on("/shared.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "text/css", (const char*)web_asset_shared_css, web_asset_shared_css_len);
-    });
-
-    server.on("/ups.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "text/css", (const char*)web_asset_ups_css, web_asset_ups_css_len);
-    });
-
-    server.on("/mobile.css", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "text/css", (const char*)web_asset_mobile_css, web_asset_mobile_css_len);
-    });
-
-    server.on("/logo.png", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "image/png", (const char*)web_asset_logo_png, web_asset_logo_png_len);
-    });
-
-    server.on("/favicon.ico", HTTP_GET, [this]() {
-        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        server.sendHeader("Content-Encoding", "gzip");
-        server.send_P(200, "image/x-icon", (const char*)web_asset_favicon_ico, web_asset_favicon_ico_len);
+        server.sendHeader("Location", "/", true);
+        server.send(301, "text/plain", "");
     });
 
 
@@ -308,7 +265,7 @@ void WebConfigServer::handleBeeper() {
 void WebConfigServer::handleOTAPage() {
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Content-Encoding", "gzip");
-    server.send_P(200, "text/html", (const char*)web_asset_update_html, web_asset_update_html_len);
+    server.send_P(200, "text/html", (const char*)web_asset_update_inlined_html, web_asset_update_inlined_html_len);
 }
 
 void WebConfigServer::handleOTAUpload() {

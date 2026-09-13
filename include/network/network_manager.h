@@ -25,6 +25,7 @@ private:
     uint32_t m_lastConnectionAttempt;
     uint32_t m_lastDisconnectTime;
     bool m_isStarted;
+    bool m_isApMode;
 };
 
 #endif // NETWORK_MANAGER_H

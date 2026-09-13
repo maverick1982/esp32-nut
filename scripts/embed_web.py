@@ -1,6 +1,12 @@
 import os
 import glob
 import gzip
+import subprocess
+
+def run_inline_script():
+    # Run inline scripts first
+    subprocess.run(["python", "scripts/inline_web.py"], check=True)
+    subprocess.run(["python", "scripts/inline_update.py"], check=True)
 
 def embed_files():
     data_dir = "data/www"
@@ -15,27 +21,25 @@ def embed_files():
 
     import hashlib
     
-    # Calculate hash of all source files
-    hasher = hashlib.md5()
-    files = glob.glob(os.path.join(data_dir, "**", "*.*"), recursive=True)
+    # We only want to embed these specific files
+    target_files = [
+        "index_inlined.html",
+        "update_inlined.html"
+    ]
+    
+    files = [os.path.join(data_dir, f) for f in target_files if os.path.exists(os.path.join(data_dir, f))]
     files.sort()
     
+    hasher = hashlib.md5()
     for filepath in files:
-        if not os.path.isfile(filepath):
-            continue
-        ext = os.path.splitext(filepath)[1].lower()
-        if ext not in [".html", ".css", ".js", ".json", ".svg", ".png", ".ico", ".jpg", ".jpeg"]:
-            continue
         with open(filepath, "rb") as bf:
             content = bf.read()
-            if ext in [".html", ".css", ".js", ".json", ".svg"]:
-                content = content.replace(b'\r', b'')
+            content = content.replace(b'\r', b'')
             hasher.update(content)
             
     current_hash = hasher.hexdigest()
     hash_file = "include/network/.web_assets.hash"
     
-    # If hash matches, skip generation
     if os.path.exists(hash_file) and os.path.exists(out_file):
         with open(hash_file, "r") as hf:
             if hf.read().strip() == current_hash:
@@ -48,21 +52,11 @@ def embed_files():
         f.write("#include <Arduino.h>\n\n")
         
         for filepath in files:
-            if not os.path.isfile(filepath):
-                continue
-            
-            ext = os.path.splitext(filepath)[1].lower()
-            if ext not in [".html", ".css", ".js", ".json", ".svg", ".png", ".ico", ".jpg", ".jpeg"]:
-                continue
-            
             with open(filepath, "rb") as bf:
                 content = bf.read()
-                if ext in [".html", ".css", ".js", ".json", ".svg"]:
-                    content = content.replace(b'\r', b'')
+                content = content.replace(b'\r', b'')
                 
-            # Compress content deterministically by setting mtime=0
             compressed = bytearray(gzip.compress(content, mtime=0))
-            # Force OS byte (10th byte) to 255 (unknown) to avoid platform/python differences
             if len(compressed) >= 10:
                 compressed[9] = 255
             
@@ -81,4 +75,6 @@ def embed_files():
     with open(hash_file, "w") as hf:
         hf.write(current_hash)
 
-embed_files()
+if __name__ == "__main__":
+    run_inline_script()
+    embed_files()
