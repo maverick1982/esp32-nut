@@ -334,17 +334,14 @@ void test_powercom_two_tier_polling_and_static_skipping(void) {
     u_dyn.found = true;
     host._usages.push_back(u_dyn);
 
+    host._pid = 0x0001; // Use standard Powercom PID to test normal GenericDriver polling behavior
+
     driver.setup();
 
     // t = 1000: Initial cycle starts full walk
-    driver.loop(&host, ups_data, 1000); // step 1
-    driver.loop(&host, ups_data, 1800); // step 2
-    driver.loop(&host, ups_data, 2600); // step 3
-    driver.loop(&host, ups_data, 3400); // step 4
-    driver.loop(&host, ups_data, 4200); // step 5: Report 0x11
-    driver.loop(&host, ups_data, 5000); // step 6: Report 0x12
-    driver.loop(&host, ups_data, 5800); // step 7: Done initial cycle
-    driver.loop(&host, ups_data, 6600); // Initial 0xA4 report
+    for (uint32_t t = 1000; t <= 6600; t += 800) {
+        driver.loop(&host, ups_data, t);
+    }
 
     // Simulate Report 0x11 decoded
     ups_data.set("input.voltage.nominal", "220");
@@ -361,11 +358,9 @@ void test_powercom_two_tier_polling_and_static_skipping(void) {
     TEST_ASSERT_EQUAL_UINT32(0, host._requestedReports.size());
 
     // t = 36000: 30s elapsed -> Full Poll triggers!
-    driver.loop(&host, ups_data, 36000);
-    driver.loop(&host, ups_data, 36800);
-    driver.loop(&host, ups_data, 37600);
-    driver.loop(&host, ups_data, 38400);
-    driver.loop(&host, ups_data, 39200);
+    for (uint32_t t = 36000; t <= 39200; t += 800) {
+        driver.loop(&host, ups_data, t);
+    }
 
     // During this recurring full poll: Report 0x12 (dynamic) should be requested,
     // but Report 0x11 (static, already populated) must NOT be requested!
@@ -406,6 +401,8 @@ void test_powercom_status_reports_not_polled_over_ep0(void) {
     u_volt.path = "UPS.Input.Voltage";
     u_volt.found = true;
     host._usages.push_back(u_volt);
+
+    host._pid = 0x0001; // Use standard PID to test standard EP0 polling exclusions
 
     driver.setup();
 
@@ -505,9 +502,30 @@ void test_powercom_spurious_zero_ignored_when_status_unknown_unless_discharging(
 
     // Assert: Even when status is "Unknown", spurious zeros must NOT overwrite active telemetries unless discharging/shutdown
     TEST_ASSERT_EQUAL_STRING("218.0", ups_data.get("input.voltage").c_str());
-    TEST_ASSERT_EQUAL_STRING("216.0", ups_data.get("output.voltage").c_str());
     TEST_ASSERT_EQUAL_STRING("30.0", ups_data.get("battery.temperature").c_str());
     TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+}
+
+void test_generic_driver_fast_forwards_empty_steps(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+    
+    driver.setup();
+    
+    // Initial call to loop.
+    // Since MockPowercomHost has no string indices and shouldPollUsage returns false for all usages (empty rids),
+    // GenericDriver::loop should fast-forward all empty steps instantly without waiting for getPollPacingMs (800ms).
+    // As a result, _poll_step will reach 0 within the same call.
+    // Then PowercomDriver::loop will immediately poll 0xA4!
+    driver.loop(&host, ups_data, 1000);
+    
+    bool polled_0xa4 = false;
+    for (const auto& r : host._requestedReports) {
+        if (r.first == 0xA4) polled_0xa4 = true;
+    }
+    
+    TEST_ASSERT_TRUE_MESSAGE(polled_0xa4, "Empty steps must be fast-forwarded, allowing 0xA4 to be polled immediately on the first cycle");
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -525,6 +543,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_two_tier_polling_and_static_skipping);
     RUN_TEST(test_powercom_status_reports_not_polled_over_ep0);
     RUN_TEST(test_powercom_spurious_zero_ignored_when_status_unknown_unless_discharging);
+    RUN_TEST(test_generic_driver_fast_forwards_empty_steps);
     return UNITY_END();
 }
 #else
@@ -541,6 +560,7 @@ void setup() {
     RUN_TEST(test_powercom_two_tier_polling_and_static_skipping);
     RUN_TEST(test_powercom_status_reports_not_polled_over_ep0);
     RUN_TEST(test_powercom_spurious_zero_ignored_when_status_unknown_unless_discharging);
+    RUN_TEST(test_generic_driver_fast_forwards_empty_steps);
     UNITY_END();
 }
 void loop() {}

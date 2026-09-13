@@ -92,125 +92,135 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         if (host->isControlPending()) return;
 
         if (now - _last_step_time >= getPollPacingMs()) { // Strict pacing for all requests
-            _last_step_time = now;
             
-            if (_poll_step == 1) {
-                if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
-            } else if (_poll_step == 2) {
-                if (!data.hasKey("ups.model") && host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
-            } else if (_poll_step == 3) {
-                if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
-            } else if (_poll_step == 4) {
-                if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
-            } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    if (!shouldPollUsage(u.path)) continue;
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found && u.report_id != 0) rids.push_back(pair);
-                }
-                
-                // Exclude reports that only contain status/event usages (handled by Interrupt IN pipe)
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    uint8_t r_id = *it & 0xFF;
-                    uint8_t r_type = *it >> 8;
-                    bool has_telemetry = false;
+            bool request_sent = false;
+            while (_poll_step > 0 && !request_sent) {
+                if (_poll_step == 1) {
+                    if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) { host->requestStringDescriptor(host->_iManufacturer); request_sent = true; }
+                } else if (_poll_step == 2) {
+                    if (!data.hasKey("ups.model") && host->_iProduct > 0) { host->requestStringDescriptor(host->_iProduct); request_sent = true; }
+                } else if (_poll_step == 3) {
+                    if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) { host->requestStringDescriptor(host->_iSerialNumber); request_sent = true; }
+                } else if (_poll_step == 4) {
+                    if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) { host->requestStringDescriptor(_batteryDateStringIndex); request_sent = true; }
+                } else {
+                    const auto& usages = host->getUsages();
+                    std::vector<uint16_t> rids;
                     for (const auto& u : usages) {
-                        if (u.report_id == r_id && u.report_type == r_type) {
-                            if (!isStatusUsage(u.path)) {
-                                has_telemetry = true;
-                                break;
-                            }
+                        if (u.report_type == 2) continue; // Skip OUTPUT reports
+                        if (!shouldPollUsage(u.path)) continue;
+                        uint16_t pair = (u.report_type << 8) | u.report_id;
+                        bool found = false;
+                        for (uint16_t id : rids) {
+                            if (id == pair) { found = true; break; }
                         }
+                        if (!found && u.report_id != 0) rids.push_back(pair);
                     }
-                    if (!has_telemetry) {
-                        it = rids.erase(it);
-                        continue;
-                    }
-                    ++it;
-                }
-
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                        }
-                        if (has_feature) {
-                            it = rids.erase(it);
-                            continue;
-                        }
-                    }
-                    ++it;
-                }
-
-                // If this is a recurring full walk (not initial walk), exclude reports that only contain static usages
-                if (_last_full_poll > 0) {
+                    
+                    // Exclude reports that only contain status/event usages (handled by Interrupt IN pipe)
                     for (auto it = rids.begin(); it != rids.end(); ) {
                         uint8_t r_id = *it & 0xFF;
                         uint8_t r_type = *it >> 8;
-                        bool has_dynamic = false;
+                        bool has_telemetry = false;
                         for (const auto& u : usages) {
                             if (u.report_id == r_id && u.report_type == r_type) {
-                                if (!isStaticUsage(u.path)) {
-                                    has_dynamic = true;
+                                if (!isStatusUsage(u.path)) {
+                                    has_telemetry = true;
                                     break;
                                 }
                             }
                         }
-                        if (!has_dynamic) {
+                        if (!has_telemetry) {
                             it = rids.erase(it);
                             continue;
                         }
                         ++it;
                     }
-                }
 
-                
-                int index = _poll_step - 5;
-                if (index >= 0 && index < (int)rids.size()) {
-                    uint8_t r_type = rids[index] >> 8;
-                    uint8_t r_id = rids[index] & 0xFF;
-                    
-                    if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
-                        _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
-                        return;
-                    }
-                    
-                    uint16_t expected_length = 64;
-                    if (host->getQuirks() & QUIRK_MAX_REPORT_SIZE_1) {
-                        expected_length = 1;
-                    } else {
-                        uint16_t max_bit_bound = 0;
-                        for (const auto& u : host->getUsages()) {
-                            if (u.report_id == r_id && u.report_type == r_type) {
-                                if (u.bit_offset + u.bit_size > max_bit_bound) {
-                                    max_bit_bound = u.bit_offset + u.bit_size;
-                                }
+                    for (auto it = rids.begin(); it != rids.end(); ) {
+                        if ((*it >> 8) == 1) { // If Input report
+                            uint8_t id = *it & 0xFF;
+                            bool has_feature = false;
+                            for (uint16_t pair : rids) {
+                                if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                            }
+                            if (has_feature) {
+                                it = rids.erase(it);
+                                continue;
                             }
                         }
-                        if (max_bit_bound > 0) {
-                            expected_length = (max_bit_bound + 7) / 8;
-                            if (r_id != 0) expected_length += 1;
+                        ++it;
+                    }
+
+                    // If this is a recurring full walk (not initial walk), exclude reports that only contain static usages
+                    if (_last_full_poll > 0) {
+                        for (auto it = rids.begin(); it != rids.end(); ) {
+                            uint8_t r_id = *it & 0xFF;
+                            uint8_t r_type = *it >> 8;
+                            bool has_dynamic = false;
+                            for (const auto& u : usages) {
+                                if (u.report_id == r_id && u.report_type == r_type) {
+                                    if (!isStaticUsage(u.path)) {
+                                        has_dynamic = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!has_dynamic) {
+                                it = rids.erase(it);
+                                continue;
+                            }
+                            ++it;
                         }
                     }
-                    host->requestReport(r_id, r_type, expected_length);
+
+                    
+                    int index = _poll_step - 5;
+                    if (index >= 0 && index < (int)rids.size()) {
+                        uint8_t r_type = rids[index] >> 8;
+                        uint8_t r_id = rids[index] & 0xFF;
+                        
+                        if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
+                            _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
+                            return;
+                        }
+                        
+                        uint16_t expected_length = 64;
+                        if (host->getQuirks() & QUIRK_MAX_REPORT_SIZE_1) {
+                            expected_length = 1;
+                        } else {
+                            uint16_t max_bit_bound = 0;
+                            for (const auto& u : host->getUsages()) {
+                                if (u.report_id == r_id && u.report_type == r_type) {
+                                    if (u.bit_offset + u.bit_size > max_bit_bound) {
+                                        max_bit_bound = u.bit_offset + u.bit_size;
+                                    }
+                                }
+                            }
+                            if (max_bit_bound > 0) {
+                                expected_length = (max_bit_bound + 7) / 8;
+                                if (r_id != 0) expected_length += 1;
+                            }
+                        }
+                        host->requestReport(r_id, r_type, expected_length);
+                        request_sent = true;
+                    } else {
+                        _poll_step = 0; // Done
+                        _last_full_poll = now != 0 ? now : 1;
+                        _last_fast_poll = now != 0 ? now : 1;
+                        _is_full_walk = false;
+                        return;
+                    }
+                }
+                
+                if (request_sent) {
+                    _last_step_time = now;
+                    _poll_step++;
+                    break;
                 } else {
-                    _poll_step = 0; // Done
-                    _last_full_poll = now != 0 ? now : 1;
-                    _last_fast_poll = now != 0 ? now : 1;
-                    _is_full_walk = false;
-                    return;
+                    _poll_step++;
                 }
             }
-            _poll_step++;
         }
     }
 }
