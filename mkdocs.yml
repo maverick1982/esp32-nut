@@ -1,0 +1,45 @@
+site_name: ESP32-NUT
+site_description: Firmware open source per colmare il divario tra gli UPS basati su USB ed i server NUT.
+docs_dir: docs/user-manual
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: deep purple
+  features:
+    - navigation.tabs
+    - navigation.top
+    - search.suggest
+    - search.highlight
+
+nav:
+  - User Manual (English):
+    - Introduction: index.md
+    - Hardware Requirements: en/hardware.md
+    - Installation: en/installation.md
+    - Configuration: en/configuration.md
+    - Status LED: en/status-led.md
+    - Client Integration: en/integration.md
+    - Troubleshooting: en/troubleshooting.md
+    - FAQ: en/faq.md
+  - Manuale Utente (Italiano):
+    - Introduzione: it/index.md
+    - Requisiti Hardware: it/hardware.md
+    - Installazione: it/installation.md
+    - Configurazione: it/configuration.md
+    - LED di Stato: it/status-led.md
+    - Integrazione Client: it/integration.md
+    - Risoluzione Problemi: it/troubleshooting.md
+    - FAQ: it/faq.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+
+plugins:
+  - search
+  - callouts
