@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+/* Override default fonts in MkDocs Material variables */
+:root {
+    --md-text-font: "Inter", sans-serif;
+    --md-code-font: "Share Tech Mono", monospace;
+}
+
+[data-md-color-scheme="slate"] {
+    /* Color Palette - Hi-Tech / Cyberpunk minimal (from Web UI) */
+    --md-default-bg-color: #06090e;
+    --md-default-fg-color: #e0e6ed;
+    --md-default-fg-color--light: #8a9bb3;
+    --md-default-fg-color--lighter: rgba(138, 155, 179, 0.5);
+    
+    /* Primary Colors (Accent in Web UI: #00f0ff) */
+    --md-primary-fg-color: #00f0ff;
+    --md-primary-fg-color--light: #00c3d0;
+    --md-primary-fg-color--dark: #00a4b3;
+    --md-primary-bg-color: #06090e;
+    --md-primary-bg-color--light: rgba(6, 9, 14, 0.7);
+    
+    /* Accent color */
+    --md-accent-fg-color: #00f0ff;
+    --md-accent-fg-color--transparent: rgba(0, 240, 255, 0.1);
+    
+    /* Specific element colors */
+    --md-code-bg-color: rgba(14, 20, 31, 0.8);
+    --md-code-fg-color: #00f0ff;
+    --md-typeset-a-color: #00f0ff;
+    --md-typeset-a-color--hover: #00ff9d;
+    
+    /* Grid background pattern matching Web UI */
+    background-image: 
+        radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.05), transparent 25%),
+        radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.03), transparent 25%),
+        linear-gradient(rgba(0, 240, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.02) 1px, transparent 1px) !important;
+    background-size: 100% 100%, 100% 100%, 30px 30px, 30px 30px !important;
+    background-position: 0 0, 0 0, -1px -1px, -1px -1px !important;
+}
+
+/* Top bar title (Orbitron) */
+.md-header__title {
+    font-family: 'Orbitron', sans-serif !important;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #e0e6ed !important;
+}
+
+/* Content Headings (Inter for better readability) */
+.md-typeset h1, 
+.md-typeset h2, 
+.md-typeset h3, 
+.md-typeset h4, 
+.md-typeset h5, 
+.md-typeset h6 {
+    font-family: 'Inter', sans-serif !important;
+    /* Rimuoviamo anche il tutto maiuscolo per i titoli lunghi */
+}
+
+/* Enhancing header style */
+.md-header {
+    background-color: rgba(8, 12, 18, 0.85) !important;
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(45, 60, 90, 0.5);
+}
+
+/* Enhancing sidebar style */
+.md-sidebar--primary .md-sidebar__scrollwrap {
+    background: transparent;
+}
+.md-nav__link--active, .md-nav__item--active > .md-nav__link {
+    color: #00f0ff !important;
+    text-shadow: 0 0 5px rgba(0, 240, 255, 0.3);
+}
+
+/* Glowing effects for buttons */
+.md-typeset .md-button--primary {
+    background-color: #00f0ff;
+    color: #000;
+    font-weight: bold;
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+}
+.md-typeset .md-button--primary:hover {
+    background-color: #00c3d0;
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.5);
+}
+
+/* Search bar styling */
+.md-search__form {
+    background-color: rgba(0, 240, 255, 0.05) !important;
+    border: 1px solid rgba(0, 240, 255, 0.3) !important;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+}
+.md-search__form:hover, .md-search__input:focus-within {
+    background-color: rgba(0, 240, 255, 0.1) !important;
+    border-color: #00f0ff !important;
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.2) !important;
+}
+.md-search__input {
+    color: #e0e6ed !important;
+}
+.md-search__input::placeholder {
+    color: rgba(138, 155, 179, 0.7) !important;
+}
+.md-search__icon {
+    color: #00f0ff !important;
+}
