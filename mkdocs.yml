@@ -5,6 +5,8 @@ docs_dir: docs/user-manual
 theme:
   name: material
   language: en
+  logo: assets/logo.png
+  favicon: assets/logo.png
   palette:
     - scheme: slate
       primary: teal
@@ -43,3 +45,6 @@ markdown_extensions:
 plugins:
   - search
   - callouts
+
+extra_css:
+  - stylesheets/extra.css
