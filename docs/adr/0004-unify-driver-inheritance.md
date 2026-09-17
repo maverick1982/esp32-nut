@@ -1,3 +1,9 @@
+---
+type: decision
+title: "Unify Sub-Driver Inheritance via GenericDriver"
+description: "Documento ADR: Unify Sub-Driver Inheritance via GenericDriver"
+tags: [adr, decision]
+---
 # Unify Sub-Driver Inheritance via GenericDriver
 
 * **ADR ID:** 0004
@@ -28,3 +34,4 @@ Chosen option: "**Option 2: Unify inheritance**", because it immediately elimina
 ## Impact on Agent Implementation
 * **Driver Scaffolding Rule**: Any new UPS driver created in the future MUST inherit from GenericDriver (not IUPSDriver directly) unless it relies on a completely non-HID proprietary protocol.
 * **Override Pattern**: The decodeReport method in a sub-driver MUST call GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data); either before or after its custom parsing block, rather than reinventing standard mappings.
+

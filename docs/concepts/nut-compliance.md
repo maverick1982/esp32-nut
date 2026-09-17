@@ -1,3 +1,9 @@
+---
+type: concept
+title: "Linee Guida Conformità NUT"
+description: "Checklist e best practice per garantire la conformità dei driver ESP32-NUT con i sorgenti ufficiali NUT."
+tags: [compliance, nut, driver, linee-guida]
+---
 # Linee Guida per la Conformità dei Driver ESP32-NUT rispetto a NUT Ufficiale
 
 Questo documento raccoglie la checklist e le best practice per garantire che i driver scritti per **ESP32-NUT** (es. `GenericDriver`, `EatonDriver`, ecc.) mantengano la totale aderenza comportamentale con i sorgenti ufficiali del progetto **Network UPS Tools (NUT)**. 
@@ -44,3 +50,4 @@ Per mantenere l'integrità del bus USB e prevenire errori di `STALL` critici, è
 
 ---
 *Documento generato e aggiornato sulla base delle analisi di aderenza a NUT del 16 Agosto 2026.*
+

@@ -8,6 +8,12 @@
 ---
 
 ```markdown
+---
+type: plan
+title: "{US-CODE}: {Spec Title} — Implementation Plan"
+description: "Implementation Plan per {US-CODE}"
+tags: [plan, implementation, {US-CODE}]
+---
 # {US-CODE}: {Spec Title} — Implementation Plan
 
 > Render all section headers in the detected language.

@@ -1,3 +1,9 @@
+---
+type: decision
+title: "Record Architecture Decisions"
+description: "Documento ADR: Record Architecture Decisions"
+tags: [adr, decision]
+---
 # Record Architecture Decisions
 
 * **ADR ID:** 0001
@@ -29,3 +35,4 @@ Chosen option: "Use Markdown Any Decision Record (MADR) directly in the reposito
 * Agents MUST read docs/adr/README.md before planning tasks.
 * Agents MUST NOT violate the decisions recorded here.
 * Agents MUST use the /new-adr workflow to propose new architectural changes.
+

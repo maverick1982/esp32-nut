@@ -1,3 +1,9 @@
+---
+type: decision
+title: "Dynamic Polling and Quirks for USB STALL Mitigation"
+description: "Documento ADR: Dynamic Polling and Quirks for USB STALL Mitigation"
+tags: [adr, decision]
+---
 # Dynamic Polling and Quirks for USB STALL Mitigation
 
 * **ADR ID:** 0005
@@ -33,3 +39,4 @@ Chosen option: "**Option 2: Dynamic Packet Sizing & Targeted Quirks (Align with 
 ## Impact on Agent Implementation
 * Agents modifying or implementing polling logic MUST NOT hardcode USB packet lengths for Control Transfers. They must parse the `HIDParser` structures.
 * If a new brand or device is observed causing USB STALLs or WDT resets, the agent MUST first look for existing quirks in the `nut_repo/` upstream codebase and mirror them into `Quirks.h` rather than refactoring the global USB stack.
+

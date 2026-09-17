@@ -1,4 +1,10 @@
-﻿# Faithfully Mirror Official NUT Drivers and Subdrivers Behavior
+---
+type: decision
+title: "Faithfully Mirror Official NUT Drivers and Subdrivers Behavior"
+description: "Documento ADR: Faithfully Mirror Official NUT Drivers and Subdrivers Behavior"
+tags: [adr, decision]
+---
+# Faithfully Mirror Official NUT Drivers and Subdrivers Behavior
 
 * **ADR ID:** 0003
 * **Status:** Accepted
@@ -40,3 +46,4 @@ ut_repo/drivers/usbhid-ups.c and
 ut_repo/drivers/*-hid.c).
 * **No Invented Heuristics**: The agent MUST NOT invent custom formulas, arbitrary bit shifts, or synthetic status names if an established pattern exists in official NUT.
 * **Traceability in Code**: Driver implementations and comments should explicitly cite the upstream NUT file and function being mirrored (e.g. // Mirrored from nut/drivers/apc-hid.c: apc_load_claim()).
+

@@ -7,6 +7,12 @@ When the inception flow has gathered the minimum required information, generate 
 > **📌 Marker contract:** The HTML comments `<!-- archetipo:prd section=<id> required=true -->` below are stable, machine-readable markers used by `archetipo validate prd`. **Do not translate, modify, or remove them.** They are part of the validation contract and must appear verbatim in every generated PRD.
 
 ```markdown
+---
+type: concept
+title: "{{PROJECT_NAME}} - Product Requirements Document"
+description: "Product Requirements Document (PRD) per {{PROJECT_NAME}}"
+tags: [prd, product, requirements]
+---
 # {{PROJECT_NAME}} - Product Requirements Document
 
 **Author:** ARchetipo

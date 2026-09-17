@@ -1,3 +1,9 @@
+---
+type: decision
+title: "Migrate to ESP-IDF usb_host_hid and Decouple Driver Tasks"
+description: "Documento ADR: Migrate to ESP-IDF usb_host_hid and Decouple Driver Tasks"
+tags: [adr, decision]
+---
 # Migrate to ESP-IDF usb_host_hid and Decouple Driver Tasks
 
 * **ADR ID:** 0002
@@ -36,3 +42,4 @@ Specifically, the refactoring established these patterns:
 * **Mutex Rule**: Agents MUST NEVER access UPSData or invoke usb_host_hid APIs from outside the class without acquiring the _mutex.
 * **Task Boundary Rule**: Agents MUST NOT place blocking control transfers (e.g., hid_class_request_get_report) inside the asynchronous background event loop, as this will cause deadlocks.
 * **Testability Rule**: Agents MUST extract byte-level parsing, bit-masking, and string formatting into pure static functions (e.g., BeeperLogic, WebApiJson) and write native unit tests for them, avoiding direct hardware dependencies in business logic.
+

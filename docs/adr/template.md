@@ -1,3 +1,9 @@
+---
+type: template
+title: "[Title]"
+description: "Documento ADR: [Title]"
+tags: [adr, decision]
+---
 # [Title]
 
 * **ADR ID:** [XXXX]
@@ -27,3 +33,4 @@ Chosen option: "[Option 1]", because [justification].
 
 ## Impact on Agent Implementation
 [Explicit rules on what the agent can and cannot do based on this decision. How this impacts code generation, dependencies, and refactoring.]
+

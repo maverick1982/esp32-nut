@@ -1,3 +1,9 @@
+---
+type: concept
+title: "Documento dei Requisiti di Prodotto (PRD)"
+description: "Server NUT ultra-efficiente basato su ESP32-S3 per monitorare gli UPS USB senza consumi eccessivi di energia."
+tags: [prd, prodotto, requisiti]
+---
 # esp32-nut-server - Documento dei Requisiti di Prodotto
 
 **Autore:** ARchetipo
@@ -284,3 +290,4 @@ Visual Studio Code con estensione PlatformIO IDE su sistema operativo Windows/ma
 
 _PRD generato tramite ARchetipo Product Inception il 2026-07-08_
 _Sessione condotta da: pasquale con il team ARchetipo_
+
