@@ -58,11 +58,11 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     // Delegating dynamic PDC walk to GenericDriver (identical to NUT hid_ups_walk)
     GenericDriver::loop(host, data, now);
 
-    // Legacy Powercom (0xA4 report) fallback polling and keepalive
+    // Legacy Powercom (0xA4 report) fallback polling
     // Older Powercom models don't use standard PDC reports and only expose an 0xA4 report.
-    // For PID 0x0004 (SPD-750U), we poll this every 3 seconds to act as an EP0 keepalive,
-    // otherwise the MCU drops the connection.
-    uint32_t a4_interval = (_current_pid == 0x0004) ? 3000 : getFullPollIntervalMs();
+    // We poll this at the standard slow interval (30s) to get battery voltage without
+    // overwhelming the MCU with requests.
+    uint32_t a4_interval = getFullPollIntervalMs();
     if (_poll_step == 0 && (now - _last_0xa4_poll >= a4_interval || _last_0xa4_poll == 0)) {
         if (!host->isControlPending() && (now - _last_step_time >= getPollPacingMs())) {
             _last_0xa4_poll = now != 0 ? now : 1;
@@ -215,8 +215,12 @@ uint32_t PowercomDriver::getFastPollIntervalMs() { return (_current_pid == 0x000
 bool PowercomDriver::shouldPollUsage(const String& path) {
     if (_current_pid != 0x0004) return true;
     
-    // For SPD-750U, we completely skip EP0 feature polling (relying 100% on Interrupt IN).
-    // The keepalive is handled exclusively by the 0xA4 legacy poll every 3s in the loop.
+    if (isStatusUsage(path)) return false; // Handled 100% by USB Interrupt IN pipe
+    if (path.indexOf("RemainingCapacity") >= 0) return false; // Handled by USB Interrupt IN pipe
+    if (path.indexOf("RunTimeToEmpty") >= 0) return false;   // Handled by USB Interrupt IN pipe
+    if (path.indexOf("PercentLoad") >= 0) return true;
+    if (path.indexOf("Temperature") >= 0) return true;
+    if (path.indexOf("AudibleAlarmControl") >= 0) return true;
     return false;
 }
 
