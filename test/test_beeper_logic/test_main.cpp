@@ -93,11 +93,27 @@ void test_beeper_buffer_expansion() {
     TEST_ASSERT_EQUAL(2, buffer[9]); // Standard HID enabled value = 2
 }
 
+void test_beeper_16bit_cyberpower() {
+    HIDUsageDef def;
+    def.report_id = 130;
+    def.bit_offset = 0; 
+    def.bit_size = 16;
+    
+    uint8_t buffer[64] = {0};
+    
+    // Give it a fetched_len of 1 (too small)
+    size_t len = BeeperLogic::manipulateBeeperBuffer(true, &def, buffer, 1, nullptr);
+    TEST_ASSERT_EQUAL(3, len); // It expanded it to 3 (byte_index=1 + 16/8 = 3)
+    TEST_ASSERT_EQUAL(2, buffer[1]); // Lower byte is 2
+    TEST_ASSERT_EQUAL(0, buffer[2]); // Upper byte is 0
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_beeper_1bit_without_report_id);
     RUN_TEST(test_beeper_1bit_with_report_id);
     RUN_TEST(test_beeper_8bit_cyberpower);
+    RUN_TEST(test_beeper_16bit_cyberpower);
     RUN_TEST(test_beeper_powercom_quirk);
     RUN_TEST(test_beeper_buffer_expansion);
     return UNITY_END();

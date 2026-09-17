@@ -247,6 +247,56 @@ void test_has_feature_beeper_control(void) {
     TEST_ASSERT_FALSE(parser3.hasFeatureBeeperControl());
 }
 
+#include <fstream>
+#include <sstream>
+#include <ArduinoJson.h>
+
+void test_cyberpower_br700elcd_beeper(void) {
+    std::ifstream file("test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json");
+    TEST_ASSERT_TRUE_MESSAGE(file.is_open(), "Fixture file must exist");
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string jsonStr = buffer.str();
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, jsonStr);
+    TEST_ASSERT_FALSE_MESSAGE(err, "JSON deserialization failed");
+
+    JsonArray hexArr = doc["report_descriptor_hex"].as<JsonArray>();
+    std::vector<uint8_t> rawDesc;
+    for (JsonVariant v : hexArr) {
+        std::string hex = v.as<std::string>();
+        uint8_t byte = (uint8_t)strtol(hex.c_str(), nullptr, 16);
+        rawDesc.push_back(byte);
+    }
+    
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(rawDesc.data(), rawDesc.size()));
+    TEST_ASSERT_TRUE(parser.hasFeatureBeeperControl());
+    
+    // Check that AudibleAlarmControl is parsed correctly
+    const HIDUsageDef* usage = parser.getUsageDef(0x0084005A); // AudibleAlarmControl
+    TEST_ASSERT_NOT_NULL(usage);
+    TEST_ASSERT_EQUAL_UINT8(128, usage->report_id); // 0x80
+    TEST_ASSERT_EQUAL_UINT8(3, usage->report_type); // Feature = 3
+    TEST_ASSERT_EQUAL_UINT16(0, usage->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(8, usage->bit_size);
+    
+    // Calculate expected length for report 128
+    uint16_t max_bit_bound = 0;
+    for (const auto& u : parser.getUsages()) {
+        if (u.report_id == usage->report_id && u.report_type == usage->report_type) {
+            if (u.bit_offset + u.bit_size > max_bit_bound) {
+                max_bit_bound = u.bit_offset + u.bit_size;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT16(8, max_bit_bound); // Only 1 byte for data
+    uint16_t expected_length = (max_bit_bound + 7) / 8 + 1; // 1 byte data + 1 byte ID = 2 bytes
+    TEST_ASSERT_EQUAL_UINT16(2, expected_length);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -259,6 +309,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_extract_short_report_tolerance);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
+    RUN_TEST(test_cyberpower_br700elcd_beeper);
     return UNITY_END();
 }
 #else
@@ -272,6 +323,7 @@ void setup() {
     RUN_TEST(test_extract_short_report_tolerance);
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
+    RUN_TEST(test_cyberpower_br700elcd_beeper);
     UNITY_END();
 }
 void loop() {}

@@ -66,18 +66,43 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     }
                     if (!found && u.report_id != 0) rids.push_back(pair);
                 }
+                std::vector<uint8_t> input_ids;
+                for (uint16_t pair : rids) {
+                    if ((pair >> 8) == 1) input_ids.push_back(pair & 0xFF);
+                }
+
                 for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                    uint8_t r_type = (*it >> 8);
+                    uint8_t r_id = (*it & 0xFF);
+                    
+                    // 1. Escludere ID inutili o pericolosi (Killer IDs e Vendor Defined >= 130)
+                    if (r_id >= 130 || r_id == 4 || r_id == 6) {
+                        it = rids.erase(it);
+                        continue;
+                    }
+                    
+                    // 2. Non interrogare mai i Feature Report se esiste l'equivalente Input
+                    // ECCEZIONE: ID 128 (Beeper). L'UPS non lo invia periodicamente via Input,
+                    // quindi dobbiamo interrogarlo esplicitamente per avere lo stato iniziale
+                    // altrimenti il bottone scompare dalla UI (stesso bug della v3).
+                    if (r_type == 3 && r_id != 128) {
+                        bool has_input = false;
+                        for (uint8_t id : input_ids) {
+                            if (id == r_id) { has_input = true; break; }
                         }
-                        if (has_feature) {
+                        if (has_input) {
                             it = rids.erase(it);
                             continue;
                         }
                     }
+                    
+                    // 3. Non interrogare mai gli Input Report sul Control Endpoint
+                    // (Ci affidiamo esclusivamente all'Interrupt Endpoint per riceverli)
+                    if (r_type == 1) {
+                        it = rids.erase(it);
+                        continue;
+                    }
+                    
                     ++it;
                 }
                 
@@ -85,6 +110,7 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
+                    
                     host->requestReport(r_id, r_type, 64);
                 } else {
                     _poll_step = 0;
