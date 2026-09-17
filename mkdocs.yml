@@ -17,7 +17,7 @@ theme:
 
 nav:
   - User Manual (English):
-    - Introduction: index.md
+    - Introduction: en/index.md
     - Hardware Requirements: en/hardware.md
     - Installation: en/installation.md
     - Configuration: en/configuration.md

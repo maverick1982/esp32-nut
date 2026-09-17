@@ -1,9 +1,2 @@
----
-title: "Introduction"
-type: manual
-tags: [user-manual]
----
-
-# Introduction
-
-This document provides comprehensive guidelines and instructions for the installation, configuration, and integration of the ESP32-NUT system.
+<meta http-equiv="refresh" content="0; url=en/">
+<a href="en/">Click here to enter the English User Manual</a>
