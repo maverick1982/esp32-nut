@@ -102,24 +102,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                         return;
                     }
                     
-                    uint16_t expected_length = 64;
-                    if (host->getQuirks() & QUIRK_MAX_REPORT_SIZE_1) {
-                        expected_length = 1;
-                    } else {
-                        uint16_t max_bit_bound = 0;
-                        for (const auto& u : host->getUsages()) {
-                            if (u.report_id == r_id && u.report_type == r_type) {
-                                if (u.bit_offset + u.bit_size > max_bit_bound) {
-                                    max_bit_bound = u.bit_offset + u.bit_size;
-                                }
-                            }
-                        }
-                        if (max_bit_bound > 0) {
-                            expected_length = (max_bit_bound + 7) / 8;
-                            if (r_id != 0) expected_length += 1;
-                        }
-                    }
-                    host->requestReport(r_id, r_type, expected_length);
+                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
                 } else {
                     _poll_step = 0; // Done
                     return;
@@ -134,7 +117,7 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(GenericDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
@@ -261,19 +244,19 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.PowerConverter.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
         
         { "UPS.PowerSummary.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
+            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
+            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->path != drv->_active_beeper) return;
+            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
@@ -295,7 +278,7 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == m.path) {
+            if (strcmp(u.path, m.path) == 0) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;

@@ -17,6 +17,8 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
@@ -54,7 +56,7 @@ void test_cyberpower_status_and_voltage(void) {
     u_ac.bit_size = 1;
     u_ac.exponent = 0;
     u_ac.unit = 0;
-    u_ac.path = "UPS.PowerSummary.PresentStatus.ACPresent";
+    strcpy(u_ac.path, "UPS.PowerSummary.PresentStatus.ACPresent");
     u_ac.found = true;
 
     HIDUsageDef u_volt;
@@ -64,7 +66,7 @@ void test_cyberpower_status_and_voltage(void) {
     u_volt.bit_size = 16;
     u_volt.exponent = -1; // Scale factor 0.1V (2305 -> 230.5V)
     u_volt.unit = 0;
-    u_volt.path = "UPS.Output.Voltage";
+    strcpy(u_volt.path, "UPS.Output.Voltage");
     u_volt.found = true;
 
     mockHost._usages.push_back(u_ac);
@@ -132,7 +134,7 @@ void test_cyberpower_load_and_zero_load_reset(void) {
     u_cap.bit_size = 16;
     u_cap.exponent = 0;
     u_cap.unit = 0;
-    u_cap.path = "UPS.Output.ConfigActivePower";
+    strcpy(u_cap.path, "UPS.Output.ConfigActivePower");
     u_cap.found = true;
 
     // PercentLoad on Report 0x13 (8 bit)
@@ -143,7 +145,7 @@ void test_cyberpower_load_and_zero_load_reset(void) {
     u_load.bit_size = 8;
     u_load.exponent = 0;
     u_load.unit = 0;
-    u_load.path = "UPS.Output.PercentLoad";
+    strcpy(u_load.path, "UPS.Output.PercentLoad");
     u_load.found = true;
 
     mockHost._usages.push_back(u_cap);
@@ -179,7 +181,7 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
     u_load.report_type = 3;
     u_load.bit_offset = 0;
     u_load.bit_size = 8;
-    u_load.path = "UPS.Output.PercentLoad";
+    strcpy(u_load.path, "UPS.Output.PercentLoad");
     u_load.found = true;
 
     HIDUsageDef u_cap;
@@ -187,7 +189,7 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
     u_cap.report_type = 3;
     u_cap.bit_offset = 0;
     u_cap.bit_size = 16;
-    u_cap.path = "UPS.Output.ConfigActivePower";
+    strcpy(u_cap.path, "UPS.Output.ConfigActivePower");
     u_cap.found = true;
 
     mockHost._usages.push_back(u_load);

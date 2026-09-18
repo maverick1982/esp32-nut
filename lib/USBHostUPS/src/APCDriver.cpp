@@ -23,7 +23,7 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
 
     // Apply APC specific mappings overrides
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(APCDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
@@ -68,7 +68,7 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == m.path) {
+            if (strcmp(u.path, m.path) == 0) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;

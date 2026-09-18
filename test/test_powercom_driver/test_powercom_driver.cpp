@@ -16,6 +16,8 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
@@ -99,7 +101,7 @@ void test_powercom_beeper_mapping(void) {
     // When AudibleAlarmControl is extracted as 1, beeperEnabled must be true
     // When AudibleAlarmControl is extracted as 2, beeperEnabled must be false
     HIDUsageDef def;
-    def.path = "UPS.PowerSummary.AudibleAlarmControl";
+    strcpy(def.path, "UPS.PowerSummary.AudibleAlarmControl");
     def.report_id = 0x1F;
     def.report_type = 3;
     def.bit_size = 8;
@@ -203,10 +205,10 @@ void test_powercom_real_descriptor_parsing(void) {
     bool found_beeper = false;
 
     for (const auto& u : usages) {
-        if (u.path.indexOf("PresentStatus") >= 0 || u.usage == 0x00840002 || u.usage == 0x00850044) found_present_status = true;
-        if (u.path.indexOf("RemainingCapacity") >= 0 || u.usage == 0x00850066) found_remaining_capacity = true;
-        if (u.path.indexOf("RunTimeToEmpty") >= 0 || u.usage == 0x00850068) found_run_time_to_empty = true;
-        if (u.path.indexOf("AudibleAlarmControl") >= 0 || u.usage == 0x0084005A || u.usage == 0x0085005A) found_beeper = true;
+        if (strstr(u.path, "PresentStatus") != nullptr || u.usage == 0x00840002 || u.usage == 0x00850044) found_present_status = true;
+        if (strstr(u.path, "RemainingCapacity") != nullptr || u.usage == 0x00850066) found_remaining_capacity = true;
+        if (strstr(u.path, "RunTimeToEmpty") != nullptr || u.usage == 0x00850068) found_run_time_to_empty = true;
+        if (strstr(u.path, "AudibleAlarmControl") != nullptr || u.usage == 0x0084005A || u.usage == 0x0085005A) found_beeper = true;
     }
 
     TEST_ASSERT_TRUE_MESSAGE(found_present_status, "PresentStatus usage should be present");

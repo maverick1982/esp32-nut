@@ -14,6 +14,8 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return ""; }
@@ -41,6 +43,8 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { static std::vector<HIDUsageDef> dummy; return dummy; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return ""; }

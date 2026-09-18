@@ -20,6 +20,8 @@ public:
     bool supportsBeeperToggle() const override { return true; }
     
     // New pure virtuals
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return usages; }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return nullptr; }
     String getActiveBeeperPath() const override { return ""; }

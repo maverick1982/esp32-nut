@@ -1033,8 +1033,11 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
     // In case transfer was not finished, error in USB LIB. This is EP0, USBH will reset the endpoint.
     HID_RETURN_ON_FALSE(received == pdTRUE, ESP_ERR_TIMEOUT, "Control transfer timeout");
     // Check transfer status
-    // Device can return less data than requested, but it must not return more data than requested
-    HID_RETURN_ON_FALSE(ctrl_xfer->actual_num_bytes <= ctrl_xfer->num_bytes, ESP_ERR_INVALID_RESPONSE, "Incorrect number of bytes transferred");
+    // Device can return less data than requested, but it might return more data due to padding (e.g. APC UPS)
+    if (ctrl_xfer->actual_num_bytes > ctrl_xfer->num_bytes) {
+        ESP_LOGD(TAG, "Device returned more data than requested (%d > %d), truncating", ctrl_xfer->actual_num_bytes, ctrl_xfer->num_bytes);
+        ctrl_xfer->actual_num_bytes = ctrl_xfer->num_bytes;
+    }
 
     ESP_LOG_BUFFER_HEXDUMP(TAG, ctrl_xfer->data_buffer, ctrl_xfer->actual_num_bytes, ESP_LOG_DEBUG);
 

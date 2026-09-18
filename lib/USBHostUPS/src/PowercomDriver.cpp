@@ -194,7 +194,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         double val = HIDParser::extractUsage(&u, report_id, data, length);
         
         for (const auto& m : mappings) {
-            if (strcmp(u.path.c_str(), m.path) == 0) {
+            if (strcmp(u.path, m.path) == 0) {
                 m.apply(this, ups_data, val, &u);
                 break; // handled by string mappings
             }
@@ -202,11 +202,11 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         
         // Match by usage instead of full path because Powercom uses non-standard Usage Page 0x0002
         if (u.usage == 0x00020030) { // Voltage
-            if (u.path.indexOf("0x0002001A") >= 0) { ups_data.set("input.voltage", String(val * 4.0f, 1)); } // Input
-            else if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("output.voltage", String(val * 4.0f, 1)); } // Output
+            if (strstr(u.path, "0x0002001A") != nullptr) { ups_data.set("input.voltage", String(val * 4.0f, 1)); } // Input
+            else if (strstr(u.path, "0x0002001C") != nullptr) { ups_data.set("output.voltage", String(val * 4.0f, 1)); } // Output
         }
         else if (u.usage == 0x00020035) { // PercentLoad
-            if (u.path.indexOf("0x0002001C") >= 0) { ups_data.set("ups.load", String((int)val)); }
+            if (strstr(u.path, "0x0002001C") != nullptr) { ups_data.set("ups.load", String((int)val)); }
         }
         else if (u.usage == 0x00020081) { // InternalChargeController (Status bits 1)
             uint32_t bitmask = (uint32_t)val;

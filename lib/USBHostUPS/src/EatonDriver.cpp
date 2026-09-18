@@ -86,7 +86,7 @@ void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
-                    host->requestReport(r_id, r_type, 64);
+                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
                 } else {
                     _poll_step = 0;
                     return;
@@ -127,7 +127,7 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == String(m.path)) {
+            if (strcmp(u.path, m.path) == 0) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;

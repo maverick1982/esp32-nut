@@ -4,6 +4,9 @@
 
 bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
     _usages.clear();
+    _input_lengths.clear();
+    _output_lengths.clear();
+    _feature_lengths.clear();
     uint32_t current_usage_page = 0;
     uint8_t current_report_id = 0;
     uint16_t report_size = 0;
@@ -21,8 +24,6 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
     };
     std::vector<GlobalState> global_stack;
     
-    std::map<uint8_t, uint16_t> input_offsets;
-    std::map<uint8_t, uint16_t> feature_offsets;
     std::vector<uint32_t> local_usages;
     std::vector<String> collection_names;
     
@@ -44,8 +45,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                 uint16_t size_bits = report_size;
                 
                 std::map<uint8_t, uint16_t>* offsets_map = nullptr;
-                if (bTag == 8) offsets_map = &input_offsets;
-                else if (bTag == 11) offsets_map = &feature_offsets;
+                if (bTag == 8) offsets_map = &_input_lengths;
+                else if (bTag == 9) offsets_map = &_output_lengths;
+                else if (bTag == 11) offsets_map = &_feature_lengths;
                 
                 for (uint16_t c = 0; c < report_count; c++) {
                     uint32_t usage = 0;
@@ -68,15 +70,14 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                         def.exponent = current_exponent;
                         def.unit = current_unit;
                         
-                        String full_path = "";
+                        def.path[0] = '\0';
                         for (const String& n : collection_names) {
-                            if (full_path.length() > 0) full_path += ".";
-                            full_path += n;
+                            if (strlen(def.path) > 0) strncat(def.path, ".", sizeof(def.path) - strlen(def.path) - 1);
+                            strncat(def.path, n.c_str(), sizeof(def.path) - strlen(def.path) - 1);
                         }
                         String leaf = get_nut_usage_name(usage);
-                        if (full_path.length() > 0) def.path = full_path + "." + leaf;
-                        else def.path = leaf;
-                        
+                        if (strlen(def.path) > 0) strncat(def.path, ".", sizeof(def.path) - strlen(def.path) - 1);
+                        strncat(def.path, leaf.c_str(), sizeof(def.path) - strlen(def.path) - 1);
                         _usages.push_back(def);
                     }
                     if (offsets_map) {
@@ -135,6 +136,26 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
     return true;
 }
 
+uint16_t HIDParser::getExpectedLength(uint8_t report_id, uint8_t report_type) const {
+    uint16_t bits = 0;
+    if (report_type == 1) { // Input
+        auto it = _input_lengths.find(report_id);
+        if (it != _input_lengths.end()) bits = it->second;
+    } else if (report_type == 2) { // Output
+        auto it = _output_lengths.find(report_id);
+        if (it != _output_lengths.end()) bits = it->second;
+    } else if (report_type == 3) { // Feature
+        auto it = _feature_lengths.find(report_id);
+        if (it != _feature_lengths.end()) bits = it->second;
+    }
+    
+    if (bits == 0) return 64; // Safe fallback if not found
+    
+    uint16_t bytes = (bits + 7) / 8;
+    if (report_id != 0) bytes += 1; // Include Report ID prefix
+    return bytes;
+}
+
 const HIDUsageDef* HIDParser::getUsageDef(uint32_t usage) const {
     for (const auto& u : _usages) {
         if (u.usage == usage) return &u;
@@ -144,7 +165,7 @@ const HIDUsageDef* HIDParser::getUsageDef(uint32_t usage) const {
 
 bool HIDParser::hasFeatureBeeperControl() const {
     for (const auto& u : _usages) {
-        if ((u.usage == 0x0084005A || u.usage == 0x0085005A || u.path.indexOf("AudibleAlarmControl") >= 0)
+        if ((u.usage == 0x0084005A || u.usage == 0x0085005A || strstr(u.path, "AudibleAlarmControl") != nullptr)
             && (u.report_type == 0x03 || u.report_type == 0x02)) {
             return true;
         }
