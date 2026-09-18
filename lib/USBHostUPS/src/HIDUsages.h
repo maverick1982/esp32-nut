@@ -45,7 +45,7 @@ struct HIDUsageDef {
     int32_t logical_max = 0;
     int8_t exponent = 0;
     uint32_t unit = 0;
-    String path = "";
+    char path[80] = {0};
 };
 
 #endif // HID_USAGES_H

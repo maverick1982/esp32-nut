@@ -52,7 +52,7 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     if (length == 0 || data == NULL || !host) return;
 
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(OpenUPSDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
@@ -82,7 +82,7 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == m.path) {
+            if (strcmp(u.path, m.path) == 0) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;

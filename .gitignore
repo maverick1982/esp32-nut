@@ -12,7 +12,7 @@ node_modules/
 nut_repo/
 playwright-report/
 test-results/
-
+site/
 # OS generated files
 .DS_Store
 .DS_Store?

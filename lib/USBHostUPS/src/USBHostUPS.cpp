@@ -297,7 +297,7 @@ bool USBHostUPS::setBeeper(bool enable) {
     
     const HIDUsageDef* def = nullptr;
     for (const auto& u : _hid_parser.getUsages()) {
-        if (u.path == active_path) {
+        if (strcmp(u.path, active_path.c_str()) == 0) {
             def = &u;
             break;
         }
@@ -309,24 +309,7 @@ bool USBHostUPS::setBeeper(bool enable) {
     
     uint8_t rep_type = (def->report_type == 2) ? HID_REPORT_TYPE_OUTPUT : HID_REPORT_TYPE_FEATURE;
     
-    // Calculate full expected length for this report ID to avoid truncating SetReport
-    uint16_t expected_length = 64; // Default fallback
-    if (_quirks & QUIRK_MAX_REPORT_SIZE_1) {
-        expected_length = 1;
-    } else {
-        uint16_t max_bit_bound = 0;
-        for (const auto& u : _hid_parser.getUsages()) {
-            if (u.report_id == def->report_id && u.report_type == def->report_type) {
-                if (u.bit_offset + u.bit_size > max_bit_bound) {
-                    max_bit_bound = u.bit_offset + u.bit_size;
-                }
-            }
-        }
-        if (max_bit_bound > 0) {
-            expected_length = (max_bit_bound + 7) / 8;
-            if (def->report_id != 0) expected_length += 1;
-        }
-    }
+    uint16_t expected_length = _hid_parser.getExpectedLength(def->report_id, rep_type);
     
     uint8_t buffer[256];
     memset(buffer, 0, sizeof(buffer));
@@ -361,9 +344,9 @@ bool USBHostUPS::isConnected() const {
 
 String USBHostUPS::getActiveBeeperPath() const {
     for (const auto& u : _hid_parser.getUsages()) {
-        if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
-            u.path == "UPS.BatterySystem.Battery.AudibleAlarmControl" || 
-            u.path == "UPS.AudibleAlarmControl") {
+        if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 || 
+            strcmp(u.path, "UPS.BatterySystem.Battery.AudibleAlarmControl") == 0 || 
+            strcmp(u.path, "UPS.AudibleAlarmControl") == 0) {
             return u.path;
         }
     }

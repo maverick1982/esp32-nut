@@ -111,7 +111,7 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
                     
-                    host->requestReport(r_id, r_type, 64);
+                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
                 } else {
                     _poll_step = 0;
                     return;
@@ -128,7 +128,7 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
     struct Mapping {
-        String path;
+        const char* path;
         void (*apply)(CyberPowerDriver*, UPSData&, double, const HIDUsageDef*);
     };
 
@@ -153,7 +153,7 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     for (const auto& u : host->getUsages()) {
         if (u.report_id != report_id || u.report_type != report_type) continue;
         for (const auto& m : mappings) {
-            if (u.path == m.path) {
+            if (strcmp(u.path, m.path) == 0) {
                 double val = HIDParser::extractUsage(&u, report_id, data, length);
                 m.apply(this, ups_data, val, &u);
                 break;

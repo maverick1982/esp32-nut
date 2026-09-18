@@ -49,6 +49,7 @@ public:
 
     const std::vector<HIDUsageDef>& getUsages() const override { return _hid_parser.getUsages(); }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _hid_parser.getUsageDef(usage); }
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isControlPending() const override { return _control_pending; }

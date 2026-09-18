@@ -16,6 +16,8 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
@@ -56,7 +58,7 @@ void test_apc_power_summary_status(void) {
     u_ac.bit_size = 1;
     u_ac.exponent = 0;
     u_ac.unit = 0;
-    u_ac.path = "UPS.PowerSummary.PresentStatus.ACPresent";
+    strcpy(u_ac.path, "UPS.PowerSummary.PresentStatus.ACPresent");
     u_ac.found = true;
 
     HIDUsageDef u_dischrg;
@@ -66,7 +68,7 @@ void test_apc_power_summary_status(void) {
     u_dischrg.bit_size = 1;
     u_dischrg.exponent = 0;
     u_dischrg.unit = 0;
-    u_dischrg.path = "UPS.PowerSummary.PresentStatus.Discharging";
+    strcpy(u_dischrg.path, "UPS.PowerSummary.PresentStatus.Discharging");
     u_dischrg.found = true;
 
     HIDUsageDef u_need_repl;
@@ -76,7 +78,7 @@ void test_apc_power_summary_status(void) {
     u_need_repl.bit_size = 1;
     u_need_repl.exponent = 0;
     u_need_repl.unit = 0;
-    u_need_repl.path = "UPS.PowerSummary.PresentStatus.NeedReplacement";
+    strcpy(u_need_repl.path, "UPS.PowerSummary.PresentStatus.NeedReplacement");
     u_need_repl.found = true;
 
     mockHost._usages.push_back(u_ac);
@@ -103,7 +105,7 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     u_date.bit_size = 24;
     u_date.exponent = 0;
     u_date.unit = 0;
-    u_date.path = "UPS.Battery.APCBattReplaceDate";
+    strcpy(u_date.path, "UPS.Battery.APCBattReplaceDate");
     u_date.found = true;
 
     mockHost._usages.push_back(u_date);
@@ -116,7 +118,7 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     u_ups_mfr_date.bit_size = 16;
     u_ups_mfr_date.exponent = 0;
     u_ups_mfr_date.unit = 0;
-    u_ups_mfr_date.path = "UPS.PowerSummary.ManufacturerDate";
+    strcpy(u_ups_mfr_date.path, "UPS.PowerSummary.ManufacturerDate");
     u_ups_mfr_date.found = true;
 
     mockHost._usages.push_back(u_ups_mfr_date);
@@ -129,7 +131,7 @@ void test_apc_battery_replace_date_packed_bcd(void) {
     u_batt_mfr_date.bit_size = 16;
     u_batt_mfr_date.exponent = 0;
     u_batt_mfr_date.unit = 0;
-    u_batt_mfr_date.path = "UPS.Battery.ManufacturerDate";
+    strcpy(u_batt_mfr_date.path, "UPS.Battery.ManufacturerDate");
     u_batt_mfr_date.found = true;
 
     mockHost._usages.push_back(u_batt_mfr_date);
@@ -166,7 +168,7 @@ void test_apc_load_and_real_power_calculation(void) {
     u_load.bit_size = 8;
     u_load.exponent = 0;
     u_load.unit = 0;
-    u_load.path = "UPS.PowerSummary.PercentLoad";
+    strcpy(u_load.path, "UPS.PowerSummary.PercentLoad");
     u_load.found = true;
 
     mockHost._usages.push_back(u_load);
@@ -216,7 +218,7 @@ void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
     u_load.report_type = 1;
     u_load.bit_offset = 0;
     u_load.bit_size = 8;
-    u_load.path = "UPS.PowerSummary.PercentLoad";
+    strcpy(u_load.path, "UPS.PowerSummary.PercentLoad");
     u_load.found = true;
 
     HIDUsageDef u_cap;
@@ -224,7 +226,7 @@ void test_apc_realpower_recalculated_when_config_arrives_after_load(void) {
     u_cap.report_type = 3;
     u_cap.bit_offset = 0;
     u_cap.bit_size = 16;
-    u_cap.path = "UPS.Flow.ConfigActivePower";
+    strcpy(u_cap.path, "UPS.Flow.ConfigActivePower");
     u_cap.found = true;
 
     mockHost._usages.push_back(u_load);

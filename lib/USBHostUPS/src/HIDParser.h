@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <vector>
+#include <map>
 #include "HIDUsages.h"
 
 class HIDParser {
@@ -14,11 +15,15 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const;
     const std::vector<HIDUsageDef>& getUsages() const { return _usages; }
     bool hasFeatureBeeperControl() const;
+    uint16_t getExpectedLength(uint8_t report_id, uint8_t report_type) const;
     
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
     
 private:
     std::vector<HIDUsageDef> _usages;
+    std::map<uint8_t, uint16_t> _input_lengths;
+    std::map<uint8_t, uint16_t> _output_lengths;
+    std::map<uint8_t, uint16_t> _feature_lengths;
 };
 
 #endif // HID_PARSER_H

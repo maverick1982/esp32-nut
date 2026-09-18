@@ -34,13 +34,15 @@ public:
     bool setBeeper(bool) override { return true; }
     bool isConnected() const override { return true; }
 
+    HIDParser _hid_parser;
+    const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _parser.getUsages(); }
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _parser.getUsageDef(usage); }
     String getActiveBeeperPath() const override {
         for (const auto& u : _parser.getUsages()) {
-            if (u.path == "UPS.PowerSummary.AudibleAlarmControl" || 
-                u.path == "UPS.BatterySystem.Battery.AudibleAlarmControl" || 
-                u.path == "UPS.AudibleAlarmControl") {
+            if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 || 
+                strcmp(u.path, "UPS.BatterySystem.Battery.AudibleAlarmControl") == 0 || 
+                strcmp(u.path, "UPS.AudibleAlarmControl") == 0) {
                 return u.path;
             }
         }

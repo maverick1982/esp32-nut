@@ -5,6 +5,7 @@
 #include <vector>
 #include "UPSData.h"
 #include "HIDUsages.h"
+#include "HIDParser.h"
 
 class IUSBHostUPS {
 public:
@@ -41,6 +42,7 @@ public:
 
     virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
+    virtual const HIDParser* getHIDParser() const = 0;
     virtual String getActiveBeeperPath() const = 0;
     virtual uint32_t getQuirks() const = 0;
     virtual bool isControlPending() const = 0;
