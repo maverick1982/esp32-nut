@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Dynamic Polling and Quirks for USB STALL Mitigation
 
 * **ADR ID:** 0005
-* **Status:** Accepted
+* **Status:** Superseded by ADR-0007
 * **Date:** 2026-09-11
 * **Authors:** Antigravity (on behalf of Maverick1982)
 
