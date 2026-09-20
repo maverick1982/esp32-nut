@@ -722,6 +722,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const fwVersion = document.getElementById('fw-version');
                 if (fwVersion) fwVersion.textContent = data.version;
             }
+            
+            if (data.device_id) {
+                const devIdEl = document.querySelector('.device-id span');
+                if (devIdEl) devIdEl.textContent = data.device_id;
+            }
         } catch (error) {
             console.error('Failed to fetch system status:', error);
             const indWifi = document.getElementById('ind-wifi');
