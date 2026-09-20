@@ -1,6 +1,6 @@
 {
   "name": "ESP32 NUT Server",
-  "version": "v1.5.3",
+  "version": "v1.5.4",
   "builds": [
     {
       "chipFamily": "ESP32-S3",
