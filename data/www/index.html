@@ -1,16 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 NUT Server | Config</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
-    
-    
-    
-    
+
+
+
+
     <link rel="stylesheet" href="bundle.css?v=1.2.0">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar / Navigation -->
@@ -21,26 +23,38 @@
                 </div>
                 <div class="brand-name">ESP32-NUT <span id="fw-version"></span></div>
             </div>
-            
+
             <nav class="tabs">
                 <button class="tab active" data-target="ups">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
                     UPS Telemetry
                 </button>
                 <button class="tab" data-target="wifi">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                    </svg>
                     Wi-Fi Config
                 </button>
                 <button class="tab" data-target="nut">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
                     NUT Server
                 </button>
                 <button class="tab" data-target="logs">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
                     System Logs
                 </button>
                 <button class="tab" data-target="ota">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
                     Firmware OTA
                 </button>
             </nav>
@@ -61,7 +75,7 @@
         <main class="content-area">
             <header class="topbar">
                 <h1 class="page-title">Network Configuration</h1>
-                <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
+                <div class="device-id">ID: <span>-</span></div>
             </header>
 
             <div class="tab-content" id="content-wifi">
@@ -79,7 +93,10 @@
                             <div class="input-wrapper">
                                 <input type="password" id="password" placeholder="••••••••••••" required>
                                 <button type="button" class="btn-icon" id="toggle-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
                                 </button>
                             </div>
                         </div>
@@ -101,7 +118,8 @@
                     <form id="nut-form" class="form-container">
                         <div class="form-group">
                             <label for="nut-upsname">UPS Name</label>
-                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$" title="Spaces are not allowed in the UPS Name" required>
+                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$"
+                                title="Spaces are not allowed in the UPS Name" required>
                         </div>
                         <div class="form-group">
                             <label for="nut-username">Username</label>
@@ -112,7 +130,10 @@
                             <div class="input-wrapper">
                                 <input type="password" id="nut-password" placeholder="••••••••••••" required>
                                 <button type="button" class="btn-icon" id="toggle-nut-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
                                 </button>
                             </div>
                         </div>
@@ -134,11 +155,14 @@
                             <span class="pulse-dot"></span> Live
                         </div>
                     </div>
-                    
-                    <div id="generic-ups-banner" style="display: none; background: var(--danger); color: white; padding: 10px 15px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-weight: 500;">
-                        Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an issue on <a href="https://github.com/maverick1982/esp32-nut/issues" target="_blank" style="color: white; text-decoration: underline;">GitHub</a> to request support.
+
+                    <div id="generic-ups-banner"
+                        style="display: none; background: var(--danger); color: white; padding: 10px 15px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-weight: 500;">
+                        Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an
+                        issue on <a href="https://github.com/maverick1982/esp32-nut/issues" target="_blank"
+                            style="color: white; text-decoration: underline;">GitHub</a> to request support.
                     </div>
-                    
+
                     <div class="metrics-grid">
                         <div class="metric-card highlight">
                             <div class="metric-label">UPS Status</div>
@@ -147,20 +171,26 @@
                         <div class="metric-card">
                             <div class="metric-label">Battery Charge</div>
                             <div class="metric-value"><span id="ups-charge">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container"><div class="progress-bar" id="bar-charge" style="width: 0%"></div></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="bar-charge" style="width: 0%"></div>
+                            </div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">UPS Load</div>
                             <div class="metric-value"><span id="ups-load">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container"><div class="progress-bar load" id="bar-load" style="width: 0%"></div></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar load" id="bar-load" style="width: 0%"></div>
+                            </div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">Real Power</div>
-                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span></div>
+                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="ups-actions" style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
+                    <div class="ups-actions"
+                        style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
                         <span class="toggle-label" style="font-weight: 500;">Beeper Alarm</span>
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <label class="switch">
@@ -200,19 +230,38 @@
                         </div>
                         <div class="logs-controls">
                             <button class="btn btn-outline" id="btn-refresh">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M23 4v6h-6M1 20v-6h6" />
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                                </svg>
                                 Refresh
                             </button>
-                            <button class="btn btn-outline" id="btn-clear-logs" style="color: var(--danger); border-color: var(--danger);">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            <button class="btn btn-outline" id="btn-clear-logs"
+                                style="color: var(--danger); border-color: var(--danger);">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path
+                                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                    </path>
+                                </svg>
                                 Clear
                             </button>
                             <button class="btn btn-primary" id="btn-download">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
                                 Export
                             </button>
-                            <a href="/api/usb/dump" class="btn btn-outline" id="link-export-usb" download="usb_diagnostics.json">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                            <a href="/api/usb/dump" class="btn btn-outline" id="link-export-usb"
+                                download="usb_diagnostics.json">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                                </svg>
                                 Export USB Diagnostics
                             </a>
                         </div>
@@ -226,4 +275,5 @@
     </div>
     <script src="bundle.js?v=1.2.0"></script>
 </body>
+
 </html>

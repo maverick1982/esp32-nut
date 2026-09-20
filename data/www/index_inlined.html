@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 NUT Server | Config</title>
     <link rel="icon" type="image/x-icon" href="data:image/x-icon;base64,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">
-    
-    
-    
-    
+
+
+
+
     <style>:root {
     /* Color Palette - Hi-Tech / Cyberpunk minimal */
     --bg-base: #06090e;
@@ -1334,6 +1335,7 @@ input[readonly] {
 }
 </style>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar / Navigation -->
@@ -1344,26 +1346,38 @@ input[readonly] {
                 </div>
                 <div class="brand-name">ESP32-NUT <span id="fw-version"></span></div>
             </div>
-            
+
             <nav class="tabs">
                 <button class="tab active" data-target="ups">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
                     UPS Telemetry
                 </button>
                 <button class="tab" data-target="wifi">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                    </svg>
                     Wi-Fi Config
                 </button>
                 <button class="tab" data-target="nut">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
                     NUT Server
                 </button>
                 <button class="tab" data-target="logs">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
                     System Logs
                 </button>
                 <button class="tab" data-target="ota">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
                     Firmware OTA
                 </button>
             </nav>
@@ -1384,7 +1398,7 @@ input[readonly] {
         <main class="content-area">
             <header class="topbar">
                 <h1 class="page-title">Network Configuration</h1>
-                <div class="device-id">ID: <span>ESP32-S3-8A4F</span></div>
+                <div class="device-id">ID: <span>-</span></div>
             </header>
 
             <div class="tab-content" id="content-wifi">
@@ -1402,7 +1416,10 @@ input[readonly] {
                             <div class="input-wrapper">
                                 <input type="password" id="password" placeholder="••••••••••••" required>
                                 <button type="button" class="btn-icon" id="toggle-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
                                 </button>
                             </div>
                         </div>
@@ -1424,7 +1441,8 @@ input[readonly] {
                     <form id="nut-form" class="form-container">
                         <div class="form-group">
                             <label for="nut-upsname">UPS Name</label>
-                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$" title="Spaces are not allowed in the UPS Name" required>
+                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$"
+                                title="Spaces are not allowed in the UPS Name" required>
                         </div>
                         <div class="form-group">
                             <label for="nut-username">Username</label>
@@ -1435,7 +1453,10 @@ input[readonly] {
                             <div class="input-wrapper">
                                 <input type="password" id="nut-password" placeholder="••••••••••••" required>
                                 <button type="button" class="btn-icon" id="toggle-nut-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
                                 </button>
                             </div>
                         </div>
@@ -1457,11 +1478,14 @@ input[readonly] {
                             <span class="pulse-dot"></span> Live
                         </div>
                     </div>
-                    
-                    <div id="generic-ups-banner" style="display: none; background: var(--danger); color: white; padding: 10px 15px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-weight: 500;">
-                        Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an issue on <a href="https://github.com/maverick1982/esp32-nut/issues" target="_blank" style="color: white; text-decoration: underline;">GitHub</a> to request support.
+
+                    <div id="generic-ups-banner"
+                        style="display: none; background: var(--danger); color: white; padding: 10px 15px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-weight: 500;">
+                        Unsupported UPS detected. Please export USB Diagnostics from the System Logs tab and open an
+                        issue on <a href="https://github.com/maverick1982/esp32-nut/issues" target="_blank"
+                            style="color: white; text-decoration: underline;">GitHub</a> to request support.
                     </div>
-                    
+
                     <div class="metrics-grid">
                         <div class="metric-card highlight">
                             <div class="metric-label">UPS Status</div>
@@ -1470,20 +1494,26 @@ input[readonly] {
                         <div class="metric-card">
                             <div class="metric-label">Battery Charge</div>
                             <div class="metric-value"><span id="ups-charge">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container"><div class="progress-bar" id="bar-charge" style="width: 0%"></div></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="bar-charge" style="width: 0%"></div>
+                            </div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">UPS Load</div>
                             <div class="metric-value"><span id="ups-load">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container"><div class="progress-bar load" id="bar-load" style="width: 0%"></div></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar load" id="bar-load" style="width: 0%"></div>
+                            </div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">Real Power</div>
-                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span></div>
+                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="ups-actions" style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
+                    <div class="ups-actions"
+                        style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
                         <span class="toggle-label" style="font-weight: 500;">Beeper Alarm</span>
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <label class="switch">
@@ -1523,19 +1553,38 @@ input[readonly] {
                         </div>
                         <div class="logs-controls">
                             <button class="btn btn-outline" id="btn-refresh">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M23 4v6h-6M1 20v-6h6" />
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                                </svg>
                                 Refresh
                             </button>
-                            <button class="btn btn-outline" id="btn-clear-logs" style="color: var(--danger); border-color: var(--danger);">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            <button class="btn btn-outline" id="btn-clear-logs"
+                                style="color: var(--danger); border-color: var(--danger);">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path
+                                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                    </path>
+                                </svg>
                                 Clear
                             </button>
                             <button class="btn btn-primary" id="btn-download">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
                                 Export
                             </button>
-                            <a href="/api/usb/dump" class="btn btn-outline" id="link-export-usb" download="usb_diagnostics.json">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                            <a href="/api/usb/dump" class="btn btn-outline" id="link-export-usb"
+                                download="usb_diagnostics.json">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                                </svg>
                                 Export USB Diagnostics
                             </a>
                         </div>
@@ -2271,6 +2320,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const fwVersion = document.getElementById('fw-version');
                 if (fwVersion) fwVersion.textContent = data.version;
             }
+            
+            if (data.device_id) {
+                const devIdEl = document.querySelector('.device-id span');
+                if (devIdEl) devIdEl.textContent = data.device_id;
+            }
         } catch (error) {
             console.error('Failed to fetch system status:', error);
             const indWifi = document.getElementById('ind-wifi');
@@ -2337,4 +2391,5 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 </body>
+
 </html>
