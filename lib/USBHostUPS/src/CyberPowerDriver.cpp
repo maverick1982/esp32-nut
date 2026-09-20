@@ -81,20 +81,6 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                         continue;
                     }
                     
-                    // 2. Non interrogare mai i Feature Report se esiste l'equivalente Input
-                    // ECCEZIONE: ID 128 (Beeper). L'UPS non lo invia periodicamente via Input,
-                    // quindi dobbiamo interrogarlo esplicitamente per avere lo stato iniziale
-                    // altrimenti il bottone scompare dalla UI (stesso bug della v3).
-                    if (r_type == 3 && r_id != 128) {
-                        bool has_input = false;
-                        for (uint8_t id : input_ids) {
-                            if (id == r_id) { has_input = true; break; }
-                        }
-                        if (has_input) {
-                            it = rids.erase(it);
-                            continue;
-                        }
-                    }
                     
                     // 3. Non interrogare mai gli Input Report sul Control Endpoint
                     // (Ci affidiamo esclusivamente all'Interrupt Endpoint per riceverli)
