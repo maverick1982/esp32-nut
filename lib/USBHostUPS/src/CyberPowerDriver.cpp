@@ -45,7 +45,7 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (_poll_step > 0) {
         if (host->isControlPending()) return;
 
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
+        if (now - _last_step_time >= 500 || _poll_step == 1) { // Execute first step immediately (DIAGNOSTICS: 500ms pacing)
             _last_step_time = now;
             
             if (_poll_step == 1) {
@@ -110,8 +110,8 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 if (index >= 0 && index < rids.size()) {
                     uint8_t r_type = rids[index] >> 8;
                     uint8_t r_id = rids[index] & 0xFF;
-                    
-                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
+                    // DIAGNOSTICS: Request 64 bytes to prevent ESP-IDF truncation and observe full response
+                    host->requestReport(r_id, r_type, 64);
                 } else {
                     _poll_step = 0;
                     return;
@@ -124,6 +124,12 @@ void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
 void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
+
+    if (report_type == 3) {
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "[CYBERPOWER DIAG] Requested ID %d, Received ID %d (len %d)", report_id, data[0], length);
+        host->logDebug(String(dbg));
+    }
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
