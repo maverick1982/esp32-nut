@@ -145,32 +145,32 @@ void test_powercom_loop_polling_nut_alignment(void) {
     TEST_ASSERT_EQUAL_UINT32(0, host._requestedStrings.size());
 
     // Step 2: input.voltage (0x1D)
-    driver.loop(&host, ups_data, 200);
+    driver.loop(&host, ups_data, 1000);
     TEST_ASSERT_EQUAL_UINT32(2, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x1D, host._requestedReports[1].first);
 
     // Step 3: output.voltage (0x21)
-    driver.loop(&host, ups_data, 300);
+    driver.loop(&host, ups_data, 2000);
     TEST_ASSERT_EQUAL_UINT32(3, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x21, host._requestedReports[2].first);
 
     // Step 4: ups.load (0x1F)
-    driver.loop(&host, ups_data, 400);
+    driver.loop(&host, ups_data, 3000);
     TEST_ASSERT_EQUAL_UINT32(4, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x1F, host._requestedReports[3].first);
 
     // Step 5: battery.temperature (0x22)
-    driver.loop(&host, ups_data, 500);
+    driver.loop(&host, ups_data, 4000);
     TEST_ASSERT_EQUAL_UINT32(5, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x22, host._requestedReports[4].first);
 
     // Step 6: ups.beeper.status (0x25)
-    driver.loop(&host, ups_data, 600);
+    driver.loop(&host, ups_data, 5000);
     TEST_ASSERT_EQUAL_UINT32(6, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0x25, host._requestedReports[5].first);
 
     // Step 7: battery.voltage legacy (0xA4)
-    driver.loop(&host, ups_data, 700);
+    driver.loop(&host, ups_data, 6000);
     TEST_ASSERT_EQUAL_UINT32(7, host._requestedReports.size());
     TEST_ASSERT_EQUAL_UINT8(0xA4, host._requestedReports[6].first);
 

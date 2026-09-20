@@ -57,6 +57,12 @@ public:
         if (bit_size == 1) return enable ? 1 : 0;
         return enable ? 2 : 1; // Default standard HID PDC (1 = disabled, 2 = enabled)
     }
+
+    /**
+     * @brief Gets the pacing interval between polling requests in ms
+     * @return Pacing interval in ms (default 50ms)
+     */
+    virtual uint32_t getPollPacingMs() const { return 50; }
 };
 
 #endif // I_UPS_DRIVER_H

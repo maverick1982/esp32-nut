@@ -30,11 +30,29 @@ LedState computeSystemState(bool wifiConnected, bool upsConnected) {
     return LedState::OPERATIONAL;
 }
 
+#include "esp_log.h"
+
+int custom_vprintf(const char *fmt, va_list args) {
+    char buf[256];
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    // Rimuovi newline finali o escape ANSI se possibile, o passalo così
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+    if (len > 1 && buf[len - 2] == '\r') buf[len - 2] = '\0';
+    
+    AppLogger::log("ESP_LOG", buf);
+    return len;
+}
+
 #ifndef UNIT_TEST
 void setup() {
     // Inizializzazione della porta seriale per il debug diagnostico
     Serial.begin(MONITOR_BAUD_RATE);
     delay(1000); // Piccolo delay per stabilizzare la connessione seriale
+    
+    // Intercetta tutti i log di ESP-IDF e framework Arduino per mostrarli sul web log
+    esp_log_set_vprintf(custom_vprintf);
+
     AppLogger::log("INFO", "\n--- ESP32 NUT Server Initialized ---");
 
     // Inizializzazione del LED diagnostico

@@ -79,25 +79,28 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (_poll_step > 0) {
         if (host->isControlPending()) return; // Non-overlapping guard
 
-        if (now - _last_step_time >= 50 || _poll_step == 1) {
+        if (now - _last_step_time >= getPollPacingMs() || _poll_step == 1) {
             _last_step_time = now;
 
             if (_poll_step == 1) {
                 // Step 1: Quick-Poll (Report 0x0A / ACPresent)
-                host->requestReport(0x0A, 3, 8);
+                // Usiamo requestReportSafe anche per ACPresent se possibile, o passiamo hardcodato se non definito nei descriptor (Powercom HID standard definisce 0x0A come Feature)
+                requestReportSafe(host, 0x0A);
             } else if (_slow_poll_counter == 0) {
                 // Steps 2..7 only during the 30s cycle
                 if (_poll_step == 2) {
-                    host->requestReport(0x1D, 3, 8); // input.voltage
+                    requestReportSafe(host, 0x1D); // input.voltage
                 } else if (_poll_step == 3) {
-                    host->requestReport(0x21, 3, 8); // output.voltage
+                    requestReportSafe(host, 0x21); // output.voltage
                 } else if (_poll_step == 4) {
-                    host->requestReport(0x1F, 3, 8); // ups.load
+                    requestReportSafe(host, 0x1F); // ups.load
                 } else if (_poll_step == 5) {
-                    host->requestReport(0x22, 3, 8); // battery.temperature
+                    requestReportSafe(host, 0x22); // battery.temperature
                 } else if (_poll_step == 6) {
-                    host->requestReport(0x25, 3, 8); // ups.beeper.status
+                    requestReportSafe(host, 0x25); // ups.beeper.status
                 } else if (_poll_step == 7) {
+                    // 0xA4 is a legacy unmapped report.
+                    // NUT hardcodes it to FEATURE (3) and exactly 8 bytes (sizeof(usb_ctrl_char[8])).
                     host->requestReport(0xA4, 3, 8); // battery.voltage (legacy)
                 } else {
                     _poll_step = 0;
@@ -107,6 +110,7 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 _poll_step = 0;
                 return;
             }
+            ESP_LOGD("PowercomDriver", "Requested step %d (r_id: %02X)", _poll_step, (_poll_step == 1) ? 0x0A : ((_poll_step == 2) ? 0x1D : ((_poll_step == 3) ? 0x21 : ((_poll_step == 4) ? 0x1F : ((_poll_step == 5) ? 0x22 : ((_poll_step == 6) ? 0x25 : 0xA4))))));
             _poll_step++;
         }
     }
@@ -122,7 +126,16 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
             sprintf(b, "%02X ", data[i]);
             hex += b;
         }
+        ESP_LOGD("PowercomDriver", "INT IN (len %d, id 0x%02X): %s", (int)length, report_id, hex.c_str());
         Serial.printf("[PowercomDriver] INT IN (len %d, id 0x%02X): %s\n", (int)length, report_id, hex.c_str());
+    } else {
+        String hex = "";
+        for (size_t i = 0; i < length && i < 16; i++) {
+            char b[4];
+            sprintf(b, "%02X ", data[i]);
+            hex += b;
+        }
+        ESP_LOGD("PowercomDriver", "FEATURE IN (len %d, id 0x%02X): %s", (int)length, report_id, hex.c_str());
     }
 
     // Save fields before GenericDriver so Powercom custom mappings can handle them
@@ -276,4 +289,27 @@ String PowercomDriver::fetchVoltageHack(IUSBHostUPS* host) {
 uint8_t PowercomDriver::encodeBeeperValue(bool enable, uint16_t bit_size) const {
     if (bit_size == 1) return enable ? 1 : 0;
     return enable ? 1 : 2; // Powercom protocol: 1 = enable, 2 = disable
+}
+
+void PowercomDriver::requestReportSafe(IUSBHostUPS* host, uint8_t r_id) {
+    uint8_t r_type = 0;
+    
+    // Scan usages to dynamically resolve the true report_type for this report_id.
+    for (const auto& u : host->getUsages()) {
+        if (u.report_id == r_id) {
+            r_type = u.report_type;
+            break;
+        }
+    }
+    
+    // If we didn't find the report in the parsed HID descriptor, default to FEATURE
+    if (r_type == 0) r_type = 3; 
+
+    // Calculate exact byte length including padding to prevent short packets / IN data aborts.
+    uint16_t exact_len = host->getHIDParser()->getExpectedLength(r_id, r_type);
+    if (exact_len == 0) exact_len = 8; // Fail-safe to 8 bytes if unknown
+
+    ESP_LOGD("PowercomDriver", "requestReportSafe: r_id=0x%02X resolved to r_type=%d, exact_len=%d", r_id, r_type, exact_len);
+
+    host->requestReport(r_id, r_type, exact_len);
 }

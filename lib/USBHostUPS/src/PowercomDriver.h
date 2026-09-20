@@ -16,8 +16,10 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const override;
+    uint32_t getPollPacingMs() const override { return 800; }
 
 private:
+    void requestReportSafe(IUSBHostUPS* host, uint8_t r_id);
     uint32_t _last_fast_poll;
     uint32_t _last_step_time;
     uint32_t _last_0xa4_poll;
