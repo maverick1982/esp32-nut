@@ -245,18 +245,21 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         
         { "UPS.PowerSummary.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
+            if (v == 0 && d.hasKey("ups.beeper.status")) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 

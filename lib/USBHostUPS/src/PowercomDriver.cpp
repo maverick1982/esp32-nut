@@ -44,7 +44,7 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         data.set("ups.type", "Powercom");
     }
     if (!data.hasKey("ups.mfr")) {
-        data.set("ups.mfr", "Powercom");
+        data.set("ups.mfr", "POWERCOM Co.,LTD");
     }
 
     if (!data.hasKey("ups.model")) {
@@ -86,13 +86,19 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
                 // Step 1: Quick-Poll (Report 0x0A / ACPresent)
                 host->requestReport(0x0A, 3, 8);
             } else if (_slow_poll_counter == 0) {
-                // Steps 2..4 only during the 30s cycle
+                // Steps 2..7 only during the 30s cycle
                 if (_poll_step == 2) {
                     host->requestReport(0x1D, 3, 8); // input.voltage
                 } else if (_poll_step == 3) {
                     host->requestReport(0x21, 3, 8); // output.voltage
                 } else if (_poll_step == 4) {
                     host->requestReport(0x1F, 3, 8); // ups.load
+                } else if (_poll_step == 5) {
+                    host->requestReport(0x22, 3, 8); // battery.temperature
+                } else if (_poll_step == 6) {
+                    host->requestReport(0x25, 3, 8); // ups.beeper.status
+                } else if (_poll_step == 7) {
+                    host->requestReport(0xA4, 3, 8); // battery.voltage (legacy)
                 } else {
                     _poll_step = 0;
                     return;
@@ -193,10 +199,15 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         if (u.report_id != report_id || u.report_type != report_type) continue;
         double val = HIDParser::extractUsage(&u, report_id, data, length);
         
+        // Powercom proprietary fallback for battery temperature (Usage Page 0x0002, ID 0x0036)
+        if (strstr(u.path, "0x00020036") != nullptr) {
+            ups_data.set("battery.temperature", String(val, 1));
+        }
+
         for (const auto& m : mappings) {
             if (strcmp(u.path, m.path) == 0) {
                 m.apply(this, ups_data, val, &u);
-                break; // handled by string mappings
+                break;
             }
         }
         
