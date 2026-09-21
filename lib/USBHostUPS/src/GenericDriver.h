@@ -24,6 +24,8 @@ protected:
     uint8_t _slow_poll_counter;
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
+    std::vector<uint16_t> _cached_rids;
+    bool _rids_cached;
 };
 
 #endif // GENERIC_DRIVER_H

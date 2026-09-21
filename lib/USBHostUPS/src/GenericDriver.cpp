@@ -28,6 +28,8 @@ void GenericDriver::setup() {
     _last_step_time = 0;
     _slow_poll_counter = 14;
     _active_beeper = "";
+    _rids_cached = false;
+    _cached_rids.clear();
 }
 
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
@@ -65,37 +67,39 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             } else if (_poll_step == 4) {
                 if (_slow_poll_counter == 0 && !data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
             } else {
-                const auto& usages = host->getUsages();
-                std::vector<uint16_t> rids;
-                for (const auto& u : usages) {
-                    if (u.report_type == 2) continue; // Skip OUTPUT reports
-                    uint16_t pair = (u.report_type << 8) | u.report_id;
-                    bool found = false;
-                    for (uint16_t id : rids) {
-                        if (id == pair) { found = true; break; }
-                    }
-                    if (!found && u.report_id != 0) rids.push_back(pair);
-                }
-                
-                for (auto it = rids.begin(); it != rids.end(); ) {
-                    if ((*it >> 8) == 1) { // If Input report
-                        uint8_t id = *it & 0xFF;
-                        bool has_feature = false;
-                        for (uint16_t pair : rids) {
-                            if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                if (!_rids_cached) {
+                    const auto& usages = host->getUsages();
+                    for (const auto& u : usages) {
+                        if (u.report_type == 2) continue; // Skip OUTPUT reports
+                        uint16_t pair = (u.report_type << 8) | u.report_id;
+                        bool found = false;
+                        for (uint16_t id : _cached_rids) {
+                            if (id == pair) { found = true; break; }
                         }
-                        if (has_feature) {
-                            it = rids.erase(it);
-                            continue;
-                        }
+                        if (!found && u.report_id != 0) _cached_rids.push_back(pair);
                     }
-                    ++it;
+                    
+                    for (auto it = _cached_rids.begin(); it != _cached_rids.end(); ) {
+                        if ((*it >> 8) == 1) { // If Input report
+                            uint8_t id = *it & 0xFF;
+                            bool has_feature = false;
+                            for (uint16_t pair : _cached_rids) {
+                                if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
+                            }
+                            if (has_feature) {
+                                it = _cached_rids.erase(it);
+                                continue;
+                            }
+                        }
+                        ++it;
+                    }
+                    _rids_cached = true;
                 }
                 
                 int index = _poll_step - 5;
-                if (index >= 0 && index < rids.size()) {
-                    uint8_t r_type = rids[index] >> 8;
-                    uint8_t r_id = rids[index] & 0xFF;
+                if (index >= 0 && index < _cached_rids.size()) {
+                    uint8_t r_type = _cached_rids[index] >> 8;
+                    uint8_t r_id = _cached_rids[index] & 0xFF;
                     
                     if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
                         _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
