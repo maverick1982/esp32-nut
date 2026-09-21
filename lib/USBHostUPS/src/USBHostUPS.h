@@ -93,6 +93,8 @@ private:
     std::map<uint16_t, CachedReport> _cached_reports;
 
     uint32_t _quirks;
+    uint8_t _event_buffer[256];
+    uint8_t _request_buffer[256];
 };
 
 #endif // USB_HOST_UPS_H
