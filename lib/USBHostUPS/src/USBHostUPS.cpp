@@ -133,9 +133,11 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
             if (_log_cb) _log_cb("INFO", dbg);
 
             if (length > 0) {
-                std::vector<uint8_t> payload(_event_buffer, _event_buffer + length);
                 uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
-                _cached_reports[key] = {r_id, 1, payload};
+                auto& cached = _cached_reports[key];
+                cached.report_id = r_id;
+                cached.report_type = 1;
+                cached.data.assign(_event_buffer, _event_buffer + length);
             }
 
             _driver->decodeReport(this, r_id, 1, _event_buffer, length, _ups_data);
@@ -245,9 +247,11 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, _request_buffer, &length);
     if (err == ESP_OK && length > 0) {
-        std::vector<uint8_t> payload(_request_buffer, _request_buffer + length);
         uint16_t key = (report_type << 8) | report_id;
-        _cached_reports[key] = {report_id, report_type, payload};
+        auto& cached = _cached_reports[key];
+        cached.report_id = report_id;
+        cached.report_type = report_type;
+        cached.data.assign(_request_buffer, _request_buffer + length);
 
         if (_driver) {
             _driver->decodeReport(this, report_id, report_type, _request_buffer, length, _ups_data);
