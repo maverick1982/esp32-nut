@@ -126,20 +126,19 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
         if (!_driver) return;
         
         size_t length = 0;
-        uint8_t data[256];
-        if (hid_host_device_get_raw_input_report_data(hid_device_handle, data, sizeof(data), &length) == ESP_OK) {
-            uint8_t r_id = (length > 0) ? data[0] : 0;
+        if (hid_host_device_get_raw_input_report_data(hid_device_handle, _event_buffer, sizeof(_event_buffer), &length) == ESP_OK) {
+            uint8_t r_id = (length > 0) ? _event_buffer[0] : 0;
             char dbg[128];
             snprintf(dbg, sizeof(dbg), "INPUT_REPORT: id=%d, len=%d", r_id, length);
             if (_log_cb) _log_cb("INFO", dbg);
 
             if (length > 0) {
-                std::vector<uint8_t> payload(data, data + length);
+                std::vector<uint8_t> payload(_event_buffer, _event_buffer + length);
                 uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
                 _cached_reports[key] = {r_id, 1, payload};
             }
 
-            _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
+            _driver->decodeReport(this, r_id, 1, _event_buffer, length, _ups_data);
         }
     } else if (event == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
         if (_log_cb) _log_cb("INFO", "HID Device Disconnected");
@@ -242,17 +241,16 @@ void USBHostUPS::loop() {
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     
-    uint8_t data[256];
     size_t length = expected_length > 0 ? expected_length : 255;
     
-    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, data, &length);
+    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, _request_buffer, &length);
     if (err == ESP_OK && length > 0) {
-        std::vector<uint8_t> payload(data, data + length);
+        std::vector<uint8_t> payload(_request_buffer, _request_buffer + length);
         uint16_t key = (report_type << 8) | report_id;
         _cached_reports[key] = {report_id, report_type, payload};
 
         if (_driver) {
-            _driver->decodeReport(this, report_id, report_type, data, length, _ups_data);
+            _driver->decodeReport(this, report_id, report_type, _request_buffer, length, _ups_data);
         }
         return true;
     } else {
@@ -311,24 +309,23 @@ bool USBHostUPS::setBeeper(bool enable) {
     
     uint16_t expected_length = _hid_parser.getExpectedLength(def->report_id, rep_type);
     
-    uint8_t buffer[256];
-    memset(buffer, 0, sizeof(buffer));
+    memset(_request_buffer, 0, sizeof(_request_buffer));
     size_t fetched_len = expected_length;
     
     // STEP 1: Fetch current report to preserve other fields
-    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, rep_type, def->report_id, buffer, &fetched_len);
+    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, rep_type, def->report_id, _request_buffer, &fetched_len);
     
     if (err != ESP_OK || fetched_len == 0) {
         // Fallback for UPSes that reject GET_REPORT on features
         fetched_len = expected_length;
-        if (def->report_id != 0) buffer[0] = def->report_id;
+        if (def->report_id != 0) _request_buffer[0] = def->report_id;
     }
     
-    fetched_len = BeeperLogic::manipulateBeeperBuffer(enable, def, buffer, fetched_len, _driver);
+    fetched_len = BeeperLogic::manipulateBeeperBuffer(enable, def, _request_buffer, fetched_len, _driver);
     if (fetched_len == 0) return false;
     
     // STEP 3: Write back
-    err = hid_class_request_set_report(_hid_dev_handle, rep_type, def->report_id, buffer, fetched_len);
+    err = hid_class_request_set_report(_hid_dev_handle, rep_type, def->report_id, _request_buffer, fetched_len);
     
     // Update local state immediately to prevent UI bouncing
     if (err == ESP_OK) {
