@@ -16,6 +16,11 @@ bool is_ap_mode = false;
 bool clear_ap_flag_pending = false;
 uint32_t boot_time_ms = 0;
 
+hw_timer_t *watchdogTimer = NULL;
+void ARDUINO_ISR_ATTR watchdogInterrupt() {
+    esp_restart();
+}
+
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
 LedState computeSystemState(bool wifiConnected, bool upsConnected) {
     if (is_ap_mode) {
@@ -39,6 +44,11 @@ void setup() {
 
     // Inizializzazione del LED diagnostico
     diagnostic_led.begin(LED_BUILTIN_PIN);
+
+    // Inizializzazione Watchdog Hardware (30 secondi)
+    watchdogTimer = timerBegin(1000000); // 1MHz resolution
+    timerAttachInterrupt(watchdogTimer, &watchdogInterrupt);
+    timerAlarm(watchdogTimer, 30000000, true, 0); // 30s timeout
 
     // Gestione NVS flag per AP manuale
     boot_prefs.begin("boot_state", false);
@@ -110,6 +120,11 @@ void setup() {
 void loop() {
     uint32_t now = millis();
 
+    // Reset Watchdog Timer
+    if (watchdogTimer) {
+        timerRestart(watchdogTimer);
+    }
+
     // Check timer per azzeramento flag manual_ap
     if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
         boot_prefs.putBool("manual_ap", false);
@@ -144,6 +159,14 @@ void loop() {
                       (int)usb_ups.getUPSData()->getFloat("battery.charge"),
                       usb_ups.getUPSStatusString().c_str(),
                       usb_ups.getUPSData()->getFloat("output.voltage"));
+    }
+
+    // Monitoraggio diagnostico stack (ogni 60 secondi)
+    static uint32_t last_stack_log = 0;
+    if (now - last_stack_log >= 60000) {
+        last_stack_log = now;
+        UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
+        AppLogger::log("INFO", "[DIAG] Loop Task Stack High Water Mark: %u bytes", (uint32_t)hwm);
     }
 
     // Aggiornamento stato LED diagnostico
