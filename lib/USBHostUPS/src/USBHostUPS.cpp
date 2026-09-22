@@ -54,7 +54,7 @@ bool USBHostUPS::begin() {
     const hid_host_driver_config_t hid_config = {
         .create_background_task = true,
         .task_priority = 5,
-        .stack_size = 4096,
+        .stack_size = 8192,
         .core_id = tskNO_AFFINITY,
         .callback = USBHostUPS::hid_host_driver_event_cb,
         .callback_arg = this
