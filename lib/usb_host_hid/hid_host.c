@@ -83,6 +83,7 @@ typedef struct hid_host_device {
     SemaphoreHandle_t device_busy;              /**< HID device main mutex */
     SemaphoreHandle_t ctrl_xfer_done;           /**< Control transfer semaphore */
     usb_transfer_t *ctrl_xfer;                  /**< Pointer to control transfer buffer */
+    volatile bool ctrl_inflight;                /**< ctrl_xfer is owned by the USB Host stack (submitted, callback not yet delivered) */
     usb_device_handle_t dev_hdl;                /**< USB device handle */
     uint8_t dev_addr;                           /**< USB device address */
 #ifdef HID_HOST_REMOTE_WAKE_SUPPORTED
@@ -947,7 +948,13 @@ static void in_xfer_done(usb_transfer_t *in_xfer)
         // Notify user
         hid_host_user_interface_callback(iface, HID_HOST_INTERFACE_EVENT_INPUT_REPORT);
         // Relaunch transfer
-        usb_host_transfer_submit(in_xfer);
+        // [esp32-nut, ADR 0008] A failed re-submit silently stops INPUT reports forever:
+        // report it so the application can restart the interface.
+        esp_err_t err = usb_host_transfer_submit(in_xfer);
+        if (err != ESP_OK && iface->state == HID_INTERFACE_STATE_ACTIVE) {
+            ESP_LOGE(TAG, "Unable to re-submit IN transfer: %s", esp_err_to_name(err));
+            hid_host_user_interface_callback(iface, HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR);
+        }
         return;
     case USB_TRANSFER_STATUS_NO_DEVICE:
     case USB_TRANSFER_STATUS_CANCELED:
@@ -997,7 +1004,40 @@ static void ctrl_xfer_done(usb_transfer_t *ctrl_xfer)
 {
     assert(ctrl_xfer);
     hid_device_t *hid_device = (hid_device_t *)ctrl_xfer->context;
+    // [esp32-nut, ADR 0008] Hand the buffer back before waking the requester.
+    // If the requester already gave up (timeout), the token left in the binary
+    // semaphore is drained by the next hid_control_transfer().
+    hid_device->ctrl_inflight = false;
     xSemaphoreGive(hid_device->ctrl_xfer_done);
+}
+
+/**
+ * @brief Lock HID device for a control request
+ *
+ * [esp32-nut, ADR 0008] Besides taking the device mutex, refuses the request while a
+ * previous control transfer is still owned by the USB Host stack. EP0 cannot be halted
+ * or flushed by a client (usbh rejects EP0 in usb_host_endpoint_halt/flush/clear), so
+ * after a timeout the only safe option is to leave ctrl_xfer untouched until its
+ * callback is delivered: writing the setup packet, re-submitting or re-allocating it
+ * earlier corrupts an URB that the HCD is still processing.
+ *
+ * @param[in] hid_device    Pointer to HID device structure
+ * @param[in] timeout_ms    Timeout of trying to take the mutex
+ * @return
+ *    - ESP_OK if the device is locked and ctrl_xfer can be used
+ *    - ESP_ERR_TIMEOUT if the mutex could not be taken within the specified timeout
+ *    - ESP_ERR_INVALID_STATE if a previous control transfer is still in flight
+ */
+static esp_err_t hid_device_lock_ctrl(hid_device_t *hid_device, uint32_t timeout_ms)
+{
+    HID_RETURN_ON_ERROR( hid_device_try_lock(hid_device, timeout_ms),
+                         "HID Device is busy by other task");
+    if (hid_device->ctrl_inflight) {
+        hid_device_unlock(hid_device);
+        ESP_LOGW(TAG, "Previous control transfer still in flight, request rejected");
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
 }
 
 /**
@@ -1009,7 +1049,11 @@ static void ctrl_xfer_done(usb_transfer_t *ctrl_xfer)
  * @return
  *   - ESP_OK if the transfer was successful
  *   - ESP_ERR_TIMEOUT if the transfer was not completed within the specified timeout
- *   - ESP_ERR_INVALID_RESPONSE if the transfer completed with an error status or incorrect number of bytes transferred
+ *   - ESP_ERR_INVALID_RESPONSE if the device answered with a STALL
+ *   - ESP_ERR_INVALID_SIZE if the device sent more data than the buffer can hold (babble)
+ *   - ESP_FAIL if the transfer failed on the bus (error, device gone, cancelled)
+ *
+ * @note Caller must hold the device lock taken with hid_device_lock_ctrl().
  */
 static esp_err_t hid_control_transfer(hid_device_t *hid_device,
                                       size_t len,
@@ -1018,6 +1062,11 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
 
     usb_transfer_t *ctrl_xfer = hid_device->ctrl_xfer;
 
+    // [esp32-nut, ADR 0008] Drop a stale completion token left by a callback that arrived
+    // after a previous timeout, otherwise this transfer would "complete" immediately
+    // with the data of the previous one.
+    xSemaphoreTake(hid_device->ctrl_xfer_done, 0);
+
     ctrl_xfer->device_handle = hid_device->dev_hdl;
     ctrl_xfer->callback = ctrl_xfer_done;
     ctrl_xfer->context = hid_device;
@@ -1025,14 +1074,38 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
     ctrl_xfer->timeout_ms = timeout_ms;
     ctrl_xfer->num_bytes = len;
 
-    HID_RETURN_ON_ERROR( usb_host_transfer_submit_control(s_hid_driver->client_handle, ctrl_xfer),
-                         "Unable to submit control transfer");
+    hid_device->ctrl_inflight = true;
+    esp_err_t ret = usb_host_transfer_submit_control(s_hid_driver->client_handle, ctrl_xfer);
+    if (ret != ESP_OK) {
+        hid_device->ctrl_inflight = false;
+        ESP_LOGE(TAG, "Unable to submit control transfer: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
-    BaseType_t received = xSemaphoreTake(hid_device->ctrl_xfer_done, pdMS_TO_TICKS(ctrl_xfer->timeout_ms));
+    BaseType_t received = xSemaphoreTake(hid_device->ctrl_xfer_done, pdMS_TO_TICKS(timeout_ms));
 
-    // In case transfer was not finished, error in USB LIB. This is EP0, USBH will reset the endpoint.
+    // [esp32-nut, ADR 0008] The HCD does not implement transfer timeouts and a client cannot
+    // halt/flush EP0, so the URB stays owned by the stack. ctrl_inflight remains set and
+    // hid_device_lock_ctrl() rejects further requests until the callback shows up.
     HID_RETURN_ON_FALSE(received == pdTRUE, ESP_ERR_TIMEOUT, "Control transfer timeout");
-    // Check transfer status
+
+    switch (ctrl_xfer->status) {
+    case USB_TRANSFER_STATUS_COMPLETED:
+        break;
+    case USB_TRANSFER_STATUS_STALL:
+        ESP_LOGD(TAG, "Control transfer stalled");
+        return ESP_ERR_INVALID_RESPONSE;
+    case USB_TRANSFER_STATUS_OVERFLOW:
+        ESP_LOGW(TAG, "Control transfer overflow");
+        return ESP_ERR_INVALID_SIZE;
+    default:
+        ESP_LOGW(TAG, "Control transfer failed, status %d", ctrl_xfer->status);
+        return ESP_FAIL;
+    }
+    if (ctrl_xfer->actual_num_bytes < USB_SETUP_PACKET_SIZE) {
+        ESP_LOGW(TAG, "Control transfer too short (%d bytes)", ctrl_xfer->actual_num_bytes);
+        return ESP_ERR_INVALID_SIZE;
+    }
     // Device can return less data than requested, but it might return more data due to padding (e.g. APC UPS)
     if (ctrl_xfer->actual_num_bytes > ctrl_xfer->num_bytes) {
         ESP_LOGD(TAG, "Device returned more data than requested (%d > %d), truncating", ctrl_xfer->actual_num_bytes, ctrl_xfer->num_bytes);
@@ -1058,8 +1131,10 @@ static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, cons
     HID_RETURN_ON_INVALID_ARG(req);
     HID_RETURN_ON_INVALID_ARG(req->data);
 
-    HID_RETURN_ON_ERROR( hid_device_try_lock(hid_device, DEFAULT_TIMEOUT_MS),
-                         "HID Device is busy by other task");
+    // [esp32-nut, ADR 0008] Lock refuses while ctrl_xfer is in flight: freeing it below
+    // would hand a dangling URB to the HCD.
+    HID_RETURN_ON_ERROR( hid_device_lock_ctrl(hid_device, DEFAULT_TIMEOUT_MS),
+                         "Control pipe not available");
 
     esp_err_t ret;
     const size_t ctrl_size = hid_device->ctrl_xfer->data_buffer_size;
@@ -1168,12 +1243,15 @@ static esp_err_t hid_class_request_set(hid_device_t *hid_device,
                                        const hid_class_request_t *req)
 {
     esp_err_t ret;
-    usb_transfer_t *ctrl_xfer = hid_device->ctrl_xfer;
     HID_RETURN_ON_INVALID_ARG(hid_device);
     HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
+    usb_transfer_t *ctrl_xfer = hid_device->ctrl_xfer;
+    HID_RETURN_ON_FALSE(USB_SETUP_PACKET_SIZE + req->wLength <= ctrl_xfer->data_buffer_size,
+                        ESP_ERR_INVALID_SIZE,
+                        "Request exceeds control transfer buffer");
 
-    HID_RETURN_ON_ERROR( hid_device_try_lock(hid_device, DEFAULT_TIMEOUT_MS),
-                         "HID Device is busy by other task");
+    HID_RETURN_ON_ERROR( hid_device_lock_ctrl(hid_device, DEFAULT_TIMEOUT_MS),
+                         "Control pipe not available");
 
     usb_setup_packet_t *setup = (usb_setup_packet_t *)ctrl_xfer->data_buffer;
     setup->bmRequestType = USB_BM_REQUEST_TYPE_DIR_OUT |
@@ -1214,9 +1292,12 @@ static esp_err_t hid_class_request_get(hid_device_t *hid_device,
     HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
 
     usb_transfer_t *ctrl_xfer = hid_device->ctrl_xfer;
+    HID_RETURN_ON_FALSE(USB_SETUP_PACKET_SIZE + req->wLength <= ctrl_xfer->data_buffer_size,
+                        ESP_ERR_INVALID_SIZE,
+                        "Request exceeds control transfer buffer");
 
-    HID_RETURN_ON_ERROR( hid_device_try_lock(hid_device, DEFAULT_TIMEOUT_MS),
-                         "HID Device is busy by other task");
+    HID_RETURN_ON_ERROR( hid_device_lock_ctrl(hid_device, DEFAULT_TIMEOUT_MS),
+                         "Control pipe not available");
 
     usb_setup_packet_t *setup = (usb_setup_packet_t *)ctrl_xfer->data_buffer;
 
@@ -1323,6 +1404,35 @@ fail:
 esp_err_t hid_host_uninstall_device(hid_device_t *hid_device)
 {
     HID_RETURN_ON_INVALID_ARG(hid_device);
+
+    // [esp32-nut, ADR 0008] A request running on another task may still be reading
+    // ctrl_xfer: wait for it to release the device before freeing anything.
+    bool locked = hid_device->device_busy &&
+                  hid_device_try_lock(hid_device, DEFAULT_TIMEOUT_MS + 1000) == ESP_OK;
+
+    // Interfaces left in WAIT_USER_DELETION must not reach the freed device through
+    // their parent pointer (class requests check for a NULL parent).
+    hid_iface_t *iface = NULL;
+    HID_ENTER_CRITICAL();
+    STAILQ_FOREACH(iface, &s_hid_driver->hid_ifaces_tailq, tailq_entry) {
+        if (iface->parent == hid_device) {
+            iface->parent = NULL;
+        }
+    }
+    HID_EXIT_CRITICAL();
+
+    if (hid_device->ctrl_inflight) {
+        // The HCD still owns ctrl_xfer and its callback references hid_device:
+        // freeing either would be a use-after-free. Leak them (a few hundred bytes).
+        ESP_LOGE(TAG, "Control transfer still in flight on device removal, leaking device context");
+        HID_ENTER_CRITICAL();
+        STAILQ_REMOVE(&s_hid_driver->hid_devices_tailq, hid_device, hid_host_device, tailq_entry);
+        HID_EXIT_CRITICAL();
+        if (locked) {
+            hid_device_unlock(hid_device);
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
 
     HID_RETURN_ON_ERROR( usb_host_transfer_free(hid_device->ctrl_xfer),
                          "Unable to free transfer buffer for EP0");
@@ -1732,7 +1842,7 @@ esp_err_t hid_host_enable_remote_wakeup(hid_host_device_handle_t hid_dev_handle,
     ESP_RETURN_ON_FALSE(
         (config_desc->bmAttributes & USB_BM_ATTRIBUTES_WAKEUP), ESP_ERR_NOT_SUPPORTED, TAG, "Device does not support remote wakeup");
 
-    HID_RETURN_ON_ERROR( hid_device_try_lock(hid_device, DEFAULT_TIMEOUT_MS), "HID Device is busy by other task");
+    HID_RETURN_ON_ERROR( hid_device_lock_ctrl(hid_device, DEFAULT_TIMEOUT_MS), "Control pipe not available");
 
     // Check current remote wakeup status
     // If user wants to enable it and is already enabled (or vice versa) return early, otherwise proceed to ctrl transfer
@@ -1800,7 +1910,14 @@ esp_err_t hid_host_device_start(hid_host_device_handle_t hid_dev_handle)
     iface->state = HID_INTERFACE_STATE_ACTIVE;
 
     // start data transfer
-    return usb_host_transfer_submit(iface->in_xfer);
+    esp_err_t ret = usb_host_transfer_submit(iface->in_xfer);
+    if (ret != ESP_OK) {
+        // [esp32-nut, ADR 0008] Keep the interface restartable: after a stop, the flushed
+        // IN transfer stays in flight until the client task processes its callback, so the
+        // caller retries hid_host_device_start() and needs the READY state for that.
+        iface->state = HID_INTERFACE_STATE_READY;
+    }
+    return ret;
 }
 
 esp_err_t hid_host_device_stop(hid_host_device_handle_t hid_dev_handle)
@@ -1852,6 +1969,7 @@ esp_err_t hid_host_get_device_info(hid_host_device_handle_t hid_dev_handle,
 
     hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
     HID_RETURN_ON_INVALID_ARG(iface);
+    HID_RETURN_ON_INVALID_ARG(iface->parent);
 
     hid_device_t *hid_dev = iface->parent;
 
@@ -2010,7 +2128,7 @@ esp_err_t hid_class_request_set_protocol(hid_host_device_handle_t hid_dev_handle
 usb_device_handle_t hid_host_get_device_handle(hid_host_device_handle_t hid_dev_handle)
 {
     hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
-    if (!iface) return NULL;
+    if (!iface || !iface->parent) return NULL;
     return iface->parent->dev_hdl;
 }
 
