@@ -58,6 +58,19 @@ Chosen option: "**Option 2**".
 * At boot: reset reason, last controlled restart cause, and the core dump summary (task, PC, backtrace, only after a crash reset) go to the log and to `/api/system-status`.
 * `sdkconfig.defaults` removed.
 
+### Addendum: USB layer review, phase 1 (2026-09-24)
+Critical fixes from `docs/plans/usb-layer-review.md` (§4, phase 1).
+
+**More `hid_host.c` deviations** (marked `[esp32-nut, review Cx]`):
+* **C2.** `hid_host_device_init_attempt()` no longer closes an uninitialized `dev_hdl` when `usb_host_device_open()` fails, and no longer aborts the HID task through `ESP_ERROR_CHECK`: enumeration errors are logged and cleaned up (interfaces not yet notified are removed, then the device). The `fail:` path of `hid_host_install_device()` frees only its own allocations, because the device is not in the list yet and `dev_hdl` belongs to the caller.
+* **C3.** `report_desc_len` keeps the bytes of the report descriptor actually received, and `hid_host_get_report_descriptor()` returns that length instead of `wReportDescriptorLength`. An empty answer is an error.
+* **C4.** `hid_host_string_descriptor_copy()` ignores a string descriptor with `bLength < 2` (the length went negative).
+
+**Application changes:**
+* **C1.** `setBeeper()` writes the report back only if it was read back up to the beeper field, or if the report carries no other usage (`BeeperLogic::canWriteBack()`). Otherwise the zeros of a blind SET_REPORT could reach `DelayBeforeShutdown` (an immediate `load.off`).
+* **C4.** Device strings are converted by `DeviceStrings::toAscii()` (always terminated, non-ASCII → `?`, trailing spaces trimmed, inverted strings detected or forced by `QUIRK_INVERT_STRINGS`) instead of `wcstombs()`.
+* **A1.** `isDataStale()` is also true with no device attached, except in the first `USBUPS_NO_DEVICE_BOOT_GRACE_MS` (15 s) after boot while no UPS has been seen yet. NUT clients get `ERR DATA-STALE` instead of an empty `Unknown` status, as with `usbhid-ups` + `upsd`. The web UI keeps showing "Disconnected" without the stale banner.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.
@@ -79,3 +92,5 @@ Chosen option: "**Option 2**".
 * Agents MUST NOT call `esp_restart()` from an ISR or from a callback. Restarts go through `USBHostUPS::requestRestart()` → `main.cpp` → `CrashDiag::recordControlledRestart()`.
 * Agents MUST NOT free, reallocate or modify `ctrl_xfer` in `hid_host.c` while `ctrl_inflight` is set, and MUST keep the `[esp32-nut, ADR 0008]` markers when updating the vendored component.
 * Agents MUST NOT reintroduce `sdkconfig.defaults` expecting it to affect the Arduino build.
+* Agents MUST NOT issue a SET_REPORT with bytes that were not read back from the device unless the report holds no other usage (`BeeperLogic::canWriteBack()`), and MUST keep the `[esp32-nut, review Cx]` markers in `hid_host.c`.
+* Agents MUST NOT serve UPS data as current with no device attached: `isDataStale()` covers that case.

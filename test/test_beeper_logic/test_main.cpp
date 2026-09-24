@@ -108,6 +108,48 @@ void test_beeper_16bit_cyberpower() {
     TEST_ASSERT_EQUAL(0, buffer[2]); // Upper byte is 0
 }
 
+static HIDUsageDef makeUsage(uint32_t usage, uint8_t report_id, uint8_t report_type,
+                             uint16_t bit_offset, uint16_t bit_size, const char* path) {
+    HIDUsageDef def;
+    def.usage = usage;
+    def.report_id = report_id;
+    def.report_type = report_type;
+    def.bit_offset = bit_offset;
+    def.bit_size = bit_size;
+    def.found = true;
+    strncpy(def.path, path, sizeof(def.path) - 1);
+    return def;
+}
+
+// Review C1: a blind SET_REPORT on a shared report would zero DelayBeforeShutdown (= load.off)
+void test_beeper_shared_report_refused_without_read_back() {
+    std::vector<HIDUsageDef> usages;
+    usages.push_back(makeUsage(0x0084005A, 15, 3, 0, 8, "UPS.PowerSummary.AudibleAlarmControl"));
+    usages.push_back(makeUsage(0x00840057, 15, 3, 8, 16, "UPS.PowerSummary.DelayBeforeShutdown"));
+    const HIDUsageDef& beeper = usages[0];
+
+    bool shared = BeeperLogic::reportHasOtherFields(usages, beeper);
+    TEST_ASSERT_TRUE(shared);
+    TEST_ASSERT_FALSE(BeeperLogic::canWriteBack(shared, beeper, false, 0));
+    // Answer too short to include the beeper field: the missing bytes would go out as zero
+    TEST_ASSERT_FALSE(BeeperLogic::canWriteBack(shared, beeper, true, 1));
+    // Report read back: the other fields are preserved
+    TEST_ASSERT_TRUE(BeeperLogic::canWriteBack(shared, beeper, true, 4));
+}
+
+void test_beeper_dedicated_report_allowed_without_read_back() {
+    std::vector<HIDUsageDef> usages;
+    usages.push_back(makeUsage(0x0084005A, 12, 3, 0, 8, "UPS.PowerSummary.AudibleAlarmControl"));
+    // Same id but INPUT, and another id: different reports
+    usages.push_back(makeUsage(0x00840057, 12, 1, 8, 16, "UPS.PowerSummary.DelayBeforeShutdown"));
+    usages.push_back(makeUsage(0x00840057, 13, 3, 0, 16, "UPS.PowerSummary.DelayBeforeShutdown"));
+    const HIDUsageDef& beeper = usages[0];
+
+    bool shared = BeeperLogic::reportHasOtherFields(usages, beeper);
+    TEST_ASSERT_FALSE(shared);
+    TEST_ASSERT_TRUE(BeeperLogic::canWriteBack(shared, beeper, false, 0));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_beeper_1bit_without_report_id);
@@ -116,5 +158,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_beeper_16bit_cyberpower);
     RUN_TEST(test_beeper_powercom_quirk);
     RUN_TEST(test_beeper_buffer_expansion);
+    RUN_TEST(test_beeper_shared_report_refused_without_read_back);
+    RUN_TEST(test_beeper_dedicated_report_allowed_without_read_back);
     return UNITY_END();
 }

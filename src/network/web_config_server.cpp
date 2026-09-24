@@ -238,7 +238,8 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
-    if (usb_ups && usb_ups->isDataStale()) {
+    // A missing UPS is already "Disconnected": the stale banner is for an attached one
+    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale()) {
         doc["ups"]["stale"] = true;
     }
 

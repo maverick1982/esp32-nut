@@ -1,4 +1,5 @@
 #include "BeeperLogic.h"
+#include "DeviceStrings.h"
 #include "USBHostUPS.h"
 #include "GenericDriver.h"
 #include "APCDriver.h"
@@ -18,7 +19,7 @@ USBHostUPS::USBHostUPS() :
     _event_queue(NULL), _self_close_handle(NULL), _dropped_events(0), _reported_dropped_events(0),
     _hid_dev_handle(NULL),
     _vid(0), _pid(0),
-    _initialized(false), _is_ready_to_poll(false),
+    _initialized(false), _is_ready_to_poll(false), _device_seen(false),
     _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
     _restart_requested(false), _restart_reason(""),
     _driver(nullptr), _log_cb(nullptr), _quirks(0)
@@ -308,7 +309,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
             }
         }
         _driver->setup();
-        populateStringsFromDeviceInfo(dev_info, _ups_data);
+        populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
     }
 
     _link.reset(millis());
@@ -316,6 +317,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     _in_recoveries = 0;
     hid_host_device_start(_hid_dev_handle);
     _is_ready_to_poll = true;
+    _device_seen = true;
 
     log("INFO", "UPS interface claimed and ready.");
 }
@@ -423,7 +425,9 @@ bool USBHostUPS::isControlPending() const {
 }
 
 bool USBHostUPS::isDataStale() const {
-    return _is_ready_to_poll && _link.isStale(millis());
+    uint32_t now = millis();
+    if (!_is_ready_to_poll) return LinkMonitor::isStaleWithoutDevice(_device_seen, now, NO_DEVICE_BOOT_GRACE_MS);
+    return _link.isStale(now);
 }
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
@@ -489,6 +493,7 @@ bool USBHostUPS::setBeeper(bool enable) {
 
     HIDUsageDef def;
     uint16_t expected_length = 0;
+    bool shared_report = true;
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         String active_path = getActiveBeeperPath();
@@ -507,6 +512,7 @@ bool USBHostUPS::setBeeper(bool enable) {
         def = *found;
         uint8_t rep_type = (def.report_type == 2) ? HID_REPORT_TYPE_OUTPUT : HID_REPORT_TYPE_FEATURE;
         expected_length = _hid_parser.getExpectedLength(def.report_id, rep_type);
+        shared_report = BeeperLogic::reportHasOtherFields(_hid_parser.getUsages(), def);
     }
 
     uint8_t rep_type = (def.report_type == 2) ? HID_REPORT_TYPE_OUTPUT : HID_REPORT_TYPE_FEATURE;
@@ -519,9 +525,16 @@ bool USBHostUPS::setBeeper(bool enable) {
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, rep_type, def.report_id, _request_buffer, &fetched_len);
     noteControlResult(err, millis());
 
-    if (err != ESP_OK || fetched_len == 0) {
+    bool fetched = (err == ESP_OK && fetched_len > 0);
+    if (!BeeperLogic::canWriteBack(shared_report, def, fetched, fetched_len)) {
+        // Writing zeros over the other fields could switch the load off (review C1)
+        log("WARN", "Beeper not changed: report %u shares fields and could not be read back (%s)",
+            (unsigned)def.report_id, fetched ? "short answer" : esp_err_to_name(err));
+        return false;
+    }
+    if (!fetched) {
         if (!_link.canPoll(millis())) return false; // pipe not answering, do not insist
-        // Fallback for UPSes that reject GET_REPORT on features
+        // Fallback for UPSes that reject GET_REPORT: the report holds only the beeper
         fetched_len = expected_length;
         if (def.report_id != 0) _request_buffer[0] = def.report_id;
     }
@@ -653,15 +666,19 @@ void USBHostUPS::logDebug(const String& msg) const {
     if (_log_cb) _log_cb("DEBUG", msg.c_str());
 }
 
-void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, UPSData& ups_data) {
-    char buf[128];
-    wcstombs(buf, dev_info.iManufacturer, sizeof(buf));
-    if (String(buf).length() > 0) ups_data.set("ups.mfr", String(buf));
+void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, uint32_t quirks, UPSData& ups_data) {
+    const bool invert = (quirks & QUIRK_INVERT_STRINGS) != 0;
+    char buf[HID_STR_DESC_MAX_LENGTH + 1];
 
-    wcstombs(buf, dev_info.iProduct, sizeof(buf));
-    if (String(buf).length() > 0) ups_data.set("ups.model", String(buf));
-
-    wcstombs(buf, dev_info.iSerialNumber, sizeof(buf));
-    if (String(buf).length() > 0 && String(buf) != "Blank") ups_data.set("ups.serial", String(buf));
+    if (DeviceStrings::toAscii(dev_info.iManufacturer, HID_STR_DESC_MAX_LENGTH, invert, buf, sizeof(buf)) > 0) {
+        ups_data.set("ups.mfr", buf);
+    }
+    if (DeviceStrings::toAscii(dev_info.iProduct, HID_STR_DESC_MAX_LENGTH, invert, buf, sizeof(buf)) > 0) {
+        ups_data.set("ups.model", buf);
+    }
+    if (DeviceStrings::toAscii(dev_info.iSerialNumber, HID_STR_DESC_MAX_LENGTH, invert, buf, sizeof(buf)) > 0 &&
+        strcmp(buf, "Blank") != 0) {
+        ups_data.set("ups.serial", buf);
+    }
 }
 

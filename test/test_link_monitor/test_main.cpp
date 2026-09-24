@@ -122,6 +122,20 @@ void test_millis_wraparound(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(near_wrap + 60000));
 }
 
+// Review A1: no device attached means nothing current to serve
+void test_stale_without_device(void) {
+    const uint32_t grace = 15000;
+    // Boot: the UPS is still enumerating
+    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 0, grace));
+    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 14999, grace));
+    // No UPS showed up in time
+    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(false, 15000, grace));
+    // A UPS was attached and went away (e.g. USB reset on a blackout): stale at once,
+    // even inside the boot grace
+    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 5000, grace));
+    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 3600000, grace));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -134,6 +148,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
+    RUN_TEST(test_stale_without_device);
     return UNITY_END();
 }
 #else
@@ -147,6 +162,7 @@ void setup() {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
+    RUN_TEST(test_stale_without_device);
     UNITY_END();
 }
 void loop() {}

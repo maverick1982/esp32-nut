@@ -71,6 +71,16 @@ public:
         return _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
     }
 
+    /**
+     * With no device attached nothing is current (review A1): like usbhid-ups + upsd,
+     * NUT clients must get ERR DATA-STALE, not an empty "Unknown" status. A UPS that
+     * resets its USB port when it goes on battery would otherwise never show OB.
+     * Only the first bootGraceMs after boot are exempt, while the UPS enumerates.
+     */
+    static bool isStaleWithoutDevice(bool deviceSeen, uint32_t now, uint32_t bootGraceMs) {
+        return deviceSeen || now >= bootGraceMs;
+    }
+
     Action tick(uint32_t now) {
         if (_failures == 0 || (now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;

@@ -116,6 +116,7 @@ typedef struct hid_interface {
     uint16_t ep_in_mps;                     /**< Interrupt IN max size */
     uint8_t country_code;                   /**< Country code */
     uint16_t report_desc_size;              /**< Size of Report */
+    uint16_t report_desc_len;               /**< [esp32-nut] Bytes of the Report actually received */
     uint8_t *report_desc;                   /**< Pointer to HID Report */
     usb_transfer_t *in_xfer;                /**< Pointer to IN transfer buffer */
     hid_host_interface_event_cb_t user_cb;  /**< Interface application callback */
@@ -506,28 +507,57 @@ static esp_err_t hid_host_interface_list_create(hid_device_t *hid_device,
 static bool hid_host_device_init_attempt(uint8_t dev_addr)
 {
     bool is_hid_device = false;
-    usb_device_handle_t dev_hdl;
+    usb_device_handle_t dev_hdl = NULL;
     const usb_config_desc_t *config_desc = NULL;
     hid_device_t *hid_device = NULL;
 
-    if (usb_host_device_open(s_hid_driver->client_handle, dev_addr, &dev_hdl) == ESP_OK) {
-        if (usb_host_get_active_config_descriptor(dev_hdl, &config_desc) == ESP_OK) {
-            is_hid_device = hid_interface_present(config_desc);
-        }
+    // [esp32-nut, review C2] The open fails when the UPS resets its USB port while it
+    // switches mode: dev_hdl is then not valid and must not be closed. Enumeration
+    // errors are logged and cleaned up instead of aborting the HID task (ESP_ERROR_CHECK).
+    esp_err_t err = usb_host_device_open(s_hid_driver->client_handle, dev_addr, &dev_hdl);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Unable to open USB device at address %d: %s", dev_addr, esp_err_to_name(err));
+        return false;
+    }
+    if (usb_host_get_active_config_descriptor(dev_hdl, &config_desc) == ESP_OK) {
+        is_hid_device = hid_interface_present(config_desc);
     }
 
-    // Create HID interfaces list in RAM, connected to the particular USB dev
-    if (is_hid_device) {
-        // Proceed, add HID device to the list, get handle if necessary
-        ESP_ERROR_CHECK( hid_host_install_device(dev_addr, dev_hdl, &hid_device) );
-        // Create Interfaces list for a possibility to claim Interface
-        ESP_ERROR_CHECK( hid_host_interface_list_create(hid_device, config_desc) );
-    } else {
+    if (!is_hid_device) {
         usb_host_device_close(s_hid_driver->client_handle, dev_hdl);
         ESP_LOGW(TAG, "No HID device at USB port %d", dev_addr);
+        return false;
     }
 
-    return is_hid_device;
+    // Proceed, add HID device to the list, get handle if necessary
+    err = hid_host_install_device(dev_addr, dev_hdl, &hid_device);
+    if (err != ESP_OK) {
+        // hid_host_install_device() released its partial state but not dev_hdl
+        ESP_LOGE(TAG, "Unable to install HID device at address %d: %s", dev_addr, esp_err_to_name(err));
+        usb_host_device_close(s_hid_driver->client_handle, dev_hdl);
+        return false;
+    }
+
+    // Create Interfaces list for a possibility to claim Interface
+    err = hid_host_interface_list_create(hid_device, config_desc);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to create HID interface list at address %d: %s", dev_addr, esp_err_to_name(err));
+        // No interface was notified to the user yet: drop them, then the device (closes dev_hdl)
+        HID_ENTER_CRITICAL();
+        hid_iface_t *iface = STAILQ_FIRST(&s_hid_driver->hid_ifaces_tailq);
+        while (iface != NULL) {
+            hid_iface_t *next = STAILQ_NEXT(iface, tailq_entry);
+            if (iface->parent == hid_device) {
+                _hid_host_remove_interface(iface);
+            }
+            iface = next;
+        }
+        HID_EXIT_CRITICAL();
+        hid_host_uninstall_device(hid_device);
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -1122,9 +1152,11 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
  *
  * @param[in] hid_device  Pointer to HID device structure
  * @param[in] req         Pointer to a class specific request structure
+ * @param[out] received   [esp32-nut, review C3] Bytes copied into req->data, can be less than wLength
  * @return esp_err_t
  */
-static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, const hid_class_request_t *req)
+static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, const hid_class_request_t *req,
+                                                  size_t *received)
 {
     HID_RETURN_ON_INVALID_ARG(hid_device);
     HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
@@ -1178,6 +1210,9 @@ static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, cons
                 memcpy(req->data,
                        ctrl_xfer->data_buffer + USB_SETUP_PACKET_SIZE,
                        response_len);
+                if (received) {
+                    *received = response_len;
+                }
             } else {
                 ret = ESP_ERR_INVALID_SIZE;
             }
@@ -1223,11 +1258,26 @@ static esp_err_t hid_class_request_report_descriptor(hid_iface_t *iface)
         .data = iface->report_desc
     };
 
-    const esp_err_t ret = usb_class_request_get_descriptor(iface->parent, &get_desc);
+    size_t received = 0;
+    esp_err_t ret = usb_class_request_get_descriptor(iface->parent, &get_desc, &received);
+
+    // [esp32-nut, review C3] Some UPS answer with fewer bytes than wReportDescriptorLength:
+    // expose only what was received, never the uninitialized tail of the buffer.
+    if (ret == ESP_OK && received == 0) {
+        ESP_LOGW(TAG, "Empty report descriptor");
+        ret = ESP_ERR_INVALID_SIZE;
+    }
+    if (ret == ESP_OK && received < iface->report_desc_size) {
+        ESP_LOGW(TAG, "Short report descriptor: %u of %u bytes",
+                 (unsigned) received, (unsigned) iface->report_desc_size);
+    }
 
     if (ret != ESP_OK) {
         free(iface->report_desc);
         iface->report_desc = NULL;
+        iface->report_desc_len = 0;
+    } else {
+        iface->report_desc_len = (uint16_t) received;
     }
     return ret;
 }
@@ -1340,7 +1390,8 @@ static esp_err_t hid_host_string_descriptor_copy(wchar_t *dest,
     if (dest == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (src != NULL) {
+    // [esp32-nut, review C4] A malformed bLength < 2 made the length negative, i.e. huge
+    if (src != NULL && src->bLength >= USB_STANDARD_DESC_SIZE) {
         size_t len = MIN((src->bLength - USB_STANDARD_DESC_SIZE) / 2, HID_STR_DESC_MAX_LENGTH - 1);
         for (int i = 0; i < len; i++) {
             dest[i] = (wchar_t) src->wData[i];
@@ -1397,7 +1448,21 @@ static esp_err_t hid_host_install_device(uint8_t dev_addr,
     return ESP_OK;
 
 fail:
-    hid_host_uninstall_device(hid_device);
+    // [esp32-nut, review C2] The device is not in the list yet and dev_hdl belongs to
+    // the caller: hid_host_uninstall_device() would close it and STAILQ_REMOVE a
+    // missing element. Release only what was allocated here.
+    if (hid_device) {
+        if (hid_device->ctrl_xfer) {
+            usb_host_transfer_free(hid_device->ctrl_xfer);
+        }
+        if (hid_device->ctrl_xfer_done) {
+            vSemaphoreDelete(hid_device->ctrl_xfer_done);
+        }
+        if (hid_device->device_busy) {
+            vSemaphoreDelete(hid_device->device_busy);
+        }
+        free(hid_device);
+    }
     return ret;
 }
 
@@ -1722,6 +1787,7 @@ static esp_err_t hid_host_device_close_impl(hid_host_device_handle_t hid_dev_han
         // If the device is closing by user before device detached we need to flush user callback here
         free(hid_iface->report_desc);
         hid_iface->report_desc = NULL;
+        hid_iface->report_desc_len = 0;
     }
 
     if (hid_iface->user_cb && hid_iface->state != HID_INTERFACE_STATE_WAIT_USER_DELETION) {
@@ -1948,14 +2014,15 @@ uint8_t *hid_host_get_report_descriptor(hid_host_device_handle_t hid_dev_handle,
     }
 
     // Report Descriptor was already requested, return pointer
+    // [esp32-nut, review C3] Length received, not the one declared in the HID descriptor
     if (iface->report_desc) {
-        *report_desc_len = iface->report_desc_size;
+        *report_desc_len = iface->report_desc_len;
         return iface->report_desc;
     }
 
     // Request Report Descriptor
     if (ESP_OK == hid_class_request_report_descriptor(iface)) {
-        *report_desc_len = iface->report_desc_size;
+        *report_desc_len = iface->report_desc_len;
         return iface->report_desc;
     }
 
