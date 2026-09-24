@@ -2377,8 +2377,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.ups && data.ups.stale) {
             addLine('UPS is not answering: values are stale and NUT clients get ERR DATA-STALE.');
         }
+        if (diag.degraded) {
+            addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable or reboot the board.');
+        }
         if (diag.last_restart_cause) {
-            addLine('Last automatic restart: ' + diag.last_restart_cause);
+            addLine('Last automatic restart: ' + diag.last_restart_cause +
+                (diag.consecutive_restarts > 1 ? ' (' + diag.consecutive_restarts + ' in a row)' : ''));
         }
         if (diag.last_crash) {
             addLine('Last crash (reset: ' + diag.reset_reason + ') in task "' + diag.last_crash.task + '", PC ' + diag.last_crash.pc + '. Backtrace: ', diag.last_crash.backtrace);

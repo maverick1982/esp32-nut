@@ -71,6 +71,20 @@ Critical fixes from `docs/plans/usb-layer-review.md` (§4, phase 1).
 * **C4.** Device strings are converted by `DeviceStrings::toAscii()` (always terminated, non-ASCII → `?`, trailing spaces trimmed, inverted strings detected or forced by `QUIRK_INVERT_STRINGS`) instead of `wcstombs()`.
 * **A1.** `isDataStale()` is also true with no device attached, except in the first `USBUPS_NO_DEVICE_BOOT_GRACE_MS` (15 s) after boot while no UPS has been seen yet. NUT clients get `ERR DATA-STALE` instead of an empty `Unknown` status, as with `usbhid-ups` + `upsd`. The web UI keeps showing "Disconnected" without the stale banner.
 
+### Addendum: USB layer review, phase 2 (2026-09-24)
+Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
+
+**More `hid_host.c` deviations** (marked `[esp32-nut, review Ax]`):
+* **A3.** New `hid_host_device_clear_ep_in_halt()`: CLEAR_FEATURE(ENDPOINT_HALT) on the IN endpoint through EP0, with the same `ctrl_inflight` guard as the class requests.
+* **A4.** New `hid_host_device_get_ep_in_mps()`. The IN transfer stays one packet long.
+* **A5a.** GET/SET class requests time out after `USBUPS_CTRL_TIMEOUT_MS` (1500 ms) instead of 5 s. Report descriptor requests and lock waits keep `DEFAULT_TIMEOUT_MS`.
+
+**Application changes:**
+* **A2.** `InputWatchdog` (in `LinkMonitor.h`, pure logic) learns the INPUT period from the intervals between bursts. Only for a periodic device, a silence of 5 × period (at least 30 s) makes the data stale and climbs the same recover → recover → restart ladder. Change-driven devices are never periodic and never trigger it.
+* **A3.** A recovery after an IN transfer error or an INPUT silence runs `stop`, then CLEAR_FEATURE(ENDPOINT_HALT), then `start`. The IDF HCD does not reset the host data toggle on a pipe clear: the first packet after it may be lost.
+* **A4.** `InputReassembler` (pure logic) rebuilds INPUT reports longer than MPS from the per-packet events, using the lengths declared in the report descriptor. A larger IN transfer was rejected: an interrupt IN transfer only ends on a short packet or a full buffer, so a shorter report that is a multiple of MPS would be glued to the next one.
+* **A7.** `RestartPolicy` (pure logic) with the count of consecutive controlled restarts in RTC memory (`CrashDiag`): the first restart runs at once, the next ones wait 1, 5 and 15 min, and after 4 the board stays up in degraded mode (data stale, web UI banner). A new enumeration of the UPS cancels the request; 10 min of fresh data clear the count. `isDataStale()` is true while a restart is requested.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.
@@ -94,3 +108,5 @@ Critical fixes from `docs/plans/usb-layer-review.md` (§4, phase 1).
 * Agents MUST NOT reintroduce `sdkconfig.defaults` expecting it to affect the Arduino build.
 * Agents MUST NOT issue a SET_REPORT with bytes that were not read back from the device unless the report holds no other usage (`BeeperLogic::canWriteBack()`), and MUST keep the `[esp32-nut, review Cx]` markers in `hid_host.c`.
 * Agents MUST NOT serve UPS data as current with no device attached: `isDataStale()` covers that case.
+* Agents MUST decode INPUT reports only after `InputReassembler`, never straight from the per-packet events, and MUST NOT enlarge the IN transfer beyond one packet.
+* Agents MUST route controlled restarts through `RestartPolicy` in `main.cpp`: never call `esp_restart()` on `isRestartRequested()` directly.

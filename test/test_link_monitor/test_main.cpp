@@ -136,6 +136,107 @@ void test_stale_without_device(void) {
     TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 3600000, grace));
 }
 
+// Review A2: watchdog on the INPUT pipe
+
+// CyberPower-like: reports 8 and 11 together every 3 s. Returns the last report time.
+static uint32_t feedBursts(InputWatchdog& wd, uint32_t start, int bursts, uint32_t period) {
+    uint32_t t = start;
+    for (int i = 0; i < bursts; i++) {
+        t = start + i * period;
+        wd.onInput(t);
+        wd.onInput(t + 10); // same burst
+    }
+    return t + 10;
+}
+
+void test_input_periodic_silence_recovers_then_restarts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 1000, 9, 3000); // 8 intervals
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(3000, wd.periodMs());
+    TEST_ASSERT_EQUAL_UINT32(30000, wd.silenceThresholdMs()); // 5 x 3 s is below the floor
+
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 29999));
+    TEST_ASSERT_FALSE(wd.isStale(last + 29999));
+
+    TEST_ASSERT_TRUE(wd.isStale(last + 30000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 30000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 30001));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 89999));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 90000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RESTART == wd.tick(last + 150000));
+}
+
+void test_input_resume_clears_stale_and_keeps_period(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 1000, 9, 3000);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 40000));
+
+    // Reports come back after the recovery
+    wd.onInput(last + 41000);
+    TEST_ASSERT_FALSE(wd.isStale(last + 41000));
+    TEST_ASSERT_EQUAL_UINT8(0, wd.recoveries());
+    // The 41 s gap was a silence, not a period
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(3000, wd.periodMs());
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 41000 + 29999));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 41000 + 30000));
+}
+
+void test_input_long_period_scales_threshold(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 9, 10000);
+    TEST_ASSERT_EQUAL_UINT32(50000, wd.silenceThresholdMs());
+    TEST_ASSERT_FALSE(wd.isStale(last + 49999));
+    TEST_ASSERT_TRUE(wd.isStale(last + 50000));
+}
+
+void test_input_change_driven_device_never_acts(void) {
+    // Reports only on changes (APC): irregular intervals
+    InputWatchdog wd;
+    wd.reset(0);
+    const uint32_t gaps[] = {1000, 7000, 2000, 30000, 5000, 1500, 60000, 4000, 9000, 2500};
+    uint32_t t = 0;
+    for (uint32_t g : gaps) {
+        t += g;
+        wd.onInput(t);
+    }
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_FALSE(wd.isStale(t + 3600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(t + 3600000));
+}
+
+void test_input_not_enough_samples_never_acts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 8, 3000); // 7 intervals
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 3600000));
+
+    // A new device forgets the learned period
+    last = feedBursts(wd, last + 3000, 9, 3000);
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    wd.reset(last);
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 3600000));
+}
+
+void test_input_jitter_tolerated(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    const uint32_t gaps[] = {3000, 3200, 2900, 3100, 2800, 3000, 3300, 2950};
+    uint32_t t = 0;
+    wd.onInput(t);
+    for (uint32_t g : gaps) {
+        t += g;
+        wd.onInput(t);
+    }
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -149,6 +250,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_stale_without_device);
+    RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
+    RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
+    RUN_TEST(test_input_long_period_scales_threshold);
+    RUN_TEST(test_input_change_driven_device_never_acts);
+    RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_jitter_tolerated);
     return UNITY_END();
 }
 #else
@@ -163,6 +270,12 @@ void setup() {
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_stale_without_device);
+    RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
+    RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
+    RUN_TEST(test_input_long_period_scales_threshold);
+    RUN_TEST(test_input_change_driven_device_never_acts);
+    RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_jitter_tolerated);
     UNITY_END();
 }
 void loop() {}

@@ -13,6 +13,7 @@
 #include "UPSData.h"
 #include "IUSBHostUPS.h"
 #include "LinkMonitor.h"
+#include "InputReassembler.h"
 #include <map>
 #include <vector>
 
@@ -89,6 +90,7 @@ private:
         enum Type : uint8_t { CONNECTED, OPEN_FAILED, INPUT_REPORT, DISCONNECTED, TRANSFER_ERROR };
         Type type;
         uint16_t length;
+        uint32_t ts; // millis() when the HID task received it
         hid_host_device_handle_t handle;
         uint8_t data[64]; // Full-speed interrupt IN max packet size
     };
@@ -118,7 +120,7 @@ private:
     void handleDisconnected(hid_host_device_handle_t handle);
     void closeInterface(hid_host_device_handle_t handle);
     void noteControlResult(esp_err_t err, uint32_t now);
-    void recoverInterface(const char* why, uint32_t now);
+    void recoverInterface(const char* why, uint32_t now, bool clear_in_halt = false);
     void retryInterfaceStart(uint32_t now);
     void requestRestart(const char* why);
     void log(const char* level, const char* fmt, ...) const;
@@ -139,6 +141,10 @@ private:
     bool _device_seen; // a UPS was claimed since boot
 
     LinkMonitor _link;
+    InputWatchdog _in_wd;
+    InputReassembler _in_reasm;
+    uint16_t _ep_in_mps;
+    bool _uses_report_ids;
     bool _in_restart_pending;
     uint8_t _in_start_attempts;
     uint32_t _in_restart_at;

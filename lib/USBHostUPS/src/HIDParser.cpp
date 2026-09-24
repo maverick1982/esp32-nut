@@ -156,6 +156,21 @@ uint16_t HIDParser::getExpectedLength(uint8_t report_id, uint8_t report_type) co
     return bytes;
 }
 
+uint16_t HIDParser::getInputLength(uint8_t report_id) const {
+    auto it = _input_lengths.find(report_id);
+    if (it == _input_lengths.end() || it->second == 0) return 0;
+    return (it->second + 7) / 8 + (report_id != 0 ? 1 : 0);
+}
+
+bool HIDParser::usesReportIds() const {
+    for (const auto* m : {&_input_lengths, &_output_lengths, &_feature_lengths}) {
+        for (const auto& kv : *m) {
+            if (kv.first != 0) return true;
+        }
+    }
+    return false;
+}
+
 const HIDUsageDef* HIDParser::getUsageDef(uint32_t usage) const {
     for (const auto& u : _usages) {
         if (u.usage == usage) return &u;

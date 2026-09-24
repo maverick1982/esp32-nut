@@ -302,6 +302,35 @@ esp_err_t hid_host_device_start(hid_host_device_handle_t hid_dev_handle);
 esp_err_t hid_host_device_stop(hid_host_device_handle_t hid_dev_handle);
 
 /**
+ * @brief [esp32-nut, review A3] Clear a halted interrupt IN endpoint on the device.
+ *
+ * Sends CLEAR_FEATURE(ENDPOINT_HALT) on EP0. hid_host_device_stop() only resets the
+ * host side of the pipe: an endpoint the device has put in STALL stays halted until
+ * this request (or a new enumeration). Blocks like the other class requests.
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if hid_dev_handle is invalid
+ *      - ESP_ERR_INVALID_STATE if the control pipe is busy
+ *      - Other error codes of the control transfer
+ */
+esp_err_t hid_host_device_clear_ep_in_halt(hid_host_device_handle_t hid_dev_handle);
+
+/**
+ * @brief [esp32-nut, review A4] wMaxPacketSize of the interrupt IN endpoint.
+ *
+ * The IN transfer is one packet long: an INPUT report longer than this arrives in
+ * several INPUT_REPORT events, one per packet.
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ *
+ * @return MPS in bytes, or 0 if hid_dev_handle is invalid
+ */
+uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle);
+
+/**
  * @brief Get the HID report descriptor for an interface.
  *
  * The returned pointer is owned by the HID host driver and remains valid until

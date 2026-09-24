@@ -297,6 +297,38 @@ void test_cyberpower_br700elcd_beeper(void) {
     TEST_ASSERT_EQUAL_UINT16(2, expected_length);
 }
 
+// Review A4: declared INPUT lengths drive the reassembly of multi-packet reports
+void test_input_length_and_report_ids(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84,       // Usage Page (Power Device)
+        0x09, 0x04,       // Usage (UPS)
+        0xA1, 0x01,       // Collection (Application)
+        0x85, 0x21,       //   Report ID 0x21
+        0x09, 0x30,       //   Usage (Voltage)
+        0x75, 0x08,       //   Report Size 8
+        0x95, 0x14,       //   Report Count 20
+        0x81, 0x02,       //   Input
+        0xC0              // End Collection
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_TRUE(parser.usesReportIds());
+    TEST_ASSERT_EQUAL_UINT16(21, parser.getInputLength(0x21)); // 20 bytes + report ID
+    TEST_ASSERT_EQUAL_UINT16(0, parser.getInputLength(0x22));  // unknown: no guess
+}
+
+void test_input_length_without_report_ids(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x0A, 0x81, 0x02, // 10 bytes, no report ID
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_FALSE(parser.usesReportIds());
+    TEST_ASSERT_EQUAL_UINT16(10, parser.getInputLength(0));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -310,6 +342,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
+    RUN_TEST(test_input_length_and_report_ids);
+    RUN_TEST(test_input_length_without_report_ids);
     return UNITY_END();
 }
 #else
@@ -324,6 +358,8 @@ void setup() {
     RUN_TEST(test_null_or_corrupted_buffer_tolerance);
     RUN_TEST(test_has_feature_beeper_control);
     RUN_TEST(test_cyberpower_br700elcd_beeper);
+    RUN_TEST(test_input_length_and_report_ids);
+    RUN_TEST(test_input_length_without_report_ids);
     UNITY_END();
 }
 void loop() {}
