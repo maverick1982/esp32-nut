@@ -16,6 +16,10 @@ public:
     const std::vector<HIDUsageDef>& getUsages() const { return _usages; }
     bool hasFeatureBeeperControl() const;
     uint16_t getExpectedLength(uint8_t report_id, uint8_t report_type) const;
+    // Declared INPUT report length in bytes, report ID included; 0 if the ID is unknown
+    uint16_t getInputLength(uint8_t report_id) const;
+    // True when the descriptor declares report IDs (every report then starts with one)
+    bool usesReportIds() const;
     
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
     

@@ -20,6 +20,7 @@ USBHostUPS::USBHostUPS() :
     _hid_dev_handle(NULL),
     _vid(0), _pid(0),
     _initialized(false), _is_ready_to_poll(false), _device_seen(false),
+    _ep_in_mps(0), _uses_report_ids(false),
     _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
     _restart_requested(false), _restart_reason(""),
     _driver(nullptr), _log_cb(nullptr), _quirks(0)
@@ -147,6 +148,7 @@ void USBHostUPS::hid_host_interface_event_cb(hid_host_device_handle_t hid_device
 void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_handle, const hid_host_interface_event_t event) {
     HidEvent ev = {};
     ev.handle = hid_device_handle;
+    ev.ts = millis();
 
     if (event == HID_HOST_INTERFACE_EVENT_INPUT_REPORT) {
         size_t length = 0;
@@ -206,6 +208,19 @@ void USBHostUPS::loop() {
         break;
     }
 
+    switch (_in_wd.tick(now)) {
+    case LinkMonitor::Action::RECOVER:
+        log("WARN", "[USB] No INPUT report for %u s (period %u ms)",
+            (unsigned)(_in_wd.silenceThresholdMs() / 1000), (unsigned)_in_wd.periodMs());
+        recoverInterface("INPUT reports stopped", now, true);
+        return;
+    case LinkMonitor::Action::RESTART:
+        requestRestart("INPUT reports stopped after recovery");
+        return;
+    default:
+        break;
+    }
+
     // Drivers skip their poll steps while isControlPending() reports a backoff
     _driver->loop(this, _ups_data, now);
 }
@@ -234,7 +249,7 @@ void USBHostUPS::processEvents() {
                 if (++_in_recoveries > MAX_IN_RECOVERIES) {
                     requestRestart("INPUT transfer keeps failing");
                 } else {
-                    recoverInterface("INPUT transfer error", millis());
+                    recoverInterface("INPUT transfer error", millis(), true);
                 }
             }
             break;
@@ -313,8 +328,18 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     }
 
     _link.reset(millis());
+    _in_wd.reset(millis());
+    _in_reasm.reset();
+    _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
+    _uses_report_ids = _hid_parser.usesReportIds();
     _in_restart_pending = false;
     _in_recoveries = 0;
+    if (_restart_requested) {
+        // The UPS enumerated again: whatever needed the restart is gone (review A7)
+        log("INFO", "[USB] UPS enumerated again: restart request cancelled");
+        _restart_requested = false;
+        _restart_reason = "";
+    }
     hid_host_device_start(_hid_dev_handle);
     _is_ready_to_poll = true;
     _device_seen = true;
@@ -325,9 +350,25 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
 void USBHostUPS::processInputReport(const HidEvent& ev) {
     if (ev.handle != _hid_dev_handle || !_driver) return;
 
-    uint8_t r_id = (ev.length > 0) ? ev.data[0] : 0;
-    log("INFO", "INPUT_REPORT: id=%d, len=%d", r_id, ev.length);
     _in_recoveries = 0;
+    _in_wd.onInput(ev.ts);
+
+    // Reports longer than one packet arrive in several events (review A4)
+    size_t expected = 0;
+    if (ev.length > 0) {
+        expected = _hid_parser.getInputLength(_uses_report_ids ? ev.data[0] : 0);
+    }
+    const uint8_t* data = nullptr;
+    size_t length = 0;
+    uint32_t dropped_before = _in_reasm.dropped();
+    bool complete = _in_reasm.feed(ev.data, ev.length, ev.ts, _ep_in_mps, expected, data, length);
+    if (_in_reasm.dropped() != dropped_before) {
+        log("WARN", "[USB] Incomplete multi-packet INPUT report dropped");
+    }
+    if (!complete) return;
+
+    uint8_t r_id = (length > 0) ? data[0] : 0;
+    log("INFO", "INPUT_REPORT: id=%d, len=%d", r_id, (int)length);
 
 #ifdef USBUPS_DEBUG_SLOW_INPUT_MS
     // Issue #47 reproduction aid: slow INPUT processing. Before ADR 0008 this ran inside
@@ -336,14 +377,14 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
 #endif
 
     std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (ev.length > 0) {
+    if (length > 0) {
         uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
         auto& cached = _cached_reports[key];
         cached.report_id = r_id;
         cached.report_type = 1;
-        cached.data.assign(ev.data, ev.data + ev.length);
+        cached.data.assign(data, data + length);
     }
-    _driver->decodeReport(this, r_id, 1, ev.data, ev.length, _ups_data);
+    _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
 }
 
 void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
@@ -383,10 +424,23 @@ void USBHostUPS::noteControlResult(esp_err_t err, uint32_t now) {
     }
 }
 
-void USBHostUPS::recoverInterface(const char* why, uint32_t now) {
+void USBHostUPS::recoverInterface(const char* why, uint32_t now, bool clear_in_halt) {
     log("WARN", "[USB] Restarting HID interface: %s", why);
     esp_err_t err = hid_host_device_stop(_hid_dev_handle); // halt + flush + clear of the IN endpoint
     if (err != ESP_OK) log("WARN", "[USB] hid_host_device_stop failed: %s", esp_err_to_name(err));
+    _in_reasm.reset();
+
+    if (clear_in_halt) {
+        // The stop only resets the host side: an endpoint the device put in STALL stays
+        // halted until CLEAR_FEATURE(ENDPOINT_HALT) (review A3). Blocking, no lock held.
+        err = hid_host_device_clear_ep_in_halt(_hid_dev_handle);
+        noteControlResult(err, millis());
+        if (err == ESP_OK) {
+            log("INFO", "[USB] IN endpoint halt cleared");
+        } else {
+            log("WARN", "[USB] CLEAR_FEATURE(ENDPOINT_HALT) failed: %s", esp_err_to_name(err));
+        }
+    }
     if (_driver) _driver->setup(); // restart the poll cycle from scratch
     _in_restart_pending = true;
     _in_start_attempts = 0;
@@ -427,7 +481,9 @@ bool USBHostUPS::isControlPending() const {
 bool USBHostUPS::isDataStale() const {
     uint32_t now = millis();
     if (!_is_ready_to_poll) return LinkMonitor::isStaleWithoutDevice(_device_seen, now, NO_DEVICE_BOOT_GRACE_MS);
-    return _link.isStale(now);
+    // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
+    if (_restart_requested) return true;
+    return _link.isStale(now) || _in_wd.isStale(now);
 }
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
@@ -611,6 +667,10 @@ String USBHostUPS::dumpUSBDiagnostics() {
         link["recoveries"] = _link.recoveries();
         link["stale"] = isDataStale();
         link["dropped_input_reports"] = (uint32_t)_dropped_events;
+        link["input_period_ms"] = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
+        link["input_recoveries"] = _in_wd.recoveries();
+        link["incomplete_input_reports"] = _in_reasm.dropped();
+        link["ep_in_mps"] = _ep_in_mps;
 
         JsonArray scenarios = doc["scenarios"].to<JsonArray>();
         JsonObject scenario = scenarios.add<JsonObject>();

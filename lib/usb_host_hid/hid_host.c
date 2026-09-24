@@ -74,6 +74,15 @@ static const char *TAG = "hid-host";
 
 #define DEFAULT_TIMEOUT_MS  (5000)
 
+// [esp32-nut, review A5a] Timeout of the GET/SET class requests issued while polling.
+// The caller (the loopTask) serves NUT and the web UI too: a healthy UPS answers in a
+// few ms, so 5 s only lengthened every stall. Descriptor requests at enumeration and
+// the lock waits keep DEFAULT_TIMEOUT_MS. To be confirmed by a soak test on APC and Eaton.
+#ifndef USBUPS_CTRL_TIMEOUT_MS
+#define USBUPS_CTRL_TIMEOUT_MS (1500)
+#endif
+#define CTRL_REQUEST_TIMEOUT_MS  (USBUPS_CTRL_TIMEOUT_MS)
+
 /**
  * @brief HID Device structure.
  *
@@ -1318,7 +1327,7 @@ static esp_err_t hid_class_request_set(hid_device_t *hid_device,
 
     ret = hid_control_transfer(hid_device,
                                USB_SETUP_PACKET_SIZE + setup->wLength,
-                               DEFAULT_TIMEOUT_MS);
+                               CTRL_REQUEST_TIMEOUT_MS);
 
     hid_device_unlock(hid_device);
 
@@ -1361,7 +1370,7 @@ static esp_err_t hid_class_request_get(hid_device_t *hid_device,
 
     ret = hid_control_transfer(hid_device,
                                USB_SETUP_PACKET_SIZE + setup->wLength,
-                               DEFAULT_TIMEOUT_MS);
+                               CTRL_REQUEST_TIMEOUT_MS);
 
     if (ESP_OK == ret) {
         // We do not need the setup data, which is still in the transfer data buffer
@@ -2002,6 +2011,42 @@ esp_err_t hid_host_device_stop(hid_host_device_handle_t hid_dev_handle)
     }
 
     return hid_host_disable_interface(iface);
+}
+
+esp_err_t hid_host_device_clear_ep_in_halt(hid_host_device_handle_t hid_dev_handle)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+
+    HID_RETURN_ON_INVALID_ARG(iface);
+    HID_RETURN_ON_INVALID_ARG(iface->parent);
+    HID_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
+
+    hid_device_t *hid_device = iface->parent;
+    HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
+
+    // [esp32-nut, review A3] Same guards as the class requests (ADR 0008)
+    HID_RETURN_ON_ERROR( hid_device_lock_ctrl(hid_device, DEFAULT_TIMEOUT_MS),
+                         "Control pipe not available");
+
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)hid_device->ctrl_xfer->data_buffer;
+    setup->bmRequestType = USB_BM_REQUEST_TYPE_DIR_OUT |
+                           USB_BM_REQUEST_TYPE_TYPE_STANDARD |
+                           USB_BM_REQUEST_TYPE_RECIP_ENDPOINT;
+    setup->bRequest = USB_B_REQUEST_CLEAR_FEATURE;
+    setup->wValue = 0; // ENDPOINT_HALT feature selector
+    setup->wIndex = iface->ep_in;
+    setup->wLength = 0;
+
+    esp_err_t ret = hid_control_transfer(hid_device, USB_SETUP_PACKET_SIZE, CTRL_REQUEST_TIMEOUT_MS);
+
+    hid_device_unlock(hid_device);
+    return ret;
+}
+
+uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+    return iface ? iface->ep_in_mps : 0;
 }
 
 uint8_t *hid_host_get_report_descriptor(hid_host_device_handle_t hid_dev_handle,

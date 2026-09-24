@@ -5,6 +5,7 @@
 #include "core/crash_diag.h"
 #include <Preferences.h>
 #include "esp_task_wdt.h"
+#include "RestartPolicy.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -17,6 +18,9 @@ Preferences boot_prefs;
 bool is_ap_mode = false;
 bool clear_ap_flag_pending = false;
 uint32_t boot_time_ms = 0;
+
+// Controlled restarts with growing delays, then degraded mode (review A7)
+RestartPolicy restart_policy;
 
 // Task watchdog on the loopTask (issue #47). It replaces a hw_timer whose ISR called
 // esp_restart(): unsafe from an ISR, and unable to fire during a panic, when interrupts
@@ -65,6 +69,7 @@ void setup() {
     delay(1000); // Piccolo delay per stabilizzare la connessione seriale
     AppLogger::log("INFO", "\n--- ESP32 NUT Server Initialized ---");
     CrashDiag::logBootInfo();
+    restart_policy = RestartPolicy(CrashDiag::consecutiveRestarts());
 
     // Inizializzazione del LED diagnostico
     diagnostic_led.begin(LED_BUILTIN_PIN);
@@ -155,8 +160,31 @@ void loop() {
     network_mgr.loop();
     usb_ups.loop();
 
-    // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR)
-    if (usb_ups.isRestartRequested()) {
+    // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR), con attese
+    // crescenti tra un riavvio e l'altro e modalità degradata oltre la soglia (review A7)
+    static RestartPolicy::Decision last_decision = RestartPolicy::Decision::NONE;
+    bool ups_healthy = usb_ups.isConnected() && !usb_ups.isDataStale();
+    RestartPolicy::Decision decision = restart_policy.update(usb_ups.isRestartRequested(), ups_healthy, now);
+    if (restart_policy.takeCleared()) {
+        CrashDiag::clearConsecutiveRestarts();
+        AppLogger::log("INFO", "[MAIN] UPS data healthy: consecutive restart counter cleared");
+    }
+    if (decision != last_decision) {
+        if (decision == RestartPolicy::Decision::WAIT) {
+            AppLogger::log("WARN", "[MAIN] Restart #%u in a row delayed by %u s: %s",
+                           (unsigned)restart_policy.consecutive() + 1,
+                           (unsigned)(restart_policy.msUntilRestart(now) / 1000), usb_ups.getRestartReason());
+        } else if (decision == RestartPolicy::Decision::DEGRADED) {
+            AppLogger::log("ERROR", "[MAIN] Degraded mode: %u restarts in a row, no more restarts (%s). "
+                                    "Replug the UPS or reboot the board.",
+                           (unsigned)restart_policy.consecutive(), usb_ups.getRestartReason());
+        } else if (decision == RestartPolicy::Decision::NONE) {
+            AppLogger::log("INFO", "[MAIN] Restart no longer needed");
+        }
+        CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED);
+        last_decision = decision;
+    }
+    if (decision == RestartPolicy::Decision::RESTART) {
         AppLogger::log("ERROR", "[MAIN] Controlled restart: %s", usb_ups.getRestartReason());
         CrashDiag::recordControlledRestart(usb_ups.getRestartReason());
         delay(200); // lascia uscire il log sulla seriale

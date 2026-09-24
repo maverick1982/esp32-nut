@@ -137,13 +137,48 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 
 ### Fase 2: robustezza del link
 
-| # | Intervento | Test |
-|---|---|---|
-| A2 | Watchdog sugli INPUT nel `LinkMonitor`: imparare l'intervallo tipico tra INPUT report (mediana degli ultimi N); se il device risulta periodico, dopo un silenzio pari a k volte l'intervallo segnare stale e poi fare recovery. Nessun effetto sui device che inviano solo sui cambi. | `test_link_monitor`: periodico → silenzio → stale/recover; aperiodico → nessuna azione |
-| A3 | Nel recovery dopo un errore IN: `CLEAR_FEATURE(ENDPOINT_HALT)` sull'endpoint IN via EP0 (nuova API in `hid_host.c`), poi `stop/start` | prova su hardware; log dell'esito |
-| A7 | Contatore dei restart in RTC con backoff crescente (1, 5, 15 min); oltre la soglia, modalità degradata: niente riavvii, dati stale, banner nella web UI | test nativo della policy (estratta in logica pura) |
-| A5a | `DEFAULT_TIMEOUT_MS` dei control transfer da 5000 a 1500 ms (valore da confermare con un soak test su APC ed Eaton) | soak test |
-| A4 | Dimensionare `in_xfer` sul massimo INPUT report del parser, arrotondato a un multiplo di MPS (limite 512 B) | test del calcolo; prova sull'APC Smart-UPS 750 pid 0003 |
+| # | Intervento | Test | Stato |
+|---|---|---|---|
+| A2 | Watchdog sugli INPUT nel `LinkMonitor`: imparare l'intervallo tipico tra INPUT report (mediana degli ultimi N); se il device risulta periodico, dopo un silenzio pari a k volte l'intervallo segnare stale e poi fare recovery. Nessun effetto sui device che inviano solo sui cambi. | `test_link_monitor`: periodico → silenzio → stale/recover; aperiodico → nessuna azione | ✅ codice + test nativi |
+| A3 | Nel recovery dopo un errore IN: `CLEAR_FEATURE(ENDPOINT_HALT)` sull'endpoint IN via EP0 (nuova API in `hid_host.c`), poi `stop/start` | prova su hardware; log dell'esito | ✅ codice + build; ⏳ prova su hardware |
+| A7 | Contatore dei restart in RTC con backoff crescente (1, 5, 15 min); oltre la soglia, modalità degradata: niente riavvii, dati stale, banner nella web UI | test nativo della policy (estratta in logica pura) | ✅ codice + test nativi |
+| A5a | `DEFAULT_TIMEOUT_MS` dei control transfer da 5000 a 1500 ms (valore da confermare con un soak test su APC ed Eaton) | soak test | ✅ codice + build; ⏳ soak test |
+| A4 | ~~Dimensionare `in_xfer` sul massimo INPUT report del parser, arrotondato a un multiplo di MPS (limite 512 B)~~ Riassemblaggio dei report multi-pacchetto lato applicazione (vedi sotto) | test del calcolo; prova sull'APC Smart-UPS 750 pid 0003 | ✅ codice + test nativi; ⏳ prova sull'APC |
+
+#### Stato di avanzamento della Fase 2 (2026-09-24)
+
+Implementazione completata, non ancora committata. Verifiche eseguite:
+- `pio test -e native`: 116/116 test superati (23 nuovi);
+- `pio run -e esp32-s3-standard`: build OK (RAM 14,2%, flash 38,0%);
+- prova su hardware con un Eaton S3 (2026-09-24): funzionamento regolare. È l'unico UPS disponibile: le prove sugli altri marchi, elencate sotto, restano a carico dei tester.
+
+**Cosa è stato fatto:**
+- **A2.** Nuova classe `InputWatchdog` in `LinkMonitor.h`:
+  - i report a meno di 500 ms l'uno dall'altro formano un burst (il CyberPower invia gli id 8 e 11 insieme), e si registrano gli intervalli tra un burst e l'altro;
+  - il device è considerato periodico quando gli ultimi 8 intervalli stanno entro ±25% dalla mediana;
+  - dopo un silenzio di 5 × periodo (minimo 30 s) i dati diventano stale e parte il recovery dell'interfaccia; dopo 60 s un secondo recovery, dopo altri 60 s il restart. È la stessa scala del `LinkMonitor`;
+  - il silenzio rilevato non viene imparato come periodo, e un device nuovo riparte da zero;
+  - il timestamp è quello di ricezione nel task HID (nuovo campo `HidEvent::ts`), così i GET_REPORT bloccanti del loopTask non falsano gli intervalli;
+  - in `/api/usb/dump` sono stati aggiunti `input_period_ms` e `input_recoveries`.
+- **A3.** Nuova API `hid_host_device_clear_ep_in_halt()`. Il recovery dopo un errore IN, o dopo un silenzio rilevato da A2, fa `stop` (reset lato host), poi `CLEAR_FEATURE(ENDPOINT_HALT)` e infine `start`. L'ordine è quello del driver MSC di Espressif: prima si svuota il pipe e poi si sblocca il device. L'esito passa da `noteControlResult()`.
+  - **Rischio da verificare su hardware:** nei sorgenti IDF (`_pipe_cmd_clear` in `hcd_dwc.c`) il clear lato host non azzera il data toggle, mentre il device lo riporta a DATA0. Il primo pacchetto dopo il clear potrebbe quindi essere scartato o dare un errore di transazione. Nei log va controllato che dopo `IN endpoint halt cleared` gli INPUT riprendano senza un nuovo `INPUT transfer error`.
+- **A7.** Nuova classe `RestartPolicy` (logica pura) e contatore dei restart consecutivi in RTC (`CrashDiag`), azzerato al power-on, al brownout e dopo 10 minuti di dati sani.
+  - Il primo restart è immediato, perché la scala di recovery ha già impiegato minuti; i successivi attendono 1, 5 e 15 minuti. Dal quinto in poi la scheda entra in modalità degradata: niente più riavvii, dati stale, banner nella web UI.
+  - Una nuova enumerazione dell'UPS annulla la richiesta di restart e l'attesa in corso.
+  - Durante l'attesa e in modalità degradata `isDataStale()` è true, perché nulla aggiorna più i dati (prima, per i device `QUIRK_NO_GET_REPORT`, il restart per errori IN non rendeva i dati stale).
+  - In `/api/system-status` sono stati aggiunti `consecutive_restarts` e `degraded`.
+- **A5a.** Nuovo `USBUPS_CTRL_TIMEOUT_MS` (1500 ms, sovrascrivibile da `build_flags`), applicato solo ai GET/SET class request del polling. La richiesta del report descriptor all'enumerazione e le attese sui lock restano a `DEFAULT_TIMEOUT_MS` (5 s).
+- **A4, cambio di approccio rispetto al piano.** Nei sorgenti IDF (`_buffer_fill_intr`, `usbh.c`) un interrupt IN multi-pacchetto termina solo con un pacchetto corto o a buffer pieno. Con `in_xfer` dimensionato sul report più lungo, un report più corto con lunghezza multipla di MPS (per esempio 8 byte su MPS 8) resterebbe in attesa e verrebbe incollato al report successivo. Per questo `in_xfer` resta di un pacchetto e il report viene ricomposto nel loopTask:
+  - nuova classe `InputReassembler` (logica pura): un pacchetto pieno che inizia un report dichiarato più lungo di MPS apre una ricomposizione, che si chiude alla lunghezza attesa o a un pacchetto corto, e scarta il frammento dopo 500 ms senza seguito;
+  - nuove API di supporto `hid_host_device_get_ep_in_mps()`, `HIDParser::getInputLength()` e `HIDParser::usesReportIds()`;
+  - in `/api/usb/dump` sono stati aggiunti `incomplete_input_reports` ed `ep_in_mps`.
+
+**Cosa resta prima di chiudere la Fase 2:**
+- prova su hardware di A3, in particolare del data toggle dopo il clear;
+- soak test di A5a su APC ed Eaton, cercando `requestReport FAILED ... ESP_ERR_TIMEOUT` che con 5 s non comparivano;
+- prova di A4 sull'APC Smart-UPS 750 pid 0003 (report 137 da 64 byte), controllando `ep_in_mps` e il report ricomposto nel dump;
+- verifica di A2 sul CyberPower (`input_period_ms` ≈ 3000) e su un APC che invia solo sui cambi (`input_period_ms` = 0);
+- commit, dopo la conferma.
 
 ### Fase 3: architettura e qualità dei dati
 

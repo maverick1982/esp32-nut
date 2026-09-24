@@ -19,8 +19,14 @@ namespace CrashDiag {
     void begin();
     // Writes the boot diagnostics to the application log
     void logBootInfo();
-    // Stores the reason of a controlled restart in RTC memory; the caller then restarts
+    // Stores the reason of a controlled restart in RTC memory and counts it as one more
+    // consecutive restart; the caller then restarts
     void recordControlledRestart(const char* reason);
+    // Controlled restarts in a row since the data was last healthy (review A7)
+    uint8_t consecutiveRestarts();
+    void clearConsecutiveRestarts();
+    // Degraded mode: restarts suspended after too many in a row (shown in the web UI)
+    void setDegraded(bool degraded);
     bool hasCoredumpPartition();
     void fillJson(JsonObject obj);
 }

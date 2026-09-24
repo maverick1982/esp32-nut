@@ -12,6 +12,11 @@ static DRAM_ATTR volatile bool s_coredump_partition = false;
 #define RESTART_MAGIC 0x4E555452u // "NUTR"
 static RTC_NOINIT_ATTR uint32_t s_restart_magic;
 static RTC_NOINIT_ATTR char s_restart_reason[64];
+// Controlled restarts in a row (review A7): kept across any reset but a power cycle
+#define RESTART_COUNT_MAGIC 0x4E555443u // "NUTC"
+static RTC_NOINIT_ATTR uint32_t s_restart_count_magic;
+static RTC_NOINIT_ATTR uint8_t s_restart_count;
+static bool s_degraded = false;
 
 static esp_reset_reason_t s_reset_reason = ESP_RST_UNKNOWN;
 static String s_last_restart_cause;
@@ -90,13 +95,20 @@ void begin() {
     }
     s_restart_magic = 0;
 
+    if (s_restart_count_magic != RESTART_COUNT_MAGIC || s_reset_reason == ESP_RST_POWERON ||
+        s_reset_reason == ESP_RST_BROWNOUT) {
+        s_restart_count_magic = RESTART_COUNT_MAGIC;
+        s_restart_count = 0;
+    }
+
     readCoreDumpSummary();
 }
 
 void logBootInfo() {
     AppLogger::log("INFO", "[DIAG] Reset reason: %s", resetReasonName(s_reset_reason));
     if (s_last_restart_cause.length() > 0) {
-        AppLogger::log("WARN", "[DIAG] Last controlled restart: %s", s_last_restart_cause.c_str());
+        AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
+                       s_last_restart_cause.c_str(), (unsigned)s_restart_count);
     }
     if (s_has_crash) {
         AppLogger::log("ERROR", "[DIAG] Last crash: task '%s', PC 0x%08lx", s_crash_task.c_str(), (unsigned long)s_crash_pc);
@@ -112,6 +124,19 @@ void recordControlledRestart(const char* reason) {
     strncpy(s_restart_reason, reason ? reason : "", sizeof(s_restart_reason) - 1);
     s_restart_reason[sizeof(s_restart_reason) - 1] = '\0';
     s_restart_magic = RESTART_MAGIC;
+    if (s_restart_count < 255) s_restart_count++;
+}
+
+uint8_t consecutiveRestarts() {
+    return s_restart_count;
+}
+
+void clearConsecutiveRestarts() {
+    s_restart_count = 0;
+}
+
+void setDegraded(bool degraded) {
+    s_degraded = degraded;
 }
 
 bool hasCoredumpPartition() {
@@ -123,6 +148,10 @@ void fillJson(JsonObject obj) {
     obj["coredump_partition"] = (bool)s_coredump_partition;
     if (s_last_restart_cause.length() > 0) {
         obj["last_restart_cause"] = s_last_restart_cause;
+    }
+    obj["consecutive_restarts"] = s_restart_count;
+    if (s_degraded) {
+        obj["degraded"] = true;
     }
     if (s_has_crash) {
         JsonObject crash = obj["last_crash"].to<JsonObject>();
