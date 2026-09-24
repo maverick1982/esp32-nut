@@ -4,6 +4,7 @@
 #include "esp_system.h"
 #include "esp_partition.h"
 #include "esp_core_dump.h"
+#include "esp_heap_caps.h"
 
 // Set once at boot, read by the panic handler: must live in internal RAM
 static DRAM_ATTR volatile bool s_coredump_partition = false;
@@ -150,6 +151,10 @@ void fillJson(JsonObject obj) {
         obj["last_restart_cause"] = s_last_restart_cause;
     }
     obj["consecutive_restarts"] = s_restart_count;
+    // Fragmentation shows up in multi-day soak tests (review S6)
+    obj["heap_free"] = (uint32_t)esp_get_free_heap_size();
+    obj["heap_min_free"] = (uint32_t)esp_get_minimum_free_heap_size();
+    obj["heap_largest_block"] = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     if (s_degraded) {
         obj["degraded"] = true;
     }

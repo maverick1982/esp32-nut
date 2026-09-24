@@ -182,16 +182,61 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 
 ### Fase 3: architettura e qualità dei dati
 
-| # | Intervento |
-|---|---|
-| A5b | Task USB dedicato (priorità sopra il loopTask, sotto WiFi) che esegue `processEvents`, polling, decodifica e recovery. Il loopTask resta per NUT e web, ed entrambi leggono `UPSData` sotto `_mutex`. Aggiungere il nuovo task al Task WDT. Aggiornare l'ADR 0008 (modello di threading). |
-| A6 | `GenericDriver`: quick poll ogni 2 s dei soli report con usage di stato (`PresentStatus`, `RemainingCapacity`, `RunTimeToEmpty`, `PercentLoad`), full poll ogni 30 s, come upstream `usbhid-ups` (ADR 0006) |
-| S3 / M2 / M4 | Unificare la macchina a stati del polling in `GenericDriver`, con hook per le politiche dei driver (report ID esclusi, INPUT via GET_REPORT sì o no, intervalli). Powercom senza membri nascosti e con chiamata a `GenericDriver::setup()`. Registro dei driver per VID/PID. |
-| M1 | Parser HID: Logical Min/Max con estensione del segno, `bit_size` limitato a 32, long item, Usage Min/Max. Test in `test_hid_parser` e `test_record_replay` su tutte le fixture. |
-| S2 | Precalcolo della tabella `usage → mapping` al claim, con decodifica O(usage del report) |
-| M5 | Implementare `requestStringDescriptor` (GET_DESCRIPTOR string su EP0) oppure rimuovere i passi morti dai driver |
-| M3 / M6 / S4 / S5 | Pulizia: leak del claim, `in_xfer = NULL`, rimozione della chiave vuota, incapsulamento di `_hid_parser`, rinominare `isControlPending` → `isPollingPaused`, rimuovere il commento |
-| S1 / S6 | INPUT report a livello DEBUG o riassunti ogni 60 s; niente `Serial.printf` nei driver; heap libero minimo nel log `[DIAG]` e in `/api/system-status` |
+| # | Intervento | Stato |
+|---|---|---|
+| A5b | Task USB dedicato (priorità sopra il loopTask, sotto WiFi) che esegue `processEvents`, polling, decodifica e recovery. Il loopTask resta per NUT e web, ed entrambi leggono `UPSData` sotto `_mutex`. Aggiungere il nuovo task al Task WDT. Aggiornare l'ADR 0008 (modello di threading). | ✅ codice + build; ⏳ prova su hardware |
+| A6 | `GenericDriver`: quick poll ogni 2 s dei soli report con usage di stato (`PresentStatus`, `RemainingCapacity`, `RunTimeToEmpty`, `PercentLoad`), full poll ogni 30 s, come upstream `usbhid-ups` (ADR 0006) | ✅ codice + test nativi |
+| S3 / M2 / M4 | Unificare la macchina a stati del polling in `GenericDriver`, con hook per le politiche dei driver (report ID esclusi, INPUT via GET_REPORT sì o no, intervalli). Powercom senza membri nascosti e con chiamata a `GenericDriver::setup()`. Registro dei driver per VID/PID. | ✅ codice + test nativi |
+| M1 | Parser HID: Logical Min/Max con estensione del segno, `bit_size` limitato a 32, long item, Usage Min/Max. Test in `test_hid_parser` e `test_record_replay` su tutte le fixture. | ✅ codice + test nativi |
+| S2 | Precalcolo della tabella `usage → mapping` al claim, con decodifica O(usage del report) | ✅ codice + test nativi (Powercom escluso, vedi sotto) |
+| M5 | Implementare `requestStringDescriptor` (GET_DESCRIPTOR string su EP0) oppure rimuovere i passi morti dai driver | ✅ implementato; ⏳ prova su hardware |
+| M3 / M6 / S4 / S5 | Pulizia: leak del claim, `in_xfer = NULL`, rimozione della chiave vuota, incapsulamento di `_hid_parser`, rinominare `isControlPending` → `isPollingPaused`, rimuovere il commento | ✅ |
+| S1 / S6 | INPUT report a livello DEBUG o riassunti ogni 60 s; niente `Serial.printf` nei driver; heap libero minimo nel log `[DIAG]` e in `/api/system-status` | ✅ |
+
+#### Stato di avanzamento della Fase 3 (2026-09-24)
+
+Implementazione completata, non ancora committata. Verifiche eseguite:
+- `pio test -e native`: 130/130 test superati (14 nuovi); tutte le fixture di `test_record_replay` restano invariate;
+- `pio run -e esp32-s3-standard`: build OK (RAM 14,2%, flash 38,4%);
+- prova su hardware con un Eaton 3S (2026-09-24):
+  - `battery.type` compare (M5);
+  - 244 GET_REPORT al minuto, 0 falliti. Una simulazione con il descriptor della fixture `eaton_3s` e lo stesso `EatonDriver` produce esattamente 244 richieste al minuto: 20 report nel full poll, 11 nel quick poll;
+  - stack libero del task `ups_poll`: 5384 byte su 8192;
+  - heap stabile: libero circa 201,9 KB, minimo 181,5 KB, blocco più grande 188,4 KB;
+  - 0 INPUT report con UPS in OL stabile: l'Eaton 3S non invia report periodici sull'interrupt, quindi il watchdog di A2 resta inattivo;
+  - toggle del beeper corretto;
+  - togliendo la rete lo stato diventava `OL OB`. **Difetto preesistente** (da `b3cb3c1`, non introdotto da questa review): `computeUPSStatusString()` aggiungeva `OL` quando `ups.status.good = 1`, ma l'Eaton tiene `PresentStatus.Good` a 1 anche in batteria (NUT `mge-hid.c` lo usa solo per `OFF`). Corretto come in `usbhid-ups`: `OL` viene da ACPresent e `OB` significa "non online" (anche con ACPresent a 0 e Discharging non ancora aggiornato); `Good` sostituisce ACPresent solo nei device che non ce l'hanno, e mai durante la scarica. Nuovi test in `test_ups_status` (135/135 in totale). Da riverificare sull'Eaton: in batteria deve comparire `OB`;
+  - 0 INPUT report anche togliendo e ridando la rete. Non è la ricomposizione di A4: gli INPUT report dell'Eaton 3S sono di 3-6 byte, sotto un pacchetto, e nel log non compaiono né report scartati né errori di transfer. Non sembra neppure una regressione: il dump live della fixture `eaton_3s` (2026-08-28, firmware precedente alla review) ha 28 report in cache, tutti FEATURE, nessun INPUT. Ipotesi più probabile: il 3S non invia sull'interrupt, o lo fa solo in condizioni particolari; i cambi di stato arrivano comunque entro circa 2 s dal quick poll. Due aggiunte per chiarirlo: l'esito di `hid_host_device_start()` al claim ora viene controllato (prima un avvio fallito della pipe INPUT passava senza log, ora c'è un WARN e un nuovo tentativo), e il riepilogo `[USB] Last 60 s` conta anche i pacchetti grezzi (`N INPUT reports (M packets)`), mentre il log di claim riporta la MPS dell'endpoint IN;
+  - seconda prova (correzioni applicate): `OL` → `OB` → `OL CHRG` corretti; pipe INPUT avviata (MPS 8); al ritorno della rete è arrivato 1 INPUT report (1 pacchetto). Quindi l'interrupt funziona: il 3S lo usa solo raramente e non nel passaggio a batteria, e i cambi di stato arrivano dal quick poll;
+  - `battery.type` compariva con circa 30 s di ritardo: l'indice della stringa (`iDeviceChemistry`) si scopre solo decodificando i report del primo full poll, mentre le stringhe venivano raccolte all'inizio del ciclo. Ora a fine full poll le stringhe vengono ricontrollate e quelle appena note si accodano allo stesso ciclo (vale anche per `battery.mfr.date`). Nuovo test `test_string_index_found_in_reports_requested_same_cycle` (136/136). Verificato sull'Eaton 3S: `battery.type` arriva pochi secondi dopo gli altri valori;
+  - heap: `largest block` da 192,5 KB a 184,3 KB in 4 minuti di avvio; da seguire nel soak test.
+
+**Cosa è stato fatto:**
+- **A5b.**Il servizio USB (eventi, polling, decodifica, recovery) gira nel task `ups_poll`: priorità 3 (sopra il loopTask, sotto il task HID a 5 e il WiFi), stack da 8 KB, periodo di 10 ms, sotto il Task WDT. `main.cpp` non chiama più `usb_ups.loop()`.
+  - `setBeeper()`, chiamato da NUT o dalla web UI, attende il passo di polling in corso tramite `_op_mutex` (al massimo 3 s) invece di sovrapporsi. L'ordine dei lock è `_op_mutex` → `_mutex`.
+  - Emerso durante il lavoro: `beeper.toggle` in `NUTServer.cpp` chiamava `setBeeper()` con il lock dei dati ancora preso (temporaneo di `getUPSData()` nella stessa espressione). Con il nuovo task sarebbe stato uno stallo di 3 s; ora legge lo stato prima.
+  - `AppLogger` è protetto da un mutex, perché ora scrivono due task.
+  - Le scritture dei driver su `UPSData` fuori dalla decodifica (`ups.type`, i default Powercom) avvengono sotto il lock dell'host.
+  - Nuovo log `[DIAG] UPS Poll Task Stack High Water Mark`.
+- **A6 / S3 / M2 / M4.** Una sola macchina a stati in `GenericDriver`:
+  - full poll ogni 30 s (string descriptor mancanti, poi tutti i report) e quick poll ogni 2 s dei soli report con usage di stato;
+  - una richiesta per chiamata, a 50 ms l'una dall'altra, e nessuna mentre `isPollingPaused()`; il ciclo interrotto riprende da dove si era fermato;
+  - le politiche dei driver sono hook: `quickPollMs()`, `fullPollMs()`, `acceptPollReport()`, `pollInputReports()`, `buildPollLists()`, `collectStringRequests()`, `onLoop()`;
+  - CyberPower: nessun quick poll, full poll ogni 30 s dei soli FEATURE, esclusi gli id 4, 6 e ≥ 130 (come prima). Eaton: esclusi i report 254/255, più il string descriptor della chimica batteria. Powercom: liste fisse 0x0A ogni 2 s e 0x1D/0x21/0x1F ogni 30 s, nessuna stringa, niente più membri nascosti, chiama `GenericDriver::setup()`;
+  - il report ID 0 non è più escluso: i device senza report ID ora vengono interrogati;
+  - nuovo `DriverRegistry` (tabella VID/PID), usato anche da `test_record_replay`.
+  - **Cambio di comportamento da verificare sull'Eaton:** prima tutti i report venivano letti ogni 2 s; ora ogni 2 s solo quelli di stato, gli altri (per esempio le tensioni) ogni 30 s, come `usbhid-ups`.
+- **M1.** Parser: Logical Min/Max (salvati nel global stack), estensione del segno se Logical Minimum < 0, Logical Maximum senza segno se inviato come byte "negativo" (0xFF per 255), `bit_size` limitato a 32, long item saltati, Usage Minimum/Maximum espansi (stessa pagina, massimo 256 usage), niente più overflow di `desc[i] << 24`.
+- **S2.** Nuovo `UsageMapIndex`: la corrispondenza usage → mappatura viene calcolata al primo report e poi riusata, con decodifica proporzionale alle usage del report. Stesso risultato dei vecchi cicli (ordine del descriptor, prima mappatura che corrisponde). Powercom mantiene il suo ciclo, perché riconosce le usage anche per codice e non solo per path.
+- **M5.** Nuove API `hid_host_device_get_string_descriptor()` e `hid_host_device_get_string_indices()`. `requestStringDescriptor()` legge prima il language ID (con fallback 0x0409), passa il descriptor al driver e non richiede più un indice fallito una volta, così un firmware che va in timeout non avvia la scala di recovery a ogni full poll. Gli indici di produttore, modello e seriale vengono ora dal device descriptor. Ora arrivano davvero `battery.type` (Eaton) e `battery.mfr.date`.
+- **Pulizie.** M3: rilascio dell'interfaccia se l'allocazione dell'IN transfer fallisce, niente `ESP_ERROR_CHECK` sul free, `in_xfer = NULL`. M6: CyberPower rimuove `input.voltage.nominal` invece di pubblicarlo vuoto. S4: `_hid_parser` privato, `isControlPending()` → `isPollingPaused()`. S5: commento rimosso.
+- **S1 / S6.** Niente più log per ogni INPUT report: un riassunto ogni 60 s (`[USB] Last 60 s: N INPUT reports, N GET_REPORT ok, N failed`). `logDebug()` è attivo solo con `-DUSBUPS_DEBUG_LOG`, e Powercom non usa più `Serial.printf`. Heap libero, minimo e blocco più grande nel log `[DIAG]` e in `/api/system-status` (`heap_free`, `heap_min_free`, `heap_largest_block`).
+
+**Cosa resta prima di chiudere la Fase 3:**
+- ~~prova sull'Eaton: dati regolari, `battery.type`, margine di stack~~ fatto;
+- ~~beeper da web UI e da NUT~~ fatto;
+- passaggio a batteria dopo la correzione dello stato: deve comparire `OB` (e qualche INPUT report nel riepilogo `[USB] Last 60 s`); stacca/riattacca;
+- commit, dopo la conferma.
 
 ### Fase 4: validazione
 

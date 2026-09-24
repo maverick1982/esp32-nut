@@ -48,13 +48,16 @@ public:
     virtual const HIDParser* getHIDParser() const = 0;
     virtual String getActiveBeeperPath() const = 0;
     virtual uint32_t getQuirks() const = 0;
-    virtual bool isControlPending() const = 0;
+    // True while polling backs off after a link failure: drivers skip their poll steps
+    virtual bool isPollingPaused() const = 0;
     virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
+    // Fetches a string descriptor and hands it to the driver's parseStringDescriptor()
     virtual bool requestStringDescriptor(uint8_t string_index) = 0;
     virtual uint16_t getVID() const { return 0; }
     virtual uint16_t getPID() const { return 0; }
     virtual void logDebug(const String& msg) const {}
 
+    // String indices of the device descriptor, set when the interface is claimed
     uint8_t _iManufacturer = 0;
     uint8_t _iProduct = 0;
     uint8_t _iSerialNumber = 0;

@@ -383,7 +383,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             if (!_usb_ups || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
                 client.print("ERR CMD-NOT-SUPPORTED\n");
             } else {
-                _usb_ups->setBeeper(!_usb_ups->getUPSData()->getBool("ups.beeper.status"));
+                // Read first: the data lock must not be held across setBeeper() (USBHostUPS lock order)
+                bool enabled = _usb_ups->getUPSData()->getBool("ups.beeper.status");
+                _usb_ups->setBeeper(!enabled);
                 client.print("OK\n");
             }
             return;

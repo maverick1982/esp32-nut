@@ -18,6 +18,7 @@
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
+#include "DriverRegistry.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -49,7 +50,7 @@ public:
         return "";
     }
     uint32_t getQuirks() const override { return _quirks; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool supportsBeeperToggle() const override {
         if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
         return _parser.hasFeatureBeeperControl();
@@ -148,27 +149,7 @@ public:
         TEST_ASSERT_GREATER_THAN_MESSAGE(0, host._parser.getUsages().size(), "Parser found 0 usages from descriptor");
 
         // 3. Dispatch Driver
-        IUPSDriver* driver = nullptr;
-        switch (vid) {
-            case 0x0463:
-                driver = new EatonDriver();
-                break;
-            case 0x051D:
-                driver = new APCDriver();
-                break;
-            case 0x0764:
-                driver = new CyberPowerDriver();
-                break;
-            case 0x0D9F:
-                driver = new PowercomDriver();
-                break;
-            case 0x04D8:
-                driver = new OpenUPSDriver();
-                break;
-            default:
-                driver = new GenericDriver();
-                break;
-        }
+        IUPSDriver* driver = DriverRegistry::create(vid, pid);
 
         // Match quirks
         host._quirks = 0;

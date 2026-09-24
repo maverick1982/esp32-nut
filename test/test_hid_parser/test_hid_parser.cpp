@@ -329,6 +329,95 @@ void test_input_length_without_report_ids(void) {
     TEST_ASSERT_EQUAL_UINT16(10, parser.getInputLength(0));
 }
 
+// Review M1: Logical Minimum < 0 means a signed field (e.g. discharge current)
+void test_signed_field_sign_extended(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x85, 0x01,
+        0x09, 0x31,             // Usage (Current)
+        0x16, 0x00, 0x80,       // Logical Minimum (-32768)
+        0x26, 0xFF, 0x7F,       // Logical Maximum (32767)
+        0x75, 0x10, 0x95, 0x01, 0xB1, 0x02, // 16 bits, Feature
+        0x09, 0x30,             // Usage (Voltage)
+        0x15, 0x00,             // Logical Minimum (0)
+        0x26, 0xFF, 0x00,       // Logical Maximum (255)
+        0x75, 0x08, 0x95, 0x01, 0xB1, 0x02, // 8 bits, Feature
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* current = parser.getUsageDef(0x00840031);
+    const HIDUsageDef* voltage = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(current);
+    TEST_ASSERT_NOT_NULL(voltage);
+    TEST_ASSERT_EQUAL_INT32(-32768, current->logical_min);
+    TEST_ASSERT_EQUAL_INT32(32767, current->logical_max);
+
+    const uint8_t report[] = {0x01, 0xF6, 0xFF, 0xF0}; // current = -10, voltage = 240
+    TEST_ASSERT_EQUAL_FLOAT(-10.0, HIDParser::extractUsage(current, 1, report, sizeof(report)));
+    // Logical Minimum 0: the top bit is magnitude, not sign
+    TEST_ASSERT_EQUAL_FLOAT(240.0, HIDParser::extractUsage(voltage, 1, report, sizeof(report)));
+}
+
+void test_unsigned_logical_max_in_one_byte(void) {
+    // "Logical Maximum (255)" sent as 0x25 0xFF is -1 as a signed byte: read it as 255
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x30, 0x15, 0x00, 0x25, 0xFF, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* voltage = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(voltage);
+    TEST_ASSERT_EQUAL_INT32(0, voltage->logical_min);
+    TEST_ASSERT_EQUAL_INT32(255, voltage->logical_max);
+}
+
+void test_wide_field_clamped_to_32_bits(void) {
+    HIDUsageDef def;
+    def.found = true;
+    def.report_id = 0;
+    def.bit_offset = 0;
+    def.bit_size = 64; // shifting by 64 was undefined behaviour
+    const uint8_t report[] = {0x78, 0x56, 0x34, 0x12, 0xFF, 0xFF, 0xFF, 0xFF};
+    TEST_ASSERT_EQUAL_FLOAT((double)0x12345678, HIDParser::extractUsage(&def, 0, report, sizeof(report)));
+}
+
+void test_long_item_skipped(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0xFE, 0x03, 0x10, 0x81, 0x02, 0x09, // long item: 3 data bytes that look like items
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    TEST_ASSERT_EQUAL(1, parser.getUsages().size());
+    TEST_ASSERT_NOT_NULL(parser.getUsageDef(0x00840030));
+}
+
+void test_usage_minimum_maximum_expanded(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x05, 0x85,             // Usage Page (Battery System)
+        0x19, 0xD0,             // Usage Minimum (ACPresent)
+        0x29, 0xD2,             // Usage Maximum (0xD2)
+        0x75, 0x01, 0x95, 0x03, 0x81, 0x02, // 3 bits, Input
+        0x75, 0x05, 0x95, 0x01, 0x81, 0x03, // padding
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    TEST_ASSERT_EQUAL(3, parser.getUsages().size());
+    const HIDUsageDef* ac = parser.getUsageDef(0x008500D0);
+    const HIDUsageDef* third = parser.getUsageDef(0x008500D2);
+    TEST_ASSERT_NOT_NULL(ac);
+    TEST_ASSERT_NOT_NULL(third);
+    TEST_ASSERT_EQUAL_UINT16(0, ac->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(2, third->bit_offset);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -344,6 +433,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_br700elcd_beeper);
     RUN_TEST(test_input_length_and_report_ids);
     RUN_TEST(test_input_length_without_report_ids);
+    RUN_TEST(test_signed_field_sign_extended);
+    RUN_TEST(test_unsigned_logical_max_in_one_byte);
+    RUN_TEST(test_wide_field_clamped_to_32_bits);
+    RUN_TEST(test_long_item_skipped);
+    RUN_TEST(test_usage_minimum_maximum_expanded);
     return UNITY_END();
 }
 #else
@@ -360,6 +454,11 @@ void setup() {
     RUN_TEST(test_cyberpower_br700elcd_beeper);
     RUN_TEST(test_input_length_and_report_ids);
     RUN_TEST(test_input_length_without_report_ids);
+    RUN_TEST(test_signed_field_sign_extended);
+    RUN_TEST(test_unsigned_logical_max_in_one_byte);
+    RUN_TEST(test_wide_field_clamped_to_32_bits);
+    RUN_TEST(test_long_item_skipped);
+    RUN_TEST(test_usage_minimum_maximum_expanded);
     UNITY_END();
 }
 void loop() {}

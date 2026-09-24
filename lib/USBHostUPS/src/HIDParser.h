@@ -24,6 +24,7 @@ public:
     static double extractUsage(const HIDUsageDef* def, uint8_t report_id, const uint8_t* data, size_t length);
     
 private:
+    static const uint32_t MAX_USAGE_RANGE = 256;
     std::vector<HIDUsageDef> _usages;
     std::map<uint8_t, uint16_t> _input_lengths;
     std::map<uint8_t, uint16_t> _output_lengths;

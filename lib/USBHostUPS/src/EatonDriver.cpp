@@ -17,86 +17,18 @@ EatonDriver::EatonDriver() : _chemStrIdx(0) {}
 
 void EatonDriver::setup() {
     GenericDriver::setup();
+    _map.invalidate();
     _chemStrIdx = 0;
 }
 
-void EatonDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
-    if (!host) return;
+bool EatonDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const {
+    // CRITICAL QUIRK (NUT libhid.c): reports 254/255 freeze or stall Eaton devices
+    return report_id != 254 && report_id != 255;
+}
 
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
-    }
-
-    if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-            _last_fast_poll = now != 0 ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
-
-            _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) {
-                _slow_poll_counter = 0;
-            }
-        }
-    }
-
-    if (_poll_step > 0) {
-        if (host->isControlPending()) return;
-
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
-            _last_step_time = now;
-            
-            if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
-            } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
-            } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
-            } else if (_poll_step == 4) {
-                if (_slow_poll_counter == 0 && _chemStrIdx > 0 && !data.hasKey("battery.type")) host->requestStringDescriptor(_chemStrIdx);
-            } else {
-                if (!_rids_cached) {
-                    const auto& usages = host->getUsages();
-                    for (const auto& u : usages) {
-                        if (u.report_type == 2) continue; // Skip OUTPUT reports
-                        if (u.report_id == 254 || u.report_id == 255) continue; // CRITICAL QUIRK (NUT): Skip reports 254/255 for Eaton devices to prevent USB freeze/stall
-                        uint16_t pair = (u.report_type << 8) | u.report_id;
-                        bool found = false;
-                        for (uint16_t id : _cached_rids) {
-                            if (id == pair) { found = true; break; }
-                        }
-                        if (!found) _cached_rids.push_back(pair);
-                    }
-                    for (auto it = _cached_rids.begin(); it != _cached_rids.end(); ) {
-                        if ((*it >> 8) == 1) { // If Input report
-                            uint8_t id = *it & 0xFF;
-                            bool has_feature = false;
-                            for (uint16_t pair : _cached_rids) {
-                                if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                            }
-                            if (has_feature) {
-                                it = _cached_rids.erase(it);
-                                continue;
-                            }
-                        }
-                        ++it;
-                    }
-                    _rids_cached = true;
-                }
-                
-                int index = _poll_step - 5;
-                if (index >= 0 && index < _cached_rids.size()) {
-                    uint8_t r_type = _cached_rids[index] >> 8;
-                    uint8_t r_id = _cached_rids[index] & 0xFF;
-                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
-                } else {
-                    _poll_step = 0;
-                    return;
-                }
-            }
-            _poll_step++;
-        }
-    }
+void EatonDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+    GenericDriver::collectStringRequests(host, data, out);
+    if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
 }
 
 void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -104,11 +36,7 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
-    struct Mapping {
-        const char* path;
-        void (*apply)(EatonDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
+    typedef UsageMapIndex<EatonDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.good", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.internal_failure", v != 0 ? "1" : "0"); } },
@@ -126,16 +54,7 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
         { "UPS.PowerSummary.iDeviceChemistry", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_chemStrIdx = (uint8_t)v; } }
     };
 
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
-                break;
-            }
-        }
-    }
+    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
 void EatonDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {

@@ -3,128 +3,191 @@
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
+#include <algorithm>
 
 /**
  * @brief Generic HID UPS Driver Implementation
- * 
+ *
  * ADR 0003 COMPLIANCE:
  * This driver faithfully mirrors the official NUT behavior for generic USB PDC devices.
  * - Reference: nut_repo/drivers/usbhid-ups.c and nut_repo/drivers/libhid.c
  * - HID Usages: Strict adherence to NUT's usbhid-ups mappings for UPS.PowerSummary, UPS.BatterySystem, etc.
+ * - Polling: quick poll of the status reports every 2 s, full poll every 30 s (usbhid-ups
+ *   pollfreq / pollinterval, ADR 0006).
  */
 
-GenericDriver::GenericDriver() : 
-    _last_poll(0),
-    _last_fast_poll(0),
-    _last_step_time(0),
-    _poll_step(0),
-    _slow_poll_counter(0) {
+GenericDriver::GenericDriver() :
+    _batteryDateStringIndex(0),
+    _lists_built(false),
+    _queue_pos(0),
+    _step_now(false),
+    _cycle_full(false),
+    _strings_rechecked(false),
+    _last_quick(0),
+    _last_full(0),
+    _last_step(0) {
 }
 
 void GenericDriver::setup() {
-    _last_poll = 0;
-    _last_fast_poll = 0;
-    _poll_step = 0;
-    _last_step_time = 0;
-    _slow_poll_counter = 14;
     _active_beeper = "";
-    _rids_cached = false;
-    _cached_rids.clear();
+    _generic_map.invalidate();
+    _lists_built = false;
+    _quick.clear();
+    _full.clear();
+    _queue.clear();
+    _queue_pos = 0;
+    _step_now = false;
+    _cycle_full = false;
+    _strings_rechecked = false;
+    _cycle_strings.clear();
+    _last_quick = 0;
+    _last_full = 0;
+    _last_step = 0;
+}
+
+bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
+    switch (u.usage) {
+    case 0x00840035: // PercentLoad
+    case 0x00840065: // Overload
+    case 0x00840069: // ShutdownImminent
+    case 0x00840073: // CommunicationLost
+    case 0x00850042: // BelowRemainingCapacityLimit
+    case 0x00850044: // Charging
+    case 0x00850045: // Discharging
+    case 0x0085004b: // NeedReplacement
+    case 0x00850066: // RemainingCapacity
+    case 0x00850068: // RunTimeToEmpty
+    case 0x008500d0: // ACPresent
+        return true;
+    default:
+        return strstr(u.path, ".PresentStatus.") != nullptr;
+    }
+}
+
+void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+    quick.clear();
+    full.clear();
+    const auto& usages = host->getUsages();
+
+    // Reports in order of first appearance. Report ID 0 is kept (review M4): a device
+    // without report IDs has only that one.
+    struct Report { uint8_t type; uint8_t id; bool status; };
+    std::vector<Report> reports;
+    for (const auto& u : usages) {
+        if (u.report_type != 1 && u.report_type != 3) continue; // OUTPUT reports are not read
+        if (!acceptPollReport(u.report_type, u.report_id)) continue;
+        bool found = false;
+        for (auto& r : reports) {
+            if (r.type == u.report_type && r.id == u.report_id) {
+                r.status = r.status || isStatusUsage(u);
+                found = true;
+                break;
+            }
+        }
+        if (!found) reports.push_back(Report{u.report_type, u.report_id, isStatusUsage(u)});
+    }
+
+    for (const auto& r : reports) {
+        if (r.type == 1) {
+            if (!pollInputReports()) continue;
+            // The FEATURE report with the same ID carries the same values
+            bool has_feature = false;
+            for (const auto& f : reports) {
+                if (f.type == 3 && f.id == r.id) { has_feature = true; break; }
+            }
+            if (has_feature) continue;
+        }
+        full.push_back(PollItem{r.type, r.id, 0});
+        if (r.status) quick.push_back(PollItem{r.type, r.id, 0});
+    }
+}
+
+void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+    if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
+    if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
+    if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
+    if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
+}
+
+// Queues the missing strings not requested yet in this cycle
+void GenericDriver::appendNewStrings(IUSBHostUPS* host, const UPSData& data) {
+    std::vector<uint8_t> strings;
+    collectStringRequests(host, data, strings);
+    for (uint8_t idx : strings) {
+        if (std::find(_cycle_strings.begin(), _cycle_strings.end(), idx) != _cycle_strings.end()) continue;
+        _cycle_strings.push_back(idx);
+        _queue.push_back(PollItem{STRING_ITEM, idx, 0});
+    }
+}
+
+void GenericDriver::startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now) {
+    _queue.clear();
+    _queue_pos = 0;
+    _cycle_full = full;
+    _strings_rechecked = false;
+    _cycle_strings.clear();
+    if (full) appendNewStrings(host, data);
+    // Devices that reject GET_REPORT only send INPUT reports on the interrupt endpoint
+    if (!(host->getQuirks() & QUIRK_NO_GET_REPORT)) {
+        const auto& reports = full ? _full : _quick;
+        _queue.insert(_queue.end(), reports.begin(), reports.end());
+    }
+
+    uint32_t stamp = now != 0 ? now : 1;
+    _last_quick = stamp; // a full poll refreshes the status reports too
+    if (full) _last_full = stamp;
+    _step_now = true; // first request right away
 }
 
 void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
+    host->lock();
+    if (data.get("ups.type") != upsTypeName()) {
+        data.set("ups.type", upsTypeName());
+    }
+    onLoop(host, data);
+    host->unlock();
+
+    if (!_lists_built) {
+        buildPollLists(host, _quick, _full);
+        _lists_built = true;
     }
 
-    if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-            _last_fast_poll = now != 0 ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
-            
-            _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
-                _slow_poll_counter = 0;
-            }
-        }
+    // Some string indices are only known once the reports are decoded (iDeviceChemistry,
+    // battery date): ask for them at the end of the same full poll, not 30 s later
+    if (_queue_pos >= _queue.size() && _cycle_full && !_strings_rechecked) {
+        _strings_rechecked = true;
+        appendNewStrings(host, data);
     }
 
-    if (_poll_step > 0) {
-        if (host->isControlPending()) return;
+    if (_queue_pos >= _queue.size()) {
+        bool full_due= _last_full == 0 || (now - _last_full) >= fullPollMs();
+        bool quick_due = quickPollMs() > 0 && (now - _last_quick) >= quickPollMs();
+        if (!full_due && !quick_due) return;
+        startCycle(host, data, full_due, now);
+    }
 
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
-            _last_step_time = now;
-            
-            if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
-            } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
-            } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
-            } else if (_poll_step == 4) {
-                if (_slow_poll_counter == 0 && !data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) host->requestStringDescriptor(_batteryDateStringIndex);
-            } else {
-                if (!_rids_cached) {
-                    const auto& usages = host->getUsages();
-                    for (const auto& u : usages) {
-                        if (u.report_type == 2) continue; // Skip OUTPUT reports
-                        uint16_t pair = (u.report_type << 8) | u.report_id;
-                        bool found = false;
-                        for (uint16_t id : _cached_rids) {
-                            if (id == pair) { found = true; break; }
-                        }
-                        if (!found && u.report_id != 0) _cached_rids.push_back(pair);
-                    }
-                    
-                    for (auto it = _cached_rids.begin(); it != _cached_rids.end(); ) {
-                        if ((*it >> 8) == 1) { // If Input report
-                            uint8_t id = *it & 0xFF;
-                            bool has_feature = false;
-                            for (uint16_t pair : _cached_rids) {
-                                if ((pair >> 8) == 3 && (pair & 0xFF) == id) { has_feature = true; break; }
-                            }
-                            if (has_feature) {
-                                it = _cached_rids.erase(it);
-                                continue;
-                            }
-                        }
-                        ++it;
-                    }
-                    _rids_cached = true;
-                }
-                
-                int index = _poll_step - 5;
-                if (index >= 0 && index < _cached_rids.size()) {
-                    uint8_t r_type = _cached_rids[index] >> 8;
-                    uint8_t r_id = _cached_rids[index] & 0xFF;
-                    
-                    if (host->getQuirks() & QUIRK_NO_GET_REPORT) {
-                        _poll_step = 0; // Skip polling entirely for devices without GET_REPORT support
-                        return;
-                    }
-                    
-                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
-                } else {
-                    _poll_step = 0; // Done
-                    return;
-                }
-            }
-            _poll_step++;
-        }
+    if (_queue_pos >= _queue.size()) return;
+    if (host->isPollingPaused()) return; // the cycle resumes where it stopped
+    if (!_step_now && (now - _last_step) < STEP_SPACING_MS) return;
+
+    const PollItem item = _queue[_queue_pos++];
+    _last_step = now;
+    _step_now = false;
+
+    if (item.report_type == STRING_ITEM) {
+        host->requestStringDescriptor(item.id);
+    } else {
+        uint16_t len = item.length ? item.length : host->getHIDParser()->getExpectedLength(item.id, item.report_type);
+        host->requestReport(item.id, item.report_type, len);
     }
 }
 
 void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
-    struct Mapping {
-        const char* path;
-        void (*apply)(GenericDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
+    typedef UsageMapIndex<GenericDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.PresentStatus.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
         { "UPS.PowerSummary.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
@@ -279,16 +342,7 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         if (_active_beeper == "") _active_beeper = "none";
     }
 
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
-                break;
-            }
-        }
-    }
+    _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
 void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {

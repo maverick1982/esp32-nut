@@ -14,39 +14,17 @@
 #include "Quirks.h"
 #include <cctype>
 
-PowercomDriver::PowercomDriver() : 
-    _last_fast_poll(0),
-    _last_step_time(0),
-    _last_0xa4_poll(0),
-    _poll_step(0),
-    _slow_poll_counter(0),
-    _mfr_retries(0),
-    _prod_retries(0),
-    _serial_retries(0) {
-}
+PowercomDriver::PowercomDriver() {}
 
 void PowercomDriver::setup() {
-    _last_fast_poll = 0;
-    _poll_step = 0;
-    _last_step_time = 0;
-    _last_0xa4_poll = 0;
-    _slow_poll_counter = 14;
-    _mfr_retries = 0;
-    _prod_retries = 0;
-    _serial_retries = 0;
-    Serial.println("[PowercomDriver] Setup completed (NUT 2.0s Quick-Poll & 30s Full-Poll mode).");
+    // Review M2: the base setup was skipped, and hidden copies of its members shadowed it
+    GenericDriver::setup();
 }
 
-void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
-    if (!host) return;
-
-    if (data.get("ups.type") != "Powercom") {
-        data.set("ups.type", "Powercom");
-    }
+void PowercomDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     if (!data.hasKey("ups.mfr")) {
         data.set("ups.mfr", "Powercom");
     }
-
     if (!data.hasKey("ups.model")) {
         uint16_t pid = host->getPID();
         switch (pid) {
@@ -60,50 +38,13 @@ void PowercomDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
             default:     data.set("ups.model", "Powercom HID UPS"); break;
         }
     }
+}
 
-    // Quick-Poll: Every 2.0s trigger status keep-alive (Report 0x0A)
-    // Full-Poll: Every 30.0s query voltages and load (Reports 0x1D, 0x21, 0x1F)
-    if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 2000 || _last_fast_poll == 0) {
-            _last_fast_poll = (now != 0) ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
-
-            _slow_poll_counter++;
-            if (_slow_poll_counter >= 15) { // 30s / 2s = 15
-                _slow_poll_counter = 0;
-            }
-        }
-    }
-
-    if (_poll_step > 0) {
-        if (host->isControlPending()) return; // Non-overlapping guard
-
-        if (now - _last_step_time >= 50 || _poll_step == 1) {
-            _last_step_time = now;
-
-            if (_poll_step == 1) {
-                // Step 1: Quick-Poll (Report 0x0A / ACPresent)
-                host->requestReport(0x0A, 3, 8);
-            } else if (_slow_poll_counter == 0) {
-                // Steps 2..4 only during the 30s cycle
-                if (_poll_step == 2) {
-                    host->requestReport(0x1D, 3, 8); // input.voltage
-                } else if (_poll_step == 3) {
-                    host->requestReport(0x21, 3, 8); // output.voltage
-                } else if (_poll_step == 4) {
-                    host->requestReport(0x1F, 3, 8); // ups.load
-                } else {
-                    _poll_step = 0;
-                    return;
-                }
-            } else {
-                _poll_step = 0;
-                return;
-            }
-            _poll_step++;
-        }
-    }
+// Quick poll: every 2 s the status keep-alive (report 0x0A).
+// Full poll: every 30 s also voltages and load (reports 0x1D, 0x21, 0x1F), as powercom-hid.
+void PowercomDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+    quick = { PollItem{3, 0x0A, 8} };
+    full = { PollItem{3, 0x0A, 8}, PollItem{3, 0x1D, 8}, PollItem{3, 0x21, 8}, PollItem{3, 0x1F, 8} };
 }
 
 void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -116,7 +57,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
             sprintf(b, "%02X ", data[i]);
             hex += b;
         }
-        Serial.printf("[PowercomDriver] INT IN (len %d, id 0x%02X): %s\n", (int)length, report_id, hex.c_str());
+        host->logDebug("[PowercomDriver] INT IN (len " + String((int)length) + "): " + hex);
     }
 
     // Save fields before GenericDriver so Powercom custom mappings can handle them
@@ -141,7 +82,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         for (size_t i = start_idx; i < length && i < 8; i++) {
             msg += (char)data[i];
         }
-        Serial.printf("[PowercomDriver] 0xA4 raw bytes: %d, text: '%s'\n", (int)length, msg.c_str());
+        host->logDebug("[PowercomDriver] 0xA4 text: '" + msg + "'");
 
         int start = -1;
         for (int i = 0; i < msg.length(); i++) {
@@ -256,10 +197,6 @@ void PowercomDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, con
     if (index == host->_iManufacturer) ups_data.set("ups.mfr", str);
     else if (index == host->_iProduct) ups_data.set("ups.model", str);
     else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.set("ups.serial", str);
-}
-
-String PowercomDriver::fetchVoltageHack(IUSBHostUPS* host) {
-    return "";
 }
 
 uint8_t PowercomDriver::encodeBeeperValue(bool enable, uint16_t bit_size) const {

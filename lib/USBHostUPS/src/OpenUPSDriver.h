@@ -11,7 +11,11 @@ public:
     OpenUPSDriver() = default;
     virtual ~OpenUPSDriver() = default;
 
+    void setup() override;
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+
+private:
+    UsageMapIndex<OpenUPSDriver> _map;
 };
 
 #endif // OPENUPS_DRIVER_H

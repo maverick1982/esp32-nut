@@ -48,14 +48,15 @@ static float calculateTemperature(double value) {
     }
 }
 
+void OpenUPSDriver::setup() {
+    GenericDriver::setup();
+    _map.invalidate();
+}
+
 void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
-    struct Mapping {
-        const char* path;
-        void (*apply)(OpenUPSDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
+    typedef UsageMapIndex<OpenUPSDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.Input.Voltage", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v * 0.1f, 1)); } },
         { "UPS.PowerSummary.Input.Current", [](OpenUPSDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.current", String(v * 0.1f, 2)); } },
@@ -79,16 +80,7 @@ void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         } }
     };
 
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
-                break;
-            }
-        }
-    }
+    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 

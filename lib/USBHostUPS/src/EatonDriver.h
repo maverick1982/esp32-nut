@@ -12,11 +12,15 @@ public:
     virtual ~EatonDriver() = default;
 
     void setup() override;
-    void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) override;
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
+protected:
+    bool acceptPollReport(uint8_t report_type, uint8_t report_id) const override;
+    void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const override;
+
 private:
+    UsageMapIndex<EatonDriver> _map;
     uint8_t _chemStrIdx;
 };
 

@@ -33,7 +33,7 @@ Constraints verified on the platform (ESP-IDF 5.1 in the pioarduino 51.03.04 Ard
 ## Decision Outcome
 Chosen option: "**Option 2**".
 
-**Threading rule.** hid_host callbacks never block. They copy the event (INPUT report bytes, connect, disconnect, transfer error) into a FreeRTOS queue with timeout 0. Two slots are reserved for non-INPUT events, and INPUT reports are dropped and counted when the queue is full. Everything else runs in the loopTask. No application lock is held during a blocking control transfer. `_mutex` only protects `UPSData` and the report cache against readers.
+**Threading rule.** hid_host callbacks never block. They copy the event (INPUT report bytes, connect, disconnect, transfer error) into a FreeRTOS queue with timeout 0. Two slots are reserved for non-INPUT events, and INPUT reports are dropped and counted when the queue is full. Everything else runs in the loopTask (in the `ups_poll` task since the phase 3 addendum). No application lockis held during a blocking control transfer. `_mutex` only protects `UPSData` and the report cache against readers.
 
 **`hid_host.c` deviations** (marked `[esp32-nut, ADR 0008]`):
 * `ctrl_inflight` flag, set on submit and cleared in `ctrl_xfer_done`. `hid_device_lock_ctrl()` rejects any request with `ESP_ERR_INVALID_STATE` while it is set, so neither the setup packet write, the resubmit, nor the realloc in `usb_class_request_get_descriptor` can touch an in-flight URB. The pipe heals by itself when the late callback arrives.
@@ -85,6 +85,20 @@ Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
 * **A4.** `InputReassembler` (pure logic) rebuilds INPUT reports longer than MPS from the per-packet events, using the lengths declared in the report descriptor. A larger IN transfer was rejected: an interrupt IN transfer only ends on a short packet or a full buffer, so a shorter report that is a multiple of MPS would be glued to the next one.
 * **A7.** `RestartPolicy` (pure logic) with the count of consecutive controlled restarts in RTC memory (`CrashDiag`): the first restart runs at once, the next ones wait 1, 5 and 15 min, and after 4 the board stays up in degraded mode (data stale, web UI banner). A new enumeration of the UPS cancels the request; 10 min of fresh data clear the count. `isDataStale()` is true while a restart is requested.
 
+### Addendum: USB layer review, phase 3 (2026-09-24)
+Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
+
+**Threading model (A5b), replacing "everything else runs in the loopTask":** the USB service (events, polling, decoding, recovery) runs in the `ups_poll` task: priority 3, above the loopTask and below the HID task (5) and WiFi, under the Task WDT. The loopTask only serves NUT and the web UI, so a UPS that does not answer no longer delays them. Requests from other tasks (`setBeeper()`) wait for the current poll step on `_op_mutex` (at most 3 s). Lock order: `_op_mutex`, then `_mutex`. `AppLogger` has its own mutex.
+
+**More `hid_host.c` deviations** (marked `[esp32-nut, review Mx]`):
+* **M3.** Claim: the interface is released if the IN transfer cannot be allocated. Release: no `ESP_ERROR_CHECK` on the free, and `in_xfer` is cleared.
+* **M5.** `usb_class_request_get_descriptor()` takes the recipient. New `hid_host_device_get_string_descriptor()` and `hid_host_device_get_string_indices()`.
+
+**Application changes:**
+* **A6 / S3.** One poll state machine in `GenericDriver`: quick poll of the status reports every 2 s, full poll (missing strings, then every report) every 30 s, as `usbhid-ups` and ADR 0006. Drivers change the policy through hooks. `DriverRegistry` picks the driver by VID/PID.
+* **M1.** Parser: signed fields when Logical Minimum < 0, fields limited to 32 bits, long items, Usage Minimum/Maximum.
+* **S2.** `UsageMapIndex` precomputes the usage → mapping match.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.
@@ -110,3 +124,5 @@ Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
 * Agents MUST NOT serve UPS data as current with no device attached: `isDataStale()` covers that case.
 * Agents MUST decode INPUT reports only after `InputReassembler`, never straight from the per-packet events, and MUST NOT enlarge the IN transfer beyond one packet.
 * Agents MUST route controlled restarts through `RestartPolicy` in `main.cpp`: never call `esp_restart()` on `isRestartRequested()` directly.
+* Agents MUST NOT call `USBHostUPS` methods that issue control transfers from tasks other than `ups_poll` without `_op_mutex` (see `setBeeper()`), and MUST NOT hold the data lock (`getUPSData()`, `lock()`) while calling them.
+* Agents MUST add poll policies to drivers through the `GenericDriver` hooks, never with a new poll state machine.

@@ -1,5 +1,9 @@
 #include "core/app_logger.h"
 #include <stdarg.h>
+#include <mutex>
+
+// Called by the loopTask and by the USB task (review A5b)
+static std::recursive_mutex s_log_mutex;
 
 LogMessage AppLogger::logBuffer[AppLogger::MAX_LOGS];
 int AppLogger::head = 0;
@@ -7,6 +11,7 @@ int AppLogger::count = 0;
 uint32_t AppLogger::nextId = 1;
 
 void AppLogger::log(const String& level, const String& msg) {
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     // Print to serial
     Serial.printf("[%lu] [%s] %s\n", millis(), level.c_str(), msg.c_str());
 
@@ -33,6 +38,7 @@ void AppLogger::log(const char* level, const char* format, ...) {
 }
 
 String AppLogger::getLogsJSON() {
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
 

@@ -844,8 +844,16 @@ static esp_err_t hid_host_interface_claim_and_prepare_transfer(hid_iface_t *ifac
                                                    iface->dev_params.iface_num, 0),
                          "Unable to claim Interface");
 
-    HID_RETURN_ON_ERROR( usb_host_transfer_alloc(iface->ep_in_mps, 0, &iface->in_xfer),
-                         "Unable to allocate transfer buffer for EP IN");
+    // [esp32-nut, review M3] Do not leave the interface claimed when the allocation fails
+    esp_err_t ret = usb_host_transfer_alloc(iface->ep_in_mps, 0, &iface->in_xfer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to allocate transfer buffer for EP IN");
+        iface->in_xfer = NULL;
+        usb_host_interface_release(s_hid_driver->client_handle,
+                                   iface->parent->dev_hdl,
+                                   iface->dev_params.iface_num);
+        return ret;
+    }
 
     // Change state
     iface->state = HID_INTERFACE_STATE_READY;
@@ -872,7 +880,12 @@ static esp_err_t hid_host_interface_release_and_free_transfer(hid_iface_t *iface
                                                     iface->dev_params.iface_num),
                          "Unable to release HID Interface");
 
-    ESP_ERROR_CHECK( usb_host_transfer_free(iface->in_xfer) );
+    // [esp32-nut, review M3] No abort() on a free error, and no dangling pointer after it
+    esp_err_t ret = usb_host_transfer_free(iface->in_xfer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to free IN transfer: %s", esp_err_to_name(ret));
+    }
+    iface->in_xfer = NULL;
 
     // Change state
     iface->state = HID_INTERFACE_STATE_IDLE;
@@ -1162,10 +1175,12 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
  * @param[in] hid_device  Pointer to HID device structure
  * @param[in] req         Pointer to a class specific request structure
  * @param[out] received   [esp32-nut, review C3] Bytes copied into req->data, can be less than wLength
+ * @param[in] recipient   [esp32-nut, review M5] USB_BM_REQUEST_TYPE_RECIP_INTERFACE (report
+ *                        descriptor) or USB_BM_REQUEST_TYPE_RECIP_DEVICE (string descriptors)
  * @return esp_err_t
  */
 static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, const hid_class_request_t *req,
-                                                  size_t *received)
+                                                  size_t *received, uint8_t recipient)
 {
     HID_RETURN_ON_INVALID_ARG(hid_device);
     HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
@@ -1202,7 +1217,7 @@ static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, cons
 
     setup->bmRequestType = USB_BM_REQUEST_TYPE_DIR_IN |
                            USB_BM_REQUEST_TYPE_TYPE_STANDARD |
-                           USB_BM_REQUEST_TYPE_RECIP_INTERFACE;
+                           recipient;
     setup->bRequest = req->bRequest;
     setup->wValue = req->wValue;
     setup->wIndex = req->wIndex;
@@ -1268,7 +1283,8 @@ static esp_err_t hid_class_request_report_descriptor(hid_iface_t *iface)
     };
 
     size_t received = 0;
-    esp_err_t ret = usb_class_request_get_descriptor(iface->parent, &get_desc, &received);
+    esp_err_t ret = usb_class_request_get_descriptor(iface->parent, &get_desc, &received,
+                                                     USB_BM_REQUEST_TYPE_RECIP_INTERFACE);
 
     // [esp32-nut, review C3] Some UPS answer with fewer bytes than wReportDescriptorLength:
     // expose only what was received, never the uninitialized tail of the buffer.
@@ -2047,6 +2063,51 @@ uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle)
 {
     hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
     return iface ? iface->ep_in_mps : 0;
+}
+
+esp_err_t hid_host_device_get_string_descriptor(hid_host_device_handle_t hid_dev_handle,
+                                                uint8_t index, uint16_t lang_id,
+                                                uint8_t *data, size_t data_length_max,
+                                                size_t *data_length)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+
+    HID_RETURN_ON_INVALID_ARG(iface);
+    HID_RETURN_ON_INVALID_ARG(iface->parent);
+    HID_RETURN_ON_INVALID_ARG(data);
+    HID_RETURN_ON_INVALID_ARG(data_length);
+    HID_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
+
+    // [esp32-nut, review M5] String descriptors requested by the drivers (battery type,
+    // battery date...): the USB Host library only fetches manufacturer, product and serial.
+    const hid_class_request_t get_desc = {
+        .bRequest = USB_B_REQUEST_GET_DESCRIPTOR,
+        .wValue = (uint16_t)((USB_B_DESCRIPTOR_TYPE_STRING << 8) | index),
+        .wIndex = lang_id,
+        .wLength = (uint16_t)(data_length_max > 255 ? 255 : data_length_max),
+        .data = data
+    };
+    *data_length = 0;
+    return usb_class_request_get_descriptor(iface->parent, &get_desc, data_length,
+                                            USB_BM_REQUEST_TYPE_RECIP_DEVICE);
+}
+
+esp_err_t hid_host_device_get_string_indices(hid_host_device_handle_t hid_dev_handle,
+                                             uint8_t *manufacturer, uint8_t *product, uint8_t *serial)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+
+    HID_RETURN_ON_INVALID_ARG(iface);
+    HID_RETURN_ON_INVALID_ARG(iface->parent);
+    HID_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
+
+    const usb_device_desc_t *desc;
+    HID_RETURN_ON_ERROR( usb_host_get_device_descriptor(iface->parent->dev_hdl, &desc),
+                         "Unable to get device descriptor");
+    if (manufacturer) *manufacturer = desc->iManufacturer;
+    if (product) *product = desc->iProduct;
+    if (serial) *serial = desc->iSerialNumber;
+    return ESP_OK;
 }
 
 uint8_t *hid_host_get_report_descriptor(hid_host_device_handle_t hid_dev_handle,
