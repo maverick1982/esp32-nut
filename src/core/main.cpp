@@ -2,7 +2,9 @@
 #include "USBHostUPS.h"
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
+#include "core/crash_diag.h"
 #include <Preferences.h>
+#include "esp_task_wdt.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -16,9 +18,27 @@ bool is_ap_mode = false;
 bool clear_ap_flag_pending = false;
 uint32_t boot_time_ms = 0;
 
-hw_timer_t *watchdogTimer = NULL;
-void ARDUINO_ISR_ATTR watchdogInterrupt() {
-    esp_restart();
+// Task watchdog on the loopTask (issue #47). It replaces a hw_timer whose ISR called
+// esp_restart(): unsafe from an ISR, and unable to fire during a panic, when interrupts
+// are masked. The TWDT panics instead, so a hang leaves a backtrace and a core dump.
+static const uint32_t LOOP_WDT_TIMEOUT_MS = 30000;
+
+static void setupLoopWatchdog() {
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = LOOP_WDT_TIMEOUT_MS,
+        .idle_core_mask = (1 << 0), // keep the IDLE0 check enabled by the Arduino core
+        .trigger_panic = true,
+    };
+    esp_err_t err = esp_task_wdt_reconfigure(&wdt_config);
+    if (err == ESP_ERR_INVALID_STATE) {
+        err = esp_task_wdt_init(&wdt_config);
+    }
+    if (err == ESP_OK) {
+        err = esp_task_wdt_add(NULL);
+    }
+    if (err != ESP_OK) {
+        AppLogger::log("ERROR", "[MAIN] Task watchdog setup failed: %s", esp_err_to_name(err));
+    }
 }
 
 // Calcola lo stato diagnostico del sistema a partire dallo stato Wi-Fi e UPS
@@ -37,18 +57,20 @@ LedState computeSystemState(bool wifiConnected, bool upsConnected) {
 
 #ifndef UNIT_TEST
 void setup() {
+    // Prima di tutto: protegge il panic handler se manca la partizione coredump
+    CrashDiag::begin();
+
     // Inizializzazione della porta seriale per il debug diagnostico
     Serial.begin(MONITOR_BAUD_RATE);
     delay(1000); // Piccolo delay per stabilizzare la connessione seriale
     AppLogger::log("INFO", "\n--- ESP32 NUT Server Initialized ---");
+    CrashDiag::logBootInfo();
 
     // Inizializzazione del LED diagnostico
     diagnostic_led.begin(LED_BUILTIN_PIN);
 
-    // Inizializzazione Watchdog Hardware (30 secondi)
-    watchdogTimer = timerBegin(1000000); // 1MHz resolution
-    timerAttachInterrupt(watchdogTimer, &watchdogInterrupt);
-    timerAlarm(watchdogTimer, 30000000, true, 0); // 30s timeout
+    // Task watchdog sul loopTask (30 secondi)
+    setupLoopWatchdog();
 
     // Gestione NVS flag per AP manuale
     boot_prefs.begin("boot_state", false);
@@ -120,10 +142,7 @@ void setup() {
 void loop() {
     uint32_t now = millis();
 
-    // Reset Watchdog Timer
-    if (watchdogTimer) {
-        timerRestart(watchdogTimer);
-    }
+    esp_task_wdt_reset();
 
     // Check timer per azzeramento flag manual_ap
     if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
@@ -135,6 +154,14 @@ void loop() {
     web_server.loop();
     network_mgr.loop();
     usb_ups.loop();
+
+    // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR)
+    if (usb_ups.isRestartRequested()) {
+        AppLogger::log("ERROR", "[MAIN] Controlled restart: %s", usb_ups.getRestartReason());
+        CrashDiag::recordControlledRestart(usb_ups.getRestartReason());
+        delay(200); // lascia uscire il log sulla seriale
+        esp_restart();
+    }
 
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura
     if (!config_mgr.isValid()) {

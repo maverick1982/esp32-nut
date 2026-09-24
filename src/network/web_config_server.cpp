@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "core/crash_diag.h"
 #include "network/web_assets.h"
 #include <Update.h>
 
@@ -237,6 +238,11 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
+    if (usb_ups && usb_ups->isDataStale()) {
+        doc["ups"]["stale"] = true;
+    }
+
+    CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
 
     String response;
     serializeJson(doc, response);
