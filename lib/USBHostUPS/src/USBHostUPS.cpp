@@ -1,14 +1,11 @@
 #include "BeeperLogic.h"
 #include "DeviceStrings.h"
 #include "USBHostUPS.h"
-#include "GenericDriver.h"
-#include "APCDriver.h"
-#include "PowercomDriver.h"
-#include "EatonDriver.h"
-#include "CyberPowerDriver.h"
-#include "OpenUPSDriver.h"
+#include "IUPSDriver.h"
+#include "DriverRegistry.h"
 #include <ArduinoJson.h>
 #include <stdarg.h>
+#include "esp_task_wdt.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -16,11 +13,13 @@
 
 USBHostUPS::USBHostUPS() :
     _usb_task_handle(NULL), _usb_task_run(false),
+    _poll_task_handle(NULL), _poll_task_run(false), _op_mutex(NULL),
     _event_queue(NULL), _self_close_handle(NULL), _dropped_events(0), _reported_dropped_events(0),
     _hid_dev_handle(NULL),
     _vid(0), _pid(0),
     _initialized(false), _is_ready_to_poll(false), _device_seen(false),
-    _ep_in_mps(0), _uses_report_ids(false),
+    _ep_in_mps(0), _uses_report_ids(false), _lang_id(0), _failed_strings{},
+    _stat_since(0), _stat_input(0), _stat_in_packets(0), _stat_get_ok(0), _stat_get_failed(0),
     _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
     _restart_requested(false), _restart_reason(""),
     _driver(nullptr), _log_cb(nullptr), _quirks(0)
@@ -38,6 +37,13 @@ bool USBHostUPS::begin() {
         _event_queue = xQueueCreate(EVENT_QUEUE_LEN, sizeof(HidEvent));
         if (!_event_queue) {
             log("ERROR", "HID event queue allocation failed");
+            return false;
+        }
+    }
+    if (!_op_mutex) {
+        _op_mutex = xSemaphoreCreateMutex();
+        if (!_op_mutex) {
+            log("ERROR", "USB operation mutex allocation failed");
             return false;
         }
     }
@@ -80,12 +86,54 @@ bool USBHostUPS::begin() {
         return false;
     }
 
+    if (!_poll_task_handle) {
+        _poll_task_run = true;
+        if (xTaskCreatePinnedToCore(USBHostUPS::poll_task, "ups_poll", POLL_TASK_STACK, this,
+                                    POLL_TASK_PRIORITY, &_poll_task_handle, tskNO_AFFINITY) != pdPASS) {
+            _poll_task_run = false;
+            _poll_task_handle = NULL;
+            log("ERROR", "USB poll task creation failed");
+            return false;
+        }
+    }
+
     _initialized = true;
     return true;
 }
 
+void USBHostUPS::poll_task(void *arg) {
+    USBHostUPS *self = static_cast<USBHostUPS*>(arg);
+    // Under the task watchdog like the loopTask: a hang becomes a panic with a backtrace.
+    // An iteration blocks at most for a few control transfer timeouts.
+    bool wdt = esp_task_wdt_add(NULL) == ESP_OK;
+    if (!wdt) self->log("WARN", "[USB] Poll task not under the task watchdog");
+
+    while (self->_poll_task_run) {
+        if (wdt) esp_task_wdt_reset();
+        if (xSemaphoreTake(self->_op_mutex, portMAX_DELAY) == pdTRUE) {
+            self->service();
+            xSemaphoreGive(self->_op_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(POLL_TASK_PERIOD_MS));
+    }
+
+    if (wdt) esp_task_wdt_delete(NULL);
+    self->_poll_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+uint32_t USBHostUPS::getPollTaskStackHighWater() const {
+    TaskHandle_t h = _poll_task_handle;
+    return h ? (uint32_t)uxTaskGetStackHighWaterMark(h) : 0;
+}
+
 void USBHostUPS::end() {
     if (!_initialized) return;
+
+    if (_poll_task_handle) {
+        _poll_task_run = false;
+        for (int i = 0; i < 400 && _poll_task_handle; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
     if (_hid_dev_handle) {
         closeInterface(_hid_dev_handle);
@@ -181,10 +229,10 @@ void USBHostUPS::postEvent(const HidEvent& ev, bool reserved_slot) {
 }
 
 // ---------------------------------------------------------------------------
-// loopTask context
+// Poll task context (review A5b)
 // ---------------------------------------------------------------------------
 
-void USBHostUPS::loop() {
+void USBHostUPS::service() {
     processEvents();
 
     if (_restart_requested) return;
@@ -221,8 +269,21 @@ void USBHostUPS::loop() {
         break;
     }
 
-    // Drivers skip their poll steps while isControlPending() reports a backoff
+    logStats(now);
+
+    // Drivers skip their poll steps while isPollingPaused() reports a backoff
     _driver->loop(this, _ups_data, now);
+}
+
+void USBHostUPS::logStats(uint32_t now) {
+    if ((now - _stat_since) < STATS_PERIOD_MS) return;
+    if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed) {
+        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed",
+            (unsigned)((now - _stat_since) / 1000), (unsigned)_stat_input, (unsigned)_stat_in_packets,
+            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed);
+    }
+    _stat_since = now;
+    _stat_input = _stat_in_packets = _stat_get_ok = _stat_get_failed = 0;
 }
 
 void USBHostUPS::processEvents() {
@@ -310,12 +371,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _pid = dev_info.PID;
 
         if (_driver) { delete _driver; _driver = nullptr; }
-        if (_vid == 0x051D) { _driver = new APCDriver(); }
-        else if (_vid == 0x0764) { _driver = new CyberPowerDriver(); }
-        else if (_vid == 0x0463) { _driver = new EatonDriver(); }
-        else if (_vid == 0x0d9f) { _driver = new PowercomDriver(); }
-        else if (_vid == 0x04D8 && (_pid == 0xD004 || _pid == 0xD005)) { _driver = new OpenUPSDriver(); }
-        else { _driver = new GenericDriver(); }
+        _driver = DriverRegistry::create(_vid, _pid);
 
         _quirks = 0;
         for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
@@ -332,6 +388,11 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     _in_reasm.reset();
     _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
     _uses_report_ids = _hid_parser.usesReportIds();
+    // String indices, so the drivers can fetch a string the USB Host library missed (review M5)
+    _iManufacturer = _iProduct = _iSerialNumber = 0;
+    hid_host_device_get_string_indices(handle, &_iManufacturer, &_iProduct, &_iSerialNumber);
+    _lang_id = 0;
+    memset(_failed_strings, 0, sizeof(_failed_strings));
     _in_restart_pending = false;
     _in_recoveries = 0;
     if (_restart_requested) {
@@ -340,17 +401,26 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _restart_requested = false;
         _restart_reason = "";
     }
-    hid_host_device_start(_hid_dev_handle);
+    // A failed start used to go unnoticed: no INPUT report would ever arrive and nothing
+    // said why. Retry it like after a recovery (retryInterfaceStart).
+    esp_err_t start_err = hid_host_device_start(_hid_dev_handle);
+    if (start_err != ESP_OK) {
+        log("WARN", "[USB] INPUT pipe not started: %s, retrying", esp_err_to_name(start_err));
+        _in_restart_pending = true;
+        _in_start_attempts = 0;
+        _in_restart_at = millis() + 50;
+    }
     _is_ready_to_poll = true;
     _device_seen = true;
 
-    log("INFO", "UPS interface claimed and ready.");
+    log("INFO", "UPS interface claimed and ready (IN endpoint MPS %u).", (unsigned)_ep_in_mps);
 }
 
 void USBHostUPS::processInputReport(const HidEvent& ev) {
     if (ev.handle != _hid_dev_handle || !_driver) return;
 
     _in_recoveries = 0;
+    _stat_in_packets++;
     _in_wd.onInput(ev.ts);
 
     // Reports longer than one packet arrive in several events (review A4)
@@ -368,7 +438,7 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
     if (!complete) return;
 
     uint8_t r_id = (length > 0) ? data[0] : 0;
-    log("INFO", "INPUT_REPORT: id=%d, len=%d", r_id, (int)length);
+    _stat_input++; // summarised every STATS_PERIOD_MS instead of one log per report (review S1)
 
 #ifdef USBUPS_DEBUG_SLOW_INPUT_MS
     // Issue #47 reproduction aid: slow INPUT processing. Before ADR 0008 this ran inside
@@ -474,7 +544,7 @@ void USBHostUPS::requestRestart(const char* why) {
     _restart_requested = true;
 }
 
-bool USBHostUPS::isControlPending() const {
+bool USBHostUPS::isPollingPaused() const {
     return !_link.canPoll(millis());
 }
 
@@ -498,6 +568,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     noteControlResult(err, millis());
 
     if (err == ESP_OK && length > 0) {
+        _stat_get_ok++;
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         uint16_t key = (report_type << 8) | report_id;
         auto& cached = _cached_reports[key];
@@ -511,6 +582,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         return true;
     }
 
+    _stat_get_failed++;
     if (err == ESP_OK) {
         log("ERROR", "requestReport FAILED: type=%d, id=%d, empty response", report_type, report_id);
     } else if (_link.failures() > 0) {
@@ -523,7 +595,39 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 }
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
-    return false;
+    if (!_is_ready_to_poll || !_hid_dev_handle || string_index == 0) return false;
+    // An index that failed once is not asked again for this device: a firmware that times
+    // out on it would otherwise climb the recovery ladder every full poll (review M5)
+    if (_failed_strings[string_index / 32] & (1u << (string_index % 32))) return false;
+    if (!_link.canPoll(millis())) return false;
+
+    // Blocking control transfers: no application lock held (ADR 0008)
+    size_t len = 0;
+    esp_err_t err;
+    if (_lang_id == 0) {
+        err = hid_host_device_get_string_descriptor(_hid_dev_handle, 0, 0, _request_buffer, 255, &len);
+        noteControlResult(err, millis());
+        if (err == ESP_OK && len >= 4 && _request_buffer[1] == 0x03) {
+            _lang_id = (uint16_t)(_request_buffer[2] | (_request_buffer[3] << 8));
+        } else if (err == ESP_OK || err == ESP_ERR_INVALID_RESPONSE) {
+            _lang_id = 0x0409; // no language list (or a STALL): US English
+        } else {
+            return false; // no answer: retry at the next full poll
+        }
+    }
+
+    err = hid_host_device_get_string_descriptor(_hid_dev_handle, string_index, _lang_id, _request_buffer, 255, &len);
+    noteControlResult(err, millis());
+    if (err != ESP_OK || len < 2) {
+        _failed_strings[string_index / 32] |= 1u << (string_index % 32);
+        log("WARN", "[USB] String descriptor %u not available: %s", (unsigned)string_index,
+            err == ESP_OK ? "empty" : esp_err_to_name(err));
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (_driver) _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+    return true;
 }
 
 IUSBHostUPS::UPSDataLock USBHostUPS::getUPSData() const {
@@ -544,6 +648,14 @@ void USBHostUPS::setLogCallback(LogCallback cb) {
 }
 
 bool USBHostUPS::setBeeper(bool enable) {
+    // Called by NUT or the web UI: wait for the current poll step, never overlap it
+    if (!_op_mutex || xSemaphoreTake(_op_mutex, pdMS_TO_TICKS(OP_WAIT_MS)) != pdTRUE) return false;
+    bool ok = setBeeperLocked(enable);
+    xSemaphoreGive(_op_mutex);
+    return ok;
+}
+
+bool USBHostUPS::setBeeperLocked(bool enable) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     if (!_link.canPoll(millis())) return false;
 
@@ -723,7 +835,11 @@ void USBHostUPS::usb_host_lib_task(void *arg) {
 }
 
 void USBHostUPS::logDebug(const String& msg) const {
+#ifdef USBUPS_DEBUG_LOG
     if (_log_cb) _log_cb("DEBUG", msg.c_str());
+#else
+    (void)msg; // keeps the 50-line web log for events that matter (review S1)
+#endif
 }
 
 void USBHostUPS::populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, uint32_t quirks, UPSData& ups_data) {

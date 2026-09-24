@@ -70,7 +70,7 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
     uint32_t getQuirks() const override { return 0; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t, uint8_t, uint16_t) override { return true; }
     bool requestStringDescriptor(uint8_t) override { return true; }
 };

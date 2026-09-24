@@ -13,7 +13,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
     uint16_t report_count = 0;
     int8_t current_exponent = 0;
     uint32_t current_unit = 0;
-    
+    int32_t logical_min = 0;
+    int32_t logical_max = 0;
+
     struct GlobalState {
         uint32_t usage_page;
         uint8_t report_id;
@@ -21,24 +23,41 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
         uint16_t report_count;
         int8_t exponent;
         uint32_t unit;
+        int32_t logical_min;
+        int32_t logical_max;
     };
     std::vector<GlobalState> global_stack;
-    
+
     std::vector<uint32_t> local_usages;
     std::vector<String> collection_names;
-    
+    // Usage Minimum / Maximum (review M1): expanded into local_usages once both are known
+    bool have_usage_min = false, have_usage_max = false;
+    uint32_t usage_min = 0, usage_max = 0;
+
     size_t i = 0;
     while (i < len) {
+        // Long item (review M1): 0xFE, bDataSize, bLongItemTag, data. Skipped whole:
+        // read as a short item it desynchronised the rest of the descriptor.
+        if (desc[i] == 0xFE) {
+            if (i + 1 >= len) break;
+            i += 3 + desc[i + 1];
+            continue;
+        }
+
         uint8_t bSize = desc[i] & 0x03;
         if (bSize == 3) bSize = 4;
         uint8_t bType = (desc[i] >> 2) & 0x03;
         uint8_t bTag = (desc[i] >> 4) & 0x0F;
         i++;
-        
+
         uint32_t data = 0;
         for (int j = 0; j < bSize && i < len; j++) {
-            data |= (desc[i++] << (8 * j));
+            data |= ((uint32_t)desc[i++]) << (8 * j); // unsigned: desc[i] << 24 overflowed an int
         }
+        // Global items such as Logical Minimum are signed in the size they are sent in
+        int32_t sdata = (bSize == 1) ? (int32_t)(int8_t)data
+                      : (bSize == 2) ? (int32_t)(int16_t)data
+                      : (int32_t)data;
         
         if (bType == 0) { // Main
             if (bTag == 8 || bTag == 9 || bTag == 11) { // Input, Output, Feature
@@ -65,8 +84,8 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                         def.bit_offset = (*offsets_map)[current_report_id];
                         def.bit_size = size_bits;
                         def.found = true;
-                        def.logical_min = 0;
-                        def.logical_max = 0;
+                        def.logical_min = logical_min;
+                        def.logical_max = logical_max;
                         def.exponent = current_exponent;
                         def.unit = current_unit;
                         
@@ -85,6 +104,7 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                     }
                 }
                 local_usages.clear();
+                have_usage_min = have_usage_max = false;
             } else if (bTag == 10) { // Collection
                 uint32_t usage = 0;
                 if (!local_usages.empty()) {
@@ -92,6 +112,7 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                 }
                 collection_names.push_back(get_nut_usage_name(usage));
                 local_usages.clear();
+                have_usage_min = have_usage_max = false;
             } else if (bTag == 12) { // End Collection
                 if (!collection_names.empty()) {
                     collection_names.pop_back();
@@ -99,6 +120,11 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
             }
         } else if (bType == 1) { // Global
             if (bTag == 0) current_usage_page = data;
+            else if (bTag == 1) logical_min = sdata;
+            else if (bTag == 2) {
+                // Descriptors often send an unsigned maximum (e.g. 0xFF in one byte for 255)
+                logical_max = (sdata < logical_min) ? (int32_t)data : sdata;
+            }
             else if (bTag == 5) {
                 int8_t nibble = data & 0x0F;
                 if (nibble > 7) nibble -= 16;
@@ -109,7 +135,8 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
             else if (bTag == 8) current_report_id = data;
             else if (bTag == 9) report_count = data;
             else if (bTag == 10) { // Push
-                global_stack.push_back({current_usage_page, current_report_id, report_size, report_count, current_exponent, current_unit});
+                global_stack.push_back({current_usage_page, current_report_id, report_size, report_count,
+                                        current_exponent, current_unit, logical_min, logical_max});
             }
             else if (bTag == 11) { // Pop
                 if (!global_stack.empty()) {
@@ -121,14 +148,24 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                     report_count = state.report_count;
                     current_exponent = state.exponent;
                     current_unit = state.unit;
+                    logical_min = state.logical_min;
+                    logical_max = state.logical_max;
                 }
             }
         } else if (bType == 2) { // Local
+            uint32_t full_usage = (bSize <= 2) ? ((current_usage_page << 16) | data) : data;
             if (bTag == 0) { // Usage
-                if (bSize <= 2) {
-                    local_usages.push_back((current_usage_page << 16) | data);
-                } else {
-                    local_usages.push_back(data);
+                local_usages.push_back(full_usage);
+            } else if (bTag == 1 || bTag == 2) { // Usage Minimum / Maximum
+                if (bTag == 1) { usage_min = full_usage; have_usage_min = true; }
+                else { usage_max = full_usage; have_usage_max = true; }
+                if (have_usage_min && have_usage_max) {
+                    // Same page only, and bounded: a corrupt range must not exhaust the heap
+                    if ((usage_min >> 16) == (usage_max >> 16) && usage_max >= usage_min &&
+                        usage_max - usage_min < MAX_USAGE_RANGE) {
+                        for (uint32_t u = usage_min; u <= usage_max; u++) local_usages.push_back(u);
+                    }
+                    have_usage_min = have_usage_max = false;
                 }
             }
         }
@@ -201,17 +238,29 @@ double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const 
     // size (like 32 bits for input voltage) than the actual payload returned.
     // We tolerate short reports by allowing the loop below to read up to 'length'.
     
+    // Fields wider than 32 bits are read as their low 32 bits (review M1: a shift by 64
+    // was undefined behaviour)
+    uint16_t bits = def->bit_size;
+    if (bits == 0) return 0.0;
+    if (bits > 32) bits = 32;
+
     uint16_t byte_idx = bit_offset / 8;
     uint8_t bit_shift = bit_offset % 8;
-    
+
     uint64_t raw = 0;
-    for (int i = 0; i < ((def->bit_size + bit_shift + 7) / 8) && (byte_idx + i) < length; i++) {
+    for (int i = 0; i < ((bits + bit_shift + 7) / 8) && (byte_idx + i) < length; i++) {
         raw |= ((uint64_t)data[byte_idx + i]) << (i * 8);
     }
     raw >>= bit_shift;
-    raw &= (1ULL << def->bit_size) - 1;
-    
-    double val = (double)(int32_t)raw;
+    raw &= (bits == 32) ? 0xFFFFFFFFULL : ((1ULL << bits) - 1);
+
+    // Signed only when the descriptor says so (review M1): a negative Logical Minimum.
+    // Discharge currents, for example, are negative.
+    int64_t value = (int64_t)raw;
+    if (def->logical_min < 0 && ((raw >> (bits - 1)) & 1)) {
+        value -= (int64_t)1 << bits;
+    }
+    double val = (double)value;
     if (def->bit_size > 1) {
         int8_t unit_expo = def->exponent;
         if (def->unit == 0x00F0D121 || def->unit == 0x0000D121) {

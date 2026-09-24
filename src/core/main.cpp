@@ -5,6 +5,7 @@
 #include "core/crash_diag.h"
 #include <Preferences.h>
 #include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
 #include "RestartPolicy.h"
 
 USBHostUPS usb_ups;
@@ -158,7 +159,7 @@ void loop() {
 
     web_server.loop();
     network_mgr.loop();
-    usb_ups.loop();
+    // The UPS is served by its own task (USBHostUPS::begin, review A5b)
 
     // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR), con attese
     // crescenti tra un riavvio e l'altro e modalità degradata oltre la soglia (review A7)
@@ -222,6 +223,11 @@ void loop() {
         last_stack_log = now;
         UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
         AppLogger::log("INFO", "[DIAG] Loop Task Stack High Water Mark: %u bytes", (uint32_t)hwm);
+        AppLogger::log("INFO", "[DIAG] UPS Poll Task Stack High Water Mark: %u bytes",
+                       (unsigned)usb_ups.getPollTaskStackHighWater());
+        AppLogger::log("INFO", "[DIAG] Heap: free %u, min free %u, largest block %u bytes",
+                       (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
 
     // Aggiornamento stato LED diagnostico

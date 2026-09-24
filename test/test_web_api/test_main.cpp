@@ -26,7 +26,7 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return nullptr; }
     String getActiveBeeperPath() const override { return ""; }
     uint32_t getQuirks() const override { return 0; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override { return true; }
     bool requestStringDescriptor(uint8_t string_index) override { return true; }
 };

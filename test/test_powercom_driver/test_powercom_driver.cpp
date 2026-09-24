@@ -24,7 +24,7 @@ public:
     uint32_t getQuirks() const override { return 0; }
     uint16_t _pid = 0x0004;
     uint16_t getPID() const override { return _pid; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
         return true;

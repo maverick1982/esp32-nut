@@ -64,6 +64,48 @@ void test_status_empty_data_returns_unknown(void) {
     TEST_ASSERT_EQUAL_STRING("Unknown", UPSData::computeUPSStatusString(data).c_str());
 }
 
+// Eaton keeps PresentStatus.Good at 1 on battery: it was reported as "OL OB"
+void test_status_eaton_on_battery_with_good(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "0");
+    data.set("ups.status.discharging", "1");
+    data.set("ups.status.good", "1");
+    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_eaton_online_with_good(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.discharging", "0");
+    data.set("ups.status.good", "1");
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_ac_lost_before_discharging_flag(void) {
+    // ACPresent and Discharging may come from different reports: no power is OB already
+    UPSData data;
+    data.set("ups.status.ac_present", "0");
+    data.set("ups.status.discharging", "0");
+    data.set("ups.status.good", "1");
+    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_discharging_wins_over_stale_ac_present(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.discharging", "1");
+    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_good_only_device(void) {
+    // No ACPresent: Good stands in for it, but never while discharging
+    UPSData data;
+    data.set("ups.status.good", "1");
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
+    data.set("ups.status.discharging", "1");
+    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -75,6 +117,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_multiple_alarm_flags);
     RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
     RUN_TEST(test_status_empty_data_returns_unknown);
+    RUN_TEST(test_status_eaton_on_battery_with_good);
+    RUN_TEST(test_status_eaton_online_with_good);
+    RUN_TEST(test_status_ac_lost_before_discharging_flag);
+    RUN_TEST(test_status_discharging_wins_over_stale_ac_present);
+    RUN_TEST(test_status_good_only_device);
     return UNITY_END();
 }
 #else
@@ -87,6 +134,11 @@ void setup() {
     RUN_TEST(test_status_multiple_alarm_flags);
     RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
     RUN_TEST(test_status_empty_data_returns_unknown);
+    RUN_TEST(test_status_eaton_on_battery_with_good);
+    RUN_TEST(test_status_eaton_online_with_good);
+    RUN_TEST(test_status_ac_lost_before_discharging_flag);
+    RUN_TEST(test_status_discharging_wins_over_stale_ac_present);
+    RUN_TEST(test_status_good_only_device);
     UNITY_END();
 }
 void loop() {}

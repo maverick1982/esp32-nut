@@ -18,95 +18,14 @@ CyberPowerDriver::CyberPowerDriver() {}
 
 void CyberPowerDriver::setup() {
     GenericDriver::setup();
-    _slow_poll_counter = 1; // Align to CyberPower original initialization if necessary? Wait, CyberPowerDriver::setup had _slow_poll_counter = 14!
-    // Actually, let's just use GenericDriver::setup() exactly.
+    _map.invalidate();
 }
 
-void CyberPowerDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
-    if (!host) return;
-
-    if (data.get("ups.type") != getDriverName()) {
-        data.set("ups.type", getDriverName());
-    }
-
-    if (_poll_step == 0) {
-        if (now - _last_fast_poll >= 30000 || _last_fast_poll == 0) { // 30 seconds polling for CyberPower!
-            _last_fast_poll = now != 0 ? now : 1;
-            _poll_step = 1;
-            _last_step_time = now;
-            
-            _slow_poll_counter++;
-            if (_slow_poll_counter >= 2) { // Every 2 cycles (60s)
-                _slow_poll_counter = 0;
-            }
-        }
-    }
-
-    if (_poll_step > 0) {
-        if (host->isControlPending()) return;
-
-        if (now - _last_step_time >= 50 || _poll_step == 1) { // Execute first step immediately
-            _last_step_time = now;
-            
-            if (_poll_step == 1) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.mfr")) if (host->_iManufacturer > 0) host->requestStringDescriptor(host->_iManufacturer);
-            } else if (_poll_step == 2) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.model")) if (host->_iProduct > 0) host->requestStringDescriptor(host->_iProduct);
-            } else if (_poll_step == 3) {
-                if (_slow_poll_counter == 0 && !data.hasKey("ups.serial")) if (host->_iSerialNumber > 0) host->requestStringDescriptor(host->_iSerialNumber);
-            } else {
-                if (!_rids_cached) {
-                    const auto& usages = host->getUsages();
-                    for (const auto& u : usages) {
-                        if (u.report_type == 2) continue; // Skip OUTPUT reports
-                        uint16_t pair = (u.report_type << 8) | u.report_id;
-                        bool found = false;
-                        for (uint16_t id : _cached_rids) {
-                            if (id == pair) { found = true; break; }
-                        }
-                        if (!found && u.report_id != 0) _cached_rids.push_back(pair);
-                    }
-                    std::vector<uint8_t> input_ids;
-                    for (uint16_t pair : _cached_rids) {
-                        if ((pair >> 8) == 1) input_ids.push_back(pair & 0xFF);
-                    }
-    
-                    for (auto it = _cached_rids.begin(); it != _cached_rids.end(); ) {
-                        uint8_t r_type = (*it >> 8);
-                        uint8_t r_id = (*it & 0xFF);
-                        
-                        // 1. Escludere ID inutili o pericolosi (Killer IDs e Vendor Defined >= 130)
-                        if (r_id >= 130 || r_id == 4 || r_id == 6) {
-                            it = _cached_rids.erase(it);
-                            continue;
-                        }
-                        
-                        // 3. Non interrogare mai gli Input Report sul Control Endpoint
-                        // (Ci affidiamo esclusivamente all'Interrupt Endpoint per riceverli)
-                        if (r_type == 1) {
-                            it = _cached_rids.erase(it);
-                            continue;
-                        }
-                        
-                        ++it;
-                    }
-                    _rids_cached = true;
-                }
-                
-                int index = _poll_step - 4;
-                if (index >= 0 && index < _cached_rids.size()) {
-                    uint8_t r_type = _cached_rids[index] >> 8;
-                    uint8_t r_id = _cached_rids[index] & 0xFF;
-                    
-                    host->requestReport(r_id, r_type, host->getHIDParser()->getExpectedLength(r_id, r_type));
-                } else {
-                    _poll_step = 0;
-                    return;
-                }
-            }
-            _poll_step++;
-        }
-    }
+// Traffic on EP0 is what makes these firmwares stall: status values come from the
+// INPUT reports the UPS sends every few seconds, the rest is read every 30 s.
+bool CyberPowerDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const {
+    // Vendor-defined reports (>= 130) and reports 4 and 6 hang some firmwares
+    return !(report_id >= 130 || report_id == 4 || report_id == 6);
 }
 
 void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -114,17 +33,13 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
-    struct Mapping {
-        const char* path;
-        void (*apply)(CyberPowerDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
+    typedef UsageMapIndex<CyberPowerDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             // In cps-hid, this is battery.voltage.nominal. We do NOT want to map it 
             // to input.voltage.nominal like GenericDriver does.
             // Override the generic mapping by clearing the input one and setting battery.
-            d.set("input.voltage.nominal", ""); 
+            d.remove("input.voltage.nominal");
             d.set("battery.voltage.nominal", String((int)v));
         } },
         { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
@@ -137,14 +52,5 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
         } }
     };
 
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                double val = HIDParser::extractUsage(&u, report_id, data, length);
-                m.apply(this, ups_data, val, &u);
-                break;
-            }
-        }
-    }
+    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }

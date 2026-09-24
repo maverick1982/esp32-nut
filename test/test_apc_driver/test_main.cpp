@@ -22,7 +22,7 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
     uint32_t getQuirks() const override { return 0; }
-    bool isControlPending() const override { return false; }
+    bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
         return true;
