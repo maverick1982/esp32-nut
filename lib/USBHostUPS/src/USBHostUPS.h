@@ -16,6 +16,11 @@
 #include <map>
 #include <vector>
 
+// Time after boot during which a missing UPS is not reported as stale (review A1)
+#ifndef USBUPS_NO_DEVICE_BOOT_GRACE_MS
+#define USBUPS_NO_DEVICE_BOOT_GRACE_MS 15000
+#endif
+
 struct CachedReport {
     uint8_t report_id;
     uint8_t report_type;
@@ -78,7 +83,7 @@ public:
     HIDParser _hid_parser;
 
 public:
-    static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, UPSData& ups_data);
+    static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, uint32_t quirks, UPSData& ups_data);
 private:
     struct HidEvent {
         enum Type : uint8_t { CONNECTED, OPEN_FAILED, INPUT_REPORT, DISCONNECTED, TRANSFER_ERROR };
@@ -92,6 +97,7 @@ private:
     static const UBaseType_t EVENT_QUEUE_RESERVED = 2;
     static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
+    static const uint32_t NO_DEVICE_BOOT_GRACE_MS = USBUPS_NO_DEVICE_BOOT_GRACE_MS;
 
     mutable std::recursive_mutex _mutex;
     static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle, const hid_host_driver_event_t event, void *arg);
@@ -130,6 +136,7 @@ private:
     uint16_t _pid;
     bool _initialized;
     bool _is_ready_to_poll;
+    bool _device_seen; // a UPS was claimed since boot
 
     LinkMonitor _link;
     bool _in_restart_pending;

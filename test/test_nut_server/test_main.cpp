@@ -85,6 +85,7 @@ void setUp(void) {
     mockHost.statusString = "OL";
     mockHost.beeperState = true;
     mockHost.connected = true;
+    mockHost.stale = false;
 
     NUTServerConfig config;
     config.username = "admin";
@@ -254,6 +255,29 @@ void test_data_stale(void) {
     TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"95\"\n", printer.getOutput().c_str());
 }
 
+// Review A1: with the UPS unplugged (or re-enumerating) the host reports stale data.
+// Clients must get ERR DATA-STALE, never an empty "Unknown" status, while the UPS
+// itself stays listed.
+void test_disconnected_is_stale(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.statusString = "UNKNOWN";
+    mockHost.connected = false;
+    mockHost.stale = true;
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
+}
+
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
     // LIST CLIENT must be answered with a BEGIN/END pair. A bare "ERR" is what
@@ -394,6 +418,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
+    RUN_TEST(test_disconnected_is_stale);
     return UNITY_END();
 }
 #else
@@ -411,6 +436,7 @@ void setup() {
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
+    RUN_TEST(test_disconnected_is_stale);
     UNITY_END();
 }
 void loop() {}

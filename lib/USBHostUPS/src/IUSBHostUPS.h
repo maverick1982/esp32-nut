@@ -38,8 +38,8 @@ public:
     virtual String getUPSStatusString() const = 0;
     virtual bool setBeeper(bool enable) = 0;
     virtual bool isConnected() const = 0;
-    // True while the device is attached but its values can no longer be refreshed
-    // (control pipe not answering): consumers must not serve them as current.
+    // True when the values can no longer be refreshed: control pipe not answering, or
+    // no device attached (after the boot grace). Consumers must not serve them as current.
     virtual bool isDataStale() const { return false; }
     virtual bool supportsBeeperToggle() const { return true; }
 
