@@ -680,6 +680,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Issue #47: surface crash diagnostics without a serial console
+    function renderDiagnostics(data) {
+        const banner = document.getElementById('diag-banner');
+        if (!banner) return;
+        const diag = data.diagnostics || {};
+        const lines = [];
+        const addLine = (text, code) => {
+            const p = document.createElement('p');
+            p.textContent = text;
+            if (code) {
+                const c = document.createElement('code');
+                c.textContent = code;
+                p.appendChild(c);
+            }
+            lines.push(p);
+        };
+
+        if (data.ups && data.ups.stale) {
+            addLine('UPS is not answering: values are stale and NUT clients get ERR DATA-STALE.');
+        }
+        if (diag.last_restart_cause) {
+            addLine('Last automatic restart: ' + diag.last_restart_cause);
+        }
+        if (diag.last_crash) {
+            addLine('Last crash (reset: ' + diag.reset_reason + ') in task "' + diag.last_crash.task + '", PC ' + diag.last_crash.pc + '. Backtrace: ', diag.last_crash.backtrace);
+        } else if (diag.reset_reason && ['PANIC', 'TASK_WDT', 'INTERRUPT_WDT', 'OTHER_WDT', 'BROWNOUT'].includes(diag.reset_reason)) {
+            addLine('Last reset reason: ' + diag.reset_reason);
+        }
+        if (diag.coredump_partition === false) {
+            addLine('Crash details cannot be saved: the partition table has no coredump partition. Flash the full firmware once with the web installer (OTA cannot update the partition table).');
+        }
+
+        banner.replaceChildren(...lines);
+        banner.hidden = lines.length === 0;
+    }
+
     async function fetchSystemStatus() {
         if (isFetchingAPI) return;
         
@@ -707,9 +743,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
+            renderDiagnostics(data);
+
             if (lblUps && data.ups) {
-                lblUps.textContent = 'UPS: ' + data.ups.status;
-                if (data.ups.status === 'Connecting') {
+                lblUps.textContent = 'UPS: ' + data.ups.status + (data.ups.stale ? ' (stale)' : '');
+                if (data.ups.stale) {
+                    indUps.className = 'status-indicator warning';
+                } else if (data.ups.status === 'Connecting') {
                     indUps.className = 'status-indicator warning';
                 } else if (data.ups.status === 'Disconnected') {
                     indUps.className = 'status-indicator danger';

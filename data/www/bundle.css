@@ -241,6 +241,25 @@ body {
     animation: pulse 2s infinite;
 }
 
+.diag-banner {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--warning);
+    border-radius: var(--border-radius);
+    background: rgba(255, 184, 0, 0.08);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.diag-banner p {
+    margin: 0.25rem 0;
+}
+
+.diag-banner code {
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+
 .status-indicator.success {
     background: var(--success);
     box-shadow: 0 0 8px rgba(0, 255, 157, 0.5);
