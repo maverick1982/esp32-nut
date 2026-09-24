@@ -283,6 +283,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 return;
             }
 
+            // Like upsd: never serve frozen values as current
+            if (_usb_ups && _usb_ups->isDataStale()) {
+                client.print("ERR DATA-STALE\n");
+                return;
+            }
+
             client.printf("BEGIN LIST VAR %s\n", upsName.c_str());
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
@@ -419,6 +425,11 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
             if (!_usb_ups) {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
+                return;
+            }
+
+            if (_usb_ups->isDataStale()) {
+                client.print("ERR DATA-STALE\n");
                 return;
             }
 

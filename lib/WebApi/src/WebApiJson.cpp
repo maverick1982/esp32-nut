@@ -16,8 +16,11 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     }
     
     auto data = usb_ups->getUPSData();
-    
+
     doc["ups.status"] = usb_ups->getUPSStatusString();
+    if (usb_ups->isDataStale()) {
+        doc["_stale"] = true;
+    }
     
     for (const auto& param : data->getAll()) {
         if (param.key.startsWith("ups.status.") && param.key != "ups.status") {

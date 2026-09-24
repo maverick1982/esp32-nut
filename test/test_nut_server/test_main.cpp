@@ -60,6 +60,9 @@ public:
         return connected;
     }
 
+    bool stale = false;
+    bool isDataStale() const override { return stale; }
+
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
@@ -227,6 +230,30 @@ void test_instcmd_beeper(void) {
     TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
 }
 
+// Issue #47: frozen values must not be served as current (upsd behaviour)
+void test_data_stale(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("battery.charge", "95");
+
+    mockHost.stale = true;
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    mockHost.stale = false;
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"95\"\n", printer.getOutput().c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
     // LIST CLIENT must be answered with a BEGIN/END pair. A bare "ERR" is what
@@ -366,6 +393,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_data_stale);
     return UNITY_END();
 }
 #else
@@ -382,6 +410,7 @@ void setup() {
     RUN_TEST(test_get_desc_and_type);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
+    RUN_TEST(test_data_stale);
     UNITY_END();
 }
 void loop() {}
