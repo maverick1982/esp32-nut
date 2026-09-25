@@ -137,3 +137,60 @@ Nota: il panic handler chiama `disable_all_wdts()` prima di scrivere il core dum
 - **Riproduzione deterministica:** un flag di build di debug che fa `delay(6000)` nel callback INPUT. Prima del fix deve dare timeout (e poi crash); dopo il fix nessun errore e nessun timeout.
 - Unit test nativi (`env:native`) per la macchina a stati di recupero (F3): backoff, watchdog sul link, escalation, dati stale.
 - Soak test di più giorni con x-magic sui due UPS, chiedendo log seriali completi con reset reason ed eventuale summary del core dump.
+
+## 5. Verifica su tutti i log della issue (2026-09-24)
+
+Ricontrollati tutti i log allegati o incollati nella issue, compresi i quattro del 2026-09-24 (`cp1300-20260924_082854`, `cp1300-20260924_173251`, `cp1500-20260924_082848`, `cp1500-20260924_173243`). Questi girano ancora con il fix v2 (`hid_control_transfer(1034)`) e con le schede alimentate esternamente.
+
+### 5.1 Un solo meccanismo, confermato su 22 timeout su 22
+
+| Log | Firmware | Timeout | INPUT mancante prima | Esito |
+|---|---|---|---|---|
+| comment 2026-09-22 | fix v1 | 2 | 4,7 / 7,6 s | panic immediato (stack canary, poi panic annidati) |
+| dev-debug | pre-v1 | 2 | ~7,5 s | panic |
+| cp1300/cp1500 2026-09-23 | fix v2 | 6 | 4,7-7,6 s | panic (4), fine log (1), inizio cattura (1) |
+| cp1300/cp1500 2026-09-24 | fix v2 | 11 | 4,7-13 s | panic (5), reset da watchdog HW TG0/TG1/RTC (3), blocco muto (3) |
+
+- In ogni caso manca almeno un INPUT report prima del timeout, e il report trattenuto arriva 348-364 ms dopo la riga `Control transfer timeout`. È il deadlock di §3.1: il callback INPUT del task HID aspetta `_mutex`, tenuto dal loopTask dentro il GET_REPORT.
+- Dopo il timeout: `Voltage = 0.0 V` (fino a 30 righe) prima del crash, cioè le risposte sfasate di §3.2. Crash dall'ISR USB con lo stesso backtrace (`0x40380eb0 0x4037eee6 0x4037df78 ... 0x4206061d`), poi `Re-entered core dump!` e panic annidati. Tempo tra timeout e crash: da 0 a 504 s.
+- Blocchi senza uscita: cp1300 09:11 (la scheda riparte solo al power-on manuale 7,7 ore dopo), cp1500 15:29 (ferma per 1,4 ore sui backtrace annidati), fine log a 19:41 e a 21:06. I reset `RTCWDT_RTC_RST` due secondi dopo un panic confermano il panic handler bloccato nel core dump senza partizione (§3.3).
+- Nessun reset `BROWNOUT` in nessun log, e i crash continuano con alimentazione esterna: il brownout è escluso.
+- Il reset USB dell'UPS esiste (`USBH: Device 1 gone`, 3 volte nel log cp1300 della mattina, riconnessione in circa 0,4 s), ma nessun crash lo segue: non è la causa. Il firmware attuale lo gestisce nel task di polling (disconnect differito, dati `ERR DATA-STALE` durante la riconnessione, enumerazione robusta C2).
+
+### 5.2 Cause dei log più vecchi, già corrette prima della v3
+
+- `Stack canary watchpoint triggered (IDLE0)`, PC `0x42028281` (log v1.5.1, dev, fix v1): stack del task HID da 4 KB. Nei log v2 (stack a 8 KB) non compare più.
+- `Core 1 LoadProhibited` in `memcpy` della ROM con `EXCVADDR 0` (v1.5.1): compatibile con la `memcpy` di lunghezza negativa su un transfer fallito (ADR 0008), corretta nella v3. Senza l'ELF di quella versione non si può confermare il frame.
+
+### 5.3 Copertura nel firmware attuale (branch `fix/issue-47`, fasi 1-3 della review)
+
+| Sintomo nei log | Correzione |
+|---|---|
+| Timeout del control transfer (deadlock) | callback HID mai bloccanti, eventi in coda (`b3dc8ec`); dal 2026-09-24 polling in un task dedicato (review A5b) |
+| Dati sfasati / `0.0 V` / crash dall'ISR USB | URB di EP0 mai toccato mentre è in volo, semaforo svuotato, stato verificato (`0318cd1`) |
+| Panic annidati, blocchi, watchdog inerte | Task WDT su loopTask e `ups_poll`, partizione `coredump` + `--wrap` condizionale (`ed9f9ee`) |
+| Scheda che non riparte da sola | scala di recupero `LinkMonitor` + restart controllati con backoff e modalità degradata (review A7) |
+| Valori congelati serviti come validi | `ERR DATA-STALE` a pipe ferma, a device scollegato (A1) e con watchdog INPUT (A2) |
+| Traffico EP0 del CyberPower | full poll ogni 30 s dei soli FEATURE, niente GET_REPORT degli INPUT (fase 3) |
+
+**Cosa non è dimostrato:**
+- nessuna prova su un CyberPower: il firmware attuale non è ancora stato dato a x-magic;
+- i blocchi muti non hanno output e la loro causa è dedotta (lo stato corrotto dopo il timeout), non osservata;
+- se una scheda si bloccasse con gli interrupt disabilitati su entrambi i core, resta solo l'interrupt watchdog (il reset `TG1WDT_SYS_RST` nel log cp1500 mostra che funziona);
+- senza un flash completo con il web installer non c'è partizione `coredump`: il panic si chiude lo stesso (wrap), ma senza dettagli post-mortem.
+
+### 5.4 Prossimo passo con x-magic
+
+Firmware di test `test_fix_issue_47_v3.zip` (commit `6a8e871`, versione `fix-issue-47-v3`), da installare con un **flash completo** dal web flasher di Espressif, perché serve ad aggiungere la partizione `coredump`:
+- opzione A: `bootloader.bin` a `0x0`, `partitions.bin` a `0x8000`, `boot_app0.bin` a `0xe000`, `firmware.bin` a `0x10000`, senza "Erase Flash", così le impostazioni restano;
+- opzione B: immagine unica a `0x0`, che però cancella le impostazioni.
+
+`boot_app0.bin` riscrive `otadata`. Senza, una scheda che dopo un numero dispari di OTA gira da `app1` continuerebbe ad avviare il vecchio firmware anche dopo il flash. Per lo stesso motivo il file è stato aggiunto anche al manifest del web installer e a `release.yml`.
+
+Opzione A provata il 2026-09-25 su ESP32-S3 con Eaton 3S: flash riuscito e funzionamento regolare.
+
+Da verificare nei log:
+- nessun `Control transfer timeout` preceduto da un INPUT mancante; un eventuale timeout isolato deve dare solo backoff (`link failures`, `polling paused`), mai dati `0.0 V` o crash;
+- riepilogo `[USB] Last 60 s`: circa 40 INPUT report al minuto (id 8 e 11 ogni 3 s) e un GET_REPORT ogni 30 s per report FEATURE;
+- al boot `[DIAG] Reset reason`, `Last controlled restart` e `Last crash` (con backtrace dal core dump);
+- build di debug opzionale con `-DUSBUPS_DEBUG_SLOW_INPUT_MS=6000` per la riproduzione deterministica (F5): prima del fix causava timeout e crash, ora non deve dare errori.

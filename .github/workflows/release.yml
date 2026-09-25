@@ -40,7 +40,12 @@ jobs:
           cp .pio/build/esp32-s3-standard/firmware.bin release-pkg/
           cp .pio/build/esp32-s3-standard/bootloader.bin release-pkg/
           cp .pio/build/esp32-s3-standard/partitions.bin release-pkg/
-          
+          # Empty otadata at 0xe000: after an odd number of OTA updates the board boots
+          # from app1, and a full flash that skips it keeps starting the old firmware
+          BOOT_APP0=$(find ~/.platformio/packages -path "*/tools/partitions/boot_app0.bin" | head -n 1)
+          if [ -z "$BOOT_APP0" ]; then echo "boot_app0.bin not found" >&2; exit 1; fi
+          cp "$BOOT_APP0" release-pkg/
+
           # Creazione manifest.json
           cat <<EOF > release-pkg/manifest.json
           {
@@ -52,6 +57,7 @@ jobs:
                 "parts": [
                   { "path": "bootloader.bin", "offset": 0 },
                   { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "boot_app0.bin", "offset": 57344 },
                   { "path": "firmware.bin", "offset": 65536 }
                 ]
               }
