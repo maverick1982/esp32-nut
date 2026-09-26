@@ -10,6 +10,15 @@ tags: [prd, prodotto, requisiti]
 **Data:** 2026-07-08
 **Versione:** 1.0
 
+> **Nota (2026-09-26).** Questo è il PRD iniziale dell'MVP: resta come riferimento storico e non viene aggiornato. Punti in cui il firmware attuale è diverso:
+> - **Configurazione:** salvata in NVS (`Preferences`, chiave `config_json`), non su LittleFS `/config.json`. La tabella partizioni non ha partizioni LittleFS o SPIFFS.
+> - **Watchdog e affidabilità:** niente watchdog hardware a timer. Il Task WDT (30 s, panic) sorveglia il loopTask e il task `ups_poll`; il link USB si recupera con backoff, restart dell'interfaccia e riavvii controllati con attese crescenti; c'è un core dump in flash (ADR 0008).
+> - **Scope UPS:** non solo Eaton 3S. APC, CyberPower, Eaton, Powercom e OpenUPS hanno driver dedicati scelti per VID/PID, con un driver generico per gli altri UPS HID PDC (ADR 0003, ADR 0004).
+> - **Polling:** stato ogni 2 s, dati completi ogni 30 s, INPUT report asincroni. I client NUT ricevono `ERR DATA-STALE` quando i dati non sono aggiornabili o l'UPS non è collegato.
+> - **Installazione:** web installer o pacchetto di release con flash completo (bootloader a `0x0`, partizioni a `0x8000`, `boot_app0.bin` a `0xe000`, firmware a `0x10000`); gli aggiornamenti successivi via OTA.
+> - **Struttura del progetto:** `src/core`, `src/network`, `include/core`, `include/network` e le librerie in `lib/` (`USBHostUPS`, `usb_host_hid`, `NUTServer`, `WebApi`, `DiagnosticLED`).
+> - **Decisioni architetturali:** fanno fede gli ADR in [`docs/adr`](../adr/README.md). Le voci "ADR-001/002/003" di questo documento sono le decisioni iniziali dell'MVP e non corrispondono alla numerazione di quella cartella.
+
 ---
 
 ## Elevator Pitch

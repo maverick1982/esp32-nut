@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Migrate to ESP-IDF usb_host_hid and Decouple Driver Tasks
 
 * **ADR ID:** 0002
-* **Status:** Accepted
+* **Status:** Accepted, amended by [ADR 0008](0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md)
 * **Date:** 2026-09-05
 * **Authors:** Antigravity / @maverick1982
 
@@ -28,6 +28,11 @@ Specifically, the refactoring established these patterns:
 3. **Synchronous Control Transfers**: Operations like setBeeper (which use hid_class_request_set_report) are executed synchronously on the main thread (not the background task) to prevent stalling the event loop.
 4. **Native Testability**: Hardware-independent logic (like bit-masking in BeeperLogic and JSON payload generation in WebApiJson) was extracted into pure functions to allow native TDD without requiring physical USB hardware.
 
+> **Amendment (ADR 0008, 2026-09-24).** Points 1-3 no longer describe the firmware. Holding `_mutex` across control transfers, and taking it inside the hid_host callbacks, caused the deadlock of issue #47.
+> - **Tasks:** `usb_host_events` runs `usb_host_lib_handle_events()`, and the hid_host component has its own task (priority 5) whose callbacks only post to a queue. The USB service (events, polling, decoding, recovery) runs in `ups_poll` (priority 3, 8 KB, 10 ms period, under the Task WDT), started by `USBHostUPS::begin()`. `loop()` never services USB.
+> - **Locks:** `_mutex` only protects `UPSData`, the parser and the report cache. No application lock is held during a control transfer.
+> - **Control requests from other tasks:** `setBeeper()` runs in the calling task and waits (at most 3 s) on `_op_mutex`, so it never overlaps a poll step. Lock order: `_op_mutex`, then `_mutex`.
+
 ## Consequences
 ### Positive
 * The ESP32 no longer deadlocks during aggressive concurrent polling from the Web UI and NUT clients.
@@ -35,11 +40,11 @@ Specifically, the refactoring established these patterns:
 * Codebase is highly testable (native unit tests cover payload manipulation and API generation).
 
 ### Negative
-* Increased memory footprint due to the dedicated FreeRTOS task.
+* Increased memory footprint due to the dedicated FreeRTOS tasks (today `usb_host_events` 4 KB, HID 8 KB, `ups_poll` 8 KB).
 * Increased complexity in USBHostUPS.cpp regarding mutex lifecycle management.
 
 ## Impact on Agent Implementation
-* **Mutex Rule**: Agents MUST NEVER access UPSData or invoke usb_host_hid APIs from outside the class without acquiring the _mutex.
-* **Task Boundary Rule**: Agents MUST NOT place blocking control transfers (e.g., hid_class_request_get_report) inside the asynchronous background event loop, as this will cause deadlocks.
+* **Mutex Rule**: Agents MUST take `_mutex` (`getUPSData()` / `lock()`) to read or modify UPSData, and MUST NOT hold it across `hid_class_request_*` or any other blocking USB call (ADR 0008).
+* **Task Boundary Rule**: Agents MUST NOT block, take `_mutex` or issue control transfers inside the hid_host callbacks. Blocking control transfers belong in the `ups_poll` task, or behind `_op_mutex` when issued by another task.
 * **Testability Rule**: Agents MUST extract byte-level parsing, bit-masking, and string formatting into pure static functions (e.g., BeeperLogic, WebApiJson) and write native unit tests for them, avoiding direct hardware dependencies in business logic.
 

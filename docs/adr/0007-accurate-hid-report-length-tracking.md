@@ -38,7 +38,8 @@ Chosen option: "**Option 2: Faithful "NUT Way" Length Tracking with Truncation T
 * Transitioning from `String` to `const char*` and fixed arrays requires stricter memory management and string manipulation (e.g., `strcmp`, `strncat`).
 
 ## Impact on Agent Implementation
-* Agents MUST NEVER use hardcoded report lengths (like `64`) when calling `requestReport`. They MUST ALWAYS use `host->getHIDParser()->getExpectedLength(report_id, report_type)`.
-* Agents MUST NEVER use `String` objects for HID paths or map keys. Use `char[80]` arrays or `const char*` with proper custom comparators for `std::map`.
+* Agents MUST NEVER use hardcoded report lengths (like `64`) when calling `requestReport`. They MUST ALWAYS use `host->getHIDParser()->getExpectedLength(report_id, report_type)`. `GenericDriver` does it for every `PollItem` with `length` 0. Known exception: the fixed Powercom lists (8 bytes, inherited from the previous driver), to be revisited when the `feature/issue-36` Powercom work is ported.
+* Agents MUST NEVER use `String` objects for HID paths (`HIDUsageDef.path`) or map keys. Use `char[80]` arrays or `const char*` with proper custom comparators for `std::map`. (The active beeper path is still kept as a `String` in `GenericDriver` and `USBHostUPS`.)
+* INPUT reports longer than one packet are rebuilt by `InputReassembler` from `HIDParser::getInputLength()` (ADR 0008, review A4).
 * Agents MUST assume that padding bits are part of the report length calculation, maintaining the "NUT Way" exact bit counting algorithm.
 * This ADR effectively supersedes ADR 0005 regarding report length handling and quirks.

@@ -130,10 +130,10 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 - **A1.** `LinkMonitor::isStaleWithoutDevice()`: senza device i dati sono stale, tranne nei primi `USBUPS_NO_DEVICE_BOOT_GRACE_MS` (15 s, sovrascrivibile da `build_flags`) dopo il boot se nessun UPS è ancora stato visto. Dopo un disconnect sono stale subito, anche dentro la grazia. `NUTServer.cpp` non ha richiesto modifiche, perché controllava già `isDataStale()` su `LIST VAR` e `GET VAR`. `/api/system-status` segnala `stale` solo con il device connesso, così la web UI mostra "Disconnected" senza il banner "UPS is not answering". Test: `test_stale_without_device`, `test_disconnected_is_stale`.
 
 **Cosa resta prima di chiudere la Fase 1:**
-- prova su hardware di stacca/riattacca a raffica (C2);
-- confronto del descriptor dump prima e dopo sulle UPS disponibili (C3), controllando nel log l'eventuale `Short report descriptor`;
-- verifica di `ups.mfr`, `ups.model` e `ups.serial` sul CyberPower con stringhe invertite (C4);
-- commit, dopo la conferma.
+- prova su hardware di stacca/riattacca a raffica (C2). In parte coperta dalle 11 disconnessioni reali dei due CyberPower di x-magic (2026-09-26), tutte riconnesse senza errori; manca la prova "a raffica" (Fase 4);
+- confronto del descriptor dump prima e dopo sulle UPS disponibili (C3), controllando nel log l'eventuale `Short report descriptor`. Nessun `Short report descriptor` nei log di Eaton e CyberPower;
+- ~~verifica di `ups.mfr`, `ups.model` e `ups.serial` sul CyberPower con stringhe invertite (C4)~~ fatto: `CPS`, `CP1300EPFCLCD` e `CP1500EPFCLCD` corretti nei dump del 2026-09-26;
+- ~~commit~~ fatto (`da1f354`).
 
 ### Fase 2: robustezza del link
 
@@ -174,11 +174,11 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
   - in `/api/usb/dump` sono stati aggiunti `incomplete_input_reports` ed `ep_in_mps`.
 
 **Cosa resta prima di chiudere la Fase 2:**
-- prova su hardware di A3, in particolare del data toggle dopo il clear;
-- soak test di A5a su APC ed Eaton, cercando `requestReport FAILED ... ESP_ERR_TIMEOUT` che con 5 s non comparivano;
-- prova di A4 sull'APC Smart-UPS 750 pid 0003 (report 137 da 64 byte), controllando `ep_in_mps` e il report ricomposto nel dump;
-- verifica di A2 sul CyberPower (`input_period_ms` ≈ 3000) e su un APC che invia solo sui cambi (`input_period_ms` = 0);
-- commit, dopo la conferma.
+- prova su hardware di A3, in particolare del data toggle dopo il clear. Non ancora osservata: nessun errore IN nei log di Eaton e CyberPower, quindi il percorso non è mai scattato;
+- soak test di A5a su APC ed Eaton, cercando `requestReport FAILED ... ESP_ERR_TIMEOUT` che con 5 s non comparivano. Sui CyberPower (2026-09-26) e sull'Eaton 3S: 0 richieste fallite; manca l'APC;
+- prova di A4 sull'APC Smart-UPS 750 pid 0003 (report 137 da 64 byte), controllando `ep_in_mps` e il report ricomposto nel dump. I CyberPower hanno `ep_in_mps` 64 e 0 report incompleti, ma i loro report non superano un pacchetto;
+- verifica di A2: ~~CyberPower (`input_period_ms` ≈ 3000)~~ fatto, 3000 ms su entrambi; manca un APC che invia solo sui cambi (`input_period_ms` = 0);
+- ~~commit~~ fatto (`6de1b99`).
 
 ### Fase 3: architettura e qualità dei dati
 
@@ -234,20 +234,51 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 
 **Cosa resta prima di chiudere la Fase 3:**
 - ~~prova sull'Eaton: dati regolari, `battery.type`, margine di stack~~ fatto;
-- ~~beeper da web UI e da NUT~~ fatto;
-- passaggio a batteria dopo la correzione dello stato: deve comparire `OB` (e qualche INPUT report nel riepilogo `[USB] Last 60 s`); stacca/riattacca;
-- commit, dopo la conferma.
+- ~~beeper da web UI e da NUT~~ fatto (Eaton);
+- ~~passaggio a batteria dopo la correzione dello stato~~ fatto: `OB` corretto su Eaton 3S e sui due CyberPower;
+- stacca/riattacca a raffica (Fase 4);
+- ~~commit~~ fatto (`6a8e871`).
 
 ### Fase 4: validazione
 
 - **Test nativi:** ogni fix con logica pura ha un test (beeper, conversione delle stringhe, stale al disconnect, watchdog INPUT, policy dei restart, parser).
 - **Fault injection:** flag di build di debug per:
-  - timeout del control transfer (già presente: `USBUPS_DEBUG_SLOW_INPUT_MS`);
+  - timeout del control transfer. `USBUPS_DEBUG_SLOW_INPUT_MS` non serve più allo scopo: dalla Fase 3 il ritardo gira nel task `ups_poll` e, con INPUT ogni 3 s, blocca il task oltre i 30 s del Task WDT invece di provocare un timeout. Serve un flag nuovo che ritardi il callback di completamento del control transfer in `hid_host.c`;
   - STALL simulato sull'IN;
   - descriptor troncato;
   - disconnect durante un GET_REPORT.
 - **Hardware:** stacca/riattacca a raffica (50 cicli), passaggio a batteria e ritorno, calibrazione dell'UPS, alimentazione della scheda da un'altra porta USB dell'UPS.
 - **Soak test:** almeno 72 h sulle UPS dei tester (CyberPower CP1300/CP1500 di @x-magic, APC ed Eaton), con log seriali completi, reset reason e heap minimo.
+
+#### Stato di avanzamento della Fase 4 (2026-09-26)
+
+**Prima validazione sui CyberPower di x-magic** (firmware `fix-issue-47-v3`, commit `6a8e871`, flash completo con esptool, schede alimentate esternamente):
+
+| | CP1300 | CP1500 |
+|---|---|---|
+| Uptime continuo nel log | 13,9 h | 19,6 h |
+| Reset, panic, blocchi | nessuno (solo il power-on iniziale) | nessuno |
+| Righe `ERROR` / `WARN` | 0 | 0 |
+| GET_REPORT riusciti / falliti | ~40.100 / 0 | ~56.500 / 0 |
+| INPUT al minuto | 40 costanti | 40 costanti |
+| Disconnessioni USB dell'UPS | 5, riconnesse in ~0,4 s | 6, riconnesse in ~0,4 s |
+| Dati validi dopo la riconnessione | 2,0-5,5 s | 1,1-3,9 s |
+| Risposte sfasate in cache | 0 su 24 | 0 su 24 |
+| `link` nel dump | failures 0, recoveries 0, dropped 0, `input_period_ms` 3000 | uguale |
+| Stack libero minimo del task `ups_poll` | 5388 B | 5200 B |
+| Heap libero (dalla 1ª ora) | stabile ~215,4 KB | stabile ~215,4 KB |
+
+- Passaggi `OL` → `OB` → `OL CHRG` corretti su entrambi, compresa una scarica di 44 minuti. Le disconnessioni USB coincidono con i cambi di modalità e alcune avvengono nello stesso secondo sui due UPS: è il reset USB dell'UPS ipotizzato da x-magic, ora gestito senza conseguenze.
+- Con il fix v2 in un periodo simile si erano visti una quindicina di timeout con deadlock, tutti seguiti da crash o blocchi.
+- Heap: il minimo storico (`min free`) scende a gradini fino a ~184 KB in corrispondenza di eventi; il blocco libero più grande è fermo a 192,5 KB. Nessuna tendenza alla perdita.
+
+**Rispetto ai criteri di §5:**
+- nessun panic o blocco: ✅ nelle ~33 ore-scheda disponibili, ⏳ 72 h e altri marchi;
+- dati validi entro 10 s dopo un reset USB: ✅ (massimo 5,5 s);
+- beeper senza azzerare altri campi: ✅ su Eaton (C1), ⏳ CyberPower;
+- web UI e NUT entro 200 ms con l'UPS muto: ⏳ da misurare (l'architettura lo garantisce dalla Fase 3, ma la misura non è stata fatta).
+
+**Resta da fare:** soak test di 72 h, prove su APC (A2 aperiodico, A4, A5a) e Powercom, stacca/riattacca a raffica, fault injection, misura dei tempi di risposta con l'UPS muto.
 
 ## 5. Criteri di accettazione
 
