@@ -50,6 +50,8 @@ void PowercomDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qu
 void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
+#ifdef USBUPS_DEBUG_LOG
+    // Raw dump of every INPUT report: only in debug builds, it allocates on each report
     if (report_type == 1) { // Interrupt IN report
         String hex = "";
         for (size_t i = 0; i < length && i < 16; i++) {
@@ -59,6 +61,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         }
         host->logDebug("[PowercomDriver] INT IN (len " + String((int)length) + "): " + hex);
     }
+#endif
 
     // Save fields before GenericDriver so Powercom custom mappings can handle them
     String saved_voltage = ups_data.get("battery.voltage");
@@ -82,7 +85,9 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         for (size_t i = start_idx; i < length && i < 8; i++) {
             msg += (char)data[i];
         }
+#ifdef USBUPS_DEBUG_LOG
         host->logDebug("[PowercomDriver] 0xA4 text: '" + msg + "'");
+#endif
 
         int start = -1;
         for (int i = 0; i < msg.length(); i++) {

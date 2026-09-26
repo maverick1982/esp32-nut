@@ -193,7 +193,7 @@ Da verificare nei log:
 - nessun `Control transfer timeout` preceduto da un INPUT mancante; un eventuale timeout isolato deve dare solo backoff (`link failures`, `polling paused`), mai dati `0.0 V` o crash;
 - riepilogo `[USB] Last 60 s`: circa 40 INPUT report al minuto (id 8 e 11 ogni 3 s) e un GET_REPORT ogni 30 s per report FEATURE;
 - al boot `[DIAG] Reset reason`, `Last controlled restart` e `Last crash` (con backtrace dal core dump);
-- build di debug opzionale con `-DUSBUPS_DEBUG_SLOW_INPUT_MS=6000` per la riproduzione deterministica (F5): prima del fix causava timeout e crash, ora non deve dare errori.
+- ~~build di debug con `-DUSBUPS_DEBUG_SLOW_INPUT_MS=6000` per la riproduzione deterministica (F5)~~: il flag è stato rimosso prima del merge. Con il servizio USB nel task `ups_poll` rallentava il task stesso fino al Task WDT invece di provocare un timeout (vedi la Fase 4 di `usb-layer-review.md`).
 
 ### 5.5 Esito del firmware v3 (2026-09-26)
 
