@@ -170,7 +170,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
     if (_queue_pos >= _queue.size()) return;
     if (host->isPollingPaused()) return; // the cycle resumes where it stopped
-    if (!_step_now && (now - _last_step) < STEP_SPACING_MS) return;
+    if (!_step_now && (now - _last_step) < stepSpacingMs()) return;
 
     const PollItem item = _queue[_queue_pos++];
     _last_step = now;

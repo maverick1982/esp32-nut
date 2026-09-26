@@ -19,6 +19,8 @@ public:
 protected:
     const char* upsTypeName() const override { return "Powercom"; }
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
+    // The SPD-750U MCU stalls when control requests come too close (issue #36)
+    uint32_t stepSpacingMs() const override { return 800; }
     void buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const override;
     // Model and vendor come from the PID table: no string descriptor requests
     void collectStringRequests(IUSBHostUPS*, const UPSData&, std::vector<uint8_t>&) const override {}

@@ -13,7 +13,7 @@
  * - quick poll every quickPollMs(): only the reports that carry status usages
  *   (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad...);
  * - full poll every fullPollMs(): the missing string descriptors, then every report.
- * One control request per loop() call, STEP_SPACING_MS apart, and none while
+ * One control request per loop() call, stepSpacingMs() apart, and none while
  * isPollingPaused(). Derived drivers only change the policy through the hooks below
  * instead of copying the state machine.
  */
@@ -45,6 +45,8 @@ protected:
     // --- Poll policy ---
     virtual uint32_t quickPollMs() const { return 2000; } // 0 = no quick poll
     virtual uint32_t fullPollMs() const { return 30000; }
+    // Minimum gap between two control requests of a cycle
+    virtual uint32_t stepSpacingMs() const { return STEP_SPACING_MS; }
     // Reports a driver must never request (e.g. ones that freeze the firmware)
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too

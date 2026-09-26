@@ -23,7 +23,7 @@ void PowercomDriver::setup() {
 
 void PowercomDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     if (!data.hasKey("ups.mfr")) {
-        data.set("ups.mfr", "Powercom");
+        data.set("ups.mfr", "POWERCOM Co.,LTD");
     }
     if (!data.hasKey("ups.model")) {
         uint16_t pid = host->getPID();
@@ -40,11 +40,33 @@ void PowercomDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     }
 }
 
+// FEATURE report that carries the usage (by path, or by code when path is null), 0 if none
+static uint8_t featureReportFor(IUSBHostUPS* host, const char* path, uint32_t usage) {
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type != 3 || u.report_id == 0) continue;
+        if (path ? strcmp(u.path, path) == 0 : u.usage == usage) return u.report_id;
+    }
+    return 0;
+}
+
 // Quick poll: every 2 s the status keep-alive (report 0x0A).
-// Full poll: every 30 s also voltages and load (reports 0x1D, 0x21, 0x1F), as powercom-hid.
+// Full poll: every 30 s also voltages and load (reports 0x1D, 0x21, 0x1F), as powercom-hid,
+// then battery temperature, beeper and the legacy 0xA4 battery voltage (issue #36).
+// Temperature and beeper report IDs change between models: they come from the descriptor.
 void PowercomDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick = { PollItem{3, 0x0A, 8} };
     full = { PollItem{3, 0x0A, 8}, PollItem{3, 0x1D, 8}, PollItem{3, 0x21, 8}, PollItem{3, 0x1F, 8} };
+
+    uint8_t temp_id = featureReportFor(host, "UPS.Battery.Temperature", 0);
+    if (!temp_id) temp_id = featureReportFor(host, nullptr, 0x00020036); // PowercomTemperature
+    if (temp_id) full.push_back(PollItem{3, temp_id, 0});
+
+    String beeper = host->getActiveBeeperPath();
+    uint8_t beeper_id = beeper.length() ? featureReportFor(host, beeper.c_str(), 0) : 0;
+    if (beeper_id) full.push_back(PollItem{3, beeper_id, 0});
+
+    // Unmapped in NUT too: read as FEATURE of exactly 8 bytes (powercom-hid.c)
+    full.push_back(PollItem{3, 0xA4, 8});
 }
 
 void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -175,6 +197,9 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
             int32_t delay = 60 * (i >> 8) + (i & 0x00FF);
             ups_data.set("ups.delay.shutdown", String(delay));
             ups_data.set("ups.timer.shutdown", String(delay));
+        }
+        else if (u.usage == 0x00020036) { // PowercomTemperature
+            ups_data.set("battery.temperature", String(val, 0));
         }
         else if (u.usage == 0x00020083) { // DesignCapacity
             ups_data.set("battery.capacity", String((int)(val / 3600.0)));
