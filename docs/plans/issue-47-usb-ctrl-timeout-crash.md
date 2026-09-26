@@ -166,9 +166,9 @@ Ricontrollati tutti i log allegati o incollati nella issue, compresi i quattro d
 
 | Sintomo nei log | Correzione |
 |---|---|
-| Timeout del control transfer (deadlock) | callback HID mai bloccanti, eventi in coda (`b3dc8ec`); dal 2026-09-24 polling in un task dedicato (review A5b) |
-| Dati sfasati / `0.0 V` / crash dall'ISR USB | URB di EP0 mai toccato mentre è in volo, semaforo svuotato, stato verificato (`0318cd1`) |
-| Panic annidati, blocchi, watchdog inerte | Task WDT su loopTask e `ups_poll`, partizione `coredump` + `--wrap` condizionale (`ed9f9ee`) |
+| Timeout del control transfer (deadlock) | callback HID mai bloccanti, eventi in coda (`eaf98e3`); dal 2026-09-24 polling in un task dedicato (review A5b) |
+| Dati sfasati / `0.0 V` / crash dall'ISR USB | URB di EP0 mai toccato mentre è in volo, semaforo svuotato, stato verificato (`968862b`) |
+| Panic annidati, blocchi, watchdog inerte | Task WDT su loopTask e `ups_poll`, partizione `coredump` + `--wrap` condizionale (`a88b3fc`) |
 | Scheda che non riparte da sola | scala di recupero `LinkMonitor` + restart controllati con backoff e modalità degradata (review A7) |
 | Valori congelati serviti come validi | `ERR DATA-STALE` a pipe ferma, a device scollegato (A1) e con watchdog INPUT (A2) |
 | Traffico EP0 del CyberPower | full poll ogni 30 s dei soli FEATURE, niente GET_REPORT degli INPUT (fase 3) |
@@ -181,7 +181,7 @@ Ricontrollati tutti i log allegati o incollati nella issue, compresi i quattro d
 
 ### 5.4 Prossimo passo con x-magic
 
-Firmware di test `test_fix_issue_47_v3.zip` (commit `6a8e871`, versione `fix-issue-47-v3`), da installare con un **flash completo** dal web flasher di Espressif, perché serve ad aggiungere la partizione `coredump`:
+Firmware di test `test_fix_issue_47_v3.zip` (commit `dd2a740` su `main`, versione `fix-issue-47-v3`; nei commenti della issue è citato come `6a8e871`, lo stesso commit sul branch di sviluppo prima del rebase-merge, con contenuto identico), da installare con un **flash completo** dal web flasher di Espressif, perché serve ad aggiungere la partizione `coredump`:
 - opzione A: `bootloader.bin` a `0x0`, `partitions.bin` a `0x8000`, `boot_app0.bin` a `0xe000`, `firmware.bin` a `0x10000`, senza "Erase Flash", così le impostazioni restano;
 - opzione B: immagine unica a `0x0`, che però cancella le impostazioni.
 

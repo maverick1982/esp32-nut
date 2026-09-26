@@ -100,7 +100,7 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 * **S2.** `UsageMapIndex` precomputes the usage → mapping match.
 
 ### Field validation (2026-09-26)
-Firmware `fix-issue-47-v3` (`6a8e871`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).
+Firmware `fix-issue-47-v3` (`dd2a740`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).
 
 ## Consequences
 ### Positive
@@ -113,7 +113,7 @@ Firmware `fix-issue-47-v3` (`6a8e871`) on the two CyberPower units of issue #47:
 ### Negative
 * More deviations from the upstream `usb_host_hid` component (see also ADR 0007), to carry over on every update.
 * A control URB that never comes back can only be cleared by a restart. IDF 5.1 has no way to reset the port.
-* The `coredump` partition needs a one-time full flash with the web installer, because OTA does not update the partition table. Until then, core dumps are skipped (but panics no longer hang). The web installer and the release package also write `boot_app0.bin` (empty otadata) at `0xe000`: otherwise a board left on `app1` by an odd number of OTA updates keeps booting the old firmware after the full flash (`2a1cea0`).
+* The `coredump` partition needs a one-time full flash with the web installer, because OTA does not update the partition table. Until then, core dumps are skipped (but panics no longer hang). The web installer and the release package also write `boot_app0.bin` (empty otadata) at `0xe000`: otherwise a board left on `app1` by an odd number of OTA updates keeps booting the old firmware after the full flash (`9723a3d`).
 * INPUT reports are dropped (and counted) if the task draining the event queue (the loopTask, since phase 3 `ups_poll`) stalls for more than ~40 s.The Task WDT fires before that.
 
 ## Impact on Agent Implementation

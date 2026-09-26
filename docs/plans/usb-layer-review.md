@@ -20,7 +20,7 @@ Review fatta dopo il fix v3 dell'issue #47 (ADR 0008). L'obiettivo è una connes
 - il report che contiene il beeper non contiene mai altre usage;
 - l'unico INPUT report più lungo di 8 byte è il report 137 (64 byte) dell'APC Smart-UPS 750 pid 0003.
 
-I riferimenti di riga si riferiscono al commit `60b6448`.
+I riferimenti di riga si riferiscono al commit `ffa1209`.
 
 ## 2. In sintesi
 
@@ -133,7 +133,7 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 - prova su hardware di stacca/riattacca a raffica (C2). In parte coperta dalle 11 disconnessioni reali dei due CyberPower di x-magic (2026-09-26), tutte riconnesse senza errori; manca la prova "a raffica" (Fase 4);
 - confronto del descriptor dump prima e dopo sulle UPS disponibili (C3), controllando nel log l'eventuale `Short report descriptor`. Nessun `Short report descriptor` nei log di Eaton e CyberPower;
 - ~~verifica di `ups.mfr`, `ups.model` e `ups.serial` sul CyberPower con stringhe invertite (C4)~~ fatto: `CPS`, `CP1300EPFCLCD` e `CP1500EPFCLCD` corretti nei dump del 2026-09-26;
-- ~~commit~~ fatto (`da1f354`).
+- ~~commit~~ fatto (`a34391b`).
 
 ### Fase 2: robustezza del link
 
@@ -178,7 +178,7 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 - soak test di A5a su APC ed Eaton, cercando `requestReport FAILED ... ESP_ERR_TIMEOUT` che con 5 s non comparivano. Sui CyberPower (2026-09-26) e sull'Eaton 3S: 0 richieste fallite; manca l'APC;
 - prova di A4 sull'APC Smart-UPS 750 pid 0003 (report 137 da 64 byte), controllando `ep_in_mps` e il report ricomposto nel dump. I CyberPower hanno `ep_in_mps` 64 e 0 report incompleti, ma i loro report non superano un pacchetto;
 - verifica di A2: ~~CyberPower (`input_period_ms` ≈ 3000)~~ fatto, 3000 ms su entrambi; manca un APC che invia solo sui cambi (`input_period_ms` = 0);
-- ~~commit~~ fatto (`6de1b99`).
+- ~~commit~~ fatto (`ec15a56`).
 
 ### Fase 3: architettura e qualità dei dati
 
@@ -237,7 +237,7 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 - ~~beeper da web UI e da NUT~~ fatto (Eaton);
 - ~~passaggio a batteria dopo la correzione dello stato~~ fatto: `OB` corretto su Eaton 3S e sui due CyberPower;
 - stacca/riattacca a raffica (Fase 4);
-- ~~commit~~ fatto (`6a8e871`).
+- ~~commit~~ fatto (`dd2a740`).
 
 ### Fase 4: validazione
 
@@ -252,7 +252,7 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 
 #### Stato di avanzamento della Fase 4 (2026-09-26)
 
-**Prima validazione sui CyberPower di x-magic** (firmware `fix-issue-47-v3`, commit `6a8e871`, flash completo con esptool, schede alimentate esternamente):
+**Prima validazione sui CyberPower di x-magic** (firmware `fix-issue-47-v3`, commit `dd2a740`, flash completo con esptool, schede alimentate esternamente):
 
 | | CP1300 | CP1500 |
 |---|---|---|
