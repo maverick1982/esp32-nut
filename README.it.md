@@ -4,6 +4,15 @@
 
 *🇬🇧 [Read in English](README.md)*
 
+> [!WARNING]
+> **Aggiorni da una versione v1.5.x o precedente? Installa la v1.6.x o successive con il [web installer](https://maverick1982.github.io/esp32-nut/), non con un aggiornamento OTA.**
+>
+> La v1.6 aggiunge una nuova partizione della flash (`coredump`) che conserva i dettagli dei crash per la diagnostica. Un aggiornamento OTA non può modificare la tabella delle partizioni: la scheda funzionerebbe, ma senza quella partizione.
+>
+> Quando l'installer chiede **"Do you want to erase the device before installing?"**, lascia **"Erase device" deselezionato** e premi **Next**: le impostazioni Wi-Fi e NUT vengono conservate. Selezionalo solo se vuoi un'installazione pulita (la scheda ripartirà in modalità configurazione con l'access point `NUT_ESP32_Config`).
+>
+> Dopo questa installazione, una tantum, gli aggiornamenti successivi si possono di nuovo fare via OTA.
+
 Un firmware open-source per ESP32-S3 che funge da **Server NUT (Network UPS Tools) bridge** standalone via Wi-Fi. Si connette a un gruppo di continuità (UPS) Eaton (come l'Eaton 3S 700) tramite USB Host e ne espone i dati sulla rete locale utilizzando il protocollo standard NUT (porta 3493) e un'interfaccia web integrata.
 
 Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone solo della porta USB) in sistemi come Home Assistant, TrueNAS, Synology o qualsiasi altro client NUT senza la necessità di tenere acceso un Raspberry Pi o un PC 24 ore su 24.

@@ -243,7 +243,7 @@ Implementazione completata, non ancora committata. Verifiche eseguite:
 
 - **Test nativi:** ogni fix con logica pura ha un test (beeper, conversione delle stringhe, stale al disconnect, watchdog INPUT, policy dei restart, parser).
 - **Fault injection:** flag di build di debug per:
-  - timeout del control transfer. `USBUPS_DEBUG_SLOW_INPUT_MS` non serve più allo scopo: dalla Fase 3 il ritardo gira nel task `ups_poll` e, con INPUT ogni 3 s, blocca il task oltre i 30 s del Task WDT invece di provocare un timeout. Serve un flag nuovo che ritardi il callback di completamento del control transfer in `hid_host.c`;
+  - timeout del control transfer. `USBUPS_DEBUG_SLOW_INPUT_MS` non serviva più allo scopo ed è stato rimosso prima del merge:dalla Fase 3 il ritardo gira nel task `ups_poll` e, con INPUT ogni 3 s, blocca il task oltre i 30 s del Task WDT invece di provocare un timeout. Serve un flag nuovo che ritardi il callback di completamento del control transfer in `hid_host.c`;
   - STALL simulato sull'IN;
   - descriptor troncato;
   - disconnect durante un GET_REPORT.

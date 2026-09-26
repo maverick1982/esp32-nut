@@ -51,6 +51,7 @@ jobs:
           {
             "name": "ESP32 NUT Server",
             "version": "${{ github.ref_name }}",
+            "new_install_prompt_erase": true,
             "builds": [
               {
                 "chipFamily": "ESP32-S3",

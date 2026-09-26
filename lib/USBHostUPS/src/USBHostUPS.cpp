@@ -441,12 +441,6 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
     uint8_t r_id = (length > 0) ? data[0] : 0;
     _stat_input++; // summarised every STATS_PERIOD_MS instead of one log per report (review S1)
 
-#ifdef USBUPS_DEBUG_SLOW_INPUT_MS
-    // Issue #47 reproduction aid: slow INPUT processing. Before ADR 0008 this ran inside
-    // the HID task callback and turned every overlapping GET_REPORT into a timeout.
-    delay(USBUPS_DEBUG_SLOW_INPUT_MS);
-#endif
-
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (length > 0) {
         uint16_t key = (1 << 8) | r_id; // type 1 = INPUT
