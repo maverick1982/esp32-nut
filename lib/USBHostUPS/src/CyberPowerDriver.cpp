@@ -10,7 +10,7 @@
  * ADR 0003 COMPLIANCE:
  * This sub-driver faithfully mirrors the official NUT behavior for CyberPower HID devices.
  * - Reference: nut_repo/drivers/cps-hid.c
- * - ConfigVoltage Quirks: In cps-hid, UPS.PowerSummary.ConfigVoltage maps to battery.voltage.nominal, overriding generic mapping.
+ * - ConfigVoltage: UPS.PowerSummary.ConfigVoltage -> battery.voltage.nominal, as in cps-hid (GenericDriver mapping).
  * - String Inversion: cps-hid handles UTF-16 inversion (handled generically via QUIRK_INVERT_STRINGS).
  */
 
@@ -35,13 +35,6 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
 
     typedef UsageMapIndex<CyberPowerDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.ConfigVoltage", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            // In cps-hid, this is battery.voltage.nominal. We do NOT want to map it 
-            // to input.voltage.nominal like GenericDriver does.
-            // Override the generic mapping by clearing the input one and setting battery.
-            d.remove("input.voltage.nominal");
-            d.set("battery.voltage.nominal", String((int)v));
-        } },
         { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
         { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
         { "UPS.Output.CPSInputSensitivity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
