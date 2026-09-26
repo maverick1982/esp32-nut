@@ -1177,10 +1177,12 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
  * @param[out] received   [esp32-nut, review C3] Bytes copied into req->data, can be less than wLength
  * @param[in] recipient   [esp32-nut, review M5] USB_BM_REQUEST_TYPE_RECIP_INTERFACE (report
  *                        descriptor) or USB_BM_REQUEST_TYPE_RECIP_DEVICE (string descriptors)
+ * @param[in] timeout_ms  [esp32-nut] Transfer timeout: string descriptors are polled requests
+ *                        and use CTRL_REQUEST_TIMEOUT_MS like GET_REPORT
  * @return esp_err_t
  */
 static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, const hid_class_request_t *req,
-                                                  size_t *received, uint8_t recipient)
+                                                  size_t *received, uint8_t recipient, uint32_t timeout_ms)
 {
     HID_RETURN_ON_INVALID_ARG(hid_device);
     HID_RETURN_ON_INVALID_ARG(hid_device->ctrl_xfer);
@@ -1223,7 +1225,7 @@ static esp_err_t usb_class_request_get_descriptor(hid_device_t *hid_device, cons
     setup->wIndex = req->wIndex;
     setup->wLength = req->wLength;
 
-    ret = hid_control_transfer(hid_device, required_size, DEFAULT_TIMEOUT_MS);
+    ret = hid_control_transfer(hid_device, required_size, timeout_ms);
 
     if (ret == ESP_OK) {
         if (ctrl_xfer->actual_num_bytes < USB_SETUP_PACKET_SIZE) {
@@ -1284,7 +1286,7 @@ static esp_err_t hid_class_request_report_descriptor(hid_iface_t *iface)
 
     size_t received = 0;
     esp_err_t ret = usb_class_request_get_descriptor(iface->parent, &get_desc, &received,
-                                                     USB_BM_REQUEST_TYPE_RECIP_INTERFACE);
+                                                     USB_BM_REQUEST_TYPE_RECIP_INTERFACE, DEFAULT_TIMEOUT_MS);
 
     // [esp32-nut, review C3] Some UPS answer with fewer bytes than wReportDescriptorLength:
     // expose only what was received, never the uninitialized tail of the buffer.
@@ -2089,7 +2091,7 @@ esp_err_t hid_host_device_get_string_descriptor(hid_host_device_handle_t hid_dev
     };
     *data_length = 0;
     return usb_class_request_get_descriptor(iface->parent, &get_desc, data_length,
-                                            USB_BM_REQUEST_TYPE_RECIP_DEVICE);
+                                            USB_BM_REQUEST_TYPE_RECIP_DEVICE, CTRL_REQUEST_TIMEOUT_MS);
 }
 
 esp_err_t hid_host_device_get_string_indices(hid_host_device_handle_t hid_dev_handle,

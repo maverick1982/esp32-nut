@@ -35,7 +35,17 @@ public:
     }
 
     LinkMonitor() : LinkMonitor(defaultConfig()) {}
-    explicit LinkMonitor(const Config& cfg) : _cfg(cfg) { reset(0); }
+    explicit LinkMonitor(const Config& cfg) : _cfg(cfg), _carriesData(true) { reset(0); }
+
+    /**
+     * False when the control pipe carries no UPS data (QUIRK_NO_GET_REPORT: values only
+     * come from INPUT reports, guarded by InputWatchdog). Its failures then still back off
+     * the remaining requests (strings, beeper) but never make the data stale nor climb the
+     * recovery ladder: a string request timing out on such a device used to restart the
+     * board while INPUT data kept flowing.
+     */
+    void setCarriesData(bool carriesData) { _carriesData = carriesData; }
+    bool carriesData() const { return _carriesData; }
 
     void reset(uint32_t now) {
         _failures = 0;
@@ -68,7 +78,7 @@ public:
     }
 
     bool isStale(uint32_t now) const {
-        return _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
+        return _carriesData && _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
     }
 
     /**
@@ -82,6 +92,7 @@ public:
     }
 
     Action tick(uint32_t now) {
+        if (!_carriesData) return Action::NONE;
         if (_failures == 0 || (now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;
         _recoveries++;
@@ -97,6 +108,7 @@ public:
 
 private:
     Config _cfg;
+    bool _carriesData;
     uint8_t _failures;
     uint8_t _recoveries;
     uint32_t _lastAliveMs;

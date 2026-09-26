@@ -92,6 +92,7 @@ public:
                             : (d.hasKey("ups.status.good") && good && !onBattery);
         if (online) status += "OL ";
         if (onBattery || (hasAc && !acPresent)) status += "OB ";
+        if (onBattery) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
         if (d.getBool("ups.status.battery_low")) status += "LB ";
         
         if (d.hasKey("ups.status.charging") && charging && !(batteryCharge == 100.0f && d.hasKey("ups.status.ac_present") && acPresent)) status += "CHRG ";
