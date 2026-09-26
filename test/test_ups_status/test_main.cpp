@@ -17,7 +17,7 @@ void test_status_on_battery_discharging(void) {
     data.set("ups.status.ac_present", "0");
     data.set("ups.status.discharging", "1");
 
-    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_on_battery_low_battery(void) {
@@ -26,7 +26,7 @@ void test_status_on_battery_low_battery(void) {
     data.set("ups.status.discharging", "1");
     data.set("ups.status.battery_low", "1");
 
-    TEST_ASSERT_EQUAL_STRING("OB LB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_online_charging(void) {
@@ -70,7 +70,7 @@ void test_status_eaton_on_battery_with_good(void) {
     data.set("ups.status.ac_present", "0");
     data.set("ups.status.discharging", "1");
     data.set("ups.status.good", "1");
-    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_eaton_online_with_good(void) {
@@ -94,7 +94,7 @@ void test_status_discharging_wins_over_stale_ac_present(void) {
     UPSData data;
     data.set("ups.status.ac_present", "1");
     data.set("ups.status.discharging", "1");
-    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_good_only_device(void) {
@@ -103,7 +103,7 @@ void test_status_good_only_device(void) {
     data.set("ups.status.good", "1");
     TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
     data.set("ups.status.discharging", "1");
-    TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
 }
 
 #ifdef PIO_UNIT_TESTING

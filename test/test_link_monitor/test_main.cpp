@@ -136,6 +136,24 @@ void test_stale_without_device(void) {
     TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 3600000, grace));
 }
 
+// QUIRK_NO_GET_REPORT: the data comes only from INPUT reports. A string request that
+// times out must not make it stale nor restart the board.
+void test_control_pipe_without_data_never_escalates(void) {
+    LinkMonitor m(testConfig());
+    m.setCarriesData(false);
+    m.reset(0);
+    m.onLinkFailure(1000);
+    TEST_ASSERT_FALSE(m.canPoll(1500)); // still backs off the remaining requests
+    TEST_ASSERT_FALSE(m.isStale(1000 + 3600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(1000 + 3600000));
+    // A reset (new device) keeps the setting
+    m.reset(5000);
+    TEST_ASSERT_FALSE(m.carriesData());
+    m.setCarriesData(true);
+    m.onLinkFailure(6000);
+    TEST_ASSERT_TRUE(m.isStale(6000 + 20000));
+}
+
 // Review A2: watchdog on the INPUT pipe
 
 // CyberPower-like: reports 8 and 11 together every 3 s. Returns the last report time.
@@ -250,6 +268,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_stale_without_device);
+    RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);
@@ -270,6 +289,7 @@ void setup() {
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_stale_without_device);
+    RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);

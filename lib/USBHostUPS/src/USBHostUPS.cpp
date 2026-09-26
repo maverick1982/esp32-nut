@@ -384,6 +384,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     }
 
     _link.reset(millis());
+    _link.setCarriesData(!(_quirks & QUIRK_NO_GET_REPORT));
     _in_wd.reset(millis());
     _in_reasm.reset();
     _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
@@ -612,7 +613,12 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
         } else if (err == ESP_OK || err == ESP_ERR_INVALID_RESPONSE) {
             _lang_id = 0x0409; // no language list (or a STALL): US English
         } else {
-            return false; // no answer: retry at the next full poll
+            // No answer: give up this string for the device instead of paying another
+            // timeout at every full poll
+            _failed_strings[string_index / 32] |= 1u << (string_index % 32);
+            log("WARN", "[USB] String descriptor %u not available: no language ID (%s)",
+                (unsigned)string_index, esp_err_to_name(err));
+            return false;
         }
     }
 

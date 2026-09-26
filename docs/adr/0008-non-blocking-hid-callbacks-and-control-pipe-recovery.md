@@ -49,7 +49,7 @@ Chosen option: "**Option 2**".
 * After a link failure, Feature Report polling backs off exponentially from 2 s to 30 s, through `isControlPending()`, which every driver already honours (renamed `isPollingPaused()` in phase 3).
 * After 20 s without an answer, the data is *stale*: the NUT server returns `ERR DATA-STALE` (like `upsd`) and the web UI flags it.
 * After 60 s without an answer: interface restart (`hid_host_device_stop/start`, driver poll cycle reset), at most 2 times, then a controlled `esp_restart()` from the loopTask. The reason is kept in RTC memory and logged at the next boot. An IN transfer error restarts the interface directly (at most 3 times in a row).
-* Devices that never issue control requests (`QUIRK_NO_GET_REPORT`) never accumulate failures and are never reset. (Since phases 2-3 they may still issue string descriptor requests, at most once per failing index, and their INPUT pipe is guarded by `InputWatchdog`.)
+* Devices that never issue control requests (`QUIRK_NO_GET_REPORT`) never accumulate failures and are never reset. (Since phases 2-3 they may still issue string descriptor requests, at most once per failing index, and their INPUT pipe is guarded by `InputWatchdog`. `LinkMonitor::setCarriesData(false)` keeps control pipe failures from making their data stale or climbing the recovery ladder.)
 
 **Crash safety net:**
 * Task WDT on the loopTask (30 s, panic) instead of the `hw_timer` ISR; since phase 3 also on the `ups_poll` task.
@@ -77,7 +77,7 @@ Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
 **More `hid_host.c` deviations** (marked `[esp32-nut, review Ax]`):
 * **A3.** New `hid_host_device_clear_ep_in_halt()`: CLEAR_FEATURE(ENDPOINT_HALT) on the IN endpoint through EP0, with the same `ctrl_inflight` guard as the class requests.
 * **A4.** New `hid_host_device_get_ep_in_mps()`. The IN transfer stays one packet long.
-* **A5a.** GET/SET class requests time out after `USBUPS_CTRL_TIMEOUT_MS` (1500 ms) instead of 5 s. Report and string descriptor requests and lock waits keep `DEFAULT_TIMEOUT_MS` (5 s); CLEAR_FEATURE uses the 1500 ms timeout.
+* **A5a.** GET/SET class requests time out after `USBUPS_CTRL_TIMEOUT_MS` (1500 ms) instead of 5 s. String descriptor requests and CLEAR_FEATURE use the same 1500 ms timeout; report descriptor requests and lock waits keep `DEFAULT_TIMEOUT_MS` (5 s). `setBeeper()` waits up to 4 s for the current poll step (language ID + string).
 
 **Application changes:**
 * **A2.** `InputWatchdog` (in `LinkMonitor.h`, pure logic) learns the INPUT period from the intervals between bursts. Only for a periodic device, a silence of 5 × period (at least 30 s) makes the data stale and climbs the same recover → recover → restart ladder. Change-driven devices are never periodic and never trigger it.

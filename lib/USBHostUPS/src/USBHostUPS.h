@@ -109,7 +109,9 @@ private:
     static const uint32_t POLL_TASK_STACK = 8192;
     static const UBaseType_t POLL_TASK_PRIORITY = 3; // HID task 5, usb_host_events 2, loopTask 1
     static const uint32_t POLL_TASK_PERIOD_MS = 10;
-    static const uint32_t OP_WAIT_MS = 3000;          // longest wait of setBeeper() for a poll step
+    // Longest wait of setBeeper() for a poll step. The longest step is a string request:
+    // language ID + string, 2 x USBUPS_CTRL_TIMEOUT_MS (1.5 s) when the UPS does not answer.
+    static const uint32_t OP_WAIT_MS = 4000;
 
     mutable std::recursive_mutex _mutex;
     HIDParser _hid_parser;
