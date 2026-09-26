@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Dynamic Polling and Quirks for USB STALL Mitigation
 
 * **ADR ID:** 0005
-* **Status:** Superseded by ADR-0007
+* **Status:** Partially superseded by ADR 0007 (report lengths, `QUIRK_MAX_REPORT_SIZE_1`); `QUIRK_NO_GET_REPORT` is still in force. The freeze root cause was the deadlock addressed by ADR 0008.
 * **Date:** 2026-09-11
 * **Authors:** Antigravity (on behalf of Maverick1982)
 
@@ -37,6 +37,6 @@ Chosen option: "**Option 2: Dynamic Packet Sizing & Targeted Quirks (Align with 
 * Developer maintenance overhead: future unsupported UPS models that still freeze might require the manual introduction of new Product IDs to the `UPS_QUIRKS` table.
 
 ## Impact on Agent Implementation
-* Agents modifying or implementing polling logic MUST NOT hardcode USB packet lengths for Control Transfers. They must parse the `HIDParser` structures.
+* Agents modifying or implementing polling logic MUST NOT hardcode USB packet lengths for Control Transfers. They must parse the `HIDParser` structures. Known exception: the fixed Powercom poll lists use 8 bytes (see ADR 0007).
 * If a new brand or device is observed causing USB STALLs or WDT resets, the agent MUST first look for existing quirks in the `nut_repo/` upstream codebase and mirror them into `Quirks.h` rather than refactoring the global USB stack.
 

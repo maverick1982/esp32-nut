@@ -46,13 +46,13 @@ Chosen option: "**Option 2**".
 
 **Recovery ladder** (`LinkMonitor`, pure logic, unit tested):
 * An answered request, including a STALL, counts as *alive*. No answer (timeout, pipe busy, bus error) counts as a *link failure*.
-* After a link failure, Feature Report polling backs off exponentially from 2 s to 30 s, through `isControlPending()`, which every driver already honours.
+* After a link failure, Feature Report polling backs off exponentially from 2 s to 30 s, through `isControlPending()`, which every driver already honours (renamed `isPollingPaused()` in phase 3).
 * After 20 s without an answer, the data is *stale*: the NUT server returns `ERR DATA-STALE` (like `upsd`) and the web UI flags it.
 * After 60 s without an answer: interface restart (`hid_host_device_stop/start`, driver poll cycle reset), at most 2 times, then a controlled `esp_restart()` from the loopTask. The reason is kept in RTC memory and logged at the next boot. An IN transfer error restarts the interface directly (at most 3 times in a row).
-* Devices that never issue control requests (`QUIRK_NO_GET_REPORT`) never accumulate failures and are never reset.
+* Devices that never issue control requests (`QUIRK_NO_GET_REPORT`) never accumulate failures and are never reset. (Since phases 2-3 they may still issue string descriptor requests, at most once per failing index, and their INPUT pipe is guarded by `InputWatchdog`.)
 
 **Crash safety net:**
-* Task WDT on the loopTask (30 s, panic) instead of the `hw_timer` ISR.
+* Task WDT on the loopTask (30 s, panic) instead of the `hw_timer` ISR; since phase 3 also on the `ups_poll` task.
 * `coredump` partition at `0x7F0000` (64 KB, fills the 8 MB flash exactly).
 * `-Wl,--wrap=esp_core_dump_write`: the wrapper calls the real writer only if the partition exists. This covers boards updated via OTA, which keep the old partition table: the panic completes and the board reboots instead of hanging with the watchdogs disabled.
 * At boot: reset reason, last controlled restart cause, and the core dump summary (task, PC, backtrace, only after a crash reset) go to the log and to `/api/system-status`.
@@ -77,7 +77,7 @@ Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
 **More `hid_host.c` deviations** (marked `[esp32-nut, review Ax]`):
 * **A3.** New `hid_host_device_clear_ep_in_halt()`: CLEAR_FEATURE(ENDPOINT_HALT) on the IN endpoint through EP0, with the same `ctrl_inflight` guard as the class requests.
 * **A4.** New `hid_host_device_get_ep_in_mps()`. The IN transfer stays one packet long.
-* **A5a.** GET/SET class requests time out after `USBUPS_CTRL_TIMEOUT_MS` (1500 ms) instead of 5 s. Report descriptor requests and lock waits keep `DEFAULT_TIMEOUT_MS`.
+* **A5a.** GET/SET class requests time out after `USBUPS_CTRL_TIMEOUT_MS` (1500 ms) instead of 5 s. Report and string descriptor requests and lock waits keep `DEFAULT_TIMEOUT_MS` (5 s); CLEAR_FEATURE uses the 1500 ms timeout.
 
 **Application changes:**
 * **A2.** `InputWatchdog` (in `LinkMonitor.h`, pure logic) learns the INPUT period from the intervals between bursts. Only for a periodic device, a silence of 5 × period (at least 30 s) makes the data stale and climbs the same recover → recover → restart ladder. Change-driven devices are never periodic and never trigger it.
@@ -95,9 +95,12 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 * **M5.** `usb_class_request_get_descriptor()` takes the recipient. New `hid_host_device_get_string_descriptor()` and `hid_host_device_get_string_indices()`.
 
 **Application changes:**
-* **A6 / S3.** One poll state machine in `GenericDriver`: quick poll of the status reports every 2 s, full poll (missing strings, then every report) every 30 s, as `usbhid-ups` and ADR 0006. Drivers change the policy through hooks. `DriverRegistry` picks the driver by VID/PID.
+* **A6 / S3.** One poll state machine in `GenericDriver`: quick poll of the status reports every 2 s, full poll (missing strings, then every report, then the strings found during the cycle) every 30 s, as `usbhid-ups` and ADR 0006. Drivers change the policy through hooks. `DriverRegistry` picks the driver by VID/PID.
 * **M1.** Parser: signed fields when Logical Minimum < 0, fields limited to 32 bits, long items, Usage Minimum/Maximum.
 * **S2.** `UsageMapIndex` precomputes the usage → mapping match.
+
+### Field validation (2026-09-26)
+Firmware `fix-issue-47-v3` (`6a8e871`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).
 
 ## Consequences
 ### Positive
@@ -110,14 +113,14 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 ### Negative
 * More deviations from the upstream `usb_host_hid` component (see also ADR 0007), to carry over on every update.
 * A control URB that never comes back can only be cleared by a restart. IDF 5.1 has no way to reset the port.
-* The `coredump` partition needs a one-time full flash with the web installer, because OTA does not update the partition table. Until then, core dumps are skipped (but panics no longer hang).
-* INPUT reports are dropped (and counted) if the loopTask stalls for more than ~40 s. The Task WDT fires before that.
+* The `coredump` partition needs a one-time full flash with the web installer, because OTA does not update the partition table. Until then, core dumps are skipped (but panics no longer hang). The web installer and the release package also write `boot_app0.bin` (empty otadata) at `0xe000`: otherwise a board left on `app1` by an odd number of OTA updates keeps booting the old firmware after the full flash (`2a1cea0`).
+* INPUT reports are dropped (and counted) if the task draining the event queue (the loopTask, since phase 3 `ups_poll`) stalls for more than ~40 s.The Task WDT fires before that.
 
 ## Impact on Agent Implementation
 * Agents MUST NOT block, take `_mutex`, log through `AppLogger`, or issue control transfers inside hid_host callbacks (`handle_driver_event`, `handle_interface_event`). They only post to `_event_queue`.
 * Agents MUST NOT hold `_mutex` (or any other application lock) across `hid_class_request_*` calls. Take it only to read or modify `UPSData` and the report cache.
-* Agents MUST route every control request result through `noteControlResult()` so the `LinkMonitor` sees it, and MUST NOT bypass `isControlPending()` in drivers.
-* Agents MUST NOT call `esp_restart()` from an ISR or from a callback. Restarts go through `USBHostUPS::requestRestart()` → `main.cpp` → `CrashDiag::recordControlledRestart()`.
+* Agents MUST route every control request result through `noteControlResult()` so the `LinkMonitor` sees it, and MUST NOT bypass `isPollingPaused()` (formerly `isControlPending()`) in drivers.
+* Agents MUST NOT call `esp_restart()` from an ISR or from a callback. Restarts go through `USBHostUPS::requestRestart()` → `RestartPolicy` in `main.cpp` → `CrashDiag::recordControlledRestart()` → `esp_restart()`.
 * Agents MUST NOT free, reallocate or modify `ctrl_xfer` in `hid_host.c` while `ctrl_inflight` is set, and MUST keep the `[esp32-nut, ADR 0008]` markers when updating the vendored component.
 * Agents MUST NOT reintroduce `sdkconfig.defaults` expecting it to affect the Arduino build.
 * Agents MUST NOT issue a SET_REPORT with bytes that were not read back from the device unless the report holds no other usage (`BeeperLogic::canWriteBack()`), and MUST keep the `[esp32-nut, review Cx]` markers in `hid_host.c`.

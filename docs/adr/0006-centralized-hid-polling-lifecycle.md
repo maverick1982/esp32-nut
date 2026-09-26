@@ -6,8 +6,8 @@ tags: [adr, decision]
 ---
 # Centralized Two-Tier HID Polling and Static Variable Lifecycle in GenericDriver
 
-* **ADR ID:** 0005
-* **Status:** Accepted
+* **ADR ID:** 0006
+* **Status:** Accepted, partially implemented. Amended by [ADR 0008](0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md) (phase 3 addendum).
 * **Date:** 2026-09-06
 * **Authors:** Antigravity / @maverick1982
 
@@ -41,6 +41,21 @@ Chosen option: "**Option 2: Centralize Two-Tier Polling and Static Lifecycle in 
 3. It protects all supported UPS hardware from USB control pipe exhaustion and eliminates unnecessary bus traffic.
 4. It cleanly separates vendor quirks (e.g. Powercom 800ms pacing and custom `0xA4` text report) from core HID scheduling.
 
+### Implementation status (2026-09-26)
+The first implementation (`7dbde3e`) never reached `main`: until 1.5.x every driver polled all reports every 2 s. The two-tier engine was implemented with the USB layer review, phase 3 (ADR 0008 addendum), in a different form:
+* **Implemented:** points 1 and 2.
+  * Quick poll every 2 s of the reports that hold status usages (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad, ...).
+  * Full poll every 30 s: missing strings, then every report, then the strings found during the cycle.
+  * 50 ms between requests, and none while `isPollingPaused()`.
+  * Report ID 0 included.
+* **Implemented differently:** point 5. The driver hooks are `quickPollMs()` (0 = no quick poll), `fullPollMs()`, `acceptPollReport()`, `pollInputReports()`, `buildPollLists()`, `collectStringRequests()`, `upsTypeName()` and `onLoop()`. The request spacing is fixed (`STEP_SPACING_MS`): there is no `getPollPacingMs()` and no Powercom 800 ms pacing (that exists only on the unmerged `feature/issue-36` branch). The drivers use them as follows:
+  * **CyberPower:** no quick poll; FEATURE reports only, every 30 s, excluding IDs 4, 6 and >= 130.
+  * **Eaton:** excludes reports 254 and 255.
+  * **Powercom:** fixed lists, 0x0A every 2 s and 0x0A, 0x1D, 0x21, 0x1F every 30 s. The `0xA4` report is decoded if it arrives but is not requested.
+* **Not implemented:**
+  * Point 3: only string descriptors are static. Nominal values are re-read at every full poll.
+  * Point 4: `GenericDriver` writes every decoded value as received; there is no zero filter. The zeros of issue #36 and #48 turned out to be responses shifted after a control transfer timeout (ADR 0008), not UPS glitches.
+
 ## Consequences
 ### Positive
 * **Hardware Stability**: Eliminates USB control transfer saturation, preventing microcontroller lockup and ADC starvation on devices like Powercom SPD-750U.
@@ -53,10 +68,10 @@ Chosen option: "**Option 2: Centralize Two-Tier Polling and Static Lifecycle in 
 
 ## Impact on Agent Implementation
 * **`GenericDriver` State Machine**:
-  - Implement two distinct polling timers: `getFastPollIntervalMs()` (default 2000ms for Quick Poll / Interrupt checks) and `getFullPollIntervalMs()` (default 30000ms for Full Feature Report updates, matching NUT `DEFAULT_POLLFREQ`).
-  - Classify nominal voltages (`input.voltage.nominal`, `output.voltage.nominal`) and string descriptors as static: once populated in `UPSData`, they must be excluded from recurring `GET_REPORT` requests.
-* **Spurious Zero Protection**:
+  - Poll timing comes from the hooks `quickPollMs()` (default 2000 ms, 0 disables the quick poll) and `fullPollMs()` (default 30000 ms, matching NUT `DEFAULT_POLLFREQ`). Agents MUST change a driver's policy only through the hooks listed in "Implementation status", never with a new state machine.
+  - String descriptors are static: they are requested only while the key is missing (`collectStringRequests()`), and an index that failed is not asked again for that device. Nominal voltages are not static yet (see "Implementation status").
+* **Spurious Zero Protection** (not implemented, see "Implementation status"):
   - In `GenericDriver::decodeReport()`, ensure analog telemetry fields (e.g. `input.voltage`, `output.voltage`, `battery.temperature`, `ups.temperature`) do not overwrite existing valid positive values with `0.0` when the UPS is reported as `OL` (Online).
 * **Vendor Quirks Preservation**:
-  - Retain `PowercomDriver::getPollPacingMs()` (800ms for PID 0x0004) and `PowercomDriver` custom decoding (`0xA4` report, beeper inverted logic).
+  - Retain `PowercomDriver` custom decoding (`0xA4` report, beeper inverted logic) and its fixed poll lists (`buildPollLists()`).
 

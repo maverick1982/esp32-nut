@@ -194,3 +194,16 @@ Da verificare nei log:
 - riepilogo `[USB] Last 60 s`: circa 40 INPUT report al minuto (id 8 e 11 ogni 3 s) e un GET_REPORT ogni 30 s per report FEATURE;
 - al boot `[DIAG] Reset reason`, `Last controlled restart` e `Last crash` (con backtrace dal core dump);
 - build di debug opzionale con `-DUSBUPS_DEBUG_SLOW_INPUT_MS=6000` per la riproduzione deterministica (F5): prima del fix causava timeout e crash, ora non deve dare errori.
+
+### 5.5 Esito del firmware v3 (2026-09-26)
+
+Feedback di x-magic sulla issue (`cp1300-20260925_230317.log`, `cp1500-20260925_231222.log`, dump `usb_diagnostics.json` e `/api/system-status` di entrambi):
+- **nessun reboot, crash o timeout** in 13,9 h (CP1300) e 19,6 h (CP1500) di uptime continuo, anche nei passaggi tra rete e batteria;
+- ~96.600 GET_REPORT riusciti, 0 falliti; 40 INPUT al minuto senza buchi; nessuna risposta sfasata e nessun `0.0 V`;
+- 11 reset USB dell'UPS, tutti gestiti: riconnessione in ~0,4 s, dati validi entro 1-6 s, nel frattempo `ERR DATA-STALE` ai client NUT;
+- flash completo con esptool riuscito: NVS conservata, partizione `coredump` presente, `coredump_partition: true`, errore `esp_core_dump_flash` al boot sparito;
+- heap stabile a ~215,4 KB dalla prima ora.
+
+Con il fix v2 in un periodo simile si erano osservati una quindicina di timeout con deadlock (§5.1), tutti seguiti da crash o blocchi: la causa radice risulta eliminata. Il dettaglio è nella Fase 4 di `docs/plans/usb-layer-review.md`.
+
+Risposta pubblicata sulla issue il 2026-09-26: i fix v3 verranno uniti su `main` e usciranno con la prossima release ufficiale. A x-magic sono stati chiesti qualche giorno in più di test e una prova del beeper.
