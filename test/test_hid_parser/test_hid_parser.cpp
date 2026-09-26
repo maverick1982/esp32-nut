@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "HIDParser.h"
+#include "NUTUsages.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -418,6 +419,52 @@ void test_usage_minimum_maximum_expanded(void) {
     TEST_ASSERT_EQUAL_UINT16(2, third->bit_offset);
 }
 
+void test_usage_lookup_stops_at_sentinel(void) {
+    // Issue #55: usage 0 matched the { NULL, 0 } sentinel and gave a NULL name
+    TEST_ASSERT_NULL(nut_usage_lookup(0));
+    TEST_ASSERT_EQUAL_STRING("0x00000000", get_nut_usage_name(0).c_str());
+    TEST_ASSERT_EQUAL_STRING("UPS", nut_usage_lookup(0x00840004));
+    TEST_ASSERT_EQUAL_STRING("APCBattReplaceDate", nut_usage_lookup(0xFF860016));
+}
+
+void test_collection_without_usage(void) {
+    // Tail of the APC Back-UPS BX1500G descriptor (issue #55): a Physical
+    // collection with no Usage around a vendor Feature
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,     // UPS application collection
+        0xA1, 0x00,                             // Collection (Physical), no Usage
+        0x06, 0x00, 0xFF, 0x85, 0x80, 0x09, 0x55,
+        0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x82,
+        0xC0,
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    const HIDUsageDef* vendor = parser.getUsageDef(0xFF000055);
+    TEST_ASSERT_NOT_NULL(vendor);
+    TEST_ASSERT_EQUAL_UINT8(0x80, vendor->report_id);
+    TEST_ASSERT_EQUAL_STRING("UPS.0x00000000.0xFF000055", vendor->path);
+}
+
+void test_path_truncated_to_buffer(void) {
+    // Nested collections longer than path[80]: truncated, still terminated
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x24, 0xA1, 0x00, 0x09, 0x24, 0xA1, 0x00,
+        0x09, 0x30, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+        0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0,
+        0xC0
+    };
+    HIDParser parser;
+    parser.parseReportDescriptor(desc, sizeof(desc));
+    const HIDUsageDef* v = parser.getUsageDef(0x00840030);
+    TEST_ASSERT_NOT_NULL(v);
+    TEST_ASSERT_EQUAL(sizeof(v->path) - 1, strlen(v->path));
+    TEST_ASSERT_EQUAL_STRING_LEN("UPS.PowerSummary.PowerSummary.", v->path, 30);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -438,6 +485,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_wide_field_clamped_to_32_bits);
     RUN_TEST(test_long_item_skipped);
     RUN_TEST(test_usage_minimum_maximum_expanded);
+    RUN_TEST(test_usage_lookup_stops_at_sentinel);
+    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_path_truncated_to_buffer);
     return UNITY_END();
 }
 #else
@@ -459,6 +509,9 @@ void setup() {
     RUN_TEST(test_wide_field_clamped_to_32_bits);
     RUN_TEST(test_long_item_skipped);
     RUN_TEST(test_usage_minimum_maximum_expanded);
+    RUN_TEST(test_usage_lookup_stops_at_sentinel);
+    RUN_TEST(test_collection_without_usage);
+    RUN_TEST(test_path_truncated_to_buffer);
     UNITY_END();
 }
 void loop() {}

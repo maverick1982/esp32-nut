@@ -184,10 +184,19 @@ static const NUTUsageDef nut_usages[] = {
     { NULL, 0 }
 };
 
-static String get_nut_usage_name(uint32_t code) {
-    for (size_t i = 0; i < sizeof(nut_usages) / sizeof(nut_usages[0]); i++) {
-        if (nut_usages[i].code == code) return String(nut_usages[i].name);
+// NUT name of a usage, nullptr when it is not in the table. The loop stops at the
+// { NULL, 0 } sentinel: matched as a regular entry, it returned a NULL name for
+// usage 0 (a Collection without Usage, e.g. APC Back-UPS BX1500G, issue #55).
+static const char* nut_usage_lookup(uint32_t code) {
+    for (const NUTUsageDef* u = nut_usages; u->name != NULL; u++) {
+        if (u->code == code) return u->name;
     }
+    return nullptr;
+}
+
+static String get_nut_usage_name(uint32_t code) {
+    const char* name = nut_usage_lookup(code);
+    if (name) return String(name);
     char buf[16];
     snprintf(buf, sizeof(buf), "0x%08X", code);
     return String(buf);

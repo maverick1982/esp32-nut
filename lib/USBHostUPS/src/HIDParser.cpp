@@ -2,6 +2,15 @@
 #include <map>
 #include "NUTUsages.h"
 
+// Appends ".seg" (or "seg" to an empty path), truncated to cap. A NULL segment is
+// skipped: an Arduino String left without a buffer returns NULL from c_str(), and
+// strncat on it crashed the board at enumeration (issue #55).
+static void appendPathSegment(char* path, size_t cap, const char* seg) {
+    if (!seg) return;
+    if (path[0] != '\0') strncat(path, ".", cap - strlen(path) - 1);
+    strncat(path, seg, cap - strlen(path) - 1);
+}
+
 bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
     _usages.clear();
     _input_lengths.clear();
@@ -91,12 +100,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                         
                         def.path[0] = '\0';
                         for (const String& n : collection_names) {
-                            if (strlen(def.path) > 0) strncat(def.path, ".", sizeof(def.path) - strlen(def.path) - 1);
-                            strncat(def.path, n.c_str(), sizeof(def.path) - strlen(def.path) - 1);
+                            appendPathSegment(def.path, sizeof(def.path), n.c_str());
                         }
-                        String leaf = get_nut_usage_name(usage);
-                        if (strlen(def.path) > 0) strncat(def.path, ".", sizeof(def.path) - strlen(def.path) - 1);
-                        strncat(def.path, leaf.c_str(), sizeof(def.path) - strlen(def.path) - 1);
+                        appendPathSegment(def.path, sizeof(def.path), get_nut_usage_name(usage).c_str());
                         _usages.push_back(def);
                     }
                     if (offsets_map) {
