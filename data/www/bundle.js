@@ -577,7 +577,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (elRealPower) {
-                const realPower = data['ups.realpower'] || '--';
+                // ?? and not ||: a real power of 0 W is a value, not a missing one
+                const realPower = data['ups.realpower'] ?? '--';
                 elRealPower.innerText = realPower;
             }
 
