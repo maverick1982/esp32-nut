@@ -86,6 +86,7 @@ public:
     bool isPollingPaused() const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
     bool requestStringDescriptor(uint8_t string_index) override;
+    uint32_t inputReportAgeMs(uint8_t report_id, uint32_t now) const override;
     uint16_t getVID() const override { return _vid; }
     uint16_t getPID() const override { return _pid; }
 
@@ -167,6 +168,9 @@ private:
     bool _uses_report_ids;
     uint16_t _lang_id;             // of the string descriptors, 0 = not read yet
     uint32_t _failed_strings[8];   // bitmap of the string indices that failed (256)
+    // When each INPUT report ID was last received (HID task time), poll task only (issue #60)
+    uint32_t _input_ts[256];
+    uint32_t _input_seen[8];       // bitmap: _input_ts valid
 
     // Traffic summary logged every STATS_PERIOD_MS (review S1)
     uint32_t _stat_since;

@@ -19,6 +19,7 @@ USBHostUPS::USBHostUPS() :
     _vid(0), _pid(0),
     _initialized(false), _is_ready_to_poll(false), _device_seen(false),
     _ep_in_mps(0), _uses_report_ids(false), _lang_id(0), _failed_strings{},
+    _input_ts{}, _input_seen{},
     _stat_since(0), _stat_input(0), _stat_in_packets(0), _stat_get_ok(0), _stat_get_failed(0),
     _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
     _restart_requested(false), _restart_reason(""),
@@ -397,6 +398,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     hid_host_device_get_string_indices(handle, &_iManufacturer, &_iProduct, &_iSerialNumber);
     _lang_id = 0;
     memset(_failed_strings, 0, sizeof(_failed_strings));
+    memset(_input_seen, 0, sizeof(_input_seen));
     _in_restart_pending = false;
     _in_recoveries = 0;
     if (_restart_requested) {
@@ -443,6 +445,8 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
 
     uint8_t r_id = (length > 0) ? data[0] : 0;
     _stat_input++; // summarised every STATS_PERIOD_MS instead of one log per report (review S1)
+    _input_ts[r_id] = ev.ts;
+    _input_seen[r_id / 32] |= 1u << (r_id % 32);
 
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (length > 0) {
@@ -590,6 +594,13 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         log("ERROR", "requestReport FAILED: type=%d, id=%d, err=0x%x (%s)", report_type, report_id, err, esp_err_to_name(err));
     }
     return false;
+}
+
+uint32_t USBHostUPS::inputReportAgeMs(uint8_t report_id, uint32_t now) const {
+    if (!(_input_seen[report_id / 32] & (1u << (report_id % 32)))) return UINT32_MAX;
+    // ts comes from the HID task and can be a few ms newer than the poll task's now
+    int32_t age = (int32_t)(now - _input_ts[report_id]);
+    return age > 0 ? (uint32_t)age : 0;
 }
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {

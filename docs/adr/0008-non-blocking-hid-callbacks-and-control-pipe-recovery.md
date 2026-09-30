@@ -102,6 +102,17 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 ### Field validation (2026-09-26)
 Firmware `fix-issue-47-v3` (`dd2a740`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).
 
+### Addendum: stuck control transfer and fewer requests (issue #60, 2026-09-30)
+Logs from an APC Back-UPS BX750MI (v1.6.1): after 1-2 minutes of polling a GET_REPORT times out and the callback never comes, so every later request gets `ESP_ERR_INVALID_STATE`. INPUT reports keep flowing (status, charge). The two interface restarts of the ladder fail at the first request, and only the controlled restart (bus reset) brings the UPS back, about 3.5 minutes after the first error.
+
+**More `hid_host.c` deviations** (marked `[esp32-nut, issue 60]`):
+* New `hid_host_device_ctrl_stuck()`: `ctrl_inflight` read outside a request, i.e. a timed-out URB still owned by the stack. `USBHostUPS::service()` calls it under `_op_mutex`, so none of its own requests is in progress.
+
+**Application changes:**
+* `LinkMonitor::tick(now, ctrlStuck)`: with a stuck transfer, after `stuckRestartMs` (30 s) the monitor asks for the restart directly and skips the interface restarts, which cannot free EP0.
+* `GenericDriver` skips a report whose values all came in an INPUT report younger than `maxReportAgeMs()` (2 s), like `refresh_report_buffer()` in `libhid.c`. A FEATURE report counts only if its INPUT twin (same ID) carries all its usages.
+* `APCDriver`: for `ups.model` starting with "Back-UPS BX", quick poll and report age are 10 s, like the `pollinterval = 10` their users set in `usbhid-ups`.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.

@@ -13,11 +13,17 @@
  * - Date parsing (apc_date_conversion): Maps APCBattReplaceDate using APC proprietary bit-shifts.
  */
 
-APCDriver::APCDriver() {}
+APCDriver::APCDriver() : _back_ups_bx(false) {}
 
 void APCDriver::setup() {
     GenericDriver::setup();
     _map.invalidate();
+    _back_ups_bx = false;
+}
+
+void APCDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+    // ups.model comes from the product string, read at claim time
+    _back_ups_bx = isBackUpsBX(data.get("ups.model"));
 }
 
 void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {

@@ -4,6 +4,7 @@
 #include "HIDUsages.h"
 #include "Quirks.h"
 #include <algorithm>
+#include <string.h>
 #include <cmath>
 
 /**
@@ -20,6 +21,7 @@
 GenericDriver::GenericDriver() :
     _batteryDateStringIndex(0),
     _lists_built(false),
+    _input_twin{},
     _queue_pos(0),
     _step_now(false),
     _cycle_full(false),
@@ -41,6 +43,7 @@ void GenericDriver::setup() {
     _cycle_full = false;
     _strings_rechecked = false;
     _cycle_strings.clear();
+    memset(_input_twin, 0, sizeof(_input_twin));
     _last_quick = 0;
     _last_full = 0;
     _last_step = 0;
@@ -103,6 +106,38 @@ void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qui
     }
 }
 
+// A FEATURE report is an INPUT twin when every one of its usages is also in the INPUT
+// report with the same ID: the INPUT report then already refreshes all its values.
+// libhid.c keeps one buffer per report ID for both (issue #60, APC Back-UPS BX).
+void GenericDriver::findInputTwins(IUSBHostUPS* host) {
+    memset(_input_twin, 0, sizeof(_input_twin));
+    uint32_t mismatch[8] = {};
+    const auto& usages = host->getUsages();
+    for (const auto& f : usages) {
+        if (f.report_type != 3) continue;
+        bool in_input = false;
+        for (const auto& i : usages) {
+            if (i.report_type == 1 && i.report_id == f.report_id && strcmp(i.path, f.path) == 0) {
+                in_input = true;
+                break;
+            }
+        }
+        uint32_t bit = 1u << (f.report_id % 32);
+        if (in_input) _input_twin[f.report_id / 32] |= bit;
+        else mismatch[f.report_id / 32] |= bit;
+    }
+    for (int w = 0; w < 8; w++) _input_twin[w] &= ~mismatch[w];
+}
+
+bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const {
+    if (item.report_type == 3) {
+        if (!(_input_twin[item.id / 32] & (1u << (item.id % 32)))) return false;
+    } else if (item.report_type != 1) {
+        return false;
+    }
+    return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
+}
+
 void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
     if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
@@ -152,6 +187,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
     if (!_lists_built) {
         buildPollLists(host, _quick, _full);
+        findInputTwins(host);
         _lists_built = true;
     }
 
@@ -172,6 +208,10 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (_queue_pos >= _queue.size()) return;
     if (host->isPollingPaused()) return; // the cycle resumes where it stopped
     if (!_step_now && (now - _last_step) < stepSpacingMs()) return;
+
+    // Skipped reports cost no request, so they take no step either
+    while (_queue_pos < _queue.size() && isFreshFromInput(host, _queue[_queue_pos], now)) _queue_pos++;
+    if (_queue_pos >= _queue.size()) return;
 
     const PollItem item = _queue[_queue_pos++];
     _last_step = now;

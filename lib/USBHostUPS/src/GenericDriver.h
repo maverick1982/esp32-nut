@@ -14,7 +14,8 @@
  *   (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad...);
  * - full poll every fullPollMs(): the missing string descriptors, then every report.
  * One control request per loop() call, stepSpacingMs() apart, and none while
- * isPollingPaused(). Derived drivers only change the policy through the hooks below
+ * isPollingPaused(). A report the UPS has just sent as an INPUT report is skipped
+ * (maxReportAgeMs()). Derived drivers only change the policy through the hooks below
  * instead of copying the state machine.
  */
 class GenericDriver : public IUPSDriver {
@@ -47,6 +48,9 @@ protected:
     virtual uint32_t fullPollMs() const { return 30000; }
     // Minimum gap between two control requests of a cycle
     virtual uint32_t stepSpacingMs() const { return STEP_SPACING_MS; }
+    // A report whose values all arrived in an INPUT report younger than this is not
+    // requested again (libhid.c refresh_report_buffer(), age = pollinterval, issue #60)
+    virtual uint32_t maxReportAgeMs() const { return 2000; }
     // Reports a driver must never request (e.g. ones that freeze the firmware)
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too
@@ -64,12 +68,16 @@ protected:
 private:
     void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
     void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
+    void findInputTwins(IUSBHostUPS* host);
+    bool isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const;
 
     UsageMapIndex<GenericDriver> _generic_map;
     bool _lists_built;
     std::vector<PollItem> _quick;
     std::vector<PollItem> _full;
     std::vector<PollItem> _queue;
+    // Bitmap of the report IDs whose FEATURE values all come with the INPUT report too
+    uint32_t _input_twin[8];
     size_t _queue_pos;
     bool _step_now;
     bool _cycle_full;

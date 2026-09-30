@@ -3,6 +3,8 @@
 #include "GenericDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
+#include "APCDriver.h"
+#include <map>
 #include "IUSBHostUPS.h"
 #include "Quirks.h"
 
@@ -20,6 +22,7 @@ public:
     std::vector<std::pair<uint8_t, std::vector<uint8_t>>> _answers;
     bool _paused = false;
     HIDParser _hid_parser;
+    std::map<uint8_t, uint32_t> _input_at; // report ID -> when its INPUT report arrived
 
     void lock() const override {}
     void unlock() const override {}
@@ -45,6 +48,10 @@ public:
     bool requestStringDescriptor(uint8_t index) override {
         _strings.push_back(index);
         return true;
+    }
+    uint32_t inputReportAgeMs(uint8_t id, uint32_t now) const override {
+        auto it = _input_at.find(id);
+        return it == _input_at.end() ? UINT32_MAX : now - it->second;
     }
 
     void addUsage(uint32_t usage, uint8_t id, uint8_t type, const char* path) {
@@ -233,6 +240,95 @@ void test_string_index_found_in_reports_requested_same_cycle(void) {
     TEST_ASSERT_EQUAL(1, host._strings.size());
 }
 
+// Issue #60, like libhid.c refresh_report_buffer(): the UPS just sent these values as an
+// INPUT report, so they are not requested again.
+// Back-UPS BX-like: 12 and 19 exist as FEATURE and INPUT with the same usages, 35 is
+// FEATURE only.
+static void bxLikeDevice() {
+    host.addUsage(0x00850066, 12, 3, "UPS.PowerSummary.RemainingCapacity");
+    host.addUsage(0x00850066, 12, 1, "UPS.PowerSummary.RemainingCapacity");
+    host.addUsage(0x008500D0, 19, 3, "UPS.PowerSummary.ACPresent");
+    host.addUsage(0x008500D0, 19, 1, "UPS.PowerSummary.ACPresent");
+    host.addUsage(0x00850068, 35, 3, "UPS.PowerSummary.RunTimeToEmpty");
+}
+
+void test_report_fresh_from_input_is_skipped(void) {
+    bxLikeDevice();
+    host._input_at[12] = 900;
+    GenericDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(19, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(35, host._reports[1].first);
+    // The skipped report took no step: the next request went out right away
+}
+
+void test_report_with_old_input_is_requested(void) {
+    bxLikeDevice();
+    host._input_at[12] = 900;
+    GenericDriver drv;
+    drv.setup();
+    runLoop(drv, 2900, 3400); // INPUT 12 is exactly 2 s old
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(12, host._reports[0].first);
+}
+
+// Report 1 FEATURE also carries RemainingCapacity, which its INPUT twin lacks
+void test_feature_with_values_missing_from_input_is_requested(void) {
+    standardDevice();
+    host._input_at[1] = 990;
+    host._input_at[3] = 990;
+    GenericDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    // FEATURE 1 and 2 are requested, INPUT 3 is fresh
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(1, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(2, host._reports[1].first);
+}
+
+void test_all_reports_fresh_sends_nothing(void) {
+    host.addUsage(0x00850066, 12, 3, "UPS.PowerSummary.RemainingCapacity");
+    host.addUsage(0x00850066, 12, 1, "UPS.PowerSummary.RemainingCapacity");
+    GenericDriver drv;
+    drv.setup();
+    for (uint32_t t = 1000; t <= 40000; t += 60) {
+        host._input_at[12] = t; // a report every loop
+        drv.loop(&host, data, t);
+    }
+    TEST_ASSERT_EQUAL(0, host._reports.size());
+}
+
+void test_apc_back_ups_bx_quick_poll_10s(void) {
+    bxLikeDevice();
+    data.set("ups.model", "Back-UPS BX750MI");
+    APCDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    // No quick poll 2 s later
+    runLoop(drv, 3000, 10900);
+    TEST_ASSERT_EQUAL(0, host._reports.size());
+    // 10 s after the full poll. INPUT 12 arrived 5 s ago: still fresh for the BX
+    host._input_at[12] = 6000;
+    runLoop(drv, 11000, 11500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(19, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(35, host._reports[1].first);
+}
+
+void test_apc_other_models_keep_2s_quick_poll(void) {
+    bxLikeDevice();
+    data.set("ups.model", "Back-UPS CS 650");
+    APCDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    runLoop(drv, 3000, 3500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_first_cycle_is_full);
@@ -245,5 +341,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_policy);
     RUN_TEST(test_eaton_skips_reports_254_255);
     RUN_TEST(test_string_index_found_in_reports_requested_same_cycle);
+    RUN_TEST(test_report_fresh_from_input_is_skipped);
+    RUN_TEST(test_report_with_old_input_is_requested);
+    RUN_TEST(test_feature_with_values_missing_from_input_is_requested);
+    RUN_TEST(test_all_reports_fresh_sends_nothing);
+    RUN_TEST(test_apc_back_ups_bx_quick_poll_10s);
+    RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
     return UNITY_END();
 }
