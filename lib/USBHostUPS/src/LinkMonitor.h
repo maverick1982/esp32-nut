@@ -15,6 +15,9 @@
  * After a link failure, polling backs off exponentially. If the pipe does not come
  * back within linkTimeoutMs, the monitor first asks for an interface recovery
  * (up to maxRecoveries times), then for a controlled restart.
+ * If a timed-out control transfer is still held by the USB stack (ctrlStuck), an
+ * interface recovery cannot free EP0: after stuckRestartMs the monitor asks for the
+ * restart directly (issue #60, APC Back-UPS BX).
  * Devices that only stream INPUT reports never issue control requests, so they
  * never accumulate failures and are never reset.
  */
@@ -28,10 +31,11 @@ public:
         uint32_t staleAfterMs;
         uint32_t linkTimeoutMs;
         uint8_t maxRecoveries;
+        uint32_t stuckRestartMs;
     };
 
     static Config defaultConfig() {
-        return Config{2000, 30000, 20000, 60000, 2};
+        return Config{2000, 30000, 20000, 60000, 2, 30000};
     }
 
     LinkMonitor() : LinkMonitor(defaultConfig()) {}
@@ -91,9 +95,12 @@ public:
         return deviceSeen || now >= bootGraceMs;
     }
 
-    Action tick(uint32_t now) {
+    Action tick(uint32_t now, bool ctrlStuck = false) {
         if (!_carriesData) return Action::NONE;
-        if (_failures == 0 || (now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
+        if (_failures == 0) return Action::NONE;
+        // Only the bus reset of a restart gives EP0 back (ADR 0008)
+        if (ctrlStuck && (now - _windowStartMs) >= _cfg.stuckRestartMs) return Action::RESTART;
+        if ((now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;
         _recoveries++;
         // Give the recovered interface a full window before escalating again.

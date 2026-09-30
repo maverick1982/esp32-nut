@@ -331,6 +331,19 @@ esp_err_t hid_host_device_clear_ep_in_halt(hid_host_device_handle_t hid_dev_hand
 uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle);
 
 /**
+ * @brief [esp32-nut, issue 60] True while a control transfer that timed out is still
+ *        owned by the USB Host stack.
+ *
+ * Nothing but its late callback clears it: EP0 cannot be halted or flushed by a client
+ * and the HCD has no transfer timeout (ADR 0008). An interface stop/start does not help.
+ *
+ * @param[in] hid_dev_handle HID device handle.
+ *
+ * @return true if the control pipe is stuck, false otherwise or if hid_dev_handle is invalid
+ */
+bool hid_host_device_ctrl_stuck(hid_host_device_handle_t hid_dev_handle);
+
+/**
  * @brief [esp32-nut, review M5] Read a string descriptor of the device (GET_DESCRIPTOR on EP0).
  *
  * @param[in] hid_dev_handle HID device handle.

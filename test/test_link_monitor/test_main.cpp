@@ -122,6 +122,42 @@ void test_millis_wraparound(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(near_wrap + 60000));
 }
 
+// Issue #60: a timed-out transfer still held by the USB stack. An interface restart
+// cannot free EP0, so the monitor goes straight to the restart, and sooner.
+void test_stuck_control_transfer_restarts_directly(void) {
+    LinkMonitor m(testConfig());
+    m.reset(0);
+    m.onAlive(1000);
+    m.onLinkFailure(1000);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(30999, true));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RESTART == m.tick(31000, true));
+    TEST_ASSERT_EQUAL_UINT8(0, m.recoveries());
+}
+
+void test_stuck_flag_without_failures_never_acts(void) {
+    LinkMonitor m(testConfig());
+    m.reset(0);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000, true));
+}
+
+// The late callback arrived: the pipe is free again and the normal ladder applies
+void test_unstuck_pipe_uses_recovery_ladder(void) {
+    LinkMonitor m(testConfig());
+    m.reset(0);
+    m.onLinkFailure(1000);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(31000, false));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(60000, false));
+}
+
+// A device without data on the control pipe is never restarted, stuck or not
+void test_stuck_pipe_without_data_never_restarts(void) {
+    LinkMonitor m(testConfig());
+    m.setCarriesData(false);
+    m.reset(0);
+    m.onLinkFailure(1000);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000, true));
+}
+
 // Review A1: no device attached means nothing current to serve
 void test_stale_without_device(void) {
     const uint32_t grace = 15000;
@@ -267,6 +303,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
+    RUN_TEST(test_stuck_control_transfer_restarts_directly);
+    RUN_TEST(test_stuck_flag_without_failures_never_acts);
+    RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
+    RUN_TEST(test_stuck_pipe_without_data_never_restarts);
     RUN_TEST(test_stale_without_device);
     RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
@@ -288,6 +328,10 @@ void setup() {
     RUN_TEST(test_escalation_recover_then_restart);
     RUN_TEST(test_answer_after_recovery_resets_escalation);
     RUN_TEST(test_millis_wraparound);
+    RUN_TEST(test_stuck_control_transfer_restarts_directly);
+    RUN_TEST(test_stuck_flag_without_failures_never_acts);
+    RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
+    RUN_TEST(test_stuck_pipe_without_data_never_restarts);
     RUN_TEST(test_stale_without_device);
     RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);

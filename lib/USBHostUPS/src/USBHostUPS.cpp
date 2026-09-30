@@ -245,12 +245,15 @@ void USBHostUPS::service() {
 
     if (!_is_ready_to_poll || !_driver) return;
 
-    switch (_link.tick(now)) {
+    // Under _op_mutex: no request of ours is in progress, so in flight means stuck
+    bool ctrl_stuck = _link.failures() > 0 && hid_host_device_ctrl_stuck(_hid_dev_handle);
+    switch (_link.tick(now, ctrl_stuck)) {
     case LinkMonitor::Action::RECOVER:
         recoverInterface("control pipe not answering", now);
         return;
     case LinkMonitor::Action::RESTART:
-        requestRestart("control pipe not answering after recovery");
+        requestRestart(ctrl_stuck ? "control transfer stuck in the USB stack"
+                                  : "control pipe not answering after recovery");
         return;
     default:
         break;
