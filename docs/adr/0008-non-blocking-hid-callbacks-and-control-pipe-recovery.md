@@ -111,7 +111,7 @@ Logs from an APC Back-UPS BX750MI (v1.6.1): after 1-2 minutes of polling a GET_R
 **Application changes:**
 * `LinkMonitor::tick(now, ctrlStuck)`: with a stuck transfer, after `stuckRestartMs` (30 s) the monitor asks for the restart directly and skips the interface restarts, which cannot free EP0.
 * `GenericDriver` skips a report whose values all came in an INPUT report younger than `maxReportAgeMs()` (2 s), like `refresh_report_buffer()` in `libhid.c`. A FEATURE report counts only if its INPUT twin (same ID) carries all its usages.
-* `APCDriver`: for `ups.model` starting with "Back-UPS BX", quick poll and report age are 10 s, like the `pollinterval = 10` their users set in `usbhid-ups`.
+* `APCDriver`: for `ups.model` starting with "Back-UPS BX", quick poll and report age are 10 s, like the `pollinterval = 10` their users set in `usbhid-ups`. GET_REPORT asks at least 8 bytes instead of the declared length (`GenericDriver::requestLength()`), like the `usbhid-ups` `maxreport` flag, a tweak "for buggy APC Back-UPS firmware" that returns a wrong report size. With it `libhid.c` asks `sizeof(rbuf->data[id])` bytes, i.e. the size of a pointer. ADR 0007 exact lengths stay the rule for every other device.
 
 ## Consequences
 ### Positive

@@ -221,7 +221,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         host->requestStringDescriptor(item.id);
     } else {
         uint16_t len = item.length ? item.length : host->getHIDParser()->getExpectedLength(item.id, item.report_type);
-        host->requestReport(item.id, item.report_type, len);
+        host->requestReport(item.id, item.report_type, requestLength(item.report_type, item.id, len));
     }
 }
 

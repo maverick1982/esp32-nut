@@ -51,6 +51,8 @@ protected:
     // A report whose values all arrived in an INPUT report younger than this is not
     // requested again (libhid.c refresh_report_buffer(), age = pollinterval, issue #60)
     virtual uint32_t maxReportAgeMs() const { return 2000; }
+    // wLength of a GET_REPORT, given the length declared in the report descriptor
+    virtual uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const { return expected; }
     // Reports a driver must never request (e.g. ones that freeze the firmware)
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too

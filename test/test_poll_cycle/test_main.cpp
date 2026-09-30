@@ -14,6 +14,7 @@ class MockPollHost : public IUSBHostUPS {
 public:
     std::vector<HIDUsageDef> _usages;
     std::vector<std::pair<uint8_t, uint8_t>> _reports; // (id, type)
+    std::vector<uint16_t> _lengths; // wLength of each GET_REPORT
     std::vector<uint8_t> _strings;
     uint32_t _quirks = 0;
     // Optional answers to GET_REPORT, decoded by _driver into *_data
@@ -36,8 +37,9 @@ public:
     String getActiveBeeperPath() const override { return ""; }
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override { return _paused; }
-    bool requestReport(uint8_t id, uint8_t type, uint16_t) override {
+    bool requestReport(uint8_t id, uint8_t type, uint16_t length) override {
         _reports.push_back({id, type});
+        _lengths.push_back(length);
         for (auto& a : _answers) {
             if (a.first == id && _driver && _data) {
                 _driver->decodeReport(this, id, type, a.second.data(), a.second.size(), *_data);
@@ -329,6 +331,38 @@ void test_apc_other_models_keep_2s_quick_poll(void) {
     TEST_ASSERT_EQUAL(3, host._reports.size());
 }
 
+// usbhid-ups "maxreport" on the Back-UPS BX: GET_REPORT asks at least 8 bytes.
+// FEATURE 12 is declared 2 bytes long (ID + 8 bits); 19 and 35 are not in the
+// descriptor, so their length falls back to 64 and is kept.
+static const uint8_t REPORT_12_DESC[] = {
+    0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+    0x85, 0x0C, 0x05, 0x85, 0x09, 0x66, 0x75, 0x08, 0x95, 0x01, 0x26, 0xFF, 0x00, 0xB1, 0x02,
+    0xC0
+};
+
+static void runFirstCycle(const char* model) {
+    bxLikeDevice();
+    host._hid_parser.parseReportDescriptor(REPORT_12_DESC, sizeof(REPORT_12_DESC));
+    data.set("ups.model", model);
+    APCDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+}
+
+void test_apc_back_ups_bx_requests_at_least_8_bytes(void) {
+    runFirstCycle("Back-UPS BX750MI");
+    TEST_ASSERT_EQUAL(3, host._lengths.size());
+    TEST_ASSERT_EQUAL_UINT8(12, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT16(8, host._lengths[0]);
+    TEST_ASSERT_EQUAL_UINT16(64, host._lengths[1]);
+}
+
+void test_apc_other_models_request_declared_length(void) {
+    runFirstCycle("Back-UPS CS 650");
+    TEST_ASSERT_EQUAL(3, host._lengths.size());
+    TEST_ASSERT_EQUAL_UINT16(2, host._lengths[0]);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_first_cycle_is_full);
@@ -347,5 +381,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_all_reports_fresh_sends_nothing);
     RUN_TEST(test_apc_back_ups_bx_quick_poll_10s);
     RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
+    RUN_TEST(test_apc_back_ups_bx_requests_at_least_8_bytes);
+    RUN_TEST(test_apc_other_models_request_declared_length);
     return UNITY_END();
 }
