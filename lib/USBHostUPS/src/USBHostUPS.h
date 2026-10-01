@@ -100,7 +100,9 @@ private:
         hid_host_device_handle_t handle;
         uint8_t data[64]; // Full-speed interrupt IN max packet size
     };
-    static const UBaseType_t EVENT_QUEUE_LEN = 16;
+    // A blocking GET_REPORT keeps the poll task away for up to its 1.5 s timeout: an APC
+    // Back-UPS BX streams ~18 INPUT reports/s, so 16 slots dropped some (issue #60)
+    static const UBaseType_t EVENT_QUEUE_LEN = 48;
     // Slots kept free for connect/disconnect/error events: INPUT reports are dropped first
     static const UBaseType_t EVENT_QUEUE_RESERVED = 2;
     static const uint8_t MAX_IN_RECOVERIES = 3;
