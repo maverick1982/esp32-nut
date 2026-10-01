@@ -69,9 +69,24 @@ void test_unhealthy_interrupts_healthy_period(void) {
     p.update(false, true, 0);
     p.update(false, false, 500000); // stale for a while
     p.update(false, true, 600000);
-    TEST_ASSERT_EQUAL_UINT8(1, p.consecutive()); // the 10 minutes restart from here
+    TEST_ASSERT_EQUAL_UINT8(1, p.consecutive()); // the healthy period restarts from here
     p.update(false, true, 600000 + RestartPolicy::HEALTHY_RESET_MS);
     TEST_ASSERT_EQUAL_UINT8(0, p.consecutive());
+}
+
+// Issue #60: an APC Back-UPS BX locks EP0 again some minutes after each restart. Each
+// restart worked, so each one runs at once and the board never enters degraded mode.
+void test_restart_that_worked_keeps_next_restart_immediate(void) {
+    RestartPolicy p(0);
+    uint32_t t = 0;
+    for (int i = 0; i < 6; i++) {
+        TEST_ASSERT_TRUE(D::RESTART == p.update(true, false, t));
+        // After the restart (the RTC count survives it): fresh data for 5 minutes
+        p = RestartPolicy(p.consecutive() + 1);
+        for (uint32_t ms = 0; ms <= 300000; ms += 1000) p.update(false, true, t + ms);
+        TEST_ASSERT_EQUAL_UINT8(0, p.consecutive());
+        t += 301000;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -83,5 +98,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_new_enumeration_cancels_wait);
     RUN_TEST(test_healthy_period_clears_counter);
     RUN_TEST(test_unhealthy_interrupts_healthy_period);
+    RUN_TEST(test_restart_that_worked_keeps_next_restart_immediate);
     return UNITY_END();
 }

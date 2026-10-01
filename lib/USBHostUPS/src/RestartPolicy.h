@@ -14,14 +14,17 @@
  *   meantime clears the request and cancels the wait.
  * - After MAX_RESTARTS the board enters degraded mode: no more restarts, data stale,
  *   a banner in the web UI. Only a new enumeration (or a manual reboot) gets it out.
- * - HEALTHY_RESET_MS of fresh data clear the counter.
+ * - HEALTHY_RESET_MS of fresh data clear the counter: the restart worked. 2 minutes, not
+ *   10: an APC Back-UPS BX locks EP0 every 5-90 minutes and only a restart frees it. With
+ *   10 minutes two lockups close together delayed the next restart by 1 or 5 minutes of
+ *   stale data, and four could leave the board in degraded mode (issue #60).
  */
 class RestartPolicy {
 public:
     enum class Decision : uint8_t { NONE, WAIT, RESTART, DEGRADED };
 
     static const uint8_t MAX_RESTARTS = 4;
-    static const uint32_t HEALTHY_RESET_MS = 600000;
+    static const uint32_t HEALTHY_RESET_MS = 120000;
 
     static uint32_t delayMs(uint8_t consecutive) {
         static const uint32_t delays[MAX_RESTARTS] = {0, 60000, 300000, 900000};
