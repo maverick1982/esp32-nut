@@ -5,6 +5,9 @@
 #include "EatonDriver.h"
 #include "APCDriver.h"
 #include <map>
+#include <fstream>
+#include <sstream>
+#include <ArduinoJson.h>
 #include "IUSBHostUPS.h"
 #include "Quirks.h"
 
@@ -24,6 +27,7 @@ public:
     bool _paused = false;
     HIDParser _hid_parser;
     std::map<uint8_t, uint32_t> _input_at; // report ID -> when its INPUT report arrived
+    bool _answer_all = false; // every GET_REPORT is answered with zeros of the declared length
 
     void lock() const override {}
     void unlock() const override {}
@@ -44,6 +48,12 @@ public:
             if (a.first == id && _driver && _data) {
                 _driver->decodeReport(this, id, type, a.second.data(), a.second.size(), *_data);
             }
+        }
+        if (_answer_all && _driver && _data) {
+            std::vector<uint8_t> buf(_hid_parser.getExpectedLength(id, type), 0);
+            if (buf.empty()) buf.resize(2, 0);
+            buf[0] = id;
+            _driver->decodeReport(this, id, type, buf.data(), buf.size(), *_data);
         }
         return true;
     }
@@ -363,6 +373,117 @@ void test_apc_other_models_request_declared_length(void) {
     TEST_ASSERT_EQUAL_UINT16(2, host._lengths[0]);
 }
 
+// Issue #60, like HU_FLAG_STATIC in usbhid-ups: on the Back-UPS BX a report with static
+// values only is read once, then left out of the full poll
+static HIDUsageDef usageDef(uint32_t usage, const char* path) {
+    HIDUsageDef u;
+    u.usage = usage;
+    strncpy(u.path, path, sizeof(u.path) - 1);
+    return u;
+}
+
+void test_dynamic_usages(void) {
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00840030, "UPS.Input.Voltage")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00840035, "UPS.PowerConverter.PercentLoad")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00840057, "UPS.PowerSummary.DelayBeforeShutdown")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00840058, "UPS.Battery.Test")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x0084005a, "UPS.PowerSummary.AudibleAlarmControl")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00850068, "UPS.Battery.RunTimeToEmpty")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x008500d0, "UPS.PowerSummary.ACPresent")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0x00840044, "UPS.PresentStatus.Charging")));
+    TEST_ASSERT_TRUE(GenericDriver::isDynamicUsage(usageDef(0xff860016, "UPS.APCGeneralCollection.APCDelayBeforeShutdown")));
+
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0x00840040, "UPS.Battery.ConfigVoltage")));
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0x00840053, "UPS.Input.LowVoltageTransfer")));
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0x00850085, "UPS.Battery.ManufacturerDate")));
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0x00850029, "UPS.PowerSummary.RemainingCapacityLimit")));
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0x008400fe, "UPS.iProduct")));
+    TEST_ASSERT_FALSE(GenericDriver::isDynamicUsage(usageDef(0xff860042, "UPS.0xFF860042")));
+}
+
+// 37 static, 38 dynamic, 50 static but never answered
+static void bxStaticDevice(const char* model) {
+    host.addUsage(0x00840040, 37, 3, "UPS.Battery.ConfigVoltage");
+    host.addUsage(0x00840030, 38, 3, "UPS.Battery.Voltage");
+    host.addUsage(0x00840053, 50, 3, "UPS.Input.LowVoltageTransfer");
+    host._answers.push_back({37, {37, 0xB0, 0x04}});
+    host._answers.push_back({38, {38, 0x50, 0x05}});
+    data.set("ups.model", model);
+}
+
+void test_apc_back_ups_bx_reads_static_reports_once(void) {
+    bxStaticDevice("Back-UPS BX750MI");
+    APCDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    // 37 was decoded: left out. 50 never answered: asked again
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(38, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(50, host._reports[1].first);
+    // A new enumeration (setup()) reads it again
+    drv.setup();
+    host._reports.clear();
+    runLoop(drv, 32000, 32500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+}
+
+void test_apc_other_models_read_static_reports_every_full_poll(void) {
+    bxStaticDevice("Back-UPS CS 650");
+    APCDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+}
+
+// The real BX750MI descriptor of issue #60. The UPS streams INPUT 12, 20 and 22.
+static void loadFixtureDescriptor(const char* path) {
+    std::ifstream f(path);
+    TEST_ASSERT_TRUE_MESSAGE(f.good(), path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, ss.str()));
+    std::vector<uint8_t> desc;
+    for (JsonVariant v : doc["report_descriptor_hex"].as<JsonArray>()) {
+        desc.push_back((uint8_t)strtol(v.as<std::string>().c_str(), nullptr, 16));
+    }
+    host._hid_parser.parseReportDescriptor(desc.data(), desc.size());
+    host._usages = host._hid_parser.getUsages();
+}
+
+static size_t bx750miRequestsPerMinute(const char* model) {
+    loadFixtureDescriptor("test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json");
+    data.set("ups.model", model);
+    APCDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    host._answer_all = true;
+    size_t at_60s = 0;
+    // The second minute, once the static reports are known
+    for (uint32_t t = 1000; t < 121000; t += 60) {
+        if (t % 960 == 40) { host._input_at[12] = t; host._input_at[20] = t; host._input_at[22] = t; }
+        if (t >= 61000 && at_60s == 0) at_60s = host._reports.size();
+        drv.loop(&host, data, t);
+    }
+    return host._reports.size() - at_60s;
+}
+
+void test_apc_back_ups_bx750mi_requests_per_minute(void) {
+    // v1.6.1: ~336/min. fix-issue-60-v1: 102/min (Tim's log). Static reports read once:
+    // 2 full polls of 13 dynamic reports + 4 quick polls of 6 (15, 19, 34, 35, 80, 122)
+    TEST_ASSERT_EQUAL(50, bx750miRequestsPerMinute("Back-UPS BX750MI"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_first_cycle_is_full);
@@ -383,5 +504,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
     RUN_TEST(test_apc_back_ups_bx_requests_at_least_8_bytes);
     RUN_TEST(test_apc_other_models_request_declared_length);
+    RUN_TEST(test_dynamic_usages);
+    RUN_TEST(test_apc_back_ups_bx_reads_static_reports_once);
+    RUN_TEST(test_apc_other_models_read_static_reports_every_full_poll);
+    RUN_TEST(test_apc_back_ups_bx750mi_requests_per_minute);
     return UNITY_END();
 }

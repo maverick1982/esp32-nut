@@ -27,6 +27,8 @@ protected:
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
     uint32_t quickPollMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }
     uint32_t maxReportAgeMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::maxReportAgeMs(); }
+    // Nominal values, limits, dates: half of the full poll of a BX750MI (issue #60)
+    bool pollStaticReportsOnce() const override { return _back_ups_bx; }
     uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
         return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
     }

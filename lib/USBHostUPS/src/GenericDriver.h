@@ -15,8 +15,9 @@
  * - full poll every fullPollMs(): the missing string descriptors, then every report.
  * One control request per loop() call, stepSpacingMs() apart, and none while
  * isPollingPaused(). A report the UPS has just sent as an INPUT report is skipped
- * (maxReportAgeMs()). Derived drivers only change the policy through the hooks below
- * instead of copying the state machine.
+ * (maxReportAgeMs()), and with pollStaticReportsOnce() so is a static report already
+ * received. Derived drivers only change the policy through the hooks below instead of
+ * copying the state machine.
  */
 class GenericDriver : public IUPSDriver {
 public:
@@ -41,6 +42,10 @@ public:
 
     // True for the usages the quick poll keeps fresh
     static bool isStatusUsage(const HIDUsageDef& u);
+    // True for the usages whose value changes at run time: status, measures, timers,
+    // test result, beeper. The others (nominal values, limits, dates, string indices,
+    // vendor usages without a name) are static.
+    static bool isDynamicUsage(const HIDUsageDef& u);
 
 protected:
     // --- Poll policy ---
@@ -51,6 +56,9 @@ protected:
     // A report whose values all arrived in an INPUT report younger than this is not
     // requested again (libhid.c refresh_report_buffer(), age = pollinterval, issue #60)
     virtual uint32_t maxReportAgeMs() const { return 2000; }
+    // Static reports are read once per enumeration, then left out of the full poll, like
+    // HU_FLAG_STATIC in usbhid-ups (issue #60). False = every full poll reads them.
+    virtual bool pollStaticReportsOnce() const { return false; }
     // wLength of a GET_REPORT, given the length declared in the report descriptor
     virtual uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const { return expected; }
     // Reports a driver must never request (e.g. ones that freeze the firmware)
@@ -71,7 +79,10 @@ private:
     void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
     void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
     void findInputTwins(IUSBHostUPS* host);
+    void findStaticReports(IUSBHostUPS* host);
     bool isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const;
+    bool isStaticAndKnown(const PollItem& item) const;
+    static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 
     UsageMapIndex<GenericDriver> _generic_map;
     bool _lists_built;
@@ -80,6 +91,10 @@ private:
     std::vector<PollItem> _queue;
     // Bitmap of the report IDs whose FEATURE values all come with the INPUT report too
     uint32_t _input_twin[8];
+    // Bitmaps per report type (INPUT, FEATURE): reports with static values only, and
+    // reports decoded at least once since the enumeration
+    uint32_t _static_report[2][8];
+    uint32_t _decoded_report[2][8];
     size_t _queue_pos;
     bool _step_now;
     bool _cycle_full;

@@ -40,6 +40,10 @@ void test_replay_apc_cs750rs_issue48(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json");
 }
 
+void test_replay_apc_bx750mi_issue60(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json");
+}
+
 void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json");
 }
@@ -72,6 +76,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
+    RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
@@ -90,6 +95,7 @@ void setup() {
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
+    RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
