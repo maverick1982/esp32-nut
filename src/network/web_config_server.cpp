@@ -140,7 +140,10 @@ void WebConfigServer::handleConnect() {
 }
 
 void WebConfigServer::handleLogs() {
-    server.send(200, "application/json", AppLogger::getLogsJSON());
+    String logs = AppLogger::getLogsJSON();
+    // La UI converte il campo "time" (millis) nell'ora del browser (issue 60)
+    server.sendHeader("X-Uptime-Ms", String(millis()));
+    server.send(200, "application/json", logs);
 }
 
 void WebConfigServer::handleNutConfig() {
