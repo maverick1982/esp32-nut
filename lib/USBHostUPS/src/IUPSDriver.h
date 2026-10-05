@@ -27,6 +27,14 @@ public:
     virtual void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) = 0;
 
     /**
+     * @brief True once the first full poll after setup() has run (issue #60).
+     *
+     * Until then the values are partial: the host reports them stale, like upsd while
+     * usbhid-ups is still in upsdrv_initinfo().
+     */
+    virtual bool initialPollDone() const { return true; }
+
+    /**
      * @brief Decodes a received HID report
      * 
      * @param report_id The ID of the report

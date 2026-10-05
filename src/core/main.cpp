@@ -165,7 +165,8 @@ void loop() {
     // crescenti tra un riavvio e l'altro e modalità degradata oltre la soglia (review A7)
     static RestartPolicy::Decision last_decision = RestartPolicy::Decision::NONE;
     bool ups_healthy = usb_ups.isConnected() && !usb_ups.isDataStale();
-    RestartPolicy::Decision decision = restart_policy.update(usb_ups.isRestartRequested(), ups_healthy, now);
+    RestartPolicy::Decision decision = restart_policy.update(usb_ups.isRestartRequested(), ups_healthy, now,
+                                                             usb_ups.isControlPipeProven());
     if (restart_policy.takeCleared()) {
         CrashDiag::clearConsecutiveRestarts();
         AppLogger::log("INFO", "[MAIN] UPS data healthy: consecutive restart counter cleared");

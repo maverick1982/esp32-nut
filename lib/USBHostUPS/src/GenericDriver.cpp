@@ -28,6 +28,7 @@ GenericDriver::GenericDriver() :
     _step_now(false),
     _cycle_full(false),
     _strings_rechecked(false),
+    _first_full_done(false),
     _last_quick(0),
     _last_full(0),
     _last_step(0) {
@@ -44,6 +45,7 @@ void GenericDriver::setup() {
     _step_now = false;
     _cycle_full = false;
     _strings_rechecked = false;
+    _first_full_done = false;
     _cycle_strings.clear();
     memset(_input_twin, 0, sizeof(_input_twin));
     memset(_static_report, 0, sizeof(_static_report));
@@ -245,6 +247,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         _strings_rechecked = true;
         appendNewStrings(host, data);
     }
+    if (_queue_pos >= _queue.size() && _cycle_full && _strings_rechecked) _first_full_done = true;
 
     if (_queue_pos >= _queue.size()) {
         bool full_due= _last_full == 0 || (now - _last_full) >= fullPollMs();

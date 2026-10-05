@@ -89,6 +89,44 @@ void test_restart_that_worked_keeps_next_restart_immediate(void) {
     }
 }
 
+// Issue #60: the BX locked EP0 65 s after a boot. A full poll answered by the UPS
+// proves the restart worked: 30 s of fresh data clear the counter.
+void test_proven_control_pipe_clears_counter_sooner(void) {
+    RestartPolicy p(1);
+    p.update(false, true, 10000, true);
+    TEST_ASSERT_TRUE(D::NONE == p.update(false, true, 10000 + RestartPolicy::PROVEN_RESET_MS - 1, true));
+    TEST_ASSERT_EQUAL_UINT8(1, p.consecutive());
+    p.update(false, true, 10000 + RestartPolicy::PROVEN_RESET_MS, true);
+    TEST_ASSERT_EQUAL_UINT8(0, p.consecutive());
+    TEST_ASSERT_TRUE(p.takeCleared());
+    // The lockup 65 s after the boot restarts at once
+    TEST_ASSERT_TRUE(D::RESTART == p.update(true, false, 75000, false));
+}
+
+// Not proven (e.g. INPUT-only device): the 2 minute rule
+void test_unproven_keeps_healthy_reset(void) {
+    RestartPolicy p(1);
+    p.update(false, true, 10000, false);
+    p.update(false, true, 10000 + RestartPolicy::PROVEN_RESET_MS, false);
+    TEST_ASSERT_EQUAL_UINT8(1, p.consecutive());
+    p.update(false, true, 10000 + RestartPolicy::HEALTHY_RESET_MS, false);
+    TEST_ASSERT_EQUAL_UINT8(0, p.consecutive());
+}
+
+// A device that locks up within 30 s of every boot still reaches degraded mode
+void test_fast_failing_device_still_degrades(void) {
+    uint8_t consecutive = 0;
+    for (int i = 0; i < RestartPolicy::MAX_RESTARTS; i++) {
+        RestartPolicy p(consecutive);
+        p.update(false, true, 1000, true);
+        p.update(false, true, 1000 + RestartPolicy::PROVEN_RESET_MS - 1000, true);
+        TEST_ASSERT_TRUE(D::NONE != p.update(true, false, 1000 + RestartPolicy::PROVEN_RESET_MS, false));
+        consecutive = p.consecutive() + 1; // the restart ran
+    }
+    RestartPolicy p(consecutive);
+    TEST_ASSERT_TRUE(D::DEGRADED == p.update(true, false, 1000, false));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_no_request_no_action);
@@ -99,5 +137,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_healthy_period_clears_counter);
     RUN_TEST(test_unhealthy_interrupts_healthy_period);
     RUN_TEST(test_restart_that_worked_keeps_next_restart_immediate);
+    RUN_TEST(test_proven_control_pipe_clears_counter_sooner);
+    RUN_TEST(test_unproven_keeps_healthy_reset);
+    RUN_TEST(test_fast_failing_device_still_degrades);
     return UNITY_END();
 }

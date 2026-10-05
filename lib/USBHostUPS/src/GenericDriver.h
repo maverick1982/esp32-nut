@@ -30,6 +30,7 @@ public:
     void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) override;
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    bool initialPollDone() const override { return _first_full_done; }
 
     // One control request of a poll cycle
     struct PollItem {
@@ -99,6 +100,7 @@ private:
     bool _step_now;
     bool _cycle_full;
     bool _strings_rechecked;              // second look at the strings done for this cycle
+    bool _first_full_done;                // a full poll ended since setup()
     std::vector<uint8_t> _cycle_strings;  // string indices already requested in this cycle
     uint32_t _last_quick;
     uint32_t _last_full;

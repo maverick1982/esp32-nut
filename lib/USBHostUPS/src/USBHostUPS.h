@@ -18,11 +18,6 @@
 #include <map>
 #include <vector>
 
-// Time after boot during which a missing UPS is not reported as stale (review A1)
-#ifndef USBUPS_NO_DEVICE_BOOT_GRACE_MS
-#define USBUPS_NO_DEVICE_BOOT_GRACE_MS 15000
-#endif
-
 struct CachedReport {
     uint8_t report_id;
     uint8_t report_type;
@@ -73,6 +68,11 @@ public:
 
     // Set when in-place recovery failed: the owner must restart the system (never from an ISR)
     bool isRestartRequested() const { return _restart_requested; }
+    // The UPS answered GET_REPORT and a full poll ended since it was claimed, with the
+    // control pipe healthy: a controlled restart before it worked (RestartPolicy, issue #60)
+    bool isControlPipeProven() const;
+    // Claimed, first full poll still running: stale for NUT, but not a link problem
+    bool isWaitingFirstData() const { return _is_ready_to_poll && !_first_data_ready; }
     const char* getRestartReason() const { return _restart_reason; }
 
     // Free stack of the poll task in bytes (diagnostics)
@@ -107,7 +107,9 @@ private:
     static const UBaseType_t EVENT_QUEUE_RESERVED = 2;
     static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
-    static const uint32_t NO_DEVICE_BOOT_GRACE_MS = USBUPS_NO_DEVICE_BOOT_GRACE_MS;
+    // Longest wait for the first full poll after a claim: past it the data is served
+    // anyway, and LinkMonitor judges the link (a UPS without status usages never ends it)
+    static const uint32_t FIRST_DATA_MAX_MS = 30000;
     static const uint32_t STATS_PERIOD_MS = 60000;
     static const uint32_t POLL_TASK_STACK = 8192;
     static const UBaseType_t POLL_TASK_PRIORITY = 3; // HID task 5, usb_host_events 2, loopTask 1
@@ -161,7 +163,9 @@ private:
     uint16_t _pid;
     bool _initialized;
     bool _is_ready_to_poll;
-    bool _device_seen; // a UPS was claimed since boot
+    volatile bool _first_data_ready; // first full poll ended (or FIRST_DATA_MAX_MS) since the claim
+    uint32_t _claimed_at;
+    uint32_t _get_ok_since_claim;
 
     LinkMonitor _link;
     InputWatchdog _in_wd;

@@ -14,10 +14,13 @@
  *   meantime clears the request and cancels the wait.
  * - After MAX_RESTARTS the board enters degraded mode: no more restarts, data stale,
  *   a banner in the web UI. Only a new enumeration (or a manual reboot) gets it out.
- * - HEALTHY_RESET_MS of fresh data clear the counter: the restart worked. 2 minutes, not
- *   10: an APC Back-UPS BX locks EP0 every 5-90 minutes and only a restart frees it. With
- *   10 minutes two lockups close together delayed the next restart by 1 or 5 minutes of
- *   stale data, and four could leave the board in degraded mode (issue #60).
+ * - Fresh data clear the counter, since the restart worked: PROVEN_RESET_MS (30 s) when
+ *   the control pipe is proven too (a full poll answered by the UPS), HEALTHY_RESET_MS
+ *   (2 min) otherwise, e.g. on a device that only sends INPUT reports.
+ *   An APC Back-UPS BX locks EP0 from 1 minute to hours after a boot, and only a
+ *   restart frees it (issue #60). With 10 minutes, then 2, a lockup soon after a restart
+ *   delayed the next one by 1 or 5 minutes of stale data. A device that fails within
+ *   30 s of every boot still walks the 1/5/15 min ladder up to degraded mode.
  */
 class RestartPolicy {
 public:
@@ -25,6 +28,7 @@ public:
 
     static const uint8_t MAX_RESTARTS = 4;
     static const uint32_t HEALTHY_RESET_MS = 120000;
+    static const uint32_t PROVEN_RESET_MS = 30000;
 
     static uint32_t delayMs(uint8_t consecutive) {
         static const uint32_t delays[MAX_RESTARTS] = {0, 60000, 300000, 900000};
@@ -38,9 +42,10 @@ public:
     /**
      * @param restartRequested USBHostUPS asks for a restart (recovery exhausted)
      * @param healthy          device attached and data fresh
+     * @param proven           the control pipe answered a full poll since the claim
      */
-    Decision update(bool restartRequested, bool healthy, uint32_t now) {
-        trackHealth(healthy, now);
+    Decision update(bool restartRequested, bool healthy, uint32_t now, bool proven = false) {
+        trackHealth(healthy, proven, now);
 
         if (!restartRequested) {
             _scheduled = false; // cancelled by a new enumeration
@@ -68,7 +73,7 @@ public:
     }
 
 private:
-    void trackHealth(bool healthy, uint32_t now) {
+    void trackHealth(bool healthy, bool proven, uint32_t now) {
         if (!healthy) {
             _healthy = false;
             return;
@@ -77,7 +82,8 @@ private:
             _healthy = true;
             _healthySince = now;
         }
-        if (_consecutive > 0 && (now - _healthySince) >= HEALTHY_RESET_MS) {
+        uint32_t needed = proven ? PROVEN_RESET_MS : HEALTHY_RESET_MS;
+        if (_consecutive > 0 && (now - _healthySince) >= needed) {
             _consecutive = 0;
             _cleared = true;
         }

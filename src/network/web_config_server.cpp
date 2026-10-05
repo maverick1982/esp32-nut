@@ -241,8 +241,9 @@ void WebConfigServer::handleSystemStatus() {
         ups_status_str = "Disconnected";
     }
     doc["ups"]["status"] = ups_status_str;
-    // A missing UPS is already "Disconnected": the stale banner is for an attached one
-    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale()) {
+    // A missing UPS is already "Disconnected": the stale banner is for an attached one,
+    // and not for the first seconds after the claim, while the first full poll runs
+    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale() && !usb_ups->isWaitingFirstData()) {
         doc["ups"]["stale"] = true;
     }
 

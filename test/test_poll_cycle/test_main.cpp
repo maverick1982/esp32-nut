@@ -484,6 +484,21 @@ void test_apc_back_ups_bx750mi_requests_per_minute(void) {
     TEST_ASSERT_EQUAL(50, bx750miRequestsPerMinute("Back-UPS BX750MI"));
 }
 
+// Issue #60: the host serves the data only after the first full poll
+void test_initial_poll_done_after_first_full_cycle(void) {
+    standardDevice();
+    GenericDriver drv;
+    drv.setup();
+    TEST_ASSERT_FALSE(drv.initialPollDone());
+    drv.loop(&host, data, 1000); // first request of the full cycle
+    TEST_ASSERT_FALSE(drv.initialPollDone());
+    runLoop(drv, 1060, 1500);
+    TEST_ASSERT_TRUE(drv.initialPollDone());
+    // A new enumeration (or an interface recovery) starts over
+    drv.setup();
+    TEST_ASSERT_FALSE(drv.initialPollDone());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_first_cycle_is_full);
@@ -508,5 +523,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_back_ups_bx_reads_static_reports_once);
     RUN_TEST(test_apc_other_models_read_static_reports_every_full_poll);
     RUN_TEST(test_apc_back_ups_bx750mi_requests_per_minute);
+    RUN_TEST(test_initial_poll_done_after_first_full_cycle);
     return UNITY_END();
 }
