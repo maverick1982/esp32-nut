@@ -12,6 +12,21 @@ static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
 // Protocol level the implemented command subset targets, as upsd reports it.
 static const char* NUT_PROTOCOL_VERSION = "1.3";
 
+// main.c of the NUT drivers copies ups.mfr/model/serial into device.*, and sets
+// device.type "ups": NAS plugins and apps read device.model (issue #60)
+static const char* const DEVICE_ALIASES[][2] = {
+    { "device.mfr", "ups.mfr" },
+    { "device.model", "ups.model" },
+    { "device.serial", "ups.serial" },
+};
+
+static const char* deviceAliasSource(const String& var) {
+    for (const auto& a : DEVICE_ALIASES) {
+        if (var == a[0]) return a[1];
+    }
+    return nullptr;
+}
+
 NUTServer::NUTServer() : 
     _usb_ups(nullptr), 
     _port(NUT_DEFAULT_PORT), 
@@ -293,6 +308,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
+                for (const auto& a : DEVICE_ALIASES) {
+                    if (data->hasKey(a[1])) {
+                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), a[0], data->get(a[1]).c_str());
+                    }
+                }
                 for (const auto& param : data->getAll()) {
                     if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
                     client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
@@ -439,8 +460,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             String varNameLower = varName;
             varNameLower.toLowerCase();
 
+            const char* alias = deviceAliasSource(varNameLower);
             if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+            } else if (varNameLower == "device.type") {
+                client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
+            } else if (alias && data->hasKey(alias)) {
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(alias).c_str());
             } else if (data->hasKey(varNameLower)) {
                 client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
             } else {

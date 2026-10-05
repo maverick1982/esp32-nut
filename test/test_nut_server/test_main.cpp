@@ -298,6 +298,36 @@ void test_disconnected_is_stale(void) {
     TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
 }
 
+// Issue #60: OMV and Android clients read device.model, which NUT drivers copy from
+// ups.model (main.c), with device.type "ups"
+void test_device_aliases(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.data.set("ups.mfr", "American Power Conversion");
+    mockHost.data.set("ups.model", "Back-UPS BX750MI");
+    mockHost.stale = false;
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Back-UPS BX750MI\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.type");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.type \"ups\"\n", printer.getOutput().c_str());
+    // No ups.serial: no device.serial either
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.serial");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("VAR testups device.type \"ups\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.mfr \"American Power Conversion\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Back-UPS BX750MI\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("device.serial") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups ups.model \"Back-UPS BX750MI\"\n") != std::string::npos);
+}
+
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
     // LIST CLIENT must be answered with a BEGIN/END pair. A bare "ERR" is what
@@ -440,6 +470,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
+    RUN_TEST(test_device_aliases);
     return UNITY_END();
 }
 #else
@@ -459,6 +490,7 @@ void setup() {
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
+    RUN_TEST(test_device_aliases);
     UNITY_END();
 }
 void loop() {}
