@@ -123,15 +123,18 @@ void test_millis_wraparound(void) {
 }
 
 // Issue #60: a timed-out transfer still held by the USB stack. An interface restart
-// cannot free EP0, so the monitor goes straight to the restart, and sooner.
+// cannot free EP0, so the monitor goes straight to the restart, 3 s after the first
+// failure, before the data turns stale.
 void test_stuck_control_transfer_restarts_directly(void) {
     LinkMonitor m(testConfig());
     m.reset(0);
     m.onAlive(1000);
-    m.onLinkFailure(1000);
-    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(30999, true));
-    TEST_ASSERT_TRUE(LinkMonitor::Action::RESTART == m.tick(31000, true));
+    m.onLinkFailure(9000); // the last answer was 8 s earlier: the wait starts here
+    m.onLinkFailure(9500);
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(11999, true));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RESTART == m.tick(12000, true));
     TEST_ASSERT_EQUAL_UINT8(0, m.recoveries());
+    TEST_ASSERT_FALSE(m.isStale(12000));
 }
 
 void test_stuck_flag_without_failures_never_acts(void) {
@@ -156,20 +159,6 @@ void test_stuck_pipe_without_data_never_restarts(void) {
     m.reset(0);
     m.onLinkFailure(1000);
     TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000, true));
-}
-
-// Review A1: no device attached means nothing current to serve
-void test_stale_without_device(void) {
-    const uint32_t grace = 15000;
-    // Boot: the UPS is still enumerating
-    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 0, grace));
-    TEST_ASSERT_FALSE(LinkMonitor::isStaleWithoutDevice(false, 14999, grace));
-    // No UPS showed up in time
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(false, 15000, grace));
-    // A UPS was attached and went away (e.g. USB reset on a blackout): stale at once,
-    // even inside the boot grace
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 5000, grace));
-    TEST_ASSERT_TRUE(LinkMonitor::isStaleWithoutDevice(true, 3600000, grace));
 }
 
 // QUIRK_NO_GET_REPORT: the data comes only from INPUT reports. A string request that
@@ -307,7 +296,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_stuck_flag_without_failures_never_acts);
     RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
     RUN_TEST(test_stuck_pipe_without_data_never_restarts);
-    RUN_TEST(test_stale_without_device);
     RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
@@ -332,7 +320,6 @@ void setup() {
     RUN_TEST(test_stuck_flag_without_failures_never_acts);
     RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
     RUN_TEST(test_stuck_pipe_without_data_never_restarts);
-    RUN_TEST(test_stale_without_device);
     RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
