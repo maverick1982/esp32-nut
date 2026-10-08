@@ -4,6 +4,7 @@
 #include "HIDUsages.h"
 #include "Quirks.h"
 #include <algorithm>
+#include <string.h>
 #include <cmath>
 
 /**
@@ -20,10 +21,14 @@
 GenericDriver::GenericDriver() :
     _batteryDateStringIndex(0),
     _lists_built(false),
+    _input_twin{},
+    _static_report{},
+    _decoded_report{},
     _queue_pos(0),
     _step_now(false),
     _cycle_full(false),
     _strings_rechecked(false),
+    _first_full_done(false),
     _last_quick(0),
     _last_full(0),
     _last_step(0) {
@@ -40,7 +45,11 @@ void GenericDriver::setup() {
     _step_now = false;
     _cycle_full = false;
     _strings_rechecked = false;
+    _first_full_done = false;
     _cycle_strings.clear();
+    memset(_input_twin, 0, sizeof(_input_twin));
+    memset(_static_report, 0, sizeof(_static_report));
+    memset(_decoded_report, 0, sizeof(_decoded_report));
     _last_quick = 0;
     _last_full = 0;
     _last_step = 0;
@@ -63,6 +72,25 @@ bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
     default:
         return strstr(u.path, ".PresentStatus.") != nullptr;
     }
+}
+
+bool GenericDriver::isDynamicUsage(const HIDUsageDef& u) {
+    if (isStatusUsage(u)) return true;
+    uint32_t page = u.usage & 0xFFFF0000;
+    uint16_t id = u.usage & 0xFFFF;
+    if (page == 0x00840000) {
+        if (id >= 0x30 && id <= 0x37) return true; // Voltage ... Humidity
+        if (id >= 0x55 && id <= 0x58) return true; // DelayBeforeReboot/Startup/Shutdown, Test
+        if (id == 0x5a) return true;                // AudibleAlarmControl
+        if (id >= 0x60 && id <= 0x7f) return true; // status flags
+    } else if (page == 0x00850000) {
+        if (id >= 0x40 && id <= 0x4f) return true; // status flags
+        if (id >= 0x66 && id <= 0x6b) return true; // RemainingCapacity ... CycleCount
+        if (id >= 0xd0 && id <= 0xdf) return true; // ACPresent, BatteryPresent, ...
+    }
+    // Vendor usages known by name: APCDelayBefore*, APCStatusFlag, APCLineFailCause
+    return strstr(u.path, "Delay") != nullptr || strstr(u.path, "Status") != nullptr ||
+           strstr(u.path, "LineFailCause") != nullptr;
 }
 
 void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
@@ -101,6 +129,62 @@ void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qui
         full.push_back(PollItem{r.type, r.id, 0});
         if (r.status) quick.push_back(PollItem{r.type, r.id, 0});
     }
+}
+
+// A FEATURE report is an INPUT twin when every one of its usages is also in the INPUT
+// report with the same ID: the INPUT report then already refreshes all its values.
+// libhid.c keeps one buffer per report ID for both (issue #60, APC Back-UPS BX).
+void GenericDriver::findInputTwins(IUSBHostUPS* host) {
+    memset(_input_twin, 0, sizeof(_input_twin));
+    uint32_t mismatch[8] = {};
+    const auto& usages = host->getUsages();
+    for (const auto& f : usages) {
+        if (f.report_type != 3) continue;
+        bool in_input = false;
+        for (const auto& i : usages) {
+            if (i.report_type == 1 && i.report_id == f.report_id && strcmp(i.path, f.path) == 0) {
+                in_input = true;
+                break;
+            }
+        }
+        uint32_t bit = 1u << (f.report_id % 32);
+        if (in_input) _input_twin[f.report_id / 32] |= bit;
+        else mismatch[f.report_id / 32] |= bit;
+    }
+    for (int w = 0; w < 8; w++) _input_twin[w] &= ~mismatch[w];
+}
+
+// A report is static when none of its usages is dynamic
+void GenericDriver::findStaticReports(IUSBHostUPS* host) {
+    memset(_static_report, 0, sizeof(_static_report));
+    uint32_t dynamic[2][8] = {};
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type != 1 && u.report_type != 3) continue;
+        uint32_t bit = 1u << (u.report_id % 32);
+        uint8_t slot = typeSlot(u.report_type);
+        if (isDynamicUsage(u)) dynamic[slot][u.report_id / 32] |= bit;
+        else _static_report[slot][u.report_id / 32] |= bit;
+    }
+    for (int t = 0; t < 2; t++) {
+        for (int w = 0; w < 8; w++) _static_report[t][w] &= ~dynamic[t][w];
+    }
+}
+
+bool GenericDriver::isStaticAndKnown(const PollItem& item) const {
+    if (!pollStaticReportsOnce()) return false;
+    if (item.report_type != 1 && item.report_type != 3) return false;
+    uint8_t slot = typeSlot(item.report_type);
+    uint32_t bit = 1u << (item.id % 32);
+    return (_static_report[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
+}
+
+bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const {
+    if (item.report_type == 3) {
+        if (!(_input_twin[item.id / 32] & (1u << (item.id % 32)))) return false;
+    } else if (item.report_type != 1) {
+        return false;
+    }
+    return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
 }
 
 void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
@@ -152,6 +236,8 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
 
     if (!_lists_built) {
         buildPollLists(host, _quick, _full);
+        findInputTwins(host);
+        findStaticReports(host);
         _lists_built = true;
     }
 
@@ -161,6 +247,7 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         _strings_rechecked = true;
         appendNewStrings(host, data);
     }
+    if (_queue_pos >= _queue.size() && _cycle_full && _strings_rechecked) _first_full_done = true;
 
     if (_queue_pos >= _queue.size()) {
         bool full_due= _last_full == 0 || (now - _last_full) >= fullPollMs();
@@ -173,6 +260,13 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (host->isPollingPaused()) return; // the cycle resumes where it stopped
     if (!_step_now && (now - _last_step) < stepSpacingMs()) return;
 
+    // Skipped reports cost no request, so they take no step either
+    while (_queue_pos < _queue.size() &&
+           (isFreshFromInput(host, _queue[_queue_pos], now) || isStaticAndKnown(_queue[_queue_pos]))) {
+        _queue_pos++;
+    }
+    if (_queue_pos >= _queue.size()) return;
+
     const PollItem item = _queue[_queue_pos++];
     _last_step = now;
     _step_now = false;
@@ -181,12 +275,15 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
         host->requestStringDescriptor(item.id);
     } else {
         uint16_t len = item.length ? item.length : host->getHIDParser()->getExpectedLength(item.id, item.report_type);
-        host->requestReport(item.id, item.report_type, len);
+        host->requestReport(item.id, item.report_type, requestLength(item.report_type, item.id, len));
     }
 }
 
 void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
+    if (report_type == 1 || report_type == 3) {
+        _decoded_report[typeSlot(report_type)][report_id / 32] |= 1u << (report_id % 32);
+    }
 
     typedef UsageMapIndex<GenericDriver>::Mapping Mapping;
     static const Mapping mappings[] = {

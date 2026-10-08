@@ -53,6 +53,8 @@ public:
     virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
     // Fetches a string descriptor and hands it to the driver's parseStringDescriptor()
     virtual bool requestStringDescriptor(uint8_t string_index) = 0;
+    // ms since the last complete INPUT report with this ID, UINT32_MAX if none yet (issue #60)
+    virtual uint32_t inputReportAgeMs(uint8_t report_id, uint32_t now) const { return UINT32_MAX; }
     virtual uint16_t getVID() const { return 0; }
     virtual uint16_t getPID() const { return 0; }
     virtual void logDebug(const String& msg) const {}

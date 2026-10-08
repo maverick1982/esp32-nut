@@ -15,6 +15,11 @@
  * After a link failure, polling backs off exponentially. If the pipe does not come
  * back within linkTimeoutMs, the monitor first asks for an interface recovery
  * (up to maxRecoveries times), then for a controlled restart.
+ * If a timed-out control transfer is still held by the USB stack (ctrlStuck), an
+ * interface recovery cannot free EP0: stuckRestartMs after the first failure the monitor
+ * asks for the restart directly (issue #60, APC Back-UPS BX). 3 s, before the data turns
+ * stale (staleAfterMs): the INPUT reports keep the status current meanwhile, so NUT
+ * clients only miss the few seconds of the reboot.
  * Devices that only stream INPUT reports never issue control requests, so they
  * never accumulate failures and are never reset.
  */
@@ -28,10 +33,11 @@ public:
         uint32_t staleAfterMs;
         uint32_t linkTimeoutMs;
         uint8_t maxRecoveries;
+        uint32_t stuckRestartMs;
     };
 
     static Config defaultConfig() {
-        return Config{2000, 30000, 20000, 60000, 2};
+        return Config{2000, 30000, 20000, 60000, 2, 3000};
     }
 
     LinkMonitor() : LinkMonitor(defaultConfig()) {}
@@ -49,6 +55,7 @@ public:
 
     void reset(uint32_t now) {
         _failures = 0;
+        _firstFailureMs = now;
         _recoveries = 0;
         _lastAliveMs = now;
         _windowStartMs = now;
@@ -65,6 +72,7 @@ public:
     }
 
     void onLinkFailure(uint32_t now) {
+        if (_failures == 0) _firstFailureMs = now;
         if (_failures < 255) _failures++;
         uint32_t backoff = _cfg.backoffBaseMs;
         for (uint8_t i = 1; i < _failures && backoff < _cfg.backoffMaxMs; i++) backoff *= 2;
@@ -81,19 +89,12 @@ public:
         return _carriesData && _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
     }
 
-    /**
-     * With no device attached nothing is current (review A1): like usbhid-ups + upsd,
-     * NUT clients must get ERR DATA-STALE, not an empty "Unknown" status. A UPS that
-     * resets its USB port when it goes on battery would otherwise never show OB.
-     * Only the first bootGraceMs after boot are exempt, while the UPS enumerates.
-     */
-    static bool isStaleWithoutDevice(bool deviceSeen, uint32_t now, uint32_t bootGraceMs) {
-        return deviceSeen || now >= bootGraceMs;
-    }
-
-    Action tick(uint32_t now) {
+    Action tick(uint32_t now, bool ctrlStuck = false) {
         if (!_carriesData) return Action::NONE;
-        if (_failures == 0 || (now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
+        if (_failures == 0) return Action::NONE;
+        // Only the bus reset of a restart gives EP0 back (ADR 0008)
+        if (ctrlStuck && (now - _firstFailureMs) >= _cfg.stuckRestartMs) return Action::RESTART;
+        if ((now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;
         _recoveries++;
         // Give the recovered interface a full window before escalating again.
@@ -111,6 +112,7 @@ private:
     bool _carriesData;
     uint8_t _failures;
     uint8_t _recoveries;
+    uint32_t _firstFailureMs; // first failure since the device last answered
     uint32_t _lastAliveMs;
     uint32_t _windowStartMs;
     uint32_t _backoffUntilMs;

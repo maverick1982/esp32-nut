@@ -2076,9 +2076,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    function addLogEntry(level, msg) {
+    // when: time of the entry on the device, converted to the browser clock (issue #60)
+    function addLogEntry(level, msg, when) {
         if(!terminalOutput) return;
-        const now = new Date();
+        const now = when || new Date();
         const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
         
         let levelClass = 'terminal-level-info';
@@ -2102,6 +2103,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let lastLogId = 0;
+    let lastUptimeMs = null;
 
     async function fetchLogs() {
         if (!document.getElementById('content-logs').classList.contains('active')) return;
@@ -2112,11 +2114,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/logs');
             if (response.ok) {
                 const logs = await response.json();
-                
+                const receivedAt = Date.now();
+                // Device uptime when the list was built: entry time (millis) -> wall clock
+                const uptimeHeader = response.headers.get('X-Uptime-Ms');
+                const uptimeMs = uptimeHeader !== null ? Number(uptimeHeader) : NaN;
+
+                // After a device restart the IDs start again from 1 (issue #60)
+                const restarted = (Number.isFinite(uptimeMs) && lastUptimeMs !== null && uptimeMs < lastUptimeMs) ||
+                    (logs.length > 0 && logs[logs.length - 1].id < lastLogId);
+                if (Number.isFinite(uptimeMs)) lastUptimeMs = uptimeMs;
+                if (restarted) {
+                    addLogEntry('WARN', 'Device restarted');
+                    lastLogId = 0;
+                }
+
                 let maxId = lastLogId;
                 for (let i = 0; i < logs.length; i++) {
                     if (logs[i].id > lastLogId) {
-                        addLogEntry(logs[i].level, logs[i].msg);
+                        const when = Number.isFinite(uptimeMs) && typeof logs[i].time === 'number'
+                            ? new Date(receivedAt - Math.max(0, uptimeMs - logs[i].time))
+                            : undefined;
+                        addLogEntry(logs[i].level, logs[i].msg, when);
                         if (logs[i].id > maxId) {
                             maxId = logs[i].id;
                         }

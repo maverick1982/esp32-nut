@@ -69,7 +69,7 @@ Critical fixes from `docs/plans/usb-layer-review.md` (§4, phase 1).
 **Application changes:**
 * **C1.** `setBeeper()` writes the report back only if it was read back up to the beeper field, or if the report carries no other usage (`BeeperLogic::canWriteBack()`). Otherwise the zeros of a blind SET_REPORT could reach `DelayBeforeShutdown` (an immediate `load.off`).
 * **C4.** Device strings are converted by `DeviceStrings::toAscii()` (always terminated, non-ASCII → `?`, trailing spaces trimmed, inverted strings detected or forced by `QUIRK_INVERT_STRINGS`) instead of `wcstombs()`.
-* **A1.** `isDataStale()` is also true with no device attached, except in the first `USBUPS_NO_DEVICE_BOOT_GRACE_MS` (15 s) after boot while no UPS has been seen yet. NUT clients get `ERR DATA-STALE` instead of an empty `Unknown` status, as with `usbhid-ups` + `upsd`. The web UI keeps showing "Disconnected" without the stale banner.
+* **A1.** `isDataStale()` is also true with no device attached. Until issue #60 the first `USBUPS_NO_DEVICE_BOOT_GRACE_MS` (15 s) after boot were exempt; now the data is stale until the first full poll after a claim (see the #60 addendum). NUT clients get `ERR DATA-STALE` instead of an empty `Unknown` status, as with `usbhid-ups` + `upsd`. The web UI keeps showing "Disconnected" without the stale banner.
 
 ### Addendum: USB layer review, phase 2 (2026-09-24)
 Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
@@ -83,7 +83,7 @@ Link robustness from `docs/plans/usb-layer-review.md` (§4, phase 2).
 * **A2.** `InputWatchdog` (in `LinkMonitor.h`, pure logic) learns the INPUT period from the intervals between bursts. Only for a periodic device, a silence of 5 × period (at least 30 s) makes the data stale and climbs the same recover → recover → restart ladder. Change-driven devices are never periodic and never trigger it.
 * **A3.** A recovery after an IN transfer error or an INPUT silence runs `stop`, then CLEAR_FEATURE(ENDPOINT_HALT), then `start`. The IDF HCD does not reset the host data toggle on a pipe clear: the first packet after it may be lost.
 * **A4.** `InputReassembler` (pure logic) rebuilds INPUT reports longer than MPS from the per-packet events, using the lengths declared in the report descriptor. A larger IN transfer was rejected: an interrupt IN transfer only ends on a short packet or a full buffer, so a shorter report that is a multiple of MPS would be glued to the next one.
-* **A7.** `RestartPolicy` (pure logic) with the count of consecutive controlled restarts in RTC memory (`CrashDiag`): the first restart runs at once, the next ones wait 1, 5 and 15 min, and after 4 the board stays up in degraded mode (data stale, web UI banner). A new enumeration of the UPS cancels the request; 10 min of fresh data clear the count. `isDataStale()` is true while a restart is requested.
+* **A7.** `RestartPolicy` (pure logic) with the count of consecutive controlled restarts in RTC memory (`CrashDiag`): the first restart runs at once, the next ones wait 1, 5 and 15 min, and after 4 the board stays up in degraded mode (data stale, web UI banner). A new enumeration of the UPS cancels the request; fresh data clear the count: 30 s with the control pipe proven, 2 min otherwise (10 min until issue #60, see its addendum). `isDataStale()` is true while a restart is requested.
 
 ### Addendum: USB layer review, phase 3 (2026-09-24)
 Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
@@ -101,6 +101,28 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 
 ### Field validation (2026-09-26)
 Firmware `fix-issue-47-v3` (`dd2a740`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).
+
+### Addendum: stuck control transfer and fewer requests (issue #60, 2026-09-30)
+Logs from an APC Back-UPS BX750MI (v1.6.1): after 1-2 minutes of polling a GET_REPORT times out and the callback never comes, so every later request gets `ESP_ERR_INVALID_STATE`. INPUT reports keep flowing (status, charge). The two interface restarts of the ladder fail at the first request, and only the controlled restart (bus reset) brings the UPS back, about 3.5 minutes after the first error.
+
+**More `hid_host.c` deviations** (marked `[esp32-nut, issue 60]`):
+* New `hid_host_device_ctrl_stuck()`: `ctrl_inflight` read outside a request, i.e. a timed-out URB still owned by the stack. `USBHostUPS::service()` calls it under `_op_mutex`, so none of its own requests is in progress.
+
+**Application changes:**
+* `LinkMonitor::tick(now, ctrlStuck)`: with a stuck transfer, after `stuckRestartMs` (30 s) the monitor asks for the restart directly and skips the interface restarts, which cannot free EP0.
+* `GenericDriver` skips a report whose values all came in an INPUT report younger than `maxReportAgeMs()` (2 s), like `refresh_report_buffer()` in `libhid.c`. A FEATURE report counts only if its INPUT twin (same ID) carries all its usages.
+* `APCDriver`: for `ups.model` starting with "Back-UPS BX", quick poll and report age are 10 s, like the `pollinterval = 10` their users set in `usbhid-ups`. GET_REPORT asks at least 8 bytes instead of the declared length (`GenericDriver::requestLength()`), like the `usbhid-ups` `maxreport` flag, a tweak "for buggy APC Back-UPS firmware" that returns a wrong report size. With it `libhid.c` asks `sizeof(rbuf->data[id])` bytes, i.e. the size of a pointer. ADR 0007 exact lengths stay the rule for every other device.
+
+**Second round (2026-10-01).** With these changes the BX750MI ran 15-90 minutes between lockups instead of 1-2 (102 GET_REPORT/min), and each controlled restart brought it back, 16 times in a day. Two gaps were left:
+* `RestartPolicy` cleared its count after 10 min of fresh data. A lockup 5 minutes after a restart waited 1 or 5 more minutes with stale data (the 60 s and 300 s gaps seen in Home Assistant), and four close lockups would have left the board in degraded mode. The count is now cleared after 2 min (`HEALTHY_RESET_MS`): a restart followed by 2 minutes of fresh data worked, so the next one runs at once. A device that fails again within 2 minutes still walks the 1/5/15 min ladder.
+* On the BX the full poll read 42 reports, half of them static (nominal values, limits, dates, string indices, vendor usages). With `GenericDriver::pollStaticReportsOnce()` (APCDriver: "Back-UPS BX" only) a report with no dynamic usage (`isDynamicUsage()`: status, measures, timers, test, beeper) is left out of the full poll once decoded, like `HU_FLAG_STATIC` in `usbhid-ups` with the interrupt pipe. A new enumeration reads it again, and one never answered is asked at every full poll. On the BX750MI descriptor: 50 GET_REPORT/min.
+* `EVENT_QUEUE_LEN` 16 → 48: during the 1.5 s of a timed-out GET_REPORT the BX sent ~27 INPUT reports, 29 were dropped.
+
+**Third round (2026-10-05).** With 50 GET_REPORT/min the BX750MI still locked up about 1.4 times an hour (17 in 12.5 h, from 65 s to 4 h after a boot): the lockup rate does not follow the request rate. On Linux the kernel cancels the timed-out URB and NUT goes on; here only a restart frees EP0. The goal became a recovery NUT clients barely see:
+* `LinkMonitor` asks for the stuck restart `stuckRestartMs` (3 s, was 30 s) after the *first failure*, not after the last answer. That is before `staleAfterMs` (20 s): meanwhile the INPUT reports keep status, charge and LB current, so clients only miss the reboot.
+* `RestartPolicy::update(..., proven)`: `USBHostUPS::isControlPipeProven()` (a GET_REPORT answered and the first full poll ended since the claim, no link failure) clears the count after `PROVEN_RESET_MS` (30 s) of fresh data. Without it (INPUT-only devices) `HEALTHY_RESET_MS` (2 min) stays. A device failing within 30 s of every boot still reaches degraded mode.
+* `isDataStale()` is true until the first full poll after a claim (`IUPSDriver::initialPollDone()`, plus a known status), at most `FIRST_DATA_MAX_MS` (30 s), like `upsd` while `usbhid-ups` runs `upsdrv_initinfo()`. Before, NUT served an empty status right after the boot (Home Assistant: `unknown`). The 15 s boot grace of A1 is gone, so without a device the data is always stale. The web UI hides the stale banner while the first poll runs (`isWaitingFirstData()`).
+* `NUTServer` publishes `device.type` ("ups") and `device.mfr/model/serial` copied from `ups.*`, as `drivers/main.c` does: the OMV NUT plugin and an Android app did not show the model.
 
 ## Consequences
 ### Positive

@@ -17,8 +17,10 @@ USBHostUPS::USBHostUPS() :
     _event_queue(NULL), _self_close_handle(NULL), _dropped_events(0), _reported_dropped_events(0),
     _hid_dev_handle(NULL),
     _vid(0), _pid(0),
-    _initialized(false), _is_ready_to_poll(false), _device_seen(false),
+    _initialized(false), _is_ready_to_poll(false),
+    _first_data_ready(false), _claimed_at(0), _get_ok_since_claim(0),
     _ep_in_mps(0), _uses_report_ids(false), _lang_id(0), _failed_strings{},
+    _input_ts{}, _input_seen{},
     _stat_since(0), _stat_input(0), _stat_in_packets(0), _stat_get_ok(0), _stat_get_failed(0),
     _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
     _restart_requested(false), _restart_reason(""),
@@ -245,12 +247,15 @@ void USBHostUPS::service() {
 
     if (!_is_ready_to_poll || !_driver) return;
 
-    switch (_link.tick(now)) {
+    // Under _op_mutex: no request of ours is in progress, so in flight means stuck
+    bool ctrl_stuck = _link.failures() > 0 && hid_host_device_ctrl_stuck(_hid_dev_handle);
+    switch (_link.tick(now, ctrl_stuck)) {
     case LinkMonitor::Action::RECOVER:
         recoverInterface("control pipe not answering", now);
         return;
     case LinkMonitor::Action::RESTART:
-        requestRestart("control pipe not answering after recovery");
+        requestRestart(ctrl_stuck ? "control transfer stuck in the USB stack"
+                                  : "control pipe not answering after recovery");
         return;
     default:
         break;
@@ -273,6 +278,19 @@ void USBHostUPS::service() {
 
     // Drivers skip their poll steps while isPollingPaused() reports a backoff
     _driver->loop(this, _ups_data, now);
+
+    if (!_first_data_ready) {
+        bool done = false;
+        if (_driver->initialPollDone()) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            done = UPSData::computeUPSStatusString(_ups_data) != "Unknown";
+        }
+        if (done || (now - _claimed_at) >= FIRST_DATA_MAX_MS) {
+            _first_data_ready = true;
+            log(done ? "INFO" : "WARN", "[USB] First full poll %s after %u ms: data served",
+                done ? "done" : "not done", (unsigned)(now - _claimed_at));
+        }
+    }
 }
 
 void USBHostUPS::logStats(uint32_t now) {
@@ -394,8 +412,13 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     hid_host_device_get_string_indices(handle, &_iManufacturer, &_iProduct, &_iSerialNumber);
     _lang_id = 0;
     memset(_failed_strings, 0, sizeof(_failed_strings));
+    memset(_input_seen, 0, sizeof(_input_seen));
     _in_restart_pending = false;
     _in_recoveries = 0;
+    // Stale until the first full poll: the values are partial (issue #60)
+    _first_data_ready = false;
+    _claimed_at = millis();
+    _get_ok_since_claim = 0;
     if (_restart_requested) {
         // The UPS enumerated again: whatever needed the restart is gone (review A7)
         log("INFO", "[USB] UPS enumerated again: restart request cancelled");
@@ -412,7 +435,6 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _in_restart_at = millis() + 50;
     }
     _is_ready_to_poll = true;
-    _device_seen = true;
 
     log("INFO", "UPS interface claimed and ready (IN endpoint MPS %u).", (unsigned)_ep_in_mps);
 }
@@ -440,6 +462,8 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
 
     uint8_t r_id = (length > 0) ? data[0] : 0;
     _stat_input++; // summarised every STATS_PERIOD_MS instead of one log per report (review S1)
+    _input_ts[r_id] = ev.ts;
+    _input_seen[r_id / 32] |= 1u << (r_id % 32);
 
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (length > 0) {
@@ -545,10 +569,19 @@ bool USBHostUPS::isPollingPaused() const {
 
 bool USBHostUPS::isDataStale() const {
     uint32_t now = millis();
-    if (!_is_ready_to_poll) return LinkMonitor::isStaleWithoutDevice(_device_seen, now, NO_DEVICE_BOOT_GRACE_MS);
+    // No device, or not claimed yet after boot (review A1). Like upsd while the driver is
+    // not up: before issue #60 the first 15 s after boot were exempt, and NUT served an
+    // empty status (Home Assistant: "unknown").
+    if (!_is_ready_to_poll) return true;
+    // Partial values until the first full poll (usbhid-ups upsdrv_initinfo())
+    if (!_first_data_ready) return true;
     // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
     if (_restart_requested) return true;
     return _link.isStale(now) || _in_wd.isStale(now);
+}
+
+bool USBHostUPS::isControlPipeProven() const {
+    return _is_ready_to_poll && _first_data_ready && _get_ok_since_claim > 0 && _link.failures() == 0;
 }
 
 bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length) {
@@ -564,6 +597,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
     if (err == ESP_OK && length > 0) {
         _stat_get_ok++;
+        _get_ok_since_claim++;
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         uint16_t key = (report_type << 8) | report_id;
         auto& cached = _cached_reports[key];
@@ -587,6 +621,13 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         log("ERROR", "requestReport FAILED: type=%d, id=%d, err=0x%x (%s)", report_type, report_id, err, esp_err_to_name(err));
     }
     return false;
+}
+
+uint32_t USBHostUPS::inputReportAgeMs(uint8_t report_id, uint32_t now) const {
+    if (!(_input_seen[report_id / 32] & (1u << (report_id % 32)))) return UINT32_MAX;
+    // ts comes from the HID task and can be a few ms newer than the poll task's now
+    int32_t age = (int32_t)(now - _input_ts[report_id]);
+    return age > 0 ? (uint32_t)age : 0;
 }
 
 bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
