@@ -1621,7 +1621,8 @@
       ],
       "expected_ups_data": {
         "ups.mfr": "American Power Conversion",
-        "ups.model": "Back-UPS CS 750-RS FW:936.b1 .I",
+        "ups.model": "Back-UPS CS 750-RS",
+        "ups.firmware": "936.b1 .I",
         "ups.serial": "TEST0000",
         "ups.status.charging": "0",
         "ups.status.discharging": "0",

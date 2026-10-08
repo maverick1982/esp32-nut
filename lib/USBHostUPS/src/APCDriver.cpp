@@ -21,6 +21,34 @@ void APCDriver::setup() {
     _back_ups_bx = false;
 }
 
+bool APCDriver::splitProduct(const String& product, String& model, String& firmware, String& aux) {
+    int fw = product.indexOf("FW:");
+    if (fw < 0) return false;
+    // apc_format_model() cuts the character before "FW:", normally a space
+    model = product.substring(0, fw > 0 ? fw - 1 : 0);
+    String rest = product.substring(fw + 3);
+    int usb = rest.indexOf("USB FW:");
+    if (usb >= 0) {
+        firmware = rest.substring(0, usb > 0 ? usb - 1 : 0);
+        aux = rest.substring(usb + 7);
+    } else {
+        firmware = rest;
+        aux = "";
+    }
+    model.trim();
+    firmware.trim();
+    aux.trim();
+    return true;
+}
+
+void APCDriver::formatDeviceStrings(UPSData& data) {
+    String model, firmware, aux;
+    if (!splitProduct(data.get("ups.model"), model, firmware, aux)) return;
+    if (model.length() > 0) data.set("ups.model", model);
+    if (firmware.length() > 0) data.set("ups.firmware", firmware);
+    if (aux.length() > 0) data.set("ups.firmware.aux", aux);
+}
+
 void APCDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     // ups.model comes from the product string, read at claim time
     _back_ups_bx = isBackUpsBX(data.get("ups.model"));

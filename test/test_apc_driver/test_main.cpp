@@ -270,6 +270,58 @@ void test_apc_battery_voltage_nominal_one_decimal(void) {
     TEST_ASSERT_EQUAL_STRING("13.6", ups_data.get("battery.voltage.nominal").c_str());
 }
 
+// Issue 76: ups.model without the firmware, as apc-hid.c apc_format_model()
+static void assertSplit(const char* product, const char* model, const char* fw, const char* aux) {
+    String m, f, a;
+    TEST_ASSERT_TRUE_MESSAGE(APCDriver::splitProduct(product, m, f, a), product);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(model, m.c_str(), product);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(fw, f.c_str(), product);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(aux, a.c_str(), product);
+}
+
+void test_apc_split_product_real_strings(void) {
+    // Product strings from the fixtures and from issue 71
+    assertSplit("Back-UPS ES 700G FW:871.O4 .I USB FW:O4 ", "Back-UPS ES 700G", "871.O4 .I", "O4");
+    assertSplit("Back-UPS CS 500 FW:808.q14 .I USB FW:q14 ", "Back-UPS CS 500", "808.q14 .I", "q14");
+    assertSplit("Back-UPS BX1500G FW:866.L3 .D USB FW:L3 ", "Back-UPS BX1500G", "866.L3 .D", "L3");
+    // The double space of the model stays, as upstream
+    assertSplit("Back-UPS RS  900MI FW:948.g3 .I USB FW:g3     ", "Back-UPS RS  900MI", "948.g3 .I", "g3");
+    // No "USB FW:" part
+    assertSplit("Back-UPS CS 750-RS FW:936.b1 .I", "Back-UPS CS 750-RS", "936.b1 .I", "");
+    assertSplit("Smart-UPS 750 FW:UPS 09.3 / ID=18", "Smart-UPS 750", "UPS 09.3 / ID=18", "");
+
+    String m, f, a;
+    TEST_ASSERT_FALSE(APCDriver::splitProduct("Back-UPS BX750MI", m, f, a));
+}
+
+void test_apc_format_device_strings(void) {
+    UPSData d;
+    d.set("ups.model", "Back-UPS ES 700G FW:871.O4 .I USB FW:O4");
+    driver.formatDeviceStrings(d);
+    TEST_ASSERT_EQUAL_STRING("Back-UPS ES 700G", d.get("ups.model").c_str());
+    TEST_ASSERT_EQUAL_STRING("871.O4 .I", d.get("ups.firmware").c_str());
+    TEST_ASSERT_EQUAL_STRING("O4", d.get("ups.firmware.aux").c_str());
+
+    // Idempotent: called again after every string descriptor
+    driver.formatDeviceStrings(d);
+    TEST_ASSERT_EQUAL_STRING("Back-UPS ES 700G", d.get("ups.model").c_str());
+    TEST_ASSERT_EQUAL_STRING("871.O4 .I", d.get("ups.firmware").c_str());
+
+    // Without "FW:" nothing changes and no firmware key appears
+    UPSData bx;
+    bx.set("ups.model", "Back-UPS BX750MI");
+    driver.formatDeviceStrings(bx);
+    TEST_ASSERT_EQUAL_STRING("Back-UPS BX750MI", bx.get("ups.model").c_str());
+    TEST_ASSERT_FALSE(bx.hasKey("ups.firmware"));
+    TEST_ASSERT_FALSE(bx.hasKey("ups.firmware.aux"));
+
+    // The BX detection works on the split model
+    UPSData bx1500;
+    bx1500.set("ups.model", "Back-UPS BX1500G FW:866.L3 .D USB FW:L3");
+    driver.formatDeviceStrings(bx1500);
+    TEST_ASSERT_TRUE(APCDriver::isBackUpsBX(bx1500.get("ups.model")));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -280,6 +332,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_loop_polling_and_string_requests);
     RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
+    RUN_TEST(test_apc_split_product_real_strings);
+    RUN_TEST(test_apc_format_device_strings);
     return UNITY_END();
 }
 #else
@@ -291,6 +345,8 @@ void setup() {
     RUN_TEST(test_apc_loop_polling_and_string_requests);
     RUN_TEST(test_apc_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
+    RUN_TEST(test_apc_split_product_real_strings);
+    RUN_TEST(test_apc_format_device_strings);
     UNITY_END();
 }
 void loop() {}

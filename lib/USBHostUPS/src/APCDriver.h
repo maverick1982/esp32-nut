@@ -23,6 +23,12 @@ public:
     static const uint16_t BX_MIN_REQUEST_LENGTH = 8;
     static bool isBackUpsBX(const String& model) { return model.startsWith("Back-UPS BX"); }
 
+    // apc-hid.c apc_format_model(): "<model> FW:<firmware> USB FW:<aux>". False when
+    // the product string has no "FW:" (already split, or a model without firmware).
+    static bool splitProduct(const String& product, String& model, String& firmware, String& aux);
+    // ups.model without the firmware, which goes to ups.firmware / ups.firmware.aux (issue #76)
+    void formatDeviceStrings(UPSData& data) override;
+
 protected:
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
     uint32_t quickPollMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }
