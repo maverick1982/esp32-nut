@@ -43,6 +43,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - APC BackUPS Pro 900
 - APC Back-UPS XS 700U
 - APC Back-UPS BX750MI, BX1200MI
+- APC Back-UPS ES 700G
 - APC Smart-UPS 750
 
 **Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). Dalla v1.7.1 la scheda si riavvia da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))

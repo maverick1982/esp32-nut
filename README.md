@@ -43,6 +43,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - APC BackUPS Pro 900
 - APC Back-UPS XS 700U
 - APC Back-UPS BX750MI, BX1200MI
+- APC Back-UPS ES 700G
 - APC Smart-UPS 750
 
 **Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). Since v1.7.1 the board restarts on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
