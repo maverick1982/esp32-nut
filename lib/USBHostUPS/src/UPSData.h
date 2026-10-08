@@ -101,10 +101,12 @@ public:
         if (onBattery || (hasAc && !acPresent)) status += "OB ";
         // DEPLETED suppresses DISCHRG, as upstream: DISCHRG && !DEPLETED.
         if (onBattery && !depleted) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
-        // LB covers lowbatt and timelimitexp, as upstream
-        // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent still renders
-        // as FSD here instead of contributing to LB; issue #65 aligns that.
-        if (d.getBool("ups.status.battery_low") || timeLimitExpired) status += "LB ";
+        // LB covers lowbatt, timelimitexp and shutdownimm, as upstream
+        // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent never gives FSD:
+        // only the upsmon primary sets it, and upsmon shuts down on FSD even on
+        // mains (issue #65).
+        bool shutdownImminent = d.getBool("ups.status.shutdown_imminent");
+        if (d.getBool("ups.status.battery_low") || timeLimitExpired || shutdownImminent) status += "LB ";
 
         // CHRG is qualified by FullyCharged when the device reports it: present
         // and false (notfullycharged) shows CHRG, present and true hides it.
@@ -121,8 +123,10 @@ public:
         // RB covers replacebatt and nobattery, as upstream (REPLACEBATT | NOBATTERY).
         if (d.getBool("ups.status.replace_battery") || noBattery) status += "RB ";
         if (d.getBool("ups.status.overload")) status += "OVER ";
-        if (d.getBool("ups.status.shutdown_imminent")) status += "FSD ";
-        if (d.getBool("ups.status.comm_lost")) status += "COMM_LOST ";
+        // CommunicationLost is an internal fault bit upstream (commfault ->
+        // ups.alarm), not a status token: COMM_LOST is not NUT vocabulary (issue #65).
+        // ups.status.shutdown_imminent and ups.status.comm_lost stay in the
+        // dictionary for a future ups.alarm.
 
         if (status.length() == 0) status = "Unknown";
         status.trim();

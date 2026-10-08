@@ -51,12 +51,36 @@ void test_status_multiple_alarm_flags(void) {
     TEST_ASSERT_EQUAL_STRING("OL RB OVER", UPSData::computeUPSStatusString(data).c_str());
 }
 
+// ShutdownImminent gives LB, never FSD; CommunicationLost gives no token (issue #65)
 void test_status_shutdown_imminent_and_comm_lost(void) {
     UPSData data;
+    data.set("ups.status.ac_present", "1");
     data.set("ups.status.shutdown_imminent", "1");
     data.set("ups.status.comm_lost", "1");
+    TEST_ASSERT_EQUAL_STRING("OL LB", UPSData::computeUPSStatusString(data).c_str());
 
-    TEST_ASSERT_EQUAL_STRING("FSD COMM_LOST", UPSData::computeUPSStatusString(data).c_str());
+    data.set("ups.status.ac_present", "0");
+    data.set("ups.status.discharging", "1");
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", UPSData::computeUPSStatusString(data).c_str());
+
+    // No duplicate LB together with lowbatt and timelimitexp
+    data.set("ups.status.battery_low", "1");
+    data.set("ups.status.remaining_time_limit_expired", "1");
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", UPSData::computeUPSStatusString(data).c_str());
+
+    data.set("ups.status.shutdown_imminent", "0");
+    data.set("ups.status.battery_low", "0");
+    data.set("ups.status.remaining_time_limit_expired", "0");
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_comm_lost_alone_gives_no_token(void) {
+    UPSData data;
+    data.set("ups.status.comm_lost", "1");
+    TEST_ASSERT_EQUAL_STRING("Unknown", UPSData::computeUPSStatusString(data).c_str());
+
+    data.set("ups.status.ac_present", "1");
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_empty_data_returns_unknown(void) {
@@ -108,8 +132,7 @@ void test_status_good_only_device(void) {
 
 // --- Upstream ups_status_set() semantics for the extended PresentStatus flags ---
 
-// RemainingTimeLimitExpired triggers LB, together with lowbatt (SHUTDOWNIMM
-// contributes too upstream; issue #65 aligns that separately).
+// RemainingTimeLimitExpired triggers LB, together with lowbatt and ShutdownImminent.
 void test_status_timelimit_expired_triggers_lb(void) {
     UPSData data;
     data.set("ups.status.ac_present", "1");
@@ -202,6 +225,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
     RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
+    RUN_TEST(test_status_comm_lost_alone_gives_no_token);
     RUN_TEST(test_status_empty_data_returns_unknown);
     RUN_TEST(test_status_eaton_on_battery_with_good);
     RUN_TEST(test_status_eaton_online_with_good);
@@ -226,6 +250,7 @@ void setup() {
     RUN_TEST(test_status_online_charging);
     RUN_TEST(test_status_multiple_alarm_flags);
     RUN_TEST(test_status_shutdown_imminent_and_comm_lost);
+    RUN_TEST(test_status_comm_lost_alone_gives_no_token);
     RUN_TEST(test_status_empty_data_returns_unknown);
     RUN_TEST(test_status_eaton_on_battery_with_good);
     RUN_TEST(test_status_eaton_online_with_good);
