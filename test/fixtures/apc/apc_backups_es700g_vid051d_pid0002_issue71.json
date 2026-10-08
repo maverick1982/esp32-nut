@@ -3,7 +3,7 @@
   "vid": "51d",
   "pid": "2",
   "manufacturer": "APC",
-  "product": "Back-UPS ES 700G FW:871.O4 .I U",
+  "product": "Back-UPS ES 700G FW:871.O4 .I USB FW:O4 ",
   "serial_number": "TEST0000",
   "report_descriptor_hex": [
     "0x05",
@@ -1490,7 +1490,9 @@
       ],
       "expected_ups_data": {
         "ups.mfr": "APC",
-        "ups.model": "Back-UPS ES 700G FW:871.O4 .I U",
+        "ups.model": "Back-UPS ES 700G",
+        "ups.firmware": "871.O4 .I",
+        "ups.firmware.aux": "O4",
         "ups.serial": "TEST0000",
         "ups.type": "APCDriver",
         "battery.charge": "97",
@@ -1518,5 +1520,5 @@
       }
     }
   ],
-  "notes": "Back-UPS ES 700G. The product string is cut at 31 characters by hid_host_dev_info_t (issue #76); the full string from Linux is \"Back-UPS ES 700G FW:871.O4 .I USB FW:O4 \". Serial anonymized."
+  "notes": "Back-UPS ES 700G, live dump of v1.7.0. That firmware cut the product string at 31 characters (\"Back-UPS ES 700G FW:871.O4 .I U\"); \"product\" holds the full string from Linux, as read since issue #76. Serial anonymized."
 }

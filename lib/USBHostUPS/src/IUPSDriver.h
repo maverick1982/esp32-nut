@@ -55,6 +55,15 @@ public:
     virtual void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 
     /**
+     * @brief Rewrites the device strings once they are known (issue #76).
+     *
+     * Called after the strings are read from the device info at claim time and after
+     * every string descriptor, like the format_model/format_mfr hooks of the NUT
+     * subdrivers. Must be idempotent.
+     */
+    virtual void formatDeviceStrings(UPSData& data) {}
+
+    /**
      * @brief Encodes boolean beeper state into device-specific HID value
      * 
      * @param enable Desired beeper state

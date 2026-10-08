@@ -124,6 +124,16 @@ Logs from an APC Back-UPS BX750MI (v1.6.1): after 1-2 minutes of polling a GET_R
 * `isDataStale()` is true until the first full poll after a claim (`IUPSDriver::initialPollDone()`, plus a known status), at most `FIRST_DATA_MAX_MS` (30 s), like `upsd` while `usbhid-ups` runs `upsdrv_initinfo()`. Before, NUT served an empty status right after the boot (Home Assistant: `unknown`). The 15 s boot grace of A1 is gone, so without a device the data is always stale. The web UI hides the stale banner while the first poll runs (`isWaitingFirstData()`).
 * `NUTServer` publishes `device.type` ("ups") and `device.mfr/model/serial` copied from `ups.*`, as `drivers/main.c` does: the OMV NUT plugin and an Android app did not show the model.
 
+### Addendum: device strings (issue #76, 2026-10-08)
+`hid_host_dev_info_t` cut every device string at 31 characters: an APC Back-UPS ES 700G showed `ups.model = "Back-UPS ES 700G FW:871.O4 .I U"`.
+
+**More `hid_host` deviations** (marked `[esp32-nut, issue 76]`):
+* `HID_STR_DESC_MAX_LENGTH` 32 → 64, like the model buffer of `apc-hid.c`. `wchar_t` is 2 bytes on the S3 toolchain: 192 more bytes on the poll task stack during the claim.
+
+**Application changes:**
+* New `IUPSDriver::formatDeviceStrings()`, called after the strings are read at claim time and after every string descriptor, like the `format_model` hooks of the NUT subdrivers. It must be idempotent.
+* `APCDriver` splits the product string like `apc_format_model()`: `ups.model` before `FW:`, `ups.firmware` up to `USB FW:`, `ups.firmware.aux` after it. `device.model` follows `ups.model`, and `isBackUpsBX()` still matches the split model.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.

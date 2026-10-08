@@ -27,8 +27,11 @@ extern "C" {
  *
  * This driver stores at most 32 wide characters per string to reduce memory
  * usage when filling hid_host_dev_info_t via hid_host_get_device_info().
+ *
+ * [esp32-nut, issue 76] 64, like the model buffer of NUT apc-hid: 32 cut the APC
+ * product strings ("Back-UPS ES 700G FW:871.O4 .I USB FW:O4 ") at 31 characters.
  */
-#define HID_STR_DESC_MAX_LENGTH           32
+#define HID_STR_DESC_MAX_LENGTH           64
 
 // For backward compatibility with IDF versions which do not have suspend/resume api
 #ifdef USB_HOST_LIB_EVENT_FLAGS_AUTO_SUSPEND

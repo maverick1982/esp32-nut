@@ -177,6 +177,8 @@ public:
             std::vector<uint8_t> sDesc = encodeUtf16Descriptor(sVal);
             driver->parseStringDescriptor(&host, idx, sDesc.data(), sDesc.size(), ups_data);
         }
+        // As USBHostUPS after the strings are read (issue #76)
+        driver->formatDeviceStrings(ups_data);
 
         // 5. Replay Scenarios
         JsonArray scenarios = doc["scenarios"].as<JsonArray>();

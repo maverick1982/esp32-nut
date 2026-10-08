@@ -399,6 +399,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         }
         _driver->setup();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
+        _driver->formatDeviceStrings(_ups_data);
     }
 
     _link.reset(millis());
@@ -667,7 +668,10 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     }
 
     std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (_driver) _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+    if (_driver) {
+        _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+        _driver->formatDeviceStrings(_ups_data);
+    }
     return true;
 }
 
