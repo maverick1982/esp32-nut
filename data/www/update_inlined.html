@@ -1406,6 +1406,212 @@ input[readonly] {
     }
 }
 
+/* US-059: UPS Commands */
+/* --- Last test result --- */
+.test-result {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    padding: 0.9rem 1.2rem;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--bg-panel-border);
+    border-left: 3px solid var(--success);
+    border-radius: var(--border-radius);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+.test-result[hidden] { display: none; }
+.test-result .test-result-label {
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.75rem;
+}
+.test-result .test-result-value { color: var(--success); margin-left: auto; }
+.test-result.running { border-left-color: var(--info); }
+.test-result.running .test-result-value { color: var(--info); }
+.test-result.failed { border-left-color: var(--danger); }
+.test-result.failed .test-result-value { color: var(--danger); }
+
+/* --- Command groups --- */
+.cmd-group {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+}
+.cmd-group + .cmd-group { margin-top: 1.5rem; }
+
+.cmd-group-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--bg-panel-border);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+}
+.cmd-group-header svg { width: 16px; height: 16px; flex-shrink: 0; }
+.cmd-group-count {
+    margin-left: auto;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    font-size: 0.7rem;
+}
+
+.cmd-group-note {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 184, 0, 0.06);
+    color: var(--warning);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+.cmd-group-note svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* Power control: hazard stripe on the left edge, dimmed rows */
+.cmd-group.locked { border-color: rgba(255, 184, 0, 0.25); }
+.cmd-group.locked .cmd-group-header { color: var(--warning); }
+.cmd-group.locked .cmd-row {
+    background: repeating-linear-gradient(-45deg,
+        transparent 0 10px, rgba(255, 184, 0, 0.025) 10px 20px);
+}
+.cmd-group.locked .cmd-name { color: var(--text-secondary); }
+.cmd-group.locked .cmd-desc { color: rgba(138, 155, 179, 0.7); }
+
+/* --- Command row --- */
+.cmd-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.1fr) 2fr auto;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    transition: background 0.2s;
+}
+.cmd-row:last-child { border-bottom: none; }
+.cmd-group:not(.locked) .cmd-row:hover { background: rgba(0, 240, 255, 0.04); }
+
+.cmd-name {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    color: var(--accent);
+    word-break: break-all;
+}
+.cmd-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.cmd-action {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+/* Inline outcome message (appears after the call, fades out) */
+.cmd-result {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    animation: fadeIn 0.25s ease-out;
+    /* Spazio riservato anche quando è vuoto: il messaggio non allarga la colonna
+       e non sposta nome e descrizione (larghezza di "Command rejected by the UPS") */
+    min-width: 13rem;
+    justify-content: flex-end;
+}
+.cmd-result.success { color: var(--success); }
+.cmd-result.error { color: var(--danger); }
+.cmd-result.fade { opacity: 0; transition: opacity 0.6s; }
+
+/* --- Run button --- */
+.btn-sm {
+    padding: 0.4rem 0.9rem;
+    font-size: 0.75rem;
+}
+.cmd-run {
+    min-width: 7.5rem;
+    justify-content: center;
+}
+.cmd-run:disabled {
+    border-color: rgba(138, 155, 179, 0.3);
+    color: rgba(138, 155, 179, 0.6);
+    background: transparent;
+    box-shadow: none;
+    cursor: not-allowed;
+}
+.cmd-run.running:disabled {
+    border-color: rgba(0, 240, 255, 0.4);
+    color: var(--accent);
+}
+.cmd-run svg { width: 12px; height: 12px; }
+
+.cmd-spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid rgba(0, 240, 255, 0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: cmd-spin 0.8s linear infinite;
+}
+@keyframes cmd-spin { to { transform: rotate(360deg); } }
+
+/* --- Empty state --- */
+.cmd-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 3rem 1rem;
+    border: 1px dashed var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    text-align: center;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+.cmd-empty[hidden] { display: none; }
+.cmd-empty svg { width: 32px; height: 32px; opacity: 0.5; }
+.cmd-empty strong {
+    color: var(--text-primary);
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.cmd-empty span { font-size: 0.8rem; }
+
+/* --- Mobile (US-042 breakpoint) --- */
+@media (max-width: 768px) {
+    .cmd-row {
+        grid-template-columns: 1fr;
+        gap: 0.4rem;
+        padding: 0.9rem 1rem;
+    }
+    .cmd-action { margin-top: 0.4rem; }
+    .cmd-result { white-space: normal; margin-right: auto; min-width: 0; justify-content: flex-start; }
+    .cmd-result:empty { display: none; }
+    .test-result { flex-wrap: wrap; }
+    .test-result .test-result-value { margin-left: 0; width: 100%; }
+}
+
+/* Static groups in index.html: no gap above the power group when the actions group is hidden */
+.cmd-group[hidden] { display: none; }
+.cmd-group[hidden] + .cmd-group { margin-top: 0; }
+
 /* OTA Update Styles */
 .ota-container {
     max-width: 500px;

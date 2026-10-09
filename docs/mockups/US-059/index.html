@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | UPS Commands (US-059 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css (tokens, fonts, layout, metric cards, mobile rules) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-059 -->
+    <link rel="stylesheet" href="commands.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.8.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <!-- NEW (US-059): second entry, right after UPS Telemetry -->
+                <button class="tab active" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <button class="tab" data-target="wifi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                    </svg>
+                    Wi-Fi Config
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: Connected</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: Connected</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">UPS Commands</h1>
+                <div class="device-id">ID: <span>A4CF12F0C3E8</span></div>
+            </header>
+
+            <div class="tab-content active" id="content-commands">
+                <div class="panel ups-panel">
+                    <div class="panel-header">
+                        <h2>UPS Actions</h2>
+                        <div class="polling-indicator">
+                            <span class="pulse-dot"></span> Live
+                        </div>
+                    </div>
+
+                    <!-- Same 4 cards as the telemetry page (cmd-* ids, fed by the same /api/ups-vars poll) -->
+                    <div class="metrics-grid">
+                        <div class="metric-card highlight">
+                            <div class="metric-label">UPS Status</div>
+                            <div class="metric-value status-online" id="cmd-ups-status">OL</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Battery Charge</div>
+                            <div class="metric-value"><span id="cmd-ups-charge">100</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="cmd-bar-charge" style="width: 100%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">UPS Load</div>
+                            <div class="metric-value"><span id="cmd-ups-load">18</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar load" id="cmd-bar-load" style="width: 18%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Real Power</div>
+                            <div class="metric-value"><span id="cmd-ups-realpower">72</span><span class="unit">W</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Last test result: hidden when ups.test.result is absent -->
+                    <div class="test-result" id="cmd-test-result">
+                        <span class="status-indicator success" id="cmd-test-result-dot"></span>
+                        <span class="test-result-label">Last test result</span>
+                        <span class="test-result-value" id="cmd-test-result-value">Done and passed</span>
+                    </div>
+
+                    <!-- Command list, rendered from GET /api/ups/commands -->
+                    <div id="cmd-list"></div>
+
+                    <!-- Empty state -->
+                    <div class="cmd-empty" id="cmd-empty" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="4 17 10 11 4 5" />
+                            <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                        <strong>No commands available</strong>
+                        <span>The UPS is disconnected or does not expose any command.</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Mockup-only state switcher -->
+    <div class="mock-switcher" role="group" aria-label="Mockup state">
+        <span>Mockup</span>
+        <button type="button" data-state="populated" class="on">Populated</button>
+        <button type="button" data-state="no-test">No test result</button>
+        <button type="button" data-state="empty">Empty / disconnected</button>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -537,17 +537,87 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
-    const elCharge = document.getElementById('ups-charge');
-    const barCharge = document.getElementById('bar-charge');
-    const elLoad = document.getElementById('ups-load');
-    const barLoad = document.getElementById('bar-load');
-    const elStatus = document.getElementById('ups-status');
-    const elRealPower = document.getElementById('ups-realpower');
+
+    // The 4 metric cards exist on the telemetry page and on the commands page (US-059)
+    const TELEMETRY_METRIC_IDS = {
+        status: 'ups-status', charge: 'ups-charge', barCharge: 'bar-charge',
+        load: 'ups-load', barLoad: 'bar-load', realPower: 'ups-realpower'
+    };
+    const COMMANDS_METRIC_IDS = {
+        status: 'cmd-ups-status', charge: 'cmd-ups-charge', barCharge: 'cmd-bar-charge',
+        load: 'cmd-ups-load', barLoad: 'cmd-bar-load', realPower: 'cmd-ups-realpower'
+    };
+
+    function renderMetrics(data, ids) {
+        const elStatus = document.getElementById(ids.status);
+        const elCharge = document.getElementById(ids.charge);
+        const barCharge = document.getElementById(ids.barCharge);
+        const elLoad = document.getElementById(ids.load);
+        const barLoad = document.getElementById(ids.barLoad);
+        const elRealPower = document.getElementById(ids.realPower);
+
+        if (elStatus) elStatus.innerText = data['ups.status'] || '--';
+
+        if (elCharge) {
+            const charge = data['battery.charge'] || 0;
+            elCharge.innerText = charge;
+            if (barCharge) barCharge.style.width = `${charge}%`;
+        }
+
+        if (elLoad) {
+            const load = data['ups.load'] || 0;
+            elLoad.innerText = load;
+            if (barLoad) {
+                barLoad.style.width = `${load}%`;
+                if (parseInt(load) > 80) {
+                    barLoad.style.background = 'var(--danger)';
+                    barLoad.style.boxShadow = '0 0 10px var(--danger)';
+                } else {
+                    barLoad.style.background = 'var(--accent)';
+                    barLoad.style.boxShadow = '0 0 10px var(--accent)';
+                }
+            }
+        }
+
+        if (elRealPower) {
+            // ?? and not ||: a real power of 0 W is a value, not a missing one
+            const realPower = data['ups.realpower'] ?? '--';
+            elRealPower.innerText = realPower;
+        }
+    }
+
+    // US-059: "Last test result" box, hidden when ups.test.result is absent
+    function renderTestResult(data) {
+        const box = document.getElementById('cmd-test-result');
+        const dot = document.getElementById('cmd-test-result-dot');
+        const value = document.getElementById('cmd-test-result-value');
+        if (!box) return;
+        const result = data['ups.test.result'];
+        if (result === undefined || result === null || result === '') {
+            box.hidden = true;
+            return;
+        }
+        const text = String(result);
+        const running = text === 'In progress';
+        const failed = text === 'Done and error' || text === 'Aborted';
+        box.className = 'test-result' + (running ? ' running' : (failed ? ' failed' : ''));
+        if (dot) dot.className = 'status-indicator ' + (running ? 'info' : (failed ? 'danger' : 'success'));
+        if (value) value.textContent = text;
+        box.hidden = false;
+    }
+
+    // Tabs that show data from /api/ups-vars: one shared poll serves both
+    const UPS_POLL_TABS = ['ups', 'commands'];
+    const isUpsPollTabActive = () => UPS_POLL_TABS.some(t => {
+        const el = document.getElementById(`content-${t}`);
+        return el && el.classList.contains('active');
+    });
 
     let upsPollInterval = null;
+    let lastCatalogKey = null; // connection + beeper state seen at the previous poll
 
     async function fetchUpsVars() {
-        if (!document.getElementById('content-ups').classList.contains('active')) return;
+        if (!isUpsPollTabActive()) return;
         if (isFetchingAPI) return;
         
         isFetchingAPI = true;
@@ -571,35 +641,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
 
-            // Update primary metrics
-            if (elStatus) elStatus.innerText = data['ups.status'] || '--';
-            
-            if (elCharge) {
-                const charge = data['battery.charge'] || 0;
-                elCharge.innerText = charge;
-                if (barCharge) barCharge.style.width = `${charge}%`;
-            }
-            
-            if (elLoad) {
-                const load = data['ups.load'] || 0;
-                elLoad.innerText = load;
-                if (barLoad) {
-                    barLoad.style.width = `${load}%`;
-                    if (parseInt(load) > 80) {
-                        barLoad.style.background = 'var(--danger)';
-                        barLoad.style.boxShadow = '0 0 10px var(--danger)';
-                    } else {
-                        barLoad.style.background = 'var(--accent)';
-                        barLoad.style.boxShadow = '0 0 10px var(--accent)';
-                    }
-                }
-            }
+            // Update primary metrics (telemetry and commands pages)
+            renderMetrics(data, TELEMETRY_METRIC_IDS);
+            renderMetrics(data, COMMANDS_METRIC_IDS);
+            renderTestResult(data);
 
-            if (elRealPower) {
-                // ?? and not ||: a real power of 0 W is a value, not a missing one
-                const realPower = data['ups.realpower'] ?? '--';
-                elRealPower.innerText = realPower;
+            // Reload the command catalog when the UPS connects or disconnects, or when
+            // ups.beeper.status appears/disappears (the beeper.* commands depend on it)
+            const catalogKey = (!!data._disconnected) + '|' + (data['ups.beeper.status'] !== undefined);
+            if (lastCatalogKey !== null && catalogKey !== lastCatalogKey) {
+                loadCommands();
             }
+            lastCatalogKey = catalogKey;
 
             // Update table
             if (upsTableBody) {
@@ -677,29 +730,184 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Start polling when UPS tab is clicked
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            if (tab.getAttribute('data-target') === 'ups') {
-                if (!upsPollInterval) {
-                    fetchUpsVars();
-                    upsPollInterval = setInterval(fetchUpsVars, 2000);
-                }
-            } else {
-                if (upsPollInterval) {
-                    clearInterval(upsPollInterval);
-                    upsPollInterval = null;
-                }
-            }
-        });
-    });
+    // US-059: UPS command list
+    const CMD_LOCK_NOTE = 'Available via NUT only until web authentication is implemented';
+    const CMD_ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4l13 8-13 8z"/></svg>';
+    const CMD_ICON_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
+    const CMD_ERRORS = {
+        400: 'Command not supported',
+        403: 'Available via NUT only',
+        500: 'Command rejected by the UPS',
+        503: 'UPS not connected'
+    };
+    const CMD_RESULT_MS = 4000;
 
-    // Start polling immediately if UPS tab is active on load
-    if (activeTab && activeTab.getAttribute('data-target') === 'ups') {
+    // Button content is built from constants only, never from API data
+    function setRunButtonContent(btn, iconHtml, label) {
+        btn.innerHTML = iconHtml;
+        btn.appendChild(document.createTextNode(' ' + label));
+    }
+
+    async function runCommand(name, btn, out) {
+        if (btn.disabled) return;
+        out.className = 'cmd-result';
+        out.textContent = '';
+        btn.disabled = true;
+        btn.classList.add('running');
+        setRunButtonContent(btn, '<span class="cmd-spinner"></span>', 'Running…');
+
+        let ok = false;
+        let message;
+        try {
+            const res = await fetch('/api/ups/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            });
+            if (res.status === 200) {
+                ok = true;
+                message = 'Command sent';
+            } else {
+                message = CMD_ERRORS[res.status] || `Command failed (HTTP ${res.status})`;
+            }
+        } catch (err) {
+            console.error('UPS command error:', err);
+            message = 'Network error';
+        }
+
+        btn.classList.remove('running');
+        setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+        out.className = 'cmd-result ' + (ok ? 'success' : 'error');
+        out.textContent = message;
+
+        // The message stays ~4 s, then fades; the button is re-enabled with it
+        setTimeout(() => {
+            out.classList.add('fade');
+            btn.disabled = false;
+        }, CMD_RESULT_MS);
+        setTimeout(() => {
+            out.className = 'cmd-result';
+            out.textContent = '';
+        }, CMD_RESULT_MS + 600);
+    }
+
+    function buildCommandRow(cmd, destructive) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row';
+        row.dataset.cmd = cmd.name;
+
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = cmd.name;
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = typeof cmd.description === 'string' ? cmd.description : '';
+
+        const action = document.createElement('div');
+        action.className = 'cmd-action';
+
+        const out = document.createElement('span');
+        out.className = 'cmd-result';
+        out.setAttribute('aria-live', 'polite');
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-outline btn-sm cmd-run';
+        if (destructive) {
+            // Locked: no listener, nothing can be sent from the web UI
+            btn.disabled = true;
+            btn.title = CMD_LOCK_NOTE;
+            setRunButtonContent(btn, CMD_ICON_LOCK, 'Run');
+        } else {
+            setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+            btn.addEventListener('click', () => runCommand(cmd.name, btn, out));
+        }
+
+        action.append(out, btn);
+        row.append(name, desc, action);
+        return row;
+    }
+
+    function renderCommands(commands) {
+        const list = document.getElementById('cmd-list');
+        const empty = document.getElementById('cmd-empty');
+        const groupActions = document.getElementById('cmd-group-actions');
+        const groupPower = document.getElementById('cmd-group-power');
+        if (!list || !empty || !groupActions || !groupPower) return;
+
+        [groupActions, groupPower].forEach(g => g.querySelectorAll('.cmd-row').forEach(r => r.remove()));
+
+        let nActions = 0;
+        let nPower = 0;
+        for (const cmd of commands) {
+            if (!cmd || typeof cmd.name !== 'string' || cmd.name === '') continue;
+            const destructive = !!cmd.destructive;
+            (destructive ? groupPower : groupActions).appendChild(buildCommandRow(cmd, destructive));
+            if (destructive) nPower++; else nActions++;
+        }
+
+        const countActions = document.getElementById('cmd-count-actions');
+        const countPower = document.getElementById('cmd-count-power');
+        if (countActions) countActions.textContent = String(nActions);
+        if (countPower) countPower.textContent = String(nPower);
+        groupActions.hidden = nActions === 0;
+        groupPower.hidden = nPower === 0;
+
+        const isEmpty = nActions + nPower === 0;
+        list.hidden = isEmpty;
+        empty.hidden = !isEmpty;
+    }
+
+    let commandsLoadSeq = 0;
+
+    async function loadCommands() {
+        const seq = ++commandsLoadSeq;
+        let commands = [];
+        try {
+            const res = await fetch('/api/ups/commands');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            if (json && Array.isArray(json.commands)) commands = json.commands;
+        } catch (err) {
+            console.error('Failed to fetch UPS commands:', err);
+        }
+        // A newer request started meanwhile: its answer wins
+        if (seq !== commandsLoadSeq) return;
+        renderCommands(commands);
+    }
+
+    function startUpsPolling() {
         if (!upsPollInterval) {
             fetchUpsVars();
             upsPollInterval = setInterval(fetchUpsVars, 2000);
         }
+    }
+
+    function stopUpsPolling() {
+        if (upsPollInterval) {
+            clearInterval(upsPollInterval);
+            upsPollInterval = null;
+        }
+    }
+
+    // Poll /api/ups-vars while the telemetry or the commands tab is shown
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.getAttribute('data-target');
+            if (UPS_POLL_TABS.includes(target)) {
+                startUpsPolling();
+                if (target === 'commands') loadCommands();
+            } else {
+                stopUpsPolling();
+            }
+        });
+    });
+
+    // Start polling immediately if one of those tabs is active on load
+    if (activeTab && UPS_POLL_TABS.includes(activeTab.getAttribute('data-target'))) {
+        startUpsPolling();
+        if (activeTab.getAttribute('data-target') === 'commands') loadCommands();
     }
 
     // Issue #47: surface crash diagnostics without a serial console

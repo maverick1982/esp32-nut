@@ -31,6 +31,13 @@
                     </svg>
                     UPS Telemetry
                 </button>
+                <button class="tab" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
                 <button class="tab" data-target="wifi">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path
@@ -215,6 +222,90 @@
                             <tbody id="ups-table-body">
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="content-commands">
+                <div class="panel ups-panel">
+                    <div class="panel-header">
+                        <h2>UPS Actions</h2>
+                        <div class="polling-indicator">
+                            <span class="pulse-dot"></span> Live
+                        </div>
+                    </div>
+
+                    <!-- Same 4 cards as the telemetry page, fed by the same /api/ups-vars poll -->
+                    <div class="metrics-grid">
+                        <div class="metric-card highlight">
+                            <div class="metric-label">UPS Status</div>
+                            <div class="metric-value status-online" id="cmd-ups-status">--</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Battery Charge</div>
+                            <div class="metric-value"><span id="cmd-ups-charge">--</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="cmd-bar-charge" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">UPS Load</div>
+                            <div class="metric-value"><span id="cmd-ups-load">--</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar load" id="cmd-bar-load" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Real Power</div>
+                            <div class="metric-value"><span id="cmd-ups-realpower">--</span><span class="unit">W</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Last test result: hidden when ups.test.result is absent -->
+                    <div class="test-result" id="cmd-test-result" hidden>
+                        <span class="status-indicator success" id="cmd-test-result-dot"></span>
+                        <span class="test-result-label">Last test result</span>
+                        <span class="test-result-value" id="cmd-test-result-value">--</span>
+                    </div>
+
+                    <!-- Command list, rows rendered from GET /api/ups/commands -->
+                    <div id="cmd-list">
+                        <section class="cmd-group" id="cmd-group-actions" hidden>
+                            <div class="cmd-group-header">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M9 3h6M10 3v6L4 20a1 1 0 001 1h14a1 1 0 001-1L14 9V3" />
+                                </svg>
+                                <span>Tests &amp; beeper</span>
+                                <span class="cmd-group-count" id="cmd-count-actions">0</span>
+                            </div>
+                        </section>
+                        <section class="cmd-group locked" id="cmd-group-power" hidden>
+                            <div class="cmd-group-header">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9z" />
+                                </svg>
+                                <span>Power control</span>
+                                <span class="cmd-group-count" id="cmd-count-power">0</span>
+                            </div>
+                            <div class="cmd-group-note">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                                    <path d="M7 11V7a5 5 0 0110 0v4" />
+                                </svg>
+                                Available via NUT only until web authentication is implemented
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Empty state -->
+                    <div class="cmd-empty" id="cmd-empty" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="4 17 10 11 4 5" />
+                            <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                        <strong>No commands available</strong>
+                        <span>The UPS is disconnected or does not expose any command.</span>
                     </div>
                 </div>
             </div>
