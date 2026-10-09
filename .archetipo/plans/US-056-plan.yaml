@@ -71,7 +71,7 @@ tasks:
   - id: TASK-01
     title: Creare CommandCatalog.h con tabella dei comandi, find() e build()
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** introdurre la tabella statica dei comandi NUT e la funzione pura che ricava i comandi disponibili dagli usage del descriptor.
@@ -97,10 +97,11 @@ tasks:
       - [ ] La tabella contiene esattamente i 16 comandi della spec, con le descrizioni di `cmdvartab` e i flag distruttivi corretti
       - [ ] `build()` considera solo usage FEATURE e restituisce i comandi nell'ordine della tabella
       - [ ] Nessun altro file modificato
+    ref: TASK-01
   - id: TASK-02
     title: Test unitari del catalogo su usage sintetici
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -135,10 +136,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti i casi elencati sono presenti e verdi
       - [ ] Il comando di verifica termina con 0 failures
+    ref: TASK-02
   - id: TASK-03
     title: Esporre getSupportedCommands() su IUSBHostUPS e USBHostUPS
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -165,10 +167,11 @@ tasks:
       - [ ] `getSupportedCommands()` restituisce vuoto con UPS non connesso
       - [ ] L'override di `USBHostUPS` prende `_mutex`
       - [ ] Build firmware ok e nessun mock di test modificato
+    ref: TASK-03
   - id: TASK-04
     title: LIST CMD e GET CMDDESC dal catalogo nel server NUT
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -193,10 +196,11 @@ tasks:
       - [ ] LIST CMD non contiene più nomi di comandi scritti a mano
       - [ ] GET CMDDESC restituisce la descrizione di `cmdvartab` per i comandi in tabella e `"Unavailable"` per gli altri
       - [ ] INSTCMD e GET DESC invariati
+    ref: TASK-04
   - id: TASK-05
     title: Aggiornare i test del server NUT per LIST CMD e CMDDESC
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -225,10 +229,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] I nuovi casi sono presenti e verdi
       - [ ] Tutti i test preesistenti di `test_nut_server` sono verdi
+    ref: TASK-05
   - id: TASK-06
     title: Catalogo atteso per ogni fixture di replay
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -253,10 +258,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Ogni fixture esistente ha un elenco di comandi atteso con almeno un commento di giustificazione
       - [ ] `test_record_replay` è verde
+    ref: TASK-06
   - id: TASK-07
     title: 'Regressione completa: suite nativa e build firmware'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-05
@@ -282,3 +288,4 @@ tasks:
       ## Criteri di Completamento
       - [ ] Suite nativa completa con 0 failures
       - [ ] Build `esp32-s3-standard` completata senza errori
+    ref: TASK-07

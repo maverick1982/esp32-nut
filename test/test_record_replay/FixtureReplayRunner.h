@@ -19,6 +19,7 @@
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
 #include "DriverRegistry.h"
+#include "CommandCatalog.h"
 
 class ReplayMockHost : public IUSBHostUPS {
 public:
@@ -79,7 +80,9 @@ public:
         return desc;
     }
 
-    static void runFixtureTest(const char* filePath) {
+    // expectedCommands: NUT commands the device must expose (LIST CMD order, space
+    // separated); nullptr skips the check (US-056)
+    static void runFixtureTest(const char* filePath, const char* expectedCommands = nullptr) {
         std::ifstream f(filePath);
         if (!f.is_open()) {
             std::string msg = "Cannot open fixture file: ";
@@ -234,6 +237,17 @@ public:
                 TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey(key), assertMsg.c_str());
                 TEST_ASSERT_EQUAL_STRING_MESSAGE(expVal.c_str(), actualVal.c_str(), assertMsg.c_str());
             }
+        }
+
+        if (expectedCommands) {
+            // Same inputs as IUSBHostUPS::getSupportedCommands(); ups_data is the replayed data
+            bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
+            std::string actual;
+            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper)) {
+                if (!actual.empty()) actual += " ";
+                actual += c->name;
+            }
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, actual.c_str(), "supported NUT commands");
         }
 
         delete driver;

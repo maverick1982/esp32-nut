@@ -82,6 +82,7 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _hid_parser.getUsageDef(usage); }
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
+    std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
