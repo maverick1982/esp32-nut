@@ -1,0 +1,245 @@
+schema: archetipo/plan/v2
+spec_code: US-060
+body: |
+  ---
+  type: plan
+  title: "US-060: Riparare la suite e2e Playwright della Web UI — Piano di Implementazione"
+  description: "Piano di Implementazione per US-060"
+  tags: [plan, implementation, US-060]
+  ---
+  # US-060: Riparare la suite e2e Playwright della Web UI — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-09
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-004 — CI/CD e Automazione
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come sviluppatore del firmware, voglio che `npx playwright test` torni completamente verde sulla Web UI attuale, in modo da usare gli e2e come rete di sicurezza prima di ogni modifica a `data/www`, invece di ignorare 21 fallimenti noti.
+
+  **Criteri di Accettazione**
+  - I 21 test oggi falliti passano, oppure sono rimossi o accorpati con motivazione scritta.
+  - Nessuna modifica a `data/www`: un bug reale della UI diventa issue o spec separata e il test resta `test.fixme` con il riferimento.
+  - Asserzioni adattate alla UI attuale senza ridurre la copertura.
+  - `screenshot.spec.ts` fuori dalla suite normale, non sovrascrive `docs/images/`, lanciabile con un comando documentato.
+  - Causa annotata per `default-tab.spec.js` e `ota_zip.spec.ts`.
+  - Suite completa verde 3 volte di seguito (`--repeat-each 3`).
+  - Test nativi e build invariati.
+
+  ---
+
+  ## Analisi delle cause (2026-10-09)
+
+  Eseguita la suite (esclusi gli screenshot) e poi una prova su una copia temporanea degli spec con i soli percorsi degli asset corretti: da 20 falliti a 4 (più 2 dell'installer, dovuti solo alla copia in un'altra cartella).
+
+  - **Asset rinominati (causa principale).** `data/www/index.html` carica `bundle.css?v=…` e `bundle.js?v=…`. Gli spec instradano ancora `**/*app.js*`, `**/*ups.css*`, `**/*shared.css*` verso file che non esistono più: il bundle non viene servito, quindi il JS non parte (card a `--`, tab non attivi, form senza handler). Vale anche per `default-tab.spec.js`.
+  - **Pagina OTA.** `data/www/update.html` contiene i segnaposto `shared.css?v=1.1.1` e `mobile.css?v=1.1.1`, che `scripts/inline_update.py` sostituisce con `bundle.css` + `shared_ota.css` (il primo) e con niente (il secondo); il firmware serve `update_inlined.html`. Gli spec cercano `data/www/shared.css` e `mobile.css`, che non esistono (ENOENT). Inoltre `ota_zip.spec.ts` instrada `http://esp32.local/fflate.min.js` alla lettera, ma la pagina chiede `fflate.min.js?v=1.1.1`: fflate non si carica e lo zip risulta "Invalid ZIP file". Causa di `ota_zip.spec.ts`: asset OTA e query string di fflate.
+  - **Da verificare dopo la correzione dei percorsi:** `logs-viewer.spec.ts` "should display mocked system logs" (il terminale non mostra il log simulato) e `ups-parameters.spec.ts` "shows generic banner" (il banner resta visibile dopo il cambio di `ups.type` entro 3,5 s). Ipotesi: API non simulate (`/api/system-status`, `/api/config`, ...) escono verso `esp32.local` e la risoluzione lenta tiene occupato il flag `isFetchingAPI` di `bundle.js`, condiviso tra le fetch. `e2e/ups-commands.spec.ts` evita il problema con un catch-all su `**/api/**`.
+  - **`debug.spec.ts`** ripete il primo test di `wifi-config.spec.ts` (stesso flusso, sottoinsieme delle asserzioni): si elimina.
+  - **`system-status.spec.js`** è già `test.skip` (il saltato della suite) e usa `file://`: fuori scope, resta com'è.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Un helper condiviso serve la Web UI come la serve il firmware, e gli spec smettono di conoscere i nomi dei file. Nessuna modifica a `data/www`.
+
+  - **`e2e/support/webui.ts`** (nuovo):
+    - `serveIndex(page)`: catch-all `**/api/**` → `{}` (registrato per primo: in Playwright le route registrate dopo hanno la precedenza, quindi i mock dei singoli test vincono); `http://esp32.local/` → `data/www/index.html`; `**/bundle.css*`, `**/bundle.js*` da `data/www/`; `logo.png` e `favicon.ico` reali o vuoti.
+    - `serveUpdatePage(page)`: GET `http://esp32.local/update` e `/update.html` → `data/www/update.html`; `**/shared.css*` → `bundle.css` + `shared_ota.css` concatenati come in `inline_update.py`; `**/mobile.css*` → CSS vuoto; `**/fflate.min.js*` → `data/www/fflate.min.js`. Le POST su `/update` restano ai singoli test.
+    - Percorsi con `path.resolve(__dirname, '..', 'data/www', …)`, non `process.cwd()`.
+  - **Spec della pagina principale** (`config_autopopulate`, `logs-viewer`, `nut_config`, `responsive`, `ups-parameters`, `version`, `wifi-config`, `default-tab.spec.js`): le route degli asset diventano `serveIndex(page)`; restano solo i mock delle API del test. Asserzioni adattate alla UI attuale solo dove il testo o la struttura sono cambiati, mantenendo lo scenario.
+  - **Spec OTA** (`ota-update`, `ota_zip`): `serveUpdatePage(page)`, e `serveIndex(page)` dove si parte dalla home.
+  - **Screenshot.** `playwright.config.ts`: `testIgnore: process.env.SCREENSHOTS ? [] : ['**/screenshot.spec.ts']`. Lo spec usa l'helper e clicca esplicitamente il tab Wi-Fi prima del primo screenshot (oggi il tab predefinito è UPS Telemetry, US-049). Script npm `"e2e": "playwright test"`; per gli screenshot una forma che funzioni su Windows senza nuove dipendenze (niente `cross-env`), documentata in `e2e/README.md`.
+  - **`e2e/README.md`** (nuovo, breve): come lanciare la suite, gli screenshot (sovrascrivono `docs/images/`), il ruolo dell'helper e la regola "un bug reale diventa issue + `test.fixme`".
+  - **Fuori scope:** Playwright in CI, `system-status.spec.js`, migrare `ups-commands.spec.ts` all'helper (funziona già; facoltativo solo se riduce davvero codice duplicato senza cambiarne le asserzioni).
+
+  ---
+
+  ## Strategia di Test
+
+  La spec è essa stessa una suite e2e: la verifica è la suite stessa, eseguita più volte, più la prova che firmware e asset non sono cambiati.
+
+  - Dopo ogni gruppo di spec migrati, lanciare solo quei file per isolare i problemi.
+  - Suite completa con `npx playwright test --repeat-each 3`: 0 falliti, 0 instabili.
+  - `git status` mostra modifiche solo sotto `e2e/`, `playwright.config.ts`, `package.json`; `data/www` e `docs/images/` invariati.
+  - Il comando degli screenshot viene provato una volta; poi `docs/images/` si ripristina con `git checkout` (aggiornare le immagini non fa parte della spec).
+  - Suite nativa e build `esp32-s3-standard` eseguite per confermare che nulla è cambiato.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `testDir: ./e2e`), `npx playwright test`.
+  **Video demo:** no, spec puramente tecnica (la prova è l'output della suite).
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Suite completa | Tutti gli spec esistenti girano contro gli asset reali di `data/www` serviti dall'helper e passano |
+  | Pagina OTA | Caricamento di un .bin, di uno .zip valido e di uno .zip senza firmware.bin con la pagina OTA servita come dal firmware |
+  | Screenshot su richiesta | Con `SCREENSHOTS=1` lo spec degli screenshot gira e cattura i tab; senza, è escluso |
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-09_
+tasks:
+  - id: TASK-01
+    title: Helper condiviso e2e/support/webui.ts
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** servire la Web UI ai test come la serve il firmware, in un solo posto.
+
+      **Da leggere:** `e2e/ups-commands.spec.ts` (beforeEach: route di index, bundle, immagini, catch-all API), `scripts/inline_update.py` (come `update.html` diventa `update_inlined.html`), `data/www/index.html` e `data/www/update.html` (tag di asset), la sezione "Soluzione Tecnica" del piano.
+
+      **Passi:**
+      1. Creare `e2e/support/webui.ts` con `export async function serveIndex(page: Page)` e `export async function serveUpdatePage(page: Page)`, come descritto nel piano.
+      2. Registrare per primo il catch-all `**/api/**` → `{ json: {} }`, con un commento che spiega la precedenza delle route in Playwright e perché serve (niente richieste verso `esp32.local` reale).
+      3. `serveUpdatePage`: unire `bundle.css` e `shared_ota.css` come `inline_update.py`, `mobile.css` vuoto, `fflate.min.js` con glob che accetta la query string.
+      4. Percorsi da `path.resolve(__dirname, '..', '..', 'data/www', ...)` (o equivalente corretto rispetto alla cartella `e2e/support`).
+      5. Verificare che `playwright.config.ts` non tratti `e2e/support/*.ts` come spec (il pattern di default è `*.spec.*`/`*.test.*`: ok).
+
+      **Verifica:** `npx tsc --noEmit` non è configurato: basta che TASK-02 importi l'helper e passi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `e2e/support/webui.ts` — nuovo helper
+
+      ## Criteri di Completamento
+      - [ ] `serveIndex` e `serveUpdatePage` esportati e documentati
+      - [ ] Nessun riferimento a `app.js`, `ups.css`, `data/www/shared.css`, `data/www/mobile.css`
+    ref: TASK-01
+  - id: TASK-02
+    title: Migrare gli spec della pagina principale ed eliminare debug.spec.ts
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far passare gli spec della pagina principale con gli asset reali.
+
+      **Da leggere:** `e2e/config_autopopulate.spec.ts`, `logs-viewer.spec.ts`, `nut_config.spec.ts`, `responsive.spec.ts`, `ups-parameters.spec.ts`, `version.spec.ts`, `wifi-config.spec.ts`, `default-tab.spec.js`, `debug.spec.ts`; `data/www/bundle.js` solo per capire i flussi (fetchLogs ~431, fetchUpsVars ~620, banner Generic ~634, flag `isFetchingAPI`).
+
+      **Passi:**
+      1. In ogni spec sostituire le route degli asset con `await serveIndex(page)` all'inizio del `beforeEach` (o del test), lasciando i mock delle API specifici del test dopo l'helper. Per `default-tab.spec.js` usare `require` se il file resta JS.
+      2. Lanciare ogni file da solo: `npx playwright test e2e/<file>`.
+      3. Dove un'asserzione fallisce per un testo o una struttura cambiati nella UI, adattarla alla UI attuale mantenendo lo stesso scenario (stessi passi e stesse verifiche di comportamento).
+      4. `logs-viewer` (log simulato non mostrato) e `ups-parameters` "shows generic banner": verificare prima se il catch-all dell'helper li risolve. Se no, capire la causa leggendo `bundle.js`. Se è un bug reale della UI: non toccare `data/www`, aprire una issue (o proporre una spec all'utente), marcare il test `test.fixme` con un commento che cita la issue, e annotarlo nel report.
+      5. Eliminare `e2e/debug.spec.ts` (sottoinsieme di `wifi-config.spec.ts` "renders the main interface correctly"); la motivazione va nel messaggio di commit.
+      6. Annotare nel report la causa di `default-tab.spec.js` (asset rinominati).
+
+      **Verifica:** `npx playwright test e2e/config_autopopulate.spec.ts e2e/logs-viewer.spec.ts e2e/nut_config.spec.ts e2e/responsive.spec.ts e2e/ups-parameters.spec.ts e2e/version.spec.ts e2e/wifi-config.spec.ts e2e/default-tab.spec.js`
+
+      **Blocchi:** nessuna modifica a `data/www`. Un test che cambierebbe significato (scenario diverso, asserzione tolta) non si adatta: si segnala.
+
+      ## File Coinvolti
+      - `e2e/config_autopopulate.spec.ts`, `e2e/logs-viewer.spec.ts`, `e2e/nut_config.spec.ts`, `e2e/responsive.spec.ts`, `e2e/ups-parameters.spec.ts`, `e2e/version.spec.ts`, `e2e/wifi-config.spec.ts`, `e2e/default-tab.spec.js` — route tramite l'helper, asserzioni adattate
+      - `e2e/debug.spec.ts` — eliminato
+
+      ## Criteri di Completamento
+      - [ ] Tutti i file elencati verdi, salvo eventuali `test.fixme` con issue citata
+      - [ ] Nessun riferimento ai vecchi asset
+      - [ ] Copertura degli scenari invariata
+    ref: TASK-02
+  - id: TASK-03
+    title: Migrare gli spec della pagina OTA
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far passare `ota-update.spec.ts` e `ota_zip.spec.ts` con la pagina OTA servita come dal firmware.
+
+      **Da leggere:** `e2e/ota-update.spec.ts`, `e2e/ota_zip.spec.ts`, `data/www/update.html`, `scripts/inline_update.py`.
+
+      **Passi:**
+      1. Sostituire le route di `update.html`, `shared.css`, `mobile.css`, `fflate.min.js` con `serveUpdatePage(page)`; dove si parte dalla home anche `serveIndex(page)`. Le POST di upload restano nei test.
+      2. `ota-update.spec.ts` "should navigate to OTA page from index": verificare come la UI attuale porta alla pagina OTA (link, tab o pulsante in `index.html`/`bundle.js`) e adattare il passo di navigazione, mantenendo l'asserzione sull'URL `/update`.
+      3. Verificare i messaggi attesi di `ota_zip.spec.ts` contro `update.html` (oggi "Update complete!", "Il file .zip non contiene alcun firmware.bin").
+      4. Annotare nel report la causa di `ota_zip.spec.ts` (asset OTA inesistenti e query string di fflate).
+
+      **Verifica:** `npx playwright test e2e/ota-update.spec.ts e2e/ota_zip.spec.ts`
+
+      **Blocchi:** come TASK-02: bug reale → issue + `test.fixme`, nessuna modifica a `data/www`.
+
+      ## File Coinvolti
+      - `e2e/ota-update.spec.ts`, `e2e/ota_zip.spec.ts` — route tramite l'helper
+
+      ## Criteri di Completamento
+      - [ ] I 6 test OTA verdi
+      - [ ] Causa di `ota_zip` annotata
+    ref: TASK-03
+  - id: TASK-04
+    title: Screenshot fuori dalla suite normale e documentazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la suite normale non tocca più `docs/images/`, e gli screenshot si rigenerano con un comando documentato.
+
+      **Da leggere:** `playwright.config.ts`, `e2e/screenshot.spec.ts`, `package.json`.
+
+      **Passi:**
+      1. `playwright.config.ts`: `testIgnore: process.env.SCREENSHOTS ? [] : ['**/screenshot.spec.ts']`, con commento.
+      2. `e2e/screenshot.spec.ts`: usare `serveIndex(page)` (mantenendo i mock dei dati di esempio) e, per la pagina OTA, `serveUpdatePage(page)` navigando su `/update`; cliccare il tab Wi-Fi prima del primo screenshot (il tab predefinito è UPS Telemetry da US-049).
+      3. `package.json` → `scripts`: `"e2e": "playwright test"`. Per gli screenshot scegliere una forma che funzioni su Windows senza nuove dipendenze (per esempio uno script Node minimo che imposta `process.env.SCREENSHOTS` e lancia Playwright, oppure documentare `SCREENSHOTS=1 npx playwright test e2e/screenshot.spec.ts` per Git Bash e `$env:SCREENSHOTS=1; npx playwright test ...` per PowerShell). Non aggiungere dipendenze npm.
+      4. Creare `e2e/README.md`: comandi della suite e degli screenshot (avviso: sovrascrivono `docs/images/`), uso dell'helper, regola "bug reale → issue + `test.fixme`".
+      5. Provare il comando degli screenshot una volta, poi ripristinare `docs/images/` con `git checkout -- docs/images`.
+
+      **Verifica:** `npx playwright test --list` non elenca `screenshot.spec.ts`; il comando documentato lo esegue con successo; `git status docs/images` pulito alla fine.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `playwright.config.ts` — testIgnore condizionale
+      - `e2e/screenshot.spec.ts` — helper e tab Wi-Fi esplicito
+      - `package.json` — script
+      - `e2e/README.md` — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Screenshot esclusi dalla suite normale
+      - [ ] Comando documentato e provato
+      - [ ] `docs/images/` invariato
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Verifica finale: suite ripetuta, nessun cambio a firmware e UI'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare i criteri di accettazione.
+
+      **Passi:**
+      1. `npx playwright test --repeat-each 3`: 0 falliti, 0 flaky (il saltato di `system-status.spec.js` resta).
+      2. `git status --short`: modifiche solo in `e2e/`, `playwright.config.ts`, `package.json`; `data/www/` e `docs/images/` puliti.
+      3. Suite nativa e build per confermare che sono invariate.
+      4. Riportare numeri, cause annotate (`default-tab`, `ota_zip`), file eliminati e motivazione, eventuali `test.fixme` con la issue.
+
+      **Verifica:**
+      - `npx playwright test --repeat-each 3`
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+
+      **Blocchi:** un test instabile si corregge con attese su locator o `expect.poll`, non con `waitForTimeout` né con retry nella config.
+
+      ## File Coinvolti
+      - nessun file nuovo; verifica dell'intera spec
+
+      ## Criteri di Completamento
+      - [ ] Suite e2e verde 3 volte di seguito
+      - [ ] `data/www` e `docs/images/` invariati
+      - [ ] Suite nativa e build verdi
+    ref: TASK-05

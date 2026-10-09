@@ -1,0 +1,49 @@
+schema: archetipo/spec/v2
+code: US-060
+title: Riparare la suite e2e Playwright della Web UI
+epic:
+  code: EP-004
+  title: CI/CD e Automazione
+priority: MEDIUM
+points: 3
+status: REVIEW
+body: |
+  #### US-060: Riparare la suite e2e Playwright della Web UI
+
+  **Epic:** EP-004 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio che `npx playwright test` torni completamente verde sulla Web UI attuale,
+  in modo da usare gli e2e come rete di sicurezza prima di ogni modifica a `data/www`, invece di ignorare 21 fallimenti noti.
+
+  **Dimostrazione**
+  Sul branch, `npx playwright test` termina con 0 test falliti. Gli scenari che prima fallivano per gli asset rinominati ora girano contro `bundle.js` e `bundle.css`. Il `git diff` di `data/www` è vuoto, salvo bug reali segnalati a parte.
+
+  **Contesto (verificato il 2026-10-09 su HEAD 5212f39)**
+  - La suite dà 21 falliti, 1 saltato e 3 passati. A questi si aggiungono i 7 di `ups-commands.spec.ts`, che passano.
+  - 10 file instradano ancora i vecchi `app.js` e `ups.css`, ora unificati in `bundle.js` e `bundle.css`: `config_autopopulate`, `debug`, `logs-viewer`, `nut_config`, `ota-update`, `responsive`, `screenshot`, `ups-parameters`, `version`, `wifi-config`.
+  - `default-tab.spec.js` e `ota_zip.spec.ts` falliscono per cause non ancora indagate.
+  - Riferimento funzionante: `e2e/ups-commands.spec.ts`, che instrada `**/bundle.css*` e `**/bundle.js*`.
+
+  **Criteri di Accettazione**
+  - [ ] Tutti i 21 test oggi falliti passano, oppure sono rimossi o accorpati con una motivazione scritta (per esempio `debug.spec.ts` se duplica `wifi-config`).
+  - [ ] Nessuna modifica a `data/www`: se un test rivela un bug reale della UI, il bug si apre come issue o spec separata e il test resta marcato `test.fixme` con il riferimento.
+  - [ ] Le asserzioni si adattano alla UI attuale (testi, id, struttura dei tab) senza ridurre la copertura dello scenario originale.
+  - [ ] `screenshot.spec.ts` non gira nella suite normale e non sovrascrive `docs/images/`; resta lanciabile con un comando documentato.
+  - [ ] Per `default-tab.spec.js` e `ota_zip.spec.ts` la causa del fallimento è annotata nel commit o nel piano.
+  - [ ] La suite completa passa 3 volte di seguito (`--repeat-each 3`) senza test instabili.
+  - [ ] Test nativi e build `esp32-s3-standard` invariati.
+
+  **Assunzioni**
+  - Aggiungere Playwright alla CI di GitHub è fuori scope e può diventare una spec futura.
+history:
+  - status: TODO
+    at: "2026-10-09T16:31:34Z"
+  - status: PLANNED
+    at: "2026-10-09T18:04:10Z"
+  - status: IN PROGRESS
+    at: "2026-10-09T18:06:51Z"
+  - status: REVIEW
+    at: "2026-10-09T18:19:31Z"
