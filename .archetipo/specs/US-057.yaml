@@ -1,0 +1,33 @@
+schema: archetipo/spec/v2
+code: US-057
+title: Esecuzione via NUT dei comandi di test batteria e test pannello
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 3
+status: TODO
+body: |
+  #### US-057: Esecuzione via NUT dei comandi di test batteria e test pannello
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-056
+
+  **User Story**
+  Come utente di Home Assistant o amministratore NUT,
+  voglio avviare e fermare il test delle batterie e del pannello con `upscmd`,
+  in modo da controllare periodicamente lo stato delle batterie, anche da un'automazione.
+
+  **Dimostrazione**
+  Si lancia `upscmd -u <user> -p <pwd> <ups>@<ip> test.battery.start.quick`. La risposta è `OK`, l'UPS esegue il test e `upsc` mostra `ups.test.result` che cambia mentre il test procede, fino all'esito. `test.battery.stop` interrompe un test in corso. Comando ed esito compaiono nel System Log.
+
+  **Criteri di Accettazione**
+  - [ ] `INSTCMD` con `test.battery.start.quick`, `test.battery.start.deep`, `test.battery.stop`, `test.panel.start` e `test.panel.stop` scrive sull'UPS il valore che usa usbhid-ups (Test: 1 = quick, 2 = deep, 3 = stop).
+  - [ ] Un comando assente dal catalogo risponde `ERR CMD-NOT-SUPPORTED`. Con UPS non connesso la risposta è `ERR DRIVER-NOT-CONNECTED`. Se la scrittura verso l'UPS fallisce o va in timeout, la risposta è `ERR INSTCMD-FAILED`.
+  - [ ] Senza login, quando l'autenticazione è attiva, la risposta resta `ERR ACCESS-DENIED`.
+  - [ ] Il comando non blocca il server NUT né il polling oltre il timeout del control transfer. Nome del comando ed esito vanno nel log di sistema.
+  - [ ] I comandi beeper passano dallo stesso percorso di esecuzione senza regressioni (`test_beeper_logic` e `test_nut_server` verdi).
+  - [ ] Test nativi coprono il successo, il comando non supportato, l'UPS disconnesso e la scrittura fallita.
+history:
+  - status: TODO
+    at: "2026-10-09T13:44:12Z"
