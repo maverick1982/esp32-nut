@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test';
-import * as fs from 'fs';
-import * as path from 'path';
+import { serveUpdatePage } from './support/webui';
 import * as fflate from 'fflate';
 
 test.describe('OTA Update via ZIP', () => {
@@ -26,31 +25,18 @@ test.describe('OTA Update via ZIP', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        // Intercept routes to serve local files
+        // Serve the OTA page as the firmware does; only the upload POST is mocked here
+        await serveUpdatePage(page);
         await page.route('http://esp32.local/update', async route => {
-            if (route.request().method() === 'GET') {
-                await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/update.html') });
-            } else if (route.request().method() === 'POST') {
+            if (route.request().method() === 'POST') {
                 await route.fulfill({
                     status: 200,
                     contentType: 'text/plain',
                     body: 'OK'
                 });
             } else {
-                await route.continue();
+                await route.fallback();
             }
-        });
-        
-        await page.route('http://esp32.local/fflate.min.js', async route => {
-            await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/fflate.min.js') });
-        });
-
-        await page.route('**/*shared.css*', async route => {
-            await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-        });
-        
-        await page.route('**/*mobile.css*', async route => {
-            await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/mobile.css') });
         });
 
         await page.goto('http://esp32.local/update');

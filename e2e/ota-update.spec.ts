@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
+import { serveIndex, serveUpdatePage } from './support/webui';
 
 test.describe('OTA Update Flow', () => {
   let dummyBinPath: string;
@@ -22,22 +23,8 @@ test.describe('OTA Update Flow', () => {
   });
 
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('http://esp32.local/update', async route => {
-      if (route.request().method() === 'GET') {
-        await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/update.html') });
-      } else {
-        await route.continue();
-      }
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
+    await serveIndex(page);
+    await serveUpdatePage(page);
   });
 
   test('should navigate to OTA page from index', async ({ page }) => {
@@ -72,7 +59,7 @@ test.describe('OTA Update Flow', () => {
           body: 'OK',
         });
       } else {
-        route.continue();
+        route.fallback();
       }
     });
 

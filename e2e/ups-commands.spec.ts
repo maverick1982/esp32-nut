@@ -1,10 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
-import * as path from 'path';
+import { serveIndex } from './support/webui';
 
-// US-059 — "UPS Commands" page. Serves the real data/www sources and mocks
-// every API the page calls with page.route.
-
-const WWW = path.resolve(process.cwd(), 'data/www');
+// US-059 — "UPS Commands" page. Serves the real data/www sources (support/webui.ts)
+// and mocks every API the page calls with page.route.
 
 type Vars = Record<string, unknown>;
 
@@ -60,16 +58,8 @@ test.describe('UPS Commands page (US-059)', () => {
   test.beforeEach(async ({ page }) => {
     mock = defaultMock();
 
-    // Catch-all first: later routes take precedence in Playwright
-    await page.route('**/api/**', route => route.fulfill({ json: {} }));
-    await page.route('http://esp32.local/', route =>
-      route.fulfill({ path: path.join(WWW, 'index.html') }));
-    await page.route('**/bundle.css*', route =>
-      route.fulfill({ path: path.join(WWW, 'bundle.css'), contentType: 'text/css' }));
-    await page.route('**/bundle.js*', route =>
-      route.fulfill({ path: path.join(WWW, 'bundle.js'), contentType: 'application/javascript' }));
-    await page.route(/\.(png|ico|svg|jpg)(\?.*)?$/, route =>
-      route.fulfill({ status: 200, body: '' }));
+    // Page, assets and API catch-all first: the mocks below take precedence
+    await serveIndex(page);
 
     await page.route('**/api/config', route => route.fulfill({ json: {} }));
     await page.route('**/api/system-status', route => route.fulfill({

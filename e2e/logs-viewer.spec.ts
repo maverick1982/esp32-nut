@@ -1,17 +1,9 @@
 import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { serveIndex } from './support/webui';
 
 test.describe('System Logs View', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
+    await serveIndex(page);
   });
 
   test('should display mocked system logs in the terminal', async ({ page }) => {

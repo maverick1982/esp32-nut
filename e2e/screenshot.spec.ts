@@ -1,30 +1,11 @@
 import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { serveIndex, serveUpdatePage } from './support/webui';
 
 test.describe('Generate Screenshots', () => {
   test.beforeEach(async ({ page }) => {
-    // Intercetta i file statici
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
-    await page.route('**/*mobile.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/mobile.css') });
-    });
-    await page.route('http://esp32.local/logo.png', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/logo.png') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('http://esp32.local/update.html', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/update.html') });
-    });
+    // Serve the real Web UI (index + OTA page) as the firmware does
+    await serveIndex(page);
+    await serveUpdatePage(page);
 
     // Mock API responses
     await page.route('**/api/config', async route => {
@@ -88,29 +69,32 @@ test.describe('Generate Screenshots', () => {
     // Imposta una dimensione adatta
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto('http://esp32.local/');
-    await page.waitForTimeout(500); // aspetta l'animazione e i dati
 
-    // 1. Wi-Fi Tab
-    await page.screenshot({ path: 'docs/images/ui-wifi.png' });
+    // 1. Wi-Fi Tab (the default tab is UPS Telemetry since US-049: select it explicitly)
+    await page.locator('.tab[data-target="wifi"]').click();
+    await expect(page.locator('#content-wifi')).toHaveClass(/active/);
+    await page.screenshot({ path: 'docs/images/ui-wifi.png', animations: 'disabled' });
 
     // 2. NUT Tab
     await page.locator('.tab[data-target="nut"]').click();
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: 'docs/images/ui-nut.png' });
+    await expect(page.locator('#content-nut')).toHaveClass(/active/);
+    await page.screenshot({ path: 'docs/images/ui-nut.png', animations: 'disabled' });
 
-    // 3. UPS Tab
+    // 3. UPS Tab (wait for the mocked telemetry to be rendered)
     await page.locator('.tab[data-target="ups"]').click();
-    await page.waitForTimeout(1000);
-    await page.screenshot({ path: 'docs/images/ui-ups.png' });
+    await expect(page.locator('#content-ups')).toHaveClass(/active/);
+    await expect(page.locator('#ups-charge')).toHaveText('100');
+    await page.screenshot({ path: 'docs/images/ui-ups.png', animations: 'disabled' });
 
-    // 4. Logs Tab
+    // 4. Logs Tab (wait for the mocked log lines)
     await page.locator('.tab[data-target="logs"]').click();
-    await page.waitForTimeout(2500);
-    await page.screenshot({ path: 'docs/images/ui-logs.png' });
+    await expect(page.locator('#content-logs')).toHaveClass(/active/);
+    await expect(page.locator('#terminal-output')).toContainText('NUT Server listening on port 3493');
+    await page.screenshot({ path: 'docs/images/ui-logs.png', animations: 'disabled' });
 
-    // 5. OTA Tab (separate page usually, but in app.js it might navigate or iframe)
-    await page.goto('http://esp32.local/update.html');
-    await page.waitForTimeout(300);
-    await page.screenshot({ path: 'docs/images/ui-ota.png' });
+    // 5. OTA page (separate page served at /update)
+    await page.goto('http://esp32.local/update');
+    await expect(page.locator('.dropzone')).toBeVisible();
+    await page.screenshot({ path: 'docs/images/ui-ota.png', animations: 'disabled' });
   });
 });

@@ -1,20 +1,9 @@
 import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { serveIndex } from './support/webui';
 
 test.describe('Default Tab', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
+    await serveIndex(page);
     await page.route('**/api/config', async route => {
       await route.fulfill({ json: {} });
     });
