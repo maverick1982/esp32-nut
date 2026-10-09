@@ -167,6 +167,45 @@ void test_resolve_rejects_other_commands() {
     TEST_ASSERT_FALSE(CommandCatalog::resolveWrite(nullptr, usages, def, value));
 }
 
+// beeper.mute writes 3 on a multi-bit FEATURE beeper (mge-hid.c, apc-hid.c, cps-hid.c)
+static HIDUsageDef beeperField(uint16_t bits, uint8_t report_type, int32_t lmin, int32_t lmax) {
+    HIDUsageDef d = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, report_type);
+    d.bit_size = bits;
+    d.logical_min = lmin;
+    d.logical_max = lmax;
+    return d;
+}
+
+void test_mute_listed_for_multibit_feature_beeper() {
+    std::vector<HIDUsageDef> usages = { beeperField(8, 0x03, 1, 3) };
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
+                             names(CommandCatalog::build(usages, true)).c_str());
+    // Not controllable (quirk, EcoFlow): no beeper command at all
+    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false).size());
+}
+
+void test_mute_not_listed_when_field_cannot_hold_3() {
+    std::vector<HIDUsageDef> one_bit = { beeperField(1, 0x03, 0, 1) };
+    std::vector<HIDUsageDef> output = { beeperField(8, 0x02, 1, 3) };
+    std::vector<HIDUsageDef> range2 = { beeperField(8, 0x03, 1, 2) };
+    const char* expected = "beeper.enable beeper.disable beeper.toggle";
+    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(one_bit, true)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(output, true)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(range2, true)).c_str());
+}
+
+void test_resolve_mute_writes_3_on_active_beeper() {
+    std::vector<HIDUsageDef> usages = { beeperField(8, 0x03, 0, 0) };  // no declared range
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(3, value);
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", def.path);
+
+    std::vector<HIDUsageDef> one_bit = { beeperField(1, 0x03, 0, 1) };
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", one_bit, def, value));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -183,5 +222,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_resolve_prefers_feature_usage);
     RUN_TEST(test_resolve_panel_test_values);
     RUN_TEST(test_resolve_rejects_other_commands);
+    RUN_TEST(test_mute_listed_for_multibit_feature_beeper);
+    RUN_TEST(test_mute_not_listed_when_field_cannot_hold_3);
+    RUN_TEST(test_resolve_mute_writes_3_on_active_beeper);
     return UNITY_END();
 }

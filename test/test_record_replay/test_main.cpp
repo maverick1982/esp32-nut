@@ -8,7 +8,8 @@
 // DelayBeforeReboot (or APC 0xff86007c) -> shutdown.reboot. beeper.* follow the
 // AudibleAlarmControl FEATURE plus a decoded ups.beeper.status: fixtures whose
 // scenarios replay no beeper report expose none, as LIST CMD did before US-056.
-#define CMD_BEEPER "beeper.enable beeper.disable beeper.toggle "
+// beeper.mute: the active beeper field is an 8-bit FEATURE (APC/CyberPower range 1..3)
+#define CMD_BEEPER "beeper.enable beeper.disable beeper.toggle beeper.mute "
 #define CMD_BATTERY_TEST "test.battery.start.quick test.battery.start.deep test.battery.stop "
 #define CMD_PANEL_TEST "test.panel.start test.panel.stop "
 #define CMD_LOAD_FULL "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop"

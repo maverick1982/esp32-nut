@@ -437,19 +437,22 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         
         { "UPS.BatterySystem.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
