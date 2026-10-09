@@ -56,6 +56,7 @@ Il file sostituisce **tutto** il testo della release: niente "What's Changed" au
 ## Release
 
 <!-- Una riga per ogni vX.Y.Z.md, dalla più recente. -->
+- [v1.7.2](v1.7.2.md) - ups.model APC senza firmware e non più troncato, ups.firmware / ups.firmware.aux (#76); APC Back-UPS ES 700G testato (#71).
 - [v1.7.1](v1.7.1.md) - Recupero automatico dei blocchi USB degli APC Back-UPS BX (#60), variabili device.*, niente FSD/COMM_LOST in ups.status (#65).
 - [v1.7.0](v1.7.0.md) - Supporto EcoFlow (#61), letture Powercom SPD-750U (#36), token ups.status da PresentStatus (#62), battery.voltage.nominal arrotondato (#67).
 - [v1.6.1](v1.6.1.md) - Boot loop APC Back-UPS (#55), mappature APC ripristinate (#48).
