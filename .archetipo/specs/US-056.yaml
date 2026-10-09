@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 3
-status: PLANNED
+status: REVIEW
 body: |
   #### US-056: Catalogo dei comandi UPS ricavato dal descriptor HID ed esposto con LIST CMD
 
@@ -34,3 +34,7 @@ history:
     at: "2026-10-09T13:44:12Z"
   - status: PLANNED
     at: "2026-10-09T13:49:02Z"
+  - status: IN PROGRESS
+    at: "2026-10-09T13:54:45Z"
+  - status: REVIEW
+    at: "2026-10-09T14:07:39Z"

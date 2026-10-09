@@ -6,6 +6,7 @@
 #include "UPSData.h"
 #include "HIDUsages.h"
 #include "HIDParser.h"
+#include "CommandCatalog.h"
 
 class IUSBHostUPS {
 public:
@@ -47,6 +48,13 @@ public:
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
     virtual const HIDParser* getHIDParser() const = 0;
     virtual String getActiveBeeperPath() const = 0;
+    // NUT instant commands the attached device supports, empty when no UPS is connected
+    virtual std::vector<const UPSCommandInfo*> getSupportedCommands() const {
+        if (!isConnected()) return {};
+        // Data lock released before build(), as the NUT server does around setBeeper()
+        bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");
+        return CommandCatalog::build(getUsages(), beeper);
+    }
     virtual uint32_t getQuirks() const = 0;
     // True while polling backs off after a link failure: drivers skip their poll steps
     virtual bool isPollingPaused() const = 0;

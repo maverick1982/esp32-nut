@@ -89,6 +89,7 @@ void setUp(void) {
     mockHost.beeperToggleSupported = true;
     mockHost.connected = true;
     mockHost.stale = false;
+    mockHost._mockUsages.clear();
 
     NUTServerConfig config;
     config.username = "admin";
@@ -362,6 +363,62 @@ void test_list_cmd_unaffected_by_client(void) {
     TEST_ASSERT_TRUE(printer.getOutput().find("beeper") == std::string::npos);
 }
 
+static HIDUsageDef featureUsage(const char* path, uint32_t usage) {
+    HIDUsageDef d;
+    d.usage = usage;
+    d.report_type = 0x03;
+    d.found = true;
+    strncpy(d.path, path, sizeof(d.path) - 1);
+    return d;
+}
+
+// US-056: LIST CMD publishes the commands derived from the HID descriptor
+void test_list_cmd_from_descriptor(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057));
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeStartup", 0x00840056));
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("BEGIN LIST CMD testups\n") == 0);
+    TEST_ASSERT_TRUE(out.find("CMD testups beeper.toggle\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.return\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups load.off\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("test.battery") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("END LIST CMD testups\n") != std::string::npos);
+}
+
+void test_list_cmd_empty_when_disconnected(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.connected = false;
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD testups\nEND LIST CMD testups\n", printer.getOutput().c_str());
+}
+
+// Beeper not controllable (e.g. EcoFlow): the other commands are still listed
+void test_list_cmd_without_controllable_beeper(void) {
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.beeperToggleSupported = false;
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "LIST CMD testups");
+    std::string out = printer.getOutput();
+    TEST_ASSERT_TRUE(out.find("beeper") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups test.battery.start.quick\n") != std::string::npos);
+}
+
+void test_cmddesc_known_and_unknown(void) {
+    server.processCommand(printer, 0, "GET CMDDESC testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups test.battery.start.quick \"Start a quick battery test\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET CMDDESC testups foo.bar");
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups foo.bar \"Unavailable\"\n", printer.getOutput().c_str());
+}
+
 void test_get_upsdesc_and_numlogins(void) {
     server.processCommand(printer, 0, "GET UPSDESC testups");
     TEST_ASSERT_EQUAL_STRING("UPSDESC testups \"ESP32-S3 UPS Bridge\"\n",
@@ -395,7 +452,7 @@ void test_get_desc_and_type(void) {
 
     printer.clear();
     server.processCommand(printer, 0, "GET CMDDESC testups beeper.enable");
-    TEST_ASSERT_EQUAL_STRING("CMDDESC testups beeper.enable \"Unavailable\"\n",
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups beeper.enable \"Enable the UPS beeper\"\n",
                              printer.getOutput().c_str());
 
     printer.clear();
@@ -471,6 +528,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
+    RUN_TEST(test_list_cmd_from_descriptor);
+    RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_list_cmd_without_controllable_beeper);
+    RUN_TEST(test_cmddesc_known_and_unknown);
     return UNITY_END();
 }
 #else
@@ -491,6 +552,10 @@ void setup() {
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
+    RUN_TEST(test_list_cmd_from_descriptor);
+    RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_list_cmd_without_controllable_beeper);
+    RUN_TEST(test_cmddesc_known_and_unknown);
     UNITY_END();
 }
 void loop() {}

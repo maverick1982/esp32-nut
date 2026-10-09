@@ -794,6 +794,12 @@ bool USBHostUPS::supportsBeeperToggle() const {
     return getActiveBeeperPath() != "";
 }
 
+std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {
+    // _hid_parser is replaced under _mutex when a device (re)connects
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return IUSBHostUPS::getSupportedCommands();
+}
+
 String USBHostUPS::dumpUSBDiagnostics() {
     JsonDocument doc;
 
