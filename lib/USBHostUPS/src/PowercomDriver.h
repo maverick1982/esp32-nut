@@ -15,6 +15,10 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const override;
+    // powercom-hid.c drives load/shutdown with its own encodings (powercom_shutdown_info,
+    // powercom_startup_info: minutes/seconds) and PCM vendor usages, not the generic
+    // sequences: none are offered here (US-058)
+    bool shutdownCommandsSupported() const override { return false; }
 
 protected:
     const char* upsTypeName() const override { return "Powercom"; }

@@ -387,12 +387,14 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             client.print("ERR DRIVER-NOT-CONNECTED\n");
             return;
         }
-        // An optional value (tokens[3]) is only used by the delay commands (US-058)
-        switch (_usb_ups->executeCommand(cmdName.c_str())) {
+        // INSTCMD <ups> <cmd> [value]: the value is used by the delay commands only
+        const char* param = tokens.size() > 3 ? tokens[3].c_str() : nullptr;
+        switch (_usb_ups->executeCommand(cmdName.c_str(), param)) {
         case CommandResult::OK:            client.print("OK\n"); break;
         case CommandResult::NOT_SUPPORTED: client.print("ERR CMD-NOT-SUPPORTED\n"); break;
         case CommandResult::NOT_CONNECTED: client.print("ERR DRIVER-NOT-CONNECTED\n"); break;
         case CommandResult::FAILED:        client.print("ERR INSTCMD-FAILED\n"); break;
+        case CommandResult::INVALID_ARGUMENT: client.print("ERR INVALID-ARGUMENT\n"); break;
         }
         return;
     }

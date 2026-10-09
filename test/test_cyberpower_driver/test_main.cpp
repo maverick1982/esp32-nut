@@ -213,6 +213,14 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
     TEST_ASSERT_EQUAL_UINT16(100, ups_data.getFloat("ups.realpower"));
 }
 
+// US-058: DEFAULT_OFFDELAY_CPS / DEFAULT_ONDELAY_CPS of usbhid-ups.h (the CPS firmware
+// rounds the delays down to multiples of 60 s)
+void test_cyberpower_default_delays(void) {
+    TEST_ASSERT_EQUAL_INT32(60, driver.defaultOffDelay());
+    TEST_ASSERT_EQUAL_INT32(120, driver.defaultOnDelay());
+    TEST_ASSERT_TRUE(driver.shutdownCommandsSupported());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -222,6 +230,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_loop_polling_and_string_requests);
     RUN_TEST(test_cyberpower_load_and_zero_load_reset);
     RUN_TEST(test_cyberpower_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_cyberpower_default_delays);
     return UNITY_END();
 }
 #else
@@ -232,6 +241,7 @@ void setup() {
     RUN_TEST(test_cyberpower_loop_polling_and_string_requests);
     RUN_TEST(test_cyberpower_load_and_zero_load_reset);
     RUN_TEST(test_cyberpower_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_cyberpower_default_delays);
     UNITY_END();
 }
 void loop() {}

@@ -13,6 +13,10 @@ public:
     // ups.beeper.status readable, but do not offer or attempt the toggle.
     bool beeperControllable() const override { return false; }
 
+    // ecoflow-hid.c leaves shutdown.reboot/shutdown.stop commented out as well (FIXME:
+    // untested): no load.* or shutdown.* commands (US-058)
+    bool shutdownCommandsSupported() const override { return false; }
+
     EcoFlowDriver();
     virtual ~EcoFlowDriver() = default;
 

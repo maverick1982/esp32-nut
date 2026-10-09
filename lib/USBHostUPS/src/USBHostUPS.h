@@ -62,6 +62,7 @@ public:
     bool isConnected() const override;
     bool isDataStale() const override;
     bool supportsBeeperToggle() const override;
+    bool shutdownCommandsSupported() const override;
 
     void setLogCallback(LogCallback cb);
     void logDebug(const String& msg) const override;
@@ -84,7 +85,7 @@ public:
     String getActiveBeeperPath() const override;
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override;
-    CommandResult executeCommand(const char* name) override;
+    CommandResult executeCommand(const char* name, const char* param = nullptr) override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
@@ -95,6 +96,9 @@ public:
 
     static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, uint32_t quirks, UPSData& ups_data);
 private:
+    // ups.delay.* defaults of the driver (CommandCatalog::applyDefaultDelays, US-058)
+    void applyDefaultDelays();
+
     struct HidEvent {
         enum Type : uint8_t { CONNECTED, OPEN_FAILED, INPUT_REPORT, DISCONNECTED, TRANSFER_ERROR };
         Type type;
