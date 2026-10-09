@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-056
+title: Catalogo dei comandi UPS ricavato dal descriptor HID ed esposto con LIST CMD
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 3
+status: PLANNED
+body: |
+  #### US-056: Catalogo dei comandi UPS ricavato dal descriptor HID ed esposto con LIST CMD
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di Home Assistant o di un client NUT,
+  voglio che il server NUT elenchi i comandi che il mio UPS supporta davvero, ricavati dal suo descriptor USB,
+  in modo da sapere quali azioni posso inviare senza andare per tentativi.
+
+  **Dimostrazione**
+  Si esegue `upscmd -l <ups>@<ip>` (o `LIST CMD <ups>` via telnet sulla 3493) con l'Eaton 3S collegato. Escono i comandi presenti nel suo descriptor (per esempio `beeper.enable`, `test.battery.start.quick`, `shutdown.return`), ognuno con la sua descrizione. `pio test -e native` mostra cataloghi diversi per le fixture di replay delle varie marche.
+
+  **Criteri di Accettazione**
+  - [ ] Il catalogo segue le corrispondenze comando → path HID di usbhid-ups (`nut_repo/drivers/*-hid.c`). Un comando compare solo se il path che lo realizza esiste nel descriptor come report FEATURE.
+  - [ ] Comandi coperti: `beeper.enable/disable/toggle`, `test.battery.start.quick`, `test.battery.start.deep`, `test.battery.stop`, `test.panel.start/stop`, `load.off`, `load.on`, `load.off.delay`, `load.on.delay`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `shutdown.reboot`.
+  - [ ] Ogni comando è marcato come *non distruttivo* (test, beeper) o *distruttivo* (`load.*`, `shutdown.*`).
+  - [ ] I comandi beeper restano legati a `beeperControllable()`: per esempio EcoFlow non li espone.
+  - [ ] `LIST CMD` restituisce il catalogo al posto della lista beeper scritta a mano. `GET CMDDESC <ups> <cmd>` restituisce la descrizione standard NUT.
+  - [ ] Senza UPS connesso, o con un descriptor senza comandi, `LIST CMD` risponde con `BEGIN`/`END` vuoti.
+  - [ ] Test nativi sulle fixture di replay (Eaton, APC, CyberPower, Powercom, EcoFlow) verificano il catalogo atteso per ognuna. Il resto della suite nativa passa senza modifiche.
+history:
+  - status: TODO
+    at: "2026-10-09T13:44:12Z"
+  - status: PLANNED
+    at: "2026-10-09T13:49:02Z"

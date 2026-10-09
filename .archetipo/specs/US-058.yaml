@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-058
+title: Esecuzione via NUT dei comandi di spegnimento e controllo del carico
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-058: Esecuzione via NUT dei comandi di spegnimento e controllo del carico
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-056
+
+  **User Story**
+  Come amministratore che usa upsmon o Home Assistant,
+  voglio comandare via NUT lo spegnimento ritardato dell'UPS e l'accensione o lo spegnimento del carico,
+  in modo che la sequenza di shutdown standard di NUT funzioni anche con l'ESP32 al posto del driver usbhid-ups.
+
+  **Dimostrazione**
+  Con un carico non critico (una lampada), `upscmd ... shutdown.return` spegne l'uscita dopo `ups.delay.shutdown` secondi e la riaccende quando torna la rete. Se `shutdown.stop` arriva entro il ritardo, lo spegnimento viene annullato. `load.off.delay 30` spegne l'uscita dopo 30 secondi.
+
+  **Criteri di Accettazione**
+  - [ ] La semantica è quella di usbhid-ups:
+    - `load.off` = DelayBeforeShutdown 0
+    - `load.on` = DelayBeforeStartup 0
+    - `load.off.delay` / `load.on.delay` usano il valore passato come parametro di `INSTCMD`, oppure `ups.delay.shutdown` / `ups.delay.start`
+    - `shutdown.return` = DelayBeforeStartup (`ups.delay.start`) e poi DelayBeforeShutdown (`ups.delay.shutdown`)
+    - `shutdown.stayoff` = DelayBeforeStartup -1 e poi DelayBeforeShutdown
+    - `shutdown.stop` = DelayBeforeShutdown -1
+    - `shutdown.reboot` = DelayBeforeReboot
+  - [ ] `ups.delay.shutdown` e `ups.delay.start` sono esposti con i default di NUT (20 s e 30 s) quando l'UPS non li fornisce.
+  - [ ] Errori e autenticazione funzionano come in US-057. Ogni comando distruttivo viene loggato a livello WARN.
+  - [ ] Questi comandi sono eseguibili solo dal server NUT: nessun percorso HTTP li invia all'UPS.
+  - [ ] Test nativi verificano la sequenza e i valori scritti per ogni comando, anche con il parametro opzionale.
+history:
+  - status: TODO
+    at: "2026-10-09T13:44:12Z"

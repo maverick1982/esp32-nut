@@ -1,0 +1,284 @@
+schema: archetipo/plan/v2
+spec_code: US-056
+body: |
+  ---
+  type: plan
+  title: "US-056: Catalogo dei comandi UPS ricavato dal descriptor HID ed esposto con LIST CMD — Piano di Implementazione"
+  description: "Piano di Implementazione per US-056"
+  tags: [plan, implementation, US-056]
+  ---
+  # US-056: Catalogo dei comandi UPS ricavato dal descriptor HID ed esposto con LIST CMD — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-09
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come utente di Home Assistant o di un client NUT, voglio che il server NUT elenchi i comandi che il mio UPS supporta davvero, ricavati dal suo descriptor USB, in modo da sapere quali azioni posso inviare senza andare per tentativi.
+
+  **Criteri di Accettazione**
+  - Il catalogo segue le corrispondenze comando → path HID di usbhid-ups; un comando compare solo se il path che lo realizza esiste nel descriptor come report FEATURE.
+  - Comandi coperti: beeper.enable/disable/toggle, test.battery.start.quick/deep, test.battery.stop, test.panel.start/stop, load.off, load.on, load.off.delay, load.on.delay, shutdown.return, shutdown.stayoff, shutdown.stop, shutdown.reboot.
+  - Ogni comando è marcato non distruttivo (test, beeper) o distruttivo (load.*, shutdown.*).
+  - I comandi beeper restano legati a beeperControllable().
+  - LIST CMD restituisce il catalogo; GET CMDDESC restituisce la descrizione standard NUT.
+  - Senza UPS connesso o senza comandi, LIST CMD risponde con BEGIN/END vuoti.
+  - Test nativi sulle fixture di replay verificano il catalogo atteso; il resto della suite passa.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Il catalogo è una tabella statica header-only (`lib/USBHostUPS/src/CommandCatalog.h`) che descrive ogni comando NUT con nome, descrizione standard (da `nut_repo/data/cmdvartab`), flag distruttivo e l'elenco degli usage HID che lo realizzano. Una funzione pura confronta la tabella con gli usage del descriptor parsato e restituisce i comandi disponibili. Header-only perché l'env `native` elenca i .cpp a mano in `build_src_filter`: nessuna modifica a `platformio.ini`.
+
+  - **Contratto dati:** `struct UPSCommandInfo { const char* name; const char* description; bool destructive; };`. Il namespace `CommandCatalog` espone `const UPSCommandInfo* find(const char* name)` (lookup sulla tabella statica, indipendente dal device) e `std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available)`. I puntatori puntano a dati statici: nessun problema di lifetime.
+  - **Regola di presenza (decisione):** un usage "realizza" un comando se `report_type == 0x03` (FEATURE) e (a) `path` coincide esattamente con uno dei path standard della tabella oppure (b) `usage` coincide con uno dei codici vendor APC della tabella. Il caso (b) serve perché `NUTUsages.h` non dà nome agli usage APC 0xff86xxxx: i loro path non sono `UPS.APCGeneralCollection.APCDelayBefore*`. Non si toccano le tabelle dei nomi in questa spec, per non cambiare i path visti da APCDriver e dalle fixture.
+  - **Corrispondenze (da `nut_repo/drivers/*-hid.c` e dalla semantica di `instcmd()` in `usbhid-ups.c`):**
+    - Test = `UPS.BatterySystem.Battery.Test`, `UPS.Battery.Test`, `UPS.Output.Test` → `test.battery.start.quick`, `test.battery.start.deep`, `test.battery.stop`.
+    - PanelTest = codice vendor 0xff860072 (APCPanelTest) → `test.panel.start`, `test.panel.stop`.
+    - DelayBeforeShutdown = `UPS.PowerSummary.DelayBeforeShutdown`, `UPS.Output.DelayBeforeShutdown`, codice vendor 0xff86007d → `load.off`, `load.off.delay`, `shutdown.stop`.
+    - DelayBeforeStartup = `UPS.PowerSummary.DelayBeforeStartup`, `UPS.Output.DelayBeforeStartup`, codice vendor 0xff86007e → `load.on`, `load.on.delay`.
+    - DelayBeforeShutdown **e** DelayBeforeStartup presenti → `shutdown.return`, `shutdown.stayoff` (usbhid-ups li esegue come load.on.delay + load.off.delay e fallisce se manca uno dei due).
+    - DelayBeforeReboot = `UPS.PowerSummary.DelayBeforeReboot`, `UPS.Output.DelayBeforeReboot`, codice vendor 0xff86007c → `shutdown.reboot`.
+    - Beeper: `beeper.enable`, `beeper.disable`, `beeper.toggle` presenti solo se `beeper_available` è true. Nessun nuovo controllo sul descriptor: si mantiene esattamente la condizione odierna di LIST CMD (`supportsBeeperToggle() && hasKey("ups.beeper.status")`), che già incorpora `beeperControllable()` e l'accettazione dei report OUTPUT di `hasFeatureBeeperControl()`.
+    - Distruttivi: tutti i `load.*` e `shutdown.*`. Non distruttivi: `test.*` e `beeper.*`.
+  - **Esposizione:** `IUSBHostUPS` riceve un nuovo metodo virtuale non puro `getSupportedCommands()` con implementazione di default inline (vuoto se `!isConnected()`, altrimenti `CommandCatalog::build(getUsages(), supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status"))`). Essendo non puro, i 10 mock host esistenti nei test non vanno toccati. `USBHostUPS` lo sovrascrive solo per prendere `_mutex` (ricorsivo) attorno alla chiamata base: `_hid_parser` viene sostituito alla riconnessione sotto lo stesso lock.
+  - **NUTServer:** `LIST CMD` itera `getSupportedCommands()` al posto delle tre righe beeper scritte a mano. `GET CMDDESC <ups> <cmd>` risponde con `CommandCatalog::find(cmd)->description` se il comando è in tabella, altrimenti mantiene `"Unavailable"`. `GET DESC` resta invariato. `INSTCMD` non cambia: l'esecuzione è di US-057/US-058.
+  - **Fuori scope (assunzione):** gli usage vendor Powercom (`PCMDelayBefore*`, `PowercomDelayBeforeShutdown`) non hanno nome nel parser e non vengono mappati. Se un Powercom espone i path standard, i comandi compaiono comunque.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity (`pio test -e native`), senza hardware. La logica di catalogo è pura e si testa su vettori di `HIDUsageDef` sintetici. L'integrazione si verifica sui descriptor reali delle fixture di replay e sul protocollo del server NUT.
+
+  - **Unità (`test/test_command_catalog`):** ogni gruppo di corrispondenze, il filtro FEATURE (un INPUT/OUTPUT con lo stesso path non conta), i codici vendor APC, la regola "entrambi i delay" per shutdown.return/stayoff, il flag beeper, i flag distruttivi, `find()` su nome noto e ignoto.
+  - **Integrazione protocollo (`test/test_nut_server`):** LIST CMD con usage mock e con UPS disconnesso (BEGIN/END vuoti), comandi beeper assenti quando `supportsBeeperToggle()` è false (caso EcoFlow), GET CMDDESC con descrizione standard e con comando sconosciuto (`"Unavailable"`). L'asserzione esistente su `CMDDESC ... beeper.enable "Unavailable"` va aggiornata alla descrizione standard.
+  - **Replay (`test/test_record_replay`):** per ogni fixture (Eaton 3S/5P, APC ×9, CyberPower ×3, Powercom, OpenUPS) si fissa il catalogo atteso. Il valore atteso si ricava leggendo gli usage FEATURE del descriptor della fixture, non copiando l'output del codice. Non esiste una fixture EcoFlow (US-054 è ancora TODO): il caso beeper-non-controllabile è coperto dal test del server NUT.
+  - **Regressione:** suite nativa completa verde e build `esp32-s3-standard` ok.
+  - **Nessun test e2e:** la spec non ha superficie UI. La verifica manuale è `upscmd -l <ups>@<ip>` sull'Eaton 3S, come da Dimostrazione.
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-09_
+tasks:
+  - id: TASK-01
+    title: Creare CommandCatalog.h con tabella dei comandi, find() e build()
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Obiettivo:** introdurre la tabella statica dei comandi NUT e la funzione pura che ricava i comandi disponibili dagli usage del descriptor.
+
+      **Da leggere:** `lib/USBHostUPS/src/HIDUsages.h` (struct `HIDUsageDef`), `lib/USBHostUPS/src/BeeperLogic.h` (stile header-only esistente), la sezione "Soluzione Tecnica" del piano (corrispondenze e regola di presenza), `nut_repo/data/cmdvartab` (righe `CMDDESC`).
+
+      **Passi:**
+      1. Creare `lib/USBHostUPS/src/CommandCatalog.h` con include guard, `#include <vector>`, `<string.h>`, `"HIDUsages.h"`.
+      2. Definire `struct UPSCommandInfo { const char* name; const char* description; bool destructive; };`.
+      3. Nel namespace `CommandCatalog` definire la tabella statica `inline` di 16 `UPSCommandInfo`, in questo ordine: beeper.enable, beeper.disable, beeper.toggle, test.battery.start.quick, test.battery.start.deep, test.battery.stop, test.panel.start, test.panel.stop, load.off, load.on, load.off.delay, load.on.delay, shutdown.return, shutdown.stayoff, shutdown.stop, shutdown.reboot. Descrizioni copiate alla lettera da `cmdvartab`. `destructive = true` solo per load.* e shutdown.*.
+      4. Definire le corrispondenze come helper interni (es. `hasFeature(usages, paths[], n, vendor_codes[], m)`): Test, PanelTest, DelayBeforeShutdown, DelayBeforeStartup, DelayBeforeReboot con i path e i codici vendor APC (0xff860072, 0xff86007d, 0xff86007e, 0xff86007c) elencati nel piano. Conta solo un usage con `report_type == 0x03`.
+      5. `inline const UPSCommandInfo* find(const char* name)`: lookup per nome, `nullptr` se assente o `name == nullptr`.
+      6. `inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available)`: restituisce i comandi nell'ordine della tabella, applicando le regole del piano (shutdown.return/stayoff solo con entrambi i delay).
+      7. Commenti brevi in inglese come nel resto di `lib/USBHostUPS`, con il riferimento a `usbhid-ups` per le corrispondenze.
+
+      **Blocchi:** nessuno. Non modificare `NUTUsages.h` né `platformio.ini`.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CommandCatalog.h` — nuovo file header-only
+
+      ## Criteri di Completamento
+      - [ ] `CommandCatalog.h` compila incluso da solo in un .cpp nativo (verificato da TASK-02)
+      - [ ] La tabella contiene esattamente i 16 comandi della spec, con le descrizioni di `cmdvartab` e i flag distruttivi corretti
+      - [ ] `build()` considera solo usage FEATURE e restituisce i comandi nell'ordine della tabella
+      - [ ] Nessun altro file modificato
+  - id: TASK-02
+    title: Test unitari del catalogo su usage sintetici
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con test nativi tutte le regole di `CommandCatalog::build()` e `find()`.
+
+      **Da leggere:** `test/test_beeper_logic/test_main.cpp` (struttura Unity e costruzione di `HIDUsageDef` a mano), `lib/USBHostUPS/src/CommandCatalog.h`.
+
+      **Passi:**
+      1. Creare `test/test_command_catalog/test_main.cpp` con un helper `HIDUsageDef mk(const char* path, uint32_t usage, uint8_t report_type)`.
+      2. Casi:
+         - vettore vuoto e `beeper_available=false` → nessun comando
+         - solo `beeper_available=true` → i 3 comandi beeper
+         - `UPS.PowerSummary.DelayBeforeShutdown` FEATURE → load.off, load.off.delay, shutdown.stop, senza shutdown.return
+         - shutdown + startup → anche load.on, load.on.delay, shutdown.return, shutdown.stayoff
+         - stesso path come INPUT (0x01) → nessun comando
+         - `UPS.BatterySystem.Battery.Test` e `UPS.Output.Test` → i 3 test.battery.*
+         - codici vendor APC 0xff86007d / 0xff86007e / 0xff86007c / 0xff860072 con path qualsiasi → comandi corrispondenti
+         - `UPS.PowerSummary.DelayBeforeReboot` → shutdown.reboot
+         - flag `destructive` corretti su tutto il risultato
+         - `find("test.battery.start.quick")` restituisce la descrizione "Start a quick battery test"
+         - `find("foo")` e `find(nullptr)` → nullptr
+      3. Eseguire il test.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog`
+
+      **Blocchi:** se il test non viene raccolto, controllare `test_ignore` in `platformio.ini` (non deve escluderlo).
+
+      ## File Coinvolti
+      - `test/test_command_catalog/test_main.cpp` — nuovo file di test
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati sono presenti e verdi
+      - [ ] Il comando di verifica termina con 0 failures
+  - id: TASK-03
+    title: Esporre getSupportedCommands() su IUSBHostUPS e USBHostUPS
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere il catalogo disponibile a chi usa l'host USB, in modo thread-safe e senza toccare i mock esistenti.
+
+      **Da leggere:** `lib/USBHostUPS/src/IUSBHostUPS.h`, `lib/USBHostUPS/src/USBHostUPS.h`, `lib/USBHostUPS/src/USBHostUPS.cpp` (righe ~777-795: `getActiveBeeperPath`, `supportsBeeperToggle` e uso di `_mutex`).
+
+      **Passi:**
+      1. In `IUSBHostUPS.h` includere `"CommandCatalog.h"` e aggiungere il metodo virtuale **non puro** `virtual std::vector<const UPSCommandInfo*> getSupportedCommands() const`, con implementazione inline: se `!isConnected()` restituisce un vettore vuoto. Altrimenti calcola `bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");` (lock dei dati rilasciato prima di `build`, come in NUTServer) e restituisce `CommandCatalog::build(getUsages(), beeper)`.
+      2. In `USBHostUPS.h` dichiarare `std::vector<const UPSCommandInfo*> getSupportedCommands() const override;`.
+      3. In `USBHostUPS.cpp` implementarlo prendendo `std::lock_guard<std::recursive_mutex> lock(_mutex);` e delegando a `IUSBHostUPS::getSupportedCommands()`. Commento: `_hid_parser` viene sostituito sotto `_mutex` alla riconnessione.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila. La suite nativa compila senza modifiche ai mock (`pio test -e native`).
+
+      **Blocchi:** non rendere il metodo puro: romperebbe i 10 mock host nei test.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUSBHostUPS.h` — nuovo metodo virtuale con default
+      - `lib/USBHostUPS/src/USBHostUPS.h` — dichiarazione override
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — override con `_mutex`
+
+      ## Criteri di Completamento
+      - [ ] `getSupportedCommands()` restituisce vuoto con UPS non connesso
+      - [ ] L'override di `USBHostUPS` prende `_mutex`
+      - [ ] Build firmware ok e nessun mock di test modificato
+  - id: TASK-04
+    title: LIST CMD e GET CMDDESC dal catalogo nel server NUT
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il server NUT pubblica il catalogo al posto della lista beeper scritta a mano e risponde a CMDDESC con la descrizione standard.
+
+      **Da leggere:** `lib/NUTServer/src/NUTServer.cpp` righe ~325-342 (LIST CMD/RW/CLIENT) e ~477-515 (DESC/CMDDESC/TYPE).
+
+      **Passi:**
+      1. Nel ramo `subcmd == "CMD" && _usb_ups` sostituire il blocco `supportsBeeperToggle() ...` con un ciclo su `_usb_ups->getSupportedCommands()`: per ogni voce stampare `CMD <upsName> <name>\n`. Le righe BEGIN/END restano invariate.
+      2. Nel ramo DESC/CMDDESC: se `subcmd == "CMDDESC"` e `CommandCatalog::find(varName.c_str())` non è nullptr, rispondere `CMDDESC <ups> <cmd> "<description>"`. In ogni altro caso mantenere la risposta `"Unavailable"`. Aggiornare il commento esistente ("this bridge carries none") per dire che le descrizioni dei comandi vengono dal catalogo.
+      3. Non toccare INSTCMD.
+
+      **Verifica:** build firmware ok. I test di TASK-05 coprono il comportamento.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — LIST CMD e CMDDESC
+
+      ## Criteri di Completamento
+      - [ ] LIST CMD non contiene più nomi di comandi scritti a mano
+      - [ ] GET CMDDESC restituisce la descrizione di `cmdvartab` per i comandi in tabella e `"Unavailable"` per gli altri
+      - [ ] INSTCMD e GET DESC invariati
+  - id: TASK-05
+    title: Aggiornare i test del server NUT per LIST CMD e CMDDESC
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare il nuovo comportamento del protocollo e mantenere verdi i test esistenti.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp` (`MockUSBHost` alla riga ~34, test alle righe ~245, ~354, ~397, ~436-444).
+
+      **Passi:**
+      1. Permettere a `MockUSBHost` di restituire un vettore di usage configurabile da `getUsages()` (se oggi restituisce un vettore fisso vuoto, aggiungere un membro pubblico `std::vector<HIDUsageDef> usages`).
+      2. Aggiornare l'asserzione `CMDDESC testups beeper.enable "Unavailable"` in `CMDDESC testups beeper.enable "Enable the UPS beeper"`.
+      3. Aggiungere test:
+         - LIST CMD con usage FEATURE `UPS.PowerSummary.DelayBeforeShutdown` e `UPS.PowerSummary.DelayBeforeStartup` più beeper abilitato: contiene `CMD testups shutdown.return` e `CMD testups beeper.toggle`
+         - LIST CMD con `isConnected()` false: solo BEGIN/END
+         - LIST CMD con `beeperToggleSupported = false` e `ups.beeper.status` presente (caso EcoFlow): nessun `beeper.*`
+         - `GET CMDDESC testups foo.bar` → `"Unavailable"`
+      4. Lasciare invariati gli altri test esistenti su LIST CMD, che devono restare verdi.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server`
+
+      **Blocchi:** se `MockUSBHost::isConnected()` è fisso a true, renderlo configurabile con un membro.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — mock esteso, asserzione CMDDESC aggiornata, nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] I nuovi casi sono presenti e verdi
+      - [ ] Tutti i test preesistenti di `test_nut_server` sono verdi
+  - id: TASK-06
+    title: Catalogo atteso per ogni fixture di replay
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, sui descriptor reali delle fixture, quali comandi espone ogni UPS supportato.
+
+      **Da leggere:** `test/test_record_replay/FixtureReplayRunner.h` (`ReplayMockHost`, parsing del descriptor), `test/test_record_replay/test_main.cpp` (struttura dei test per fixture), i JSON in `test/fixtures/*/`.
+
+      **Passi:**
+      1. Per ogni fixture già caricata dai test di replay, dopo il replay calcolare `CommandCatalog::build(host._parser.getUsages(), host.supportsBeeperToggle() && host._data.hasKey("ups.beeper.status"))` e confrontare i nomi con un elenco atteso scritto nel test.
+      2. Ricavare ogni elenco atteso dagli usage FEATURE del descriptor della fixture (per esempio stampandoli una volta con un test temporaneo e confrontandoli con la tabella del piano), NON copiando l'output di `build()`. Annotare nel commento del test i path che giustificano ogni comando non ovvio.
+      3. Per l'Eaton 3S l'elenco atteso deve coincidere con quanto si vedrà con `upscmd -l` sull'UPS reale (Dimostrazione della spec).
+      4. Non esiste una fixture EcoFlow (US-054 è TODO): non crearne una qui.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay`
+
+      **Blocchi:** se una fixture mostra un comando che la tabella del piano non prevede, o ne manca uno atteso, fermarsi e segnalarlo invece di adattare il test.
+
+      ## File Coinvolti
+      - `test/test_record_replay/test_main.cpp` — asserzioni sul catalogo per fixture
+
+      ## Criteri di Completamento
+      - [ ] Ogni fixture esistente ha un elenco di comandi atteso con almeno un commento di giustificazione
+      - [ ] `test_record_replay` è verde
+  - id: TASK-07
+    title: 'Regressione completa: suite nativa e build firmware'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il cambiamento non rompe nulla e che il firmware compila.
+
+      **Passi:**
+      1. Eseguire l'intera suite nativa.
+      2. Eseguire la build del firmware.
+      3. Riportare nel log del task il numero di test passati (prima del lavoro erano 198/198 su main) e l'esito della build.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+
+      **Blocchi:** se un test preesistente fallisce, correggere il codice dei task precedenti, non il test, salvo l'asserzione CMDDESC già prevista in TASK-05.
+
+      ## File Coinvolti
+      - nessun file nuovo; verifica di tutto il lavoro della spec
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa con 0 failures
+      - [ ] Build `esp32-s3-standard` completata senza errori

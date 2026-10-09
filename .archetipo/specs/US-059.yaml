@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-059
+title: Pagina "UPS Commands" nella Web UI
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 5
+status: TODO
+body: |
+  #### US-059: Pagina "UPS Commands" nella Web UI
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-056, US-057
+
+  **User Story**
+  Come utente della Web UI,
+  voglio una pagina dedicata con i 4 indicatori principali dell'UPS e l'elenco delle azioni che il mio UPS supporta, ognuna con un pulsante per eseguirla,
+  in modo da lanciare un test batteria o gestire il beeper dal browser senza client NUT.
+
+  **Dimostrazione**
+  Nella Web UI, subito sotto "UPS Telemetry", c'è la voce "UPS Commands". La pagina mostra in alto i 4 box (UPS Status, Battery Charge, UPS Load, Real Power), aggiornati come nella telemetria. Sotto c'è la lista dei comandi supportati dall'UPS, con descrizione e pulsante "Run". Premendo "Run" su `test.battery.start.quick` compare un messaggio di esito e il riquadro "Last test result" mostra `ups.test.result`. I comandi distruttivi sono in lista con il pulsante disabilitato e la nota "Available via NUT only until web authentication is implemented".
+
+  **Criteri di Accettazione**
+  - [ ] La voce "UPS Commands" è la seconda del menu, subito dopo "UPS Telemetry". Il titolo della pagina si aggiorna come per gli altri tab e il layout è responsive come il resto della UI.
+  - [ ] I 4 box mostrano gli stessi valori della telemetria con la stessa frequenza di aggiornamento, senza aumentare le richieste al server.
+  - [ ] `GET /api/ups/commands` restituisce il catalogo in JSON (nome, descrizione, flag distruttivo). Con UPS non connesso o catalogo vuoto la pagina mostra "No commands available".
+  - [ ] `POST /api/ups/command` esegue solo i comandi non distruttivi del catalogo, cioè test e beeper.
+    - comando distruttivo: risposta 403, nulla viene inviato all'UPS
+    - comando sconosciuto o non supportato: risposta 400
+    - scrittura fallita sull'UPS: risposta 500
+    - la pagina mostra l'esito di ogni caso
+  - [ ] I comandi distruttivi sono elencati come placeholder: pulsante disabilitato e nota che rimanda a NUT.
+  - [ ] Il riquadro "Last test result" mostra `ups.test.result` quando l'UPS lo espone. Altrimenti è nascosto.
+  - [ ] Il toggle del beeper nella pagina UPS Telemetry resta e continua a funzionare.
+
+  **Assunzioni**
+  - Le etichette della Web UI sono in inglese, come quelle esistenti.
+  - Lo storico dei comandi eseguiti è fuori scope.
+  - Abilitare i comandi distruttivi dal web sarà una spec futura, dopo l'autenticazione della Web UI.
+history:
+  - status: TODO
+    at: "2026-10-09T13:44:12Z"
