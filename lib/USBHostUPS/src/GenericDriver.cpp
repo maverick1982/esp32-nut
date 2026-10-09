@@ -279,6 +279,20 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     }
 }
 
+// ups.test.result text for a Test value, test_read_info in usbhid-ups.c; nullptr otherwise
+static const char* testResultText(int v) {
+    switch (v) {
+    case 1: return "Done and passed";
+    case 2: return "Done and warning";
+    case 3: return "Done and error";
+    case 4: return "Aborted";
+    case 5: return "In progress";
+    case 6: return "No test initiated";
+    case 7: return "Test scheduled";
+    default: return nullptr;
+    }
+}
+
 void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
     if (report_type == 1 || report_type == 3) {
@@ -438,6 +452,9 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
         } },
         
+        { "UPS.BatterySystem.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
+        { "UPS.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
+        { "UPS.Output.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
         { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.shutdown", String((int)v)); d.set("ups.timer.shutdown", String((int)v)); } },
         
         { "UPS.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },

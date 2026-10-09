@@ -770,6 +770,71 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     return err == ESP_OK;
 }
 
+bool USBHostUPS::writeUsage(const HIDUsageDef& def, uint32_t value) {
+    // Same serialisation as setBeeper(): wait for the current poll step, never overlap it
+    if (!_op_mutex || xSemaphoreTake(_op_mutex, pdMS_TO_TICKS(OP_WAIT_MS)) != pdTRUE) return false;
+    bool ok = writeUsageLocked(def, value);
+    xSemaphoreGive(_op_mutex);
+    return ok;
+}
+
+bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
+    if (!_is_ready_to_poll || !_hid_dev_handle) return false;
+    if (!_link.canPoll(millis())) return false;
+
+    uint16_t expected_length = 0;
+    bool shared_report = true;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        expected_length = _hid_parser.getExpectedLength(def.report_id, HID_REPORT_TYPE_FEATURE);
+        shared_report = BeeperLogic::reportHasOtherFields(_hid_parser.getUsages(), def);
+    }
+    if (expected_length > sizeof(_request_buffer)) expected_length = sizeof(_request_buffer);
+
+    memset(_request_buffer, 0, sizeof(_request_buffer));
+    size_t fetched_len = expected_length;
+
+    // Read back the report to preserve its other fields (no application lock held, ADR 0008)
+    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, HID_REPORT_TYPE_FEATURE, def.report_id, _request_buffer, &fetched_len);
+    noteControlResult(err, millis());
+
+    bool fetched = (err == ESP_OK && fetched_len > 0);
+    if (!BeeperLogic::canWriteBack(shared_report, def, fetched, fetched_len)) {
+        // Writing zeros over the other fields could switch the load off (review C1)
+        log("WARN", "%s not written: report %u shares fields and could not be read back (%s)",
+            def.path, (unsigned)def.report_id, fetched ? "short answer" : esp_err_to_name(err));
+        return false;
+    }
+    if (!fetched) {
+        if (!_link.canPoll(millis())) return false; // pipe not answering, do not insist
+        // The report holds only this field: write it from scratch
+        fetched_len = expected_length;
+        if (def.report_id != 0) _request_buffer[0] = def.report_id;
+    }
+
+    fetched_len = BeeperLogic::writeField(def, value, _request_buffer, fetched_len);
+    if (fetched_len == 0) return false;
+
+    err = hid_class_request_set_report(_hid_dev_handle, HID_REPORT_TYPE_FEATURE, def.report_id, _request_buffer, fetched_len);
+    noteControlResult(err, millis());
+    if (err != ESP_OK) {
+        log("WARN", "%s = %u not written: %s", def.path, (unsigned)value, esp_err_to_name(err));
+    }
+    return err == ESP_OK;
+}
+
+CommandResult USBHostUPS::executeCommand(const char* name) {
+    CommandResult r = IUSBHostUPS::executeCommand(name);
+    const char* cmd = name ? name : "(null)";
+    switch (r) {
+    case CommandResult::OK:            log("INFO", "Command %s: OK", cmd); break;
+    case CommandResult::FAILED:        log("WARN", "Command %s: failed", cmd); break;
+    case CommandResult::NOT_SUPPORTED: log("WARN", "Command %s: not supported", cmd); break;
+    case CommandResult::NOT_CONNECTED: log("WARN", "Command %s: UPS not connected", cmd); break;
+    }
+    return r;
+}
+
 bool USBHostUPS::isConnected() const {
     return _is_ready_to_poll;
 }

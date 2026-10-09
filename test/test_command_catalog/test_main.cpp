@@ -113,6 +113,60 @@ void test_find_known_and_unknown() {
     TEST_ASSERT_NULL(CommandCatalog::find(nullptr));
 }
 
+// US-057: usage and value written by the test commands
+void test_resolve_battery_test_values() {
+    std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
+    HIDUsageDef def;
+    uint32_t value = 99;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(1, value);
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", def.path);
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(2, value);
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.stop", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(3, value);
+}
+
+// APC declare UPS.Battery.Test as INPUT and FEATURE: the FEATURE one is written
+void test_resolve_prefers_feature_usage() {
+    HIDUsageDef in = mk("UPS.Battery.Test", 0x00840058, 0x01);
+    in.report_id = 10;
+    HIDUsageDef feat = mk("UPS.Battery.Test", 0x00840058, 0x03);
+    feat.report_id = 20;
+    std::vector<HIDUsageDef> usages = { in, feat };
+    HIDUsageDef def;
+    uint32_t value;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT8(0x03, def.report_type);
+    TEST_ASSERT_EQUAL_UINT8(20, def.report_id);
+}
+
+void test_resolve_panel_test_values() {
+    std::vector<HIDUsageDef> usages = { mk("UPS.0xFF860072", 0xff860072, 0x03) };
+    HIDUsageDef def;
+    uint32_t value = 99;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.start", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(1, value);
+    TEST_ASSERT_EQUAL_UINT32(0xff860072, def.usage);
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.stop", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(0, value);
+}
+
+void test_resolve_rejects_other_commands() {
+    std::vector<HIDUsageDef> usages = {
+        mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 0x03),
+        mk("UPS.PowerSummary.DelayBeforeStartup", 0x00840056, 0x03),
+        mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03),
+    };
+    HIDUsageDef def;
+    uint32_t value;
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value)); // no Test usage
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.enable", usages, def, value));
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("shutdown.return", usages, def, value));
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("foo", usages, def, value));
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite(nullptr, usages, def, value));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -125,5 +179,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_delay_before_reboot);
     RUN_TEST(test_destructive_flags);
     RUN_TEST(test_find_known_and_unknown);
+    RUN_TEST(test_resolve_battery_test_values);
+    RUN_TEST(test_resolve_prefers_feature_usage);
+    RUN_TEST(test_resolve_panel_test_values);
+    RUN_TEST(test_resolve_rejects_other_commands);
     return UNITY_END();
 }
