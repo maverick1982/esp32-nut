@@ -160,6 +160,8 @@
       ],
       "expected_ups_data": {
         "ups.status": "OL",
+        "ups.delay.shutdown": "60",
+        "ups.delay.start": "120",
         "ups.mfr": "CPS",
         "ups.model": " CP 1350C",
         "ups.status.ac_present": "1",

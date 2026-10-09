@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "GenericDriver.h"
+#include "OpenUPSDriver.h"
 #include "IUSBHostUPS.h"
 
 class MockGenericHost : public IUSBHostUPS {
@@ -175,6 +176,30 @@ void test_beeper_status_muted(void) {
     TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
 }
 
+// US-058, user decision of 2026-10-09: DelayBeforeShutdown is the timer (ups.timer.shutdown);
+// ups.delay.* are configured delays set by the host, never written by the driver
+void test_delay_before_shutdown_sets_only_timer(void) {
+    addUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x15, 3, 0, 16);
+    uint8_t report[] = { 0x15, 30, 0 };
+    driver.decodeReport(&mockHost, 0x15, 3, report, sizeof(report), ups_data);
+    TEST_ASSERT_EQUAL_STRING("30", ups_data.get("ups.timer.shutdown").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.start"));
+}
+
+// DEFAULT_OFFDELAY / DEFAULT_ONDELAY of usbhid-ups.h, shutdown commands offered
+void test_default_delays_and_shutdown_commands(void) {
+    TEST_ASSERT_EQUAL_INT32(20, driver.defaultOffDelay());
+    TEST_ASSERT_EQUAL_INT32(30, driver.defaultOnDelay());
+    TEST_ASSERT_TRUE(driver.shutdownCommandsSupported());
+}
+
+// US-058: openups-hid.c has no load/shutdown commands (no dedicated OpenUPS test env)
+void test_openups_no_shutdown_commands(void) {
+    OpenUPSDriver openups;
+    TEST_ASSERT_FALSE(openups.shutdownCommandsSupported());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -188,6 +213,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_test_result_unknown_value_ignored);
     RUN_TEST(test_test_result_from_output_test);
     RUN_TEST(test_beeper_status_muted);
+    RUN_TEST(test_delay_before_shutdown_sets_only_timer);
+    RUN_TEST(test_default_delays_and_shutdown_commands);
+    RUN_TEST(test_openups_no_shutdown_commands);
     return UNITY_END();
 }
 #else
@@ -202,6 +230,9 @@ void setup() {
     RUN_TEST(test_test_result_unknown_value_ignored);
     RUN_TEST(test_test_result_from_output_test);
     RUN_TEST(test_beeper_status_muted);
+    RUN_TEST(test_delay_before_shutdown_sets_only_timer);
+    RUN_TEST(test_default_delays_and_shutdown_commands);
+    RUN_TEST(test_openups_no_shutdown_commands);
     UNITY_END();
 }
 void loop() {}

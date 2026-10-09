@@ -40,6 +40,13 @@ public:
         writes.emplace_back(def.path, value);
         return writeOk;
     }
+
+    // Chiamate a executeCommand(), per verificare che il 403 arrivi prima dell'host (US-058)
+    int executeCalls = 0;
+    CommandResult executeCommand(const char* name, const char* param = nullptr) override {
+        executeCalls++;
+        return IUSBHostUPS::executeCommand(name, param);
+    }
 };
 
 APIMockUSBHost mockHost;
@@ -68,6 +75,7 @@ void setUp(void) {
     mockHost.usages.clear();
     mockHost.writes.clear();
     mockHost.writeOk = true;
+    mockHost.executeCalls = 0;
 }
 void tearDown(void) {}
 
@@ -188,6 +196,24 @@ void test_run_command_destructive_forbidden() {
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
 
+// US-058: shutdown.default e i comandi con ritardo restano solo NUT, senza toccare l'host
+void test_run_command_shutdown_default_and_delay_forbidden() {
+    addTestAndShutdownUsages();
+    mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeReboot"));
+    const char* bodies[] = {
+        "{\"name\":\"shutdown.default\"}",
+        "{\"name\":\"load.off.delay\"}",
+        "{\"name\":\"load.off.delay\",\"value\":\"30\"}",
+    };
+    for (const char* body : bodies) {
+        String response;
+        TEST_ASSERT_EQUAL_MESSAGE(403, WebApiJson::runUpsCommand(&mockHost, body, response), body);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Available via NUT only\"}", response.c_str(), body);
+    }
+    TEST_ASSERT_EQUAL(0, mockHost.executeCalls);
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
 void test_run_command_disconnected() {
     addTestAndShutdownUsages();
     mockHost.connected = false;
@@ -258,6 +284,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_run_command_missing_name);
     RUN_TEST(test_run_command_unknown);
     RUN_TEST(test_run_command_destructive_forbidden);
+    RUN_TEST(test_run_command_shutdown_default_and_delay_forbidden);
     RUN_TEST(test_run_command_disconnected);
     RUN_TEST(test_run_command_write_failed);
     RUN_TEST(test_run_command_null_host);

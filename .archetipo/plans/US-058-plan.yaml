@@ -1,0 +1,352 @@
+schema: archetipo/plan/v2
+spec_code: US-058
+body: |
+  ---
+  type: plan
+  title: "US-058: Esecuzione via NUT dei comandi di spegnimento e controllo del carico — Piano di Implementazione"
+  description: "Piano di Implementazione per US-058"
+  tags: [plan, implementation, US-058]
+  ---
+  # US-058: Esecuzione via NUT dei comandi di spegnimento e controllo del carico — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-09
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come amministratore che usa upsmon o Home Assistant, voglio comandare via NUT lo spegnimento ritardato dell'UPS e l'accensione o lo spegnimento del carico, in modo che la sequenza di shutdown standard di NUT funzioni anche con l'ESP32 al posto del driver usbhid-ups.
+
+  **Criteri di Accettazione**
+  - Semantica usbhid-ups per `load.off`, `load.on`, `load.off.delay`, `load.on.delay`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `shutdown.reboot`.
+  - `shutdown.default` prova `shutdown.return`, `shutdown.reboot`, `load.off.delay`, `shutdown.stayoff` e si ferma al primo che riesce; `OK` o `ERR INSTCMD-FAILED`; il log dice quale comando è stato usato.
+  - `shutdown.default` nel catalogo come distruttivo, elencato quando l'UPS supporta almeno uno dei quattro comandi.
+  - `ups.delay.shutdown` e `ups.delay.start` esposti con i default di NUT.
+  - Errori e autenticazione come US-057; ogni comando distruttivo loggato a WARN.
+  - Nessun percorso HTTP invia questi comandi all'UPS.
+  - Test nativi su sequenze, valori, parametro opzionale e ripiego di `shutdown.default`.
+
+  ---
+
+  ## Decisioni prese con l'utente (2026-10-09)
+
+  1. **`ups.delay.*` con la semantica NUT.** In usbhid-ups `ups.delay.shutdown` e `ups.delay.start` sono ritardi configurati (`HU_FLAG_ABSENT` in mge-hid.c, apc-hid.c, cps-hid.c) e non vengono mai letti dal dispositivo; il valore letto da DelayBeforeShutdown/Startup è il timer (`ups.timer.*`). Oggi GenericDriver, APCDriver e PowercomDriver scrivono il timer anche in `ups.delay.*` (Eaton 3S e APC delle fixture: `-1`). Usarlo per `shutdown.return` scriverebbe -1, cioè annullerebbe lo spegnimento. Quindi: i driver scrivono solo `ups.timer.*`, e `ups.delay.*` vengono impostati dal host con i default. Il valore visibile cambia da `-1` a `20` sulle fixture Eaton e APC: è un cambio voluto.
+  2. **Default di NUT per marca.** 20 s / 30 s (`DEFAULT_OFFDELAY` / `DEFAULT_ONDELAY`, usbhid-ups.h), 60 s / 120 s per CyberPower (`DEFAULT_OFFDELAY_CPS` / `DEFAULT_ONDELAY_CPS`): il firmware CPS arrotonda i ritardi per difetto a multipli di 60 s, quindi 20 s darebbe uno spegnimento immediato.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  La traduzione comando → scritture HID è una funzione pura in `CommandCatalog`, testabile in nativo come `resolveWrite()` di US-057. `IUSBHostUPS::executeCommand()` riceve il parametro opzionale di `INSTCMD`, esegue le scritture in sequenza con `writeUsage()` e implementa il ripiego di `shutdown.default`. Il server NUT passa il parametro; il web continua a bloccare i distruttivi con 403 prima di chiamare l'host.
+
+  - **Sequenze (usbhid-ups.c `instcmd()` e tabelle `*-hid.c`).** Gruppi di usage già definiti in `CommandCatalog.h`: Shutdown = DelayBeforeShutdown, Startup = DelayBeforeStartup, Reboot = DelayBeforeReboot (percorsi standard e codici APC).
+    - `load.off` → Shutdown 0; `load.on` → Startup 0
+    - `load.off.delay [n]` → Shutdown n, default `ups.delay.shutdown`; `load.on.delay [n]` → Startup n, default `ups.delay.start`
+    - `shutdown.return` → Startup `ups.delay.start`, pausa 125 ms, Shutdown `ups.delay.shutdown`. Eccezione APC Back-UPS CS (apc-hid.c:461): se il dispositivo ha la FEATURE `UPS.Output.APCDelayBeforeReboot`, una sola scrittura di 1 su quel campo, come fa `find_nut_info()` che trova prima la voce diretta
+    - `shutdown.stayoff` → Startup -1, pausa 125 ms, Shutdown `ups.delay.shutdown`
+    - `shutdown.stop` → Shutdown -1
+    - `shutdown.reboot [n]` → Reboot n, default 10 (dfl di apc/mge/cps-hid.c)
+    - La pausa di 125 ms è quella di usbhid-ups (alcuni UPS rifiutano comandi troppo ravvicinati). Se la prima scrittura fallisce, la seconda non parte.
+    - Valori negativi: `writeUsage()` riceve `(uint32_t)(int32_t)v` e `BeeperLogic::writeField()` lo maschera su `bit_size`, quindi -1 diventa il complemento a due del campo.
+  - **Parametro.** Usato solo da `load.off.delay`, `load.on.delay` e `shutdown.reboot`; ignorato dagli altri comandi. Deve essere un intero decimale (segno `-` ammesso) ≥ -1; se il campo dichiara un range logico (`logical_max > logical_min`) deve starci dentro. Altrimenti `CommandResult::INVALID_ARGUMENT` → `ERR INVALID-ARGUMENT`, senza scritture. usbhid-ups usa `atol()`, che trasforma un testo non numerico in 0 (spegnimento immediato): qui lo si rifiuta di proposito.
+  - **`shutdown.default`.** Voce nuova del catalogo, `destructive: true`, descrizione da cmdvartab: "Run the driver-defined UPS shutdown sequence (as opposed to user-configured 'sdcommands')". Disponibile quando almeno uno tra `shutdown.return`, `shutdown.reboot`, `load.off.delay`, `shutdown.stayoff` è disponibile. In `executeCommand()` prova i quattro nell'ordine di `upsdrv_shutdown()`, salta quelli non supportati, si ferma al primo `OK` e ne memorizza il nome; se nessuno riesce → `FAILED`. Ogni tentativo passa da `executeCommand()` virtuale, quindi viene loggato.
+  - **Driver.** `IUPSDriver` riceve tre hook:
+    - `shutdownCommandsSupported()` (default true; false per PowercomDriver, EcoFlowDriver e OpenUPSDriver: powercom-hid.c usa codifiche e comandi propri, ecoflow-hid.c li ha commentati, openups-hid.c non li ha);
+    - `defaultOffDelay()` 20 e `defaultOnDelay()` 30 (CyberPowerDriver: 60 e 120).
+    - `CommandCatalog::build()` riceve il flag e senza di esso non elenca `load.*` né `shutdown.*`.
+    - `IUSBHostUPS::shutdownCommandsSupported()` (default true), override in `USBHostUPS` sotto `_mutex` come `supportsBeeperToggle()`.
+  - **`ups.delay.*`.** GenericDriver, APCDriver e PowercomDriver smettono di scrivere `ups.delay.*` (tengono `ups.timer.*`); la rimozione in EcoFlowDriver resta innocua. Una funzione pura `CommandCatalog::applyDefaultDelays(UPSData&, usages, off, on, supported)` imposta `ups.delay.shutdown` se c'è il gruppo Shutdown e `ups.delay.start` se c'è il gruppo Startup, solo con driver che supportano i comandi. `USBHostUPS` la chiama subito dopo `formatDeviceStrings()` (USBHostUPS.cpp:402 e :673), e così il replay runner (`FixtureReplayRunner.h:184`).
+  - **Log.** `USBHostUPS::executeCommand()` logga i comandi distruttivi a WARN anche quando riescono, con il parametro se presente ("Command load.off.delay 30: OK"). Per `shutdown.default` aggiunge il comando usato ("Command shutdown.default: OK via shutdown.return").
+  - **Server NUT.** `INSTCMD <ups> <cmd> [value]` passa `tokens[3]` a `executeCommand()`; `INVALID_ARGUMENT` → `ERR INVALID-ARGUMENT`. Autenticazione e altri errori invariati (US-057).
+  - **Web.** Nessun percorso nuovo. `WebApiJson::runUpsCommand()` resta com'è (403 sui distruttivi prima dell'host, senza parametro); il `switch` gestisce `INVALID_ARGUMENT` come 400 per completezza. `shutdown.default` compare da solo nel gruppo Power control bloccato.
+  - **Fuori scope:** `ups.start.auto`, rendere `ups.delay.*` modificabili (SET VAR o Web UI), comandi di spegnimento per Powercom/EcoFlow/OpenUPS, conversione dell'unit exponent nelle scritture (i campo ritardo sono in secondi con esponente 0 sui dispositivi noti).
+
+  ---
+
+  ## Strategia di Test
+
+  Tutto nativo (Unity). La logica delle sequenze si verifica sulla funzione pura del catalogo; l'esecuzione, il ripiego e il protocollo con il mock del server NUT, che registra le scritture `{path, valore}`.
+
+  - **`test_command_catalog`:** per ogni comando la sequenza attesa (usage e valore, anche -1), con e senza parametro; parametro non numerico, < -1 o fuori range logico → `INVALID_ARGUMENT`; quirk APC CS; disponibilità di `shutdown.default` (presente con il solo Reboot, assente senza gruppi); `build()` con flag driver false senza `load.*`/`shutdown.*`; `applyDefaultDelays()`.
+  - **Driver e replay:** CyberPower 60/120, Generic 20/30, Powercom/EcoFlow/OpenUPS senza comandi di spegnimento; i driver non scrivono più `ups.delay.*`; fixture replay Eaton e APC con `ups.delay.shutdown` 20 al posto di -1 e `ups.timer.shutdown` -1 invariato.
+  - **`test_nut_server`:** INSTCMD per ogni comando con le scritture attese e l'ordine; `load.off.delay 30`; `load.off.delay abc` → `ERR INVALID-ARGUMENT` senza scritture; `shutdown.default` che ripiega quando `shutdown.return` non è supportato e quando la sua scrittura fallisce, e `ERR INSTCMD-FAILED` quando falliscono tutti; accesso negato senza autenticazione.
+  - **`test_web_api`:** `shutdown.default` e `load.off.delay` → 403 senza scritture.
+  - **Regressione:** suite nativa completa, build `esp32-s3-standard`, `e2e/ups-commands.spec.ts`.
+  - **E2E:** non serve; la Web UI non cambia. La Dimostrazione (lampada, `upscmd`) richiede hardware reale: niente video demo, la verifica sul campo la fa l'utente con l'Eaton 3S.
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-09_
+tasks:
+  - id: TASK-01
+    title: 'CommandCatalog: shutdown.default, flag driver e resolveShutdownSteps()'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la traduzione dei comandi di carico e spegnimento in scritture HID, come funzione pura.
+
+      **Da leggere:** `lib/USBHostUPS/src/CommandCatalog.h` (tabella, gruppi, `build()`, `resolveWrite()`), la sezione "Soluzione Tecnica" del piano, `nut_repo/drivers/usbhid-ups.c:1008-1170` e `nut_repo/drivers/apc-hid.c:440-462` come riferimento.
+
+      **Passi:**
+      1. Aggiungere alla tabella `{ "shutdown.default", "Run the driver-defined UPS shutdown sequence (as opposed to user-configured 'sdcommands')", true }` dopo `shutdown.reboot`.
+      2. `build(usages, beeper_available, shutdown_cmds = true)`: con `shutdown_cmds` false nessun `load.*`/`shutdown.*`. `shutdown.default` è disponibile se lo è almeno uno tra `shutdown.return`, `shutdown.reboot`, `load.off.delay`, `shutdown.stayoff`.
+      3. Aggiungere `struct WriteStep { HIDUsageDef def; int32_t value; };` ed `enum class StepsResult { OK, NOT_SUPPORTED, INVALID_ARGUMENT };`.
+      4. `StepsResult resolveShutdownSteps(const char* name, const char* param, const std::vector<HIDUsageDef>& usages, int32_t off_delay, int32_t on_delay, std::vector<WriteStep>& steps)` con le sequenze del piano:
+         - `load.off`/`load.on` 0
+         - `load.off.delay`/`load.on.delay` parametro o ritardo
+         - `shutdown.return`: quirk APC CS se c'è la FEATURE con path esatto `UPS.Output.APCDelayBeforeReboot` (1), altrimenti Startup `on_delay` poi Shutdown `off_delay`
+         - `shutdown.stayoff`: Startup -1 poi Shutdown `off_delay`
+         - `shutdown.stop` Shutdown -1
+         - `shutdown.reboot` parametro o 10
+      5. Parametro solo per `load.off.delay`, `load.on.delay`, `shutdown.reboot`: intero decimale ≥ -1 (helper `parseDelayParam`), dentro `[logical_min, logical_max]` se il campo dichiara un range; altrimenti `INVALID_ARGUMENT` con `steps` vuoto. Usage mancante → `NOT_SUPPORTED`.
+      6. `void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& usages, int32_t off_delay, int32_t on_delay, bool shutdown_cmds)`: imposta `ups.delay.shutdown` se c'è il gruppo Shutdown e `ups.delay.start` se c'è il gruppo Startup, solo con `shutdown_cmds`. Se `UPSData.h` crea dipendenze circolari, mettere la funzione dove compila senza cicli, annotandolo.
+      7. Aggiornare il commento di `resolveWrite()` (load e shutdown ora passano da `resolveShutdownSteps()`).
+
+      **Verifica:** compila con i test di TASK-02.
+
+      **Blocchi:** se il parser non produce mai il path `UPS.Output.APCDelayBeforeReboot` (vendor usage non nominato), confrontare per codice 0xff86007c **e** collection Output come fa `findFeature`; se non si riesce a distinguere dalla collection APCGeneralCollection, lasciare fuori il quirk e annotarlo nel piano.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CommandCatalog.h` — voce nuova, flag, sequenze, default dei ritardi
+
+      ## Criteri di Completamento
+      - [ ] Sequenze e valori identici al piano per tutti i comandi
+      - [ ] Parametro non valido → `INVALID_ARGUMENT` senza passi
+      - [ ] `shutdown.default` distruttivo e disponibile secondo la regola
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di CommandCatalog per i comandi di spegnimento
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire sequenze, parametri e disponibilità.
+
+      **Da leggere:** `test/test_command_catalog/test_main.cpp` (helper per gli usage e struttura).
+
+      **Passi:**
+      1. Per ogni comando verificare `steps` (path e valore, ordine): `load.off`, `load.on`, `load.off.delay` senza parametro (20) e con `30`, `load.on.delay` (30 e parametro), `shutdown.return`, `shutdown.stayoff` (Startup -1 poi Shutdown 20), `shutdown.stop` (-1), `shutdown.reboot` (10 e `5`).
+      2. Usage solo Output o solo codici APC: si usa il primo FEATURE del gruppo come in US-057.
+      3. Quirk APC CS: con la FEATURE `UPS.Output.APCDelayBeforeReboot` `shutdown.return` è una sola scrittura di 1.
+      4. Parametri non validi: `abc`, `-5`, `12x`, valore oltre `logical_max` → `INVALID_ARGUMENT`, `steps` vuoto. Parametro ignorato da `load.off`.
+      5. `build()`:
+         - `shutdown.default` presente con il solo gruppo Reboot
+         - assente senza gruppi di spegnimento
+         - è distruttivo
+         - con flag false nessun `load.*`/`shutdown.*` ma test e beeper presenti
+      6. `applyDefaultDelays()`: chiavi impostate solo con il gruppo relativo e con flag true.
+      7. Test esistenti invariati, salvo l'eventuale presenza di `shutdown.default` negli elenchi attesi (aggiornamento meccanico).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog`
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `test/test_command_catalog/test_main.cpp` — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi presenti e verdi
+      - [ ] Test preesistenti verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Hook dei driver e ups.delay.* con la semantica NUT
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ritardi di default per marca, comandi disattivati dove NUT non li prevede, `ups.delay.*` separati dal timer letto.
+
+      **Da leggere:** `lib/USBHostUPS/src/IUPSDriver.h`, `CyberPowerDriver.h`, `PowercomDriver.h/.cpp` (righe ~195-200), `EcoFlowDriver.h/.cpp` (righe ~85-102), `OpenUPSDriver.h`, `GenericDriver.cpp:461`, `APCDriver.cpp:90-91`, `IUSBHostUPS.h` (`getSupportedCommands`), `USBHostUPS.cpp` (righe ~402, ~673, `supportsBeeperToggle`, `getSupportedCommands`), `test/test_record_replay/FixtureReplayRunner.h:184`.
+
+      **Passi:**
+      1. `IUPSDriver`: `virtual bool shutdownCommandsSupported() const { return true; }`, `virtual int32_t defaultOffDelay() const { return 20; }`, `virtual int32_t defaultOnDelay() const { return 30; }`, con commento che cita `DEFAULT_OFFDELAY`/`DEFAULT_ONDELAY` di usbhid-ups.h.
+      2. Override:
+         - `CyberPowerDriver`: 60/120 (`DEFAULT_*_CPS`)
+         - `PowercomDriver`, `EcoFlowDriver`, `OpenUPSDriver`: `shutdownCommandsSupported()` false, con il motivo (powercom-hid.c, ecoflow-hid.c, openups-hid.c)
+      3. `IUSBHostUPS`: `virtual bool shutdownCommandsSupported() const { return true; }`; `getSupportedCommands()` passa il flag a `build()`. `USBHostUPS` fa l'override sotto `_mutex` interrogando `_driver`.
+      4. Togliere la scrittura di `ups.delay.shutdown`/`ups.delay.start` da GenericDriver, APCDriver e PowercomDriver, lasciando `ups.timer.*`. In EcoFlowDriver aggiornare il commento (la rimozione resta innocua).
+      5. In `USBHostUPS`, subito dopo le due chiamate a `formatDeviceStrings()`, chiamare `CommandCatalog::applyDefaultDelays()` con usage, default e flag del driver, sotto lo stesso lock già tenuto lì. Stesso passo nel replay runner dopo `formatDeviceStrings()`.
+
+      **Verifica:** build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` e test di TASK-04.
+
+      **Blocchi:** cambiare `ups.delay.*` è voluto (decisione utente del 2026-10-09). Se emergono altri consumatori di `ups.delay.*` (web, MQTT), fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUPSDriver.h` — hook
+      - `lib/USBHostUPS/src/CyberPowerDriver.h`, `PowercomDriver.h`, `EcoFlowDriver.h`, `OpenUPSDriver.h` — override
+      - `lib/USBHostUPS/src/GenericDriver.cpp`, `APCDriver.cpp`, `PowercomDriver.cpp`, `EcoFlowDriver.cpp` — solo `ups.timer.*`
+      - `lib/USBHostUPS/src/IUSBHostUPS.h`, `USBHostUPS.h/.cpp` — flag e default alla connessione
+      - `test/test_record_replay/FixtureReplayRunner.h` — stesso hook del host
+
+      ## Criteri di Completamento
+      - [ ] Nessun driver scrive `ups.delay.*`
+      - [ ] Default 20/30 (60/120 CyberPower) impostati alla connessione
+      - [ ] Powercom, EcoFlow, OpenUPS senza comandi di spegnimento in LIST CMD
+    ref: TASK-03
+  - id: TASK-04
+    title: Test di driver e replay per ritardi e comandi per marca
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il nuovo comportamento di `ups.delay.*` e dei flag per marca.
+
+      **Da leggere:** `test/test_generic_driver`, `test_apc_driver`, `test_powercom_driver`, `test_ecoflow_driver`, `test_cyberpower_driver`, `test_record_replay` e le fixture con `ups.delay.shutdown` (`test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`, `test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json`, `test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json`).
+
+      **Passi:**
+      1. Test dei driver:
+         - Generic, APC e Powercom non scrivono più `ups.delay.shutdown` e continuano a scrivere `ups.timer.shutdown`
+         - default 20/30 per Generic, 60/120 per CyberPower
+         - `shutdownCommandsSupported()` false per Powercom, EcoFlow e OpenUPS
+      2. Fixture replay: `ups.delay.shutdown` atteso `20` (era `-1`), `ups.timer.shutdown` `-1` invariato; aggiungere `ups.delay.start` `30` dove il dispositivo ha DelayBeforeStartup.
+      3. Test esistenti che verificano `ups.delay.shutdown` dal dispositivo: aggiornarli alla nuova semantica, citando la decisione nel commento.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_apc_driver -f test_powercom_driver -f test_ecoflow_driver -f test_cyberpower_driver -f test_record_replay`
+
+      **Blocchi:** l'unica modifica semantica ammessa ai test esistenti è `ups.delay.*` (decisione utente del 2026-10-09). Qualsiasi altro test esistente che fallisce si corregge nel codice.
+
+      ## File Coinvolti
+      - `test/test_*_driver/test_main.cpp` — nuovi casi e aggiornamenti
+      - `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`, `test/fixtures/apc/*.json` — valori attesi
+
+      ## Criteri di Completamento
+      - [ ] Ritardi e flag verificati per ogni marca
+      - [ ] Fixture replay verdi con i nuovi valori
+    ref: TASK-04
+  - id: TASK-05
+    title: executeCommand con parametro, sequenze, shutdown.default e INSTCMD
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** eseguire i comandi di spegnimento da NUT con la semantica di usbhid-ups.
+
+      **Da leggere:** `lib/USBHostUPS/src/IUSBHostUPS.h` (`executeCommand`), `USBHostUPS.h/.cpp` (`executeCommand` con i log, `writeUsage`), `lib/NUTServer/src/NUTServer.cpp:365-398`, `lib/WebApi/src/WebApiJson.cpp` (`runUpsCommand`), `test/mocks/Arduino.h` (`delay`).
+
+      **Passi:**
+      1. `CommandResult` riceve `INVALID_ARGUMENT`.
+      2. `executeCommand(const char* name, const char* param = nullptr)` in `IUSBHostUPS` e `USBHostUPS` (aggiornare l'override e ogni chiamante, anche i mock dei test se fanno override).
+      3. Nel base, dopo il controllo di supporto:
+         - `shutdown.default`: per ciascuno di `shutdown.return`, `shutdown.reboot`, `load.off.delay`, `shutdown.stayoff`, se supportato, chiamare `executeCommand(sub)` (virtuale, così ogni tentativo viene loggato); al primo `OK` salvare il nome in un membro `_last_default_shutdown` e restituire `OK`; altrimenti `FAILED`.
+         - comandi `load.*`/`shutdown.*`: leggere `ups.delay.shutdown`/`ups.delay.start` da `UPSData` (ripiego sui default 20/30 se mancano), chiamare `resolveShutdownSteps()` sotto il data lock, poi, a lock rilasciato, `writeUsage(step.def, (uint32_t)step.value)` per ogni passo con `delay(125)` tra due passi. Prima scrittura fallita → `FAILED` senza la seconda. `StepsResult` → `CommandResult`.
+         - il resto invariato (beeper, test).
+      4. `USBHostUPS::executeCommand`: i comandi distruttivi (`CommandCatalog::find(name)->destructive`) si loggano a WARN anche se riescono, col parametro se presente; per `shutdown.default` riuscito aggiungere "via <comando>". `INVALID_ARGUMENT` loggato a WARN.
+      5. `NUTServer`: passare `tokens.size() > 3 ? tokens[3].c_str() : nullptr`; `INVALID_ARGUMENT` → `ERR INVALID-ARGUMENT`; togliere il commento "(US-058)" superato.
+      6. `WebApiJson::runUpsCommand`: nessun parametro; aggiungere `INVALID_ARGUMENT` → 400 `{"error":"Invalid request"}` al `switch`. Il 403 sui distruttivi resta prima di ogni chiamata all'host.
+
+      **Verifica:** build firmware e test di TASK-06.
+
+      **Blocchi:** non tenere `_mutex` né il data lock durante `writeUsage()` (ordine dei lock ADR 0008, come in US-057).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CommandCatalog.h` — `INVALID_ARGUMENT`
+      - `lib/USBHostUPS/src/IUSBHostUPS.h` — parametro, sequenze, ripiego
+      - `lib/USBHostUPS/src/USBHostUPS.h/.cpp` — firma e log
+      - `lib/NUTServer/src/NUTServer.cpp` — parametro e nuovo errore
+      - `lib/WebApi/src/WebApiJson.cpp` — caso 400
+
+      ## Criteri di Completamento
+      - [ ] INSTCMD con parametro opzionale per i comandi di ritardo
+      - [ ] `shutdown.default` ripiega nell'ordine di `upsdrv_shutdown()` e logga il comando usato
+      - [ ] Comandi distruttivi loggati a WARN
+      - [ ] Build firmware ok
+    ref: TASK-05
+  - id: TASK-06
+    title: Test nativi di INSTCMD, shutdown.default e blocco web
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare l'esecuzione end-to-end lato firmware.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp` (`MockUSBHost`, scritture registrate, test US-057 da riga ~435), `test/test_web_api/test_main.cpp`, `test/test_usb_host_interface/test_main.cpp` (mock che fanno override).
+
+      **Passi:**
+      1. Nel mock NUT: possibilità di far fallire la scrittura su un path (`failPaths`) e usage per Shutdown, Startup e Reboot.
+      2. INSTCMD, con le scritture attese in ordine:
+         - `load.off` (Shutdown 0)
+         - `load.on` (Startup 0)
+         - `load.off.delay` (20)
+         - `load.off.delay 30` (30)
+         - `load.on.delay 5`
+         - `shutdown.return` (Startup 30 poi Shutdown 20)
+         - `shutdown.stayoff` (Startup -1 come complemento a due del campo, poi Shutdown 20)
+         - `shutdown.stop` (-1)
+         - `shutdown.reboot` (10)
+      3. Errori:
+         - `load.off.delay abc` → `ERR INVALID-ARGUMENT` senza scritture
+         - `shutdown.return` con la prima scrittura fallita → `ERR INSTCMD-FAILED` e nessuna seconda scrittura
+         - senza autenticazione con auth richiesta → `ERR ACCESS-DENIED`
+      4. `shutdown.default`:
+         - con tutti i gruppi → usa `shutdown.return`
+         - senza Startup → `shutdown.reboot`
+         - Reboot che fallisce e niente Startup → `load.off.delay`
+         - tutte le scritture fallite → `ERR INSTCMD-FAILED`
+         - nessun gruppo → `ERR CMD-NOT-SUPPORTED`
+      5. `LIST CMD` contiene `shutdown.default` quando c'è almeno un gruppo.
+      6. `test_web_api`: `{"name":"shutdown.default"}` e `{"name":"load.off.delay"}` → 403 e nessuna scrittura.
+      7. Aggiornare i mock con override di `executeCommand` alla nuova firma (meccanico).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server -f test_web_api -f test_usb_host_interface`
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — mock esteso e nuovi casi
+      - `test/test_web_api/test_main.cpp` — casi 403
+      - `test/test_usb_host_interface/test_main.cpp` — firma, se serve
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi presenti e verdi
+      - [ ] Test US-057 e US-059 invariati e verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Regressione completa: suite nativa, build ed e2e'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che nulla si è rotto oltre al cambio voluto di `ups.delay.*`.
+
+      **Passi:**
+      1. Suite nativa completa (prima di questa spec: 247 test).
+      2. Build del firmware.
+      3. `npx playwright test e2e/ups-commands.spec.ts` (la Web UI non cambia; non lanciare l'intera suite e2e, che sovrascrive `docs/images/`, vedi US-060).
+      4. Riportare numeri ed esiti, e ricordare che la Dimostrazione con la lampada va fatta a mano sull'Eaton 3S.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+      - `npx playwright test e2e/ups-commands.spec.ts`
+
+      **Blocchi:** un test preesistente che fallisce si corregge nel codice, salvo `ups.delay.*` (TASK-04).
+
+      ## File Coinvolti
+      - nessun file nuovo; verifica dell'intera spec
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa con 0 failures
+      - [ ] Build `esp32-s3-standard` ok
+      - [ ] `e2e/ups-commands.spec.ts` verde
+    ref: TASK-07

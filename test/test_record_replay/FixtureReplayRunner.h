@@ -81,8 +81,10 @@ public:
     }
 
     // expectedCommands: NUT commands the device must expose (LIST CMD order, space
-    // separated); nullptr skips the check (US-056)
-    static void runFixtureTest(const char* filePath, const char* expectedCommands = nullptr) {
+    // separated); nullptr skips the check (US-056). checkUsages, when given, receives the
+    // parsed usages for device-specific assertions (US-058)
+    static void runFixtureTest(const char* filePath, const char* expectedCommands = nullptr,
+                               void (*checkUsages)(const std::vector<HIDUsageDef>&) = nullptr) {
         std::ifstream f(filePath);
         if (!f.is_open()) {
             std::string msg = "Cannot open fixture file: ";
@@ -182,6 +184,9 @@ public:
         }
         // As USBHostUPS after the strings are read (issue #76)
         driver->formatDeviceStrings(ups_data);
+        // ups.delay.* defaults, as USBHostUPS right after formatDeviceStrings() (US-058)
+        CommandCatalog::applyDefaultDelays(ups_data, host._parser.getUsages(), driver->defaultOffDelay(),
+                                           driver->defaultOnDelay(), driver->shutdownCommandsSupported());
 
         // 5. Replay Scenarios
         JsonArray scenarios = doc["scenarios"].as<JsonArray>();
@@ -243,12 +248,13 @@ public:
             // Same inputs as IUSBHostUPS::getSupportedCommands(); ups_data is the replayed data
             bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
             std::string actual;
-            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper)) {
+            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported())) {
                 if (!actual.empty()) actual += " ";
                 actual += c->name;
             }
             TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, actual.c_str(), "supported NUT commands");
         }
+        if (checkUsages) checkUsages(host.getUsages());
 
         delete driver;
     }

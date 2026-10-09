@@ -195,7 +195,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
         else if (u.usage == 0x00020057) { // DelayBeforeShutdown
             uint16_t i = (uint16_t)val;
             int32_t delay = 60 * (i >> 8) + (i & 0x00FF);
-            ups_data.set("ups.delay.shutdown", String(delay));
+            // Only the timer: ups.delay.* are configured delays, not device values (US-058)
             ups_data.set("ups.timer.shutdown", String(delay));
         }
         else if (u.usage == 0x00020036) { // PowercomTemperature

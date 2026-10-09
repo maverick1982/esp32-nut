@@ -458,7 +458,8 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.BatterySystem.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
         { "UPS.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
         { "UPS.Output.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
-        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.shutdown", String((int)v)); d.set("ups.timer.shutdown", String((int)v)); } },
+        // Timer read from the device; ups.delay.* are the configured delays (US-058, applyDefaultDelays)
+        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.shutdown", String((int)v)); } },
         
         { "UPS.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
         { "UPS.Input.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },

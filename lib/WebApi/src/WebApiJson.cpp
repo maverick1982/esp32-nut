@@ -121,6 +121,9 @@ int WebApiJson::runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& 
         case CommandResult::NOT_CONNECTED:
             response = "{\"error\":\"UPS not connected\"}";
             return 503;
+        case CommandResult::INVALID_ARGUMENT:
+            response = "{\"error\":\"Invalid request\"}";
+            return 400;
         case CommandResult::FAILED:
         default:
             response = "{\"error\":\"Command rejected by the UPS\"}";

@@ -84,6 +84,21 @@ public:
      * ups.beeper.status is still reported read-only.
      */
     virtual bool beeperControllable() const { return true; }
+
+    /**
+     * @brief True when the load.* and shutdown.* commands are offered (US-058).
+     *
+     * False for subdrivers whose NUT counterpart has no such commands or uses its own
+     * encodings: they are then neither listed nor executed, and ups.delay.* is not set.
+     */
+    virtual bool shutdownCommandsSupported() const { return true; }
+
+    /**
+     * @brief Default ups.delay.shutdown / ups.delay.start in seconds, set by the host at
+     * connection: DEFAULT_OFFDELAY / DEFAULT_ONDELAY of usbhid-ups.h (20 / 30).
+     */
+    virtual int32_t defaultOffDelay() const { return 20; }
+    virtual int32_t defaultOnDelay() const { return 30; }
 };
 
 #endif // I_UPS_DRIVER_H

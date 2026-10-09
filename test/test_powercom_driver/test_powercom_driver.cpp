@@ -277,6 +277,31 @@ void test_powercom_full_poll_spd750u_descriptor(void) {
     TEST_ASSERT_EQUAL_STRING("41.0", ups_data.get("battery.temperature").c_str());
 }
 
+// US-058, user decision of 2026-10-09: DelayBeforeShutdown (minutes/seconds bytes) is
+// the timer only; no ups.delay.*, and no load/shutdown commands (powercom-hid.c uses
+// its own encodings)
+void test_powercom_delay_sets_only_timer(void) {
+    PowercomDriver driver;
+    UPSData ups_data;
+    MockPowercomHost host;
+
+    HIDUsageDef def;
+    strcpy(def.path, "UPS.0x00020004.0x00020057");
+    def.usage = 0x00020057;
+    def.report_id = 0x20;
+    def.report_type = 3;
+    def.bit_size = 16;
+    def.bit_offset = 0;
+    def.found = true;
+    host._usages.push_back(def);
+
+    uint8_t data[] = { 0x20, 0x05, 0x01 };  // 1 min 5 s
+    driver.decodeReport(&host, 0x20, 3, data, sizeof(data), ups_data);
+    TEST_ASSERT_EQUAL_STRING("65", ups_data.get("ups.timer.shutdown").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -289,6 +314,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_loop_polling_nut_alignment);
     RUN_TEST(test_powercom_real_descriptor_parsing);
     RUN_TEST(test_powercom_full_poll_spd750u_descriptor);
+    RUN_TEST(test_powercom_delay_sets_only_timer);
     return UNITY_END();
 }
 #else
@@ -302,6 +328,7 @@ void setup() {
     RUN_TEST(test_powercom_loop_polling_nut_alignment);
     RUN_TEST(test_powercom_real_descriptor_parsing);
     RUN_TEST(test_powercom_full_poll_spd750u_descriptor);
+    RUN_TEST(test_powercom_delay_sets_only_timer);
     UNITY_END();
 }
 void loop() {}

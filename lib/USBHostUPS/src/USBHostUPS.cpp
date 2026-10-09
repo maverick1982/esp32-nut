@@ -400,6 +400,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _driver->setup();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
         _driver->formatDeviceStrings(_ups_data);
+        applyDefaultDelays();
     }
 
     _link.reset(millis());
@@ -671,6 +672,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     if (_driver) {
         _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
         _driver->formatDeviceStrings(_ups_data);
+        applyDefaultDelays();
     }
     return true;
 }
@@ -823,14 +825,29 @@ bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
     return err == ESP_OK;
 }
 
-CommandResult USBHostUPS::executeCommand(const char* name) {
-    CommandResult r = IUSBHostUPS::executeCommand(name);
-    const char* cmd = name ? name : "(null)";
+CommandResult USBHostUPS::executeCommand(const char* name, const char* param) {
+    CommandResult r = IUSBHostUPS::executeCommand(name, param);
+    // "load.off.delay 30": the parameter is part of what was asked
+    String cmd = name ? name : "(null)";
+    if (param && *param) {
+        cmd += " ";
+        cmd += param;
+    }
+    const UPSCommandInfo* info = CommandCatalog::find(name);
+    const bool destructive = info && info->destructive;
     switch (r) {
-    case CommandResult::OK:            log("INFO", "Command %s: OK", cmd); break;
-    case CommandResult::FAILED:        log("WARN", "Command %s: failed", cmd); break;
-    case CommandResult::NOT_SUPPORTED: log("WARN", "Command %s: not supported", cmd); break;
-    case CommandResult::NOT_CONNECTED: log("WARN", "Command %s: UPS not connected", cmd); break;
+    case CommandResult::OK:
+        // Commands that cut power to the load stay visible at WARN even when they succeed
+        if (name && strcmp(name, "shutdown.default") == 0) {
+            log("WARN", "Command %s: OK via %s", cmd.c_str(), _last_default_shutdown.c_str());
+        } else {
+            log(destructive ? "WARN" : "INFO", "Command %s: OK", cmd.c_str());
+        }
+        break;
+    case CommandResult::FAILED:           log("WARN", "Command %s: failed", cmd.c_str()); break;
+    case CommandResult::NOT_SUPPORTED:    log("WARN", "Command %s: not supported", cmd.c_str()); break;
+    case CommandResult::NOT_CONNECTED:    log("WARN", "Command %s: UPS not connected", cmd.c_str()); break;
+    case CommandResult::INVALID_ARGUMENT: log("WARN", "Command %s: invalid argument", cmd.c_str()); break;
     }
     return r;
 }
@@ -857,6 +874,22 @@ bool USBHostUPS::supportsBeeperToggle() const {
     // handleDisconnected() deletes _driver with the same lock held.
     if (_driver && !_driver->beeperControllable()) return false;
     return getActiveBeeperPath() != "";
+}
+
+bool USBHostUPS::shutdownCommandsSupported() const {
+    // Same lock as supportsBeeperToggle(): _driver is deleted under _mutex
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver ? _driver->shutdownCommandsSupported() : true;
+}
+
+void USBHostUPS::applyDefaultDelays() {
+    // ups.delay.* with NUT semantics: driver defaults set at connection, never read from
+    // the device (US-058). Right after formatDeviceStrings(); _mutex is recursive and
+    // the callers already hold it.
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_driver) return;
+    CommandCatalog::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
+                                       _driver->defaultOnDelay(), _driver->shutdownCommandsSupported());
 }
 
 std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {

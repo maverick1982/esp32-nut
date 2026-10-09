@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <vector>
+#include <stdlib.h>
+#include <limits.h>
 #include "HIDUsages.h"
+#include "UPSData.h"
 
 // A NUT instant command the bridge knows about. Descriptions come verbatim from
 // nut_repo/data/cmdvartab; destructive commands cut power to the load.
@@ -14,7 +17,7 @@ struct UPSCommandInfo {
     bool destructive;
 };
 
-enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED };
+enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED, INVALID_ARGUMENT };
 
 namespace CommandCatalog {
 
@@ -37,6 +40,7 @@ inline const UPSCommandInfo* table(size_t& count) {
         { "shutdown.stayoff",         "Turn off the load and remain off",                  true },
         { "shutdown.stop",            "Stop a shutdown in progress",                       true },
         { "shutdown.reboot",          "Shut down the load briefly while rebooting the UPS", true },
+        { "shutdown.default",         "Run the driver-defined UPS shutdown sequence (as opposed to user-configured 'sdcommands')", true },
     };
     count = sizeof(commands) / sizeof(commands[0]);
     return commands;
@@ -101,6 +105,41 @@ inline bool hasFeature(const std::vector<HIDUsageDef>& usages, const UsageGroup&
     return findFeature(usages, g) != nullptr;
 }
 
+// APC Back-UPS CS: shutdown.return is a single write of 1 on UPS.Output.APCDelayBeforeReboot
+// (apc-hid.c, found by find_nut_info() before the generic entries). HIDParser names vendor
+// usages by code ("UPS.Output.0xFF86007C"), so both the named path and the code directly
+// under the Output collection match; UPS.APCGeneralCollection's field (0xFF860005) does not.
+inline const HIDUsageDef* apcCsReturnField(const std::vector<HIDUsageDef>& usages) {
+    static const char kOutput[] = "UPS.Output.";
+    const size_t n = sizeof(kOutput) - 1;
+    for (const auto& u : usages) {
+        if (u.report_type != 0x03) continue;
+        if (strcmp(u.path, "UPS.Output.APCDelayBeforeReboot") == 0) return &u;
+        if (u.usage == 0xff86007c && strncmp(u.path, kOutput, n) == 0 && strchr(u.path + n, '.') == nullptr)
+            return &u;
+    }
+    return nullptr;
+}
+
+// Reboot group without the APC Back-UPS CS field: in apc-hid.c UPS.Output.APCDelayBeforeReboot
+// serves shutdown.return only (value 1); shutdown.reboot uses the standard DelayBeforeReboot
+// paths and UPS.APCGeneralCollection.APCDelayBeforeReboot. findFeature() matches the vendor
+// code on any path, so the CS field would otherwise receive the reboot delay.
+inline const HIDUsageDef* rebootField(const std::vector<HIDUsageDef>& usages) {
+    const HIDUsageDef* cs = apcCsReturnField(usages);
+    for (size_t i = 0; i < kReboot.n_paths; i++) {
+        for (const auto& u : usages) {
+            if (u.report_type == 0x03 && strcmp(u.path, kReboot.paths[i]) == 0) return &u;
+        }
+    }
+    for (size_t i = 0; i < kReboot.n_codes; i++) {
+        for (const auto& u : usages) {
+            if (&u != cs && u.report_type == 0x03 && u.usage == kReboot.codes[i]) return &u;
+        }
+    }
+    return nullptr;
+}
+
 // Beeper field the host drives: first AudibleAlarmControl in descriptor order, as
 // USBHostUPS::getActiveBeeperPath() picks it
 inline const HIDUsageDef* activeBeeper(const std::vector<HIDUsageDef>& usages) {
@@ -130,14 +169,17 @@ inline const HIDUsageDef* muteField(const std::vector<HIDUsageDef>& usages) {
  * instcmd(): shutdown.return/stayoff need both DelayBeforeStartup and
  * DelayBeforeShutdown. The beeper commands follow beeper_available, the
  * condition LIST CMD has always used (supportsBeeperToggle() and a reported
- * ups.beeper.status).
+ * ups.beeper.status). shutdown_cmds is IUPSDriver::shutdownCommandsSupported():
+ * false hides every load.* and shutdown.* command (US-058). shutdown.default is
+ * listed when at least one of the commands upsdrv_shutdown() tries is available.
  */
-inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available) {
+inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available,
+                                                bool shutdown_cmds = true) {
     const bool test = hasFeature(usages, kTest);
     const bool panel = hasFeature(usages, kPanel);
-    const bool shutdown = hasFeature(usages, kShutdown);
-    const bool startup = hasFeature(usages, kStartup);
-    const bool reboot = hasFeature(usages, kReboot);
+    const bool shutdown = shutdown_cmds && hasFeature(usages, kShutdown);
+    const bool startup = shutdown_cmds && hasFeature(usages, kStartup);
+    const bool reboot = shutdown_cmds && rebootField(usages) != nullptr;
 
     std::vector<const UPSCommandInfo*> result;
     size_t count;
@@ -155,6 +197,9 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
         else if (strcmp(n, "shutdown.return") == 0 || strcmp(n, "shutdown.stayoff") == 0)
             available = shutdown && startup;
         else if (strcmp(n, "shutdown.reboot") == 0) available = reboot;
+        // At least one of shutdown.return, shutdown.reboot, load.off.delay, shutdown.stayoff:
+        // load.off.delay needs only Shutdown, which return and stayoff need as well
+        else if (strcmp(n, "shutdown.default") == 0) available = reboot || shutdown;
         if (available) result.push_back(&commands[i]);
     }
     return result;
@@ -165,7 +210,7 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
  * (test_write_info in usbhid-ups.c), APCPanelTest 1 = start, 0 = stop (apc-hid.c),
  * beeper.mute 3 on the beeper field (mge-hid.c, apc-hid.c, cps-hid.c).
  * False for the other beeper commands (written by setBeeper()), the load and shutdown commands
- * (not executed yet) and unknown names or usages.
+ * (sequences of writes, resolved by resolveShutdownSteps()) and unknown names or usages.
  */
 inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value) {
     if (!name) return false;
@@ -187,6 +232,125 @@ inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usage
     if (!found) return false;
     def = *found;
     return true;
+}
+
+// US-058: one HID write of a load/shutdown sequence. The value is signed: -1 (cancel)
+// reaches writeUsage() as (uint32_t)value and is masked to the field's bit_size.
+struct WriteStep {
+    HIDUsageDef def;
+    int32_t value;
+};
+
+enum class StepsResult { OK, NOT_SUPPORTED, INVALID_ARGUMENT };
+
+// Delay given as INSTCMD parameter: decimal integer, optional '-', >= -1. usbhid-ups
+// uses atol(), which turns "abc" into 0 (immediate shutdown): rejected here on purpose.
+inline bool parseDelayParam(const char* text, int32_t& out) {
+    if (!text || !*text) return false;
+    const char* p = text;
+    if (*p == '-') p++;
+    if (*p < '0' || *p > '9') return false;
+    char* end = nullptr;
+    long long v = strtoll(text, &end, 10);
+    if (*end != '\0' || v < -1 || v > INT32_MAX) return false;
+    out = (int32_t)v;
+    return true;
+}
+
+// Delay not configured (ups.delay.* missing or not a number): the commands that need it
+// are not run rather than guessing a value
+static const int32_t kNoDelay = INT32_MIN;
+
+/**
+ * True when value can be written into field without being truncated by
+ * BeeperLogic::writeField(): -1 (cancel, all ones as in usbhid-ups) always fits,
+ * the other values must stay within the field's bit_size (signed when logical_min < 0).
+ * A truncated delay could become 0, i.e. an immediate shutdown.
+ */
+inline bool fitsField(const HIDUsageDef& field, int32_t value) {
+    if (value == -1) return true;
+    if (value < 0) return false;
+    if (field.bit_size == 0 || field.bit_size >= 32) return true;
+    int64_t max = field.logical_min < 0 ? ((int64_t)1 << (field.bit_size - 1)) - 1
+                                        : ((int64_t)1 << field.bit_size) - 1;
+    return value <= max;
+}
+
+/**
+ * HID writes of a load.* or shutdown.* command, with the semantics of instcmd() in
+ * usbhid-ups.c and of the <brand>-hid.c tables. off_delay and on_delay are
+ * ups.delay.shutdown and ups.delay.start. param is used only by load.off.delay,
+ * load.on.delay and shutdown.reboot (nullptr or "" = default) and ignored by the others;
+ * when not an integer >= -1, or outside the field's declared logical range,
+ * INVALID_ARGUMENT with no steps. Missing usage: NOT_SUPPORTED. Two steps are written in
+ * order, with the 125 ms pause of usbhid-ups between them. shutdown.default is not a
+ * sequence (the host tries the commands one by one): NOT_SUPPORTED here.
+ */
+inline StepsResult resolveShutdownSteps(const char* name, const char* param, const std::vector<HIDUsageDef>& usages,
+                                        int32_t off_delay, int32_t on_delay, std::vector<WriteStep>& steps) {
+    steps.clear();
+    if (!name) return StepsResult::NOT_SUPPORTED;
+    const HIDUsageDef* sd = findFeature(usages, kShutdown);
+    const HIDUsageDef* st = findFeature(usages, kStartup);
+
+    // One write on a field, with the parameter when the command takes one
+    auto single = [&](const HIDUsageDef* field, int32_t dfl, bool takes_param) -> StepsResult {
+        if (!field) return StepsResult::NOT_SUPPORTED;
+        int32_t value = dfl;
+        bool from_param = false;
+        if (takes_param && param && *param) {
+            if (!parseDelayParam(param, value)) return StepsResult::INVALID_ARGUMENT;
+            bool range_declared = field->logical_max > field->logical_min;
+            if (range_declared && (value < field->logical_min || value > field->logical_max))
+                return StepsResult::INVALID_ARGUMENT;
+            from_param = true;
+        }
+        if (value == kNoDelay) return StepsResult::NOT_SUPPORTED;
+        if (!fitsField(*field, value))
+            return from_param ? StepsResult::INVALID_ARGUMENT : StepsResult::NOT_SUPPORTED;
+        steps.push_back({ *field, value });
+        return StepsResult::OK;
+    };
+
+    if (strcmp(name, "load.off") == 0) return single(sd, 0, false);
+    if (strcmp(name, "load.on") == 0) return single(st, 0, false);
+    if (strcmp(name, "load.off.delay") == 0) return single(sd, off_delay, true);
+    if (strcmp(name, "load.on.delay") == 0) return single(st, on_delay, true);
+    if (strcmp(name, "shutdown.stop") == 0) return single(sd, -1, false);
+    if (strcmp(name, "shutdown.reboot") == 0) return single(rebootField(usages), 10, true);
+    if (strcmp(name, "shutdown.return") == 0) {
+        if (const HIDUsageDef* cs = apcCsReturnField(usages)) {
+            steps.push_back({ *cs, 1 });
+            return StepsResult::OK;
+        }
+        if (!sd || !st || on_delay == kNoDelay || off_delay == kNoDelay) return StepsResult::NOT_SUPPORTED;
+        if (!fitsField(*st, on_delay) || !fitsField(*sd, off_delay)) return StepsResult::NOT_SUPPORTED;
+        steps.push_back({ *st, on_delay });
+        steps.push_back({ *sd, off_delay });
+        return StepsResult::OK;
+    }
+    if (strcmp(name, "shutdown.stayoff") == 0) {
+        if (!sd || !st || off_delay == kNoDelay) return StepsResult::NOT_SUPPORTED;
+        if (!fitsField(*sd, off_delay)) return StepsResult::NOT_SUPPORTED;
+        steps.push_back({ *st, -1 });
+        steps.push_back({ *sd, off_delay });
+        return StepsResult::OK;
+    }
+    return StepsResult::NOT_SUPPORTED;
+}
+
+/**
+ * ups.delay.shutdown and ups.delay.start with NUT semantics: configured delays, never read
+ * from the device (HU_FLAG_ABSENT in mge-hid.c, apc-hid.c, cps-hid.c), set by the host at
+ * connection with the driver defaults (IUPSDriver::defaultOffDelay/defaultOnDelay). Only
+ * when the device has the group and the driver supports the shutdown commands; what the
+ * device reports in DelayBeforeShutdown/Startup is ups.timer.*.
+ */
+inline void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& usages,
+                               int32_t off_delay, int32_t on_delay, bool shutdown_cmds) {
+    if (!shutdown_cmds) return;
+    if (hasFeature(usages, kShutdown)) data.set("ups.delay.shutdown", String((int)off_delay));
+    if (hasFeature(usages, kStartup)) data.set("ups.delay.start", String((int)on_delay));
 }
 
 } // namespace CommandCatalog

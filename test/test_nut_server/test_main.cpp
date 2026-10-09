@@ -1,6 +1,7 @@
 #include <unity.h>
 #include "NUTServer.h"
 #include "IUSBHostUPS.h"
+#include "BeeperLogic.h"
 #include <sstream>
 #include <algorithm>
 
@@ -59,11 +60,14 @@ public:
         return true;
     }
 
-    // Writes requested by executeCommand(): {path, value}
+    // Writes requested by executeCommand(): {path, value}, failed ones included.
+    // failPaths: fields whose write fails (US-058)
     bool writeOk = true;
+    std::vector<std::string> failPaths;
     std::vector<std::pair<std::string, uint32_t>> writes;
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override {
         writes.push_back({def.path, value});
+        if (std::find(failPaths.begin(), failPaths.end(), def.path) != failPaths.end()) return false;
         return writeOk;
     }
 
@@ -103,6 +107,7 @@ void setUp(void) {
     mockHost.setBeeperOk = true;
     mockHost.writeOk = true;
     mockHost.writes.clear();
+    mockHost.failPaths.clear();
 
     NUTServerConfig config;
     config.username = "admin";
@@ -487,15 +492,223 @@ void test_instcmd_requires_login(void) {
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
 
-// Listed since US-056, executed only with US-058
-void test_instcmd_shutdown_not_executed_yet(void) {
-    server.setAuthenticated(0, true);
-    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057));
-    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeStartup", 0x00840056));
+// US-058: delay fields of the mock, 16 bits wide like the Eaton 3S
+#define P_SD "UPS.PowerSummary.DelayBeforeShutdown"
+#define P_ST "UPS.PowerSummary.DelayBeforeStartup"
+#define P_RB "UPS.PowerSummary.DelayBeforeReboot"
 
-    server.processCommand(printer, 0, "INSTCMD testups shutdown.return");
-    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+static void addDelayUsages(bool shutdown, bool startup, bool reboot) {
+    auto add = [](const char* path, uint32_t usage) {
+        HIDUsageDef d = featureUsage(path, usage);
+        d.report_id = 0x11;
+        d.bit_size = 16;
+        mockHost._mockUsages.push_back(d);
+    };
+    if (shutdown) add(P_SD, 0x00840057);
+    if (startup) add(P_ST, 0x00840056);
+    if (reboot) add(P_RB, 0x00840055);
+    // As USBHostUPS at connection: ups.delay.* with the NUT defaults
+    CommandCatalog::applyDefaultDelays(mockHost.data, mockHost._mockUsages, 20, 30, true);
+}
+
+// Writes recorded by the mock as "path=value" joined by spaces, values as signed
+static std::string writesStr() {
+    std::string out;
+    for (const auto& w : mockHost.writes) {
+        if (!out.empty()) out += " ";
+        out += w.first + "=" + std::to_string((int32_t)w.second);
+    }
+    return out;
+}
+
+static std::string instcmd(const char* line) {
+    printer.clear();
+    mockHost.writes.clear();
+    server.processCommand(printer, 0, line);
+    return printer.getOutput();
+}
+
+// US-058: each load.* / shutdown.* command writes the usbhid-ups sequence, in order.
+// ups.delay.* are not set in the mock data: the NUT defaults 20/30 apply.
+void test_instcmd_shutdown_sequences(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+    struct Case { const char* line; const char* writes; };
+    const Case cases[] = {
+        { "INSTCMD testups load.off",            P_SD "=0" },
+        { "INSTCMD testups load.on",             P_ST "=0" },
+        { "INSTCMD testups load.off.delay",      P_SD "=20" },
+        { "INSTCMD testups load.off.delay 30",   P_SD "=30" },
+        { "INSTCMD testups load.on.delay",       P_ST "=30" },
+        { "INSTCMD testups load.on.delay 5",     P_ST "=5" },
+        { "INSTCMD testups shutdown.return",     P_ST "=30 " P_SD "=20" },
+        { "INSTCMD testups shutdown.stayoff",    P_ST "=-1 " P_SD "=20" },
+        { "INSTCMD testups shutdown.stop",       P_SD "=-1" },
+        { "INSTCMD testups shutdown.reboot",     P_RB "=10" },
+        { "INSTCMD testups shutdown.reboot 5",   P_RB "=5" },
+        // The value is ignored by the commands that take none
+        { "INSTCMD testups load.off 99",         P_SD "=0" },
+    };
+    for (const auto& c : cases) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("OK\n", instcmd(c.line).c_str(), c.line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(c.writes, writesStr().c_str(), c.line);
+    }
+}
+
+// -1 reaches writeUsage() as (uint32_t)-1 and becomes the field's two's complement
+void test_instcmd_stayoff_writes_minus_one_as_twos_complement(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.stayoff").c_str());
+    TEST_ASSERT_EQUAL(2, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING(P_ST, mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFF, mockHost.writes[0].second);
+
+    // What USBHostUPS::writeUsageLocked() puts in the report: 16-bit field = 0xFFFF
+    const HIDUsageDef& st = mockHost._mockUsages[1];
+    uint8_t report[4] = { 0x11, 0x00, 0x00, 0xAA };
+    TEST_ASSERT_EQUAL(3, BeeperLogic::writeField(st, mockHost.writes[0].second, report, 3));
+    TEST_ASSERT_EQUAL_HEX8(0x11, report[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xFF, report[1]);
+    TEST_ASSERT_EQUAL_HEX8(0xFF, report[2]);
+    TEST_ASSERT_EQUAL_HEX8(0xAA, report[3]);
+}
+
+// The configured ups.delay.* (set at connection) drive the sequences
+void test_instcmd_uses_configured_delays(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.data.set("ups.delay.shutdown", "60");
+    mockHost.data.set("ups.delay.start", "120");
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=120 " P_SD "=60", writesStr().c_str());
+}
+
+// Without configured ups.delay.* nothing is guessed: no write, the command is refused
+void test_instcmd_without_configured_delays(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.data.remove("ups.delay.shutdown");
+    mockHost.data.set("ups.delay.start", "abc");
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups load.off.delay").c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups load.off.delay 45").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_SD "=45", writesStr().c_str());
+}
+
+// 65536 on a 16-bit field would be truncated to 0, an immediate shutdown
+void test_instcmd_param_too_large_for_field(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", instcmd("INSTCMD testups load.off.delay 65536").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_invalid_argument(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+
+    const char* lines[] = {
+        "INSTCMD testups load.off.delay abc",
+        "INSTCMD testups load.on.delay -5",
+        "INSTCMD testups shutdown.reboot 12x",
+    };
+    for (const char* line : lines) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", instcmd(line).c_str(), line);
+        TEST_ASSERT_EQUAL_MESSAGE(0, mockHost.writes.size(), line);
+    }
+}
+
+// The second write of a sequence is not sent when the first fails
+void test_instcmd_sequence_stops_at_first_failed_write(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, false);
+    mockHost.failPaths.push_back(P_ST);
+
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30", writesStr().c_str());
+}
+
+void test_instcmd_shutdown_requires_login(void) {
+    server.setAuthenticated(0, false);
+    addDelayUsages(true, true, true);
+
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups load.off.delay 30").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+// shutdown.default tries shutdown.return, shutdown.reboot, load.off.delay, shutdown.stayoff
+// (upsdrv_shutdown() order) and stops at the first that succeeds
+void test_instcmd_shutdown_default_fallback(void) {
+    server.setAuthenticated(0, true);
+
+    // All groups: shutdown.return
+    addDelayUsages(true, true, true);
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_SD "=20", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.return", mockHost.lastDefaultShutdown().c_str());
+
+    // shutdown.return fails on its first write: shutdown.reboot
+    mockHost.failPaths = { P_ST };
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_RB "=10", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot", mockHost.lastDefaultShutdown().c_str());
+
+    // No Startup (shutdown.return not supported): shutdown.reboot
+    mockHost.failPaths.clear();
+    mockHost._mockUsages.clear();
+    addDelayUsages(true, false, true);
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot", mockHost.lastDefaultShutdown().c_str());
+
+    // Reboot fails and no Startup: load.off.delay
+    mockHost.failPaths = { P_RB };
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10 " P_SD "=20", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("load.off.delay", mockHost.lastDefaultShutdown().c_str());
+
+    // The value of INSTCMD is not passed on to the fallback commands
+    mockHost.failPaths.clear();
+    TEST_ASSERT_EQUAL_STRING("OK\n", instcmd("INSTCMD testups shutdown.default 5").c_str());
+    TEST_ASSERT_EQUAL_STRING(P_RB "=10", writesStr().c_str());
+}
+
+void test_instcmd_shutdown_default_all_fail(void) {
+    server.setAuthenticated(0, true);
+    addDelayUsages(true, true, true);
+    mockHost.failPaths = { P_SD, P_ST, P_RB };
+
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    // return (Startup), reboot, load.off.delay, stayoff (Startup): one failed write each
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_RB "=10 " P_SD "=20 " P_ST "=-1", writesStr().c_str());
+    TEST_ASSERT_EQUAL_STRING("", mockHost.lastDefaultShutdown().c_str());
+}
+
+void test_instcmd_shutdown_default_without_groups(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_list_cmd_includes_shutdown_default(void) {
+    addDelayUsages(false, false, true);
+    std::string out = instcmd("LIST CMD testups");
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.reboot\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("CMD testups shutdown.default\n") != std::string::npos);
+
+    mockHost._mockUsages.clear();
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    out = instcmd("LIST CMD testups");
+    TEST_ASSERT_TRUE(out.find("shutdown.default") == std::string::npos);
 }
 
 void test_instcmd_beeper_failure_and_toggle(void) {
@@ -659,7 +872,18 @@ int main(int argc, char **argv) {
     RUN_TEST(test_instcmd_driver_not_connected);
     RUN_TEST(test_instcmd_write_failed);
     RUN_TEST(test_instcmd_requires_login);
-    RUN_TEST(test_instcmd_shutdown_not_executed_yet);
+    RUN_TEST(test_instcmd_shutdown_sequences);
+    RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
+    RUN_TEST(test_instcmd_uses_configured_delays);
+    RUN_TEST(test_instcmd_without_configured_delays);
+    RUN_TEST(test_instcmd_param_too_large_for_field);
+    RUN_TEST(test_instcmd_invalid_argument);
+    RUN_TEST(test_instcmd_sequence_stops_at_first_failed_write);
+    RUN_TEST(test_instcmd_shutdown_requires_login);
+    RUN_TEST(test_instcmd_shutdown_default_fallback);
+    RUN_TEST(test_instcmd_shutdown_default_all_fail);
+    RUN_TEST(test_instcmd_shutdown_default_without_groups);
+    RUN_TEST(test_list_cmd_includes_shutdown_default);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
     return UNITY_END();
@@ -691,7 +915,18 @@ void setup() {
     RUN_TEST(test_instcmd_driver_not_connected);
     RUN_TEST(test_instcmd_write_failed);
     RUN_TEST(test_instcmd_requires_login);
-    RUN_TEST(test_instcmd_shutdown_not_executed_yet);
+    RUN_TEST(test_instcmd_shutdown_sequences);
+    RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
+    RUN_TEST(test_instcmd_uses_configured_delays);
+    RUN_TEST(test_instcmd_without_configured_delays);
+    RUN_TEST(test_instcmd_param_too_large_for_field);
+    RUN_TEST(test_instcmd_invalid_argument);
+    RUN_TEST(test_instcmd_sequence_stops_at_first_failed_write);
+    RUN_TEST(test_instcmd_shutdown_requires_login);
+    RUN_TEST(test_instcmd_shutdown_default_fallback);
+    RUN_TEST(test_instcmd_shutdown_default_all_fail);
+    RUN_TEST(test_instcmd_shutdown_default_without_groups);
+    RUN_TEST(test_list_cmd_includes_shutdown_default);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
     UNITY_END();
