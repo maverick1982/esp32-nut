@@ -55,6 +55,40 @@ public:
         bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");
         return CommandCatalog::build(getUsages(), beeper);
     }
+    // Writes value into the FEATURE field of def (read-modify-write of its report)
+    virtual bool writeUsage(const HIDUsageDef& def, uint32_t value) { return false; }
+    /**
+     * Runs a NUT instant command (US-057). No lock is held while setBeeper() or
+     * writeUsage() talk to the device: lock order is _op_mutex, then _mutex (ADR 0008).
+     */
+    virtual CommandResult executeCommand(const char* name) {
+        if (!name) return CommandResult::NOT_SUPPORTED;
+        if (!isConnected()) return CommandResult::NOT_CONNECTED;
+        bool supported = false;
+        for (const auto* c : getSupportedCommands()) {
+            if (strcmp(c->name, name) == 0) { supported = true; break; }
+        }
+        if (!supported) return CommandResult::NOT_SUPPORTED;
+
+        if (strcmp(name, "beeper.enable") == 0 || strcmp(name, "beeper.disable") == 0) {
+            return setBeeper(strcmp(name, "beeper.enable") == 0) ? CommandResult::OK : CommandResult::FAILED;
+        }
+        if (strcmp(name, "beeper.toggle") == 0) {
+            // Read first: the data lock must not be held across setBeeper()
+            bool enabled = getUPSData()->getBool("ups.beeper.status");
+            return setBeeper(!enabled) ? CommandResult::OK : CommandResult::FAILED;
+        }
+
+        HIDUsageDef def;
+        uint32_t value = 0;
+        {
+            UPSDataLock lk = getUPSData();  // guards the parsed usages too
+            if (!CommandCatalog::resolveWrite(name, getUsages(), def, value)) {
+                return CommandResult::NOT_SUPPORTED;  // load.* and shutdown.* not executed yet
+            }
+        }
+        return writeUsage(def, value) ? CommandResult::OK : CommandResult::FAILED;
+    }
     virtual uint32_t getQuirks() const = 0;
     // True while polling backs off after a link failure: drivers skip their poll steps
     virtual bool isPollingPaused() const = 0;

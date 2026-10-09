@@ -51,10 +51,20 @@ public:
         return statusString;
     }
 
+    bool setBeeperOk = true;
     bool setBeeper(bool enable) override {
+        if (!setBeeperOk) return false;
         beeperState = enable;
         data.set("ups.beeper.status", enable ? "enabled" : "disabled");
         return true;
+    }
+
+    // Writes requested by executeCommand(): {path, value}
+    bool writeOk = true;
+    std::vector<std::pair<std::string, uint32_t>> writes;
+    bool writeUsage(const HIDUsageDef& def, uint32_t value) override {
+        writes.push_back({def.path, value});
+        return writeOk;
     }
 
     bool isConnected() const override {
@@ -90,6 +100,9 @@ void setUp(void) {
     mockHost.connected = true;
     mockHost.stale = false;
     mockHost._mockUsages.clear();
+    mockHost.setBeeperOk = true;
+    mockHost.writeOk = true;
+    mockHost.writes.clear();
 
     NUTServerConfig config;
     config.username = "admin";
@@ -419,6 +432,87 @@ void test_cmddesc_known_and_unknown(void) {
     TEST_ASSERT_EQUAL_STRING("CMDDESC testups foo.bar \"Unavailable\"\n", printer.getOutput().c_str());
 }
 
+// US-057: test commands go through executeCommand() and write the Test usage
+void test_instcmd_battery_test_writes_value(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, mockHost.writes[0].second);
+
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.stop");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_UINT32(3, mockHost.writes.back().second);
+}
+
+void test_instcmd_not_in_catalog(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "INSTCMD testups test.panel.start");
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_driver_not_connected(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.connected = false;
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_write_failed(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+    mockHost.writeOk = false;
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.deep");
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_UINT32(2, mockHost.writes.back().second);
+}
+
+void test_instcmd_requires_login(void) {
+    server.setAuthenticated(0, false);
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+// Listed since US-056, executed only with US-058
+void test_instcmd_shutdown_not_executed_yet(void) {
+    server.setAuthenticated(0, true);
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057));
+    mockHost._mockUsages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeStartup", 0x00840056));
+
+    server.processCommand(printer, 0, "INSTCMD testups shutdown.return");
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+void test_instcmd_beeper_failure_and_toggle(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    mockHost.setBeeperOk = false;
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.enable");
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+}
+
 void test_get_upsdesc_and_numlogins(void) {
     server.processCommand(printer, 0, "GET UPSDESC testups");
     TEST_ASSERT_EQUAL_STRING("UPSDESC testups \"ESP32-S3 UPS Bridge\"\n",
@@ -532,6 +626,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
     RUN_TEST(test_cmddesc_known_and_unknown);
+    RUN_TEST(test_instcmd_battery_test_writes_value);
+    RUN_TEST(test_instcmd_not_in_catalog);
+    RUN_TEST(test_instcmd_driver_not_connected);
+    RUN_TEST(test_instcmd_write_failed);
+    RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_instcmd_shutdown_not_executed_yet);
+    RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     return UNITY_END();
 }
 #else
@@ -556,6 +657,13 @@ void setup() {
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
     RUN_TEST(test_cmddesc_known_and_unknown);
+    RUN_TEST(test_instcmd_battery_test_writes_value);
+    RUN_TEST(test_instcmd_not_in_catalog);
+    RUN_TEST(test_instcmd_driver_not_connected);
+    RUN_TEST(test_instcmd_write_failed);
+    RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_instcmd_shutdown_not_executed_yet);
+    RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     UNITY_END();
 }
 void loop() {}

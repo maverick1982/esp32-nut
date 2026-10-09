@@ -150,8 +150,23 @@ void test_beeper_dedicated_report_allowed_without_read_back() {
     TEST_ASSERT_TRUE(BeeperLogic::canWriteBack(shared, beeper, false, 0));
 }
 
+// writeField changes only the bits of the field (US-057)
+void test_write_field_unaligned_2bit() {
+    HIDUsageDef def;
+    def.report_id = 0;
+    def.bit_offset = 3;
+    def.bit_size = 2;
+
+    uint8_t buffer[4] = { 0xFF, 0xFF, 0, 0 };
+    size_t len = BeeperLogic::writeField(def, 2, buffer, 2);
+    TEST_ASSERT_EQUAL(2, len);
+    TEST_ASSERT_EQUAL_HEX8(0xF7, buffer[0]); // bits 3-4 = 0b10
+    TEST_ASSERT_EQUAL_HEX8(0xFF, buffer[1]);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_write_field_unaligned_2bit);
     RUN_TEST(test_beeper_1bit_without_report_id);
     RUN_TEST(test_beeper_1bit_with_report_id);
     RUN_TEST(test_beeper_8bit_cyberpower);

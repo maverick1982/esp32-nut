@@ -14,6 +14,8 @@ struct UPSCommandInfo {
     bool destructive;
 };
 
+enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED };
+
 namespace CommandCatalog {
 
 inline const UPSCommandInfo* table(size_t& count) {
@@ -50,21 +52,52 @@ inline const UPSCommandInfo* find(const char* name) {
     return nullptr;
 }
 
-// True when a FEATURE usage matches one of the standard paths or, for the APC
-// vendor usages (0xff86xxxx, not named by NUTUsages.h), one of the usage codes.
-inline bool hasFeature(const std::vector<HIDUsageDef>& usages,
-                       const char* const* paths, size_t n_paths,
-                       const uint32_t* codes, size_t n_codes) {
-    for (const auto& u : usages) {
-        if (u.report_type != 0x03) continue;
-        for (size_t i = 0; i < n_paths; i++) {
-            if (strcmp(u.path, paths[i]) == 0) return true;
-        }
-        for (size_t i = 0; i < n_codes; i++) {
-            if (u.usage == codes[i]) return true;
+// HID usages that realise a group of commands: standard paths, tried in order, and
+// APC vendor usage codes (0xff86xxxx, not named by NUTUsages.h, so matched by code)
+struct UsageGroup {
+    const char* const* paths;
+    size_t n_paths;
+    const uint32_t* codes;
+    size_t n_codes;
+};
+
+static const char* const kTestPaths[] = {
+    "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test" };
+static const uint32_t kPanelCodes[] = { 0xff860072 };     // APCPanelTest
+static const char* const kShutdownPaths[] = {
+    "UPS.PowerSummary.DelayBeforeShutdown", "UPS.Output.DelayBeforeShutdown" };
+static const uint32_t kShutdownCodes[] = { 0xff86007d };  // APCDelayBeforeShutdown
+static const char* const kStartupPaths[] = {
+    "UPS.PowerSummary.DelayBeforeStartup", "UPS.Output.DelayBeforeStartup" };
+static const uint32_t kStartupCodes[] = { 0xff86007e };   // APCDelayBeforeStartup
+static const char* const kRebootPaths[] = {
+    "UPS.PowerSummary.DelayBeforeReboot", "UPS.Output.DelayBeforeReboot" };
+static const uint32_t kRebootCodes[] = { 0xff86007c };    // APCDelayBeforeReboot
+
+static const UsageGroup kTest     = { kTestPaths, 3, nullptr, 0 };
+static const UsageGroup kPanel    = { nullptr, 0, kPanelCodes, 1 };
+static const UsageGroup kShutdown = { kShutdownPaths, 2, kShutdownCodes, 1 };
+static const UsageGroup kStartup  = { kStartupPaths, 2, kStartupCodes, 1 };
+static const UsageGroup kReboot   = { kRebootPaths, 2, kRebootCodes, 1 };
+
+// First FEATURE usage of the group, paths in the group's order before the codes.
+// Only FEATURE counts: some APC declare UPS.Battery.Test as INPUT as well.
+inline const HIDUsageDef* findFeature(const std::vector<HIDUsageDef>& usages, const UsageGroup& g) {
+    for (size_t i = 0; i < g.n_paths; i++) {
+        for (const auto& u : usages) {
+            if (u.report_type == 0x03 && strcmp(u.path, g.paths[i]) == 0) return &u;
         }
     }
-    return false;
+    for (size_t i = 0; i < g.n_codes; i++) {
+        for (const auto& u : usages) {
+            if (u.report_type == 0x03 && u.usage == g.codes[i]) return &u;
+        }
+    }
+    return nullptr;
+}
+
+inline bool hasFeature(const std::vector<HIDUsageDef>& usages, const UsageGroup& g) {
+    return findFeature(usages, g) != nullptr;
 }
 
 /**
@@ -76,24 +109,11 @@ inline bool hasFeature(const std::vector<HIDUsageDef>& usages,
  * ups.beeper.status).
  */
 inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available) {
-    static const char* const test_paths[] = {
-        "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test" };
-    static const uint32_t panel_codes[] = { 0xff860072 };  // APCPanelTest
-    static const char* const shutdown_paths[] = {
-        "UPS.PowerSummary.DelayBeforeShutdown", "UPS.Output.DelayBeforeShutdown" };
-    static const uint32_t shutdown_codes[] = { 0xff86007d };  // APCDelayBeforeShutdown
-    static const char* const startup_paths[] = {
-        "UPS.PowerSummary.DelayBeforeStartup", "UPS.Output.DelayBeforeStartup" };
-    static const uint32_t startup_codes[] = { 0xff86007e };  // APCDelayBeforeStartup
-    static const char* const reboot_paths[] = {
-        "UPS.PowerSummary.DelayBeforeReboot", "UPS.Output.DelayBeforeReboot" };
-    static const uint32_t reboot_codes[] = { 0xff86007c };  // APCDelayBeforeReboot
-
-    const bool test = hasFeature(usages, test_paths, 3, nullptr, 0);
-    const bool panel = hasFeature(usages, nullptr, 0, panel_codes, 1);
-    const bool shutdown = hasFeature(usages, shutdown_paths, 2, shutdown_codes, 1);
-    const bool startup = hasFeature(usages, startup_paths, 2, startup_codes, 1);
-    const bool reboot = hasFeature(usages, reboot_paths, 2, reboot_codes, 1);
+    const bool test = hasFeature(usages, kTest);
+    const bool panel = hasFeature(usages, kPanel);
+    const bool shutdown = hasFeature(usages, kShutdown);
+    const bool startup = hasFeature(usages, kStartup);
+    const bool reboot = hasFeature(usages, kReboot);
 
     std::vector<const UPSCommandInfo*> result;
     size_t count;
@@ -113,6 +133,27 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
         if (available) result.push_back(&commands[i]);
     }
     return result;
+}
+
+/**
+ * Usage and value a test command writes: Test takes 1 = quick, 2 = deep, 3 = abort
+ * (test_write_info in usbhid-ups.c), APCPanelTest 1 = start, 0 = stop (apc-hid.c).
+ * False for the beeper (written by setBeeper()), the load and shutdown commands
+ * (not executed yet) and unknown names or usages.
+ */
+inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value) {
+    if (!name) return false;
+    const UsageGroup* group = nullptr;
+    if (strcmp(name, "test.battery.start.quick") == 0) { group = &kTest; value = 1; }
+    else if (strcmp(name, "test.battery.start.deep") == 0) { group = &kTest; value = 2; }
+    else if (strcmp(name, "test.battery.stop") == 0) { group = &kTest; value = 3; }
+    else if (strcmp(name, "test.panel.start") == 0) { group = &kPanel; value = 1; }
+    else if (strcmp(name, "test.panel.stop") == 0) { group = &kPanel; value = 0; }
+    if (!group) return false;
+    const HIDUsageDef* found = findFeature(usages, *group);
+    if (!found) return false;
+    def = *found;
+    return true;
 }
 
 } // namespace CommandCatalog

@@ -83,6 +83,8 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
+    bool writeUsage(const HIDUsageDef& def, uint32_t value) override;
+    CommandResult executeCommand(const char* name) override;
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
@@ -149,6 +151,7 @@ private:
     void requestRestart(const char* why);
     void logStats(uint32_t now);
     bool setBeeperLocked(bool enable); // _op_mutex held
+    bool writeUsageLocked(const HIDUsageDef& def, uint32_t value); // _op_mutex held
     void log(const char* level, const char* fmt, ...) const;
 
     QueueHandle_t _event_queue;

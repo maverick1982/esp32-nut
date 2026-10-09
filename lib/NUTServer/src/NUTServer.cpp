@@ -383,34 +383,17 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
 
-        if (cmdName == "beeper.enable") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                _usb_ups->setBeeper(true);
-                client.print("OK\n");
-            }
-            return;
-        } else if (cmdName == "beeper.disable") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                _usb_ups->setBeeper(false);
-                client.print("OK\n");
-            }
-            return;
-        } else if (cmdName == "beeper.toggle") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                // Read first: the data lock must not be held across setBeeper() (USBHostUPS lock order)
-                bool enabled = _usb_ups->getUPSData()->getBool("ups.beeper.status");
-                _usb_ups->setBeeper(!enabled);
-                client.print("OK\n");
-            }
+        if (!_usb_ups) {
+            client.print("ERR DRIVER-NOT-CONNECTED\n");
             return;
         }
-        client.print("ERR CMD-NOT-SUPPORTED\n");
+        // An optional value (tokens[3]) is only used by the delay commands (US-058)
+        switch (_usb_ups->executeCommand(cmdName.c_str())) {
+        case CommandResult::OK:            client.print("OK\n"); break;
+        case CommandResult::NOT_SUPPORTED: client.print("ERR CMD-NOT-SUPPORTED\n"); break;
+        case CommandResult::NOT_CONNECTED: client.print("ERR DRIVER-NOT-CONNECTED\n"); break;
+        case CommandResult::FAILED:        client.print("ERR INSTCMD-FAILED\n"); break;
+        }
         return;
     }
 

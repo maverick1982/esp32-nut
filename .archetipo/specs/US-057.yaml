@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 3
-status: TODO
+status: REVIEW
 body: |
   #### US-057: Esecuzione via NUT dei comandi di test batteria e test pannello
 
@@ -31,3 +31,9 @@ body: |
 history:
   - status: TODO
     at: "2026-10-09T13:44:12Z"
+  - status: PLANNED
+    at: "2026-10-09T14:17:27Z"
+  - status: IN PROGRESS
+    at: "2026-10-09T14:21:31Z"
+  - status: REVIEW
+    at: "2026-10-09T14:32:18Z"
