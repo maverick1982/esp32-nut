@@ -74,9 +74,10 @@ public:
             return setBeeper(strcmp(name, "beeper.enable") == 0) ? CommandResult::OK : CommandResult::FAILED;
         }
         if (strcmp(name, "beeper.toggle") == 0) {
-            // Read first: the data lock must not be held across setBeeper()
-            bool enabled = getUPSData()->getBool("ups.beeper.status");
-            return setBeeper(!enabled) ? CommandResult::OK : CommandResult::FAILED;
+            // Read first: the data lock must not be held across setBeeper().
+            // A muted beeper is not disabled: toggling it disables it.
+            bool disabled = getUPSData()->get("ups.beeper.status") == "disabled";
+            return setBeeper(disabled) ? CommandResult::OK : CommandResult::FAILED;
         }
 
         HIDUsageDef def;

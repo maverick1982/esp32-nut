@@ -18,7 +18,8 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
-    String getActiveBeeperPath() const override { return ""; }
+    String activeBeeper;
+    String getActiveBeeperPath() const override { return activeBeeper; }
     uint32_t getQuirks() const override { return 0; }
     bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t, uint8_t, uint16_t) override { return true; }
@@ -45,6 +46,7 @@ static void addUsage(const char* path, uint8_t report_id, uint8_t report_type,
 void setUp(void) {
     ups_data = UPSData();
     mockHost._usages.clear();
+    mockHost.activeBeeper = "";
     driver.setup();
 }
 
@@ -155,6 +157,24 @@ void test_test_result_from_output_test(void) {
     TEST_ASSERT_EQUAL_STRING("Done and passed", ups_data.get("ups.test.result").c_str());
 }
 
+// AudibleAlarmControl 3 is "muted", as beeper_info in usbhid-ups
+void test_beeper_status_muted(void) {
+    addUsage("UPS.PowerSummary.AudibleAlarmControl", 0x18, 3, 0, 8);
+    mockHost.activeBeeper = "UPS.PowerSummary.AudibleAlarmControl";
+
+    uint8_t muted[] = { 0x18, 3 };
+    driver.decodeReport(&mockHost, 0x18, 3, muted, sizeof(muted), ups_data);
+    TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
+
+    uint8_t enabled[] = { 0x18, 2 };
+    driver.decodeReport(&mockHost, 0x18, 3, enabled, sizeof(enabled), ups_data);
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+
+    uint8_t disabled[] = { 0x18, 1 };
+    driver.decodeReport(&mockHost, 0x18, 3, disabled, sizeof(disabled), ups_data);
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -167,6 +187,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_test_result_decoded);
     RUN_TEST(test_test_result_unknown_value_ignored);
     RUN_TEST(test_test_result_from_output_test);
+    RUN_TEST(test_beeper_status_muted);
     return UNITY_END();
 }
 #else
@@ -180,6 +201,7 @@ void setup() {
     RUN_TEST(test_test_result_decoded);
     RUN_TEST(test_test_result_unknown_value_ignored);
     RUN_TEST(test_test_result_from_output_test);
+    RUN_TEST(test_beeper_status_muted);
     UNITY_END();
 }
 void loop() {}

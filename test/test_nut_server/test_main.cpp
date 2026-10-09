@@ -513,6 +513,34 @@ void test_instcmd_beeper_failure_and_toggle(void) {
     TEST_ASSERT_FALSE(mockHost.beeperState);
 }
 
+// beeper.mute writes 3 on the beeper field; toggling a muted beeper disables it
+void test_instcmd_beeper_mute_and_toggle_from_muted(void) {
+    server.setAuthenticated(0, true);
+    HIDUsageDef beeper = featureUsage("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a);
+    beeper.bit_size = 8;
+    beeper.logical_min = 1;
+    beeper.logical_max = 3;
+    mockHost._mockUsages.push_back(beeper);
+    mockHost.data.set("ups.beeper.status", "enabled");
+
+    server.processCommand(printer, 0, "INSTCMD testups beeper.mute");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(3, mockHost.writes[0].second);
+
+    mockHost.data.set("ups.beeper.status", "muted");
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD testups beeper.toggle");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+}
+
 void test_get_upsdesc_and_numlogins(void) {
     server.processCommand(printer, 0, "GET UPSDESC testups");
     TEST_ASSERT_EQUAL_STRING("UPSDESC testups \"ESP32-S3 UPS Bridge\"\n",
@@ -633,6 +661,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_instcmd_requires_login);
     RUN_TEST(test_instcmd_shutdown_not_executed_yet);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
+    RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
     return UNITY_END();
 }
 #else
@@ -664,6 +693,7 @@ void setup() {
     RUN_TEST(test_instcmd_requires_login);
     RUN_TEST(test_instcmd_shutdown_not_executed_yet);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
+    RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
     UNITY_END();
 }
 void loop() {}

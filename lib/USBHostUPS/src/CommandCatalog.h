@@ -23,6 +23,7 @@ inline const UPSCommandInfo* table(size_t& count) {
         { "beeper.enable",            "Enable the UPS beeper",                             false },
         { "beeper.disable",           "Disable the UPS beeper",                            false },
         { "beeper.toggle",            "Toggle the UPS beeper",                             false },
+        { "beeper.mute",              "Temporarily mute the UPS beeper",                   false },
         { "test.battery.start.quick", "Start a quick battery test",                        false },
         { "test.battery.start.deep",  "Start a deep battery test",                         false },
         { "test.battery.stop",        "Stop the battery test",                             false },
@@ -100,6 +101,29 @@ inline bool hasFeature(const std::vector<HIDUsageDef>& usages, const UsageGroup&
     return findFeature(usages, g) != nullptr;
 }
 
+// Beeper field the host drives: first AudibleAlarmControl in descriptor order, as
+// USBHostUPS::getActiveBeeperPath() picks it
+inline const HIDUsageDef* activeBeeper(const std::vector<HIDUsageDef>& usages) {
+    for (const auto& u : usages) {
+        if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 ||
+            strcmp(u.path, "UPS.BatterySystem.Battery.AudibleAlarmControl") == 0 ||
+            strcmp(u.path, "UPS.AudibleAlarmControl") == 0) {
+            return &u;
+        }
+    }
+    return nullptr;
+}
+
+// beeper.mute writes 3 (beeper_info "muted" in usbhid-ups): it needs a FEATURE field
+// of at least 2 bits whose declared logical range, if any, reaches 3. A 1-bit beeper
+// only knows on and off.
+inline const HIDUsageDef* muteField(const std::vector<HIDUsageDef>& usages) {
+    const HIDUsageDef* b = activeBeeper(usages);
+    if (!b || b->report_type != 0x03 || b->bit_size < 2) return nullptr;
+    bool range_declared = b->logical_max > b->logical_min;
+    return (!range_declared || b->logical_max >= 3) ? b : nullptr;
+}
+
 /**
  * Commands the device supports, in table order. The command -> HID path mapping
  * follows usbhid-ups (the nut_repo/drivers/<brand>-hid.c tables) and the semantics of its
@@ -121,7 +145,8 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
     for (size_t i = 0; i < count; i++) {
         const char* n = commands[i].name;
         bool available = false;
-        if (strncmp(n, "beeper.", 7) == 0) available = beeper_available;
+        if (strcmp(n, "beeper.mute") == 0) available = beeper_available && muteField(usages);
+        else if (strncmp(n, "beeper.", 7) == 0) available = beeper_available;
         else if (strncmp(n, "test.battery.", 13) == 0) available = test;
         else if (strncmp(n, "test.panel.", 11) == 0) available = panel;
         else if (strcmp(n, "load.off") == 0 || strcmp(n, "load.off.delay") == 0 ||
@@ -137,12 +162,20 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
 
 /**
  * Usage and value a test command writes: Test takes 1 = quick, 2 = deep, 3 = abort
- * (test_write_info in usbhid-ups.c), APCPanelTest 1 = start, 0 = stop (apc-hid.c).
- * False for the beeper (written by setBeeper()), the load and shutdown commands
+ * (test_write_info in usbhid-ups.c), APCPanelTest 1 = start, 0 = stop (apc-hid.c),
+ * beeper.mute 3 on the beeper field (mge-hid.c, apc-hid.c, cps-hid.c).
+ * False for the other beeper commands (written by setBeeper()), the load and shutdown commands
  * (not executed yet) and unknown names or usages.
  */
 inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value) {
     if (!name) return false;
+    if (strcmp(name, "beeper.mute") == 0) {
+        const HIDUsageDef* b = muteField(usages);
+        if (!b) return false;
+        def = *b;
+        value = 3;
+        return true;
+    }
     const UsageGroup* group = nullptr;
     if (strcmp(name, "test.battery.start.quick") == 0) { group = &kTest; value = 1; }
     else if (strcmp(name, "test.battery.start.deep") == 0) { group = &kTest; value = 2; }

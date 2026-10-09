@@ -2328,11 +2328,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     beeperActions.style.display = 'flex';
                     if (beeperToggle && beeperState) {
                         beeperToggle.disabled = false;
-                        const isEnabled = data['ups.beeper.status'] === 'enabled';
+                        // A muted beeper is still on: the switch disables it
+                        const isMuted = data['ups.beeper.status'] === 'muted';
+                        const isEnabled = data['ups.beeper.status'] !== 'disabled';
                         if (beeperToggle.checked !== isEnabled) {
                             beeperToggle.checked = isEnabled;
                         }
-                        beeperState.textContent = isEnabled ? 'Enabled' : 'Disabled';
+                        beeperState.textContent = isMuted ? 'Muted' : (isEnabled ? 'Enabled' : 'Disabled');
                         beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
                     }
                 } else {
