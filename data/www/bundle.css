@@ -1470,6 +1470,7 @@ input[readonly] {
     font-size: 0.78rem;
 }
 .cmd-group-note svg { width: 14px; height: 14px; flex-shrink: 0; }
+.cmd-group-note[hidden] { display: none; }
 
 /* Power control: hazard stripe on the left edge, dimmed rows */
 .cmd-group.locked { border-color: rgba(255, 184, 0, 0.25); }
@@ -1700,6 +1701,27 @@ body.auth-page {
 }
 .auth-form .input-wrapper input { padding-right: 2.75rem; }
 
+/* US-062: "Remember me" checkbox, same mono label style as the fields */
+.auth-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    align-self: flex-start;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    cursor: pointer;
+    user-select: none;
+}
+.auth-check input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.auth-check:hover { color: var(--text-primary); }
+
 /* Inline error / notice above the fields */
 .auth-alert {
     display: flex;
@@ -1789,6 +1811,8 @@ body.auth-page {
     color: var(--text-secondary);
 }
 .sidebar-session[hidden] { display: none; }
+/* US-062: two buttons (Log out, Log out of all devices) wrap under the user */
+.sidebar-session { flex-wrap: wrap; row-gap: 0.5rem; }
 .session-user {
     display: flex;
     align-items: center;
@@ -1814,6 +1838,9 @@ body.auth-page {
     margin-left: auto;
 }
 .btn-logout svg { width: 14px; height: 14px; }
+.btn-logout-all { margin-left: 0; }
+/* Logout-all error: full row under the buttons */
+.sidebar-session .auth-alert { flex-basis: 100%; }
 .btn-logout:hover {
     border-color: var(--danger);
     color: var(--danger);

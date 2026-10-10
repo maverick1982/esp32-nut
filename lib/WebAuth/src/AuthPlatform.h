@@ -14,6 +14,13 @@ struct CredentialRecord {
     uint32_t iterations;
 };
 
+// Sessione persistente ("Remember me", ADR 0009): solo SHA-256 del token e un
+// numero di sequenza monotono che ne indica l'età (la scheda non ha orologio)
+struct PersistentSession {
+    uint8_t hash[32];
+    uint32_t seq;
+};
+
 // Primitive crittografiche fornite dalla piattaforma (mbedTLS/esp_random sul device)
 class IAuthCrypto {
 public:
@@ -25,13 +32,17 @@ public:
     virtual void randomBytes(uint8_t* buf, size_t len) = 0;
 };
 
-// Archivio persistente delle credenziali (NVS sul device)
+// Archivio persistente delle credenziali e delle sessioni persistenti (NVS sul device)
 class IAuthStorage {
 public:
     virtual ~IAuthStorage() = default;
     // false se non ci sono credenziali salvate
     virtual bool loadCredentials(CredentialRecord& record) = 0;
     virtual bool saveCredentials(const CredentialRecord& record) = 0;
+    // Sessioni persistenti: al massimo max voci in out; false se non leggibili
+    virtual bool loadSessions(PersistentSession* out, size_t max, size_t& count) = 0;
+    // Sostituisce l'intero insieme salvato (count = 0 lo svuota)
+    virtual bool saveSessions(const PersistentSession* in, size_t count) = 0;
 };
 
 #endif

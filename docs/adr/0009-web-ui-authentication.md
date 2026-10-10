@@ -110,7 +110,7 @@ Chosen options: **P3**, **S2** and **T2**.
 * `POST /api/auth/logout` (current session). Public and idempotent: it removes the session named by the cookie, if any, and always answers 200 with the clearing cookie, so an already expired session can still log out cleanly. It cannot affect another session, because it only acts on the caller's own cookie (`SameSite=Strict`, JSON content type required).
 
 **Authenticated routes**
-* `POST /api/auth/logout-all`.
+* `POST /api/auth/logout-all`. It needs a valid session and is refused with 403 in AP mode, where sessions are not validated.
 
 **`POST /api/auth/credentials` `{current_password?, username, password}`**
 This one endpoint serves PDR D3 and D5:

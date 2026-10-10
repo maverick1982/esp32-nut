@@ -43,7 +43,7 @@
         } catch (e) {
             // empty or non-JSON body: the status code is enough
         }
-        return { status: res.status, data: data || {} };
+        return { status: res.status, data: data || {}, headers: res.headers };
     }
 
     // ---------- Status ----------
@@ -70,8 +70,41 @@
         $('signin-error').hidden = false;
     }
 
+    // US-062: 429 after too many failed attempts. The wait comes from the body
+    // (retry_after, seconds) or from the Retry-After header; "Sign in" stays
+    // disabled while the countdown runs.
+    let throttleTimer = null;
+
+    function retryAfterSeconds(result) {
+        let n = Number(result.data.retry_after);
+        if (!Number.isFinite(n) || n <= 0) {
+            n = Number(result.headers && result.headers.get('Retry-After'));
+        }
+        return Number.isFinite(n) && n > 0 ? Math.ceil(n) : 1;
+    }
+
+    function startThrottle(seconds) {
+        const btn = $('btn-signin');
+        let left = seconds;
+        if (throttleTimer) clearInterval(throttleTimer);
+        btn.disabled = true;
+        showSigninError(`Too many attempts. Try again in ${left} s`);
+        throttleTimer = setInterval(() => {
+            left--;
+            if (left > 0) {
+                $('signin-error-text').textContent = `Too many attempts. Try again in ${left} s`;
+                return;
+            }
+            clearInterval(throttleTimer);
+            throttleTimer = null;
+            $('signin-error').hidden = true;
+            btn.disabled = false;
+        }, 1000);
+    }
+
     $('signin-form').addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (throttleTimer) return;
         const user = $('login-username');
         const pwd = $('login-password');
         if (!user.value) { user.focus(); return; }
@@ -83,7 +116,11 @@
         setBusy(btn, true, 'Signing in');
         let result;
         try {
-            result = await postJson('/api/auth/login', { username: user.value, password: pwd.value });
+            result = await postJson('/api/auth/login', {
+                username: user.value,
+                password: pwd.value,
+                remember: $('login-remember').checked === true
+            });
         } catch (err) {
             console.error('Login request failed:', err);
             setBusy(btn, false, 'Sign in');
@@ -99,6 +136,11 @@
             // No credentials on the device (e.g. reset meanwhile): first-use form
             resetCreate();
             showView('create');
+            return;
+        }
+        if (result.status === 429) {
+            startThrottle(retryAfterSeconds(result));
+            pwd.value = '';
             return;
         }
         // 401 and anything else: generic message, never which field is wrong

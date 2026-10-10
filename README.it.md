@@ -153,12 +153,14 @@ La Web UI è protetta da nome utente e password.
 - **Regole**: nome utente da 1 a 32 caratteri stampabili, password da 8 a 64 byte (da 8 a 64 caratteri ASCII semplici; lettere accentate ed emoji occupano 2-4 byte ciascuna). La password è salvata come hash PBKDF2-SHA256 con salt, mai in chiaro.
 - **Tutto richiede il login**: ogni pagina e ogni API, compreso l'aggiornamento firmware OTA.
 - **Sessione**: termina dopo 30 minuti senza richieste (un'interfaccia aperta continua ad aggiornarsi, quindi resti connesso finché è aperta) e a ogni riavvio. Per uscire usa il pulsante **Log out** nella barra laterale.
+- **Remember me**: se spunti la casella al login, la sessione dura 30 giorni e sopravvive a riavvii e aggiornamenti firmware. Al massimo 8 dispositivi possono essere ricordati: il login su un 9° disconnette il più vecchio.
+- **Log out of all devices**: il pulsante nella barra laterale chiude tutte le sessioni, comprese quelle ricordate.
+- **Password sbagliate**: dopo 5 password sbagliate di fila, ogni tentativo successivo deve attendere 1 s, poi 2, 4… fino a 60 s. Nessun blocco permanente, e intanto NUT continua a funzionare.
+- **Comandi di spegnimento**: i comandi di carico e spegnimento (`load.off`, `shutdown.*`, …) si eseguono dalla pagina **UPS Commands** dopo una conferma. In modalità Access Point restano bloccati (solo via NUT).
 - **Separate da NUT**: le credenziali della Web UI sono indipendenti da quelle NUT (scheda NUT), che continuano a funzionare come prima per Home Assistant, PeaNUT, `upscmd`, ecc.
 - **Modalità Access Point** (doppio reset entro 3 secondi): la Web UI è accessibile senza login, come prima.
 - ⚠️ **HTTP in chiaro**: la Web UI è servita in HTTP, quindi le password viaggiano non cifrate sulla rete. Usala su una rete locale fidata e non riutilizzare una password usata altrove.
 - **Password dimenticata**: il reset dalla modalità Access Point arriverà con un prossimo aggiornamento (US-063). Fino ad allora l'unica strada è un erase completo della flash, che cancella anche le impostazioni Wi-Fi e NUT.
-- I tentativi di login non sono ancora limitati (arriverà con US-062).
-
 ### 4. Utilizzo Quotidiano
 - Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.
 - **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).

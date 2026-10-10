@@ -1,0 +1,403 @@
+schema: archetipo/plan/v2
+spec_code: US-062
+body: |
+  ---
+  type: plan
+  title: "US-062: Remember me, logout da tutti i dispositivi, limite tentativi e comandi di spegnimento dalla Web UI — Piano di Implementazione"
+  description: "Piano di implementazione per US-062"
+  tags: [plan, implementation, US-062]
+  ---
+  # US-062: "Remember me", logout da tutti i dispositivi, limite tentativi e comandi di spegnimento dalla Web UI — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-10
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** HIGH | **Punti:** 5 | **Bloccata da:** US-061 (REVIEW, già committata)
+
+  Riferimenti vincolanti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D2, D8, D9) e [ADR 0009](docs/adr/0009-web-ui-authentication.md). Si estende quanto fatto in US-061 (`lib/WebAuth`, `src/network/auth_platform.*`, `src/network/web_config_server.cpp`, `data/www/login.*`, `bundle.js`).
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Tutta la logica nuova resta pura in `lib/WebAuth` e `lib/WebApi`, testata in nativo; il firmware aggiunge solo lo storage NVS delle sessioni persistenti, una rotta e il passaggio della modalità AP/STA alle API dei comandi.
+
+  ### Sessioni persistenti ("Remember me")
+
+  - `AuthPlatform.h`: `struct PersistentSession { uint8_t hash[32]; uint32_t seq; }` e due metodi nuovi in `IAuthStorage`: `bool loadSessions(PersistentSession* out, size_t max, size_t& count)` e `bool saveSessions(const PersistentSession* in, size_t count)`.
+  - `SessionTable`: costruttore `(IAuthCrypto&, IAuthStorage&)` e `void begin()` che carica le persistenti. Oltre agli 8 slot volatili ha 8 slot persistenti `{hash, seq, used}`. `create(now, bool persistent = false)`: le persistenti non hanno scadenza per inattività lato server (i 30 giorni li applica il browser con `Max-Age`, ADR 0009); se i loro slot sono pieni si sostituisce quella con `seq` più basso, cioè la più vecchia (criterio della spec), e `seq` è un contatore monotono (`max(seq caricati) + 1`), perché la scheda non ha orologio. `validate` scandisce tutti i 16 slot con confronto in tempo costante; per le volatili resta la scadenza di 30 minuti. `remove` e `clear` toccano entrambe le tabelle.
+  - Scritture su NVS **solo** in `create(persistent)`, `remove` di una persistente e `clear` (ADR 0009: mai sulle richieste ordinarie). Il token in chiaro non viene mai salvato: in NVS va solo `SHA-256(token)`.
+  - `NvsAuthStorage` (namespace `web_auth`, chiave `sessions`): blob di `count * 36` byte (hash + seq little-endian); un blob con lunghezza non multipla di 36 o oltre 8 voci viene ignorato come vuoto.
+  - `AuthService::login` legge il campo opzionale `remember` (bool; assente o non bool = false). Con `remember` il cookie ha anche `Max-Age=2592000`; senza, resta il cookie di sessione di US-061.
+
+  ### Logout da tutti i dispositivi
+
+  - `AuthService::logoutAll()`: `sessions.clear()` (volatili e persistenti, blob NVS svuotato) e cookie di cancellazione. Rotta `POST /api/auth/logout-all`, **autenticata** (non è nella lista pubblica di `AuthPolicy`, quindi nessuna modifica alla policy), con `requireJson()`.
+
+  ### Limite ai tentativi falliti
+
+  - Nuova classe pura `LoginThrottle` (`lib/WebAuth/src/LoginThrottle.h/.cpp`): contatore globale dei fallimenti consecutivi. `uint32_t retryAfterMs(uint32_t now)` restituisce 0 se si può tentare; `recordFailure(now)`, `recordSuccess()`. Dopo il 5° fallimento consecutivo l'attesa è `min(1000 << (failures - 5), 60000)` ms dall'ultimo fallimento: 1 s, 2 s, 4 s … fino a 60 s. Aritmetica `uint32_t` sicura al rollover. Un tentativo rifiutato con 429 non conta come fallimento e non esegue il PBKDF2.
+  - `AuthService` riceve `LoginThrottle&`. Ordine in `login`: body non valido → 400; non configurato → 409; throttle attivo → **429** `{"error":"too_many_attempts","retry_after":N}` (N in secondi, arrotondato per eccesso); credenziali errate → `recordFailure` e 401; ok → `recordSuccess` e 200. `AuthResponse` ottiene `uint32_t retry_after_s` (0 = assente) e `WebConfigServer::sendAuth` aggiunge l'header `Retry-After`. Nessuna `delay()`: il loop (e quindi NUT) non si ferma mai.
+  - La stessa istanza servirà a US-063 per la password attuale.
+
+  ### Comandi di spegnimento dalla Web UI
+
+  - `WebApiJson::runUpsCommand(usb_ups, body, response, bool allow_destructive)` e `generateUpsCommands(usb_ups, bool allow_destructive)`. Con `allow_destructive` falso il comportamento è quello di oggi (403 prima di qualsiasi chiamata all'host); con vero i comandi distruttivi passano a `executeCommand(name)` senza parametro, quindi `load.off.delay` usa `ups.delay.shutdown` come via NUT. Il catalogo aggiunge per ogni comando `"locked": destructive && !allow_destructive`.
+  - `WebConfigServer` passa `!is_ap_mode`: in STA il guard ha già verificato la sessione, in AP l'interfaccia è aperta e i distruttivi restano bloccati (PDR D7/D8).
+  - Il messaggio 403 diventa `Available via NUT only in Access Point mode`.
+
+  ### Frontend
+
+  - `login.html`/`login.js`: casella "Remember me" nel form "Sign in", inviata come `remember`. Su 429 messaggio `Too many attempts. Try again in N s` con conto alla rovescia e pulsante disabilitato fino a zero.
+  - Sidebar (`index.html`, `bundle.js`): accanto a "Log out" un pulsante "Log out of all devices" (`POST /api/auth/logout-all`, poi `/login`). Stesse regole di visibilità del pulsante Log out.
+  - Pagina "UPS Commands": un comando distruttivo con `locked !== false` resta col lucchetto (default prudente se il campo manca); altrimenti pulsante Run normale che prima chiede conferma con `window.confirm`: nome del comando e avviso `This command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.` Annullare non invia nulla. La classe `locked` del gruppo "Power control" è applicata solo se almeno un comando è bloccato. Nota del lucchetto: `Available via NUT only in Access Point mode`.
+  - Nessun mockup: sono un campo, un pulsante e una finestra di conferma nativa aggiunti a schermate esistenti (si può passare a una modale personalizzata in seguito).
+
+  ### Modifiche semantiche a test esistenti
+
+  La spec cambia il contratto di `/api/ups/command`: i test `test_web_api` sul 403 restano validi con `allow_destructive = false` e se ne aggiungono per il caso permesso; il test e2e "destructive commands … locked" di `e2e/ups-commands.spec.ts` diventa il caso AP (`locked: true`) con la nuova nota, e si aggiunge il caso sbloccato.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity per tutta la logica (`pio test -e native`), Playwright per i flussi della UI con API mockate, build del firmware (`pio run -e esp32-s3-standard`).
+
+  - **SessionTable persistenti**: sopravvivono a una nuova istanza sullo stesso storage; nessuna scadenza dopo 31 giorni simulati di `millis`; 9ª persistente sostituisce quella con `seq` minore anche dopo un ricaricamento; `remove` di una persistente aggiorna lo storage; `clear` svuota storage e RAM; le volatili non vengono mai salvate; conteggio delle scritture: zero sulle `validate`; nello storage solo hash, mai il token.
+  - **LoginThrottle**: 4 fallimenti senza attesa; dal 5° attese 1 s, 2 s, 4 s … con limite 60 s; `retryAfterMs` esatto ai bordi (999/1000 ms); successo azzera; rollover di `millis()`.
+  - **AuthService**: cookie con `Max-Age=2592000` solo con `remember: true`; `remember` non bool ignorato; 429 con `retry_after` e nessuna chiamata a `deriveKey` (contatore del crypto finto); 401 → 429 dopo il 5° errore; login corretto dopo l'attesa → 200 e contatore azzerato; `logoutAll` invalida volatili e persistenti.
+  - **WebApiJson**: con `allow_destructive` vero `shutdown.return` e `load.off.delay` arrivano all'host (scritture registrate dal mock), con falso 403 e zero chiamate; campo `locked` nel catalogo nei due casi.
+  - **Regressione**: tutte le suite native e la suite e2e completa verdi.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`e2e/`, helper `serveIndex`/`serveLogin`/`serveUpdatePage` in `e2e/support/webui.ts`)
+  **Video demo:** previsto (la Dimostrazione è filmabile: remember me, 429, conferma del comando); lo registra `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Remember me | L'utente spunta "Remember me" e accede: il POST contiene `remember: true` e si arriva a `/`. Senza spunta il body contiene `remember: false`. |
+  | Troppi tentativi | Il login risponde 429 con `retry_after: 3`: compare "Too many attempts. Try again in 3 s", il pulsante è disabilitato, il conto scende e alla fine il pulsante torna attivo. |
+  | Logout da tutti i dispositivi | Dalla sidebar "Log out of all devices" → un `POST /api/auth/logout-all` e redirect a `/login`; in AP il pulsante non c'è. |
+  | Comando di spegnimento | Catalogo con `shutdown.return` `locked: false`: click su Run → finestra di conferma con nome e avviso; Annulla → nessun POST; Conferma → `POST /api/ups/command` con `{name: "shutdown.return"}` e messaggio "Command sent". |
+  | Modalità AP | Catalogo con `locked: true`: lucchetto, nota "Available via NUT only in Access Point mode", nessun POST nemmeno con click forzato. |
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-10-10_
+tasks:
+  - id: TASK-01
+    title: Sessioni persistenti in SessionTable e storage delle sessioni
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiungere a `SessionTable` fino a 8 sessioni persistenti, salvate come hash tramite `IAuthStorage` (ADR 0009, PDR D2).
+
+      **Leggi:** `lib/WebAuth/src/AuthPlatform.h`, `lib/WebAuth/src/SessionTable.h/.cpp`, `lib/WebAuth/src/CredentialStore.h` (helper `constantTimeEquals`), sezione "Sessioni persistenti" del piano.
+
+      **Modifica:**
+      1. `AuthPlatform.h`: `struct PersistentSession { uint8_t hash[32]; uint32_t seq; };`; in `IAuthStorage` aggiungere `virtual bool loadSessions(PersistentSession* out, size_t max, size_t& count) = 0;` e `virtual bool saveSessions(const PersistentSession* in, size_t count) = 0;`.
+      2. `SessionTable`: costruttore `(IAuthCrypto&, IAuthStorage&)`; `static constexpr size_t kMaxPersistentSessions = 8`; `void begin()` carica le persistenti e imposta `next_seq_ = max(seq) + 1`; `String create(uint32_t now, bool persistent = false)`: se persistente usa uno slot persistente libero o sostituisce quello con `seq` minore, assegna `seq = next_seq_++` e chiama `saveSessions` con tutte le persistenti attive; `validate`: scansione completa di volatili e persistenti in tempo costante, le persistenti non scadono per inattività; `remove`: se il token era persistente salva lo storage; `clear`: svuota tutto e salva lo storage vuoto; `activeCount` conta entrambe; aggiungere `size_t persistentCount() const` per i test.
+      3. Le volatili restano identiche a US-061 (8 slot, 30 minuti, LRU).
+
+      **Vincoli:** nessuna scrittura sullo storage in `validate`; nello storage solo `SHA-256(token)`; nessuna dipendenza ESP.
+
+      **Verifica:** compila nella suite di TASK-02 (le chiamate esistenti `create(now)` restano valide grazie al default).
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/AuthPlatform.h — PersistentSession e metodi di storage
+      - lib/WebAuth/src/SessionTable.h — slot persistenti, begin, create(persistent)
+      - lib/WebAuth/src/SessionTable.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] Fino a 8 persistenti, sostituzione di quella con `seq` minore
+      - [ ] Persistenti senza scadenza per inattività, volatili invariate
+      - [ ] Storage scritto solo in create persistente, remove di persistente e clear
+      - [ ] Nello storage solo hash
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi delle sessioni persistenti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire le sessioni persistenti nella suite `test/test_web_auth`.
+
+      **Leggi:** `test/test_web_auth/test_main.cpp` (FakeCrypto, MemoryStorage), `lib/WebAuth/src/SessionTable.h`.
+
+      **Modifica:**
+      1. `MemoryStorage`: implementare `loadSessions`/`saveSessions` su un vettore in memoria con contatore `sessionSaves`. Aggiornare le costruzioni esistenti di `SessionTable` al nuovo costruttore (modifica meccanica).
+      2. Casi nuovi: persistente valida dopo `begin()` di una nuova istanza sullo stesso storage; valida a `now + 31 giorni` di millis; volatile non sopravvive a una nuova istanza; 9 persistenti → la prima creata non è più valida, le altre sì, anche dopo ricaricamento (seq continua); `remove` di una persistente → non valida dopo ricaricamento; `clear` → nessuna sessione e storage vuoto; `sessionSaves` non cambia dopo 100 `validate` e dopo la creazione di volatili; lo storage non contiene i byte del token.
+      3. I test esistenti di `SessionTable` devono restare verdi senza cambiare ciò che asseriscono.
+
+      **Verifica:** `pio test -e native -f test_web_auth`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — storage finto esteso e nuovi test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_auth` passa
+      - [ ] Coperti persistenza, assenza di scadenza, sostituzione della più vecchia, remove/clear, scritture solo quando previste
+    ref: TASK-02
+  - id: TASK-03
+    title: 'LoginThrottle e AuthService: remember, 429 e logout da tutti i dispositivi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** limite ai tentativi falliti senza bloccare il loop, cookie persistente e logout globale (PDR D2, D9).
+
+      **Leggi:** `lib/WebAuth/src/AuthService.h/.cpp`, sezioni "Limite ai tentativi falliti" e "Logout da tutti i dispositivi" del piano.
+
+      **Modifica:**
+      1. Nuovi `lib/WebAuth/src/LoginThrottle.h/.cpp`: `kFreeAttempts = 5`, `kBaseDelayMs = 1000`, `kMaxDelayMs = 60000`; `uint32_t retryAfterMs(uint32_t now) const` (0 se `failures_ < 5`, altrimenti `max(0, delay - (now - last_failure_ms_))` con `delay = min(1000 << (failures_ - 5), 60000)`, attenzione all'overflow dello shift: limitare l'esponente); `void recordFailure(uint32_t now)`; `void recordSuccess()`.
+      2. `AuthResponse`: campo `uint32_t retry_after_s = 0`.
+      3. `AuthService`: costruttore `(CredentialStore&, SessionTable&, LoginThrottle&)`. `parseCredentials` legge anche `remember` opzionale (bool; altrimenti false). `login`: 400 → 409 → se `retryAfterMs(now) > 0` 429 `{"error":"too_many_attempts","retry_after":N}` con `retry_after_s = N` (secondi per eccesso) senza chiamare `verify` → credenziali errate: `recordFailure(now)` e 401 → ok: `recordSuccess()`, `sessions.create(now, remember)` e cookie con `; Max-Age=2592000` se `remember`. Nuovo `AuthResponse logoutAll()`: `sessions.clear()`, 200 `{"success":true}` e cookie di cancellazione. Costante `kRememberMaxAgeS = 2592000`.
+
+      **Vincoli:** nessuna attesa bloccante; nessuna dipendenza ESP.
+
+      **Verifica:** compila nella suite di TASK-04.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/LoginThrottle.h — nuovo
+      - lib/WebAuth/src/LoginThrottle.cpp — nuovo
+      - lib/WebAuth/src/AuthService.h — throttle, remember, logoutAll, retry_after_s
+      - lib/WebAuth/src/AuthService.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] Attese 1, 2, 4 … 60 s dopo il 5° fallimento consecutivo, azzerate da un successo
+      - [ ] 429 senza PBKDF2 e con `retry_after`
+      - [ ] Cookie persistente solo con `remember: true`
+      - [ ] `logoutAll` chiude volatili e persistenti
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di LoginThrottle e delle nuove API di AuthService
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire throttle, remember e logout globale.
+
+      **Leggi:** `lib/WebAuth/src/LoginThrottle.h`, `lib/WebAuth/src/AuthService.h`, `test/test_web_auth/test_main.cpp`.
+
+      **Modifica:** aggiornare in modo meccanico la costruzione di `AuthService` nei test esistenti e aggiungere:
+      - `LoginThrottle`: dopo 4 fallimenti `retryAfterMs` = 0; dopo il 5° = 1000; a +999 ms = 1, a +1000 = 0; 6° fallimento → 2000; dopo 20 fallimenti l'attesa è 60000 (nessun overflow); `recordSuccess` → 0; rollover con fallimento a `0xFFFFFF00`.
+      - `AuthService`: `remember: true` → cookie contiene `Max-Age=2592000`; `remember` assente, false o stringa → nessun `Max-Age`; 5 login errati → 401, il 6° immediato → 429 con body `retry_after` e `retry_after_s` > 0 e il contatore `deriveKey` del FakeCrypto invariato; dopo l'attesa simulata login corretto → 200 e successivo errore di nuovo 401; `logoutAll` → la sessione volatile e una persistente non sono più valide.
+
+      **Verifica:** `pio test -e native -f test_web_auth`, poi `pio test -e native` completo.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — nuovi test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` passa per intero
+      - [ ] Coperti limiti del throttle, 429 senza PBKDF2, remember e logoutAll
+    ref: TASK-04
+  - id: TASK-05
+    title: Comandi distruttivi permessi in STA nelle API dei comandi
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le API `/api/ups/commands` e `/api/ups/command` permettono i comandi distruttivi quando il chiamante lo consente (STA autenticata) e li bloccano altrimenti (PDR D8).
+
+      **Leggi:** `lib/WebApi/src/WebApiJson.h/.cpp` (`generateUpsCommands`, `runUpsCommand`), sezione "Comandi di spegnimento dalla Web UI" del piano.
+
+      **Modifica:**
+      1. `generateUpsCommands(IUSBHostUPS* usb_ups, bool allow_destructive)`: per ogni comando aggiunge `"locked": destructive && !allow_destructive`.
+      2. `runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response, bool allow_destructive)`: il controllo `info->destructive` restituisce 403 solo se `!allow_destructive`, con body `{"error":"Available via NUT only in Access Point mode"}`; altrimenti si prosegue con l'ordine esistente (host nullo 503, poi `executeCommand(name)`).
+      3. Aggiornare i commenti che dicono "solo non distruttivi".
+
+      **Vincoli:** nessun parametro aggiuntivo inviato a `executeCommand` (il ritardo resta quello configurato); l'ordine dei controlli resta parte del contratto.
+
+      **Verifica:** compila nella suite di TASK-06.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — nuove firme
+      - lib/WebApi/src/WebApiJson.cpp — locked e allow_destructive
+
+      ## Criteri di Completamento
+      - [ ] Con `allow_destructive` falso: 403 prima di qualsiasi chiamata all'host, come oggi
+      - [ ] Con `allow_destructive` vero: i comandi distruttivi arrivano a `executeCommand`
+      - [ ] Il catalogo riporta `locked` per comando
+    ref: TASK-05
+  - id: TASK-06
+    title: Aggiornare i test di test_web_api al nuovo contratto dei comandi
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** adattare i test esistenti alle nuove firme e coprire il caso permesso. È una modifica semantica prevista dalla spec (i comandi distruttivi diventano eseguibili in STA).
+
+      **Leggi:** `test/test_web_api/test_main.cpp` (test `test_run_command_destructive_forbidden`, `test_run_command_shutdown_default_and_delay_forbidden`, `test_run_command_destructive_forbidden_null_host` e quelli del catalogo).
+
+      **Modifica:**
+      1. Le chiamate esistenti passano `false` (o `true` per i comandi non distruttivi, dove il risultato non cambia); i test del 403 restano con `false` e aggiornano il body atteso a `Available via NUT only in Access Point mode`.
+      2. Nuovi test: con `true`, `shutdown.return` → 200 e scritture registrate dal mock; `load.off.delay` → 200 usando il ritardo configurato (`ups.delay.shutdown` nel mock); `shutdown.default` → 200; host nullo con comando distruttivo e `true` → 503; catalogo con `false` → `locked: true` sui distruttivi e `false` sugli altri; con `true` → `locked: false` ovunque.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      **Bloccanti:** se un comando distruttivo non è risolvibile con le usage del mock, aggiungere le usage necessarie con l'helper `featureUsage` già presente.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — firme aggiornate e nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_api` passa
+      - [ ] Coperti 403 in AP, esecuzione in STA e il campo `locked`
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Firmware: storage NVS delle sessioni, rotta logout-all, Retry-After e modalità per i comandi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare le nuove funzioni al firmware.
+
+      **Leggi:** `src/network/auth_platform.h/.cpp`, `src/network/web_config_server.cpp`, `include/network/web_config_server.h`, ADR 0009.
+
+      **Modifica:**
+      1. `NvsAuthStorage::loadSessions/saveSessions`: namespace `web_auth`, chiave `sessions`, blob di `count * 36` byte (32 di hash + `seq` uint32 little-endian); lunghezza non multipla di 36 o più di `max` voci → `count = 0` e true; `saveSessions` con `count == 0` rimuove la chiave.
+      2. `WebConfigServer`: membro `LoginThrottle throttle`; `SessionTable sessions(auth_crypto, auth_storage)`; `AuthService auth(credentials, sessions, throttle)`; in `begin()` chiamare `sessions.begin()` dopo `credentials.begin()`.
+      3. `sendAuth`: se `res.retry_after_s > 0` aggiunge l'header `Retry-After`.
+      4. Rotta `POST /api/auth/logout-all` (guarded, `requireJson()`), log INFO `[AUTH] All sessions closed by '<username>'`. Log WARN quando il login risponde 429 (senza password).
+      5. `handleUpsCommands` e `handleUpsCommand` passano `!is_ap_mode` a `generateUpsCommands`/`runUpsCommand`. Log WARN dei comandi distruttivi eseguiti dalla Web UI con il nome del comando e lo username.
+
+      **Verifica:** `pio run -e esp32-s3-standard` compila; `pio test -e native` invariato.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - src/network/auth_platform.h — metodi delle sessioni
+      - src/network/auth_platform.cpp — blob NVS `sessions`
+      - src/network/web_config_server.cpp — throttle, logout-all, Retry-After, modalità ai comandi
+      - include/network/web_config_server.h — nuovi membri e handler
+
+      ## Criteri di Completamento
+      - [ ] Le sessioni persistenti sono salvate nel blob `sessions` e ricaricate all'avvio
+      - [ ] `POST /api/auth/logout-all` richiede sessione e JSON
+      - [ ] Il 429 porta l'header `Retry-After`
+      - [ ] In AP i comandi distruttivi rispondono 403, in STA vengono eseguiti
+      - [ ] `pio run -e esp32-s3-standard` compila
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Frontend: Remember me, attesa dopo troppi tentativi, logout globale e conferma dei comandi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere visibili in UI le funzioni della spec.
+
+      **Leggi:** `data/www/login.html`, `data/www/login.js`, `data/www/index.html` (sidebar `#sidebar-session`, gruppo `#cmd-group-power`), `data/www/bundle.js` (sezione US-059 dei comandi, logout di US-061), `data/www/bundle.css`, sezione "Frontend" del piano.
+
+      **Modifica:**
+      1. Login: casella "Remember me" nel form "Sign in" (stile coerente con i form esistenti), inviata come `remember` (bool). Risposta 429: alert `Too many attempts. Try again in N s` con N da `retry_after` (o dall'header `Retry-After`), conto alla rovescia ogni secondo, pulsante "Sign in" disabilitato fino a zero.
+      2. Sidebar: pulsante "Log out of all devices" vicino a "Log out", con la stessa visibilità; click → `POST /api/auth/logout-all` (`Content-Type: application/json`, body `{}`) → `location.replace('/login')`.
+      3. Comandi: `CMD_LOCK_NOTE = 'Available via NUT only in Access Point mode'`; `CMD_ERRORS[403]` uguale; `buildCommandRow` blocca un comando se `destructive && cmd.locked !== false`; un comando distruttivo non bloccato ha il pulsante Run normale e prima di `runCommand` chiede `window.confirm` con il testo `Run "<name>"?\n\nThis command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.`; annullando non invia nulla. Il gruppo "Power control" ha la classe `locked` solo se contiene almeno un comando bloccato (in `index.html` togliere la classe statica e gestirla in `renderCommands`).
+      4. Rigenerare gli asset con `python scripts/embed_web.py`.
+
+      **Verifica:** `python scripts/embed_web.py`; `npx playwright test` (atteso: falliscono solo i test di `ups-commands.spec.ts` sul lucchetto, aggiornati in TASK-09); `pio run -e esp32-s3-standard`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - data/www/login.html — casella Remember me
+      - data/www/login.js — remember e gestione del 429
+      - data/www/index.html — pulsante Log out of all devices, classe locked dinamica
+      - data/www/bundle.js — logout-all, comandi sbloccati con conferma
+      - data/www/bundle.css — stili dei nuovi elementi
+      - data/www/*_inlined.html, include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] "Remember me" inviato nel login
+      - [ ] Il 429 mostra l'attesa con conto alla rovescia
+      - [ ] "Log out of all devices" visibile solo dove lo è Log out
+      - [ ] Comandi distruttivi sbloccati chiedono conferma; bloccati con la nuova nota
+    ref: TASK-08
+  - id: TASK-09
+    title: Test e2e dei nuovi flussi e aggiornamento di ups-commands.spec.ts
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della strategia e2e.
+
+      **Leggi:** `e2e/README.md`, `e2e/support/webui.ts`, `e2e/auth.spec.ts`, `e2e/ups-commands.spec.ts`.
+
+      **Modifica:**
+      1. `e2e/auth.spec.ts`: Remember me (body con `remember: true` e `false`); 429 con `retry_after: 3` (messaggio, pulsante disabilitato, conto che scende, pulsante riattivato: attese con `expect` e timeout adeguato, niente `waitForTimeout`); "Log out of all devices" (un POST a `/api/auth/logout-all`, redirect a `/login`) e assenza del pulsante in AP.
+      2. `e2e/ups-commands.spec.ts`: il test del lucchetto usa `locked: true` e la nuova nota (modifica semantica prevista dalla spec); nuovo test con `shutdown.return` `locked: false`: `page.once('dialog')` verifica che il messaggio contenga il nome e l'avviso, `dismiss` → nessun POST; `accept` → POST con `{name: "shutdown.return"}` e "Command sent".
+
+      **Verifica:** `npx playwright test` completo verde; `npx playwright test e2e/auth.spec.ts e2e/ups-commands.spec.ts --repeat-each 3` stabile.
+
+      **Bloccanti:** un bug reale della UI va segnalato secondo `e2e/README.md`, non nascosto adattando il test.
+
+      ## File Coinvolti
+      - e2e/auth.spec.ts — nuovi scenari
+      - e2e/ups-commands.spec.ts — lucchetto in AP e comando con conferma
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari della strategia e2e sono coperti
+      - [ ] `npx playwright test` passa per intero e `--repeat-each 3` è stabile
+    ref: TASK-09
+  - id: TASK-10
+    title: Documentazione e verifica finale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiornare la documentazione utente e verificare tutto.
+
+      **Leggi:** sezione "Web UI Login" di `README.md` e "Login alla Web UI" di `README.it.md`.
+
+      **Modifica:**
+      1. In entrambi i README: "Remember me" (30 giorni, sopravvive a riavvii e OTA, al massimo 8 dispositivi, il più vecchio viene disconnesso); "Log out of all devices"; dopo 5 password sbagliate attese crescenti da 1 a 60 s; i comandi di spegnimento si eseguono dalla pagina "UPS Commands" con conferma, tranne in modalità AP. Togliere la riga "tentativi non ancora limitati (US-062)".
+      2. `e2e/README.md` solo se servono nuove istruzioni.
+      3. Verifica finale: `pio test -e native`, `npx playwright test`, `pio run -e esp32-s3-standard`.
+
+      **Verifica:** i tre comandi passano.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - README.md — sezione login aggiornata
+      - README.it.md — stessa sezione in italiano
+
+      ## Criteri di Completamento
+      - [ ] I README descrivono remember me, logout globale, limite tentativi e comandi di spegnimento
+      - [ ] `pio test -e native`, `npx playwright test` e `pio run -e esp32-s3-standard` passano
+    ref: TASK-10

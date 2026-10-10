@@ -2,30 +2,38 @@
 #include <ArduinoJson.h>
 #include <string>
 
-AuthService::AuthService(CredentialStore& credentials, SessionTable& sessions)
-    : credentials_(credentials), sessions_(sessions) {}
+AuthService::AuthService(CredentialStore& credentials, SessionTable& sessions, LoginThrottle& throttle)
+    : credentials_(credentials), sessions_(sessions), throttle_(throttle) {}
 
-bool AuthService::parseCredentials(const String& body, String& username, String& password) {
+bool AuthService::parseCredentials(const String& body, String& username, String& password, bool& remember) {
+    remember = false;
     // Body lunghi rifiutati subito e filtro sui soli campi usati
     if (body.length() > kMaxBodyLength) return false;
     JsonDocument filter;
     filter["username"] = true;
     filter["password"] = true;
+    filter["remember"] = true;
     JsonDocument req;
     DeserializationError err = deserializeJson(req, body.c_str(), DeserializationOption::Filter(filter));
     if (err) return false;
     if (!req["username"].is<const char*>() || !req["password"].is<const char*>()) return false;
     username = req["username"].as<const char*>();
     password = req["password"].as<const char*>();
+    // Solo un vero booleano attiva il cookie persistente
+    remember = req["remember"].is<bool>() && req["remember"].as<bool>();
     return true;
 }
 
-String AuthService::sessionCookie(const String& token) {
+String AuthService::sessionCookie(const String& token, bool remember) {
     String cookie = kSessionCookie;
     cookie += "=";
     cookie += token;
     cookie += "; ";
     cookie += kCookieAttributes;
+    if (remember) {
+        cookie += "; Max-Age=";
+        cookie += String((unsigned long)kRememberMaxAgeS);
+    }
     return cookie;
 }
 
@@ -55,20 +63,40 @@ AuthResponse AuthService::error(int status, const char* code) {
 
 AuthResponse AuthService::login(const String& body, uint32_t now) {
     String username, password;
-    if (!parseCredentials(body, username, password)) return error(400, "invalid_request");
+    bool remember = false;
+    if (!parseCredentials(body, username, password, remember)) return error(400, "invalid_request");
     if (!credentials_.hasCredentials()) return error(409, "setup_required");
-    if (!credentials_.verify(username, password)) return error(401, "invalid_credentials");
+
+    // Throttle attivo: 429 senza PBKDF2 e senza contare un nuovo fallimento
+    uint32_t wait_ms = throttle_.retryAfterMs(now);
+    if (wait_ms > 0) {
+        uint32_t wait_s = wait_ms / 1000 + (wait_ms % 1000 ? 1 : 0);
+        AuthResponse res;
+        res.status = 429;
+        res.body = "{\"error\":\"too_many_attempts\",\"retry_after\":";
+        res.body += String((unsigned long)wait_s);
+        res.body += "}";
+        res.retry_after_s = wait_s;
+        return res;
+    }
+
+    if (!credentials_.verify(username, password)) {
+        throttle_.recordFailure(now);
+        return error(401, "invalid_credentials");
+    }
+    throttle_.recordSuccess();
 
     AuthResponse res;
     res.status = 200;
     res.body = successBody(credentials_.username());
-    res.set_cookie = sessionCookie(sessions_.create(now));
+    res.set_cookie = sessionCookie(sessions_.create(now, remember), remember);
     return res;
 }
 
 AuthResponse AuthService::createInitialCredentials(const String& body, uint32_t now) {
     String username, password;
-    if (!parseCredentials(body, username, password)) return error(400, "invalid_request");
+    bool remember = false;
+    if (!parseCredentials(body, username, password, remember)) return error(400, "invalid_request");
 
     switch (credentials_.create(username, password)) {
         case CredentialStore::CreateResult::OK:
@@ -109,7 +137,18 @@ AuthResponse AuthService::status(const String& token, bool ap_mode, uint32_t now
 }
 
 AuthResponse AuthService::logout(const String& token) {
+    // Idempotente: 200 anche se il salvataggio di una persistente fallisce
     if (token.length() > 0) sessions_.remove(token);
+    AuthResponse res;
+    res.status = 200;
+    res.body = "{\"success\":true}";
+    res.set_cookie = clearCookie();
+    return res;
+}
+
+AuthResponse AuthService::logoutAll() {
+    // Storage non svuotato: 500 senza cookie, la sessione resta valida per riprovare
+    if (!sessions_.clear()) return error(500, "storage_error");
     AuthResponse res;
     res.status = 200;
     res.body = "{\"success\":true}";

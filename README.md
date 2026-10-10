@@ -153,12 +153,14 @@ The Web UI is protected by a username and password.
 - **Rules**: username of 1-32 printable characters, password of 8-64 bytes (8-64 plain ASCII characters; accented letters and emoji take 2-4 bytes each). The password is stored as a salted PBKDF2-SHA256 hash, never in clear text.
 - **Everything requires login**: every page and API, firmware OTA update included.
 - **Session**: it ends after 30 minutes without requests (an open UI keeps polling, so it stays signed in while it is open) and at every reboot. Use the **Log out** button in the sidebar to sign out.
+- **Remember me**: tick it when you sign in and the session lasts 30 days, surviving reboots and firmware updates. At most 8 devices can be remembered: signing in on a 9th disconnects the oldest one.
+- **Log out of all devices**: the sidebar button closes every session, remembered ones included.
+- **Wrong passwords**: after 5 wrong passwords in a row, each further attempt has to wait 1 s, then 2, 4… up to 60 s. There is no permanent lockout, and NUT keeps running meanwhile.
+- **Shutdown commands**: load and shutdown commands (`load.off`, `shutdown.*`, …) can be run from the **UPS Commands** page after a confirmation. In Access Point mode they stay locked (NUT only).
 - **Separate from NUT**: the Web UI credentials are independent of the NUT credentials (NUT tab), which keep working as before for Home Assistant, PeaNUT, `upscmd`, etc.
 - **Access Point mode** (double reset within 3 seconds): the Web UI is open without login, as before.
 - ⚠️ **Plain HTTP**: the Web UI is served over HTTP, so passwords travel unencrypted on the network. Use it on a trusted LAN and don't reuse a password you use elsewhere.
 - **Forgotten password**: a reset from Access Point mode will come in a later update (US-063). Until then, the only way is a full flash erase, which also erases the Wi-Fi and NUT settings.
-- Login attempts are not rate-limited yet (coming with US-062).
-
 ### 4. Usage
 - Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.
 - **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
