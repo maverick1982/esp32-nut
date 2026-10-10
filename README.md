@@ -147,7 +147,19 @@ You can install the firmware directly from your browser without downloading any 
 4. Enter your home Wi-Fi credentials and set your preferred NUT Server username/password.
 5. Save and reboot.
 
-### 3. Usage
+### 3. 🔐 Web UI Login
+The Web UI is protected by a username and password.
+- **Create the credentials right away**: after updating to this firmware (or after a full flash), the first visit to the Web UI from your LAN shows only the **Create credentials** form. Whoever creates them first becomes the administrator, so do it as soon as the update is done.
+- **Rules**: username of 1-32 printable characters, password of 8-64 bytes (8-64 plain ASCII characters; accented letters and emoji take 2-4 bytes each). The password is stored as a salted PBKDF2-SHA256 hash, never in clear text.
+- **Everything requires login**: every page and API, firmware OTA update included.
+- **Session**: it ends after 30 minutes without requests (an open UI keeps polling, so it stays signed in while it is open) and at every reboot. Use the **Log out** button in the sidebar to sign out.
+- **Separate from NUT**: the Web UI credentials are independent of the NUT credentials (NUT tab), which keep working as before for Home Assistant, PeaNUT, `upscmd`, etc.
+- **Access Point mode** (double reset within 3 seconds): the Web UI is open without login, as before.
+- ⚠️ **Plain HTTP**: the Web UI is served over HTTP, so passwords travel unencrypted on the network. Use it on a trusted LAN and don't reuse a password you use elsewhere.
+- **Forgotten password**: a reset from Access Point mode will come in a later update (US-063). Until then, the only way is a full flash erase, which also erases the Wi-Fi and NUT settings.
+- Login attempts are not rate-limited yet (coming with US-062).
+
+### 4. Usage
 - Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.
 - **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
 - **NUT Client**: Configure your Home Assistant or NAS to connect to the ESP32's IP on port `3493` using the credentials you defined.

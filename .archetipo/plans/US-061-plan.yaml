@@ -1,0 +1,401 @@
+schema: archetipo/plan/v2
+spec_code: US-061
+body: "---\ntype: plan\ntitle: \"US-061: Login e protezione di tutte le route della Web UI — Piano di Implementazione\"\ndescription: \"Piano di implementazione per US-061\"\ntags: [plan, implementation, US-061]\n---\n# US-061: Login e protezione di tutte le route della Web UI — Piano di Implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-10-10\n\n---\n\n## Spec\n\n**Epic:** EP-002 — Connettività di Rete e Configurazione\n**Priorità:** HIGH | **Punti:** 5\n\nRiferimenti vincolanti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D1, D2, D3, D4) e [ADR 0009](docs/adr/0009-web-ui-authentication.md). In caso di dubbio fa fede l'ADR.\n\n---\n\n## Soluzione Tecnica\n\nLa logica di autenticazione è pura e testabile in nativo, in una nuova libreria `lib/WebAuth/src`, come `WebApiJson` per le API. Il codice che dipende dalla piattaforma (mbedTLS, `esp_fill_random`, NVS) è isolato in due adapter in `src/network/` e iniettato tramite interfacce. `WebConfigServer` diventa solo il collante HTTP.\n\n### Libreria `lib/WebAuth/src` (nessuna dipendenza ESP)\n\n- **`AuthPlatform.h`**: interfacce `IAuthCrypto` (`deriveKey(password, salt, salt_len, iterations, out32)`, `sha256(data, len, out32)`, `randomBytes(buf, len)`) e `IAuthStorage` (`loadCredentials(CredentialRecord&)`, `saveCredentials(const CredentialRecord&)`). `CredentialRecord`: `username` (String), `salt[16]`, `hash[32]`, `iterations` (uint32).\n- **`CredentialStore`**: `begin()` carica il record; `hasCredentials()`; `static validateUsername()` (1-32 caratteri ASCII stampabili 0x20-0x7E) e `static validatePassword()` (8-64 byte); `create(user, pwd)` → `CreateResult { OK, INVALID_USERNAME, INVALID_PASSWORD, ALREADY_CONFIGURED, STORAGE_ERROR }` con salt casuale e PBKDF2 a `kDefaultIterations = 10000`; `verify(user, pwd)` ricalcola con salt e iterazioni del record e confronta in tempo costante (username e hash). La password non viene mai conservata né loggata.\n- **`SessionTable`**: solo sessioni volatili (le persistenti arrivano con US-062). 8 slot `{hash[32], last_seen_ms, used}`. `create(now)` genera 16 byte casuali, restituisce il token esadecimale (32 caratteri) e salva solo `SHA-256(token)`; se piena sostituisce lo slot usato meno di recente. `validate(token, now)` confronta in tempo costante, scarta le sessioni con `now - last_seen >= 30 min` (sottrazione `uint32_t`, sicura al rollover di `millis()`) e aggiorna `last_seen`. `remove(token)`, `clear()`. Nessuna scrittura su NVS: un riavvio chiude tutte le sessioni, come richiesto.\n- **`AuthPolicy`**: funzione pura `decide(path, method, ap_mode, configured, authenticated)` → `ALLOW | REDIRECT_LOGIN | UNAUTHORIZED | SETUP_REQUIRED`. In AP: sempre `ALLOW`. Rotte pubbliche: `GET /login`, `POST /api/auth/login`, `GET /api/auth/status`, `POST /api/auth/credentials`, `POST /api/auth/logout`. Senza sessione: `GET` di una pagina (path che non inizia con `/api/`) → `REDIRECT_LOGIN`; tutto il resto (API e `POST /update`) → `SETUP_REQUIRED` se non ci sono credenziali, altrimenti `UNAUTHORIZED`. Più `extractCookie(header, name)` per leggere `sid` dall'header `Cookie`.\n- **`AuthService`**: logica delle API, restituisce `AuthResponse { int status; String body; String set_cookie; }` come `WebApiJson::runUpsCommand`:\n  - `login(body, now)`: JSON non valido o campi mancanti → 400; credenziali non configurate → 409 `{\"error\":\"setup_required\"}`; errate → 401 `{\"error\":\"invalid_credentials\"}`; ok → 200 `{\"success\":true,\"username\":...}` + cookie.\n  - `createInitialCredentials(body, now)` (TOFU): già configurate → 409 `{\"error\":\"already_configured\"}`; username o password non validi → 400 `{\"error\":\"invalid_username\"|\"invalid_password\"}`; errore NVS → 500; ok → 200 + cookie (chi crea è autenticato).\n  - `status(token, ap_mode, now)` → `{configured, authenticated, ap_mode}` più `username` solo se autenticato.\n  - `logout(token)`: idempotente, rimuove la sessione se esiste e restituisce sempre 200 + cookie di cancellazione.\n  - `isAuthenticated(token, now)` per il guard.\n  - Cookie: `sid=<hex>; Path=/; HttpOnly; SameSite=Strict`; cancellazione: `sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`. Body JSON limitato a 256 byte come `MAX_COMMAND_BODY_LENGTH`.\n\n### Adapter ESP (`src/network/auth_platform.cpp/.h`)\n\n- `EspAuthCrypto`: `mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, ...)`, `mbedtls_sha256(..., 0)`, `esp_fill_random`. Alla creazione delle credenziali si logga a INFO la durata del PBKDF2 (`[AUTH] PBKDF2 10000 iterations: N ms`) per verificare sul dispositivo l'obiettivo di 100-200 ms dell'ADR; il numero di iterazioni è salvato nel record, quindi potrà essere cambiato senza invalidare password esistenti.\n- `NvsAuthStorage`: `Preferences` namespace `web_auth`, chiavi `user`, `salt`, `hash`, `iter`. Separato da `config_json` (namespace `nutos`).\n\n### Integrazione HTTP (`src/network/web_config_server.cpp/.h`)\n\n- `collectHeaders` raccoglie `Content-Type` e `Cookie`.\n- Ogni rotta è registrata tramite un wrapper `guarded(handler)` che chiama `AuthPolicy::decide`; `onNotFound` passa dallo stesso controllo (in AP resta il redirect del captive portal). `302 Location: /login` per le pagine, `401` JSON per il resto.\n- Nuove rotte pubbliche: `GET /login` (pagina inlined e gzip come `/update`), `POST /api/auth/login`, `GET /api/auth/status`, `POST /api/auth/credentials`, `POST /api/auth/logout`.\n- **OTA**: il controllo di autenticazione è nella callback di upload a `UPLOAD_FILE_START`. Se la richiesta non è autorizzata si imposta `ota_rejected = true` e `Update.begin()` non viene chiamato; i chunk successivi sono ignorati; il handler finale risponde 401 e azzera il flag, senza impostare `should_restart`.\n- Tutti i POST JSON (`/api/wifi/connect`, `/api/nut/config`, `/api/beeper`, `/api/auth/*`) richiedono `Content-Type: application/json`, altrimenti 415, come già fa `/api/ups/command` (ADR 0009, CSRF). Il frontend li invia già così.\n- Log: login riusciti e falliti con lo username, mai password o token.\n\n### Frontend\n\n- Nuova pagina `data/www/login.html` + `data/www/login.js`, inlined da `scripts/inline_web.py` in `login_inlined.html` (CSS `bundle.css`, logo, favicon, JS) e aggiunta ai `target_files` di `scripts/embed_web.py`. Al caricamento chiama `GET /api/auth/status`: se `authenticated` va a `/`; se `!configured` mostra \"Create credentials\" (username, password, conferma, validazione lato client con le stesse regole), altrimenti \"Sign in\". Layout dal mockup `docs/mockups/US-061/`.\n- `data/www/bundle.js`: wrapper `apiFetch` usato da tutte le chiamate `/api/*` e dall'export USB; su 401 imposta un flag che ferma il polling e fa `location.replace('/login?expired=1')` (la pagina di login mostra l'avviso di sessione scaduta). Pulsante \"Log out\" nella sidebar, con il nome utente accanto (`POST /api/auth/logout`, poi `/login`), nascosto quando `/api/auth/status` riporta `ap_mode`.\n- `data/www/update.html`: risposta 401 dell'upload → `/login`.\n\n### Limiti accettati (da documentare)\n\nHTTP in chiaro; il polling della UI aperta mantiene viva la sessione (la scadenza è \"30 minuti senza richieste\"); niente limite ai tentativi falliti fino a US-062, quindi ogni tentativo costa un PBKDF2 sul loop.\n\n---\n\n## Strategia di Test\n\nLa logica è coperta da test nativi Unity (`pio test -e native`), i flussi utente da Playwright con le API mockate tramite `e2e/support/webui.ts`; il firmware deve compilare (`pio run -e esp32-s3-standard`).\n\n- **Unit (nuova suite `test/test_web_auth`)**: `IAuthCrypto` finto e deterministico (derivazione e hash basati su un mix di byte, RNG con seed) e `IAuthStorage` in memoria. Copertura: validazione username/password ai limiti (0, 1, 32, 33 caratteri; 7, 8, 64, 65 byte; caratteri non stampabili); `create` → `ALREADY_CONFIGURED` alla seconda volta; `verify` corretto/errato/username diverso; salt diverso a ogni creazione; `SessionTable` scadenza a 30 min esatti, refresh di `last_seen`, rollover di `millis()`, sostituzione LRU con 8 slot pieni, token mai salvato in chiaro, `remove`/`clear`; `AuthPolicy` tabella di casi (AP, rotte pubbliche, pagina vs API, `POST /update`, setup richiesto); `extractCookie` con più cookie e spazi; `AuthService` status code e body di ogni ramo, e cookie con `HttpOnly; SameSite=Strict`.\n- **Regressione**: `test_web_api` e le altre suite native invariate; suite e2e esistente verde (il catch-all di `serveIndex` risponde `{}` a `/api/auth/status`).\n- **Build firmware**: `pio run -e esp32-s3-standard` dopo l'integrazione e dopo la rigenerazione degli asset.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`playwright.config.ts`, `e2e/`, helper `e2e/support/webui.ts`)\n**Video demo:** previsto (la Dimostrazione è filmabile); lo registra `archetipo-review`, non l'implementazione.\n\n| Scenario | Flusso utente |\n|---|---|\n| Prima configurazione | Status `{configured:false}`: la pagina `/login` mostra solo \"Create credentials\"; password e conferma diverse → errore; password di 7 caratteri → errore; dati validi → `POST /api/auth/credentials` con il body atteso e redirect a `/`. |\n| Login | Status `{configured:true}`: credenziali errate (401) → messaggio \"Invalid username or password\" e nessun redirect; credenziali corrette (200) → redirect a `/`. |\n| Sessione scaduta | La UI principale è aperta e il polling riceve 401 → la pagina va a `/login` e il polling si ferma (nessuna altra richiesta a `/api/ups-vars` dopo il redirect). |\n| Logout | Click su \"Log out\" → `POST /api/auth/logout` e redirect a `/login`; in AP (`ap_mode:true`) il pulsante non è visibile. |\n| OTA non autorizzato | Upload su `/update` che risponde 401 → la pagina OTA porta a `/login`. |\n\n---\n\n> \U0001F3A8 Mockup disponibili in `docs/mockups/US-061/`\n\n_Piano generato via ARchetipo Planning — 2026-10-10_\n"
+tasks:
+  - id: TASK-01
+    title: 'Libreria WebAuth: interfacce di piattaforma e CredentialStore'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare la libreria pura `lib/WebAuth/src` con le interfacce verso la piattaforma e l'archivio delle credenziali con PBKDF2 (ADR 0009).
+
+      **Leggi:** `docs/adr/0009-web-ui-authentication.md` (sezione Credential store), `lib/WebApi/src/WebApiJson.h` (stile e convenzioni), `test/mocks/Arduino.h` (cosa offre `String` in nativo).
+
+      **Modifica:**
+      1. `AuthPlatform.h`: `struct CredentialRecord { String username; uint8_t salt[16]; uint8_t hash[32]; uint32_t iterations; }`; `class IAuthCrypto { virtual bool deriveKey(const String& password, const uint8_t* salt, size_t salt_len, uint32_t iterations, uint8_t out[32]) = 0; virtual void sha256(const uint8_t* data, size_t len, uint8_t out[32]) = 0; virtual void randomBytes(uint8_t* buf, size_t len) = 0; }`; `class IAuthStorage { virtual bool loadCredentials(CredentialRecord&) = 0; virtual bool saveCredentials(const CredentialRecord&) = 0; }`.
+      2. `CredentialStore.h/.cpp`: costruttore `(IAuthCrypto&, IAuthStorage&)`; `void begin()`; `bool hasCredentials() const`; `const String& username() const`; `static bool validateUsername(const String&)` (1-32 caratteri, ogni byte 0x20-0x7E); `static bool validatePassword(const String&)` (8-64 byte); `enum class CreateResult { OK, INVALID_USERNAME, INVALID_PASSWORD, ALREADY_CONFIGURED, STORAGE_ERROR }`; `CreateResult create(const String& user, const String& pwd)` (salt da `randomBytes`, `kDefaultIterations = 10000`, salva e aggiorna lo stato solo se il salvataggio riesce); `bool verify(const String& user, const String& pwd)` (false se non configurato; confronto in tempo costante di username e hash, senza uscita anticipata).
+      3. Helper `static bool constantTimeEquals(const uint8_t*, const uint8_t*, size_t)` riusabile da `SessionTable`.
+
+      **Vincoli:** nessun include ESP/mbedTLS/Preferences nella libreria; nessun log della password.
+
+      **Verifica:** la libreria compila nella suite nativa di TASK-02.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/AuthPlatform.h — nuovo: interfacce e CredentialRecord
+      - lib/WebAuth/src/CredentialStore.h — nuovo
+      - lib/WebAuth/src/CredentialStore.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Le interfacce e `CredentialStore` esistono con le firme descritte
+      - [ ] Validazione: username 1-32 caratteri stampabili, password 8-64 byte
+      - [ ] `create` restituisce `ALREADY_CONFIGURED` se esistono credenziali e non sovrascrive
+      - [ ] `verify` usa salt e iterazioni del record e confronta in tempo costante
+      - [ ] Nessuna dipendenza da API ESP nella libreria
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di CredentialStore
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare la suite `test/test_web_auth` con un crypto finto e uno storage in memoria, e coprire `CredentialStore`.
+
+      **Leggi:** `test/test_web_api/test_main.cpp` (struttura Unity del progetto), `platformio.ini` env `native`.
+
+      **Modifica:**
+      1. `test/test_web_auth/test_main.cpp` con `FakeCrypto` (deriveKey deterministica che dipende da password, salt e iterazioni; sha256 finta deterministica; randomBytes da un contatore, così due salt consecutivi differiscono) e `MemoryStorage` (record in memoria, flag per simulare il fallimento del salvataggio).
+      2. Casi: limiti di username (0, 1, 32, 33 caratteri; carattere 0x1F e 0x7F rifiutati); limiti di password (7, 8, 64, 65); `create` ok poi `hasCredentials()` true e `begin()` di una nuova istanza sullo stesso storage le ricarica; seconda `create` → `ALREADY_CONFIGURED`; salvataggio fallito → `STORAGE_ERROR` e `hasCredentials()` false; `verify` con password giusta, sbagliata, username diverso, e senza credenziali; due creazioni su storage diversi producono salt diversi; il record non contiene la password in chiaro.
+
+      **Verifica:** `pio test -e native -f test_web_auth`.
+
+      **Bloccanti:** se `test/mocks/Arduino.h` non offre un metodo di `String` necessario, aggiungerlo al mock senza cambiare il comportamento esistente.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — nuovo
+      - test/mocks/Arduino.h — solo se manca qualcosa a `String`
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_auth` passa
+      - [ ] Tutti i casi limite di validazione sono coperti
+      - [ ] Coperti create/verify/ricarica/errore di salvataggio
+    ref: TASK-02
+  - id: TASK-03
+    title: SessionTable con sessioni volatili e scadenza per inattività
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** tabella delle sessioni in RAM con token hashati e scadenza di 30 minuti senza richieste (PDR D2, ADR 0009).
+
+      **Leggi:** `lib/WebAuth/src/AuthPlatform.h`, `lib/WebAuth/src/CredentialStore.h` (helper di confronto).
+
+      **Modifica:** `lib/WebAuth/src/SessionTable.h/.cpp`:
+      - costruttore `(IAuthCrypto&)`; `static const size_t kMaxSessions = 8`; `static const uint32_t kIdleTimeoutMs = 30UL * 60UL * 1000UL`;
+      - slot `{ uint8_t hash[32]; uint32_t last_seen_ms; bool used; }`;
+      - `String create(uint32_t now)`: 16 byte da `randomBytes`, token = esadecimale minuscolo di 32 caratteri; salva solo `sha256(token)`; se non c'è uno slot libero (o scaduto) sostituisce quello con `last_seen` più vecchio;
+      - `bool validate(const String& token, uint32_t now)`: token di lunghezza diversa da 32 → false; cerca per hash con confronto in tempo costante; se `now - last_seen >= kIdleTimeoutMs` (aritmetica `uint32_t`) libera lo slot e restituisce false; altrimenti aggiorna `last_seen = now` e restituisce true;
+      - `void remove(const String& token)`, `void clear()`, `size_t activeCount(uint32_t now) const` (per i test).
+
+      **Vincoli:** nessuna scrittura persistente; il token in chiaro non viene mai salvato.
+
+      **Verifica:** compila nella suite di TASK-04.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/SessionTable.h — nuovo
+      - lib/WebAuth/src/SessionTable.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Token di 32 caratteri esadecimali, salvato solo come hash
+      - [ ] Scadenza a 30 minuti di inattività, sicura al rollover di `millis()`
+      - [ ] Al massimo 8 sessioni, sostituzione della meno usata di recente
+      - [ ] `remove` e `clear` funzionanti
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di SessionTable
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `SessionTable` nella suite `test/test_web_auth`.
+
+      **Leggi:** `lib/WebAuth/src/SessionTable.h`, `test/test_web_auth/test_main.cpp`.
+
+      **Modifica:** aggiungere i casi:
+      - token creato valido; token sconosciuto, vuoto o di lunghezza sbagliata non valido;
+      - valido a `now + 30min - 1`, non valido a `now + 30min` esatti;
+      - `validate` aggiorna `last_seen`: richieste ogni 10 minuti per un'ora mantengono la sessione;
+      - rollover: creazione a `0xFFFFFF00`, validazione a `0x00000100` (valida);
+      - 9 creazioni: la sessione usata meno di recente viene sostituita, le altre restano valide;
+      - `remove` invalida solo quel token; `clear` le invalida tutte;
+      - la tabella non contiene il token in chiaro (con il crypto finto, l'hash differisce dai byte del token).
+
+      **Verifica:** `pio test -e native -f test_web_auth`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — aggiungere i test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_auth` passa
+      - [ ] Coperti scadenza esatta, refresh, rollover, LRU, remove/clear
+    ref: TASK-04
+  - id: TASK-05
+    title: 'AuthPolicy e AuthService: decisione sulle rotte e logica delle API di autenticazione'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** logica pura delle decisioni di accesso e delle API `/api/auth/*`, testabile in nativo.
+
+      **Leggi:** `lib/WebApi/src/WebApiJson.cpp` (`runUpsCommand`: stile di parsing, filtri JSON, limite del body), ADR 0009 sezione HTTP layer.
+
+      **Modifica:**
+      1. `lib/WebAuth/src/AuthPolicy.h/.cpp`: `enum class AuthDecision { ALLOW, REDIRECT_LOGIN, UNAUTHORIZED, SETUP_REQUIRED }`; `AuthDecision decide(const String& path, bool is_get, bool ap_mode, bool configured, bool authenticated)`. Regole: AP → ALLOW; rotta pubblica (`GET /login`, `POST /api/auth/login`, `GET /api/auth/status`, `POST /api/auth/credentials`, `POST /api/auth/logout`) → ALLOW; autenticato → ALLOW; GET di un path che non inizia con `/api/` → REDIRECT_LOGIN; altrimenti SETUP_REQUIRED se `!configured`, UNAUTHORIZED se configurato. `String extractCookie(const String& header, const char* name)` (cookie separati da `;`, spazi ignorati, nome esatto: `xsid` non corrisponde a `sid`).
+      2. `lib/WebAuth/src/AuthService.h/.cpp`: `struct AuthResponse { int status; String body; String set_cookie; }`; costruttore `(CredentialStore&, SessionTable&)`; metodi `login(body, now)`, `createInitialCredentials(body, now)`, `status(token, ap_mode, now)`, `logout(token)`, `isAuthenticated(token, now)`, con status e body esattamente come nel piano (400 JSON non valido o campi mancanti/non stringa o body oltre 256 byte; 409 `setup_required` / `already_configured`; 401 `invalid_credentials`; 400 `invalid_username` / `invalid_password`; 500 `storage_error`; 200 con cookie). Costanti `kSessionCookie = "sid"`, attributi `Path=/; HttpOnly; SameSite=Strict`; cookie di cancellazione con `Max-Age=0`. `status` include `username` solo se autenticato.
+
+      **Vincoli:** nessuna dipendenza ESP; il body di risposta non contiene mai password, hash, salt o token (il token viaggia solo in `set_cookie`).
+
+      **Verifica:** compila nella suite di TASK-06.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/AuthPolicy.h — nuovo
+      - lib/WebAuth/src/AuthPolicy.cpp — nuovo
+      - lib/WebAuth/src/AuthService.h — nuovo
+      - lib/WebAuth/src/AuthService.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] `decide` implementa tutte le regole elencate
+      - [ ] `extractCookie` gestisce più cookie, spazi e nomi simili
+      - [ ] `AuthService` restituisce status, body e cookie come da piano
+      - [ ] Nessun segreto nei body di risposta
+    ref: TASK-05
+  - id: TASK-06
+    title: Test nativi di AuthPolicy e AuthService
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire le decisioni di accesso e ogni ramo delle API di autenticazione.
+
+      **Leggi:** `lib/WebAuth/src/AuthPolicy.h`, `lib/WebAuth/src/AuthService.h`, `test/test_web_auth/test_main.cpp`.
+
+      **Modifica:** aggiungere a `test/test_web_auth/test_main.cpp`:
+      - `decide`: tabella di casi (AP con e senza sessione; ogni rotta pubblica; `GET /` e `GET /update` senza sessione → REDIRECT_LOGIN; `GET /api/config` → UNAUTHORIZED o SETUP_REQUIRED secondo `configured`; `POST /update` senza sessione → UNAUTHORIZED, mai REDIRECT_LOGIN; `GET /login` con metodo POST non pubblico);
+      - `extractCookie`: `sid=abc`, `a=1; sid=abc; b=2`, spazi, `xsid=1; sid=abc`, header vuoto, cookie assente;
+      - `AuthService`: TOFU ok (200, cookie con `HttpOnly` e `SameSite=Strict`, la sessione del cookie è autenticata); TOFU ripetuto → 409; username/password non validi → 400 con il codice giusto; storage fallito → 500; JSON non valido e body oltre 256 byte → 400; login senza credenziali → 409; login errato → 401 e nessun cookie; login corretto → 200 e cookie; `status` prima e dopo il login e con `ap_mode`; `username` assente se non autenticato; `logout` rimuove la sessione e restituisce sempre il cookie con `Max-Age=0`, anche senza token.
+
+      **Verifica:** `pio test -e native -f test_web_auth` e `pio test -e native` completo.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — aggiungere i test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` passa per intero
+      - [ ] Ogni ramo di `decide` e di `AuthService` ha almeno un test
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Adapter ESP: crypto mbedTLS e storage NVS web_auth'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** implementare le interfacce di `AuthPlatform.h` sul firmware.
+
+      **Leggi:** `lib/WebAuth/src/AuthPlatform.h`, `src/core/config_manager.cpp` (uso di `Preferences`), ADR 0009.
+
+      **Modifica:** `src/network/auth_platform.h/.cpp`:
+      - `EspAuthCrypto`: `deriveKey` con `mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, pwd, len, salt, salt_len, iterations, 32, out)` (include `mbedtls/pkcs5.h`); misura con `millis()` e logga a INFO `[AUTH] PBKDF2 <iter> iterations: <ms> ms` solo quando chiamata da `create` (aggiungere un flag o loggare sempre a DEBUG e a INFO solo la prima volta: scegliere la forma più semplice); `sha256` con `mbedtls_sha256(data, len, out, 0)`; `randomBytes` con `esp_fill_random`.
+      - `NvsAuthStorage`: namespace `web_auth`, chiavi `user` (String), `salt` e `hash` (bytes), `iter` (UInt); `loadCredentials` restituisce false se manca `hash` o le lunghezze non tornano.
+
+      **Vincoli:** non toccare il namespace `nutos`; nessun log di password o hash.
+
+      **Verifica:** `pio run -e esp32-s3-standard` (dopo TASK-08 gli adapter sono usati; se il linker scarta il codice inutilizzato la compilazione basta comunque a verificare gli include).
+
+      **Bloccanti:** se `mbedtls_pkcs5_pbkdf2_hmac_ext` non è disponibile nella versione di mbedTLS della piattaforma, usare `mbedtls_pkcs5_pbkdf2_hmac` con un contesto `mbedtls_md` SHA-256 e annotarlo.
+
+      ## File Coinvolti
+      - src/network/auth_platform.h — nuovo
+      - src/network/auth_platform.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] `EspAuthCrypto` e `NvsAuthStorage` implementano le interfacce
+      - [ ] Dati salvati nel namespace `web_auth`, separato da `nutos`
+      - [ ] La durata del PBKDF2 viene loggata alla creazione delle credenziali
+      - [ ] `pio run -e esp32-s3-standard` compila
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Integrazione in WebConfigServer: guard su tutte le rotte, API di autenticazione e OTA protetto'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** proteggere ogni rotta in STA e servire le API `/api/auth/*`.
+
+      **Leggi:** `src/network/web_config_server.cpp/.h`, `src/core/main.cpp` (costruzione di `web_server`), `lib/WebAuth/src/AuthService.h`, `lib/WebAuth/src/AuthPolicy.h`.
+
+      **Modifica:**
+      1. `WebConfigServer` possiede `EspAuthCrypto`, `NvsAuthStorage`, `CredentialStore`, `SessionTable`, `AuthService`; `credentials.begin()` in `begin()`.
+      2. `collectHeaders` con `Content-Type` e `Cookie`.
+      3. Helper privati: `String sessionToken()` (da `extractCookie(server.header("Cookie"), "sid")`), `bool authorize()` (calcola `decide` con `server.uri()`, `server.method() == HTTP_GET`, `is_ap_mode`, `credentials.hasCredentials()`, `auth.isAuthenticated(token, millis())`; per REDIRECT_LOGIN invia `302 Location: /login`, per UNAUTHORIZED `401 {"error":"unauthorized"}`, per SETUP_REQUIRED `401 {"error":"setup_required"}`; restituisce false se ha già risposto), `bool requireJson()` (415 come in `handleUpsCommand`), `void sendAuth(const AuthResponse&)` (aggiunge `Set-Cookie` se presente).
+      4. Ogni `server.on(...)` esistente passa da `if (!authorize()) return;` tramite un wrapper `guarded(handler)`; `onNotFound` chiama `authorize()` prima del redirect captive/404.
+      5. Rotte nuove: `GET /login` (asset `web_asset_login_inlined_html`, gzip, no-cache; dipende da TASK-09: fino ad allora usare un placeholder e completare in TASK-09), `POST /api/auth/login`, `GET /api/auth/status`, `POST /api/auth/credentials` (in questa spec solo TOFU: `createInitialCredentials`), `POST /api/auth/logout`. I POST JSON passano da `requireJson()`.
+      6. `requireJson()` anche su `/api/wifi/connect`, `/api/nut/config`, `/api/beeper` (sostituisce il controllo inline di `handleUpsCommand`).
+      7. OTA: in `handleOTAUpload`, a `UPLOAD_FILE_START` se `!authorizedQuiet()` (stessa decisione senza inviare risposta) imposta `ota_rejected = true`, logga WARN e ritorna senza `Update.begin()`; con `ota_rejected` ignora WRITE/END. Il handler finale di `POST /update`: se `ota_rejected` → azzera il flag, risponde 401 e non imposta `should_restart`.
+      8. Log INFO di login riuscito/fallito e di creazione credenziali con lo username; mai password o token.
+
+      **Verifica:** `pio run -e esp32-s3-standard`; `pio test -e native` invariato.
+
+      **Bloccanti:** se `WebServer` non espone il metodo o l'URI nella callback di upload, usare il valore salvato all'inizio della richiesta e annotarlo.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — guard, rotte di autenticazione, OTA
+      - include/network/web_config_server.h — nuovi membri e helper
+
+      ## Criteri di Completamento
+      - [ ] In STA nessuna rotta non pubblica risponde senza sessione valida
+      - [ ] In AP tutte le rotte restano accessibili senza login
+      - [ ] Un upload OTA non autorizzato non chiama `Update.begin()` e riceve 401
+      - [ ] I POST JSON senza `application/json` ricevono 415
+      - [ ] `pio run -e esp32-s3-standard` compila
+    ref: TASK-08
+  - id: TASK-09
+    title: Pagina di login e prima configurazione, con pipeline di inlining
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** pagina `/login` con i due stati "Sign in" e "Create credentials", servita dal firmware.
+
+      **Leggi:** il mockup in `docs/mockups/US-061/` (fonte di verità per layout e classi), `data/www/index.html`, `data/www/bundle.css`, `scripts/inline_web.py`, `scripts/embed_web.py`.
+
+      **Modifica:**
+      1. `data/www/login.html` (usa `bundle.css?v=1.2.0`, logo, favicon, `login.js?v=1.2.0`) e `data/www/login.js`: al caricamento `GET /api/auth/status`; se `authenticated` → `location.replace('/')`; se `!configured` → stato "Create credentials" (username, password, conferma; validazione lato client: username 1-32 caratteri stampabili, password 8-64, conferma uguale; `POST /api/auth/credentials` con `Content-Type: application/json` e body `{username, password}`; 200 → `/`; 409 → ricarica lo stato; 400 → messaggio); altrimenti "Sign in" (con `?expired=1` nell'URL mostra l'avviso informativo "session expired" del mockup; `POST /api/auth/login`; 401 → "Invalid username or password"; 409 → stato di creazione; 200 → `/`). Nessuna casella "Remember me" (US-062).
+      2. `scripts/inline_web.py`: generare anche `data/www/login_inlined.html` inlining CSS, logo, favicon e `login.js`, con la stessa tecnica di `index_inlined.html`.
+      3. `scripts/embed_web.py`: aggiungere `login_inlined.html` a `target_files`.
+      4. Rigenerare con `python scripts/embed_web.py` (aggiorna `include/network/web_assets.h` e `.web_assets.hash`) e completare la rotta `GET /login` di TASK-08.
+
+      **Verifica:** `python scripts/embed_web.py`; `pio run -e esp32-s3-standard`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - data/www/login.html — nuovo
+      - data/www/login.js — nuovo
+      - data/www/login_inlined.html — generato
+      - scripts/inline_web.py — generare login_inlined.html
+      - scripts/embed_web.py — aggiungere il file ai target
+      - include/network/web_assets.h — rigenerato
+      - src/network/web_config_server.cpp — rotta GET /login
+
+      ## Criteri di Completamento
+      - [ ] La pagina rispetta il mockup `docs/mockups/US-061/` ed è responsive
+      - [ ] Stato "Create credentials" con validazione lato client e messaggi
+      - [ ] Stato "Sign in" con messaggio di errore su 401
+      - [ ] `login_inlined.html` generato ed embeddato; il firmware compila
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Frontend: gestione del 401, pulsante Log out e pagina OTA'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la UI principale torna al login quando la sessione non è più valida e permette il logout.
+
+      **Leggi:** `data/www/bundle.js` (tutte le chiamate `fetch`, gli intervalli di polling e `isFetchingAPI`), `data/www/index.html` (sidebar), `data/www/update.html` (XHR di upload), il mockup `docs/mockups/US-061/` per la posizione del pulsante.
+
+      **Modifica:**
+      1. `bundle.js`: funzione `apiFetch(url, options)` che chiama `fetch` e, se la risposta è 401, imposta `sessionExpired = true`, chiama `location.replace('/login?expired=1')` e restituisce la risposta; sostituire con `apiFetch` tutte le chiamate a `/api/*` e quella dell'export USB. I cicli di polling (`fetchLogs`, `fetchUpsVars`, `fetchSystemStatus`, comandi) non partono se `sessionExpired` è true.
+      2. Pulsante "Log out" nella sidebar secondo il mockup: `POST /api/auth/logout` con `Content-Type: application/json`, poi `location.replace('/login')`. Accanto al pulsante, come nel mockup, il nome utente (`username` di `/api/auth/status`). All'avvio `GET /api/auth/status`: se `ap_mode` è true il pulsante resta nascosto (nascosto di default finché lo status non arriva).
+      3. `update.html`: nell'`onload` dell'XHR, status 401 → `location.replace('/login')`.
+      4. Stili in `bundle.css` riusando le classi esistenti.
+      5. Rigenerare gli asset con `python scripts/embed_web.py`.
+
+      **Verifica:** `python scripts/embed_web.py`; `npx playwright test` (la suite esistente deve restare verde); `pio run -e esp32-s3-standard`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — apiFetch, logout, stop del polling
+      - data/www/index.html — pulsante Log out
+      - data/www/bundle.css — stile del pulsante
+      - data/www/update.html — 401 → /login
+      - data/www/index_inlined.html, data/www/update_inlined.html, include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Ogni chiamata `/api/*` passa da `apiFetch`
+      - [ ] Su 401 la UI va a `/login` e il polling si ferma
+      - [ ] "Log out" visibile in STA, nascosto in AP
+      - [ ] La pagina OTA gestisce il 401
+      - [ ] La suite e2e esistente resta verde
+    ref: TASK-10
+  - id: TASK-11
+    title: Test e2e dei flussi di autenticazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright i flussi utente della spec.
+
+      **Leggi:** `e2e/README.md` (regole), `e2e/support/webui.ts`, `e2e/ups-commands.spec.ts` (stile), `playwright.config.ts`.
+
+      **Modifica:**
+      1. `e2e/support/webui.ts`: helper `serveLogin(page)` che serve `http://esp32.local/login` da `data/www/login.html` più `login.js`, con lo stesso catch-all API di `serveIndex` (estrarre il catch-all in una funzione comune). Aggiornare `e2e/README.md`.
+      2. `e2e/auth.spec.ts` con gli scenari: prima configurazione (errori di conferma e lunghezza, poi `POST /api/auth/credentials` con il body atteso e redirect a `/`); login errato (messaggio, nessun redirect) e corretto (redirect a `/`); sessione scaduta (UI principale aperta, `/api/ups-vars` risponde 401 → URL `/login?expired=1` con l'avviso di sessione scaduta, nessuna ulteriore richiesta di polling dopo il redirect, verificata con `expect.poll` sul contatore delle richieste); logout (click → `POST /api/auth/logout` → `/login`); pulsante nascosto con `ap_mode: true`; upload OTA con risposta 401 → `/login` (usare `serveUpdatePage`).
+      3. Nessuna `waitForTimeout`; attese su locator o `expect.poll`.
+
+      **Verifica:** `npx playwright test` completo verde; `npx playwright test e2e/auth.spec.ts --repeat-each 3` stabile.
+
+      **Bloccanti:** se un test rivela un bug reale della UI, applicare la regola di `e2e/README.md` (fixme con riferimento) invece di adattare il test.
+
+      ## File Coinvolti
+      - e2e/support/webui.ts — serveLogin e catch-all comune
+      - e2e/auth.spec.ts — nuovo
+      - e2e/README.md — documentare serveLogin
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari della strategia e2e sono coperti
+      - [ ] `npx playwright test` passa per intero
+      - [ ] `--repeat-each 3` stabile
+    ref: TASK-11
+  - id: TASK-12
+    title: Documentazione utente e verifica finale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare il login e verificare l'intero progetto.
+
+      **Leggi:** `README.md` e `README.it.md` (sezioni "Getting Started" / "First Boot & Configuration" / "Usage"), `docs/pdr/0001-autenticazione-web.md` (Limiti accettati).
+
+      **Modifica:**
+      1. `README.md` e la versione italiana `README.it.md`, sotto "Getting Started": sezione sul login della Web UI: prima configurazione al primo accesso dopo l'aggiornamento (chi crea le credenziali diventa amministratore, farlo subito), regole di username e password, scadenza dopo 30 minuti senza richieste, logout, credenziali web separate da quelle NUT, in modalità AP nessun login, HTTP in chiaro (LAN fidata, non riusare password). Indicare che il recupero della password arriverà con US-063 (fino ad allora: erase completo).
+      2. Verifica finale: `pio test -e native`, `npx playwright test`, `pio run -e esp32-s3-standard`.
+
+      **Verifica:** i tre comandi passano.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - README.md — sezione sul login
+      - README.it.md — stessa sezione in italiano
+
+      ## Criteri di Completamento
+      - [ ] README.md e README.it.md descrivono prima configurazione, regole, scadenza, logout, AP e limite HTTP
+      - [ ] `pio test -e native`, `npx playwright test` e `pio run -e esp32-s3-standard` passano
+    ref: TASK-12
