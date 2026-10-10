@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-063
+title: 'Form "Credentials": cambio password e reset dalla modalità AP'
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 3
+status: TODO
+body: |
+  #### US-063: Form "Credentials": cambio password e reset dalla modalità AP
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-061
+
+  **User Story**
+  Come proprietario di esp32-nut,
+  voglio cambiare username e password dall'interfaccia e poterli reimpostare dalla modalità AP se li dimentico,
+  in modo da non restare mai chiuso fuori senza dover cancellare e riflashare la scheda.
+
+  **Dimostrazione**
+  In STA, da autenticati, il form "Credentials" chiede la password attuale e salva le nuove credenziali; gli altri browser vengono disconnessi. Dopo un doppio reset la scheda è in AP e lo stesso form non chiede la password attuale. Al riavvio in STA si accede con le nuove credenziali.
+
+  **Criteri di Accettazione**
+  - [ ] Un solo form con username, nuova password e conferma. In STA ha anche il campo "current password", in AP no.
+  - [ ] In STA il cambio richiede una sessione valida e la password attuale corretta. Una password attuale errata viene rifiutata e conta come tentativo fallito, con lo stesso limite del login.
+  - [ ] Il firmware accetta la richiesta senza password attuale solo quando è davvero in AP. Nascondere il campo nella UI non basta.
+  - [ ] Dopo un cambio in STA restano chiuse tutte le sessioni tranne quella da cui è stato fatto. Dopo un reset in AP sono chiuse tutte.
+  - [ ] Entrare in AP non cancella le credenziali: chi cambia solo il Wi-Fi le ritrova invariate.
+  - [ ] Stesse regole di validazione di US-061; nuova password e conferma devono coincidere.
+  - [ ] Il form non mostra né modifica le credenziali NUT.
+  - [ ] La documentazione spiega la procedura di recupero (doppio reset, poi form in AP) e che durante la modalità AP il server NUT non è attivo.
+
+  **Assunzioni**
+  - Riferimenti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D5, D6, D7), [ADR 0009](docs/adr/0009-web-ui-authentication.md).
+  - Se in STA le sessioni persistenti di US-062 non ci sono ancora, si chiudono le sessioni esistenti.
+history:
+  - status: TODO
+    at: "2026-10-10T15:16:33Z"
