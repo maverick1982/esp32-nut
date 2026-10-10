@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-062
+title: '"Remember me", logout da tutti i dispositivi, limite tentativi e comandi di spegnimento dalla Web UI'
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 5
+status: TODO
+body: |
+  #### US-062: "Remember me", logout da tutti i dispositivi, limite tentativi e comandi di spegnimento dalla Web UI
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-061
+
+  **User Story**
+  Come proprietario di esp32-nut,
+  voglio restare connesso sui miei dispositivi, poter chiudere tutte le sessioni e lanciare anche i comandi di spegnimento dalla pagina "UPS Commands",
+  in modo da usare l'interfaccia senza login continui e senza passare da un client NUT.
+
+  **Dimostrazione**
+  Login con "Remember me": dopo un riavvio o un OTA della scheda si è ancora connessi. "Log out of all devices" disconnette anche gli altri browser. Dopo 5 password sbagliate il login risponde "try again in N s". Nella pagina "UPS Commands" il lucchetto non c'è più: `load.off.delay` chiede conferma e poi viene eseguito.
+
+  **Criteri di Accettazione**
+  - [ ] Con "Remember me" la sessione dura 30 giorni e sopravvive a riavvii e OTA. Senza la casella resta il comportamento di US-061.
+  - [ ] Al massimo 8 sessioni persistenti; oltre, la più vecchia viene chiusa.
+  - [ ] "Log out of all devices" chiude tutte le sessioni, temporanee e persistenti.
+  - [ ] Dopo 5 tentativi falliti consecutivi, i successivi sono rifiutati con un'attesa che raddoppia da 1 s fino a 60 s, e la UI mostra quanto attendere. Un login riuscito azzera il contatore. Nessun blocco permanente, e il server NUT non rallenta durante il blocco.
+  - [ ] In STA, da autenticati, la pagina "UPS Commands" esegue tutti i comandi supportati, compresi `load.*` e `shutdown.*`. Prima di eseguirne uno chiede conferma, con il nome del comando e l'avviso che toglie corrente alle prese.
+  - [ ] In modalità AP i comandi di spegnimento restano bloccati: il server risponde 403 e la UI mostra il lucchetto.
+
+  **Assunzioni**
+  - Riferimenti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D2, D8, D9), [ADR 0009](docs/adr/0009-web-ui-authentication.md).
+  - Il limite dei 30 giorni è applicato dal browser: la scheda non ha un orologio.
+history:
+  - status: TODO
+    at: "2026-10-10T15:16:33Z"
