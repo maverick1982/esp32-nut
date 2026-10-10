@@ -160,7 +160,14 @@ La Web UI è protetta da nome utente e password.
 - **Separate da NUT**: le credenziali della Web UI sono indipendenti da quelle NUT (scheda NUT), che continuano a funzionare come prima per Home Assistant, PeaNUT, `upscmd`, ecc.
 - **Modalità Access Point** (doppio reset entro 3 secondi): la Web UI è accessibile senza login, come prima.
 - ⚠️ **HTTP in chiaro**: la Web UI è servita in HTTP, quindi le password viaggiano non cifrate sulla rete. Usala su una rete locale fidata e non riutilizzare una password usata altrove.
-- **Password dimenticata**: il reset dalla modalità Access Point arriverà con un prossimo aggiornamento (US-063). Fino ad allora l'unica strada è un erase completo della flash, che cancella anche le impostazioni Wi-Fi e NUT.
+- **Cambiare le credenziali**: apri la scheda **Web Login** (barra laterale, dopo **NUT Server**), inserisci la password attuale e il nuovo nome utente/password. Il salvataggio disconnette tutti gli altri dispositivi; quello in uso resta connesso.
+- **Password dimenticata**:
+  1. Doppio reset entro 3 secondi: la scheda si avvia come access point `NUT_ESP32_Config` (password `12345678`).
+  2. Collegati, apri la Web UI e vai alla scheda **Web Login**.
+  3. Imposta le nuove credenziali con **Reset credentials** (senza la password attuale). Tutte le sessioni vengono chiuse.
+  4. Riavvia la scheda per tornare sulla rete di casa.
+- ⚠️ **In modalità Access Point** la scheda non è sulla rete di casa, quindi i client NUT (Home Assistant, PeaNUT, …) non la raggiungono. Fai il recupero in tempi brevi.
+- **Le credenziali restano**: entrare in modalità Access Point non cancella le credenziali della Web UI, e cambiare solo le impostazioni Wi-Fi le mantiene.
 ### 4. Utilizzo Quotidiano
 - Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.
 - **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).

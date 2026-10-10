@@ -250,8 +250,11 @@
             return;
         }
         setBusy(btn, false, 'Create and sign in');
-        if (result.status === 409) {
-            // Created meanwhile from another browser: back to the real state
+        // Credentials created meanwhile: in STA the request becomes a change, so
+        // without a session the firmware answers 401 unauthorized (US-063); 409
+        // already_configured is still handled for the internal creation path
+        if (result.status === 409 || result.status === 401) {
+            // Back to the real state (Sign in)
             resetCreate();
             await loadStatus();
             if (!$('view-signin').hidden) {

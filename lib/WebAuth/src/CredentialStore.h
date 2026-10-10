@@ -10,6 +10,7 @@ public:
     static constexpr uint32_t kDefaultIterations = 10000;
 
     enum class CreateResult { OK, INVALID_USERNAME, INVALID_PASSWORD, ALREADY_CONFIGURED, STORAGE_ERROR };
+    enum class ReplaceResult { OK, INVALID_USERNAME, INVALID_PASSWORD, STORAGE_ERROR };
 
     CredentialStore(IAuthCrypto& crypto, IAuthStorage& storage);
 
@@ -25,6 +26,9 @@ public:
 
     // Prima creazione (TOFU): non sovrascrive mai credenziali esistenti
     CreateResult create(const String& username, const String& password);
+    // Sostituisce username e password con un nuovo salt (cambio in STA, reset in AP);
+    // funziona anche senza credenziali. Lo stato cambia solo se il salvataggio riesce
+    ReplaceResult replace(const String& username, const String& password);
     // Ricalcola l'hash con salt e iterazioni del record e confronta in tempo costante
     bool verify(const String& username, const String& password);
 

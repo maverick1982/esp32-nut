@@ -58,8 +58,8 @@ Chosen options: **P3**, **S2** and **T2**.
 
 **Storage**
 * NVS namespace `web_auth`, separate from `config_json`. Saving or invalidating the Wi-Fi/NUT config never touches the credentials, and the reverse is also true.
-* Keys: `user`, `salt` (16 bytes), `hash` (32 bytes), `iter` (uint32), `sessions` (blob).
-* `hasCredentials()` is false when `hash` is missing. That is the TOFU state, and also the state after a full flash erase.
+* Keys: `cred` (one blob: version, iterations uint32 LE, salt 16 bytes, hash 32 bytes, username length and username) and `sessions` (blob). The credential record is a single blob because NVS writes one key atomically: a change interrupted by a power loss keeps the previous record instead of mixing username, salt and hash of two versions.
+* `hasCredentials()` is false when `cred` is missing or malformed. That is the TOFU state, and also the state after a full flash erase.
 
 **Hashing and validation**
 * Hash: `mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, ...)`, 32-byte output.
@@ -114,9 +114,10 @@ Chosen options: **P3**, **S2** and **T2**.
 
 **`POST /api/auth/credentials` `{current_password?, username, password}`**
 This one endpoint serves PDR D3 and D5:
-* no credentials stored → public, `current_password` ignored (TOFU). After creation, a session is created and returned. A second concurrent setup gets 409, because the first write wins;
+* no credentials stored → public, `current_password` ignored (TOFU). After creation, a session is created and returned. Once credentials exist, a creation request is no longer a creation: in STA it becomes a change, so without a valid session it gets 401 `unauthorized` (a change needs a session and the current password); in AP it is a reset. 409 `already_configured` remains only on the internal `createInitialCredentials` path;
 * AP mode → public, `current_password` ignored (reset);
-* STA with credentials → requires a session **and** a correct `current_password` (PBKDF2, throttled like login).
+* STA with credentials → requires a session **and** a correct `current_password` (PBKDF2, throttled like login). After the change the caller's session is rotated: a new token of the same kind (persistent keeps `Max-Age`) is returned in `Set-Cookie` and every other session, the old token included, is closed. The new session and the closing are saved in one storage write; if it fails, no new cookie is sent and the old session stays valid.
+* Responses: on change/reset the success body is `{"success":true,"username":...,"sessions_closed":bool}` (`false` when the credentials changed but the other sessions could not be closed; in AP the UI asks to repeat the reset, since "Log out of all devices" is not available there); with credentials configured, an STA request without a valid session gets 401 `unauthorized`.
 
 The AP/STA decision uses the server-side `is_ap_mode`, never a request field.
 

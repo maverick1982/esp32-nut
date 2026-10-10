@@ -55,6 +55,29 @@ CredentialStore::CreateResult CredentialStore::create(const String& username, co
     return CreateResult::OK;
 }
 
+CredentialStore::ReplaceResult CredentialStore::replace(const String& username, const String& password) {
+    if (!validateUsername(username)) return ReplaceResult::INVALID_USERNAME;
+    if (!validatePassword(password)) return ReplaceResult::INVALID_PASSWORD;
+
+    // Nuovo record con nuovo salt: quello in memoria resta intatto fino al salvataggio
+    CredentialRecord rec;
+    rec.username = username;
+    rec.iterations = kDefaultIterations;
+    crypto_.randomBytes(rec.salt, sizeof(rec.salt));
+    if (!crypto_.deriveKey(password, rec.salt, sizeof(rec.salt), rec.iterations, rec.hash)) {
+        memset(rec.hash, 0, sizeof(rec.hash));
+        return ReplaceResult::STORAGE_ERROR;
+    }
+    if (!storage_.saveCredentials(rec)) {
+        memset(rec.hash, 0, sizeof(rec.hash));
+        return ReplaceResult::STORAGE_ERROR;
+    }
+
+    record_ = rec;
+    configured_ = true;
+    return ReplaceResult::OK;
+}
+
 bool CredentialStore::verify(const String& username, const String& password) {
     if (!configured_) return false;
 

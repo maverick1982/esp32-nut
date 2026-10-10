@@ -81,22 +81,28 @@ bool SessionTable::savePersistent() {
     return ok;
 }
 
-String SessionTable::create(uint32_t now, bool persistent) {
+void SessionTable::generateToken(char hex[kTokenLength + 1], uint8_t hash[32]) {
     uint8_t raw[kTokenBytes];
     crypto_.randomBytes(raw, sizeof(raw));
 
     static const char kHex[] = "0123456789abcdef";
-    char hex[kTokenLength + 1];
     for (size_t i = 0; i < kTokenBytes; i++) {
         hex[i * 2] = kHex[raw[i] >> 4];
         hex[i * 2 + 1] = kHex[raw[i] & 0x0F];
     }
     hex[kTokenLength] = '\0';
     memset(raw, 0, sizeof(raw));
+    crypto_.sha256((const uint8_t*)hex, kTokenLength, hash);
+}
+
+String SessionTable::create(uint32_t now, bool persistent) {
+    char hex[kTokenLength + 1];
+    uint8_t hash[32];
+    generateToken(hex, hash);
 
     if (persistent) {
         PersistentSlot& slot = persistent_[pickPersistentSlot()];
-        crypto_.sha256((const uint8_t*)hex, kTokenLength, slot.hash);
+        memcpy(slot.hash, hash, sizeof(slot.hash));
         slot.seq = next_seq_++;
         slot.used = true;
         savePersistent();
@@ -122,13 +128,14 @@ String SessionTable::create(uint32_t now, bool persistent) {
         }
 
         Slot& slot = slots_[target];
-        crypto_.sha256((const uint8_t*)hex, kTokenLength, slot.hash);
+        memcpy(slot.hash, hash, sizeof(slot.hash));
         slot.last_seen_ms = now;
         slot.used = true;
     }
 
     String token(hex);
     memset(hex, 0, sizeof(hex));
+    memset(hash, 0, sizeof(hash));
     return token;
 }
 
@@ -181,6 +188,57 @@ bool SessionTable::clear() {
     memset(slots_, 0, sizeof(slots_));
     memset(persistent_, 0, sizeof(persistent_));
     return true;
+}
+
+String SessionTable::rotateExclusive(const String& token, uint32_t now, bool& ok, bool& persistent) {
+    // Stessa ricerca in tempo costante di validate, senza toccare last_seen
+    persistent = false;
+    int idx = findSlot(token);
+    if (idx < 0) {
+        ok = clear();
+        return String();
+    }
+    persistent = (size_t)idx >= kMaxSessions;
+
+    char hex[kTokenLength + 1];
+    uint8_t hash[32];
+    generateToken(hex, hash);
+
+    // Nuovo insieme delle persistenti: solo la nuova sessione, se persistente.
+    // Un solo salvataggio prima di modificare la RAM, e solo se l'insieme cambia
+    ok = true;
+    if (persistent) {
+        PersistentSession out[1];
+        memcpy(out[0].hash, hash, sizeof(out[0].hash));
+        out[0].seq = next_seq_;
+        ok = storage_.saveSessions(out, 1);
+        memset(out, 0, sizeof(out));
+    } else if (persistentCount() != 0) {
+        ok = storage_.saveSessions(nullptr, 0);
+    }
+    if (!ok) {
+        // Nulla è cambiato: il vecchio token resta valido
+        memset(hex, 0, sizeof(hex));
+        memset(hash, 0, sizeof(hash));
+        return String();
+    }
+
+    memset(slots_, 0, sizeof(slots_));
+    memset(persistent_, 0, sizeof(persistent_));
+    if (persistent) {
+        memcpy(persistent_[0].hash, hash, sizeof(hash));
+        persistent_[0].seq = next_seq_++;
+        persistent_[0].used = true;
+    } else {
+        memcpy(slots_[0].hash, hash, sizeof(hash));
+        slots_[0].last_seen_ms = now;
+        slots_[0].used = true;
+    }
+
+    String fresh(hex);
+    memset(hex, 0, sizeof(hex));
+    memset(hash, 0, sizeof(hash));
+    return fresh;
 }
 
 size_t SessionTable::activeCount(uint32_t now) const {
