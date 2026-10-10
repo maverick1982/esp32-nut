@@ -1115,20 +1115,312 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnLogoutAll = document.getElementById('btn-logout-all');
     const logoutAllError = document.getElementById('logout-all-error');
 
+    // /api/auth/status is read once: it drives the sidebar session row and the
+    // US-063 Web Login form (STA change vs AP reset).
+    const authStatus = apiFetch('/api/auth/status', { cache: 'no-store' })
+        .then(res => (res.ok ? res.json() : {}))
+        .then(status => status || {})
+        .catch(err => {
+            console.error('Failed to fetch auth status:', err);
+            return {};
+        });
+
+    function setSidebarUsername(name) {
+        if (!sessionUser || !sessionUsername) return;
+        sessionUsername.textContent = name;
+        sessionUser.title = name ? 'Signed in as ' + name : 'Signed in user';
+        sessionUser.hidden = name === '';
+    }
+
     if (sidebarSession) {
-        apiFetch('/api/auth/status', { cache: 'no-store' })
-            .then(res => (res.ok ? res.json() : {}))
-            .then(status => {
-                if (!status || status.ap_mode === true || status.authenticated !== true) return;
-                if (sessionUser && sessionUsername) {
-                    const name = typeof status.username === 'string' ? status.username : '';
-                    sessionUsername.textContent = name;
-                    sessionUser.title = name ? 'Signed in as ' + name : 'Signed in user';
-                    sessionUser.hidden = name === '';
+        authStatus.then(status => {
+            if (status.ap_mode === true || status.authenticated !== true) return;
+            setSidebarUsername(typeof status.username === 'string' ? status.username : '');
+            sidebarSession.hidden = false;
+        });
+    }
+
+    // US-063: Web Login tab. STA: change the credentials, the current password
+    // is required. AP: reset them without it (the firmware decides from its own
+    // AP flag whether the current password is needed: hiding it is cosmetic).
+    const credForm = document.getElementById('cred-form');
+    if (credForm) {
+        const $ = (id) => document.getElementById(id);
+        const btnCred = $('btn-cred');
+        const CRED_FIELDS = ['cur-password', 'cred-username', 'cred-password', 'cred-password2'];
+        const CRED_FIX_FIELDS = 'Please fix the highlighted fields.';
+        const CRED_NOT_CLOSED = 'Other sessions could not be closed, use Log out of all devices';
+        // AP: "Log out of all devices" is hidden, the only way out is another reset
+        const CRED_NOT_CLOSED_AP = 'Credentials reset, but the existing sessions could not be closed. ' +
+            'Try the reset again.';
+        const NUT_LINK = '<button type="button" class="inline-link" data-goto="nut">NUT Server tab</button>';
+        const FINEPRINT_STA = 'Saving signs out every other device. NUT credentials are not affected (' +
+            NUT_LINK + ').';
+        const FINEPRINT_AP = 'Resetting closes every session on every device. NUT credentials are not affected (' +
+            NUT_LINK + '). While in AP mode the device is not on your home network, so NUT clients cannot reach it.';
+        let credApMode = false;
+        // false on first boot without credentials (status.configured false): the form creates them
+        let credConfigured = true;
+        let credThrottleTimer = null;
+
+        const credLabel = () => (!credConfigured ? 'Create credentials'
+            : credApMode ? 'Reset credentials' : 'Save credentials');
+        const credBusyLabel = () => (!credConfigured ? 'Creating' : credApMode ? 'Resetting' : 'Saving');
+
+        function setCredBusy(busy) {
+            btnCred.disabled = busy;
+            const label = btnCred.querySelector('.btn-label');
+            label.textContent = busy ? credBusyLabel() + '…' : credLabel();
+            const sp = btnCred.querySelector('.spinner');
+            if (busy && !sp) {
+                const s = document.createElement('span');
+                s.className = 'spinner';
+                btnCred.insertBefore(s, label);
+            } else if (!busy && sp) {
+                sp.remove();
+            }
+        }
+
+        function applyCredMode(ap) {
+            credApMode = ap;
+            $('grp-current').hidden = ap;
+            $('sec-verify').hidden = ap;
+            $('sec-new').hidden = ap;
+            $('cred-ap-banner').hidden = !ap;
+            $('cred-badge').hidden = !ap;
+            $('cred-lead').hidden = ap;
+            // Constant markup only, never API data
+            $('cred-fineprint').innerHTML = ap ? FINEPRINT_AP : FINEPRINT_STA;
+            if (!credThrottleTimer) setCredBusy(false);
+        }
+
+        function showCredError(text) {
+            $('cred-error-text').textContent = text;
+            $('cred-error').hidden = false;
+            $('cred-success').hidden = true;
+        }
+
+        function showCredSuccess(text) {
+            $('cred-success-text').textContent = text;
+            $('cred-success').hidden = false;
+            $('cred-error').hidden = true;
+        }
+
+        // Same rules as the firmware and the US-061 create form: username 1-32
+        // printable ASCII characters, password 8-64 bytes.
+        const printable = /^[\x20-\x7E]+$/;
+        const byteLength = (s) => new TextEncoder().encode(s).length;
+
+        function credRules() {
+            const u = $('cred-username').value;
+            const p = $('cred-password').value;
+            const c = $('cred-password2').value;
+            const pLen = byteLength(p);
+            return {
+                user: u.length >= 1 && u.length <= 32 && printable.test(u),
+                pass: pLen >= 8 && pLen <= 64,
+                match: c.length > 0 && p === c,
+                current: credApMode || $('cur-password').value.length > 0
+            };
+        }
+
+        function paintCredRules(showBad) {
+            const r = credRules();
+            credForm.querySelectorAll('#rule-list li').forEach((li) => {
+                const ok = r[li.dataset.rule];
+                li.classList.toggle('ok', ok);
+                li.classList.toggle('bad', !ok && showBad);
+            });
+            return r;
+        }
+
+        function setCredFieldError(inputId, errId, show) {
+            $(inputId).classList.toggle('invalid', show);
+            $(errId).hidden = !show;
+        }
+
+        function validateCred() {
+            const r = paintCredRules(true);
+            setCredFieldError('cur-password', 'err-current', !r.current);
+            setCredFieldError('cred-username', 'err-username', !r.user);
+            setCredFieldError('cred-password', 'err-password', !r.pass);
+            setCredFieldError('cred-password2', 'err-password2', r.pass && !r.match);
+            const ok = r.current && r.user && r.pass && r.match;
+            if (!ok) showCredError(CRED_FIX_FIELDS);
+            return ok;
+        }
+
+        CRED_FIELDS.forEach((id) => {
+            $(id).addEventListener('input', () => {
+                const r = paintCredRules(false);
+                // clear a field's error as soon as it becomes valid
+                if (r.current) setCredFieldError('cur-password', 'err-current', false);
+                if (r.user) setCredFieldError('cred-username', 'err-username', false);
+                if (r.pass) setCredFieldError('cred-password', 'err-password', false);
+                if (r.match) setCredFieldError('cred-password2', 'err-password2', false);
+                $('cred-success').hidden = true;
+            });
+        });
+
+        // 429: same wait as the login page (body retry_after, else Retry-After);
+        // the button stays disabled while the countdown runs.
+        function credRetryAfter(data, headers) {
+            let n = Number(data.retry_after);
+            if (!Number.isFinite(n) || n <= 0) n = Number(headers && headers.get('Retry-After'));
+            return Number.isFinite(n) && n > 0 ? Math.ceil(n) : 1;
+        }
+
+        function paintCountdown(left) {
+            const n = document.createElement('span');
+            n.className = 'countdown';
+            n.textContent = String(left);
+            $('cred-error-text').replaceChildren('Too many attempts. Try again in ', n, ' s');
+            $('cred-error').hidden = false;
+            $('cred-success').hidden = true;
+        }
+
+        function startCredThrottle(seconds) {
+            if (credThrottleTimer) clearInterval(credThrottleTimer);
+            let left = seconds;
+            btnCred.disabled = true;
+            paintCountdown(left);
+            credThrottleTimer = setInterval(() => {
+                left--;
+                if (left > 0) {
+                    paintCountdown(left);
+                    return;
                 }
-                sidebarSession.hidden = false;
-            })
-            .catch(err => console.error('Failed to fetch auth status:', err));
+                clearInterval(credThrottleTimer);
+                credThrottleTimer = null;
+                $('cred-error').hidden = true;
+                btnCred.disabled = false;
+            }, 1000);
+        }
+
+        credForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (credThrottleTimer || btnCred.disabled || sessionExpired) return;
+            $('cred-success').hidden = true;
+            if (!validateCred()) return;
+            $('cred-error').hidden = true;
+
+            const body = {
+                username: $('cred-username').value,
+                password: $('cred-password').value
+            };
+            if (!credApMode) body.current_password = $('cur-password').value;
+
+            setCredBusy(true);
+            let res;
+            let data = {};
+            try {
+                // Plain fetch, not apiFetch: a 401 "invalid_current_password" must not log out
+                res = await fetch('/api/auth/credentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                try {
+                    data = (await res.json()) || {};
+                } catch (err) {
+                    // empty or non-JSON body: the status code is enough
+                }
+            } catch (err) {
+                console.error('Credentials request failed:', err);
+                setCredBusy(false);
+                showCredError('Network error, please try again');
+                return;
+            }
+            setCredBusy(false);
+
+            if (res.status === 200) {
+                const name = typeof data.username === 'string' ? data.username : body.username;
+                CRED_FIELDS.forEach((id) => $(id).classList.remove('invalid'));
+                ['cur-password', 'cred-password', 'cred-password2'].forEach((id) => { $(id).value = ''; });
+                $('cred-username').value = name;
+                paintCredRules(false);
+                setSidebarUsername(name);
+                if (!credConfigured) {
+                    // First creation (TOFU): no sessions to close, the button becomes Save/Reset
+                    credConfigured = true;
+                    setCredBusy(false);
+                    showCredSuccess('Credentials created.');
+                    return;
+                }
+                if (credApMode && data.sessions_closed === false) {
+                    showCredSuccess(CRED_NOT_CLOSED_AP);
+                    return;
+                }
+                const head = credApMode ? 'Credentials reset. ' : 'Credentials saved. ';
+                let tail = credApMode ? 'All sessions have been closed.' : 'Other devices have been signed out.';
+                if (data.sessions_closed === false) tail = CRED_NOT_CLOSED;
+                showCredSuccess(head + tail);
+                return;
+            }
+            if (res.status === 401) {
+                if (data.error === 'invalid_current_password') {
+                    showCredError('Current password is wrong');
+                    const cur = $('cur-password');
+                    cur.value = '';
+                    cur.classList.add('invalid');
+                    cur.focus({ preventScroll: true });
+                    paintCredRules(false);
+                } else if (!sessionExpired) {
+                    // Session expired or closed: same redirect as apiFetch
+                    redirectExpired();
+                }
+                return;
+            }
+            if (res.status === 429) {
+                $('cur-password').value = '';
+                startCredThrottle(credRetryAfter(data, res.headers));
+                return;
+            }
+            if (res.status === 400 && data.error === 'invalid_username') {
+                setCredFieldError('cred-username', 'err-username', true);
+                showCredError(CRED_FIX_FIELDS);
+            } else if (res.status === 400 && data.error === 'invalid_password') {
+                setCredFieldError('cred-password', 'err-password', true);
+                showCredError(CRED_FIX_FIELDS);
+            } else if (res.status === 400) {
+                showCredError('Invalid request, please try again');
+            } else if (res.status === 500 && data.error === 'storage_error') {
+                showCredError('Could not save the credentials on the device. Please try again.');
+            } else {
+                showCredError(`Could not save the credentials (HTTP ${res.status})`);
+            }
+        });
+
+        // Show / hide password
+        credForm.querySelectorAll('[data-toggle]').forEach((b) => {
+            b.addEventListener('click', () => {
+                const input = $(b.dataset.toggle);
+                const show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                b.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+                b.style.color = show ? 'var(--accent)' : '';
+            });
+        });
+
+        // "NUT Server tab" link in the fineprint: same as clicking the tab
+        $('content-weblogin').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
+        applyCredMode(false);
+        paintCredRules(false);
+        authStatus.then(status => {
+            credConfigured = status.configured !== false;
+            applyCredMode(status.ap_mode === true);
+            const userInput = $('cred-username');
+            if (typeof status.username === 'string' && !userInput.value) {
+                userInput.value = status.username;
+                paintCredRules(false);
+            }
+        });
     }
 
     // US-061 Log out (this session) and US-062 Log out of all devices: same

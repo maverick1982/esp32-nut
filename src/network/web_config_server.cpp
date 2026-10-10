@@ -531,14 +531,23 @@ void WebConfigServer::handleAuthStatus() {
 void WebConfigServer::handleAuthCredentials() {
     if (!requireJson()) return;
     String body = server.hasArg("plain") ? server.arg("plain") : String();
+    // Prima creazione (TOFU), reset in AP o cambio in STA (US-063): AP/STA solo da is_ap_mode
+    const char* action = !credentials.hasCredentials() ? "created" : (is_ap_mode ? "reset" : "changed");
     // Durata del PBKDF2 nel log solo alla creazione (verifica dell'obiettivo dell'ADR)
-    auth_crypto.setLogTiming(true);
-    AuthResponse res = auth.createInitialCredentials(body, millis());
+    bool creating = !credentials.hasCredentials();
+    auth_crypto.setLogTiming(creating);
+    AuthResponse res = auth.updateCredentials(body, sessionToken(), is_ap_mode, millis());
     auth_crypto.setLogTiming(false);
     if (res.status == 200) {
-        AppLogger::log("INFO", String("[AUTH] Web UI credentials created for user '") + credentials.username() + "'");
-    } else {
-        AppLogger::log("WARN", String("[AUTH] Credentials creation refused (HTTP ") + String(res.status) + ")");
+        AppLogger::log("INFO", String("[AUTH] Web UI credentials ") + action + " for user '" + credentials.username() + "'");
+        if (res.body.indexOf("\"sessions_closed\":false") >= 0) {
+            AppLogger::log("ERROR", "[AUTH] Credentials changed but other sessions could not be closed");
+        }
+    } else if (res.status != 429 || throttle.failures() != throttle_logged_failures) {
+        // 429: solo la prima richiesta respinta di ogni finestra, come per il login
+        if (res.status == 429) throttle_logged_failures = throttle.failures();
+        AppLogger::log("WARN", String("[AUTH] Credentials ") + (creating ? "creation" : "change") +
+                       " refused (HTTP " + String(res.status) + ")");
     }
     sendAuth(res);
 }

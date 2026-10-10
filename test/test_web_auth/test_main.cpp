@@ -1170,6 +1170,623 @@ void test_service_logout_all_storage_error(void) {
     TEST_ASSERT_FALSE(service.isAuthenticated(per, 1000));
 }
 
+// ---------------------------------------------------------------------------
+// CredentialStore::replace (US-063)
+// ---------------------------------------------------------------------------
+
+void test_replace_changes_credentials(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    TEST_ASSERT_TRUE(store.create("admin", "password1") == CredentialStore::CreateResult::OK);
+    CredentialRecord before = storage.record;
+
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::OK);
+    TEST_ASSERT_TRUE(store.hasCredentials());
+    TEST_ASSERT_EQUAL_STRING("root", store.username().c_str());
+    TEST_ASSERT_FALSE(store.verify("admin", "password1"));
+    TEST_ASSERT_FALSE(store.verify("root", "password1"));
+    TEST_ASSERT_TRUE(store.verify("root", "newpass12"));
+    TEST_ASSERT_FALSE(memcmp(before.salt, storage.record.salt, sizeof(before.salt)) == 0);
+    TEST_ASSERT_FALSE(memcmp(before.hash, storage.record.hash, sizeof(before.hash)) == 0);
+    TEST_ASSERT_EQUAL_UINT32(CredentialStore::kDefaultIterations, storage.record.iterations);
+    TEST_ASSERT_FALSE(containsBytes(storage.record.hash, sizeof(storage.record.hash), "newpass12", 9));
+
+    // Stessa password: nuovo salt e quindi nuovo hash
+    CredentialRecord second = storage.record;
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::OK);
+    TEST_ASSERT_FALSE(memcmp(second.salt, storage.record.salt, sizeof(second.salt)) == 0);
+    TEST_ASSERT_FALSE(memcmp(second.hash, storage.record.hash, sizeof(second.hash)) == 0);
+
+    // Una nuova istanza sullo stesso storage ricarica le nuove credenziali
+    CredentialStore reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_EQUAL_STRING("root", reloaded.username().c_str());
+    TEST_ASSERT_TRUE(reloaded.verify("root", "newpass12"));
+    TEST_ASSERT_FALSE(reloaded.verify("admin", "password1"));
+}
+
+void test_replace_invalid_inputs(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    TEST_ASSERT_TRUE(store.create("admin", "password1") == CredentialStore::CreateResult::OK);
+    int saves = storage.saveCalls;
+    uint32_t randoms = crypto.counter;
+
+    TEST_ASSERT_TRUE(store.replace("", "newpass12") == CredentialStore::ReplaceResult::INVALID_USERNAME);
+    TEST_ASSERT_TRUE(store.replace(repeat('u', 33), "newpass12") == CredentialStore::ReplaceResult::INVALID_USERNAME);
+    TEST_ASSERT_TRUE(store.replace("root", "short") == CredentialStore::ReplaceResult::INVALID_PASSWORD);
+    TEST_ASSERT_TRUE(store.replace("root", repeat('p', 65)) == CredentialStore::ReplaceResult::INVALID_PASSWORD);
+
+    TEST_ASSERT_EQUAL(saves, storage.saveCalls);
+    TEST_ASSERT_EQUAL_UINT32(randoms, crypto.counter);
+    TEST_ASSERT_EQUAL_STRING("admin", store.username().c_str());
+    TEST_ASSERT_EQUAL_STRING("admin", storage.record.username.c_str());
+    TEST_ASSERT_TRUE(store.verify("admin", "password1"));
+}
+
+void test_replace_storage_error(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    TEST_ASSERT_TRUE(store.create("admin", "password1") == CredentialStore::CreateResult::OK);
+
+    storage.failSave = true;
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::STORAGE_ERROR);
+    TEST_ASSERT_EQUAL_STRING("admin", store.username().c_str());
+    TEST_ASSERT_TRUE(store.verify("admin", "password1"));
+    TEST_ASSERT_FALSE(store.verify("root", "newpass12"));
+
+    // deriveKey fallita: nessun salvataggio, credenziali invariate
+    storage.failSave = false;
+    crypto.deriveOk = false;
+    int saves = storage.saveCalls;
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::STORAGE_ERROR);
+    TEST_ASSERT_EQUAL(saves, storage.saveCalls);
+    crypto.deriveOk = true;
+    TEST_ASSERT_EQUAL_STRING("admin", store.username().c_str());
+    TEST_ASSERT_TRUE(store.verify("admin", "password1"));
+}
+
+void test_replace_without_credentials(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+
+    storage.failSave = true;
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::STORAGE_ERROR);
+    TEST_ASSERT_FALSE(store.hasCredentials());
+
+    storage.failSave = false;
+    TEST_ASSERT_TRUE(store.replace("root", "newpass12") == CredentialStore::ReplaceResult::OK);
+    TEST_ASSERT_TRUE(store.hasCredentials());
+    TEST_ASSERT_TRUE(store.verify("root", "newpass12"));
+
+    CredentialStore reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_TRUE(reloaded.hasCredentials());
+    TEST_ASSERT_TRUE(reloaded.verify("root", "newpass12"));
+}
+
+// ---------------------------------------------------------------------------
+// SessionTable::rotateExclusive (US-063)
+// ---------------------------------------------------------------------------
+
+struct FourSessions {
+    String v1, v2, p1, p2;
+};
+
+static FourSessions createFour(SessionTable& sessions) {
+    FourSessions s;
+    s.v1 = sessions.create(1000);
+    s.v2 = sessions.create(1000);
+    s.p1 = sessions.create(1000, true);
+    s.p2 = sessions.create(1000, true);
+    return s;
+}
+
+void test_rotate_volatile(void) {
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    FourSessions s = createFour(sessions);
+    TEST_ASSERT_EQUAL(4, sessions.activeCount(1000));
+
+    bool ok = false, persistent = true;
+    String fresh = sessions.rotateExclusive(s.v1, 1500, ok, persistent);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_FALSE(persistent);
+    TEST_ASSERT_EQUAL(SessionTable::kTokenLength, fresh.length());
+    TEST_ASSERT_TRUE(fresh != s.v1);
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.v1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.v2, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p2, 2000));
+    TEST_ASSERT_EQUAL(1, sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(0, sessions.persistentCount());
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+
+    // Il nuovo token è volatile: scade dopo 30 minuti di inattività
+    TEST_ASSERT_FALSE(sessions.validate(fresh, 2000 + SessionTable::kIdleTimeoutMs));
+
+    // Dopo un ricaricamento le persistenti chiuse non tornano
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_EQUAL(0, reloaded.persistentCount());
+    TEST_ASSERT_FALSE(reloaded.validate(s.p1, 2000));
+    TEST_ASSERT_FALSE(reloaded.validate(s.p2, 2000));
+
+    // Senza persistenti da rimuovere lo storage non si scrive
+    String mine = sessions.create(3000);
+    String other = sessions.create(3000);
+    int saves = storage.sessionSaves;
+    String next = sessions.rotateExclusive(mine, 3000, ok, persistent);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL(saves, storage.sessionSaves);
+    TEST_ASSERT_TRUE(sessions.validate(next, 3000));
+    TEST_ASSERT_FALSE(sessions.validate(mine, 3000));
+    TEST_ASSERT_FALSE(sessions.validate(other, 3000));
+}
+
+void test_rotate_persistent(void) {
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    FourSessions s = createFour(sessions);
+
+    bool ok = false, persistent = false;
+    int saves = storage.sessionSaves;
+    String fresh = sessions.rotateExclusive(s.p1, 2000, ok, persistent);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_TRUE(persistent);
+    TEST_ASSERT_EQUAL(saves + 1, storage.sessionSaves);
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.v1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.v2, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p2, 2000));
+    TEST_ASSERT_EQUAL(1, sessions.persistentCount());
+    TEST_ASSERT_EQUAL(1, sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(1, storage.sessions.size());
+
+    // Resta persistente: niente scadenza per inattività, sopravvive al ricaricamento
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 2000 + 31 * DAY));
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_EQUAL(1, reloaded.persistentCount());
+    TEST_ASSERT_TRUE(reloaded.validate(fresh, 3000));
+    TEST_ASSERT_FALSE(reloaded.validate(s.p1, 3000));
+    TEST_ASSERT_FALSE(reloaded.validate(s.p2, 3000));
+    TEST_ASSERT_FALSE(containsBytes(storage.sessions.data(), storage.sessions.size() * sizeof(PersistentSession),
+                                    fresh.c_str(), fresh.length()));
+
+    // seq successiva a quelle già usate: una nuova persistente non la sostituisce
+    String later = sessions.create(4000, true);
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 4000));
+    TEST_ASSERT_TRUE(sessions.validate(later, 4000));
+}
+
+void test_rotate_save_fails(void) {
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    FourSessions s = createFour(sessions);
+
+    storage.failSessionSave = true;
+    bool ok = true, persistent = false;
+    TEST_ASSERT_EQUAL_STRING("", sessions.rotateExclusive(s.v1, 2000, ok, persistent).c_str());
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL_STRING("", sessions.rotateExclusive(s.p1, 2000, ok, persistent).c_str());
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL_STRING("", sessions.rotateExclusive(repeat('0', 32), 2000, ok, persistent).c_str());
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_TRUE(sessions.validate(s.v1, 2000));
+    TEST_ASSERT_TRUE(sessions.validate(s.v2, 2000));
+    TEST_ASSERT_TRUE(sessions.validate(s.p1, 2000));
+    TEST_ASSERT_TRUE(sessions.validate(s.p2, 2000));
+    TEST_ASSERT_EQUAL(4, sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(2, sessions.persistentCount());
+    TEST_ASSERT_EQUAL(2, storage.sessions.size());
+
+    // Dopo il ripristino dello storage si può riprovare
+    storage.failSessionSave = false;
+    String fresh = sessions.rotateExclusive(s.p1, 2000, ok, persistent);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_TRUE(persistent);
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 2000));
+    TEST_ASSERT_EQUAL(1, sessions.activeCount(2000));
+}
+
+void test_rotate_unknown_token(void) {
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    FourSessions s = createFour(sessions);
+
+    bool ok = false, persistent = true;
+    TEST_ASSERT_EQUAL_STRING("", sessions.rotateExclusive(repeat('0', 32), 2000, ok, persistent).c_str());
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_FALSE(persistent);
+    TEST_ASSERT_FALSE(sessions.validate(s.v1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.v2, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(s.p2, 2000));
+    TEST_ASSERT_EQUAL(0, sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+
+    // Token vuoto: come clear()
+    FourSessions t = createFour(sessions);
+    TEST_ASSERT_EQUAL_STRING("", sessions.rotateExclusive("", 2000, ok, persistent).c_str());
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_FALSE(sessions.validate(t.v1, 2000));
+    TEST_ASSERT_FALSE(sessions.validate(t.p1, 2000));
+    TEST_ASSERT_EQUAL(0, sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+}
+
+// ---------------------------------------------------------------------------
+// AuthService::updateCredentials (US-063)
+// ---------------------------------------------------------------------------
+
+struct AuthFixture {
+    CredentialStore store;
+    SessionTable sessions;
+    LoginThrottle throttle;
+    AuthService service;
+    AuthFixture() : store(crypto, storage), sessions(crypto, storage), service(store, sessions, throttle) {
+        store.begin();
+        sessions.begin();
+    }
+};
+
+static const char* kRemember = "{\"username\":\"admin\",\"password\":\"password1\",\"remember\":true}";
+static const char* kNewCreds = "{\"current_password\":\"password1\",\"username\":\"root\",\"password\":\"newpass12\"}";
+static const char* kNewLogin = "{\"username\":\"root\",\"password\":\"newpass12\"}";
+static const char* kRememberNew = "{\"username\":\"root\",\"password\":\"newpass12\",\"remember\":true}";
+
+void test_update_tofu_same_as_create(void) {
+    AuthFixture f;
+    AuthResponse r = f.service.updateCredentials(kCreds, "", false, 1000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"admin\"}", r.body.c_str());
+    TEST_ASSERT_TRUE(r.set_cookie.startsWith("sid="));
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "HttpOnly"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(cookieToken(r.set_cookie), 2000));
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+
+    // Anche in AP e con current_password: è sempre una creazione
+    storage = MemoryStorage();
+    AuthFixture ap;
+    r = ap.service.updateCredentials("{\"current_password\":\"x\",\"username\":\"admin\",\"password\":\"password1\"}",
+                                     "", true, 1000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"admin\"}", r.body.c_str());
+    TEST_ASSERT_TRUE(ap.service.isAuthenticated(cookieToken(r.set_cookie), 2000));
+
+    // Errori della creazione invariati
+    storage = MemoryStorage();
+    AuthFixture bad;
+    r = bad.service.updateCredentials("{\"username\":\"\",\"password\":\"password1\"}", "", false, 1000);
+    TEST_ASSERT_EQUAL(400, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_username\"}", r.body.c_str());
+    TEST_ASSERT_FALSE(bad.store.hasCredentials());
+}
+
+void test_update_ap_reset(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String per = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+    TEST_ASSERT_EQUAL(1, storage.sessions.size());
+
+    // Nessuna password attuale e nessuna sessione richiesta
+    AuthResponse r = f.service.updateCredentials("{\"username\":\"root\",\"password\":\"newpass12\"}", "", true, 2000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"root\",\"sessions_closed\":true}", r.body.c_str());
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_FALSE(contains(r.body, "newpass12"));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(vol, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(per, 2000));
+    TEST_ASSERT_EQUAL(0, f.sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+    TEST_ASSERT_EQUAL(401, f.service.login(kCreds, 2000).status);
+    TEST_ASSERT_EQUAL(200, f.service.login(kNewLogin, 2000).status);
+
+    // current_password sbagliata: ignorata, e anche il token del chiamante si chiude
+    String caller = cookieToken(f.service.login(kNewLogin, 3000).set_cookie);
+    uint32_t failures = f.throttle.failures();
+    r = f.service.updateCredentials(
+        "{\"current_password\":\"wrongpass\",\"username\":\"admin\",\"password\":\"password2\"}", caller, true, 3000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"admin\",\"sessions_closed\":true}", r.body.c_str());
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(caller, 3000));
+    TEST_ASSERT_EQUAL_UINT32(failures, f.throttle.failures());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password2"));
+}
+
+void test_update_ap_errors(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+
+    AuthResponse r = f.service.updateCredentials("{\"username\":\"\",\"password\":\"newpass12\"}", "", true, 2000);
+    TEST_ASSERT_EQUAL(400, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_username\"}", r.body.c_str());
+    r = f.service.updateCredentials("{\"username\":\"root\",\"password\":\"short\"}", "", true, 2000);
+    TEST_ASSERT_EQUAL(400, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_password\"}", r.body.c_str());
+
+    storage.failSave = true;
+    r = f.service.updateCredentials("{\"username\":\"root\",\"password\":\"newpass12\"}", "", true, 2000);
+    TEST_ASSERT_EQUAL(500, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"storage_error\"}", r.body.c_str());
+    storage.failSave = false;
+
+    // Niente è cambiato: credenziali e sessioni intatte
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(vol, 2000));
+
+    // Sessioni non chiuse: 200 con sessions_closed false, credenziali già cambiate
+    String per = cookieToken(f.service.login(kRemember, 2000).set_cookie);
+    storage.failSessionSave = true;
+    r = f.service.updateCredentials("{\"username\":\"root\",\"password\":\"newpass12\"}", "", true, 3000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"root\",\"sessions_closed\":false}", r.body.c_str());
+    TEST_ASSERT_TRUE(f.store.verify("root", "newpass12"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(per, 3000));
+}
+
+void test_update_sta_requires_session(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    uint32_t derives = crypto.deriveCalls;
+
+    const String tokens[] = {"", repeat('0', 32), "short"};
+    for (size_t i = 0; i < sizeof(tokens) / sizeof(tokens[0]); i++) {
+        AuthResponse r = f.service.updateCredentials(kNewCreds, tokens[i], false, 2000);
+        TEST_ASSERT_EQUAL(401, r.status);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"unauthorized\"}", r.body.c_str());
+        TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    }
+    // Sessione scaduta
+    AuthResponse r = f.service.updateCredentials(kNewCreds, vol, false, 1000 + SessionTable::kIdleTimeoutMs);
+    TEST_ASSERT_EQUAL(401, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"unauthorized\"}", r.body.c_str());
+
+    TEST_ASSERT_EQUAL_UINT32(derives, crypto.deriveCalls);
+    TEST_ASSERT_EQUAL_UINT32(0, f.throttle.failures());
+    TEST_ASSERT_EQUAL_STRING("admin", f.store.username().c_str());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+}
+
+void test_update_sta_wrong_current_password(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+
+    AuthResponse r = f.service.updateCredentials(
+        "{\"current_password\":\"wrongpass\",\"username\":\"root\",\"password\":\"newpass12\"}", vol, false, 2000);
+    TEST_ASSERT_EQUAL(401, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_current_password\"}", r.body.c_str());
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_EQUAL_UINT32(1, f.throttle.failures());
+
+    // current_password mancante: stesso esito, fallimento contato
+    r = f.service.updateCredentials(kNewLogin, vol, false, 2000);
+    TEST_ASSERT_EQUAL(401, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_current_password\"}", r.body.c_str());
+    TEST_ASSERT_EQUAL_UINT32(2, f.throttle.failures());
+
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+    TEST_ASSERT_FALSE(f.store.verify("root", "newpass12"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(vol, 2000));
+}
+
+void test_update_sta_throttled(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    const char* wrong = "{\"current_password\":\"wrongpass\",\"username\":\"root\",\"password\":\"newpass12\"}";
+    for (int i = 0; i < 5; i++) {
+        AuthResponse r = f.service.updateCredentials(wrong, vol, false, 2000);
+        TEST_ASSERT_EQUAL(401, r.status);
+        TEST_ASSERT_EQUAL(0, r.retry_after_s);
+    }
+
+    // Il 6° tentativo, anche corretto: 429 senza PBKDF2
+    uint32_t derives = crypto.deriveCalls;
+    AuthResponse r = f.service.updateCredentials(kNewCreds, vol, false, 2000);
+    TEST_ASSERT_EQUAL(429, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"too_many_attempts\",\"retry_after\":1}", r.body.c_str());
+    TEST_ASSERT_EQUAL(1, r.retry_after_s);
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_EQUAL_UINT32(derives, crypto.deriveCalls);
+    TEST_ASSERT_EQUAL_UINT32(5, f.throttle.failures());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+
+    // Stesso limite del login
+    TEST_ASSERT_EQUAL(429, f.service.login(kCreds, 2000).status);
+
+    // Dopo l'attesa il cambio corretto passa e azzera i fallimenti
+    r = f.service.updateCredentials(kNewCreds, vol, false, 3000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_UINT32(0, f.throttle.failures());
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(cookieToken(r.set_cookie), 3000));
+}
+
+void test_update_sta_success(void) {
+    AuthFixture f;
+    String caller = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String other = cookieToken(f.service.login(kCreds, 1000).set_cookie);
+    String per = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+    f.throttle.recordFailure(1000);
+
+    AuthResponse r = f.service.updateCredentials(kNewCreds, caller, false, 2000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"root\",\"sessions_closed\":true}", r.body.c_str());
+    TEST_ASSERT_FALSE(contains(r.body, "newpass12"));
+    TEST_ASSERT_EQUAL_UINT32(0, f.throttle.failures());
+
+    // Sessione del chiamante ruotata: nuovo cookie volatile (senza Max-Age)
+    String fresh = cookieToken(r.set_cookie);
+    TEST_ASSERT_TRUE(r.set_cookie.startsWith("sid="));
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "HttpOnly"));
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "SameSite=Strict"));
+    TEST_ASSERT_FALSE(contains(r.set_cookie, "Max-Age"));
+    TEST_ASSERT_TRUE(fresh.length() == SessionTable::kTokenLength);
+    TEST_ASSERT_TRUE(fresh != caller);
+    TEST_ASSERT_TRUE(bodyHasNoSecrets(r, fresh));
+
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(fresh, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(caller, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(other, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(per, 2000));
+    TEST_ASSERT_EQUAL(1, f.sessions.activeCount(2000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+
+    TEST_ASSERT_EQUAL(401, f.service.login(kCreds, 3000).status);
+    TEST_ASSERT_EQUAL(200, f.service.login(kNewLogin, 3000).status);
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(fresh, 3000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(caller, 3000));
+}
+
+void test_update_sta_success_persistent_caller(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String caller = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+    String per = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+
+    AuthResponse r = f.service.updateCredentials(kNewCreds, caller, false, 2000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_TRUE(contains(r.body, "\"sessions_closed\":true"));
+
+    // Nuovo cookie persistente (Max-Age di 30 giorni), vecchio token chiuso
+    String fresh = cookieToken(r.set_cookie);
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "Max-Age=2592000"));
+    TEST_ASSERT_TRUE(fresh != caller);
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(fresh, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(caller, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(vol, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(per, 2000));
+    TEST_ASSERT_EQUAL(1, f.sessions.persistentCount());
+    TEST_ASSERT_EQUAL(1, storage.sessions.size());
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(fresh, 2000 + 31 * DAY));
+
+    // Dopo un riavvio resta solo la nuova sessione del chiamante, ancora persistente
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    TEST_ASSERT_EQUAL(1, sessions.persistentCount());
+    TEST_ASSERT_TRUE(sessions.validate(fresh, 3000));
+    TEST_ASSERT_FALSE(sessions.validate(caller, 3000));
+    TEST_ASSERT_FALSE(sessions.validate(per, 3000));
+    TEST_ASSERT_TRUE(store.verify("root", "newpass12"));
+}
+
+void test_update_sta_invalid_new_values(void) {
+    AuthFixture f;
+    String caller = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String other = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+
+    AuthResponse r = f.service.updateCredentials(
+        "{\"current_password\":\"password1\",\"username\":\"\",\"password\":\"newpass12\"}", caller, false, 2000);
+    TEST_ASSERT_EQUAL(400, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_username\"}", r.body.c_str());
+    r = f.service.updateCredentials(
+        "{\"current_password\":\"password1\",\"username\":\"root\",\"password\":\"short\"}", caller, false, 2000);
+    TEST_ASSERT_EQUAL(400, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_password\"}", r.body.c_str());
+
+    storage.failSave = true;
+    r = f.service.updateCredentials(kNewCreds, caller, false, 2000);
+    TEST_ASSERT_EQUAL(500, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"storage_error\"}", r.body.c_str());
+    storage.failSave = false;
+
+    // Credenziali e sessioni invariate
+    TEST_ASSERT_EQUAL_STRING("admin", f.store.username().c_str());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(caller, 2000));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(other, 2000));
+    TEST_ASSERT_EQUAL_UINT32(0, f.throttle.failures());
+}
+
+void test_update_sta_sessions_not_closed(void) {
+    AuthFixture f;
+    String caller = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String per = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+
+    storage.failSessionSave = true;
+    AuthResponse r = f.service.updateCredentials(kNewCreds, caller, false, 2000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"root\",\"sessions_closed\":false}", r.body.c_str());
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_TRUE(f.store.verify("root", "newpass12"));
+    TEST_ASSERT_FALSE(f.store.verify("admin", "password1"));
+    // Nessuna rotazione: il vecchio token del chiamante resta valido
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(caller, 2000));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(per, 2000));
+    TEST_ASSERT_EQUAL(2, f.sessions.activeCount(2000));
+
+    // Stesso esito con il chiamante persistente
+    storage.failSessionSave = false;
+    String percaller = cookieToken(f.service.login(kRememberNew, 3000).set_cookie);
+    storage.failSessionSave = true;
+    r = f.service.updateCredentials(
+        "{\"current_password\":\"newpass12\",\"username\":\"admin\",\"password\":\"password2\"}", percaller, false,
+        3000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_TRUE(contains(r.body, "\"sessions_closed\":false"));
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(percaller, 3000));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(per, 3000));
+    storage.failSessionSave = false;
+}
+
+void test_update_invalid_bodies(void) {
+    String big = "{\"current_password\":\"password1\",\"username\":\"root\",\"password\":\"newpass12\",\"pad\":\"";
+    big += repeat('x', 256);
+    big += "\"}";
+    const String bodies[] = {
+        "not json",
+        "",
+        "[]",
+        "{\"username\":\"root\"}",
+        "{\"password\":\"newpass12\"}",
+        "{\"username\":1,\"password\":\"newpass12\"}",
+        "{\"username\":\"root\",\"password\":null}",
+        "{\"current_password\":123,\"username\":\"root\",\"password\":\"newpass12\"}",
+        "{\"current_password\":null,\"username\":\"root\",\"password\":\"newpass12\"}",
+        "{\"current_password\":true,\"username\":\"root\",\"password\":\"newpass12\"}",
+        big,
+    };
+
+    // Senza credenziali
+    AuthFixture empty;
+    for (size_t i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
+        AuthResponse r = empty.service.updateCredentials(bodies[i], "", false, 1000);
+        TEST_ASSERT_EQUAL_MESSAGE(400, r.status, bodies[i].c_str());
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_request\"}", r.body.c_str());
+    }
+    TEST_ASSERT_FALSE(empty.store.hasCredentials());
+
+    // Con credenziali, in STA autenticato e in AP
+    storage = MemoryStorage();
+    AuthFixture f;
+    String caller = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    for (size_t i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
+        for (int ap = 0; ap < 2; ap++) {
+            AuthResponse r = f.service.updateCredentials(bodies[i], caller, ap == 1, 1000);
+            TEST_ASSERT_EQUAL_MESSAGE(400, r.status, bodies[i].c_str());
+            TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_request\"}", r.body.c_str());
+            TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, f.throttle.failures());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(caller, 1000));
+
+    // Esattamente 256 byte è accettato
+    String exact = "{\"current_password\":\"password1\",\"username\":\"root\",\"password\":\"newpass12\",\"pad\":\"";
+    String tail = "\"}";
+    exact += repeat('x', 256 - exact.length() - tail.length());
+    exact += tail;
+    TEST_ASSERT_EQUAL(256, exact.length());
+    TEST_ASSERT_EQUAL(200, f.service.updateCredentials(exact, caller, false, 1000).status);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_username_length_limits);
@@ -1228,5 +1845,24 @@ int main(int argc, char **argv) {
     RUN_TEST(test_service_login_throttle_seconds_round_up);
     RUN_TEST(test_service_logout_all);
     RUN_TEST(test_service_logout_all_storage_error);
+    RUN_TEST(test_replace_changes_credentials);
+    RUN_TEST(test_replace_invalid_inputs);
+    RUN_TEST(test_replace_storage_error);
+    RUN_TEST(test_replace_without_credentials);
+    RUN_TEST(test_rotate_volatile);
+    RUN_TEST(test_rotate_persistent);
+    RUN_TEST(test_rotate_save_fails);
+    RUN_TEST(test_rotate_unknown_token);
+    RUN_TEST(test_update_tofu_same_as_create);
+    RUN_TEST(test_update_ap_reset);
+    RUN_TEST(test_update_ap_errors);
+    RUN_TEST(test_update_sta_requires_session);
+    RUN_TEST(test_update_sta_wrong_current_password);
+    RUN_TEST(test_update_sta_throttled);
+    RUN_TEST(test_update_sta_success);
+    RUN_TEST(test_update_sta_success_persistent_caller);
+    RUN_TEST(test_update_sta_invalid_new_values);
+    RUN_TEST(test_update_sta_sessions_not_closed);
+    RUN_TEST(test_update_invalid_bodies);
     return UNITY_END();
 }

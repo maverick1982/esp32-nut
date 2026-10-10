@@ -1,0 +1,238 @@
+schema: archetipo/plan/v2
+spec_code: US-063
+body: "---\ntype: plan\ntitle: \"US-063: Form Credentials: cambio password e reset dalla modalità AP — Piano di Implementazione\"\ndescription: \"Piano di implementazione per US-063\"\ntags: [plan, implementation, US-063]\n---\n# US-063: Form \"Credentials\": cambio password e reset dalla modalità AP — Piano di Implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-10-10\n\n---\n\n## Spec\n\n**Epic:** EP-002 — Connettività di Rete e Configurazione\n**Priorità:** HIGH | **Punti:** 3 | **Bloccata da:** US-061 (REVIEW, committata). US-062 è anch'essa committata: le sessioni persistenti esistono già.\n\nRiferimenti vincolanti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D5, D6, D7) e [ADR 0009](docs/adr/0009-web-ui-authentication.md), sezione `POST /api/auth/credentials`.\n\n---\n\n## Soluzione Tecnica\n\nSi estende l'endpoint esistente `POST /api/auth/credentials` (oggi solo TOFU) in modo che serva i tre casi dell'ADR, con la decisione AP/STA presa **solo** dal flag lato server `is_ap_mode`, mai da un campo della richiesta. La logica resta pura in `lib/WebAuth` e testata in nativo.\n\n### Libreria `lib/WebAuth`\n\n- `CredentialStore::replace(user, pwd)` → `ReplaceResult { OK, INVALID_USERNAME, INVALID_PASSWORD, STORAGE_ERROR }`: valida, genera un **nuovo salt**, deriva con `kDefaultIterations`, salva e aggiorna lo stato in memoria **solo** se il salvataggio riesce (altrimenti restano valide le credenziali precedenti). Funziona anche senza credenziali, ma il TOFU continua a passare da `create`, che non sovrascrive mai.\n- `SessionTable::clearExcept(const String& token)` → bool: chiude tutte le sessioni, volatili e persistenti, tranne quella del token (che resta del suo tipo); salva lo storage se cambia l'insieme delle persistenti; stessa politica \"tutto o niente\" di `clear()` in caso di errore di scrittura.\n- `AuthService::updateCredentials(body, token, ap_mode, now)`, letto con un filtro JSON su `current_password`, `username`, `password` (body ≤ 256 byte):\n  1. body non valido → 400 `invalid_request`;\n  2. **nessuna credenziale** → stesso comportamento di `createInitialCredentials` (TOFU), invariato;\n  3. **AP** → nessuna password attuale richiesta (campo ignorato); `replace`; poi `sessions.clear()`; 200 `{\"success\":true,\"username\":...}` senza cookie (in AP non serve login); errori 400 `invalid_username`/`invalid_password`, 500 `storage_error`;\n  4. **STA con credenziali** → sessione valida obbligatoria (altrimenti 401 `unauthorized`, perché `/api/auth/credentials` è pubblica in `AuthPolicy` per il TOFU e il controllo va fatto qui); throttle attivo → 429 con `retry_after`, senza PBKDF2; `current_password` mancante o errata → `recordFailure` e 401 `invalid_current_password`; corretta → `recordSuccess`, validazione dei nuovi valori (400), `replace` (500 su errore), `clearExcept(token)`; 200 `{\"success\":true,\"username\":...}`.\n  - Il vecchio metodo `createInitialCredentials` resta e viene richiamato dal ramo TOFU, così i suoi test non cambiano.\n- La regola \"password e conferma coincidono\" è solo lato client: l'API riceve una sola password.\n\n### Firmware\n\n- `WebConfigServer::handleAuthCredentials` chiama `updateCredentials(body, sessionToken(), is_ap_mode, millis())` e aggiunge `Retry-After` tramite `sendAuth` (già presente). Log INFO con lo username per creazione, cambio (STA) e reset (AP); WARN per password attuale errata e 429; mai password o token. Timing PBKDF2 nel log solo alla creazione, come oggi.\n- Entrare in AP non tocca il namespace `web_auth`: nessuna modifica necessaria, va solo verificato (nessun codice in `main.cpp`/`AppNetworkManager` cancella le credenziali).\n- Nota sul NUT in AP: con configurazione valida il server NUT parte comunque, ma la scheda è solo access point, quindi non è raggiungibile dalla rete di casa. La documentazione lo dice così.\n\n### Frontend\n\n- Nuova scheda \"Web Login\" nella sidebar, subito dopo \"NUT Server\", con il pannello del mockup `docs/mockups/US-063/`: in STA campi Current password, Username (precompilato con `username` di `/api/auth/status`), New password, Confirm new password, checklist delle regole come il form di creazione di US-061, pulsante \"Save credentials\"; in AP (`ap_mode` true) niente Current password, banner informativo e pulsante \"Reset credentials\". La scheda è visibile in STA e in AP; senza credenziali configurate (AP al primo avvio) il form funziona come creazione.\n- Esiti: 200 → messaggio di successo (STA: altri dispositivi disconnessi; AP: tutte le sessioni chiuse) e campi password svuotati, username aggiornato nella sidebar; 401 `invalid_current_password` → \"Current password is wrong\"; 429 → stesso conto alla rovescia del login; 400 → messaggio sul campo; 401 `unauthorized` → passa da `apiFetch` (redirect a `/login`).\n- Il form non mostra né modifica le credenziali NUT (scheda separata).\n\n---\n\n## Strategia di Test\n\nTest nativi Unity per la logica, Playwright per il form in STA e in AP, build del firmware.\n\n- **CredentialStore::replace**: sostituisce username e password (il vecchio non verifica più, il nuovo sì), cambia il salt, input non validi rifiutati senza cambiare nulla, errore di salvataggio → credenziali precedenti ancora valide, funziona con e senza credenziali preesistenti.\n- **SessionTable::clearExcept**: resta valida solo la sessione indicata (volatile o persistente), le persistenti rimosse scompaiono dopo un ricaricamento, errore di scrittura → nessuna sessione chiusa, token sconosciuto → chiude tutto.\n- **AuthService::updateCredentials**: TOFU invariato; AP senza `current_password` → 200 e tutte le sessioni chiuse, con `current_password` sbagliata → ignorata (200); STA senza sessione → 401 `unauthorized`; STA con password attuale errata → 401 e fallimento contato; dopo 5 errori → 429 senza `deriveKey`; STA corretta → 200, la sessione del chiamante resta valida, le altre (anche persistenti) no, e il login funziona con le nuove credenziali e non con le vecchie; nuovi valori non validi → 400 senza cambiare nulla.\n- **Regressione**: tutte le suite native, la suite e2e completa e la build.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`e2e/`, helper di `e2e/support/webui.ts`)\n**Video demo:** previsto (cambio password in STA e reset in AP sono filmabili); lo registra `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Cambio password in STA | Utente autenticato apre \"Web Login\": vede Current password e lo username precompilato; conferma diversa → errore senza POST; dati validi → POST con `{current_password, username, password}` e messaggio di successo; i campi password si svuotano. |\n| Password attuale errata | Il POST risponde 401 `invalid_current_password` → \"Current password is wrong\"; con 429 `retry_after` → conto alla rovescia e pulsante disabilitato. |\n| Reset in AP | Status con `ap_mode: true`: il campo Current password non c'è, compare il banner, il POST non contiene `current_password` e il successo dice che tutte le sessioni sono chiuse. |\n| Credenziali NUT separate | Il form non contiene campi NUT e salvare non chiama `/api/nut/config`. |\n\n---\n\n> \U0001F3A8 Mockup disponibili in `docs/mockups/US-063/`\n\n_Piano generato via ARchetipo Planning — 2026-10-10_\n"
+tasks:
+  - id: TASK-01
+    title: CredentialStore::replace e SessionTable::clearExcept
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** primitive per sostituire le credenziali e chiudere tutte le sessioni tranne una (PDR D5).
+
+      **Leggi:** `lib/WebAuth/src/CredentialStore.h/.cpp`, `lib/WebAuth/src/SessionTable.h/.cpp` (in particolare `clear()` e `savePersistent()`), sezione "Libreria" del piano.
+
+      **Modifica:**
+      1. `CredentialStore`: `enum class ReplaceResult { OK, INVALID_USERNAME, INVALID_PASSWORD, STORAGE_ERROR }`; `ReplaceResult replace(const String& username, const String& password)`: valida, nuovo salt da `randomBytes`, `deriveKey` con `kDefaultIterations` (false → STORAGE_ERROR), costruisce un nuovo record, `saveCredentials`; aggiorna `record_` e `configured_` solo se il salvataggio riesce.
+      2. `SessionTable`: `bool clearExcept(const String& token)`: individua lo slot del token (volatile o persistente) con la stessa ricerca in tempo costante di `validate` ma senza aggiornare `last_seen`; prepara il nuovo insieme di persistenti (solo quella del token, se persistente) e lo salva **prima** di modificare la RAM; se il salvataggio fallisce restituisce false e non chiude nulla; poi libera tutti gli altri slot. Un token sconosciuto o vuoto equivale a `clear()`.
+
+      **Vincoli:** nessuna dipendenza ESP; nessun token in chiaro nello storage.
+
+      **Verifica:** compila nella suite di TASK-02.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/CredentialStore.h — ReplaceResult e replace
+      - lib/WebAuth/src/CredentialStore.cpp — implementazione
+      - lib/WebAuth/src/SessionTable.h — clearExcept
+      - lib/WebAuth/src/SessionTable.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] `replace` cambia salt e hash e non tocca lo stato se il salvataggio fallisce
+      - [ ] `clearExcept` lascia valida solo la sessione indicata
+      - [ ] Errore di scrittura in `clearExcept` → nessuna sessione chiusa
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di replace e clearExcept
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire le due primitive nella suite `test/test_web_auth`.
+
+      **Leggi:** `test/test_web_auth/test_main.cpp` (FakeCrypto, MemoryStorage con `failSave`, `failSessionSave`).
+
+      **Modifica:** aggiungere i casi:
+      - `replace`: dopo il cambio `verify` vecchio → false, nuovo → true; salt diverso dal precedente; username o password non validi → risultato corretto e credenziali invariate; `failSave` → STORAGE_ERROR e vecchie credenziali ancora valide; `replace` senza credenziali preesistenti → OK e `hasCredentials()` true; una nuova istanza `begin()` sullo stesso storage ricarica le nuove.
+      - `clearExcept`: con 2 volatili e 2 persistenti, `clearExcept` di una volatile → solo quella valida; di una persistente → solo quella valida, anche dopo ricaricamento da storage; `failSessionSave` → false e tutte ancora valide; token sconosciuto → tutte chiuse.
+
+      **Verifica:** `pio test -e native -f test_web_auth`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — nuovi test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_auth` passa
+      - [ ] Coperti successo, input non validi ed errori di storage per entrambe le primitive
+    ref: TASK-02
+  - id: TASK-03
+    title: AuthService::updateCredentials con i rami TOFU, AP e STA
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** un solo metodo che serve `POST /api/auth/credentials` nei tre casi dell'ADR 0009.
+
+      **Leggi:** `lib/WebAuth/src/AuthService.h/.cpp` (`parseCredentials`, `createInitialCredentials`, `login` per l'uso del throttle), sezione "Libreria" del piano.
+
+      **Modifica:**
+      1. `AuthResponse updateCredentials(const String& body, const String& token, bool ap_mode, uint32_t now)` con l'ordine esatto del piano: 400 body non valido (filtro JSON su `current_password`, `username`, `password`; `current_password` opzionale ma se presente deve essere stringa); senza credenziali → delega a `createInitialCredentials(body, now)`; AP → `replace`, `sessions_.clear()`, 200 senza cookie; STA → `isAuthenticated(token, now)` altrimenti 401 `unauthorized`; throttle → 429 con `retry_after`/`retry_after_s` senza PBKDF2; `verify(credentials_.username(), current_password)` falso o campo mancante → `recordFailure(now)` e 401 `invalid_current_password`; vero → `recordSuccess()`; `replace` (400/500); `sessions_.clearExcept(token)`; 200 `successBody(username)`.
+      2. Se `clear`/`clearExcept` fallisce dopo un `replace` riuscito, rispondere comunque 200 ma con `"sessions_closed":false` nel body (le credenziali sono già cambiate); altrimenti `"sessions_closed":true`.
+
+      **Vincoli:** la decisione AP/STA usa solo il parametro `ap_mode`; nessun segreto nei body.
+
+      **Verifica:** compila nella suite di TASK-04.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/AuthService.h — updateCredentials
+      - lib/WebAuth/src/AuthService.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] TOFU invariato
+      - [ ] AP: nessuna password attuale, tutte le sessioni chiuse
+      - [ ] STA: sessione e password attuale obbligatorie, fallimenti contati dal throttle, altre sessioni chiuse
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di updateCredentials
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire ogni ramo di `updateCredentials`.
+
+      **Leggi:** `lib/WebAuth/src/AuthService.h`, `test/test_web_auth/test_main.cpp`.
+
+      **Modifica:** aggiungere i casi della strategia di test del piano: TOFU tramite `updateCredentials` uguale a `createInitialCredentials`; AP senza e con `current_password` sbagliata → 200, nessun cookie, tutte le sessioni (anche persistenti) chiuse; STA senza sessione → 401 `unauthorized` e nessun cambio; STA password attuale errata → 401 `invalid_current_password` e fallimento contato; 5 errori → 429 con `deriveCalls` invariato; STA corretta → 200, `sessions_closed: true`, sessione del chiamante valida, altre no, login con vecchie credenziali 401 e con nuove 200; nuovi valori non validi → 400 e credenziali invariate; `failSessionSave` dopo un cambio riuscito → 200 con `sessions_closed: false`; body non valido o oltre 256 byte → 400.
+
+      **Verifica:** `pio test -e native -f test_web_auth`, poi `pio test -e native` completo.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp — nuovi test
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` passa per intero
+      - [ ] Ogni ramo di `updateCredentials` ha almeno un test
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Firmware: handleAuthCredentials usa updateCredentials'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare il nuovo metodo alla rotta esistente.
+
+      **Leggi:** `src/network/web_config_server.cpp` (`handleAuthCredentials`, `handleAuthLogin` per i log del 429, `sendAuth`), `src/core/main.cpp` e `src/network/network_manager.cpp` (verifica che l'ingresso in AP non tocchi `web_auth`).
+
+      **Modifica:**
+      1. `handleAuthCredentials`: `requireJson()`, poi `auth.updateCredentials(body, sessionToken(), is_ap_mode, millis())`; il log del timing PBKDF2 resta attivo solo quando non ci sono credenziali (creazione); `sendAuth(res)`.
+      2. Log: INFO `[AUTH] Web UI credentials created|changed|reset for user '<username>'` secondo il caso (calcolare il caso prima della chiamata: `!credentials.hasCredentials()` → created, `is_ap_mode` → reset, altrimenti changed); WARN `[AUTH] Credentials change refused (HTTP <code>)` per gli errori, con lo stesso criterio anti-flood del login per i 429; mai password o token.
+      3. Nessuna modifica all'ingresso in AP: verificare soltanto e annotare nel completamento che `web_auth` non viene toccato.
+
+      **Verifica:** `pio run -e esp32-s3-standard`; `pio test -e native` invariato.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — handleAuthCredentials e log
+
+      ## Criteri di Completamento
+      - [ ] La rotta serve TOFU, cambio in STA e reset in AP
+      - [ ] AP/STA deciso da `is_ap_mode`
+      - [ ] `pio run -e esp32-s3-standard` compila
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Frontend: scheda Web Login con il form Credentials'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il form unico per cambiare o reimpostare le credenziali.
+
+      **Leggi:** il mockup `docs/mockups/US-063/` (fonte di verità), `data/www/index.html` (sidebar e `tab-content`), `data/www/bundle.js` (gestione tab, `apiFetch`, stato di `/api/auth/status`, sidebar session), `data/www/login.js` (regole, `byteLength`, gestione del 429 da riusare), `data/www/bundle.css`.
+
+      **Modifica:**
+      1. `index.html`: tab "Web Login" dopo "NUT Server" e `#content-weblogin` con il pannello del mockup (Current password, Username, New password, Confirm, checklist delle regole, alert di esito, pulsante). Il titolo della pagina si aggiorna come per le altre tab.
+      2. `bundle.js`: con lo status di `/api/auth/status` (già letto per la sidebar) impostare la modalità: `ap_mode` true → niente Current password, banner AP, pulsante "Reset credentials"; altrimenti Current password obbligatoria e pulsante "Save credentials"; username precompilato. Validazione lato client (username 1-32 stampabili, password 8-64 byte, conferma uguale) prima del POST. `POST /api/auth/credentials` con `Content-Type: application/json` e body `{current_password?, username, password}` (in AP senza `current_password`). Esiti come nel piano: 200 → messaggio (testo AP o STA; se `sessions_closed` è false aggiungere "Other sessions could not be closed, use Log out of all devices"), campi password svuotati, username della sidebar aggiornato; 401 `invalid_current_password` → "Current password is wrong"; 429 → conto alla rovescia con pulsante disabilitato (estrarre o riusare la logica di `login.js` se possibile, altrimenti replicarla); 400 → messaggio; altri errori → messaggio generico.
+      Testi: la nota AP del mockup dice \"the NUT server is not running in AP mode\", che non è esatto (con configurazione valida il server NUT gira, ma la scheda non è sulla rete di casa): usare \"While in AP mode the device is not on your home network, so NUT clients cannot reach it.\" Lo username nella sidebar si aggiorna dopo il salvataggio, come nel mockup.
+      3. Stili solo se mancanti in `bundle.css`, riusando le classi di US-061.
+      4. `python scripts/embed_web.py`.
+
+      **Verifica:** `python scripts/embed_web.py`; `npx playwright test` (la suite esistente resta verde); `pio run -e esp32-s3-standard`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — tab e pannello Web Login
+      - data/www/bundle.js — logica del form
+      - data/www/bundle.css — eventuali stili
+      - data/www/*_inlined.html, include/network/web_assets.h, include/network/.web_assets.hash — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Il pannello rispetta il mockup `docs/mockups/US-063/`
+      - [ ] In STA serve la password attuale, in AP no
+      - [ ] Validazione lato client e tutti gli esiti gestiti
+      - [ ] Nessun campo NUT nel form
+    ref: TASK-06
+  - id: TASK-07
+    title: Test e2e del form Credentials in STA e in AP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della strategia e2e.
+
+      **Leggi:** `e2e/README.md`, `e2e/support/webui.ts`, `e2e/auth.spec.ts` (mock mutabili di `/api/auth/*`).
+
+      **Modifica:** nuovo `e2e/credentials.spec.ts` con: cambio password in STA (username precompilato, errore di conferma senza POST, POST con `{current_password, username, password}` e messaggio di successo, campi password svuotati); password attuale errata (401 → messaggio) e 429 (conto alla rovescia, pulsante disabilitato); reset in AP (`ap_mode: true`: niente Current password, banner, body senza `current_password`, messaggio "all sessions closed"); nessun campo NUT e nessuna chiamata a `/api/nut/config`. Nessuna `waitForTimeout`.
+
+      **Verifica:** `npx playwright test` completo verde; `npx playwright test e2e/credentials.spec.ts --repeat-each 3` stabile.
+
+      **Bloccanti:** un bug reale della UI va segnalato secondo `e2e/README.md`.
+
+      ## File Coinvolti
+      - e2e/credentials.spec.ts — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari della strategia e2e coperti
+      - [ ] Suite completa verde e `--repeat-each 3` stabile
+    ref: TASK-07
+  - id: TASK-08
+    title: Documentazione della procedura di recupero e verifica finale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare cambio e recupero delle credenziali.
+
+      **Leggi:** sezione "Web UI Login" di `README.md` e "Login alla Web UI" di `README.it.md`; `docs/adr/0009-web-ui-authentication.md` (sezione credentials).
+
+      **Modifica:**
+      1. README (entrambe le lingue): cambio delle credenziali dalla scheda "Web Login" con la password attuale (le altre sessioni vengono chiuse); procedura di recupero: doppio reset entro 3 s → la scheda si avvia come access point `NUT_ESP32_Config` → collegarsi, aprire la scheda "Web Login" e impostare le nuove credenziali senza la password attuale → riavviare la scheda; durante la modalità AP la scheda non è collegata alla rete di casa, quindi il server NUT non è raggiungibile dai client (Home Assistant, PeaNUT); entrare in AP non cancella le credenziali. Sostituire la riga "il recupero arriverà con US-063 / erase completo".
+      2. ADR 0009: se il body di risposta con `sessions_closed` non è già descritto, aggiungere una riga.
+      3. Verifica finale: `pio test -e native`, `npx playwright test`, `pio run -e esp32-s3-standard`.
+
+      **Verifica:** i tre comandi passano.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - README.md — cambio e recupero credenziali
+      - README.it.md — stessa sezione in italiano
+      - docs/adr/0009-web-ui-authentication.md — eventuale riga su sessions_closed
+
+      ## Criteri di Completamento
+      - [ ] I README descrivono cambio, recupero e NUT non raggiungibile in AP
+      - [ ] `pio test -e native`, `npx playwright test` e `pio run -e esp32-s3-standard` passano
+    ref: TASK-08

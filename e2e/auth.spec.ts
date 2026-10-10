@@ -31,6 +31,8 @@ interface AuthMock {
   throttle: { body: Record<string, unknown>; headers?: Record<string, string> } | null;
   /** when set, logout-all answers 500 storage_error and the session stays open */
   logoutAllFails: boolean;
+  /** when set, the credentials POST finds them created meanwhile by another browser and answers this */
+  createRace: { status: number; json: Record<string, unknown> } | null;
 }
 
 function defaultMock(): AuthMock {
@@ -48,6 +50,7 @@ function defaultMock(): AuthMock {
     logoutAllPosts: [],
     throttle: null,
     logoutAllFails: false,
+    createRace: null,
   };
 }
 
@@ -89,6 +92,10 @@ async function mockApi(page: Page) {
     const req = route.request();
     if (req.method() !== 'POST') return route.fallback();
     mock.credentialPosts.push({ contentType: req.headers()['content-type'], body: req.postDataJSON() });
+    if (mock.createRace) {
+      mock.configured = true;
+      return route.fulfill({ status: mock.createRace.status, json: mock.createRace.json });
+    }
     if (mock.configured) {
       return route.fulfill({ status: 409, json: { error: 'already_configured' } });
     }
@@ -183,6 +190,33 @@ test.describe('Web UI authentication (US-061)', () => {
       { contentType: 'application/json', body: { username: USER, password: GOOD_PASSWORD } },
     ]);
   });
+
+  // Credentials created meanwhile by another browser: in STA the firmware now
+  // treats the POST as a change without a session (401 unauthorized, US-063);
+  // 409 already_configured is the internal creation path
+  for (const race of [
+    { status: 401, json: { error: 'unauthorized' } },
+    { status: 409, json: { error: 'already_configured' } },
+  ]) {
+    test(`first setup race: ${race.status} ${race.json.error} goes back to Sign in with a message`, async ({ page }) => {
+      mock.configured = false;
+      await page.goto(LOGIN);
+      await expect(page.locator('#view-create')).toBeVisible();
+
+      mock.createRace = race;
+      await page.locator('#new-username').fill(USER);
+      await page.locator('#new-password').fill(GOOD_PASSWORD);
+      await page.locator('#new-password2').fill(GOOD_PASSWORD);
+      await page.locator('#btn-create').click();
+
+      await expect(page.locator('#view-signin')).toBeVisible();
+      await expect(page.locator('#view-create')).toBeHidden();
+      await expect(page.locator('#signin-error-text')).toHaveText(
+        'Credentials have already been created. Please sign in.');
+      await expect(page).toHaveURL(LOGIN);
+      expect(mock.credentialPosts).toHaveLength(1);
+    });
+  }
 
   test('sign in: wrong credentials show an error and stay, right ones redirect to /', async ({ page }) => {
     await page.goto(LOGIN);

@@ -9,7 +9,8 @@
 // - persistenti ("Remember me"): salvate tramite IAuthStorage, senza scadenza per
 //   inattività lato server (i 30 giorni li applica il browser con Max-Age); se gli
 //   slot sono pieni si sostituisce quella con seq più basso, cioè la più vecchia
-// Lo storage si scrive solo in create persistente, remove di una persistente e clear.
+// Lo storage si scrive solo in create persistente, remove di una persistente, clear
+// e rotateExclusive (quando cambia l'insieme delle persistenti).
 class SessionTable {
 public:
     static constexpr size_t kMaxSessions = 8;
@@ -33,6 +34,12 @@ public:
     // Chiude tutte le sessioni, volatili e persistenti, e svuota lo storage;
     // false (sessioni invariate) se lo storage non è stato svuotato
     bool clear();
+    // Rotazione esclusiva: crea un nuovo token dello stesso tipo di quello dato
+    // (persistent in uscita) e chiude tutte le altre sessioni, vecchio token
+    // compreso. Tutto o niente come clear(): un solo salvataggio dello storage
+    // prima della RAM; se fallisce ok = false, restituisce "" e non cambia nulla.
+    // Token vuoto o sconosciuto: come clear() (ok = esito), restituisce ""
+    String rotateExclusive(const String& token, uint32_t now, bool& ok, bool& persistent);
     // Volatili non scadute più persistenti
     size_t activeCount(uint32_t now) const;
     size_t persistentCount() const;
@@ -53,6 +60,8 @@ private:
     // Indice dello slot con quell'hash, -1 se assente (scansione completa di tutti
     // gli slot). 0..kMaxSessions-1 volatili, poi le persistenti
     int findSlot(const String& token);
+    // Token esadecimale casuale (32 caratteri) e il suo SHA-256
+    void generateToken(char hex[kTokenLength + 1], uint8_t hash[32]);
     bool isExpired(const Slot& slot, uint32_t now) const;
     size_t pickPersistentSlot() const;
     bool savePersistent();

@@ -7,10 +7,11 @@
 #include "core/app_logger.h"
 
 static const char* kNamespace = "web_auth";
-static const char* kKeyUser = "user";
-static const char* kKeySalt = "salt";
-static const char* kKeyHash = "hash";
-static const char* kKeyIter = "iter";
+// Record delle credenziali in un solo blob: [versione][iter LE 4][salt 16][hash 32][len 1][username]
+static const char* kKeyCred = "cred";
+static const uint8_t kCredVersion = 1;
+static const size_t kCredHeaderSize = 1 + 4 + 16 + 32 + 1;
+static const size_t kCredMaxSize = kCredHeaderSize + 32;  // username: al massimo 32 byte
 static const char* kKeySessions = "sessions";
 // Voce del blob "sessions": 32 byte di hash + seq uint32 little-endian
 static const size_t kSessionRecordSize = 36;
@@ -45,30 +46,44 @@ bool NvsAuthStorage::loadCredentials(CredentialRecord& record) {
     // Sola lettura: se il namespace non esiste ancora begin() fallisce (stato TOFU)
     if (!prefs.begin(kNamespace, true)) return false;
 
-    bool ok = prefs.isKey(kKeyHash)
-           && prefs.getBytesLength(kKeyHash) == sizeof(record.hash)
-           && prefs.getBytesLength(kKeySalt) == sizeof(record.salt);
-    if (ok) {
-        record.username = prefs.getString(kKeyUser, "");
-        record.iterations = prefs.getUInt(kKeyIter, 0);
-        ok = prefs.getBytes(kKeySalt, record.salt, sizeof(record.salt)) == sizeof(record.salt)
-          && prefs.getBytes(kKeyHash, record.hash, sizeof(record.hash)) == sizeof(record.hash)
-          && record.username.length() > 0
-          && record.iterations > 0;
-    }
+    uint8_t buf[kCredMaxSize];
+    size_t len = prefs.isKey(kKeyCred) ? prefs.getBytesLength(kKeyCred) : 0;
+    bool ok = len >= kCredHeaderSize + 1 && len <= sizeof(buf)
+           && prefs.getBytes(kKeyCred, buf, len) == len;
     prefs.end();
-    return ok;
+    if (!ok || buf[0] != kCredVersion) return false;
+
+    // [versione][iter LE 4][salt 16][hash 32][len username 1][username]
+    size_t user_len = buf[kCredHeaderSize - 1];
+    if (user_len == 0 || kCredHeaderSize + user_len != len) return false;
+    record.iterations = (uint32_t)buf[1] | ((uint32_t)buf[2] << 8)
+                      | ((uint32_t)buf[3] << 16) | ((uint32_t)buf[4] << 24);
+    memcpy(record.salt, buf + 5, sizeof(record.salt));
+    memcpy(record.hash, buf + 5 + sizeof(record.salt), sizeof(record.hash));
+    record.username = "";
+    for (size_t i = 0; i < user_len; i++) record.username += (char)buf[kCredHeaderSize + i];
+    return record.iterations > 0;
 }
 
 bool NvsAuthStorage::saveCredentials(const CredentialRecord& record) {
+    size_t user_len = record.username.length();
+    if (user_len == 0 || kCredHeaderSize + user_len > kCredMaxSize) return false;
+
+    uint8_t buf[kCredMaxSize];
+    buf[0] = kCredVersion;
+    for (int i = 0; i < 4; i++) buf[1 + i] = (uint8_t)(record.iterations >> (8 * i));
+    memcpy(buf + 5, record.salt, sizeof(record.salt));
+    memcpy(buf + 5 + sizeof(record.salt), record.hash, sizeof(record.hash));
+    buf[kCredHeaderSize - 1] = (uint8_t)user_len;
+    memcpy(buf + kCredHeaderSize, record.username.c_str(), user_len);
+
     Preferences prefs;
     if (!prefs.begin(kNamespace, false)) return false;
-
-    // hash per ultimo: la sua presenza indica un record completo
-    bool ok = prefs.putString(kKeyUser, record.username) == record.username.length()
-           && prefs.putBytes(kKeySalt, record.salt, sizeof(record.salt)) == sizeof(record.salt)
-           && prefs.putUInt(kKeyIter, record.iterations) == sizeof(uint32_t)
-           && prefs.putBytes(kKeyHash, record.hash, sizeof(record.hash)) == sizeof(record.hash);
+    // Un solo blob: NVS scrive una chiave in modo atomico (il valore precedente resta
+    // finché il nuovo non è completo), quindi un'interruzione non lascia mai username,
+    // salt e hash di versioni diverse (review US-063)
+    size_t total = kCredHeaderSize + user_len;
+    bool ok = prefs.putBytes(kKeyCred, buf, total) == total;
     prefs.end();
     return ok;
 }
