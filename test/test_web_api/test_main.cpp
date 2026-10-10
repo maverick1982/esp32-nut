@@ -76,6 +76,7 @@ void setUp(void) {
     mockHost.writes.clear();
     mockHost.writeOk = true;
     mockHost.executeCalls = 0;
+    mockHost.data = UPSData();
 }
 void tearDown(void) {}
 
@@ -117,7 +118,7 @@ void test_api_connected_host_with_data() {
 
 void test_commands_null_host() {
     JsonDocument doc;
-    deserializeJson(doc, WebApiJson::generateUpsCommands(nullptr));
+    deserializeJson(doc, WebApiJson::generateUpsCommands(nullptr, false));
     TEST_ASSERT_FALSE(doc["connected"].as<bool>());
     TEST_ASSERT_TRUE(doc["commands"].is<JsonArray>());
     TEST_ASSERT_EQUAL(0, doc["commands"].size());
@@ -127,7 +128,7 @@ void test_commands_disconnected_host() {
     addTestAndShutdownUsages();
     mockHost.connected = false;
     JsonDocument doc;
-    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost));
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost, false));
     TEST_ASSERT_FALSE(doc["connected"].as<bool>());
     TEST_ASSERT_TRUE(doc["commands"].is<JsonArray>());
     TEST_ASSERT_EQUAL(0, doc["commands"].size());
@@ -136,7 +137,7 @@ void test_commands_disconnected_host() {
 void test_commands_catalog() {
     addTestAndShutdownUsages();
     JsonDocument doc;
-    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost));
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost, false));
     TEST_ASSERT_TRUE(doc["connected"].as<bool>());
 
     bool foundQuick = false, foundLoadOff = false;
@@ -155,12 +156,43 @@ void test_commands_catalog() {
     TEST_ASSERT_TRUE(foundLoadOff);
 }
 
+// US-062: senza permesso (AP) i comandi distruttivi sono locked, gli altri no
+void test_commands_catalog_locked_when_not_allowed() {
+    addTestAndShutdownUsages();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost, false));
+    JsonArray commands = doc["commands"].as<JsonArray>();
+    TEST_ASSERT_TRUE(commands.size() > 0);
+    bool anyDestructive = false, anyOther = false;
+    for (JsonObject c : commands) {
+        TEST_ASSERT_TRUE_MESSAGE(c["locked"].is<bool>(), c["name"].as<const char*>());
+        bool destructive = c["destructive"].as<bool>();
+        if (destructive) anyDestructive = true; else anyOther = true;
+        TEST_ASSERT_EQUAL_MESSAGE(destructive, c["locked"].as<bool>(), c["name"].as<const char*>());
+    }
+    TEST_ASSERT_TRUE(anyDestructive);
+    TEST_ASSERT_TRUE(anyOther);
+}
+
+// US-062: con permesso (STA autenticata) nessun comando e' locked
+void test_commands_catalog_unlocked_when_allowed() {
+    addTestAndShutdownUsages();
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsCommands(&mockHost, true));
+    JsonArray commands = doc["commands"].as<JsonArray>();
+    TEST_ASSERT_TRUE(commands.size() > 0);
+    for (JsonObject c : commands) {
+        TEST_ASSERT_TRUE_MESSAGE(c["locked"].is<bool>(), c["name"].as<const char*>());
+        TEST_ASSERT_FALSE_MESSAGE(c["locked"].as<bool>(), c["name"].as<const char*>());
+    }
+}
+
 // --- US-059: runUpsCommand ---
 
 void test_run_command_ok() {
     addTestAndShutdownUsages();
     String response;
-    int status = WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response);
+    int status = WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response, true);
     TEST_ASSERT_EQUAL(200, status);
     TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
     TEST_ASSERT_EQUAL(1, mockHost.writes.size());
@@ -170,20 +202,20 @@ void test_run_command_ok() {
 
 void test_run_command_invalid_json() {
     String response;
-    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "not json", response));
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "not json", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
 }
 
 void test_run_command_missing_name() {
     String response;
-    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{}", response));
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
 }
 
 void test_run_command_unknown() {
     addTestAndShutdownUsages();
     String response;
-    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"foo\"}", response));
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"foo\"}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command not supported\"}", response.c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
@@ -191,8 +223,8 @@ void test_run_command_unknown() {
 void test_run_command_destructive_forbidden() {
     addTestAndShutdownUsages();
     String response;
-    TEST_ASSERT_EQUAL(403, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.return\"}", response));
-    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Available via NUT only\"}", response.c_str());
+    TEST_ASSERT_EQUAL(403, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.return\"}", response, false));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Available via NUT only in Access Point mode\"}", response.c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
 
@@ -207,8 +239,8 @@ void test_run_command_shutdown_default_and_delay_forbidden() {
     };
     for (const char* body : bodies) {
         String response;
-        TEST_ASSERT_EQUAL_MESSAGE(403, WebApiJson::runUpsCommand(&mockHost, body, response), body);
-        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Available via NUT only\"}", response.c_str(), body);
+        TEST_ASSERT_EQUAL_MESSAGE(403, WebApiJson::runUpsCommand(&mockHost, body, response, false), body);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Available via NUT only in Access Point mode\"}", response.c_str(), body);
     }
     TEST_ASSERT_EQUAL(0, mockHost.executeCalls);
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
@@ -218,7 +250,7 @@ void test_run_command_disconnected() {
     addTestAndShutdownUsages();
     mockHost.connected = false;
     String response;
-    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
@@ -227,7 +259,7 @@ void test_run_command_write_failed() {
     addTestAndShutdownUsages();
     mockHost.writeOk = false;
     String response;
-    TEST_ASSERT_EQUAL(500, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(500, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command rejected by the UPS\"}", response.c_str());
 }
 
@@ -235,7 +267,7 @@ void test_run_command_not_supported_by_ups() {
     // Comando noto al catalogo ma senza l'usage Test nel descriptor
     mockHost.usages.push_back(featureUsage("UPS.PowerSummary.DelayBeforeShutdown"));
     String response;
-    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"test.battery.start.quick\"}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Command not supported\"}", response.c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
@@ -243,8 +275,8 @@ void test_run_command_not_supported_by_ups() {
 void test_run_command_destructive_forbidden_null_host() {
     // Il 403 arriva prima del controllo sull'host
     String response;
-    TEST_ASSERT_EQUAL(403, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"load.off\"}", response));
-    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Available via NUT only\"}", response.c_str());
+    TEST_ASSERT_EQUAL(403, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"load.off\"}", response, false));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Available via NUT only in Access Point mode\"}", response.c_str());
 }
 
 void test_run_command_body_too_long() {
@@ -253,7 +285,7 @@ void test_run_command_body_too_long() {
     padded.append(WebApiJson::MAX_COMMAND_BODY_LENGTH, 'x');
     padded += "\"}";
     String response;
-    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, String(padded.c_str()), response));
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsCommand(&mockHost, String(padded.c_str()), response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", response.c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
@@ -261,13 +293,64 @@ void test_run_command_body_too_long() {
 void test_run_command_extra_fields_ignored() {
     addTestAndShutdownUsages();
     String response;
-    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"x\":[1,2,3],\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"x\":[1,2,3],\"name\":\"test.battery.start.quick\"}", response, true));
     TEST_ASSERT_EQUAL(1, mockHost.writes.size());
 }
 
 void test_run_command_null_host() {
     String response;
-    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"test.battery.start.quick\"}", response));
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"test.battery.start.quick\"}", response, true));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
+}
+
+// --- US-062: comandi distruttivi permessi (STA autenticata) ---
+
+// Ritardi configurati come all'avvio del driver (ups.delay.*)
+static void setConfiguredDelays() {
+    mockHost.data.set("ups.delay.shutdown", "20");
+    mockHost.data.set("ups.delay.start", "30");
+}
+
+void test_run_command_shutdown_return_allowed() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.return\"}", response, true));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.executeCalls);
+    TEST_ASSERT_EQUAL(2, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeStartup", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(30, mockHost.writes[0].second);
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeShutdown", mockHost.writes[1].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(20, mockHost.writes[1].second);
+}
+
+void test_run_command_load_off_delay_allowed_uses_configured_delay() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    // "value" nel body e' ignorato: a executeCommand non arriva alcun parametro
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"load.off.delay\",\"value\":\"5\"}", response, true));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(1, mockHost.writes.size());
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeShutdown", mockHost.writes[0].first.c_str());
+    TEST_ASSERT_EQUAL_UINT32(20, mockHost.writes[0].second);
+}
+
+void test_run_command_shutdown_default_allowed() {
+    addTestAndShutdownUsages();
+    setConfiguredDelays();
+    String response;
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsCommand(&mockHost, "{\"name\":\"shutdown.default\"}", response, true));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", response.c_str());
+    TEST_ASSERT_EQUAL(2, mockHost.executeCalls);  // shutdown.default, poi shutdown.return
+    TEST_ASSERT_TRUE(mockHost.writes.size() > 0);
+    TEST_ASSERT_EQUAL_STRING("shutdown.return", mockHost.lastDefaultShutdown().c_str());
+}
+
+void test_run_command_destructive_allowed_null_host() {
+    String response;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsCommand(nullptr, "{\"name\":\"load.off\"}", response, true));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", response.c_str());
 }
 
@@ -279,6 +362,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_commands_null_host);
     RUN_TEST(test_commands_disconnected_host);
     RUN_TEST(test_commands_catalog);
+    RUN_TEST(test_commands_catalog_locked_when_not_allowed);
+    RUN_TEST(test_commands_catalog_unlocked_when_allowed);
     RUN_TEST(test_run_command_ok);
     RUN_TEST(test_run_command_invalid_json);
     RUN_TEST(test_run_command_missing_name);
@@ -292,5 +377,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_run_command_destructive_forbidden_null_host);
     RUN_TEST(test_run_command_body_too_long);
     RUN_TEST(test_run_command_extra_fields_ignored);
+    RUN_TEST(test_run_command_shutdown_return_allowed);
+    RUN_TEST(test_run_command_load_off_delay_allowed_uses_configured_delay);
+    RUN_TEST(test_run_command_shutdown_default_allowed);
+    RUN_TEST(test_run_command_destructive_allowed_null_host);
     return UNITY_END();
 }

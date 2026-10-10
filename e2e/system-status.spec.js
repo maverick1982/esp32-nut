@@ -26,8 +26,16 @@ const CASES = [
   },
 ];
 
+// Known UI delay (shared isFetchingAPI flag in bundle.js), tracked as US-065:
+// the first fetchSystemStatus() call is skipped while the initial /api/ups-vars
+// request is in flight, and the next attempt comes 3 s later (or 6 s, if the
+// ups-vars poll holds the flag again). Under a loaded parallel run that is past
+// the default 5 s expect timeout, so wait for up to three system-status periods
+// until US-065 removes the delay.
+const STATUS_TIMEOUT = 10000;
+
 async function expectIndicator(page, id, expected) {
-  await expect(page.locator(`#lbl-${id}`)).toHaveText(expected.label);
+  await expect(page.locator(`#lbl-${id}`)).toHaveText(expected.label, { timeout: STATUS_TIMEOUT });
   await expect(page.locator(`#ind-${id}`)).toHaveClass(`status-indicator ${expected.level}`);
 }
 

@@ -2,11 +2,13 @@
 #include <unity.h>
 #include <ArduinoJson.h>
 #include <string.h>
+#include <vector>
 #include "AuthPlatform.h"
 #include "CredentialStore.h"
 #include "SessionTable.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
+#include "LoginThrottle.h"
 
 // Crypto finto e deterministico: non è sicuro, serve solo a rendere i risultati
 // dipendenti dagli input e diversi dai byte in chiaro
@@ -14,9 +16,11 @@ class FakeCrypto : public IAuthCrypto {
 public:
     uint32_t counter = 0;
     bool deriveOk = true;
+    uint32_t deriveCalls = 0;
 
     bool deriveKey(const String& password, const uint8_t* salt, size_t salt_len,
                    uint32_t iterations, uint8_t out[32]) override {
+        deriveCalls++;
         uint32_t h = 2166136261u ^ iterations;
         for (size_t i = 0; i < password.length(); i++) h = (h ^ (uint8_t)password[i]) * 16777619u;
         for (size_t i = 0; i < salt_len; i++) h = (h ^ salt[i]) * 16777619u;
@@ -62,6 +66,24 @@ public:
         if (failSave) return false;
         record = in;
         hasRecord = true;
+        return true;
+    }
+
+    std::vector<PersistentSession> sessions;
+    int sessionSaves = 0;
+    bool failSessionSave = false;
+    bool failSessionLoad = false;
+
+    bool loadSessions(PersistentSession* out, size_t max, size_t& count) override {
+        count = 0;
+        if (failSessionLoad) return false;
+        for (size_t i = 0; i < sessions.size() && i < max; i++) out[count++] = sessions[i];
+        return true;
+    }
+    bool saveSessions(const PersistentSession* in, size_t count) override {
+        sessionSaves++;
+        if (failSessionSave) return false;
+        sessions.assign(in, in + count);
         return true;
     }
 };
@@ -266,7 +288,7 @@ void test_constant_time_equals(void) {
 static const uint32_t MIN = 60UL * 1000UL;
 
 void test_session_token_format_and_validity(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String token = table.create(1000);
     TEST_ASSERT_EQUAL(32, token.length());
     TEST_ASSERT_TRUE(isLowerHex(token));
@@ -278,7 +300,7 @@ void test_session_token_format_and_validity(void) {
 }
 
 void test_session_invalid_tokens(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String token = table.create(1000);
     TEST_ASSERT_FALSE(table.validate("", 1000));
     TEST_ASSERT_FALSE(table.validate(repeat('0', 32), 1000));
@@ -288,7 +310,7 @@ void test_session_invalid_tokens(void) {
 }
 
 void test_session_exact_expiry(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String a = table.create(1000);
     String b = table.create(1000);
     TEST_ASSERT_TRUE(table.validate(a, 1000 + SessionTable::kIdleTimeoutMs - 1));
@@ -299,7 +321,7 @@ void test_session_exact_expiry(void) {
 }
 
 void test_session_refresh_keeps_alive(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String token = table.create(0);
     for (uint32_t t = 10 * MIN; t <= 60 * MIN; t += 10 * MIN) {
         TEST_ASSERT_TRUE(table.validate(token, t));
@@ -309,14 +331,14 @@ void test_session_refresh_keeps_alive(void) {
 }
 
 void test_session_rollover(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String token = table.create(0xFFFFFF00u);
     TEST_ASSERT_TRUE(table.validate(token, 0x00000100u));
     TEST_ASSERT_EQUAL(1, table.activeCount(0x00000100u));
 }
 
 void test_session_lru_replacement(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String tokens[SessionTable::kMaxSessions];
     for (size_t i = 0; i < SessionTable::kMaxSessions; i++) {
         tokens[i] = table.create(1000 + i * 1000);
@@ -335,7 +357,7 @@ void test_session_lru_replacement(void) {
 }
 
 void test_session_expired_slot_reused(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String old_token = table.create(0);
     String tokens[SessionTable::kMaxSessions - 1];
     for (size_t i = 0; i < SessionTable::kMaxSessions - 1; i++) tokens[i] = table.create(1000);
@@ -350,7 +372,7 @@ void test_session_expired_slot_reused(void) {
 }
 
 void test_session_remove_and_clear(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String a = table.create(1000);
     String b = table.create(1000);
     String c = table.create(1000);
@@ -371,13 +393,260 @@ void test_session_remove_and_clear(void) {
 }
 
 void test_session_token_not_stored(void) {
-    SessionTable table(crypto);
+    SessionTable table(crypto, storage);
     String token = table.create(1000);
     // Né il token esadecimale né una sua parte compaiono nella memoria della tabella
     TEST_ASSERT_FALSE(containsBytes(&table, sizeof(table), token.c_str(), 8));
     uint8_t hash[32];
     crypto.sha256((const uint8_t*)token.c_str(), token.length(), hash);
     TEST_ASSERT_TRUE(containsBytes(&table, sizeof(table), hash, sizeof(hash)));
+}
+
+// Sessioni persistenti ("Remember me")
+
+static const uint32_t DAY = 24UL * 60UL * MIN;
+
+void test_persistent_survives_reload(void) {
+    String token;
+    {
+        SessionTable table(crypto, storage);
+        table.begin();
+        token = table.create(1000, true);
+        TEST_ASSERT_EQUAL(32, token.length());
+        TEST_ASSERT_TRUE(isLowerHex(token));
+        TEST_ASSERT_EQUAL(1, table.persistentCount());
+        TEST_ASSERT_EQUAL(1, table.activeCount(1000));
+    }
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_EQUAL(1, reloaded.persistentCount());
+    TEST_ASSERT_TRUE(reloaded.validate(token, 5));
+}
+
+void test_persistent_no_idle_expiry(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    String token = table.create(1000, true);
+    uint32_t later = 1000 + 31 * DAY;
+    TEST_ASSERT_TRUE(table.validate(token, later));
+    TEST_ASSERT_TRUE(table.validate(token, 1000 + SessionTable::kIdleTimeoutMs));
+    TEST_ASSERT_EQUAL(1, table.activeCount(later));
+}
+
+void test_volatile_not_persisted(void) {
+    String token;
+    {
+        SessionTable table(crypto, storage);
+        table.begin();
+        token = table.create(1000);
+        TEST_ASSERT_TRUE(table.validate(token, 1000));
+        TEST_ASSERT_EQUAL(0, table.persistentCount());
+    }
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_FALSE(reloaded.validate(token, 1000));
+    TEST_ASSERT_EQUAL(0, reloaded.activeCount(1000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+}
+
+void test_persistent_oldest_replaced(void) {
+    const size_t n = SessionTable::kMaxPersistentSessions;
+    String tokens[n + 1];
+    {
+        SessionTable table(crypto, storage);
+        table.begin();
+        for (size_t i = 0; i <= n; i++) tokens[i] = table.create(1000 + i, true);
+        TEST_ASSERT_EQUAL(n, table.persistentCount());
+        TEST_ASSERT_FALSE(table.validate(tokens[0], 2000));
+        for (size_t i = 1; i <= n; i++) TEST_ASSERT_TRUE(table.validate(tokens[i], 2000));
+    }
+    TEST_ASSERT_EQUAL(n, storage.sessions.size());
+
+    // Dopo il ricaricamento seq continua: la prossima sostituisce tokens[1]
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_FALSE(reloaded.validate(tokens[0], 3000));
+    for (size_t i = 1; i <= n; i++) TEST_ASSERT_TRUE(reloaded.validate(tokens[i], 3000));
+    String extra = reloaded.create(3000, true);
+    TEST_ASSERT_TRUE(reloaded.validate(extra, 3000));
+    TEST_ASSERT_FALSE(reloaded.validate(tokens[1], 3000));
+    for (size_t i = 2; i <= n; i++) TEST_ASSERT_TRUE(reloaded.validate(tokens[i], 3000));
+}
+
+void test_persistent_remove(void) {
+    String keep, gone;
+    {
+        SessionTable table(crypto, storage);
+        table.begin();
+        keep = table.create(1000, true);
+        gone = table.create(1000, true);
+        table.remove(gone);
+        TEST_ASSERT_FALSE(table.validate(gone, 1000));
+        TEST_ASSERT_TRUE(table.validate(keep, 1000));
+    }
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_FALSE(reloaded.validate(gone, 1000));
+    TEST_ASSERT_TRUE(reloaded.validate(keep, 1000));
+    TEST_ASSERT_EQUAL(1, reloaded.persistentCount());
+}
+
+void test_persistent_clear(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    String vol = table.create(1000);
+    String per = table.create(1000, true);
+    table.clear();
+    TEST_ASSERT_FALSE(table.validate(vol, 1000));
+    TEST_ASSERT_FALSE(table.validate(per, 1000));
+    TEST_ASSERT_EQUAL(0, table.activeCount(1000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+
+    SessionTable reloaded(crypto, storage);
+    reloaded.begin();
+    TEST_ASSERT_EQUAL(0, reloaded.activeCount(1000));
+    TEST_ASSERT_FALSE(reloaded.validate(per, 1000));
+}
+
+void test_persistent_clear_save_fails(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    String vol = table.create(1000);
+    String per = table.create(1000, true);
+    storage.failSessionSave = true;
+    TEST_ASSERT_FALSE(table.clear());
+    // Storage non svuotato: le sessioni restano valide per riprovare
+    TEST_ASSERT_TRUE(table.validate(vol, 1000));
+    TEST_ASSERT_TRUE(table.validate(per, 1000));
+    TEST_ASSERT_EQUAL(1, storage.sessions.size());
+    storage.failSessionSave = false;
+    TEST_ASSERT_TRUE(table.clear());
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+}
+
+void test_persistent_remove_save_fails(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    String vol = table.create(1000);
+    String per = table.create(1000, true);
+    storage.failSessionSave = true;
+    // Volatile e token sconosciuto: nessuna scrittura, true
+    TEST_ASSERT_TRUE(table.remove(vol));
+    TEST_ASSERT_TRUE(table.remove(repeat('a', 32)));
+    TEST_ASSERT_FALSE(table.remove(per));
+    TEST_ASSERT_FALSE(table.validate(per, 1000));
+}
+
+void test_persistent_load_fails(void) {
+    SessionTable seed(crypto, storage);
+    seed.begin();
+    String old = seed.create(1000, true);
+    storage.failSessionLoad = true;
+    SessionTable table(crypto, storage);
+    table.begin();
+    TEST_ASSERT_EQUAL(0, table.persistentCount());
+    TEST_ASSERT_FALSE(table.validate(old, 1000));
+    String vol = table.create(1000);
+    String per = table.create(1000, true);
+    TEST_ASSERT_TRUE(table.validate(vol, 1000));
+    TEST_ASSERT_TRUE(table.validate(per, 1000));
+    TEST_ASSERT_EQUAL(1, table.persistentCount());
+}
+
+// Voce di storage per un token noto
+static PersistentSession storedSession(const String& token, uint32_t seq) {
+    PersistentSession s;
+    crypto.sha256((const uint8_t*)token.c_str(), token.length(), s.hash);
+    s.seq = seq;
+    return s;
+}
+
+void test_persistent_seq_renumbered(void) {
+    String a = repeat('a', 32), b = repeat('b', 32), c = repeat('c', 32), d = repeat('d', 32);
+    storage.sessions.push_back(storedSession(a, 0xFFFFFFFFUL));
+    storage.sessions.push_back(storedSession(b, 5));
+    storage.sessions.push_back(storedSession(c, 5));
+    storage.sessions.push_back(storedSession(d, 3));
+
+    SessionTable table(crypto, storage);
+    table.begin();
+    // Rinumerate da 1 nell'ordine di seq (stabile) e salvate una volta
+    TEST_ASSERT_EQUAL(1, storage.sessionSaves);
+    TEST_ASSERT_EQUAL(4, storage.sessions.size());
+    TEST_ASSERT_EQUAL_UINT32(4, storage.sessions[0].seq);
+    TEST_ASSERT_EQUAL_UINT32(2, storage.sessions[1].seq);
+    TEST_ASSERT_EQUAL_UINT32(3, storage.sessions[2].seq);
+    TEST_ASSERT_EQUAL_UINT32(1, storage.sessions[3].seq);
+
+    String fresh = table.create(1000, true);
+    TEST_ASSERT_EQUAL(5, storage.sessions.size());
+    uint32_t fresh_seq = storage.sessions[4].seq;
+    for (size_t i = 0; i < 4; i++) TEST_ASSERT_TRUE(fresh_seq > storage.sessions[i].seq);
+
+    // Slot pieni: la prossima sostituisce la più vecchia (d), poi b
+    const size_t free_slots = SessionTable::kMaxPersistentSessions - 5;
+    for (size_t i = 0; i < free_slots; i++) table.create(1000, true);
+    table.create(1000, true);
+    TEST_ASSERT_FALSE(table.validate(d, 1000));
+    TEST_ASSERT_TRUE(table.validate(a, 1000));
+    TEST_ASSERT_TRUE(table.validate(b, 1000));
+    TEST_ASSERT_TRUE(table.validate(c, 1000));
+    TEST_ASSERT_TRUE(table.validate(fresh, 1000));
+    table.create(1000, true);
+    TEST_ASSERT_FALSE(table.validate(b, 1000));
+    TEST_ASSERT_TRUE(table.validate(c, 1000));
+    TEST_ASSERT_TRUE(table.validate(a, 1000));
+}
+
+void test_persistent_seq_not_renumbered_when_valid(void) {
+    String a = repeat('a', 32), b = repeat('b', 32);
+    storage.sessions.push_back(storedSession(a, 7));
+    storage.sessions.push_back(storedSession(b, 2));
+    SessionTable table(crypto, storage);
+    table.begin();
+    TEST_ASSERT_EQUAL(0, storage.sessionSaves);
+    TEST_ASSERT_EQUAL_UINT32(7, storage.sessions[0].seq);
+}
+
+void test_persistent_storage_writes_only_when_expected(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    TEST_ASSERT_EQUAL(0, storage.sessionSaves);
+    String per = table.create(1000, true);
+    TEST_ASSERT_EQUAL(1, storage.sessionSaves);
+
+    String vol = table.create(1000);
+    for (int i = 0; i < 5; i++) table.create(1000 + i);
+    TEST_ASSERT_EQUAL(1, storage.sessionSaves);
+
+    for (int i = 0; i < 100; i++) {
+        TEST_ASSERT_TRUE(table.validate(per, 2000 + i));
+        TEST_ASSERT_TRUE(table.validate(vol, 2000 + i));
+        table.validate(repeat('0', 32), 2000 + i);
+    }
+    TEST_ASSERT_EQUAL(1, storage.sessionSaves);
+
+    // remove di una volatile o di un token sconosciuto: nessuna scrittura
+    table.remove(vol);
+    table.remove(repeat('f', 32));
+    TEST_ASSERT_EQUAL(1, storage.sessionSaves);
+
+    table.remove(per);
+    TEST_ASSERT_EQUAL(2, storage.sessionSaves);
+    table.clear();
+    TEST_ASSERT_EQUAL(3, storage.sessionSaves);
+}
+
+void test_persistent_token_not_in_storage(void) {
+    SessionTable table(crypto, storage);
+    table.begin();
+    String token = table.create(1000, true);
+    TEST_ASSERT_EQUAL(1, storage.sessions.size());
+    const PersistentSession& saved = storage.sessions[0];
+    TEST_ASSERT_FALSE(containsBytes(&saved, sizeof(saved), token.c_str(), 8));
+    uint8_t hash[32];
+    crypto.sha256((const uint8_t*)token.c_str(), token.length(), hash);
+    TEST_ASSERT_EQUAL_MEMORY(hash, saved.hash, sizeof(hash));
 }
 
 // ---------------------------------------------------------------------------
@@ -475,8 +744,9 @@ static bool bodyHasNoSecrets(const AuthResponse& r, const String& token) {
 void test_service_tofu_ok(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     AuthResponse r = service.createInitialCredentials(kCreds, 1000);
     TEST_ASSERT_EQUAL(200, r.status);
@@ -497,8 +767,9 @@ void test_service_tofu_ok(void) {
 void test_service_tofu_repeated(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     TEST_ASSERT_EQUAL(200, service.createInitialCredentials(kCreds, 1000).status);
     AuthResponse r = service.createInitialCredentials("{\"username\":\"evil\",\"password\":\"password2\"}", 1000);
@@ -511,8 +782,9 @@ void test_service_tofu_repeated(void) {
 void test_service_tofu_invalid_fields(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     AuthResponse r = service.createInitialCredentials("{\"username\":\"\",\"password\":\"password1\"}", 1000);
     TEST_ASSERT_EQUAL(400, r.status);
@@ -529,8 +801,9 @@ void test_service_tofu_storage_error(void) {
     storage.failSave = true;
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     AuthResponse r = service.createInitialCredentials(kCreds, 1000);
     TEST_ASSERT_EQUAL(500, r.status);
@@ -542,8 +815,9 @@ void test_service_tofu_storage_error(void) {
 void test_service_invalid_bodies(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     String big = "{\"username\":\"admin\",\"password\":\"password1\",\"pad\":\"";
     big += repeat('x', 256);
@@ -579,8 +853,9 @@ void test_service_invalid_bodies(void) {
 void test_service_login_without_credentials(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     AuthResponse r = service.login(kCreds, 1000);
     TEST_ASSERT_EQUAL(409, r.status);
@@ -591,8 +866,9 @@ void test_service_login_without_credentials(void) {
 void test_service_login(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
     TEST_ASSERT_EQUAL(200, service.createInitialCredentials(kCreds, 1000).status);
     sessions.clear();
 
@@ -619,8 +895,9 @@ void test_service_login(void) {
 void test_service_status(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
 
     AuthResponse r = service.status("", false, 1000);
     TEST_ASSERT_EQUAL(200, r.status);
@@ -657,8 +934,9 @@ void test_service_status(void) {
 void test_service_logout(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
     String first = cookieToken(service.createInitialCredentials(kCreds, 1000).set_cookie);
     String second = cookieToken(service.login(kCreds, 1000).set_cookie);
 
@@ -682,14 +960,214 @@ void test_service_logout(void) {
 void test_service_is_authenticated(void) {
     CredentialStore store(crypto, storage);
     store.begin();
-    SessionTable sessions(crypto);
-    AuthService service(store, sessions);
+    SessionTable sessions(crypto, storage);
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
     TEST_ASSERT_FALSE(service.isAuthenticated("", 1000));
 
     String token = cookieToken(service.createInitialCredentials(kCreds, 1000).set_cookie);
     TEST_ASSERT_FALSE(service.isAuthenticated("", 1000));
     TEST_ASSERT_FALSE(service.isAuthenticated(repeat('0', 32), 1000));
     TEST_ASSERT_TRUE(service.isAuthenticated(token, 1000));
+}
+
+// ---------------------------------------------------------------------------
+// LoginThrottle
+// ---------------------------------------------------------------------------
+
+void test_throttle_free_attempts(void) {
+    LoginThrottle t;
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(1000));
+    for (int i = 0; i < 4; i++) t.recordFailure(1000);
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(1000));
+    t.recordFailure(1000);
+    TEST_ASSERT_EQUAL(1000, t.retryAfterMs(1000));
+    TEST_ASSERT_EQUAL(1, t.retryAfterMs(1999));
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(2000));
+}
+
+void test_throttle_backoff_and_cap(void) {
+    LoginThrottle t;
+    for (int i = 0; i < 5; i++) t.recordFailure(1000);
+    t.recordFailure(5000);
+    TEST_ASSERT_EQUAL(2000, t.retryAfterMs(5000));
+    t.recordFailure(9000);
+    TEST_ASSERT_EQUAL(4000, t.retryAfterMs(9000));
+
+    LoginThrottle many;
+    for (int i = 0; i < 20; i++) many.recordFailure(1000);
+    TEST_ASSERT_EQUAL(LoginThrottle::kMaxDelayMs, many.retryAfterMs(1000));
+    TEST_ASSERT_EQUAL(60000, many.retryAfterMs(1000));
+    for (int i = 0; i < 100; i++) many.recordFailure(1000);
+    TEST_ASSERT_EQUAL(60000, many.retryAfterMs(1000));
+    TEST_ASSERT_EQUAL(0, many.retryAfterMs(61000));
+}
+
+void test_throttle_success_resets(void) {
+    LoginThrottle t;
+    for (int i = 0; i < 8; i++) t.recordFailure(1000);
+    TEST_ASSERT_TRUE(t.retryAfterMs(1000) > 0);
+    t.recordSuccess();
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(1000));
+    for (int i = 0; i < 4; i++) t.recordFailure(1000);
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(1000));
+}
+
+void test_throttle_rollover(void) {
+    LoginThrottle t;
+    for (int i = 0; i < 5; i++) t.recordFailure(0xFFFFFF00u);
+    TEST_ASSERT_EQUAL(1000, t.retryAfterMs(0xFFFFFF00u));
+    // 0x100 ms dopo il fallimento, oltre il rollover
+    TEST_ASSERT_EQUAL(1000 - 0x200, t.retryAfterMs(0x00000100u));
+    TEST_ASSERT_EQUAL(0, t.retryAfterMs(0xFFFFFF00u + 1000u));
+}
+
+// ---------------------------------------------------------------------------
+// AuthService: remember, 429, logoutAll
+// ---------------------------------------------------------------------------
+
+void test_service_login_remember(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
+    TEST_ASSERT_EQUAL(200, service.createInitialCredentials(kCreds, 1000).status);
+    sessions.clear();
+
+    AuthResponse r = service.login("{\"username\":\"admin\",\"password\":\"password1\",\"remember\":true}", 2000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "Max-Age=2592000"));
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "HttpOnly"));
+    TEST_ASSERT_TRUE(contains(r.set_cookie, "SameSite=Strict"));
+    String token = cookieToken(r.set_cookie);
+    TEST_ASSERT_EQUAL(32, token.length());
+    TEST_ASSERT_EQUAL(1, sessions.persistentCount());
+    TEST_ASSERT_TRUE(service.isAuthenticated(token, 2000 + 31 * DAY));
+    TEST_ASSERT_EQUAL(AuthService::kRememberMaxAgeS, 2592000);
+
+    const char* no_remember[] = {
+        "{\"username\":\"admin\",\"password\":\"password1\"}",
+        "{\"username\":\"admin\",\"password\":\"password1\",\"remember\":false}",
+        "{\"username\":\"admin\",\"password\":\"password1\",\"remember\":\"true\"}",
+        "{\"username\":\"admin\",\"password\":\"password1\",\"remember\":1}",
+    };
+    for (size_t i = 0; i < sizeof(no_remember) / sizeof(no_remember[0]); i++) {
+        r = service.login(no_remember[i], 3000);
+        TEST_ASSERT_EQUAL_MESSAGE(200, r.status, no_remember[i]);
+        TEST_ASSERT_FALSE_MESSAGE(contains(r.set_cookie, "Max-Age"), no_remember[i]);
+    }
+    TEST_ASSERT_EQUAL(1, sessions.persistentCount());
+}
+
+void test_service_login_throttled(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
+    TEST_ASSERT_EQUAL(200, service.createInitialCredentials(kCreds, 1000).status);
+    sessions.clear();
+
+    const char* wrong = "{\"username\":\"admin\",\"password\":\"wrongpass\"}";
+    for (int i = 0; i < 5; i++) {
+        AuthResponse r = service.login(wrong, 2000);
+        TEST_ASSERT_EQUAL(401, r.status);
+        TEST_ASSERT_EQUAL(0, r.retry_after_s);
+    }
+
+    // Il 6° tentativo immediato, anche con la password giusta: 429 senza PBKDF2
+    uint32_t derives = crypto.deriveCalls;
+    AuthResponse r = service.login(kCreds, 2000);
+    TEST_ASSERT_EQUAL(429, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"too_many_attempts\",\"retry_after\":1}", r.body.c_str());
+    TEST_ASSERT_EQUAL(1, r.retry_after_s);
+    TEST_ASSERT_EQUAL_STRING("", r.set_cookie.c_str());
+    r = service.login(wrong, 2500);
+    TEST_ASSERT_EQUAL(429, r.status);
+    TEST_ASSERT_TRUE(r.retry_after_s > 0);
+    TEST_ASSERT_TRUE(contains(r.body, "\"retry_after\":1"));
+    TEST_ASSERT_EQUAL(derives, crypto.deriveCalls);
+    TEST_ASSERT_EQUAL(0, sessions.activeCount(2500));
+
+    // Il body non valido e il setup restano prioritari
+    TEST_ASSERT_EQUAL(400, service.login("not json", 2500).status);
+
+    // Dopo l'attesa: login corretto, poi un errore torna a essere 401
+    r = service.login(kCreds, 3000);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_TRUE(service.isAuthenticated(cookieToken(r.set_cookie), 3000));
+    r = service.login(wrong, 3000);
+    TEST_ASSERT_EQUAL(401, r.status);
+    TEST_ASSERT_EQUAL(0, r.retry_after_s);
+}
+
+void test_service_login_throttle_seconds_round_up(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
+    TEST_ASSERT_EQUAL(200, service.createInitialCredentials(kCreds, 1000).status);
+
+    const char* wrong = "{\"username\":\"admin\",\"password\":\"wrongpass\"}";
+    for (int i = 0; i < 5; i++) TEST_ASSERT_EQUAL(401, service.login(wrong, 2000).status);
+    TEST_ASSERT_EQUAL(401, service.login(wrong, 3000).status);  // 6°: attesa 2 s
+    AuthResponse r = service.login(wrong, 3001);
+    TEST_ASSERT_EQUAL(429, r.status);
+    TEST_ASSERT_EQUAL(2, r.retry_after_s);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"too_many_attempts\",\"retry_after\":2}", r.body.c_str());
+}
+
+void test_service_logout_all(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
+    String vol = cookieToken(service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String per = cookieToken(
+        service.login("{\"username\":\"admin\",\"password\":\"password1\",\"remember\":true}", 1000).set_cookie);
+    TEST_ASSERT_TRUE(service.isAuthenticated(vol, 1000));
+    TEST_ASSERT_TRUE(service.isAuthenticated(per, 1000));
+
+    AuthResponse r = service.logoutAll();
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true}", r.body.c_str());
+    TEST_ASSERT_EQUAL_STRING("sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict", r.set_cookie.c_str());
+    TEST_ASSERT_FALSE(service.isAuthenticated(vol, 1000));
+    TEST_ASSERT_FALSE(service.isAuthenticated(per, 1000));
+    TEST_ASSERT_EQUAL(0, sessions.activeCount(1000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+}
+
+void test_service_logout_all_storage_error(void) {
+    CredentialStore store(crypto, storage);
+    store.begin();
+    SessionTable sessions(crypto, storage);
+    sessions.begin();
+    LoginThrottle throttle;
+    AuthService service(store, sessions, throttle);
+    String vol = cookieToken(service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String per = cookieToken(
+        service.login("{\"username\":\"admin\",\"password\":\"password1\",\"remember\":true}", 1000).set_cookie);
+
+    storage.failSessionSave = true;
+    AuthResponse r = service.logoutAll();
+    TEST_ASSERT_EQUAL(500, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"storage_error\"}", r.body.c_str());
+    TEST_ASSERT_EQUAL(0, r.set_cookie.length());
+    TEST_ASSERT_TRUE(service.isAuthenticated(vol, 1000));
+    TEST_ASSERT_TRUE(service.isAuthenticated(per, 1000));
+
+    // logout resta 200 anche se il salvataggio fallisce
+    AuthResponse out = service.logout(per);
+    TEST_ASSERT_EQUAL(200, out.status);
+    TEST_ASSERT_FALSE(service.isAuthenticated(per, 1000));
 }
 
 int main(int argc, char **argv) {
@@ -716,6 +1194,19 @@ int main(int argc, char **argv) {
     RUN_TEST(test_session_expired_slot_reused);
     RUN_TEST(test_session_remove_and_clear);
     RUN_TEST(test_session_token_not_stored);
+    RUN_TEST(test_persistent_survives_reload);
+    RUN_TEST(test_persistent_no_idle_expiry);
+    RUN_TEST(test_volatile_not_persisted);
+    RUN_TEST(test_persistent_oldest_replaced);
+    RUN_TEST(test_persistent_remove);
+    RUN_TEST(test_persistent_clear);
+    RUN_TEST(test_persistent_clear_save_fails);
+    RUN_TEST(test_persistent_remove_save_fails);
+    RUN_TEST(test_persistent_load_fails);
+    RUN_TEST(test_persistent_seq_renumbered);
+    RUN_TEST(test_persistent_seq_not_renumbered_when_valid);
+    RUN_TEST(test_persistent_storage_writes_only_when_expected);
+    RUN_TEST(test_persistent_token_not_in_storage);
     RUN_TEST(test_decide_table);
     RUN_TEST(test_extract_cookie);
     RUN_TEST(test_service_tofu_ok);
@@ -728,5 +1219,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_service_status);
     RUN_TEST(test_service_logout);
     RUN_TEST(test_service_is_authenticated);
+    RUN_TEST(test_throttle_free_attempts);
+    RUN_TEST(test_throttle_backoff_and_cap);
+    RUN_TEST(test_throttle_success_resets);
+    RUN_TEST(test_throttle_rollover);
+    RUN_TEST(test_service_login_remember);
+    RUN_TEST(test_service_login_throttled);
+    RUN_TEST(test_service_login_throttle_seconds_round_up);
+    RUN_TEST(test_service_logout_all);
+    RUN_TEST(test_service_logout_all_storage_error);
     return UNITY_END();
 }

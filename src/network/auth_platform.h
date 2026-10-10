@@ -21,11 +21,15 @@ private:
     bool log_timing_ = false;
 };
 
-// Credenziali nel namespace NVS "web_auth", separato da "nutos" (config_json)
+// Credenziali e sessioni persistenti nel namespace NVS "web_auth", separato da
+// "nutos" (config_json). Le sessioni sono il blob "sessions": count * 36 byte
+// (32 di hash SHA-256 + seq uint32 little-endian)
 class NvsAuthStorage : public IAuthStorage {
 public:
     bool loadCredentials(CredentialRecord& record) override;
     bool saveCredentials(const CredentialRecord& record) override;
+    bool loadSessions(PersistentSession* out, size_t max, size_t& count) override;
+    bool saveSessions(const PersistentSession* in, size_t count) override;
 };
 
 #endif

@@ -1,6 +1,7 @@
 #include "WebApiJson.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
+#include "CommandCatalog.h"
 #include "network/web_config_server.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -15,7 +16,8 @@
 
 WebConfigServer::WebConfigServer(ConfigManager& config_mgr) 
     : server(80), config_mgr(config_mgr), is_ap_mode(false),
-      credentials(auth_crypto, auth_storage), sessions(auth_crypto), auth(credentials, sessions) {}
+      credentials(auth_crypto, auth_storage), sessions(auth_crypto, auth_storage),
+      auth(credentials, sessions, throttle) {}
 
 // Username tentato in un body di login, solo per il log: caratteri non stampabili
 // sostituiti e lunghezza limitata, così il client non può sporcare il log
@@ -39,9 +41,14 @@ static String loggableUsername(const String& body) {
 void WebConfigServer::begin(bool isAPMode) {
     this->is_ap_mode = isAPMode;
     credentials.begin();
+    // Sessioni "Remember me" salvate nel blob NVS "sessions" (ADR 0009)
+    sessions.begin();
     AppLogger::log("INFO", credentials.hasCredentials()
         ? "[AUTH] Web UI credentials configured"
         : "[AUTH] No Web UI credentials: first-use setup required");
+    if (sessions.persistentCount() > 0) {
+        AppLogger::log("INFO", "[AUTH] Persistent sessions restored: %u", (unsigned)sessions.persistentCount());
+    }
     
     if (is_ap_mode) {
         // Start DNS Server for Captive Portal
@@ -96,6 +103,8 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/auth/status", HTTP_GET, guarded([this]() { handleAuthStatus(); }));
     server.on("/api/auth/credentials", HTTP_POST, guarded([this]() { handleAuthCredentials(); }));
     server.on("/api/auth/logout", HTTP_POST, guarded([this]() { handleAuthLogout(); }));
+    // Non pubblica: il guard richiede una sessione valida (in STA)
+    server.on("/api/auth/logout-all", HTTP_POST, guarded([this]() { handleAuthLogoutAll(); }));
 
     // OTA endpoints
     server.on("/update", HTTP_GET, guarded([this]() { handleOTAPage(); }));
@@ -336,16 +345,32 @@ void WebConfigServer::handleBeeper() {
     server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
 }
 
-// Catalogo dei comandi supportati dall'UPS (US-059)
+// Catalogo dei comandi supportati dall'UPS (US-059); i distruttivi sono bloccati
+// in Access Point, dove la Web UI è aperta (US-062)
 void WebConfigServer::handleUpsCommands() {
-    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups));
+    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups, !is_ap_mode));
 }
 
-// Esegue un comando non distruttivo: la logica e gli status sono in WebApiJson::runUpsCommand
+// Esegue un comando: la logica e gli status sono in WebApiJson::runUpsCommand. I
+// distruttivi sono ammessi solo in STA, dove il guard ha già richiesto la sessione
 void WebConfigServer::handleUpsCommand() {
     if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
-    int status = WebApiJson::runUpsCommand(usb_ups, server.hasArg("plain") ? server.arg("plain") : String(), response);
+    int status = WebApiJson::runUpsCommand(usb_ups, body, response, !is_ap_mode);
+    if (status == 200) {
+        // Il nome è quello del catalogo (stringa costante), non quello del client
+        JsonDocument filter;
+        filter["name"] = true;
+        JsonDocument req;
+        if (!deserializeJson(req, body, DeserializationOption::Filter(filter))) {
+            const UPSCommandInfo* info = CommandCatalog::find(req["name"].as<const char*>());
+            if (info && info->destructive) {
+                AppLogger::log("WARN", String("[CMD] Destructive command '") + info->name +
+                               "' run from the Web UI by '" + credentials.username() + "'");
+            }
+        }
+    }
     server.send(status, "application/json", response);
 }
 
@@ -466,6 +491,9 @@ void WebConfigServer::sendAuth(const AuthResponse& res) {
     if (res.set_cookie.length() > 0) {
         server.sendHeader("Set-Cookie", res.set_cookie);
     }
+    if (res.retry_after_s > 0) {
+        server.sendHeader("Retry-After", String(res.retry_after_s));
+    }
     server.sendHeader("Cache-Control", "no-store");
     server.send(res.status, "application/json", res.body);
 }
@@ -483,9 +511,15 @@ void WebConfigServer::handleAuthLogin() {
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     AuthResponse res = auth.login(body, millis());
     if (res.status == 200) {
+        throttle_logged_failures = 0;  // il successo azzera anche il throttle
         AppLogger::log("INFO", String("[AUTH] Login succeeded for user '") + credentials.username() + "'");
     } else if (res.status == 401) {
         AppLogger::log("INFO", String("[AUTH] Login failed for user '") + loggableUsername(body) + "'");
+    } else if (res.status == 429 && throttle.failures() != throttle_logged_failures) {
+        // Solo la prima richiesta respinta di ogni finestra (niente flood nel log)
+        throttle_logged_failures = throttle.failures();
+        AppLogger::log("WARN", String("[AUTH] Login throttled for user '") + loggableUsername(body) +
+                       "': retry after " + String(res.retry_after_s) + " s");
     }
     sendAuth(res);
 }
@@ -512,5 +546,21 @@ void WebConfigServer::handleAuthCredentials() {
 void WebConfigServer::handleAuthLogout() {
     if (!requireJson()) return;
     sendAuth(auth.logout(sessionToken()));
+}
+
+void WebConfigServer::handleAuthLogoutAll() {
+    if (!requireJson()) return;
+    // In AP la policy non valida le sessioni: chiunque sia sull'AP potrebbe chiuderle
+    if (is_ap_mode) {
+        server.send(403, "application/json", "{\"error\":\"Not available in Access Point mode\"}");
+        return;
+    }
+    AuthResponse res = auth.logoutAll();
+    if (res.status == 200) {
+        AppLogger::log("INFO", String("[AUTH] All sessions closed by '") + credentials.username() + "'");
+    } else {
+        AppLogger::log("ERROR", "[AUTH] Logout of all sessions failed: storage not cleared");
+    }
+    sendAuth(res);
 }
 

@@ -9,11 +9,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Every /api/* call goes through here so that a 401 sends the user to /login
     async function apiFetch(url, options) {
         const response = await fetch(url, options);
-        if (response.status === 401 && !sessionExpired) {
-            sessionExpired = true;
-            window.location.replace('/login?expired=1');
-        }
+        if (response.status === 401 && !sessionExpired) redirectExpired();
         return response;
+    }
+    function redirectExpired() {
+        sessionExpired = true;
+        window.location.replace('/login?expired=1');
     }
     const NUT_DESCRIPTIONS = {
     'ups.alarm': 'UPS alarms',
@@ -747,12 +748,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // US-059: UPS command list
-    const CMD_LOCK_NOTE = 'Available via NUT only until web authentication is implemented';
+    const CMD_LOCK_NOTE = 'Available via NUT only in Access Point mode';
+    const CMD_CONFIRM_WARNING = 'This command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.';
     const CMD_ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4l13 8-13 8z"/></svg>';
     const CMD_ICON_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
     const CMD_ERRORS = {
         400: 'Command not supported',
-        403: 'Available via NUT only',
+        403: CMD_LOCK_NOTE,
         500: 'Command rejected by the UPS',
         503: 'UPS not connected'
     };
@@ -807,6 +809,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }, CMD_RESULT_MS + 600);
     }
 
+    // US-062: a destructive command is locked unless the API says otherwise
+    // (missing field = locked, the prudent default)
+    function isCommandLocked(cmd) {
+        return !!cmd.destructive && cmd.locked !== false;
+    }
+
     function buildCommandRow(cmd, destructive) {
         const row = document.createElement('div');
         row.className = 'cmd-row';
@@ -830,11 +838,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-outline btn-sm cmd-run';
-        if (destructive) {
+        if (destructive && cmd.locked !== false) {
             // Locked: no listener, nothing can be sent from the web UI
             btn.disabled = true;
             btn.title = CMD_LOCK_NOTE;
             setRunButtonContent(btn, CMD_ICON_LOCK, 'Run');
+        } else if (destructive) {
+            // Unlocked destructive command: native confirmation first, Cancel sends nothing
+            setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
+            btn.addEventListener('click', () => {
+                if (btn.disabled) return;
+                if (!window.confirm(`Run "${cmd.name}"?\n\n${CMD_CONFIRM_WARNING}`)) return;
+                runCommand(cmd.name, btn, out);
+            });
         } else {
             setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
             btn.addEventListener('click', () => runCommand(cmd.name, btn, out));
@@ -856,11 +872,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let nActions = 0;
         let nPower = 0;
+        let nLocked = 0;
         for (const cmd of commands) {
             if (!cmd || typeof cmd.name !== 'string' || cmd.name === '') continue;
             const destructive = !!cmd.destructive;
             (destructive ? groupPower : groupActions).appendChild(buildCommandRow(cmd, destructive));
             if (destructive) nPower++; else nActions++;
+            if (isCommandLocked(cmd)) nLocked++;
         }
 
         const countActions = document.getElementById('cmd-count-actions');
@@ -869,6 +887,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (countPower) countPower.textContent = String(nPower);
         groupActions.hidden = nActions === 0;
         groupPower.hidden = nPower === 0;
+        // US-062: the group looks locked (and shows the note) only if a row is locked
+        groupPower.classList.toggle('locked', nLocked > 0);
+        const notePower = document.getElementById('cmd-note-power');
+        if (notePower) notePower.hidden = nLocked === 0;
 
         const isEmpty = nActions + nPower === 0;
         list.hidden = isEmpty;
@@ -1090,6 +1112,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionUser = document.getElementById('session-user');
     const sessionUsername = document.getElementById('session-username');
     const btnLogout = document.getElementById('btn-logout');
+    const btnLogoutAll = document.getElementById('btn-logout-all');
+    const logoutAllError = document.getElementById('logout-all-error');
 
     if (sidebarSession) {
         apiFetch('/api/auth/status', { cache: 'no-store' })
@@ -1107,21 +1131,45 @@ document.addEventListener('DOMContentLoaded', () => {
             .catch(err => console.error('Failed to fetch auth status:', err));
     }
 
-    if (btnLogout) {
-        btnLogout.addEventListener('click', async () => {
-            btnLogout.disabled = true;
+    // US-061 Log out (this session) and US-062 Log out of all devices: same
+    // flow, different endpoint. Both buttons live in the session row, so they
+    // share its visibility (hidden in AP mode and without a session).
+    function bindLogout(btn, url) {
+        if (!btn) return;
+        const all = url === '/api/auth/logout-all';
+        btn.addEventListener('click', async () => {
+            if (btnLogout) btnLogout.disabled = true;
+            if (btnLogoutAll) btnLogoutAll.disabled = true;
+            if (logoutAllError) logoutAllError.hidden = true;
             // Stop the polling first: after the logout every API call would get 401
             sessionExpired = true;
+            let ok = false;
             try {
-                await fetch('/api/auth/logout', {
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: '{}'
                 });
+                // Same redirect as apiFetch (sessionExpired is already set here)
+                if (all && response.status === 401) {
+                    redirectExpired();
+                    return;
+                }
+                ok = response.ok;
             } catch (err) {
                 console.error('Logout request failed:', err);
+            }
+            // US-062: logout-all failed, the session is still open: stay and retry
+            if (all && !ok) {
+                sessionExpired = false;
+                if (logoutAllError) logoutAllError.hidden = false;
+                if (btnLogout) btnLogout.disabled = false;
+                if (btnLogoutAll) btnLogoutAll.disabled = false;
+                return;
             }
             window.location.replace('/login');
         });
     }
+    bindLogout(btnLogout, '/api/auth/logout');
+    bindLogout(btnLogoutAll, '/api/auth/logout-all');
 });

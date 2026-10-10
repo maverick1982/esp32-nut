@@ -94,6 +94,23 @@
                     </svg>
                     Log out
                 </button>
+                <!-- US-062: ends every session, on every device -->
+                <button type="button" class="btn btn-outline btn-logout btn-logout-all" id="btn-logout-all">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" />
+                        <line x1="8" y1="21" x2="16" y2="21" />
+                        <line x1="12" y1="17" x2="12" y2="21" />
+                    </svg>
+                    Log out of all devices
+                </button>
+                <!-- US-062: shown when logout-all fails (the session stays open) -->
+                <div class="auth-alert" id="logout-all-error" role="alert" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 8v4M12 16h.01" />
+                    </svg>
+                    <span>Could not log out the other devices. Please try again.</span>
+                </div>
             </div>
         </aside>
 
@@ -299,7 +316,7 @@
                                 <span class="cmd-group-count" id="cmd-count-actions">0</span>
                             </div>
                         </section>
-                        <section class="cmd-group locked" id="cmd-group-power" hidden>
+                        <section class="cmd-group" id="cmd-group-power" hidden>
                             <div class="cmd-group-header">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M13 2L3 14h9l-1 8 10-12h-9z" />
@@ -307,12 +324,13 @@
                                 <span>Power control</span>
                                 <span class="cmd-group-count" id="cmd-count-power">0</span>
                             </div>
-                            <div class="cmd-group-note">
+                            <!-- US-062: shown only when at least one command is locked (AP mode) -->
+                            <div class="cmd-group-note" id="cmd-note-power" hidden>
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <rect x="3" y="11" width="18" height="11" rx="2" />
                                     <path d="M7 11V7a5 5 0 0110 0v4" />
                                 </svg>
-                                Available via NUT only until web authentication is implemented
+                                Available via NUT only in Access Point mode
                             </div>
                         </section>
                     </div>

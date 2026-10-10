@@ -9,6 +9,7 @@
 #include "AuthPolicy.h"
 #include "AuthService.h"
 #include "CredentialStore.h"
+#include "LoginThrottle.h"
 #include "SessionTable.h"
 #include "network/auth_platform.h"
 
@@ -29,6 +30,9 @@ private:
     EspAuthCrypto auth_crypto;
     NvsAuthStorage auth_storage;
     CredentialStore credentials;
+    LoginThrottle throttle;
+    // failures() del throttle all'ultimo WARN 429: un solo log per finestra di attesa
+    uint32_t throttle_logged_failures = 0;
     SessionTable sessions;
     AuthService auth;
 
@@ -47,6 +51,7 @@ private:
     void handleAuthStatus();
     void handleAuthCredentials();
     void handleAuthLogout();
+    void handleAuthLogoutAll();
 
     void handleOTAPage();
     void handleOTAUpload();
