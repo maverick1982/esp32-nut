@@ -25,36 +25,76 @@ function fulfillFile(route: Route, file: string, contentType: string) {
 }
 
 /**
- * Serves the main page (http://esp32.local/) with its real assets.
- *
- * - Catch-all on `**\/api/**`, registered first so that every test-specific
- *   API mock registered later overrides it. Without it, API calls the test does
- *   not mock would go out to the real `esp32.local`: the slow DNS failure keeps
- *   the shared `isFetchingAPI` flag of bundle.js busy and delays the polling the
- *   tests are waiting for. Unmocked GETs get `{}`; any other unmocked method
- *   gets 501, so a save whose endpoint or method changed makes its test fail
- *   instead of showing a success message.
- * - `http://esp32.local/` -> data/www/index.html
- * - `bundle.css` / `bundle.js` (any `?v=` query) -> data/www
- * - `logo.png` / `favicon.ico` -> real files (empty body if missing)
+ * Catch-all on `**\/api/**`, shared by every page helper. Registered first so
+ * that every test-specific API mock registered later overrides it. Without it,
+ * API calls the test does not mock would go out to the real `esp32.local`: the
+ * slow DNS failure keeps the shared `isFetchingAPI` flag of bundle.js busy and
+ * delays the polling the tests are waiting for. Unmocked GETs get `{}`; any
+ * other unmocked method gets 501, so a save whose endpoint or method changed
+ * makes its test fail instead of showing a success message.
  */
-export async function serveIndex(page: Page): Promise<void> {
+async function routeApiCatchAll(page: Page): Promise<void> {
   await page.route('**/api/**', route => {
     const req = route.request();
     if (req.method() === 'GET') return route.fulfill({ json: {} });
     return route.fulfill({ status: 501, json: { error: `unmocked ${req.method()} ${req.url()}` } });
   });
+}
 
-  await page.route('http://esp32.local/', route =>
-    fulfillFile(route, 'index.html', 'text/html'));
+// bundle.css, logo and favicon: used by both the main page and /login
+async function routeCommonAssets(page: Page): Promise<void> {
   await page.route('**/bundle.css*', route =>
     fulfillFile(route, 'bundle.css', 'text/css'));
-  await page.route('**/bundle.js*', route =>
-    fulfillFile(route, 'bundle.js', 'application/javascript'));
   await page.route('**/logo.png*', route =>
     fulfillFile(route, 'logo.png', 'image/png'));
   await page.route('**/favicon.ico*', route =>
     fulfillFile(route, 'favicon.ico', 'image/x-icon'));
+}
+
+/**
+ * Serves the main page (http://esp32.local/) with its real assets.
+ *
+ * - API catch-all (see `routeApiCatchAll`)
+ * - `http://esp32.local/` -> data/www/index.html
+ * - `bundle.css` / `bundle.js` (any `?v=` query) -> data/www
+ * - `logo.png` / `favicon.ico` -> real files (empty body if missing)
+ */
+export async function serveIndex(page: Page): Promise<void> {
+  await routeApiCatchAll(page);
+
+  await page.route('http://esp32.local/', route =>
+    fulfillFile(route, 'index.html', 'text/html'));
+  await routeCommonAssets(page);
+  await page.route('**/bundle.js*', route =>
+    fulfillFile(route, 'bundle.js', 'application/javascript'));
+}
+
+/**
+ * Serves the login page (US-061) with its real assets.
+ *
+ * - API catch-all (see `routeApiCatchAll`): `/api/auth/status` answers `{}`
+ *   unless the test mocks it, and the login page then shows "Sign in".
+ * - GET `http://esp32.local/login`, with or without a query (`?expired=1`)
+ *   -> data/www/login.html. Other methods fall through.
+ * - `login.js` (any `?v=` query) -> data/www/login.js
+ * - `bundle.css`, `logo.png`, `favicon.ico` as for `serveIndex`
+ *
+ * It can be combined with `serveIndex` in the same test, to follow a redirect
+ * from /login to / (or back).
+ */
+export async function serveLogin(page: Page): Promise<void> {
+  await routeApiCatchAll(page);
+  await routeCommonAssets(page);
+  await page.route(
+    url => url.host === 'esp32.local' && url.pathname === '/login',
+    route => {
+      if (route.request().method() === 'GET') {
+        return fulfillFile(route, 'login.html', 'text/html');
+      }
+      return route.fallback();
+    });
+  await page.route('**/login.js*', route =>
+    fulfillFile(route, 'login.js', 'application/javascript'));
 }
 
 /**

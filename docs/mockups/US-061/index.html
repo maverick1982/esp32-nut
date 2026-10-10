@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Sign in (US-061 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css (tokens, embedded fonts, panels, inputs, buttons, sidebar) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-061 -->
+    <link rel="stylesheet" href="login.css">
+</head>
+
+<body class="auth-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-switcher-wrap">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>Mockup</span>
+            <button type="button" data-state="signin" class="on">Sign in</button>
+            <button type="button" data-state="signin-error">Sign in &middot; wrong credentials</button>
+            <button type="button" data-state="signin-expired">Sign in &middot; session expired</button>
+            <button type="button" data-state="create">Create credentials</button>
+            <button type="button" data-state="create-errors">Create &middot; validation errors</button>
+            <button type="button" data-state="sidebar">Sidebar &middot; Log out</button>
+        </div>
+    </div>
+    <p class="mock-note" id="mock-note"></p>
+
+    <!-- ===================== /login : Sign in ===================== -->
+    <section class="mock-view" data-view="signin">
+        <div class="auth-shell">
+            <div class="auth-brand">
+                <div class="brand-icon"><img src="logo.png" alt="Logo"></div>
+                <div class="brand-name">ESP32-NUT <span>v1.9.0</span></div>
+            </div>
+
+            <div class="panel auth-card">
+                <div class="panel-header">
+                    <h2>Sign in</h2>
+                </div>
+                <p class="auth-lead">Enter your web credentials to manage this device.</p>
+
+                <form class="auth-form" id="signin-form" novalidate>
+                    <!-- Notice shown after a redirect caused by an expired session -->
+                    <div class="auth-alert info" id="signin-expired" role="status" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 6v6l4 2" />
+                        </svg>
+                        <span>Your session has expired. Please sign in again.</span>
+                    </div>
+
+                    <!-- Inline error: wrong username or password (deliberately generic) -->
+                    <div class="auth-alert" id="signin-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span>Invalid username or password</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="login-username">Username</label>
+                        <input type="text" id="login-username" autocomplete="username" autocapitalize="none"
+                            spellcheck="false" placeholder="admin" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <div class="input-wrapper">
+                            <input type="password" id="login-password" autocomplete="current-password"
+                                placeholder="••••••••••••" required>
+                            <button type="button" class="btn-icon" data-toggle="login-password"
+                                aria-label="Show password">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="btn-signin">
+                        <span class="glow"></span>
+                        <span class="btn-label">Sign in</span>
+                    </button>
+                </form>
+            </div>
+
+            <div class="auth-footer">ID: <span>A4CF12F0C3E8</span></div>
+        </div>
+    </section>
+
+    <!-- ===================== /login : Create credentials (first use) ===================== -->
+    <section class="mock-view" data-view="create" hidden>
+        <div class="auth-shell">
+            <div class="auth-brand">
+                <div class="brand-icon"><img src="logo.png" alt="Logo"></div>
+                <div class="brand-name">ESP32-NUT <span>v1.9.0</span></div>
+            </div>
+
+            <div class="panel auth-card">
+                <div class="panel-header">
+                    <h2>Create credentials</h2>
+                    <span class="auth-badge">First use</span>
+                </div>
+                <p class="auth-lead">No web credentials are set on this device yet. The first account created
+                    becomes the administrator.</p>
+
+                <form class="auth-form" id="create-form" novalidate>
+                    <!-- Server-side error, e.g. credentials already created from another browser -->
+                    <div class="auth-alert" id="create-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span id="create-error-text">Please fix the highlighted fields.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="new-username">Username</label>
+                        <input type="text" id="new-username" autocomplete="username" autocapitalize="none"
+                            spellcheck="false" maxlength="32" placeholder="admin" required>
+                        <span class="field-error" id="err-username" hidden>Username must be 1-32 printable
+                            characters</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-password">Password</label>
+                        <div class="input-wrapper">
+                            <input type="password" id="new-password" autocomplete="new-password" maxlength="64"
+                                placeholder="••••••••••••" required>
+                            <button type="button" class="btn-icon" data-toggle="new-password"
+                                aria-label="Show password">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg>
+                            </button>
+                        </div>
+                        <span class="field-error" id="err-password" hidden>Password is too short (minimum 8
+                            characters)</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-password2">Confirm password</label>
+                        <div class="input-wrapper">
+                            <input type="password" id="new-password2" autocomplete="new-password" maxlength="64"
+                                placeholder="••••••••••••" required>
+                            <button type="button" class="btn-icon" data-toggle="new-password2"
+                                aria-label="Show password">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg>
+                            </button>
+                        </div>
+                        <span class="field-error" id="err-password2" hidden>Passwords do not match</span>
+                    </div>
+
+                    <!-- Rules hint: each line lights up as it is satisfied -->
+                    <ul class="rule-list" id="rule-list" aria-label="Credential rules">
+                        <li data-rule="user">Username: 1-32 printable characters</li>
+                        <li data-rule="pass">Password: 8-64 characters</li>
+                        <li data-rule="match">Both passwords match</li>
+                    </ul>
+
+                    <button type="submit" class="btn btn-primary" id="btn-create">
+                        <span class="glow"></span>
+                        <span class="btn-label">Create and sign in</span>
+                    </button>
+                </form>
+
+                <p class="auth-fineprint">The web UI runs over plain HTTP on your local network. Do not reuse a
+                    password you use elsewhere. These credentials are separate from the NUT server credentials.</p>
+            </div>
+
+            <div class="auth-footer">ID: <span>A4CF12F0C3E8</span></div>
+        </div>
+    </section>
+
+    <!-- ===================== App sidebar with Log out (partial view) ===================== -->
+    <section class="mock-view" data-view="sidebar" hidden>
+        <div class="preview-wrap">
+            <div class="preview-caption">Partial view &middot; main app after sign in (STA mode)</div>
+            <div class="preview-frame">
+                <div class="app-container">
+                    <aside class="sidebar">
+                        <div class="brand">
+                            <div class="brand-icon"><img src="logo.png" alt="Logo"></div>
+                            <div class="brand-name">ESP32-NUT <span>v1.9.0</span></div>
+                        </div>
+
+                        <nav class="tabs">
+                            <button class="tab active" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                                </svg>
+                                UPS Telemetry
+                            </button>
+                            <button class="tab" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="4 17 10 11 4 5" />
+                                    <line x1="12" y1="19" x2="20" y2="19" />
+                                </svg>
+                                UPS Commands
+                            </button>
+                            <button class="tab" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path
+                                        d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                                </svg>
+                                Wi-Fi Config
+                            </button>
+                            <button class="tab" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                                    <path d="M8 21h8M12 17v4" />
+                                </svg>
+                                NUT Server
+                            </button>
+                            <button class="tab" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M4 6h16M4 12h16M4 18h16" />
+                                </svg>
+                                System Logs
+                            </button>
+                            <button class="tab" type="button">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                                </svg>
+                                Firmware OTA
+                            </button>
+                        </nav>
+
+                        <!-- Existing status indicators, unchanged -->
+                        <div class="system-status dual">
+                            <div class="status-item">
+                                <div class="status-indicator success"></div>
+                                <span>Wi-Fi: Connected</span>
+                            </div>
+                            <div class="status-item">
+                                <div class="status-indicator success"></div>
+                                <span>UPS: Connected</span>
+                            </div>
+                        </div>
+
+                        <!-- NEW (US-061): session row at the very bottom, under the indicators.
+                             Hidden in AP mode, where the UI stays open without login. -->
+                        <div class="sidebar-session" id="sidebar-session">
+                            <div class="session-user" title="Signed in user">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                                    <circle cx="12" cy="7" r="4" />
+                                </svg>
+                                <span>admin</span>
+                            </div>
+                            <button type="button" class="btn btn-outline btn-logout" id="btn-logout">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                                    <polyline points="16 17 21 12 16 7" />
+                                    <line x1="21" y1="12" x2="9" y2="12" />
+                                </svg>
+                                Log out
+                            </button>
+                        </div>
+                    </aside>
+
+                    <main class="content-area">
+                        <header class="topbar">
+                            <h1 class="page-title">UPS Telemetry</h1>
+                            <div class="device-id">ID: <span>A4CF12F0C3E8</span></div>
+                        </header>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h2>Real-Time Data Feed</h2>
+                                <div class="polling-indicator"><span class="pulse-dot"></span> Live</div>
+                            </div>
+                            <div class="stub-lines">
+                                <i style="width: 92%"></i><i style="width: 78%"></i><i style="width: 85%"></i>
+                                <i style="width: 64%"></i><i style="width: 88%"></i><i style="width: 70%"></i>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+
+                <div class="callout">NEW &middot; Log out sits at the bottom of the sidebar, under the Wi-Fi / UPS
+                    indicators. Click it: the session is closed and you land on /login.</div>
+            </div>
+        </div>
+    </section>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

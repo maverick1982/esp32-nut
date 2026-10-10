@@ -115,6 +115,11 @@
             };
 
             xhr.onload = () => {
+                // US-061: no valid session (expired or logged out): back to the login page
+                if (xhr.status === 401) {
+                    window.location.replace('/login');
+                    return;
+                }
                 if (xhr.status === 200 && xhr.responseText.trim() === 'OK') {
                     showStatus('Update complete! Rebooting...', 'success');
                     progressBar.style.backgroundColor = '#28a745';

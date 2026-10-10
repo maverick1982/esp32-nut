@@ -1,0 +1,48 @@
+schema: archetipo/spec/v2
+code: US-061
+title: Login e protezione di tutte le route della Web UI
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 5
+status: REVIEW
+body: |
+  #### US-061: Login e protezione di tutte le route della Web UI
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di esp32-nut,
+  voglio che l'interfaccia web richieda username e password,
+  in modo che nessuno sulla mia rete locale possa leggere la configurazione, cambiare impostazioni o caricare firmware al posto mio.
+
+  **Dimostrazione**
+  Dopo un OTA da una versione senza login, aprendo l'interfaccia compare solo il form "Create credentials"; dopo averle create si entra nell'interfaccia. Da un altro browser, qualunque pagina porta a `/login`. Una chiamata a `/api/config` o un upload su `/update` senza login risponde 401 e il firmware non viene scritto. Logout riporta al login. Dopo 30 minuti di inattività serve un nuovo login.
+
+  **Criteri di Accettazione**
+  - [ ] In modalità normale (STA) ogni pagina e API richiede una sessione valida. Sono pubbliche solo `/login`, i suoi asset e le API di login, stato e prima configurazione. Le API rispondono 401 in JSON, le pagine fanno redirect a `/login`.
+  - [ ] Un upload su `/update` senza sessione è rifiutato prima che venga scritto qualsiasi byte nel flash.
+  - [ ] Prima configurazione: se non esistono credenziali, la UI mostra solo il form "Create credentials". Il primo che le crea viene autenticato. Un secondo tentativo di creazione riceve un errore.
+  - [ ] Username da 1 a 32 caratteri stampabili, password da 8 a 64. Valori non validi sono rifiutati con un messaggio. La password non è mai salvata in chiaro né restituita da un'API.
+  - [ ] Login con credenziali errate: messaggio di errore e nessuna sessione.
+  - [ ] Senza "Remember me" la sessione scade dopo 30 minuti senza richieste e non sopravvive a un riavvio.
+  - [ ] Il pulsante Logout chiude la sessione.
+  - [ ] Se la sessione scade con la UI aperta, il polling si ferma e la UI torna a `/login`.
+  - [ ] In modalità AP l'interfaccia resta accessibile senza login, come oggi.
+  - [ ] Le credenziali NUT e il loro funzionamento non cambiano.
+
+  **Assunzioni**
+  - Riferimenti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D1, D2, D3, D4), [ADR 0009](docs/adr/0009-web-ui-authentication.md).
+  - Le etichette della UI sono in inglese.
+  - HTTP in chiaro è un limite accettato e va documentato.
+history:
+  - status: TODO
+    at: "2026-10-10T15:16:33Z"
+  - status: PLANNED
+    at: "2026-10-10T15:22:31Z"
+  - status: IN PROGRESS
+    at: "2026-10-10T15:28:41Z"
+  - status: REVIEW
+    at: "2026-10-10T16:06:10Z"
