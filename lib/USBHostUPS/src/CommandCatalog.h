@@ -140,17 +140,26 @@ inline const HIDUsageDef* rebootField(const std::vector<HIDUsageDef>& usages) {
     return nullptr;
 }
 
-// Beeper field the host drives: first AudibleAlarmControl in descriptor order, as
-// USBHostUPS::getActiveBeeperPath() picks it
+// Beeper field the host writes: the path USBHostUPS::getActiveBeeperPath() picks (first
+// AudibleAlarmControl in descriptor order), in its Feature or Output item. Some devices
+// (APC Smart-UPS, #78) declare the same path as Input first: writing that definition
+// would use the Input layout, and beeper.mute would not be offered. The Input item is
+// returned only when the path has no writable one.
 inline const HIDUsageDef* activeBeeper(const std::vector<HIDUsageDef>& usages) {
+    const HIDUsageDef* first = nullptr;
     for (const auto& u : usages) {
         if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 ||
             strcmp(u.path, "UPS.BatterySystem.Battery.AudibleAlarmControl") == 0 ||
             strcmp(u.path, "UPS.AudibleAlarmControl") == 0) {
-            return &u;
+            first = &u;
+            break;
         }
     }
-    return nullptr;
+    if (!first) return nullptr;
+    for (const auto& u : usages) {
+        if (strcmp(u.path, first->path) == 0 && (u.report_type == 0x03 || u.report_type == 0x02)) return &u;
+    }
+    return first;
 }
 
 // beeper.mute writes 3 (beeper_info "muted" in usbhid-ups): it needs a FEATURE field

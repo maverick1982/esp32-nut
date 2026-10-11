@@ -206,6 +206,34 @@ void test_resolve_mute_writes_3_on_active_beeper() {
     TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", one_bit, def, value));
 }
 
+// APC Smart-UPS (#78): the beeper path is declared as Input first, then as Feature.
+// The host writes the Feature item, so beeper.mute is offered and written there.
+void test_active_beeper_prefers_feature_over_input() {
+    HIDUsageDef input = beeperField(8, 0x01, 1, 3);
+    input.report_id = 0x14;
+    input.bit_offset = 0;
+    HIDUsageDef feature = beeperField(8, 0x03, 1, 3);
+    feature.report_id = 0x14;
+    feature.bit_offset = 8;
+    std::vector<HIDUsageDef> usages = { input, feature };
+
+    const HIDUsageDef* b = CommandCatalog::activeBeeper(usages);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_UINT8(0x03, b->report_type);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
+                             names(CommandCatalog::build(usages, true)).c_str());
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT8(0x03, def.report_type);
+    TEST_ASSERT_EQUAL_UINT16(8, def.bit_offset);
+
+    // Input only: still the active beeper (beeper status), but nothing to mute
+    std::vector<HIDUsageDef> input_only = { input };
+    TEST_ASSERT_EQUAL_PTR(&input_only[0], CommandCatalog::activeBeeper(input_only));
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", input_only, def, value));
+}
+
 // --- US-058: load and shutdown sequences ---
 
 static HIDUsageDef field(const char* path, uint32_t usage, int32_t lmin, int32_t lmax) {
@@ -498,6 +526,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_mute_listed_for_multibit_feature_beeper);
     RUN_TEST(test_mute_not_listed_when_field_cannot_hold_3);
     RUN_TEST(test_resolve_mute_writes_3_on_active_beeper);
+    RUN_TEST(test_active_beeper_prefers_feature_over_input);
     RUN_TEST(test_steps_load_commands);
     RUN_TEST(test_steps_shutdown_commands);
     RUN_TEST(test_steps_use_given_delays);

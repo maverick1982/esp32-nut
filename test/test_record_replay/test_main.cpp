@@ -108,9 +108,7 @@ void test_replay_apc_es700g_issue71(void) {
 
 void test_replay_apc_smartups750_issue78(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
-        /* no beeper.mute: activeBeeper() picks the Input field before the Feature one */
-        "beeper.enable beeper.disable beeper.toggle "
-        CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT);
 }
 
 void test_replay_powercom_spd750u(void) {

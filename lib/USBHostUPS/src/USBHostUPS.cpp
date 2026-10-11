@@ -716,16 +716,8 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     bool shared_report = true;
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        String active_path = getActiveBeeperPath();
-        if (active_path == "") return false;
-
-        const HIDUsageDef* found = nullptr;
-        for (const auto& u : _hid_parser.getUsages()) {
-            if (strcmp(u.path, active_path.c_str()) == 0) {
-                found = &u;
-                break;
-            }
-        }
+        // Feature/Output item of the active beeper path, as beeper.mute writes it
+        const HIDUsageDef* found = CommandCatalog::activeBeeper(_hid_parser.getUsages());
         if (!found) {
             return false;
         }
