@@ -399,6 +399,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         }
         _driver->setup();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
+        _device_product = _ups_data.get("ups.model");
         _driver->formatDeviceStrings(_ups_data);
         applyDefaultDelays();
     }
@@ -490,6 +491,7 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     _is_ready_to_poll = false;
     _in_restart_pending = false;
     _ups_data = UPSData();
+    _device_product = "";
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
     _cached_reports.clear();
@@ -671,6 +673,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (_driver) {
         _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+        if (string_index == _iProduct) _device_product = _ups_data.get("ups.model");
         _driver->formatDeviceStrings(_ups_data);
         applyDefaultDelays();
     }
@@ -907,7 +910,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
         doc["vid"] = String(_vid, HEX);
         doc["pid"] = String(_pid, HEX);
         doc["manufacturer"] = _ups_data.get("ups.mfr");
-        doc["product"] = _ups_data.get("ups.model");
+        doc["product"] = _device_product.length() > 0 ? _device_product : _ups_data.get("ups.model");
         doc["serial_number"] = _ups_data.get("ups.serial");
 
         // Format hex string as a custom 10-items-per-line JSON Array

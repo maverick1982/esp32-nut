@@ -167,6 +167,9 @@ private:
     hid_host_device_handle_t _hid_dev_handle;
 
     String _cached_report_descriptor_hex;
+    // Product string as the device sent it, before formatDeviceStrings() splits it
+    // (APC "FW:"): the dump must carry it, or a replay cannot rebuild ups.firmware
+    String _device_product;
     uint16_t _vid;
     uint16_t _pid;
     bool _initialized;
