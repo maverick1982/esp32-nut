@@ -106,6 +106,13 @@ void test_replay_apc_es700g_issue71(void) {
         CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
 }
 
+void test_replay_apc_smartups750_issue78(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
+        /* no beeper.mute: activeBeeper() picks the Input field before the Feature one */
+        "beeper.enable beeper.disable beeper.toggle "
+        CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT);
+}
+
 void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
         /* PowercomDriver: no shutdown commands (US-058) */ "test.battery.start.quick test.battery.start.deep test.battery.stop");
@@ -148,6 +155,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_es700g_issue71);
+    RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
@@ -169,6 +177,7 @@ void setup() {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_es700g_issue71);
+    RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
