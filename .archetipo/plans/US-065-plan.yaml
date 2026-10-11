@@ -1,0 +1,180 @@
+schema: archetipo/plan/v2
+spec_code: US-065
+body: |
+  ---
+  type: plan
+  title: "US-065: Indicatori di stato Wi-Fi/UPS popolati subito al caricamento della Web UI — Piano di Implementazione"
+  description: "Piano di Implementazione per US-065"
+  tags: [plan, implementation, US-065]
+  ---
+  # US-065: Indicatori di stato Wi-Fi/UPS popolati subito al caricamento della Web UI — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-11
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** LOW | **Punti:** 2
+
+  **User Story**
+  Come utente della Web UI, voglio vedere lo stato di Wi-Fi e UPS e la versione del firmware appena apro la pagina, in modo da non leggere "--" per alcuni secondi e non pensare che la scheda non risponda.
+
+  **Criteri di Accettazione**
+  - [x] Al caricamento della pagina `/api/system-status` viene richiesto subito; la prima richiesta non viene più saltata perché è in corso quella a `/api/ups-vars`, `/api/logs` o al catalogo comandi.
+  - [x] Le richieste periodiche restano le stesse per numero e frequenza; lo stesso polling non manda mai due richieste in parallelo.
+  - [x] Se una risposta è lenta o fallisce, gli altri polling continuano; il caso "Offline" resta invariato.
+  - [x] In `e2e/system-status.spec.js` il timeout di 10 s torna al default; la suite e2e completa passa anche con `--repeat-each 15 --workers 8`.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Causa verificata: in `data/www/bundle.js` la scheda attiva di default è "UPS" (`index.html`, `data-target="ups"`), quindi `startUpsPolling()` (blocco "Start polling immediately", ~riga 947) chiama `fetchUpsVars()` prima della chiamata iniziale `fetchSystemStatus()` (~riga 1060). Entrambe controllano lo stesso `isFetchingAPI`: la prima chiamata di system-status esce subito e la successiva arriva dopo 3 s (o 6 s se il flag è di nuovo occupato da ups-vars, che gira ogni 2 s).
+
+  - **Un flag per polling** al posto di `isFetchingAPI` (dichiarato alla riga 3 e usato solo da `fetchLogs`, `fetchUpsVars`, `fetchSystemStatus`): `logsInFlight`, `upsVarsInFlight`, `statusInFlight`, dichiarati accanto alla funzione che li usa, con lo stesso schema attuale (`if (xInFlight) return; xInFlight = true; try { … } finally { xInFlight = false; }`). Ogni polling resta a una richiesta per volta; polling diversi non si bloccano più.
+  - **Nessun cambio di frequenza o numero di richieste**: `setInterval` (logs 2 s, ups-vars 2 s, system-status 3 s), le chiamate iniziali e quelle da clic (refresh log, beeper) restano come sono. Il pulsante refresh dei log continua a ricevere una promise risolta anche quando il polling è già in corso.
+  - **Invariati**: stop su `sessionExpired` (US-061), condizioni di tab attiva, caso "Offline" nel `catch` di `fetchSystemStatus`, badge "Offline" di `fetchUpsVars`, `loadCommands` (già indipendente, con `commandsLoadSeq`).
+  - **Carico sulla scheda**: il WebServer Arduino è single-thread, le richieste concorrenti (al massimo 3 polling) restano in coda sul socket come già accade oggi con i clic; il numero complessivo di richieste non cambia.
+  - **Asset**: dopo la modifica rigenerare `data/www/index_inlined.html`, `include/network/web_assets.h` e `.web_assets.hash` con `python scripts/embed_web.py`.
+  - **Commenti**: aggiornare il commento di `routeApiCatchAll` in `e2e/support/webui.ts` (cita il flag condiviso) e quello di `e2e/system-status.spec.js`.
+
+  ---
+
+  ## Strategia di Test
+
+  La modifica è solo frontend: la copertura è e2e Playwright (stack già presente, `playwright.config.ts`, helper `e2e/support/webui.ts`). Nessun test nativo coinvolto, ma la suite nativa non viene toccata.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`npx playwright test`)
+  **Video demo:** non previsto (correzione di un ritardo, nessuna nuova funzionalità visibile da filmare)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Indicatori subito anche con ups-vars lenta | L'utente apre la Web UI sulla scheda UPS; `/api/ups-vars` resta in sospeso (route che non risponde finché il test non lo rilascia); gli indicatori Wi-Fi/UPS mostrano i valori di `/api/system-status` entro 2 s, cioè prima del primo intervallo di 3 s |
+  | Nessuna richiesta doppia dallo stesso polling | Con `page.clock.install()` prima del caricamento e `/api/system-status` in sospeso, avanzare l'orologio di 7 s (`page.clock.runFor`): il conteggio delle richieste a `/api/system-status` resta 1; rilasciata la risposta e avanzato di altri 3 s, parte la seconda |
+  | Indicatori esistenti | I 4 test di `e2e/system-status.spec.js` (connesso, AP, warning, offline) passano con il timeout di default di `expect` |
+
+  - Regressione: suite e2e completa verde, poi `npx playwright test --repeat-each 15 --workers 8` verde (carico con cui il ritardo era stato riprodotto).
+  - Regressione nativa: `pio test -e native` invariata (nessun file C++ toccato oltre agli asset generati); build firmware `esp32-s3-standard` SUCCESS con il nuovo `web_assets.h`.
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-10-11_
+tasks:
+  - id: TASK-01
+    title: Sostituire isFetchingAPI con un flag per ciascun polling in bundle.js
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il primo `fetchSystemStatus()` non viene più saltato perché è in corso un altro polling; ogni polling resta a una richiesta per volta.
+
+      **Leggere:** `data/www/bundle.js` righe 1-20 (`isFetchingAPI`, `sessionExpired`), `fetchLogs` (~446-489), `fetchUpsVars` (~632-748), `fetchSystemStatus` (~992-1061). Attenzione: la riga 1 del file è fflate minificato, non leggerla per intero.
+
+      **Modificare:** `data/www/bundle.js`.
+
+      **Passi:**
+      1. Rimuovere `let isFetchingAPI = false;`.
+      2. Prima di `fetchLogs` dichiarare `let logsInFlight = false;` e usarlo al posto di `isFetchingAPI` nelle tre righe della funzione (controllo, set, reset nel `finally`).
+      3. Stesso per `fetchUpsVars` con `let upsVarsInFlight = false;` (accanto a `upsPollInterval`).
+      4. Stesso per `fetchSystemStatus` con `let statusInFlight = false;`.
+      5. Un commento breve sopra il primo flag: un flag per polling, così un polling lento non ritarda gli altri (US-065).
+      6. Controllare con grep che `isFetchingAPI` non compaia più in `data/www`.
+      7. Non cambiare intervalli, chiamate iniziali, condizioni di tab, `sessionExpired`, gestione Offline, `loadCommands`.
+      8. Rigenerare gli asset: `python scripts/embed_web.py`.
+
+      **Verifica:** `grep -n isFetchingAPI data/www/*.js` vuoto; `npx playwright test e2e/system-status.spec.js` verde.
+
+      **Fatto quando:** i tre polling hanno ciascuno il proprio flag e gli asset sono rigenerati.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - data/www/bundle.js — tre flag separati al posto di isFetchingAPI
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+      - include/network/.web_assets.hash — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] `isFetchingAPI` non esiste più
+      - [ ] fetchLogs, fetchUpsVars e fetchSystemStatus usano ciascuno il proprio flag, azzerato nel finally
+      - [ ] Intervalli e chiamate iniziali invariati
+      - [ ] Asset rigenerati con scripts/embed_web.py
+    ref: TASK-01
+  - id: TASK-02
+    title: Test e2e di regressione e timeout di default in system-status.spec.js
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che gli indicatori compaiono subito anche con ups-vars lenta e che un polling non manda richieste doppie; riportare il timeout al default.
+
+      **Leggere:** `e2e/system-status.spec.js`, `e2e/support/webui.ts` (`serveIndex`, `routeApiCatchAll`), un test esistente che usa route in sospeso se presente.
+
+      **Modificare:** `e2e/system-status.spec.js`, `e2e/support/webui.ts` (solo commento).
+
+      **Passi:**
+      1. Rimuovere `STATUS_TIMEOUT` e il commento "Known UI delay … tracked as US-065"; `expectIndicator` usa il timeout di default.
+      2. Nuovo test "indicators appear even while /api/ups-vars is pending": `serveIndex`, route su `**/api/ups-vars` che non risponde (promise rilasciata a fine test, poi `route.fulfill({json:{}})`), route su `**/api/system-status` con lo stato "connected"; dopo `page.goto` attendere `#lbl-wifi` con `toHaveText('Wi-Fi: HomeNetwork', { timeout: 2000 })` (sotto il primo intervallo di 3 s) e lo stesso per UPS.
+      3. Nuovo test "one system-status request at a time": `await page.clock.install()` prima di `page.goto`; route su `**/api/system-status` che conta le richieste e resta in sospeso; dopo il caricamento `await page.clock.runFor(7000)` e verificare conteggio 1; rilasciare la risposta, `runFor(3000)` e verificare con `expect.poll` che il conteggio arrivi a 2.
+      4. In `webui.ts` aggiornare il commento di `routeApiCatchAll`: il motivo resta evitare richieste verso il vero `esp32.local`, ma senza citare il flag condiviso `isFetchingAPI` (non esiste più); dire che una richiesta lenta ritarderebbe il polling che la fa.
+
+      **Verifica:** `npx playwright test e2e/system-status.spec.js --repeat-each 5` verde.
+
+      **Fatto quando:** 6 test in system-status.spec.js, tutti verdi col timeout di default.
+
+      **Blocchi:** se `page.clock` non è supportato dalla versione installata di Playwright, sostituire il test 3 con un conteggio a tempo reale (attesa di 7 s con la route in sospeso) e annotarlo.
+
+      ## File Coinvolti
+      - e2e/system-status.spec.js — timeout di default, 2 nuovi test
+      - e2e/support/webui.ts — commento di routeApiCatchAll
+
+      ## Criteri di Completamento
+      - [ ] Nessun timeout personalizzato in system-status.spec.js
+      - [ ] Test con ups-vars in sospeso verde entro 2 s
+      - [ ] Test sul singolo polling in volo verde
+      - [ ] Commento di webui.ts aggiornato
+    ref: TASK-02
+  - id: TASK-03
+    title: Regressione completa e stress e2e
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il resto della Web UI non è cambiato e che il ritardo non si ripresenta sotto carico.
+
+      **Leggere:** `e2e/README.md` (comandi), `playwright.config.ts`.
+
+      **Modificare:** nessun file salvo correzioni locali se emergono regressioni dovute a TASK-01.
+
+      **Passi:**
+      1. `npx playwright test` (suite completa).
+      2. `npx playwright test --repeat-each 15 --workers 8`.
+      3. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio test -e native`.
+      4. `~/.platformio/penv/Scripts/pio run -e esp32-s3-standard`.
+      5. Se un test fallisce, distinguere fallimento nuovo da preesistente; ritentare una volta i fallimenti a tempo; riportare l'esito nel riepilogo.
+
+      **Verifica:** i quattro comandi terminano con successo.
+
+      **Fatto quando:** suite e2e (normale e stress), suite nativa e build firmware sono verdi.
+
+      **Blocchi:** fallimenti non transitori non legati a US-065 vanno riportati, non corretti fuori ambito.
+
+      ## File Coinvolti
+      - e2e/ — solo esecuzione
+      - test/ — solo esecuzione
+
+      ## Criteri di Completamento
+      - [ ] `npx playwright test` verde
+      - [ ] `npx playwright test --repeat-each 15 --workers 8` verde
+      - [ ] `pio test -e native` verde
+      - [ ] Build `esp32-s3-standard` SUCCESS
+    ref: TASK-03
