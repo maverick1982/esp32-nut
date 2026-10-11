@@ -1,0 +1,204 @@
+schema: archetipo/plan/v2
+spec_code: US-064
+body: |
+  ---
+  type: plan
+  title: "US-064: Timeout della modalità AP manuale — Piano di Implementazione"
+  description: "Piano di Implementazione per US-064"
+  tags: [plan, implementation, US-064]
+  ---
+  # US-064: Timeout della modalità AP manuale — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-11
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** MEDIUM | **Punti:** 2
+
+  **User Story**
+  Come proprietario di esp32-nut, voglio che la modalità AP attivata col doppio reset si chiuda da sola se nessuno la usa, in modo che la scheda non resti esposta con la password AP fissa e torni a servire NUT.
+
+  **Criteri di Accettazione**
+  - [ ] Con AP attivato dal doppio reset e configurazione valida, la scheda riavvia in STA dopo 10 minuti consecutivi senza client collegati all'AP. Il motivo viene scritto nel log.
+  - [ ] Finché almeno un client è collegato, il timeout non scatta. Quando l'ultimo client si scollega, il conteggio dei 10 minuti riparte da zero.
+  - [ ] Con configurazione mancante o non valida (primo avvio, NVS vuoto o corrotto) l'AP resta attivo senza timeout.
+  - [ ] La password dell'AP non cambia.
+  - [ ] La logica del timeout ha test unitari nativi, con un orologio simulato.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  La decisione ("riavviare adesso?") è separata dalla piattaforma, come già fatto per `RestartPolicy`: una classe header-only pura, testabile in nativo, e un cablaggio minimo in `src/core/main.cpp` che le passa il numero di client e `millis()` (PDR 0001 D7, ADR 0009 "Manual AP timeout").
+
+  - **`lib/ApIdleTimeout/src/ApIdleTimeout.h`** (nuova libreria header-only, solo `<stdint.h>`): `ApIdleTimeout(bool enabled = false, uint32_t timeout_ms = DEFAULT_TIMEOUT_MS)` con `DEFAULT_TIMEOUT_MS = 600000`; `void begin(uint32_t now)` fissa l'inizio del periodo senza client; `bool update(uint32_t stations, uint32_t now)` azzera l'inizio a `now` finché `stations > 0` e restituisce `true` **una sola volta** quando `now - idle_since >= timeout_ms` con zero client (latch interno `_fired`); `bool isEnabled() const`; `uint32_t msRemaining(uint32_t now) const` (0 se scaduto o disattivato, utile per il log). Aritmetica unsigned, quindi corretta anche al riporto di `millis()`. Disattivata: `update()` restituisce sempre `false`.
+  - **Abilitazione in `setup()`**: `ap_timeout = ApIdleTimeout(manual_ap_triggered && config_ok)` e `ap_timeout.begin(millis())` nel ramo AP. Solo l'AP da doppio reset con configurazione valida ha una modalità normale a cui tornare; con configurazione mancante o non valida l'AP resta attivo (D7). Log INFO all'avvio: `[MAIN] Manual AP: restart in STA after 10 min without clients`.
+  - **Controllo in `loop()`**: subito dopo `web_server.loop()` e **prima** dell'uscita anticipata `if (!config_mgr.isValid())`. Se `ap_timeout.isEnabled()`, chiama `ap_timeout.update(WiFi.softAPgetStationNum(), now)`; facoltativamente log INFO al cambio del numero di client (0 → n, n → 0) per rendere osservabile il reset del conteggio. Alla scadenza: `AppLogger::log("WARN", "[MAIN] Manual AP: no clients for 10 min, restarting in STA mode")`, `delay(200)` per far uscire il log, `esp_restart()`.
+  - **Nessun passaggio da `CrashDiag::recordControlledRestart`**: quel percorso conta i riavvii USB consecutivi di `RestartPolicy` e allungherebbe il prossimo riavvio di recupero. Il motivo resta nel log come richiesto.
+  - **Ritorno in STA garantito**: nel boot con doppio reset `setup()` ha già scritto `manual_ap = false`, quindi dopo `esp_restart()` la scheda parte in STA. Le credenziali web e la configurazione non vengono toccate. La password AP `12345678` resta invariata.
+  - **Fuori ambito**: nessun conto alla rovescia nella Web UI, nessuna modifica alla password AP, nessun timeout per l'AP da configurazione non valida.
+  - **Documentazione**: README.md e README.it.md (sezione Access Point e passi di recupero) citano il timeout di 10 minuti senza client; ADR 0009 resta coerente (già descrive il comportamento).
+
+  ---
+
+  ## Strategia di Test
+
+  La logica è interamente nella classe pura, quindi la copertura è con test unitari nativi Unity e orologio simulato (valori `now` passati a mano); il cablaggio su scheda è verificato dalla build del firmware e da una prova manuale.
+
+  - `test/test_ap_idle_timeout/test_main.cpp` (env `native`): disattivata non scade mai; nessun client → non scade a 599999 ms, scade a 600000 ms; scade una sola volta (chiamate successive `false`); client collegato a lungo → mai scaduta; ultimo client che si scollega → i 10 minuti ripartono dal momento della disconnessione; client che si ricollega a metà → conteggio azzerato di nuovo; riporto di `millis()` (begin vicino a `UINT32_MAX`); `msRemaining` coerente.
+  - Regressione: l'intera suite nativa (`pio test -e native`) passa invariata e il firmware `esp32-s3-standard` compila.
+  - Nessun test e2e: la spec non ha superficie nella Web UI. Nessun video demo previsto.
+  - Verifica manuale su scheda (facoltativa, riportata nel riepilogo): doppio reset con configurazione valida, nessun client per 10 minuti → riavvio in STA con riga WARN nel log; con un telefono collegato all'AP nessun riavvio.
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-10-11_
+tasks:
+  - id: TASK-01
+    title: Creare la classe pura ApIdleTimeout (header-only)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** logica del timeout AP separata dalla piattaforma, testabile in nativo.
+
+      **Leggere:** `lib/USBHostUPS/src/RestartPolicy.h` come modello di stile (classe header-only, commento di testata, costanti `static const`).
+
+      **Modificare:** creare `lib/ApIdleTimeout/src/ApIdleTimeout.h`.
+
+      **Passi:**
+      1. Include solo `<stdint.h>`; guard `AP_IDLE_TIMEOUT_H`.
+      2. Commento di testata in inglese: scopo (US-064, PDR 0001 D7), abilitata solo per AP da doppio reset con configurazione valida, conteggio azzerato finché ci sono client, scadenza segnalata una volta.
+      3. `static const uint32_t DEFAULT_TIMEOUT_MS = 600000;`
+      4. Costruttore `explicit ApIdleTimeout(bool enabled = false, uint32_t timeout_ms = DEFAULT_TIMEOUT_MS)`; membri `_enabled`, `_timeoutMs`, `_idleSince` (0), `_fired` (false).
+      5. `void begin(uint32_t now)`: `_idleSince = now; _fired = false;`.
+      6. `bool update(uint32_t stations, uint32_t now)`: se `!_enabled || _fired` → false; se `stations > 0` → `_idleSince = now`, false; se `now - _idleSince >= _timeoutMs` → `_fired = true`, true; altrimenti false.
+      7. `bool isEnabled() const`, `uint32_t msRemaining(uint32_t now) const` (0 se disattivata o scaduta, altrimenti `_timeoutMs - (now - _idleSince)` limitato a 0).
+
+      **Verifica:** la build nativa del test di TASK-02 compila il file.
+
+      **Fatto quando:** l'header esiste, non dipende da Arduino ed è usabile sia in nativo sia sul firmware.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/ApIdleTimeout/src/ApIdleTimeout.h — nuovo header con la classe ApIdleTimeout
+
+      ## Criteri di Completamento
+      - [ ] La classe espone costruttore, begin, update, isEnabled, msRemaining come descritto
+      - [ ] Nessun include Arduino/ESP-IDF, sottrazioni unsigned per il riporto di millis()
+      - [ ] update() restituisce true una sola volta alla scadenza
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari nativi di ApIdleTimeout con orologio simulato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire tutti i criteri di accettazione della logica con test Unity nativi.
+
+      **Leggere:** `test/test_restart_policy/test_main.cpp` (struttura, setUp/tearDown, RUN_TEST in main).
+
+      **Modificare:** creare `test/test_ap_idle_timeout/test_main.cpp`.
+
+      **Passi:** test con nomi di comportamento:
+      1. disattivata: `update(0, t)` sempre false anche dopo ore;
+      2. nessun client: false a begin+599999, true a begin+600000;
+      3. scadenza una sola volta: chiamate successive false;
+      4. client collegato a lungo (update(1, …) per 30 min): mai true;
+      5. ultimo client che si scollega a T: false a T+599999, true a T+600000;
+      6. client che si ricollega a metà conteggio: il conteggio riparte dalla nuova disconnessione;
+      7. riporto di millis(): begin a `UINT32_MAX - 1000`, scadenza corretta dopo il riporto;
+      8. msRemaining: 600000 a begin, decresce, 0 dopo la scadenza e quando disattivata;
+      9. timeout personalizzato (es. 5000 ms) rispettato.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio test -e native -f test_ap_idle_timeout`.
+
+      **Fatto quando:** tutti i test passano.
+
+      **Blocchi:** se l'LDF nativo non trova la libreria header-only, aggiungere `-I lib/ApIdleTimeout/src` a `build_flags` di `[env:native]` in platformio.ini (adattamento locale).
+
+      ## File Coinvolti
+      - test/test_ap_idle_timeout/test_main.cpp — nuovo test Unity
+      - platformio.ini — solo se serve il path include (vedi Blocchi)
+
+      ## Criteri di Completamento
+      - [ ] I 9 scenari sono coperti da test distinti
+      - [ ] `pio test -e native -f test_ap_idle_timeout` passa
+    ref: TASK-02
+  - id: TASK-03
+    title: Cablare il timeout in main.cpp (setup e loop)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riavvio in STA dopo 10 minuti senza client nell'AP da doppio reset con configurazione valida.
+
+      **Leggere:** `src/core/main.cpp` (setup: ramo AP, `manual_ap_triggered`, `config_ok`; loop: posizione di `web_server.loop()` e dell'uscita anticipata `if (!config_mgr.isValid())`, percorso di riavvio controllato esistente).
+
+      **Modificare:** `src/core/main.cpp`.
+
+      **Passi:**
+      1. `#include "ApIdleTimeout.h"` e variabile globale `ApIdleTimeout ap_timeout;`.
+      2. In `setup()`, nel ramo AP: `ap_timeout = ApIdleTimeout(manual_ap_triggered && config_ok); ap_timeout.begin(millis());` e, se abilitata, log INFO `[MAIN] Manual AP: restart in STA mode after 10 min without clients`.
+      3. In `loop()`, subito dopo `web_server.loop()` e prima dell'uscita anticipata per configurazione non valida: se `ap_timeout.isEnabled()`, leggere `uint32_t stations = WiFi.softAPgetStationNum();`, loggare INFO al cambio 0↔n (variabile `static` con l'ultimo valore: `[MAIN] Manual AP: %u client(s) connected` / `no clients, restart in STA in 10 min`).
+      4. Se `ap_timeout.update(stations, now)` è true: `AppLogger::log("WARN", "[MAIN] Manual AP: no clients for 10 min, restarting in STA mode"); delay(200); esp_restart();`.
+      5. Non chiamare `CrashDiag::recordControlledRestart` (conterebbe come riavvio USB consecutivo). Non toccare la password AP né `boot_prefs`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio run -e esp32-s3-standard` → SUCCESS; suite nativa intera verde.
+
+      **Fatto quando:** il firmware compila e con configurazione non valida o AP non manuale il timeout resta disattivato.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - src/core/main.cpp — istanza, abilitazione in setup, controllo e riavvio in loop
+
+      ## Criteri di Completamento
+      - [ ] Timeout abilitato solo con `manual_ap_triggered && config_ok`
+      - [ ] Controllo eseguito prima dell'uscita anticipata per configurazione non valida
+      - [ ] Riga WARN con il motivo prima di `esp_restart()`
+      - [ ] Build `esp32-s3-standard` SUCCESS e suite nativa verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Documentare il timeout AP nei README
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'utente sa che l'AP manuale si chiude da solo dopo 10 minuti senza client.
+
+      **Leggere:** `README.md` (sezione configurazione iniziale, nota sul doppio reset, sezione Web UI Login con Access Point mode e passi di recupero) e le sezioni corrispondenti di `README.it.md`; `docs/adr/0009-web-ui-authentication.md` sezione "Manual AP timeout".
+
+      **Modificare:** README.md, README.it.md; ADR 0009 solo se non coerente con l'implementazione.
+
+      **Passi:**
+      1. Nella nota sul doppio reset e nel punto "Access Point mode" aggiungere: con una configurazione valida, se nessun dispositivo resta collegato all'AP per 10 minuti la scheda riparte in modalità normale; finché un dispositivo è collegato resta in AP; al primo avvio o con configurazione non valida l'AP resta attivo.
+      2. Stessa informazione in italiano in README.it.md, stesso tono delle frasi vicine.
+      3. Controllare che ADR 0009 "Manual AP timeout" corrisponda (log, nessun contatore CrashDiag); correggere solo in caso di differenze.
+
+      **Verifica:** rilettura delle sezioni modificate; nessun link rotto.
+
+      **Fatto quando:** entrambi i README descrivono il timeout in modo coerente.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - README.md — timeout AP manuale
+      - README.it.md — timeout AP manuale
+      - docs/adr/0009-web-ui-authentication.md — solo se da allineare
+
+      ## Criteri di Completamento
+      - [ ] README.md e README.it.md citano i 10 minuti senza client e l'eccezione della configurazione non valida
+      - [ ] ADR 0009 coerente con l'implementazione
+    ref: TASK-04

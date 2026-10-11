@@ -141,7 +141,7 @@ You can install the firmware directly from your browser without downloading any 
 
 ### 2. First Boot & Configuration
 1. On first boot (or if no valid Wi-Fi configuration is saved), the ESP32 will create an Access Point named **`NUT_ESP32_Config`** (Password: `12345678`).
-   > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss).
+   > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss). If the saved configuration is valid and no device stays connected to the access point for 10 minutes, the board restarts in normal mode by itself; while a device is connected it stays in Access Point mode.
 2. Connect your phone or PC to this Wi-Fi network.
 3. A captive portal should automatically open. If not, navigate to `http://192.168.4.1`.
 4. Enter your home Wi-Fi credentials and set your preferred NUT Server username/password.
@@ -165,7 +165,7 @@ The Web UI is protected by a username and password.
   1. Double reset within 3 seconds: the board starts as access point `NUT_ESP32_Config` (password `12345678`).
   2. Connect to it, open the Web UI and go to the **Web Login** tab.
   3. Set the new credentials with **Reset credentials** (no current password needed). All sessions are closed.
-  4. Restart the board to go back to the home network.
+  4. Restart the board to go back to the home network (it also goes back by itself 10 minutes after the last device disconnects from the access point).
 - ⚠️ **While in Access Point mode** the board is not on the home network, so NUT clients (Home Assistant, PeaNUT, …) cannot reach it. Keep the recovery short.
 - **Credentials are kept**: entering Access Point mode does not erase the Web UI credentials, and changing only the Wi-Fi settings keeps them too.
 ### 4. Usage

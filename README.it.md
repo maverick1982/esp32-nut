@@ -141,7 +141,7 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 
 ### 2. Primo Avvio e Configurazione
 1. Al primo avvio (o in assenza di una configurazione Wi-Fi salvata), l'ESP32 creerà un Access Point chiamato **`NUT_ESP32_Config`** (Password: `12345678`).
-   > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale).
+   > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale). Se la configurazione salvata è valida e nessun dispositivo resta collegato all'access point per 10 minuti, la scheda riparte da sola in modalità normale; finché un dispositivo è collegato resta in modalità Access Point.
 2. Connetti il tuo telefono o PC a questa rete Wi-Fi.
 3. Si aprirà automaticamente un Captive Portal. In caso contrario, naviga su `http://192.168.4.1`.
 4. Inserisci le credenziali del Wi-Fi di casa e imposta un nome utente/password per il Server NUT.
@@ -165,7 +165,7 @@ La Web UI è protetta da nome utente e password.
   1. Doppio reset entro 3 secondi: la scheda si avvia come access point `NUT_ESP32_Config` (password `12345678`).
   2. Collegati, apri la Web UI e vai alla scheda **Web Login**.
   3. Imposta le nuove credenziali con **Reset credentials** (senza la password attuale). Tutte le sessioni vengono chiuse.
-  4. Riavvia la scheda per tornare sulla rete di casa.
+  4. Riavvia la scheda per tornare sulla rete di casa (ci torna anche da sola 10 minuti dopo che l'ultimo dispositivo si è scollegato dall'access point).
 - ⚠️ **In modalità Access Point** la scheda non è sulla rete di casa, quindi i client NUT (Home Assistant, PeaNUT, …) non la raggiungono. Fai il recupero in tempi brevi.
 - **Le credenziali restano**: entrare in modalità Access Point non cancella le credenziali della Web UI, e cambiare solo le impostazioni Wi-Fi le mantiene.
 ### 4. Utilizzo Quotidiano
