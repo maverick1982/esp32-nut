@@ -55,6 +55,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - CyberPower UT650EG
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
+- CyberPower SL700U
 </details>
 
 <details>
