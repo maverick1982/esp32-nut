@@ -28,8 +28,8 @@ function fulfillFile(route: Route, file: string, contentType: string) {
  * Catch-all on `**\/api/**`, shared by every page helper. Registered first so
  * that every test-specific API mock registered later overrides it. Without it,
  * API calls the test does not mock would go out to the real `esp32.local`: the
- * slow DNS failure keeps the shared `isFetchingAPI` flag of bundle.js busy and
- * delays the polling the tests are waiting for. Unmocked GETs get `{}`; any
+ * slow DNS failure keeps that poll loop busy (one request at a time per loop)
+ * and delays the data the tests are waiting for. Unmocked GETs get `{}`; any
  * other unmocked method gets 501, so a save whose endpoint or method changed
  * makes its test fail instead of showing a success message.
  */

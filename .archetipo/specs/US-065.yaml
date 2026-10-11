@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: LOW
 points: 2
-status: TODO
+status: REVIEW
 body: |
   #### US-065: Indicatori di stato Wi-Fi/UPS popolati subito al caricamento della Web UI
 
@@ -34,3 +34,9 @@ body: |
 history:
   - status: TODO
     at: "2026-10-10T17:31:44Z"
+  - status: PLANNED
+    at: "2026-10-11T09:28:02Z"
+  - status: IN PROGRESS
+    at: "2026-10-11T09:30:19Z"
+  - status: REVIEW
+    at: "2026-10-11T13:14:33Z"
