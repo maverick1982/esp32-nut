@@ -7,6 +7,7 @@
 #include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
 #include "RestartPolicy.h"
+#include "ApIdleTimeout.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -22,6 +23,9 @@ uint32_t boot_time_ms = 0;
 
 // Controlled restarts with growing delays, then degraded mode (review A7)
 RestartPolicy restart_policy;
+
+// Manual AP mode: back to STA after 10 minutes without stations (US-064)
+ApIdleTimeout ap_timeout;
 
 // Task watchdog on the loopTask (issue #47). It replaces a hw_timer whose ISR called
 // esp_restart(): unsafe from an ISR, and unable to fire during a panic, when interrupts
@@ -98,6 +102,14 @@ void setup() {
         is_ap_mode = true;
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
         network_mgr.beginAP("NUT_ESP32_Config", "12345678");
+        // Only the double reset with a valid config has a normal mode to go back to;
+        // manual_ap is already cleared, so the restart boots in STA (PDR 0001 D7)
+        ap_timeout = ApIdleTimeout(manual_ap_triggered && config_ok);
+        ap_timeout.begin(millis());
+        if (ap_timeout.isEnabled()) {
+            AppLogger::log("INFO", "[MAIN] Manual AP: restart in STA mode after %u min without clients",
+                           (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+        }
         web_server.setUPS(&usb_ups);
         web_server.begin(true);
     } else {
@@ -159,6 +171,36 @@ void loop() {
 
     web_server.loop();
     network_mgr.loop();
+
+    // Before the early return for an invalid config (the timer is disabled there anyway)
+    if (ap_timeout.isEnabled()) {
+        // The station count is read once per second: plenty for a 10 minute timeout
+        static uint32_t last_stations = 0;
+        static uint32_t last_station_check = 0;
+        static uint32_t stations = 0;
+        if (now - last_station_check >= 1000) {
+            last_station_check = now;
+            stations = WiFi.softAPgetStationNum();
+        }
+        if (stations != last_stations) {
+            if (stations > 0) {
+                AppLogger::log("INFO", "[MAIN] Manual AP: %u client(s) connected", (unsigned)stations);
+            } else {
+                AppLogger::log("INFO", "[MAIN] Manual AP: no clients, restart in STA mode in %u min",
+                               (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+            }
+            last_stations = stations;
+        }
+        if (ap_timeout.update(stations, now)) {
+            // Reason only, kept in RTC memory and logged after the boot: recordControlledRestart
+            // would count it as a USB recovery restart and delay the next one
+            AppLogger::log("WARN", "[MAIN] Manual AP: no clients for %u min, restarting in STA mode",
+                           (unsigned)(ApIdleTimeout::DEFAULT_TIMEOUT_MS / 60000));
+            CrashDiag::recordRestartReason("Manual AP timeout: no clients for 10 min");
+            delay(200); // lascia uscire il log sulla seriale
+            esp_restart();
+        }
+    }
     // The UPS is served by its own task (USBHostUPS::begin, review A5b)
 
     // Recupero USB esaurito: riavvio controllato dal loopTask (mai da ISR), con attese

@@ -140,11 +140,11 @@ The AP/STA decision uses the server-side `is_ap_mode`, never a request field.
 * The credentials form hides `current_password` when `ap_mode` is true, otherwise requires it.
 * The header has a Logout button and "log out of all devices".
 
-### Manual AP timeout (`main.cpp`, `AppNetworkManager`)
+### Manual AP timeout (`main.cpp`, `ApIdleTimeout`)
 
 * It applies only when the AP was started by the double reset **and** `config_ok` is true. With missing or invalid config the AP stays up.
-* While `WiFi.softAPgetStationNum() > 0`, the idle start is reset. After 10 min with no station, the loop logs the reason and calls `esp_restart()`. The `manual_ap` flag is already cleared at that point, so the board boots in STA.
-* The idle logic is a small pure class with an injected clock, unit tested like `LinkMonitor` (ADR 0008).
+* While `WiFi.softAPgetStationNum() > 0`, the idle start is reset. After 10 min with no station, the loop logs the reason and calls `esp_restart()`. The reason is kept in RTC memory with `CrashDiag::recordRestartReason`, so after the boot it is logged and shown in the web UI as the last controlled restart; `recordControlledRestart` is not used, since it would count as a USB recovery restart and delay the next one. The station count is read once per second. The `manual_ap` flag is already cleared at that point, so the board boots in STA.
+* The idle logic is a small pure class (`lib/ApIdleTimeout`) with an injected clock, unit tested like `LinkMonitor` (ADR 0008).
 
 ## Consequences
 
