@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <stddef.h>
+#include <vector>
+#include "NutTable.h"
 
 struct UPSData;
 class IUSBHostUPS;
@@ -43,6 +45,20 @@ public:
      * @param ups_data Reference to the UPS data structure to update
      */
     virtual void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+
+    /**
+     * @brief Called by the host right after every decodeReport(), with the same arguments.
+     *
+     * Decodes the rows of the driver's NUT table (NutTable.h) carried by this report and
+     * writes the values of the rows that own their variable last, so a hand-written
+     * mapping of the same key never overrides them (US-066).
+     */
+    virtual void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {}
+
+    /**
+     * @brief Variables a NUT client may write (LIST RW), sorted as upsd lists them.
+     */
+    virtual void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {}
 
     /**
      * @brief Parses a received String Descriptor
@@ -89,7 +105,8 @@ public:
      * @brief True when the load.* and shutdown.* commands are offered (US-058).
      *
      * False for subdrivers whose NUT counterpart has no such commands or uses its own
-     * encodings: they are then neither listed nor executed, and ups.delay.* is not set.
+     * encodings: they are then neither listed nor executed. ups.delay.* follows
+     * delayVariablesSupported().
      */
     virtual bool shutdownCommandsSupported() const { return true; }
 
@@ -99,6 +116,26 @@ public:
      */
     virtual int32_t defaultOffDelay() const { return 20; }
     virtual int32_t defaultOnDelay() const { return 30; }
+
+    /**
+     * @brief True when the upstream subdriver declares ups.delay.shutdown/start (US-066).
+     *
+     * Usually the same drivers that offer the shutdown commands; powercom-hid declares the
+     * variables although the commands are not offered here (US-058).
+     */
+    virtual bool delayVariablesSupported() const { return shutdownCommandsSupported(); }
+
+    /**
+     * @brief Maximum length of ups.delay.* (info_len of the upstream rows: 10 in mge-hid,
+     * apc-hid and cps-hid).
+     */
+    virtual uint8_t delayAux() const { return 10; }
+
+    /**
+     * @brief Paths of the subdriver's ups.delay.* rows (NutTable.h), nullptr for a driver
+     * without an upstream subdriver: the paths of every subdriver then apply (US-058).
+     */
+    virtual const NutTable::DelayPaths* delayPaths() const { return nullptr; }
 };
 
 #endif // I_UPS_DRIVER_H

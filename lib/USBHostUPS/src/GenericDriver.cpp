@@ -31,7 +31,10 @@ GenericDriver::GenericDriver() :
     _first_full_done(false),
     _last_quick(0),
     _last_full(0),
-    _last_step(0) {
+    _last_step(0),
+    _nut_bound(false),
+    _nut_init_done(false),
+    _nut_usage_count(0) {
 }
 
 void GenericDriver::setup() {
@@ -53,6 +56,11 @@ void GenericDriver::setup() {
     _last_quick = 0;
     _last_full = 0;
     _last_step = 0;
+    _nut_rows.clear();
+    _nut_bound = false;
+    _nut_init_done = false;
+    _nut_usage_count = 0;
+    _nut_ctx = NutTable::Context();
 }
 
 bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
@@ -507,3 +515,76 @@ void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, cons
     else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
 }
 
+
+// Binds the driver's NUT table to the usages of the attached device (US-066). The usages
+// only change with a new device, which also calls setup(); the count guards a list
+// replaced in place.
+void GenericDriver::bindNutTable(IUSBHostUPS* host) {
+    const auto& usages = host->getUsages();
+    if (_nut_bound && _nut_usage_count == usages.size()) return;
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    _nut_rows = NutTable::bind(table, n, usages);
+    _nut_bound = true;
+    _nut_init_done = false;
+    _nut_usage_count = usages.size();
+}
+
+void GenericDriver::postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+    if (!host) return;
+    bindNutTable(host);
+    if (_nut_rows.empty()) return;
+
+    const auto& usages = host->getUsages();
+    if (length > 0 && data != NULL) {
+        for (size_t i = 0; i < _nut_rows.size(); i++) {
+            const NutTable::Bound& b = _nut_rows[i];
+            // The row's usage, or its twin in the other report type (libhid keeps one
+            // buffer per report ID, so either refreshes the value)
+            int pick = -1;
+            for (int idx : { b.idx, b.twin_idx }) {
+                if (idx < 0 || (size_t)idx >= usages.size()) continue;
+                const HIDUsageDef& u = usages[idx];
+                if (u.report_id == report_id && u.report_type == report_type) { pick = idx; break; }
+            }
+            if (pick < 0) continue;
+            double v = HIDParser::extractUsage(&usages[pick], report_id, data, length);
+            NutTable::onValue(_nut_rows, i, v, _nut_ctx);
+        }
+    }
+
+    // The first full poll is the end of upstream's INIT walk
+    if (!_nut_init_done && _first_full_done) {
+        NutTable::finishInit(_nut_rows);
+        _nut_init_done = true;
+    }
+
+    // The table owns its variables: written last, whatever mapping ran before
+    for (const auto& b : _nut_rows) {
+        if (b.role == NutTable::Bound::Role::ACTIVE && b.has) ups_data.set(b.info->info_type, b.value);
+    }
+}
+
+void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {
+    out.clear();
+    for (const auto& b : _nut_rows) {
+        if (b.role != NutTable::Bound::Role::ACTIVE) continue;
+        if (!(b.info->info_flags & NutTable::ST_FLAG_RW)) continue;
+        if (!data.hasKey(b.info->info_type)) continue;
+        out.push_back({ b.info->info_type, b.info->info_len, NutTable::enumValues(*b.info, _nut_ctx) });
+    }
+    // ups.delay.*: driver-side variables set by CommandCatalog::applyDefaultDelays
+    static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
+    for (const char* name : delays) {
+        if (!data.hasKey(name)) continue;
+        bool listed = false;
+        for (const auto& v : out) {
+            if (strcmp(v.name, name) == 0) { listed = true; break; }
+        }
+        if (!listed) out.push_back({ name, delayAux(), {} });
+    }
+    // upsd keeps variables in a tree ordered with strcasecmp (common/state.c)
+    std::sort(out.begin(), out.end(), [](const NutTable::RWVariable& a, const NutTable::RWVariable& b) {
+        return NutTable::compareIgnoreCase(a.name, b.name) < 0;
+    });
+}

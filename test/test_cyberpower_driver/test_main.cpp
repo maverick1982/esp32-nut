@@ -221,6 +221,48 @@ void test_cyberpower_default_delays(void) {
     TEST_ASSERT_TRUE(driver.shutdownCommandsSupported());
 }
 
+
+// --- NUT table (US-066) ---
+
+static HIDUsageDef nutField(const char* path, uint32_t usage, uint8_t report_id, uint8_t report_type,
+                            uint16_t bit_size = 8, std::initializer_list<uint8_t> coll = {}) {
+    HIDUsageDef d;
+    strcpy(d.path, path);
+    d.usage = usage;
+    d.report_id = report_id;
+    d.report_type = report_type;
+    d.bit_offset = 0;
+    d.bit_size = bit_size;
+    d.found = true;
+    size_t i = 0;
+    for (uint8_t c : coll) d.coll_index[i++] = c;
+    return d;
+}
+
+static void feed(uint8_t report_id, uint8_t report_type, uint8_t value) {
+    uint8_t data[] = { report_id, value };
+    driver.decodeReport(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+    driver.postDecode(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+}
+
+// cps-hid.c:416 + cps_sensitivity_info: UPS.Output.CPSInputSensitivity (0xff010043)
+void test_cyberpower_input_sensitivity_from_nut_table(void) {
+    mockHost._usages.push_back(nutField("UPS.Output.0xFF010043", 0xff010043, 0x1A, 3));
+    feed(0x1A, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("low", ups_data.get("input.sensitivity").c_str());
+    feed(0x1A, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("normal", ups_data.get("input.sensitivity").c_str());
+    feed(0x1A, 3, 2);
+    TEST_ASSERT_EQUAL_STRING("high", ups_data.get("input.sensitivity").c_str());
+
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(ups_data, rw);
+    TEST_ASSERT_EQUAL(1, rw.size());
+    TEST_ASSERT_EQUAL(0, rw[0].aux); // info_len 0, copied as upstream
+    TEST_ASSERT_EQUAL(3, rw[0].enums.size());
+    TEST_ASSERT_EQUAL_STRING("normal", rw[0].enums[1]);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -231,6 +273,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_load_and_zero_load_reset);
     RUN_TEST(test_cyberpower_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_cyberpower_default_delays);
+    RUN_TEST(test_cyberpower_input_sensitivity_from_nut_table);
     return UNITY_END();
 }
 #else
@@ -242,6 +285,7 @@ void setup() {
     RUN_TEST(test_cyberpower_load_and_zero_load_reset);
     RUN_TEST(test_cyberpower_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_cyberpower_default_delays);
+    RUN_TEST(test_cyberpower_input_sensitivity_from_nut_table);
     UNITY_END();
 }
 void loop() {}

@@ -29,6 +29,10 @@ public:
     // ups.model without the firmware, which goes to ups.firmware / ups.firmware.aux (issue #76)
     void formatDeviceStrings(UPSData& data) override;
 
+    // Rows of apc_hid2nut (apc-hid.c) (NutTable.h, US-066)
+    const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::apcHid2Nut(n); }
+    const NutTable::DelayPaths* delayPaths() const override { return NutTable::apcDelayPaths(); }
+
 protected:
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
     uint32_t quickPollMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }

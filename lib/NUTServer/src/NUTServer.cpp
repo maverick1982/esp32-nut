@@ -27,6 +27,17 @@ static const char* deviceAliasSource(const String& var) {
     return nullptr;
 }
 
+// upsd looks variables up with strcasecmp (common/state.c)
+static const NutTable::RWVariable* findWritable(const std::vector<NutTable::RWVariable>& rw, const String& var) {
+    for (const auto& v : rw) {
+        if (NutTable::equalsIgnoreCase(v.name, var.c_str())) return &v;
+    }
+    return nullptr;
+}
+
+// Fallback text of upsd when cmdvartab has no entry (netget.c get_desc / get_cmddesc)
+static const char* NUT_DESC_UNAVAILABLE = "Description unavailable";
+
 NUTServer::NUTServer() : 
     _usb_ups(nullptr), 
     _port(NUT_DEFAULT_PORT), 
@@ -322,7 +333,36 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             client.printf("END LIST VAR %s\n", upsName.c_str());
             return;
         }
-        else if (subcmd == "CMD" || subcmd == "RW" || subcmd == "CLIENT") {
+        else if (subcmd == "RW") {
+            // netlist.c list_rw(): same checks as LIST VAR, then "RW <ups> <var> <value>"
+            String upsName = (tokens.size() < 3) ? _config.ups_name : tokens[2];
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
+                client.print("ERR UNKNOWN-UPS\n");
+                return;
+            }
+            if (_usb_ups && _usb_ups->isDataStale()) {
+                client.print("ERR DATA-STALE\n");
+                return;
+            }
+            // Listed before the data lock is taken: getWritableVariables() takes it itself
+            std::vector<NutTable::RWVariable> rw;
+            if (_usb_ups) rw = _usb_ups->getWritableVariables();
+            client.printf("BEGIN LIST RW %s\n", upsName.c_str());
+            if (_usb_ups && !rw.empty()) {
+                auto data = _usb_ups->getUPSData();
+                for (const auto& v : rw) {
+                    if (!data->hasKey(v.name)) continue;
+                    client.printf("RW %s %s \"%s\"\n", upsName.c_str(), v.name, data->get(v.name).c_str());
+                }
+            }
+            client.printf("END LIST RW %s\n", upsName.c_str());
+            return;
+        }
+        else if (subcmd == "CMD" || subcmd == "CLIENT") {
             String upsName;
             if (tokens.size() < 3) {
                 upsName = _config.ups_name;
@@ -352,7 +392,43 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 upsName = tokens[2];
                 varName = tokens[3];
             }
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
+                client.print("ERR UNKNOWN-UPS\n");
+                return;
+            }
+            if (_usb_ups && _usb_ups->isDataStale()) {
+                client.print("ERR DATA-STALE\n");
+                return;
+            }
+            // netlist.c list_enum() / list_range(): an unknown variable is an error
+            String varNameLower = varName;
+            varNameLower.toLowerCase();
+            bool present = false;
+            if (_usb_ups) {
+                auto data = _usb_ups->getUPSData();
+                const char* alias = deviceAliasSource(varNameLower);
+                present = varNameLower == "ups.status" || varNameLower == "device.type" ||
+                          (alias && data->hasKey(alias)) || data->hasKey(varNameLower);
+            }
+            if (!present) {
+                client.print("ERR VAR-NOT-SUPPORTED\n");
+                return;
+            }
             client.printf("BEGIN LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
+            if (subcmd == "ENUM") {
+                // HU_FLAG_ENUM rows of the NUT table (US-066); usbhid-ups adds no ranges
+                std::vector<NutTable::RWVariable> rw = _usb_ups->getWritableVariables();
+                const NutTable::RWVariable* v = findWritable(rw, varName);
+                if (v) {
+                    for (const char* e : v->enums) {
+                        client.printf("ENUM %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), e);
+                    }
+                }
+            }
             client.printf("END LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
             return;
         }
@@ -482,19 +558,34 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
 
             if (subcmd == "TYPE") {
-                // Every variable the bridge exposes is read-only (LIST RW is
-                // empty) and goes out as a quoted string. Never answer a bare
-                // "RW": clients read the token after it as the type.
-                client.printf("TYPE %s %s STRING:64\n", upsName.c_str(), varName.c_str());
+                // netget.c get_type(): writable variables are "RW [ENUM] STRING:<len>"
+                // (US-066). The others still go out as quoted strings (US-071 will align
+                // them). Never answer a bare "RW": clients read the token after it as
+                // the type.
+                std::vector<NutTable::RWVariable> rw;
+                if (_usb_ups) rw = _usb_ups->getWritableVariables();
+                const NutTable::RWVariable* v = findWritable(rw, varName);
+                if (v) {
+                    client.printf("TYPE %s %s RW%s STRING:%u\n", upsName.c_str(), varName.c_str(),
+                                  v->enums.empty() ? "" : " ENUM", (unsigned)v->aux);
+                } else {
+                    client.printf("TYPE %s %s STRING:64\n", upsName.c_str(), varName.c_str());
+                }
             } else {
-                // DESC and CMDDESC share a shape. upsd answers "Unavailable"
-                // when no description database is installed: the bridge carries
-                // none for variables, while known commands take their cmdvartab
-                // description from the command catalog.
-                const UPSCommandInfo* info = (subcmd == "CMDDESC") ? CommandCatalog::find(varName.c_str()) : nullptr;
+                // DESC and CMDDESC share a shape. The texts are the cmdvartab ones:
+                // variables from the NUT table (US-066), commands from the command
+                // catalog; upsd answers "Description unavailable" for the others
+                // (netget.c get_desc / get_cmddesc).
+                const char* desc = nullptr;
+                if (subcmd == "CMDDESC") {
+                    const UPSCommandInfo* info = CommandCatalog::find(varName.c_str());
+                    if (info) desc = info->description;
+                } else {
+                    desc = NutTable::describe(varName.c_str());
+                }
                 client.printf("%s %s %s \"%s\"\n", subcmd.c_str(),
                               upsName.c_str(), varName.c_str(),
-                              info ? info->description : "Unavailable");
+                              desc ? desc : NUT_DESC_UNAVAILABLE);
             }
             return;
         }

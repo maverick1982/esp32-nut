@@ -7,6 +7,7 @@
 #include "HIDUsages.h"
 #include "HIDParser.h"
 #include "CommandCatalog.h"
+#include "NutTable.h"
 
 class IUSBHostUPS {
 public:
@@ -57,6 +58,8 @@ public:
         bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");
         return CommandCatalog::build(getUsages(), beeper, shutdownCommandsSupported());
     }
+    // Variables a NUT client may write (LIST RW), sorted as upsd; empty without a UPS (US-066)
+    virtual std::vector<NutTable::RWVariable> getWritableVariables() const { return {}; }
     // Writes value into the FEATURE field of def (read-modify-write of its report)
     virtual bool writeUsage(const HIDUsageDef& def, uint32_t value) { return false; }
     /**

@@ -33,11 +33,13 @@ body: |
     - se le chiavi che pubblichiamo solo noi (per esempio `outlet.1.switch`, `battery.capacity.full`) vanno rimosse o tenute come estensioni documentate;
     - se pubblicare le voci `unmapped.*` di upstream.
   - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale.
+  - [ ] `postDecode()` scrive in UPSData solo le variabili il cui valore è cambiato o che una mappatura scritta a mano può aver sovrascritto. Oggi riscrive tutte le righe attive a ogni report: con le righe in sola lettura nella tabella diventerebbero decine di allocazioni di String per ogni report sull'ESP32 (miglioramento aperto dalla code review di US-066). Un test verifica che un report senza righe legate non tocchi UPSData.
 
   **Assunzioni**
   - Da fare dopo US-066 (EP-003), che introduce la tabella e il motore di binding. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
   - Approccio C deciso il 2026-10-15: convergenza graduale verso le tabelle `hid_info_t` di upstream, un subdriver alla volta.
   - Il controllo modello e paese (Pegasus/3S) di US-066 si riusa.
+  - La riduzione delle scritture di `postDecode()` viene dalla code review di US-066 (2026-10-15): va fatta qui perché è questa spec a portare le righe in sola lettura nel motore.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"

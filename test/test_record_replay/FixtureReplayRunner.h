@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 #include <ArduinoJson.h>
 
 #include "IUSBHostUPS.h"
@@ -82,9 +83,14 @@ public:
 
     // expectedCommands: NUT commands the device must expose (LIST CMD order, space
     // separated); nullptr skips the check (US-056). checkUsages, when given, receives the
-    // parsed usages for device-specific assertions (US-058)
+    // parsed usages for device-specific assertions (US-058). expectedRW: names of the NUT
+    // table rows the descriptor binds, sorted and space separated (US-066); nullptr skips it
     static void runFixtureTest(const char* filePath, const char* expectedCommands = nullptr,
-                               void (*checkUsages)(const std::vector<HIDUsageDef>&) = nullptr) {
+                               void (*checkUsages)(const std::vector<HIDUsageDef>&) = nullptr,
+                               const char* expectedRW = nullptr,
+                               // Values checked after the replay, on top of the fixture's own
+                               // expectations (kept out of the fixtures, US-066)
+                               const std::vector<std::pair<std::string, std::string>>& expectedValues = {}) {
         std::ifstream f(filePath);
         if (!f.is_open()) {
             std::string msg = "Cannot open fixture file: ";
@@ -186,7 +192,8 @@ public:
         driver->formatDeviceStrings(ups_data);
         // ups.delay.* defaults, as USBHostUPS right after formatDeviceStrings() (US-058)
         CommandCatalog::applyDefaultDelays(ups_data, host._parser.getUsages(), driver->defaultOffDelay(),
-                                           driver->defaultOnDelay(), driver->shutdownCommandsSupported());
+                                           driver->defaultOnDelay(), driver->delayVariablesSupported(),
+                                           driver->delayPaths());
 
         // 5. Replay Scenarios
         JsonArray scenarios = doc["scenarios"].as<JsonArray>();
@@ -209,6 +216,8 @@ public:
 
                 if (!rData.empty()) {
                     driver->decodeReport(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
+                    // As USBHostUPS: the NUT table writes its variables last (US-066)
+                    driver->postDecode(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
                 }
             }
 
@@ -255,6 +264,27 @@ public:
             TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, actual.c_str(), "supported NUT commands");
         }
         if (checkUsages) checkUsages(host.getUsages());
+        if (expectedRW) {
+            // Every driver derives from GenericDriver, which owns the NUT table
+            size_t n = 0;
+            const NutTable::HidInfo* table = static_cast<GenericDriver*>(driver)->hid2nut(n);
+            std::vector<std::string> names;
+            for (const auto& b : NutTable::bind(table, n, host.getUsages())) {
+                if (std::find(names.begin(), names.end(), b.info->info_type) == names.end()) names.push_back(b.info->info_type);
+            }
+            std::sort(names.begin(), names.end());
+            std::string actual;
+            for (const auto& name : names) {
+                if (!actual.empty()) actual += " ";
+                actual += name;
+            }
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedRW, actual.c_str(), "NUT table rows bound by the descriptor");
+        }
+        for (const auto& kv : expectedValues) {
+            std::string msg = "after replay - key: " + kv.first;
+            TEST_ASSERT_TRUE_MESSAGE(ups_data.hasKey(kv.first.c_str()), msg.c_str());
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(kv.second.c_str(), ups_data.get(kv.first.c_str()).c_str(), msg.c_str());
+        }
 
         delete driver;
     }

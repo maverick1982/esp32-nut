@@ -39,6 +39,8 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
 
     std::vector<uint32_t> local_usages;
     std::vector<String> collection_names;
+    // Parallel to collection_names: index+1 of indexed collections, 0 otherwise
+    std::vector<uint8_t> collection_indices;
     // Usage Minimum / Maximum (review M1): expanded into local_usages once both are known
     bool have_usage_min = false, have_usage_max = false;
     uint32_t usage_min = 0, usage_max = 0;
@@ -103,6 +105,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                             appendPathSegment(def.path, sizeof(def.path), n.c_str());
                         }
                         appendPathSegment(def.path, sizeof(def.path), get_nut_usage_name(usage).c_str());
+                        for (size_t d = 0; d < collection_indices.size() && d < sizeof(def.coll_index); d++) {
+                            def.coll_index[d] = collection_indices[d];
+                        }
                         _usages.push_back(def);
                     }
                     if (offsets_map) {
@@ -117,11 +122,14 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                     usage = local_usages.back();
                 }
                 collection_names.push_back(get_nut_usage_name(usage));
+                // Vendor-defined collection types (>= 0x80) carry an index, as in hidparser.c
+                collection_indices.push_back(data >= 0x80 ? (uint8_t)((data & 0x7F) + 1) : 0);
                 local_usages.clear();
                 have_usage_min = have_usage_max = false;
             } else if (bTag == 12) { // End Collection
                 if (!collection_names.empty()) {
                     collection_names.pop_back();
+                    collection_indices.pop_back();
                 }
             }
         } else if (bType == 1) { // Global

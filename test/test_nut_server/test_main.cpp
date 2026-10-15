@@ -77,6 +77,10 @@ public:
 
     bool stale = false;
     bool isDataStale() const override { return stale; }
+
+    // Writable variables reported to LIST RW / GET TYPE / LIST ENUM (US-066)
+    std::vector<NutTable::RWVariable> rw;
+    std::vector<NutTable::RWVariable> getWritableVariables() const override { return rw; }
     bool supportsBeeperToggle() const override { return beeperToggleSupported; }
 
     std::vector<HIDUsageDef> _mockUsages;
@@ -108,6 +112,7 @@ void setUp(void) {
     mockHost.writeOk = true;
     mockHost.writes.clear();
     mockHost.failPaths.clear();
+    mockHost.rw.clear();
 
     NUTServerConfig config;
     config.username = "admin";
@@ -434,7 +439,8 @@ void test_cmddesc_known_and_unknown(void) {
 
     printer.clear();
     server.processCommand(printer, 0, "GET CMDDESC testups foo.bar");
-    TEST_ASSERT_EQUAL_STRING("CMDDESC testups foo.bar \"Unavailable\"\n", printer.getOutput().c_str());
+    // upsd's fallback text (netget.c:130), US-066
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups foo.bar \"Description unavailable\"\n", printer.getOutput().c_str());
 }
 
 // US-057: test commands go through executeCommand() and write the Test usage
@@ -772,9 +778,120 @@ void test_get_upsdesc_and_numlogins(void) {
     TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
 }
 
+// --- Writable variables (US-066): netlist.c list_rw/list_enum, netget.c get_type/get_desc ---
+
+static void setupWritable() {
+    mockHost.data.set("battery.charge.low", "20");
+    mockHost.data.set("input.sensitivity", "normal");
+    mockHost.rw = {
+        { "battery.charge.low", 10, {} },
+        { "input.sensitivity", 10, { "low", "normal", "high" } },
+    };
+}
+
+void test_list_rw_with_values(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST RW testups\n"
+        "RW testups battery.charge.low \"20\"\n"
+        "RW testups input.sensitivity \"normal\"\n"
+        "END LIST RW testups\n",
+        printer.getOutput().c_str());
+}
+
+void test_list_rw_errors_and_empty(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST RW wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = false;
+    mockHost.rw.clear();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST RW testups\nEND LIST RW testups\n", printer.getOutput().c_str());
+}
+
+void test_get_type_of_writable_variables(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "GET TYPE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge.low RW STRING:10\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET TYPE testups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups input.sensitivity RW ENUM STRING:10\n", printer.getOutput().c_str());
+
+    // Read-only variables keep the previous answer (US-071 will align them)
+    printer.clear();
+    mockHost.data.set("battery.charge", "100");
+    server.processCommand(printer, 0, "GET TYPE testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge STRING:64\n", printer.getOutput().c_str());
+}
+
+void test_list_enum_and_range(void) {
+    setupWritable();
+    server.processCommand(printer, 0, "LIST ENUM testups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST ENUM testups input.sensitivity\n"
+        "ENUM testups input.sensitivity \"low\"\n"
+        "ENUM testups input.sensitivity \"normal\"\n"
+        "ENUM testups input.sensitivity \"high\"\n"
+        "END LIST ENUM testups input.sensitivity\n",
+        printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST ENUM testups battery.charge.low\nEND LIST ENUM testups battery.charge.low\n",
+                             printer.getOutput().c_str());
+
+    // usbhid-ups adds no ranges
+    printer.clear();
+    server.processCommand(printer, 0, "LIST RANGE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST RANGE testups battery.charge.low\nEND LIST RANGE testups battery.charge.low\n",
+                             printer.getOutput().c_str());
+
+    // An unknown variable is an error, as in list_enum()
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM testups no.such.var");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST ENUM wrongups input.sensitivity");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST RANGE testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+}
+
+void test_get_desc_of_table_variables(void) {
+    // Texts from nut_repo/data/cmdvartab
+    server.processCommand(printer, 0, "GET DESC testups battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.charge.low \"Remaining battery level when UPS switches to LB (percent)\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET DESC testups ups.delay.start");
+    TEST_ASSERT_EQUAL_STRING("DESC testups ups.delay.start \"Interval to wait before (re)starting the load (seconds)\"\n",
+                             printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET DESC testups no.such.var");
+    TEST_ASSERT_EQUAL_STRING("DESC testups no.such.var \"Description unavailable\"\n", printer.getOutput().c_str());
+}
+
 void test_get_desc_and_type(void) {
     server.processCommand(printer, 0, "GET DESC testups ups.status");
-    TEST_ASSERT_EQUAL_STRING("DESC testups ups.status \"Unavailable\"\n",
+    // Not a variable of the NUT table, whose descriptions are the only cmdvartab texts the
+    // bridge carries so far: upsd's fallback text (netget.c:98). upsd with the full
+    // cmdvartab answers "UPS status" (US-071).
+    TEST_ASSERT_EQUAL_STRING("DESC testups ups.status \"Description unavailable\"\n",
                              printer.getOutput().c_str());
 
     printer.clear();
@@ -782,7 +899,7 @@ void test_get_desc_and_type(void) {
     std::string typeOut = printer.getOutput();
     TEST_ASSERT_EQUAL_STRING("TYPE testups ups.status STRING:64\n", typeOut.c_str());
     // Clients read the token after "RW" as the type, so a bare RW would crash
-    // them. Nothing this bridge exposes is writeable.
+    // them. ups.status is not writable.
     TEST_ASSERT_TRUE(typeOut.find("RW") == std::string::npos);
 
     printer.clear();
@@ -858,6 +975,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);
     RUN_TEST(test_get_desc_and_type);
+    RUN_TEST(test_list_rw_with_values);
+    RUN_TEST(test_list_rw_errors_and_empty);
+    RUN_TEST(test_get_type_of_writable_variables);
+    RUN_TEST(test_list_enum_and_range);
+    RUN_TEST(test_get_desc_of_table_variables);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);
@@ -901,6 +1023,11 @@ void setup() {
     RUN_TEST(test_list_cmd_unaffected_by_client);
     RUN_TEST(test_get_upsdesc_and_numlogins);
     RUN_TEST(test_get_desc_and_type);
+    RUN_TEST(test_list_rw_with_values);
+    RUN_TEST(test_list_rw_errors_and_empty);
+    RUN_TEST(test_get_type_of_writable_variables);
+    RUN_TEST(test_list_enum_and_range);
+    RUN_TEST(test_get_desc_of_table_variables);
     RUN_TEST(test_ver_and_netver);
     RUN_TEST(test_gonut_newups_sequence);
     RUN_TEST(test_data_stale);

@@ -99,13 +99,8 @@ void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t repor
         { "UPS.PowerConverter.PercentLoad", [](APCDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.set("ups.load", String((int)v));
             d.updateRealPower();
-        }},
-        { "UPS.Input.APCSensitivity",[](APCDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            int val = (int)v;
-            if (val == 1) d.set("input.sensitivity", "low");
-            else if (val == 2) d.set("input.sensitivity", "medium");
-            else if (val == 3) d.set("input.sensitivity", "high");
         }}
+        // input.sensitivity comes from the NUT table (apc_sensitivity_info, US-066)
     };
 
     _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
