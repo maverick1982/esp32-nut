@@ -505,6 +505,49 @@ void test_apply_default_delays() {
     CommandCatalog::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true);
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.start"));
+
+    // US-066: the HU_FLAG_ABSENT rows need the path in any report type, as
+    // HIDGetItemData(); the commands still need a FEATURE field to write
+    UPSData input_only;
+    std::vector<HIDUsageDef> input = { mk(SD, 0x00840057, 0x01) };
+    CommandCatalog::applyDefaultDelays(input_only, input, 20, 30, true);
+    TEST_ASSERT_EQUAL_STRING("20", input_only.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(CommandCatalog::hasFeature(input, CommandCatalog::kShutdown));
+
+    // A vendor path for ups.delay.shutdown (Powercom PCMDelayBeforeShutdown, 0x00ff0057)
+    UPSData vendor;
+    CommandCatalog::applyDefaultDelays(vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true,
+                                       NutTable::powercomDelayPaths());
+    TEST_ASSERT_EQUAL_STRING("20", vendor.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(vendor.hasKey("ups.delay.start"));
+    UPSData no_vendor;
+    CommandCatalog::applyDefaultDelays(no_vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true);
+    TEST_ASSERT_FALSE(no_vendor.hasKey("ups.delay.shutdown"));
+
+    // Each subdriver has its own paths, as usbhid-ups: cps-hid.c:386-387 declares only
+    // UPS.Output.*, mge-hid.c:2066-2067 only UPS.PowerSummary.*
+    std::vector<HIDUsageDef> summary = { mk(SD, 0x00840057, 0x03), mk(ST, 0x00840056, 0x03) };
+    UPSData cps_summary;
+    CommandCatalog::applyDefaultDelays(cps_summary, summary, 60, 120, true, NutTable::cpsDelayPaths());
+    TEST_ASSERT_FALSE(cps_summary.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(cps_summary.hasKey("ups.delay.start"));
+    UPSData mge_summary;
+    CommandCatalog::applyDefaultDelays(mge_summary, summary, 20, 30, true, NutTable::mgeDelayPaths());
+    TEST_ASSERT_EQUAL_STRING("20", mge_summary.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", mge_summary.get("ups.delay.start").c_str());
+    std::vector<HIDUsageDef> output = { mk("UPS.Output.DelayBeforeShutdown", 0x00840057, 0x03) };
+    UPSData mge_output;
+    CommandCatalog::applyDefaultDelays(mge_output, output, 20, 30, true, NutTable::mgeDelayPaths());
+    TEST_ASSERT_FALSE(mge_output.hasKey("ups.delay.shutdown"));
+    // apc-hid.c:367-368: the APC codes only under APCGeneralCollection (0xff860005)
+    UPSData apc_general;
+    CommandCatalog::applyDefaultDelays(apc_general, { mk("UPS.0xFF860005.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
+                                       NutTable::apcDelayPaths());
+    TEST_ASSERT_TRUE(apc_general.hasKey("ups.delay.shutdown"));
+    UPSData apc_elsewhere;
+    CommandCatalog::applyDefaultDelays(apc_elsewhere, { mk("UPS.Output.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
+                                       NutTable::apcDelayPaths());
+    TEST_ASSERT_FALSE(apc_elsewhere.hasKey("ups.delay.shutdown"));
 }
 
 int main(int argc, char **argv) {

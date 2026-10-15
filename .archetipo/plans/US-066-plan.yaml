@@ -10,7 +10,7 @@ body: |
   # US-066: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM — Piano di Implementazione
 
   **Generato da:** ARchetipo Planning Team
-  **Data:** 2026-10-15 (rev. 3: tabella unica in forma `hid_info_t`, approccio C)
+  **Data:** 2026-10-15 (rev. 4: note di implementazione dalla code review)
 
   ---
 
@@ -61,7 +61,7 @@ body: |
     - Il binding ricorda anche l'usage "gemello" con lo stesso `report_id`, lo stesso percorso e un tipo diverso (Input o Feature). I report gemelli APC (`GenericDriver::findInputTwins`, issue #60) aggiornano così il valore da qualunque dei due arrivi, come il buffer unico per report ID di libhid.
     - Le voci `absent` (`outlet.*.desc`) si legano con la stessa regola di presenza del percorso e pubblicano subito `dfl`.
   - **`ups.delay.*` (variabili lato driver).** Le gestisce già `CommandCatalog::applyDefaultDelays` (US-058). Due allineamenti a upstream:
-    - la presenza si basa sul percorso in qualunque tipo di report, non solo Feature;
+    - la presenza si basa sul percorso in qualunque tipo di report, non solo Feature, e sui percorsi del subdriver del driver (`IUPSDriver::delayPaths()`, `NutTable::*DelayPaths()`: mge solo PowerSummary, cps solo Output, apc PowerSummary/Output/APCGeneralCollection, powercom PowerSummary più PCM). Il driver generico, senza subdriver upstream, mantiene l'unione dei percorsi di US-058;
     - le variabili esistono anche quando il driver non offre i comandi di spegnimento, se il subdriver upstream le dichiara. È il caso di powercom-hid: `ups.delay.start` = 60 e `ups.delay.shutdown` = 20, aux 8, percorsi `UPS.PowerSummary.DelayBeforeStartup/Shutdown` e `PCMDelayBeforeShutdown` (0x00FF0057).
 
     Si aggiunge `IUPSDriver::delayVariablesSupported()`, che di default vale `shutdownCommandsSupported()`, e `delayAux()` (default 10). Powercom li sovrascrive. EcoFlow e OpenUPS restano senza, come in upstream. I comandi Powercom restano assenti come deciso in US-058.
@@ -71,7 +71,7 @@ body: |
     - `BatteryDate`: `date_conversion_fun`. Il valore 0 diventa `"not set"`.
     - `MgeDate` / `MgeTime`: `strftime` su `gmtime`. Upstream usa `localtime`, ma l'ESP32 non ha fuso, quindi il risultato coincide con un host in UTC.
     - `NominalVoltage`: `nominal_output_voltage_fun`, con la classe fissata dal primo valore e azzerata a ogni `setup()`.
-    - `PegasusThreshold` / `PegasusYesNo`: `eaton_check_pegasus_fun` / `pegasus_yes_no_info_fun`. Valgono per i modelli Pegasus, o per i 3S 700/750 con paese diverso da Europa (0). Un paese sconosciuto (-1) è accettato, come in upstream.
+    - `PegasusThreshold` / `PegasusYesNo`: `eaton_check_pegasus_fun` / `pegasus_yes_no_info_fun`. Valgono per i modelli Pegasus. Upstream fa lo `switch` su `mge_type & 0xFF00`, quindi `MGE_3S` (0x110) ricade nel caso `MGE_PEGASUS` e il controllo sul paese non viene mai raggiunto: un 3S 700/750 è sempre valido. Lo riproduciamo così com'è. `mge_type` si ricava come `mge_format_model()`/`get_model_name()`: iProduct più la stringa `UPS.PowerSummary.iModel` (0xFFFF00F0), oppure `UPS.Flow.[4].ConfigApparentPower` se la stringa è vuota o non arriva. Il paese arriva da `UPS.PowerSummary.0xFFFF0095` (Country). Finché questi dati non sono noti, al più tardi alla fine del primo poll completo, le righe che ne dipendono restano in attesa (`DecodeResult::DEFER`).
     - `ups.date` / `ups.time`: si usa la variante RW di `mge-hid.c:2097-2098` (`HAVE_STRPTIME`, il caso standard su Linux).
   - **Proprietà del valore.** Il catalogo ha l'ultima parola sulle variabili legate, come upstream che disabilita le voci duplicate successive (`item->hiddata = NULL`). L'hook virtuale `IUPSDriver::postDecode(...)` viene chiamato subito dopo ogni `decodeReport`, in `USBHostUPS.cpp` (righe 479 e 613) e nel replay runner. `GenericDriver` lo implementa così:
     1. decodifica i campi legati del report e ne salva il valore in cache;
@@ -126,7 +126,7 @@ tasks:
   - id: TASK-01
     title: Indici delle collection in HIDUsageDef (coll_index) nel parser
     type: Impl
-    status: TODO
+    status: DONE
     body: |
       ## Descrizione
       **Obiettivo:** registrare per ogni usage l'indice delle collection che lo contengono, come fa upstream con `[N]`, senza cambiare `HIDUsageDef::path`.
@@ -158,10 +158,11 @@ tasks:
       - [ ] `HIDUsageDef::path` è identico a prima per ogni usage
       - [ ] `coll_index` vale indice+1 per le collection con valore >= 0x80 e 0 per le altre
       - [ ] La suite nativa esistente resta verde
+    ref: TASK-01
   - id: TASK-02
     title: Test del parser per le collection indicizzate
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |
@@ -185,10 +186,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] I tre casi descritti passano
       - [ ] I test esistenti del parser passano senza modifiche
+    ref: TASK-02
   - id: TASK-03
     title: NutTable.h — strutture, match dei percorsi, binding con regola INIT di upstream, conversioni base e descrizioni
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |
@@ -250,10 +252,11 @@ tasks:
       - [ ] La natura RW di un nome si decide alla prima lettura del valore e resta fissa, con passaggio al candidato successivo se fallisce
       - [ ] Le conversioni seguono le funzioni upstream citate
       - [ ] `describe` è case-insensitive e copia cmdvartab parola per parola
+    ref: TASK-03
   - id: TASK-04
     title: Tabelle RW per subdriver (mge, apc, cps, ecoflow) e hook hid2nut() nei driver
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |
@@ -303,10 +306,11 @@ tasks:
       - [ ] Ogni voce `ST_FLAG_RW` dei subdriver citati è nella tabella o esclusa con un commento motivato
       - [ ] `info_type`, `info_flags`, `info_len`, `dfl`, `hidflags` e lookup coincidono con upstream
       - [ ] I percorsi usano la notazione di `HIDUsageDef::path` più `[N]`
+    ref: TASK-04
   - id: TASK-05
     title: Conversioni mge con contesto — classe di tensione nominale e controllo Pegasus/3S
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |
@@ -325,9 +329,9 @@ tasks:
         - il primo valore fissa `nominal`;
         - si accettano solo i valori della stessa classe, secondo lo switch upstream;
         - `enumValues` restituisce i valori della lookup accettati dalla classe.
-      - `PegasusThreshold` / `PegasusYesNo`: validi solo se `mge_type` è Pegasus, oppure è 3S con `country != 0`. Un paese sconosciuto (-1) è accettato.
+      - `PegasusThreshold` / `PegasusYesNo`: validi solo se `mge_type & 0xFF00` è `MGE_PEGASUS`. Per lo switch mascherato di upstream anche `MGE_3S` (0x110) ricade lì, quindi il controllo sul paese non scatta mai.
       - In `EatonDriver`:
-        - ricavare `mge_type` da `ups.model` in `formatDeviceStrings()`, solo per le righe Pegasus ("Protection Station" 500/650/800, "Ellipse ECO" 650/800/1200/1600) e 3S 700/750, con la logica di confronto upstream;
+        - ricavare `mge_type` come `get_model_name()`: iProduct (`ups.model`) più la stringa iModel, o `ConfigApparentPower` di `Flow.[4]` come ripiego, confrontati con le righe di `mge_model_names` sotto `MGE_DEFAULT` (offline, Pegasus, 3S). Il calcolo avviene in `onLoop()` quando i dati sono noti, o alla fine del primo poll completo;
         - leggere `country` dall'usage `UPS.PowerSummary.0xFFFF0095` (Country);
         - esporre il contesto (`rwContext()`).
       - Il contesto si azzera in `setup()`.
@@ -349,10 +353,11 @@ tasks:
       - [ ] La classe di tensione si fissa al primo valore e filtra decode ed ENUM come `nominal_output_voltage_fun`
       - [ ] Le voci Pegasus compaiono solo per i modelli e i paesi previsti da upstream
       - [ ] Il contesto riparte da zero a ogni `setup()`
+    ref: TASK-05
   - id: TASK-06
     title: Test unitari del catalogo (nuovo test_rw_catalog)
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
     body: |
@@ -384,7 +389,7 @@ tasks:
         - `ups.shutdown` → disabled, enabled;
         - cps `input.sensitivity` → low, normal, high;
         - tensione nominale: prima lettura 230, poi ENUM della classe HV e un valore LV rifiutato.
-      - Pegasus: Protection Station 650 → valido; 3S 700 con paese 0 → no, con paese 1 → sì, con paese -1 → sì; altro modello → no.
+      - Pegasus: Protection Station 650 → valido; 3S 700 valido anche con paese 0 (switch mascherato upstream); "Eaton 3S" (iProduct reale della fixture) → `MGE_DEFAULT`, non valido.
       - `describe`: "battery.charge.low" e "BATTERY.CHARGE.LOW" danno la stringa di cmdvartab; "outlet.1.desc" dà `nullptr`.
       - EcoFlow: `UPS.PowerSummary.RemainingCapacityLimit` si lega a `battery.charge.low` con `info_len` 5.
       - Voce in sola lettura sintetica (senza `ST_FLAG_RW`): si lega, diventa ACTIVE e pubblica il valore, ma non compare in `writableVariables()`. Una voce RO che precede una RW con lo stesso nome vince e la variabile non è RW, come in upstream. Garantisce che il motore sia pronto per le migrazioni.
@@ -399,10 +404,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti i casi elencati sono presenti e passano
       - [ ] I valori attesi sono calcolati a mano o presi da upstream, mai copiati dall'output del codice
+    ref: TASK-06
   - id: TASK-07
     title: Binding e postDecode in GenericDriver, hook nei punti di decode e rimozione delle mappature sensitivity morte
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-05
@@ -459,10 +465,11 @@ tasks:
       - [ ] I report gemelli aggiornano le variabili legate
       - [ ] `writableVariables` è ordinato con `strcasecmp` e include `ups.delay.*` solo se presenti in UPSData
       - [ ] Host e replay runner chiamano `postDecode` dopo ogni `decodeReport`
+    ref: TASK-07
   - id: TASK-08
     title: getWritableVariables() in IUSBHostUPS e USBHostUPS
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |
@@ -493,10 +500,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Senza UPS connesso l'elenco è vuoto
       - [ ] L'override prende `_mutex` come `getSupportedCommands()`
+    ref: TASK-08
   - id: TASK-09
     title: Server NUT — LIST RW, GET TYPE, LIST ENUM/RANGE, GET DESC e GET CMDDESC
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-08
     body: |
@@ -540,10 +548,11 @@ tasks:
       - [ ] GET TYPE delle variabili non RW è identico a prima
       - [ ] LIST ENUM restituisce `VAR-NOT-SUPPORTED` per una variabile assente
       - [ ] DESC e CMDDESC senza descrizione rispondono `"Description unavailable"`
+    ref: TASK-09
   - id: TASK-10
     title: Test del protocollo NUT per le variabili RW e le descrizioni
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-09
     body: |
@@ -577,10 +586,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti i casi elencati sono presenti e passano
       - [ ] Le sole asserzioni esistenti modificate sono quelle su "Unavailable", motivate nel commento
+    ref: TASK-10
   - id: TASK-11
     title: Replay delle fixture — elenco RW atteso per descriptor e aspettative ricalcolate
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |
@@ -616,10 +626,11 @@ tasks:
       - [ ] Ogni fixture ha un `expectedRW`
       - [ ] Le aspettative modificate hanno il calcolo dai byte nel commento
       - [ ] Il replay passa da `postDecode` come l'host
+    ref: TASK-11
   - id: TASK-12
     title: ups.delay.* come in upstream — presenza su qualunque tipo di report e variabili Powercom
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |
@@ -671,10 +682,11 @@ tasks:
       - [ ] Su Powercom `ups.delay.start` = 60 e `ups.delay.shutdown` = 20 sono RW con aux 8, senza comandi di spegnimento
       - [ ] `LIST CMD` non cambia su nessuna fixture
       - [ ] EcoFlow e OpenUPS restano senza `ups.delay.*`
+    ref: TASK-12
   - id: TASK-13
     title: Test dei driver, regressione completa e build firmware
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
       - TASK-10
@@ -710,3 +722,4 @@ tasks:
       - [ ] I nuovi test dei driver passano
       - [ ] La suite nativa completa è verde
       - [ ] La build `esp32-s3-standard` compila e il report riporta l'impatto su memoria e `sizeof(HIDUsageDef)`
+    ref: TASK-13

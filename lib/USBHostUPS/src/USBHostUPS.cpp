@@ -477,6 +477,8 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
         cached.data.assign(data, data + length);
     }
     _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
+    // The NUT table writes its variables last (US-066)
+    _driver->postDecode(this, r_id, 1, data, length, _ups_data);
 }
 
 void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
@@ -611,6 +613,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
 
         if (_driver) {
             _driver->decodeReport(this, report_id, report_type, _request_buffer, length, _ups_data);
+            _driver->postDecode(this, report_id, report_type, _request_buffer, length, _ups_data);
         }
         return true;
     }
@@ -884,13 +887,24 @@ void USBHostUPS::applyDefaultDelays() {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (!_driver) return;
     CommandCatalog::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
-                                       _driver->defaultOnDelay(), _driver->shutdownCommandsSupported());
+                                       _driver->defaultOnDelay(), _driver->delayVariablesSupported(),
+                                       _driver->delayPaths());
 }
 
 std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {
     // _hid_parser is replaced under _mutex when a device (re)connects
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     return IUSBHostUPS::getSupportedCommands();
+}
+
+std::vector<NutTable::RWVariable> USBHostUPS::getWritableVariables() const {
+    // _driver is deleted and the usages replaced under _mutex (recursive, as getUPSData())
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    std::vector<NutTable::RWVariable> out;
+    if (!_driver || !isConnected()) return out;
+    auto lk = getUPSData();
+    _driver->writableVariables(lk.get(), out);
+    return out;
 }
 
 String USBHostUPS::dumpUSBDiagnostics() {

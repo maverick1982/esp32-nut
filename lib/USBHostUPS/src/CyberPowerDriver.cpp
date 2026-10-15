@@ -36,13 +36,8 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     typedef UsageMapIndex<CyberPowerDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
         { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
-        { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        { "UPS.Output.CPSInputSensitivity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            int val = (int)v;
-            if (val == 1) d.set("input.sensitivity", "low");
-            else if (val == 2) d.set("input.sensitivity", "medium");
-            else if (val == 3) d.set("input.sensitivity", "high");
-        } }
+        { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } }
+        // input.sensitivity comes from the NUT table (cps_sensitivity_info, US-066)
     };
 
     _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);

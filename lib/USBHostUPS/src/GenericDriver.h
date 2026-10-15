@@ -31,6 +31,14 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     bool initialPollDone() const override { return _first_full_done; }
+    void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const override;
+
+    // NUT table of the driver's upstream subdriver (US-066). Empty for drivers whose
+    // subdriver has no rows yet.
+    virtual const NutTable::HidInfo* hid2nut(size_t& n) const { n = 0; return nullptr; }
+    // Rows bound to the attached device; built on the first decoded report
+    const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }
 
     // One control request of a poll cycle
     struct PollItem {
@@ -75,8 +83,17 @@ protected:
 
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
+    // Inputs of the model-dependent conversions (mge_type, country, nominal voltage
+    // class); mutable because LIST ENUM evaluates them like the upstream functions do
+    mutable NutTable::Context _nut_ctx;
 
 private:
+    void bindNutTable(IUSBHostUPS* host);
+
+    std::vector<NutTable::Bound> _nut_rows;
+    bool _nut_bound;
+    bool _nut_init_done;                  // finishInit() applied after the first full poll
+    size_t _nut_usage_count;
     void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
     void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
     void findInputTwins(IUSBHostUPS* host);

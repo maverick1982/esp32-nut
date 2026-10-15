@@ -46,6 +46,10 @@ struct HIDUsageDef {
     int8_t exponent = 0;
     uint32_t unit = 0;
     char path[80] = {0};
+    // Index of each enclosing collection, as the "[N]" nodes of upstream paths
+    // (hidparser.c:207): entry d is (Collection value & 0x7F) + 1 for the collection at
+    // depth d when its value is >= 0x80, 0 when it has no index. path is unchanged.
+    uint8_t coll_index[8] = {0};
 };
 
 #endif // HID_USAGES_H

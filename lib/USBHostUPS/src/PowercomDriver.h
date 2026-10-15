@@ -20,6 +20,14 @@ public:
     // sequences: none are offered here (US-058)
     bool shutdownCommandsSupported() const override { return false; }
 
+    // powercom-hid.c:620-639 still declares ups.delay.start ("60") and ups.delay.shutdown
+    // (DEFAULT_OFFDELAY) with info_len 8, also on PCMDelayBeforeShutdown (0x00ff0057 in
+    // powercom_usage_lkp): the variables exist without the commands (US-066)
+    bool delayVariablesSupported() const override { return true; }
+    int32_t defaultOnDelay() const override { return 60; }
+    uint8_t delayAux() const override { return 8; }
+    const NutTable::DelayPaths* delayPaths() const override { return NutTable::powercomDelayPaths(); }
+
 protected:
     const char* upsTypeName() const override { return "Powercom"; }
     void onLoop(IUSBHostUPS* host, UPSData& data) override;

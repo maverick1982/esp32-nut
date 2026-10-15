@@ -84,6 +84,7 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
+    std::vector<NutTable::RWVariable> getWritableVariables() const override;
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override;
     CommandResult executeCommand(const char* name, const char* param = nullptr) override;
     uint32_t getQuirks() const override { return _quirks; }

@@ -465,6 +465,74 @@ void test_path_truncated_to_buffer(void) {
     TEST_ASSERT_EQUAL_STRING_LEN("UPS.PowerSummary.PowerSummary.", v->path, 30);
 }
 
+// Collection items with a value >= 0x80 are indexed: upstream adds "[value & 0x7F]"
+// to the path (hidparser.c:207), we keep path unchanged and record index+1 (US-066)
+void test_indexed_collection_recorded(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x00,     // UPS, Collection (Physical)
+        0x09, 0x1E, 0xA1, 0x84,                 // Flow, Collection (0x84) -> [4]
+        0x85, 0x12, 0x09, 0x40,                 // Report ID 0x12, ConfigVoltage
+        0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,     // Feature
+        0xC0,
+        0x09, 0x35, 0xB1, 0x02,                 // PercentLoad after End Collection
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+
+    const HIDUsageDef* v = parser.getUsageDef(0x00840040);
+    TEST_ASSERT_NOT_NULL(v);
+    TEST_ASSERT_EQUAL_STRING("UPS.Flow.ConfigVoltage", v->path);
+    TEST_ASSERT_EQUAL_UINT8(0, v->coll_index[0]);
+    TEST_ASSERT_EQUAL_UINT8(5, v->coll_index[1]);
+
+    // The index is popped with its collection
+    const HIDUsageDef* after = parser.getUsageDef(0x00840035);
+    TEST_ASSERT_NOT_NULL(after);
+    TEST_ASSERT_EQUAL_STRING("UPS.PercentLoad", after->path);
+    TEST_ASSERT_EQUAL_UINT8(0, after->coll_index[0]);
+    TEST_ASSERT_EQUAL_UINT8(0, after->coll_index[1]);
+}
+
+static std::vector<uint8_t> loadFixtureDescriptor(const char* path) {
+    std::ifstream file(path);
+    TEST_ASSERT_TRUE_MESSAGE(file.is_open(), "Fixture file must exist");
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    JsonDocument doc;
+    TEST_ASSERT_FALSE_MESSAGE(deserializeJson(doc, buffer.str()), "JSON deserialization failed");
+    std::vector<uint8_t> raw;
+    for (JsonVariant v : doc["report_descriptor_hex"].as<JsonArray>()) {
+        raw.push_back((uint8_t)strtol(v.as<std::string>().c_str(), nullptr, 16));
+    }
+    return raw;
+}
+
+// Eaton 3S: upstream paths UPS.Flow.[4].ConfigVoltage, UPS.OutletSystem.Outlet.[1].OutletID
+// and UPS.OutletSystem.Outlet.[2].OutletID (mge-hid.c). The two OutletID share our path
+// and differ only by the index.
+void test_eaton_3s_indexed_collections(void) {
+    std::vector<uint8_t> raw = loadFixtureDescriptor("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json");
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(raw.data(), raw.size()));
+
+    int config_voltage = 0;
+    uint8_t outlet_indices = 0; // bit n set when Outlet.[n] is seen
+    for (const auto& u : parser.getUsages()) {
+        if (strcmp(u.path, "UPS.Flow.ConfigVoltage") == 0) {
+            config_voltage++;
+            TEST_ASSERT_EQUAL_UINT8(5, u.coll_index[1]);
+        }
+        if (strcmp(u.path, "UPS.OutletSystem.Outlet.OutletID") == 0) {
+            TEST_ASSERT_EQUAL_UINT8(0, u.coll_index[1]);
+            TEST_ASSERT_TRUE(u.coll_index[2] == 2 || u.coll_index[2] == 3);
+            outlet_indices |= (uint8_t)(1u << (u.coll_index[2] - 1));
+        }
+    }
+    TEST_ASSERT_EQUAL(1, config_voltage);
+    TEST_ASSERT_EQUAL_HEX8(0x06, outlet_indices);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -488,6 +556,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_usage_lookup_stops_at_sentinel);
     RUN_TEST(test_collection_without_usage);
     RUN_TEST(test_path_truncated_to_buffer);
+    RUN_TEST(test_indexed_collection_recorded);
+    RUN_TEST(test_eaton_3s_indexed_collections);
     return UNITY_END();
 }
 #else
@@ -512,6 +582,8 @@ void setup() {
     RUN_TEST(test_usage_lookup_stops_at_sentinel);
     RUN_TEST(test_collection_without_usage);
     RUN_TEST(test_path_truncated_to_buffer);
+    RUN_TEST(test_indexed_collection_recorded);
+    RUN_TEST(test_eaton_3s_indexed_collections);
     UNITY_END();
 }
 void loop() {}

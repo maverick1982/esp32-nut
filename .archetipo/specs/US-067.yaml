@@ -41,6 +41,7 @@ body: |
     - Gli esiti si conservano in una tabella a dimensione fissa: i più vecchi vengono scartati, senza allocazioni che crescono nel tempo.
   - [ ] Ogni SET, riuscito o fallito, va nel System Log con variabile, valore ed esito.
   - [ ] I test nativi coprono ogni codice d'errore, il ciclo scrittura/rilettura sulle fixture e la sequenza di TRACKING usata da `upsrw -w`.
+  - [ ] Il replay di ogni fixture verifica anche l'elenco finale di `LIST RW`, cioè `writableVariables()` dopo il replay e dopo la fine simulata del primo poll completo (`finishInit`), con nomi e lunghezze massime e con `ups.delay.*` compreso. Oggi il replay controlla solo quali righe della tabella il descriptor lega (miglioramento aperto dalla code review di US-066). Gli attesi si ricavano dai byte dei report, mai dall'output del codice.
 
   **Assunzioni**
   - Riferimenti: `setvar()` in `nut_repo/drivers/usbhid-ups.c`; `set_var()` e `SET TRACKING` in `nut_repo/server/netset.c`; `GET TRACKING` in `nut_repo/server/netget.c`; `tracking_get()` in `nut_repo/server/upsd.c`; `do_set()` in `nut_repo/clients/upsrw.c`.
@@ -49,6 +50,7 @@ body: |
   - Le credenziali NUT che autorizzano `INSTCMD` autorizzano anche `SET`.
   - TRACKING per `INSTCMD` (`upscmd -w`) è in US-069.
   - Il reset ai default delle variabili lato driver è nella Web UI (US-068).
+  - Il controllo end-to-end di `LIST RW` nel replay viene dalla code review di US-066 (2026-10-15).
 history:
   - status: TODO
     at: "2026-10-14T16:10:02Z"

@@ -7,7 +7,7 @@ epic:
 priority: LOW
 points: 5
 status: TODO
-body: |-
+body: |
   #### US-071: Allineamento a upsd di GET TYPE, ordinamento di LIST VAR e risposte senza UPS collegato
 
   **Epic:** EP-003 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
@@ -27,6 +27,7 @@ body: |-
   **Criteri di Accettazione**
   - [ ] `GET TYPE` delle variabili non RW risponde `NUMBER` o `STRING:<n>` come upsd, con il tipo e la lunghezza dei flag della voce upstream (`ST_FLAG_STRING`, `info_len`). Le variabili senza voce upstream seguono una regola documentata.
   - [ ] `GET TYPE`, `GET DESC` e `LIST ENUM`/`LIST RANGE` fanno i controlli di upsd: `ERR UNKNOWN-UPS`, `ERR DATA-STALE`, `ERR DRIVER-NOT-CONNECTED`, `ERR VAR-NOT-SUPPORTED`.
+  - [ ] `GET DESC` restituisce il testo di cmdvartab per ogni variabile che upsd descrive (per esempio `ups.status` "UPS status"), non solo per quelle della tabella NUT di US-066. "Description unavailable" resta solo per le variabili assenti da cmdvartab.
   - [ ] Senza UPS collegato, `LIST VAR`, `LIST RW`, `LIST CMD`, `GET VAR` e `INSTCMD` rispondono `ERR DRIVER-NOT-CONNECTED`, come `ups_available()` in upsd.
   - [ ] `LIST VAR` e `LIST RW` sono ordinate come l'albero di upsd (`strcasecmp`).
   - [ ] I test nativi del server NUT coprono ogni caso. Prima del merge si verifica Home Assistant (integrazione NUT) con UPS collegato e scollegato.

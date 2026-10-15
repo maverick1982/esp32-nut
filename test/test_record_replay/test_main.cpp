@@ -28,12 +28,12 @@ void tearDown(void) {}
 
 void test_replay_eaton_3s(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
-        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT);
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low input.transfer.high input.transfer.low outlet.1.desc outlet.desc output.voltage.nominal");
 }
 
 void test_replay_eaton_5p(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.charge.restart battery.protection output.voltage.nominal ups.shutdown ups.start.reboot ups.test.interval");
 }
 
 // The CS500 declares the APC Back-UPS CS field UPS.Output.0xFF86007C: apc-hid.c writes
@@ -63,71 +63,85 @@ static void checkCs500ShutdownFields(const std::vector<HIDUsageDef>& usages) {
 void test_replay_apc_cs500(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json",
         /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT,
-        checkCs500ShutdownFields);
+        checkCs500ShutdownFields, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low");
 }
 
 void test_replay_apc_rs900mi(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low");
 }
 
 void test_replay_apc_xs700u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_OFF CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_OFF CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low");
 }
 
 void test_replay_apc_smartups750(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0003_issue22.json",
-        /* no beeper report replayed */ CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low");
 }
 
 void test_replay_apc_bx1500g_issue55(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low");
 }
 
 void test_replay_apc_smartups750_issue13(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low");
 }
 
 void test_replay_apc_cs750rs_issue48(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed FEATURE 0x35, APCSensitivity = 2 -> apc_sensitivity_info */ { { "input.sensitivity", "high" } });
 }
 
 void test_replay_apc_bx750mi_issue60(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } });
 }
 
 void test_replay_apc_es700g_issue71(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
-        CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT);
+        CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } });
 }
 
 void test_replay_apc_smartups750_issue78(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed INPUT 0x22, APCSensitivity = 2 -> apc_sensitivity_info */ { { "input.sensitivity", "high" } });
 }
 
 void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
-        /* PowercomDriver: no shutdown commands (US-058) */ "test.battery.start.quick test.battery.start.deep test.battery.stop");
+        /* PowercomDriver: no shutdown commands (US-058) */ "test.battery.start.quick test.battery.start.deep test.battery.stop", nullptr, /* NUT table rows (US-066) */ "",
+        /* powercom-hid.c:620-637: ups.delay.start "60", ups.delay.shutdown DEFAULT_OFFDELAY */
+        { { "ups.delay.start", "60" }, { "ups.delay.shutdown", "20" } });
+}
+
+// Descriptor only, no scenarios: checks the NUT table rows (US-066)
+void test_replay_cyberpower_br700elcd(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json", nullptr, nullptr,
+        "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low");
 }
 
 void test_replay_cyberpower_cp1350c(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low");
 }
 
 void test_replay_cyberpower_cp1500epfclcd(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT);
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed FEATURE 0x1A, CPSInputSensitivity = 2 -> cps_sensitivity_info */ { { "input.sensitivity", "high" } });
 }
 
 void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
-    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json");
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", nullptr, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        /* replayed FEATURE 0x1A, CPSInputSensitivity = 1 -> cps_sensitivity_info */ { { "input.sensitivity", "normal" } });
 }
 
 // The W150 reports PresentStatus.BatteryPresent = 0 in its normal state, but
@@ -135,7 +149,7 @@ void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
 // fixture "notes" (US-055).
 void test_replay_openups_wallecube_w150(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json",
-        "");
+        "", nullptr, /* NUT table rows (US-066) */ "");
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -155,6 +169,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_cyberpower_br700elcd);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
@@ -177,6 +192,7 @@ void setup() {
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_cyberpower_br700elcd);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
