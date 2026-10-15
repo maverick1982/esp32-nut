@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-074
+title: 'Tabella unica Eaton (mge-hid), parte 2: PowerConverter, Input/Output, Flow, Outlet e comandi'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-074: Tabella unica Eaton (mge-hid), parte 2: PowerConverter, Input/Output, Flow, Outlet e comandi
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come utente di un UPS Eaton,
+  voglio che il server NUT esponga le stesse variabili di ingresso, uscita, prese e gli stessi comandi di usbhid-ups,
+  in modo che Home Assistant e PeaNUT mostrino le stesse informazioni che avrei con NUT su un PC.
+
+  **Dimostrazione**
+  Sull'Eaton 3S `upsc` mostra le variabili `input.*`, `output.*`, `outlet.*` (id, desc, status, switchable…) previste da mge-hid per quel descriptor, e `upscmd -l` elenca i comandi della tabella. Il driver Eaton non ha più mappature scritte a mano.
+
+  **Criteri di Accettazione**
+  - [ ] `mgeHid2Nut()` contiene tutte le restanti righe di `mge_hid2nut`, comandi `HU_TYPE_CMD` compresi, nell'ordine upstream. Restano escluse solo le tre variabili bypass/ECO di US-070 e le conversioni non portabili, con un commento.
+  - [ ] I comandi Eaton vengono dalla tabella. `LIST CMD` sulle fixture Eaton coincide con quello di oggi, salvo differenze motivate da upstream.
+  - [ ] `EatonDriver` non ha più mappature scritte a mano. Restano solo gli hook non tabellari: stringhe, contesto modello e paese, quirk.
+  - [ ] Per ogni fixture Eaton, l'elenco completo atteso delle variabili coincide con quello pubblicato, e le differenze rispetto a prima sono nelle note di rilascio, applicando la regola dell'ADR di US-073.
+  - [ ] La pagina "UPS Telemetry" della Web UI funziona con le chiavi risultanti.
+  - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale.
+
+  **Assunzioni**
+  - Usa il motore e la regola sulle chiavi decisi in US-073.
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-070
+title: Variabili Eaton di bypass e modalità ECO (input.bypass.switch.*, input.eco.switchable)
+epic:
+  code: EP-003
+  title: Server NUT
+priority: LOW
+points: 3
+status: TODO
+body: |
+  #### US-070: Variabili Eaton di bypass e modalità ECO (input.bypass.switch.*, input.eco.switchable)
+
+  **Epic:** EP-003 | **Priorità:** LOW | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-066, US-067
+
+  **User Story**
+  Come amministratore di un UPS Eaton online (per esempio 9SX/9PX),
+  voglio leggere e impostare via NUT il bypass e la modalità ECO come fa usbhid-ups,
+  in modo da gestire queste funzioni senza il software Eaton.
+
+  **Dimostrazione**
+  Su un Eaton che dichiara `UPS.PowerConverter.Input.[2].SwitchOnControl` e `UPS.PowerConverter.Input.[5].Switchable`, `upsrw ups@<ip>` elenca `input.bypass.switch.on`, `input.bypass.switch.off` e `input.eco.switchable` con i valori ammessi. Le scritture seguono le regole di mge-hid: il bypass si attiva solo se tensione e frequenza sono nei limiti configurati.
+
+  **Criteri di Accettazione**
+  - [ ] Le tre voci di mge-hid entrano nel catalogo di US-066 con nome, aux e percorso upstream.
+  - [ ] Lettura e scrittura riproducono `eaton_input_bypass_check_range`, `eaton_input_bypass_mode_on_info`, `eaton_input_bypass_mode_off_info` ed `eaton_input_buzzwordmode_report` / `eaton_input_buzzwordmode_setvar_nuf`, comprese le dipendenze da altre variabili.
+  - [ ] Una scrittura rifiutata dai controlli upstream dà `ERR INVALID-VALUE` o `ERR SET-FAILED`, come in US-067, e all'UPS non arriva nulla.
+  - [ ] Le variabili compaiono solo se il descriptor dichiara i percorsi relativi.
+  - [ ] I test nativi coprono ogni ramo delle funzioni portate, con usage e valori sintetici.
+
+  **Assunzioni**
+  - Riferimenti: `nut_repo/drivers/mge-hid.c` (righe 1100-1260 e 2218-2373).
+  - Nessuna fixture espone oggi questi percorsi: serve un dump da un tester con un Eaton online prima di chiudere la spec.
+  - Esclusa da US-066 su decisione del 2026-10-15.
+history:
+  - status: TODO
+    at: "2026-10-15T16:46:49Z"

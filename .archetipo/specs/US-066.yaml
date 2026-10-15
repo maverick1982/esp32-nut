@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-066
+title: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 8
+status: PLANNED
+body: |
+  #### US-066: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 8 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come amministratore che usa upsrw o Home Assistant,
+  voglio vedere quali parametri del mio UPS si possono modificare, con il loro tipo e i valori ammessi,
+  in modo da sapere cosa posso configurare senza leggere il descriptor HID.
+
+  **Dimostrazione**
+  `upsrw ups@<ip>` elenca le variabili scrivibili dell'UPS collegato, con descrizione, tipo e valore attuale. Per esempio `ups.delay.shutdown`, `ups.delay.start` e le soglie che il descriptor dichiara come Feature, come `battery.charge.low`. Per le variabili a scelta, come `input.sensitivity`, mostra i valori ammessi.
+
+  **Criteri di Accettazione**
+  - [ ] Il catalogo contiene tutte le variabili `ST_FLAG_RW` dei subdriver upstream mge-hid, apc-hid, cps-hid, powercom-hid ed ecoflow-hid, con lo stesso nome NUT, lo stesso percorso HID e la stessa lunghezza massima. Ogni driver usa la tabella del proprio subdriver.
+  - [ ] Una variabile compare in `LIST RW` con le stesse regole di usbhid-ups: il suo percorso esiste nel descriptor, qualunque sia il tipo di report, e la prima lettura del valore riesce. Le variabili lato driver (`HU_FLAG_ABSENT`, come `ups.delay.*`) compaiono quando il loro percorso esiste, con il default del subdriver, anche su Powercom.
+  - [ ] `GET TYPE` risponde come upsd: `TYPE <ups> <var> RW [ENUM] STRING:<n>` per le variabili scrivibili. Per le altre la risposta resta quella attuale.
+  - [ ] `LIST ENUM` restituisce i valori ammessi per le variabili che upstream marca `HU_FLAG_ENUM`. `LIST RANGE` resta vuota, come in usbhid-ups.
+  - [ ] `GET DESC` restituisce la descrizione standard NUT di ogni variabile del catalogo, e `"Description unavailable"` quando non c'è, come upsd (anche per `GET CMDDESC`).
+  - [ ] Con UPS scollegato o dati stale, `LIST RW` dà gli stessi errori di `LIST VAR`.
+  - [ ] Nei test nativi, le fixture Eaton, APC, CyberPower e Powercom verificano l'elenco RW atteso. EcoFlow, che non ha una fixture, si verifica con usage sintetici.
+
+  **Assunzioni**
+  - Riferimenti: `nut_repo/drivers/usbhid-ups.c` (gestione `HU_FLAG_ENUM` / `HU_FLAG_ABSENT`), `nut_repo/server/netget.c` (formato di `GET TYPE`).
+  - `SET VAR` è fuori scope (US-067).
+  - Fuori dal catalogo, in una spec separata: `input.bypass.switch.on`, `input.bypass.switch.off` e `input.eco.switchable` di mge-hid. Passano da funzioni con logica a stato (controllo dei range del bypass, modalità ECO) e nessuna fixture le espone.
+  - Punti portati da 5 a 8 in pianificazione: servono il parser con collection indicizzate (`Flow.[4]`, `Outlet.[2]`) e la lettura dei valori RW dal catalogo.
+  - Deviazioni residue accettate e motivate nel piano. `GET TYPE` delle variabili non RW e le risposte senza UPS collegato sono in US-071.
+  - Approccio C (2026-10-15): il catalogo nasce come tabella unica HID→NUT con la forma di `hid_info_t`, per ora con le sole voci RW. Le voci in sola lettura, gli stati e i comandi arrivano con le migrazioni US-073…US-079 (EP-001).
+history:
+  - status: TODO
+    at: "2026-10-14T16:10:02Z"
+  - status: PLANNED
+    at: "2026-10-15T16:46:30Z"
