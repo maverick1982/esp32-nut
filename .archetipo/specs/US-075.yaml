@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-075
+title: 'Tabella unica CyberPower (cps-hid): voci RO, stati e comandi'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-075: Tabella unica CyberPower (cps-hid): voci RO, stati e comandi
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come utente di un UPS CyberPower,
+  voglio che variabili, stati e comandi vengano dalla tabella `cpsHid2Nut()` copiata da `cps_hid2nut`,
+  in modo da avere gli stessi dati di usbhid-ups e meno differenze da inseguire una issue alla volta.
+
+  **Dimostrazione**
+  Sulle fixture BR700ELCD, CP1350C, CP1500EPFCLCD e CP1600EPFCLCD, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che cps-hid ricava da quei descriptor, con i ritardi CyberPower 60/120 di US-058.
+
+  **Criteri di Accettazione**
+  - [ ] `cpsHid2Nut()` contiene tutte le righe di `cps_hid2nut` nell'ordine upstream, comprese le conversioni CyberPower (per esempio la correzione delle tensioni). Le esclusioni sono motivate.
+  - [ ] `CyberPowerDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: quirk e ritardi.
+  - [ ] Per ogni fixture CyberPower, gli elenchi attesi di variabili e comandi, ricavati in modo indipendente, coincidono con quelli pubblicati. Le differenze rispetto a prima sono nelle note di rilascio.
+  - [ ] `ups.status` resta invariato sulle fixture, salvo differenze motivate.
+  - [ ] Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Nessun CyberPower disponibile in sede: prima del rilascio serve la prova di un tester (per esempio Luca72, CP1600EPFCLCD).
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

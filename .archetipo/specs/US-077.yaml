@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-077
+title: 'Tabella unica Powercom (powercom-hid): voci RO, stati e comandi'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 5
+status: TODO
+body: |
+  #### US-077: Tabella unica Powercom (powercom-hid): voci RO, stati e comandi
+
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come utente di un UPS Powercom,
+  voglio che variabili e stati vengano dalla tabella `powercomHid2Nut()` copiata da `powercom_hid2nut`,
+  in modo da avere gli stessi dati di usbhid-ups.
+
+  **Dimostrazione**
+  Sulla fixture SPD-750U, `upsc` dà l'elenco di variabili che powercom-hid ricava da quel descriptor, compresi i report di temperatura e beeper individuati nella issue #36.
+
+  **Criteri di Accettazione**
+  - [ ] `powercomHid2Nut()` contiene tutte le righe di `powercom_hid2nut` nell'ordine upstream, comprese le conversioni Powercom. Le esclusioni sono motivate.
+  - [ ] I comandi Powercom restano assenti come deciso in US-058, salvo una decisione diversa registrata nella spec. Le loro righe sono in tabella ma marcate come non esposte, con il motivo.
+  - [ ] `PowercomDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: `stepSpacingMs` e quirk.
+  - [ ] Per la fixture Powercom, l'elenco atteso delle variabili coincide con quello pubblicato. Le differenze rispetto a prima sono nelle note di rilascio.
+  - [ ] Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Serve la prova di un tester Powercom (per esempio fox1047) prima del rilascio.
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

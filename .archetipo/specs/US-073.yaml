@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-073
+title: 'Tabella unica Eaton (mge-hid), parte 1: motore per voci RO e stati BOOL, PowerSummary e BatterySystem'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-073: Tabella unica Eaton (mge-hid), parte 1: motore per voci RO e stati BOOL, PowerSummary e BatterySystem
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come manutentore del firmware,
+  voglio che le variabili Eaton di PowerSummary e BatterySystem e i bit di stato vengano dalla tabella `mgeHid2Nut()`, copiata riga per riga da `mge_hid2nut` di upstream,
+  in modo che i valori Eaton coincidano con usbhid-ups e che ogni differenza sia verificabile confrontando una riga con l'altra.
+
+  **Dimostrazione**
+  Sull'Eaton 3S e nelle fixture Eaton 3S/5P, `upsc` mostra per le variabili `battery.*`, `ups.*` di PowerSummary e per `ups.status` gli stessi nomi, valori e formati che usbhid-ups ricava da quei descriptor. Le mappature Eaton scritte a mano per queste voci non esistono più, e il test di replay elenca le variabili aggiunte e rimosse.
+
+  **Criteri di Accettazione**
+  - [ ] Il motore della tabella di US-066 gestisce anche:
+    - le voci in sola lettura con i formati `%.0f`/`%.1f`/`%s` e le funzioni di conversione `info_lkp` usate da queste righe;
+    - le voci `BOOL`, che impostano le chiavi interne `ups.status.*` da cui `computeUPSStatusString` ricava `ups.status`.
+  - [ ] `mgeHid2Nut()` contiene, nell'ordine upstream, tutte le righe di `mge_hid2nut` dei gruppi PowerSummary, BatterySystem/Battery e status. Le conversioni non portabili sono escluse con un commento motivato.
+  - [ ] Per le variabili coperte, le mappature Eaton e generiche non le scrivono più per i dispositivi Eaton.
+  - [ ] Per ogni fixture Eaton, l'elenco atteso delle variabili coperte, ricavato in modo indipendente dal descriptor e dal file upstream, coincide con quello pubblicato. Le differenze rispetto a prima (aggiunte, rimosse, formati) sono elencate nel test e nelle note di rilascio.
+  - [ ] `ups.status` e `LIST CMD` non cambiano sulle fixture Eaton, salvo differenze motivate dalla tabella upstream.
+  - [ ] Prima di pianificare si decidono con l'utente, e si registrano in un ADR valido per tutte le migrazioni:
+    - se le chiavi che pubblichiamo solo noi (per esempio `outlet.1.switch`, `battery.capacity.full`) vanno rimosse o tenute come estensioni documentate;
+    - se pubblicare le voci `unmapped.*` di upstream.
+  - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale.
+
+  **Assunzioni**
+  - Da fare dopo US-066 (EP-003), che introduce la tabella e il motore di binding. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
+  - Approccio C deciso il 2026-10-15: convergenza graduale verso le tabelle `hid_info_t` di upstream, un subdriver alla volta.
+  - Il controllo modello e paese (Pegasus/3S) di US-066 si riusa.
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

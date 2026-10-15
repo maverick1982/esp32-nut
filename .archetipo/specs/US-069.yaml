@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-069
+title: TRACKING per INSTCMD (upscmd -w)
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: TODO
+body: |
+  #### US-069: TRACKING per INSTCMD (upscmd -w)
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-067
+
+  **User Story**
+  Come amministratore che lancia comandi all'UPS con upscmd o da script,
+  voglio usare `upscmd -w` per avere l'esito reale del comando,
+  in modo che gli script di test e di spegnimento si comportino come con upsd e non si fermino su un errore del protocollo.
+
+  **Dimostrazione**
+  Oggi `upscmd -w -u <user> -p <pw> ups@<ip> beeper.disable` termina con "Enabling command status tracking failed. upsd answered: ERR ...". Dopo questa spec stampa `SUCCESS`. Con un comando che l'UPS rifiuta stampa l'errore restituito da `GET TRACKING`. `upscmd` senza `-w` si comporta come prima.
+
+  **Criteri di Accettazione**
+  - [ ] Con TRACKING attivo nella sessione (`SET TRACKING ON`, US-067), gli errori di validazione di `INSTCMD` restano immediati: `ACCESS-DENIED`, `UNKNOWN-UPS`, `DRIVER-NOT-CONNECTED`, `CMD-NOT-SUPPORTED`. Se il comando è valido, la risposta è `OK TRACKING <uuid4>`.
+  - [ ] `GET TRACKING <id>` restituisce l'esito del comando:
+    - `SUCCESS`: comando eseguito
+    - `ERR INVALID-ARGUMENT`: parametro mancante o non valido, per esempio il ritardo di `load.off.delay`
+    - `ERR FAILED`: scrittura sull'UPS fallita
+  - [ ] Gli esiti di `INSTCMD` e `SET VAR` usano la stessa tabella e le stesse regole di scadenza di US-067.
+  - [ ] Senza TRACKING, `INSTCMD` risponde come oggi: OK o errore sincrono, compreso `ERR INSTCMD-FAILED`.
+  - [ ] I test nativi coprono la sequenza di TRACKING usata da `upscmd -w` per un comando riuscito, uno fallito e uno con parametro non valido.
+
+  **Assunzioni**
+  - Riferimenti: `netinstcmd.c` e `tracking_get()` in `nut_repo/server/upsd.c`, `nut_repo/clients/upscmd.c`.
+  - I comandi che spengono il carico seguono la stessa logica: `OK TRACKING` vuol dire che il comando è stato scritto sull'UPS, non che il carico è già spento, come in upsd.
+history:
+  - status: TODO
+    at: "2026-10-14T16:18:10Z"

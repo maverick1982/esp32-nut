@@ -1,0 +1,34 @@
+schema: archetipo/spec/v2
+code: US-079
+title: Tabella generica per le marche sconosciute e rimozione delle mappature a mano e di CommandCatalog
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 5
+status: TODO
+body: |
+  #### US-079: Tabella generica per le marche sconosciute e rimozione delle mappature a mano e di CommandCatalog
+
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-074, US-075, US-076, US-077, US-078
+
+  **User Story**
+  Come manutentore del firmware,
+  voglio un solo meccanismo HID→NUT, le tabelle, e una tabella generica per gli UPS di marche sconosciute,
+  in modo da eliminare la doppia fonte dei valori e il codice ormai inutile.
+
+  **Dimostrazione**
+  Il codice non contiene più lambda di mappatura in `GenericDriver` né `CommandCatalog.h`. Un UPS di marca sconosciuta, simulato con un descriptor PDC standard, pubblica le stesse variabili e gli stessi comandi di prima.
+
+  **Criteri di Accettazione**
+  - [ ] `genericHid2Nut()` traduce in righe di tabella le mappature di `GenericDriver`, con nomi e formati NUT standard e i percorsi delle tabelle upstream quando coincidono. Per gli UPS di marca sconosciuta non si perde nessuna variabile oggi pubblicata, salvo quanto deciso nell'ADR di US-073.
+  - [ ] I comandi vengono tutti dalle tabelle (`HU_TYPE_CMD`). `CommandCatalog.h` è rimosso, insieme alla sua logica di presenza e di passi di scrittura, che passa al motore della tabella. `LIST CMD` non cambia su nessuna fixture.
+  - [ ] L'hook `postDecode` non deve più dare l'"ultima parola" su nessuna variabile, perché ogni variabile ha una sola fonte. La cache dei valori si rimuove se non serve più.
+  - [ ] Suite nativa verde, replay di tutte le fixture invariato rispetto a prima di questa spec, build ok con l'impatto su RAM e flash riportato.
+
+  **Assunzioni**
+  - Ultima spec della convergenza decisa il 2026-10-15 (approccio C).
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"
