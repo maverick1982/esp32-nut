@@ -8,8 +8,8 @@
 #include "NutTable.h"
 
 /**
- * Results of the SET VAR requests sent with TRACKING ON (US-067), as tracking_add() /
- * tracking_get() of upsd (nut_repo/server/upsd.c), in fixed memory.
+ * Results of the SET VAR and INSTCMD requests sent with TRACKING ON (US-067, US-069), as
+ * tracking_add() / tracking_get() of upsd (nut_repo/server/upsd.c), in fixed memory.
  *
  * upsd keeps a linked list that tracking_cleanup() trims by age. Here a full table drops
  * its oldest entry instead, so the memory never grows. The table is shared by every

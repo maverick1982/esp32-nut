@@ -75,6 +75,8 @@ private:
     void closeSession(int slot);
     void setVar(Print& client, int slot, const String& upsName, const String& varName, const String& value);
     void rejectSet(Print& client, int slot, const String& varName, const String& value, const char* err);
+    // Esito di SET VAR o INSTCMD con TRACKING ON: voce nella tabella condivisa e OK TRACKING <id>
+    void replyTracking(Print& client, NutTable::SetStatus st);
     const char* missingCredentials(int slot) const;
     static bool isVarPresent(const UPSData& data, const String& varNameLower);
     void log(const char* level, const char* fmt, ...) const;

@@ -1460,6 +1460,154 @@ void test_tracking_id_format(void) {
     TEST_ASSERT_EQUAL_STRING("11111111-2222-4222-B333-333344444444", id);
 }
 
+// --- INSTCMD with TRACKING (US-069): netinstcmd.c send_instcmd/net_instcmd, upsd.c
+// tracking_get, clients/upscmd.c do_cmd ---
+
+// upscmd -w: SET TRACKING ON, INSTCMD, then GET TRACKING <id> until it is not PENDING
+void test_upscmd_tracking_sequence(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING ON").c_str());
+
+    std::string reply = request(0, "INSTCMD testups beeper.disable");
+    // upscmd.c do_cmd(), on the line without its newline: strlen("OK TRACKING ") + UUID4_LEN - 1
+    TEST_ASSERT_EQUAL(48, (int)reply.size() - 1);
+    std::string id = trackingId(reply);
+    TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), reply.c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+}
+
+// STAT_INSTCMD_FAILED: the write reached the UPS and failed
+void test_instcmd_tracking_failed(void) {
+    server.setAuthenticated(0, true);
+    request(0, "SET TRACKING ON");
+    addDelayUsages(true, true, false);
+    mockHost.failPaths.push_back(P_ST);
+
+    std::string id = trackingId(request(0, "INSTCMD testups shutdown.return"));
+    TEST_ASSERT_TRUE(isUuid4(id));
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30", writesStr().c_str());
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("ERR FAILED\n", request(0, get.c_str()).c_str());
+
+    mockHost.data.set("ups.beeper.status", "enabled");
+    mockHost.setBeeperOk = false;
+    id = trackingId(request(0, "INSTCMD testups beeper.enable"));
+    TEST_ASSERT_TRUE(isUuid4(id));
+    get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("ERR FAILED\n", request(0, get.c_str()).c_str());
+}
+
+// STAT_INSTCMD_CONVERSION_FAILED: the parameter is checked before anything is written
+void test_instcmd_tracking_invalid_argument(void) {
+    server.setAuthenticated(0, true);
+    request(0, "SET TRACKING ON");
+    addDelayUsages(true, true, true);
+
+    const char* lines[] = {
+        "INSTCMD testups load.off.delay abc",
+        "INSTCMD testups load.off.delay 65536",
+        "INSTCMD testups shutdown.reboot 12x",
+    };
+    for (const char* line : lines) {
+        mockHost.writes.clear();
+        std::string id = trackingId(request(0, line));
+        TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), line);
+        std::string get = "GET TRACKING " + id;
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", request(0, get.c_str()).c_str(), line);
+        TEST_ASSERT_EQUAL_MESSAGE(0, mockHost.writes.size(), line);
+    }
+}
+
+// Validation errors stay immediate with TRACKING on: no id, nothing in the table
+void test_instcmd_tracking_validation_errors_are_immediate(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+    // A known entry: if an error below took a slot, filling the table would drop it
+    std::string known = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.enable"));
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, known.c_str()).c_str());
+    // Strictly the oldest: on equal ages add() drops another entry
+    fakeNow += 1;
+
+    TEST_ASSERT_EQUAL_STRING("ERR CMD-NOT-SUPPORTED\n", request(0, "INSTCMD testups invalid.cmd").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "INSTCMD otherups beeper.enable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "INSTCMD testups").c_str());
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+    mockHost.connected = true;
+
+    // Credentials sent but wrong: user_checkinstcmd()
+    server.setClientUsername(0, "admin");
+    server.setAuthenticated(0, false);
+    request(0, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+
+    // CAPACITY - 1 more entries fill the table exactly: the known one is still there
+    server.setAuthenticated(0, true);
+    for (size_t i = 0; i + 1 < NutTracking::CAPACITY; i++) {
+        fakeNow += 1;
+        TEST_ASSERT_TRUE(isUuid4(trackingId(request(0, "INSTCMD testups beeper.enable"))));
+    }
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, known.c_str()).c_str());
+}
+
+// INSTCMD and SET VAR share the table: same capacity, same tracking_delay
+void test_instcmd_tracking_shares_table_with_set_var(void) {
+    setupSettable();
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+
+    std::string setGet = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    std::string cmdGet = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.disable"));
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, setGet.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, cmdGet.c_str()).c_str());
+
+    // tracking_cleanup() drops an entry when difftime() > tracking_delay (3600 s)
+    fakeNow += NutTracking::MAX_AGE_MS + 1;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, cmdGet.c_str()).c_str());
+
+    // A full table drops its oldest entry, whichever command created it
+    server.clearTracking();
+    request(0, "SET TRACKING ON");
+    setGet = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    std::string last;
+    for (size_t i = 0; i < NutTracking::CAPACITY; i++) {
+        fakeNow += 1;
+        last = "GET TRACKING " + trackingId(request(0, "INSTCMD testups beeper.enable"));
+    }
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, setGet.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, last.c_str()).c_str());
+}
+
+// The flag is per session, as client->tracking in upsd
+void test_instcmd_tracking_is_per_session(void) {
+    server.setAuthenticated(0, true);
+    server.setAuthenticated(1, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "INSTCMD testups beeper.enable").c_str());
+}
+
+// Without TRACKING the reply waits for the command: OK or the synchronous error
+void test_instcmd_without_tracking_unchanged(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    addDelayUsages(true, true, false);
+    request(0, "SET TRACKING ON");
+    request(0, "SET TRACKING OFF");
+
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "INSTCMD testups load.off.delay abc").c_str());
+    mockHost.setBeeperOk = false;
+    TEST_ASSERT_EQUAL_STRING("ERR INSTCMD-FAILED\n", request(0, "INSTCMD testups beeper.enable").c_str());
+}
+
 void test_split_tokens_pconf(void) {
     // Lines of the existing tests: same words
     std::vector<String> t = NUTServer::splitTokens("INSTCMD testups load.off.delay 30");
@@ -1757,6 +1905,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_tracking_is_per_session);
     RUN_TEST(test_set_var_rejections_are_logged);
     RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_upscmd_tracking_sequence);
+    RUN_TEST(test_instcmd_tracking_failed);
+    RUN_TEST(test_instcmd_tracking_invalid_argument);
+    RUN_TEST(test_instcmd_tracking_validation_errors_are_immediate);
+    RUN_TEST(test_instcmd_tracking_shares_table_with_set_var);
+    RUN_TEST(test_instcmd_tracking_is_per_session);
+    RUN_TEST(test_instcmd_without_tracking_unchanged);
     RUN_TEST(test_split_tokens_pconf);
     RUN_TEST(test_encode_value);
     RUN_TEST(test_var_replies_are_escaped);
@@ -1841,6 +1996,13 @@ void setup() {
     RUN_TEST(test_tracking_is_per_session);
     RUN_TEST(test_set_var_rejections_are_logged);
     RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_upscmd_tracking_sequence);
+    RUN_TEST(test_instcmd_tracking_failed);
+    RUN_TEST(test_instcmd_tracking_invalid_argument);
+    RUN_TEST(test_instcmd_tracking_validation_errors_are_immediate);
+    RUN_TEST(test_instcmd_tracking_shares_table_with_set_var);
+    RUN_TEST(test_instcmd_tracking_is_per_session);
+    RUN_TEST(test_instcmd_without_tracking_unchanged);
     RUN_TEST(test_split_tokens_pconf);
     RUN_TEST(test_encode_value);
     RUN_TEST(test_var_replies_are_escaped);

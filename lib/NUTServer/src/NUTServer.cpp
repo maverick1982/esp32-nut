@@ -54,6 +54,21 @@ static const NutTable::RWVariable* findWritable(const std::vector<NutTable::RWVa
     return nullptr;
 }
 
+// Outcome of an INSTCMD sent with TRACKING ON, as the STAT_INSTCMD_* of usbhid-ups read by
+// tracking_get(): HANDLED, FAILED (HIDSetDataValue failed), CONVERSION_FAILED (bad parameter).
+// false for NOT_SUPPORTED and NOT_CONNECTED: immediate errors, they never reach the table.
+// No default, so a new CommandResult is flagged by -Wswitch.
+static bool instcmdTrackingStatus(CommandResult r, NutTable::SetStatus& out) {
+    switch (r) {
+    case CommandResult::OK:               out = NutTable::SetStatus::OK; return true;
+    case CommandResult::FAILED:           out = NutTable::SetStatus::FAILED; return true;
+    case CommandResult::INVALID_ARGUMENT: out = NutTable::SetStatus::CONVERSION_FAILED; return true;
+    case CommandResult::NOT_SUPPORTED:    return false;
+    case CommandResult::NOT_CONNECTED:    return false;
+    }
+    return false;
+}
+
 // Fallback text of upsd when cmdvartab has no entry (netget.c get_desc / get_cmddesc)
 static const char* NUT_DESC_UNAVAILABLE = "Description unavailable";
 
@@ -606,7 +621,15 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
         // INSTCMD <ups> <cmd> [value]: the value is used by the delay commands only
         const char* param = tokens.size() > 3 ? tokens[3].c_str() : nullptr;
-        switch (_usb_ups->executeCommand(cmdName.c_str(), param)) {
+        CommandResult r = _usb_ups->executeCommand(cmdName.c_str(), param);
+        // send_instcmd() with a tracking id. Driver and server are one process, so the outcome
+        // is known before the reply and PENDING never shows up, as in setVar()
+        NutTable::SetStatus st;
+        if (_clientTracking[slot] && instcmdTrackingStatus(r, st)) {
+            replyTracking(client, st);
+            return;
+        }
+        switch (r) {
         case CommandResult::OK:            client.print("OK\n"); break;
         case CommandResult::NOT_SUPPORTED: client.print("ERR CMD-NOT-SUPPORTED\n"); break;
         case CommandResult::NOT_CONNECTED: client.print("ERR DRIVER-NOT-CONNECTED\n"); break;
@@ -826,6 +849,15 @@ void NUTServer::rejectSet(Print& client, int slot, const String& varName, const 
     log("WARN", "SET %s \"%s\" from %s: ERR %s", varName.c_str(), value.c_str(), user, err);
 }
 
+// tracking_add() + "OK TRACKING <id>" of set_var() and send_instcmd(): one table for
+// SET VAR and INSTCMD, with the outcome already known
+void NUTServer::replyTracking(Print& client, NutTable::SetStatus st) {
+    char id[NutTracking::ID_LEN];
+    _tracking.newId(id);
+    _tracking.add(id, st, _now());
+    client.printf("OK TRACKING %s\n", id);
+}
+
 // netset.c set_var(): the checks of upsd, in its order. Nothing reaches the UPS unless
 // every check passes.
 void NUTServer::setVar(Print& client, int slot, const String& upsName, const String& varName, const String& value) {
@@ -896,10 +928,7 @@ void NUTServer::setVar(Print& client, int slot, const String& upsName, const Str
     // once written, or the result kept for GET TRACKING (PENDING never shows up)
     NutTable::SetStatus st = _usb_ups->setVariable(v->name, value.c_str());
     if (_clientTracking[slot]) {
-        char id[NutTracking::ID_LEN];
-        _tracking.newId(id);
-        _tracking.add(id, st, _now());
-        client.printf("OK TRACKING %s\n", id);
+        replyTracking(client, st);
     } else if (st == NutTable::SetStatus::OK) {
         client.print("OK\n");
     } else {
