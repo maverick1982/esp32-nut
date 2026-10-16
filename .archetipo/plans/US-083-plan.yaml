@@ -1,0 +1,186 @@
+schema: archetipo/plan/v2
+spec_code: US-083
+body: |
+  # US-083: Menu laterale identico in tutte le pagine, comprese "UPS Commands" e "UPS Settings" — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 2
+
+  **User Story**
+  Come amministratore che usa la Web UI, voglio che il menu a sinistra resti identico quando passo da una pagina all'altra, in modo che l'interfaccia sembri stabile e coerente e i comandi del menu restino dove me li aspetto.
+
+  **Criteri di Accettazione**
+  - Su desktop il menu a sinistra ha la stessa larghezza in tutte le pagine, anche in "UPS Commands" e "UPS Settings", con qualsiasi contenuto.
+  - Logo, titolo, icone e voci del menu, nome utente e pulsante Log out hanno la stessa posizione e dimensione in tutte le pagine.
+  - I contenuti di "UPS Commands" e "UPS Settings" restano interamente utilizzabili da 1024 px in su.
+  - Il layout mobile (sotto il breakpoint, menu in alto) non cambia.
+  - Un test e2e Playwright confronta posizione e dimensione di menu, logo e Log out tra le pagine.
+
+  ---
+
+  ## Causa (verificata)
+
+  Un probe Playwright temporaneo (rimosso) ha misurato il menu su ogni pagina con i sorgenti reali di `data/www`:
+
+  | Viewport | Telemetry | Commands | Settings | Wi-Fi | NUT | Web Login | Logs |
+  |---|---|---|---|---|---|---|---|
+  | 1024 px | 260 | 210.1 | 210.1 | 245.3 | 251.1 | 260 | 210.1 |
+  | 1280 px | 260 | 230.5 | 210.1 | 260 | 260 | 260 | 250.8 |
+  | 1600 px | 260 | 260 | 242.8 | 260 | 260 | 260 | 260 |
+
+  (larghezza di `.sidebar` in px)
+
+  In `data/www/bundle.css` la `.app-container` è un flex in riga; `.sidebar` ha `width: var(--sidebar-width)` (260px) ma il valore predefinito `flex-shrink: 1`, e `.content-area` (`flex-grow: 1`, `overflow-y: auto`) ha il valore predefinito `min-width: auto`. Quando il contenuto della pagina attiva ha una larghezza minima maggiore dello spazio rimasto (le griglie di comandi e variabili, ma anche Wi-Fi/NUT/Logs a 1024 px), il flex comprime il menu. Con esso si restringono il logo (`.brand-icon` da 47.6 a 35.5 px: l'immagine segue il contenitore), il titolo e le voci, e il Log out (allineato a destra) si sposta. Il difetto quindi non riguarda solo le due pagine citate: la correzione vale per tutte.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Solo CSS, nessuna modifica a HTML o JS. In `data/www/bundle.css` si aggiunge, subito dopo la regola `.content-area` (sezione Layout), un blocco limitato al desktop:
+
+  ```css
+  /* US-083: on desktop the sidebar keeps its width on every page. Without these two rules
+     the flex row squeezed it whenever the active page had wide content (UPS Commands,
+     UPS Settings, Wi-Fi/NUT/Logs at 1024 px): the content area now shrinks instead. */
+  @media (min-width: 769px) {
+      .sidebar { flex-shrink: 0; }
+      .content-area { min-width: 0; }
+  }
+  ```
+
+  - **`flex-shrink: 0`** blocca la larghezza del menu a `--sidebar-width` in ogni pagina: logo, titolo, voci e Log out restano dove sono.
+  - **`min-width: 0`** lascia restringere l'area contenuti sotto la sua larghezza minima intrinseca: il contenuto va a capo dentro i suoi contenitori invece di spingere il menu. Con il probe e il CSS iniettato, a 1024/1280/1600 px nessun elemento della pagina attiva supera il bordo interno dell'area contenuti e `scrollWidth == clientWidth` (nessuno scroll orizzontale).
+  - **`min-width: 769px`** è il complemento esatto del breakpoint mobile esistente `@media (max-width: 768px)` (US-042): sotto quella soglia nulla cambia, compreso il comportamento flex in colonna.
+  - **Asset incorporati**: il firmware serve gli HTML inline. Dopo la modifica si esegue a mano `python scripts/embed_web.py` (il pre-script PlatformIO non rigenera nulla). Cambiano `data/www/index_inlined.html`, `login_inlined.html`, `update_inlined.html` (tutti includono `bundle.css`), `include/network/web_assets.h` e `include/network/.web_assets.hash`: vanno committati insieme a `bundle.css`.
+  - **Fuori scope**: la pagina `/update` (Firmware OTA) e `/login` non hanno il menu laterale; il layout mobile; nessun cambio di larghezza del menu (resta 260px).
+
+  ---
+
+  ## Strategia di test
+
+  La spec è solo Web UI: niente test nativi nuovi. La copertura è e2e Playwright (framework già presente: `playwright.config.ts`, helper `e2e/support/webui.ts`), più la regressione delle suite esistenti.
+
+  - **Nuovo `e2e/sidebar-layout.spec.ts`**: con `serveIndex(page)` e le API mockate come in `ups-commands.spec.ts` / `ups-settings.spec.ts`, ma con contenuti volutamente lunghi (descrizioni e valori lunghi). Per le viewport 1024x900 e 1280x900 visita in ordine UPS Telemetry, UPS Commands, UPS Settings, Wi-Fi Config, NUT Server, Web Login e System Logs. Su ognuna confronta con UPS Telemetry (tolleranza 0.5 px) il bounding box di `.sidebar`, `.brand-icon`, `.brand-name`, della prima `button.tab`, di `#session-username` e `#btn-logout`. Verifica anche che `.sidebar` sia larga 260 px e che `.content-area` non abbia overflow orizzontale (`scrollWidth <= clientWidth`).
+  - **Usabilità dei contenuti** (criterio 3): a 1024 px i pulsanti `button.cmd-run` di UPS Commands e Apply di UPS Settings sono visibili e interamente dentro il rettangolo di `.content-area`.
+  - **Mobile invariato** (criterio 4): a 375x812 la `.sidebar` è larga quanto la viewport e la sua posizione è identica tra UPS Telemetry e UPS Commands. Deve passare anche `e2e/responsive.spec.ts` esistente.
+  - **Mutazione**: con il blocco CSS rimosso il nuovo test deve fallire (sidebar a 210 px su Settings), poi si ripristina.
+  - **Regressione**: suite e2e completa (`npx playwright test`, oggi 83/83) e build firmware `esp32-s3-standard` (il `web_assets.h` cambia). I test nativi non sono toccati.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`@playwright/test`, Chromium)
+  **Video demo:** non registrato (`e2e.record_demo_video: false` in config); la Dimostrazione sarebbe filmabile.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Navigazione desktop | L'amministratore autenticato apre la Web UI a 1280 px e passa da UPS Telemetry a UPS Commands, UPS Settings, Wi-Fi, NUT, Web Login e System Logs: il menu non cambia larghezza né posizione di logo, titolo, voci e Log out |
+  | Finestra stretta | Stesso giro a 1024 px con descrizioni e valori lunghi: il menu resta a 260 px e i pulsanti Run / Apply restano visibili e cliccabili |
+  | Mobile | A 375 px il menu resta in alto a tutta larghezza, come oggi |
+
+  _Piano generato con ARchetipo Planning — 2026-10-16_
+tasks:
+  - id: TASK-01
+    title: Bloccare la larghezza del menu su desktop e rigenerare gli asset incorporati
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** su desktop il menu laterale resta largo `--sidebar-width` (260px) in ogni pagina; l'area contenuti si restringe al suo posto.
+
+      **Leggi:** `data/www/bundle.css`: la sezione `/* --- Layout --- */` (`.app-container`), la regola `.sidebar` (~riga 113), la regola `.content-area` (~riga 288) e il blocco `/* Mobile Responsive Styles for US-042 */` `@media (max-width: 768px)` (~riga 1298); `scripts/embed_web.py`.
+
+      **Modifica:**
+      1. In `data/www/bundle.css`, subito dopo la chiusura della regola `.content-area { ... }` (prima di `.topbar`), aggiungere esattamente:
+      ```css
+      /* US-083: on desktop the sidebar keeps its width on every page. Without these two rules
+         the flex row squeezed it whenever the active page had wide content (UPS Commands,
+         UPS Settings, Wi-Fi/NUT/Logs at 1024 px): the content area now shrinks instead. */
+      @media (min-width: 769px) {
+          .sidebar { flex-shrink: 0; }
+          .content-area { min-width: 0; }
+      }
+      ```
+      2. Non toccare la regola `.sidebar` base, il blocco mobile, HTML o JS.
+      3. Rispettare le terminazioni di riga del file (controllare con `file data/www/bundle.css`; se CRLF, il nuovo testo deve essere CRLF).
+      4. Eseguire dalla root `python scripts/embed_web.py`: rigenera `data/www/index_inlined.html`, `login_inlined.html`, `update_inlined.html`, `include/network/web_assets.h` e `include/network/.web_assets.hash`.
+
+      **Verifica:** `git diff --stat` mostra solo `bundle.css`, i tre `*_inlined.html`, `web_assets.h` e `.web_assets.hash`; `grep -c "US-083" data/www/index_inlined.html` restituisce 1.
+
+      **Blocchi:** nessuno. Se `embed_web.py` cambia altri file oltre a quelli elencati, fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - data/www/bundle.css — nuovo blocco `@media (min-width: 769px)`
+      - data/www/index_inlined.html, data/www/login_inlined.html, data/www/update_inlined.html — rigenerati
+      - include/network/web_assets.h, include/network/.web_assets.hash — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Il blocco CSS è presente una sola volta, dopo `.content-area`, con il commento US-083
+      - [ ] Il blocco mobile `@media (max-width: 768px)` è invariato
+      - [ ] Gli asset incorporati sono rigenerati e contengono la nuova regola
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test e2e: geometria del menu identica in tutte le pagine (desktop e mobile)'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** un test Playwright che fallisce se il menu laterale cambia larghezza o posizione degli elementi tra le pagine, e che prova che i contenuti di UPS Commands e UPS Settings restano usabili a 1024 px.
+
+      **Leggi:** `e2e/support/webui.ts` (`serveIndex`), `e2e/ups-commands.spec.ts` (beforeEach: mock di `/api/config`, `/api/system-status`, `/api/ups-vars`, `/api/ups/commands`, `/api/ups/command`; helper `openCommandsTab`), `e2e/ups-settings.spec.ts` (mock di `/api/auth/status` con `{ configured: true, authenticated: true, ap_mode: false, username: 'admin' }`, `/api/ups/variables` con `{ connected, variables }`, struttura `Variable`, selettore `.cmd-row.set-row[data-var=...]`), `e2e/responsive.spec.ts`, `e2e/README.md`.
+
+      **Modifica:** creare `e2e/sidebar-layout.spec.ts` (commenti in inglese, stile degli altri spec):
+      1. `beforeEach`: `serveIndex(page)` poi i mock: auth autenticato (username `admin`, così `#sidebar-session` è visibile), system-status connesso, ups-vars con `ups.status: 'OL'`, `ups.beeper.status: 'enabled'`; `/api/ups/commands` con 3 comandi di cui almeno uno con descrizione lunga (oltre 120 caratteri) e uno distruttivo; `/api/ups/variables` con almeno 3 variabili, una con descrizione lunga (oltre 120 caratteri), una enum e una con valore lungo (20 caratteri, `max_length` 20).
+      2. Helper `geometry(page)`: `page.evaluate` che restituisce `{x, y, width, height}` di `.sidebar`, `.brand-icon`, `.brand-name`, `nav.tabs button.tab` (prima), `#session-username`, `#btn-logout`.
+      3. Per ciascuna viewport `{1024, 900}` e `{1280, 900}` (`test.describe` + `test.use({ viewport })` o `page.setViewportSize`): `goto('http://esp32.local/')`, attendere `#sidebar-session` visibile, misurare la geometria su UPS Telemetry (`data-target="ups"`) come riferimento; poi per `commands`, `settings`, `wifi`, `nut`, `weblogin`, `logs`: click su `button.tab[data-target=...]`, `expect(#content-<tab>).toHaveClass(/active/)`, per commands/settings attendere che le righe siano renderizzate (`.cmd-row` / `.set-row` visibili), misurare e confrontare ogni valore con il riferimento con `toBeCloseTo(v, 0)` o differenza assoluta <= 0.5; verificare `.sidebar` width = 260 (±0.5) e che `.content-area` abbia `scrollWidth <= clientWidth`. Il messaggio di errore deve nominare pagina ed elemento.
+      4. Test a 1024 px: su UPS Commands ogni `button.cmd-run` visibile ha `boundingBox().x + width <= ` bordo destro di `.content-area`; su UPS Settings lo stesso per i pulsanti Apply (`.set-apply`).
+      5. Test mobile a 375x812: `.sidebar` width uguale a 375 (±0.5) e bounding box di `.sidebar` identico tra UPS Telemetry e UPS Commands.
+      6. Non usare `waitForTimeout`: solo attese basate su `expect`.
+
+      **Verifica:** `npx playwright test e2e/sidebar-layout.spec.ts` verde. Mutazione: commentare temporaneamente il blocco `@media (min-width: 769px)` in `data/www/bundle.css` (gli e2e servono `bundle.css` direttamente, non serve rigenerare): il test deve fallire su UPS Commands/Settings; poi ripristinare il file (`git diff data/www/bundle.css` deve tornare quello di TASK-01).
+
+      **Blocchi:** TASK-01. Se `#session-username` non è visibile con il mock di auth, usare `#btn-logout` come riferimento e annotarlo.
+
+      ## File Coinvolti
+      - e2e/sidebar-layout.spec.ts — nuovo test
+
+      ## Criteri di Completamento
+      - [ ] Il test confronta sidebar, logo, titolo, prima voce, utente e Log out di 6 pagine con UPS Telemetry a 1024 e 1280 px
+      - [ ] Il test verifica assenza di overflow orizzontale e pulsanti Run/Apply dentro l'area contenuti a 1024 px
+      - [ ] Il test copre il layout mobile a 375 px
+      - [ ] Senza il blocco CSS di TASK-01 il test fallisce; con il blocco passa
+    ref: TASK-02
+  - id: TASK-03
+    title: Regressione e2e completa e build firmware
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il cambio CSS non rompe altre pagine e che il firmware compila con gli asset rigenerati.
+
+      **Leggi:** nulla di nuovo.
+
+      **Passi:**
+      1. `npx playwright test` (suite completa; `screenshot.spec.ts` è escluso di default). Base: 83 test prima di questa spec, più quelli di TASK-02. In caso di fallimento per timeout, rilanciare una volta il singolo spec prima di considerarlo rotto.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+      3. Non rigenerare `docs/images` (gli screenshot si aggiornano solo su richiesta con `npm run e2e:screenshots`).
+
+      **Blocchi:** TASK-02.
+
+      ## File Coinvolti
+      - nessun file modificato (solo verifica)
+
+      ## Criteri di Completamento
+      - [ ] Tutta la suite e2e passa, compreso `e2e/responsive.spec.ts`
+      - [ ] La build `esp32-s3-standard` termina con SUCCESS
+    ref: TASK-03
