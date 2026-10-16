@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 8
-status: REVIEW
+status: DONE
 body: |
   #### US-066: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM
 
@@ -46,3 +46,5 @@ history:
     at: "2026-10-15T19:00:24Z"
   - status: REVIEW
     at: "2026-10-15T19:58:21Z"
+  - status: DONE
+    at: "2026-10-16T14:54:48Z"
