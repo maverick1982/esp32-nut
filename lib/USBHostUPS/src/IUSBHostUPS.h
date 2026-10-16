@@ -137,6 +137,13 @@ public:
         }
         return writeUsage(def, value) ? CommandResult::OK : CommandResult::FAILED;
     }
+    /**
+     * Runs a NUT SET VAR (US-067) with the plan of the driver (IUPSDriver::planSet): a HID
+     * write followed by a read back of the report, or a driver-side value saved first. Name
+     * and value are already checked by the NUT server. No lock is held while the device
+     * is written: lock order is _op_mutex, then _mutex (ADR 0008), as executeCommand().
+     */
+    virtual NutTable::SetStatus setVariable(const char* name, const char* value) { return NutTable::SetStatus::NOT_CONNECTED; }
     // Command shutdown.default ran with its last success, empty if none (US-058)
     const String& lastDefaultShutdown() const { return _last_default_shutdown; }
     virtual uint32_t getQuirks() const = 0;

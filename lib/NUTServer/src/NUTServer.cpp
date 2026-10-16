@@ -1,4 +1,23 @@
 #include "NUTServer.h"
+#include <stdarg.h>
+#include <stdlib.h>
+#ifndef PIO_UNIT_TESTING
+#include <esp_random.h>
+#endif
+
+// Default clock and random source of TRACKING (US-067); tests inject their own
+static uint32_t defaultClock() {
+    return (uint32_t)millis();
+}
+
+static uint32_t defaultRandom() {
+#ifdef PIO_UNIT_TESTING
+    // rand() gives at least 15 bits per call
+    return ((uint32_t)rand() << 30) ^ ((uint32_t)rand() << 15) ^ (uint32_t)rand();
+#else
+    return esp_random();
+#endif
+}
 
 // Shared by LIST UPS and GET UPSDESC so the two cannot drift.
 static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
@@ -45,6 +64,9 @@ NUTServer::NUTServer() :
 #ifndef PIO_UNIT_TESTING
     , _server(NUT_DEFAULT_PORT)
 #endif
+    , _tracking(defaultRandom)
+    , _now(defaultClock)
+    , _log_cb(nullptr)
 {
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         _clientActive[i] = false;
@@ -52,7 +74,36 @@ NUTServer::NUTServer() :
         _clientLastActivity[i] = 0;
         _clientBuffer[i] = "";
         _clientUsername[i] = "";
+        _clientUsernameSet[i] = false;
+        _clientPasswordSet[i] = false;
+        _clientTracking[i] = false;
     }
+}
+
+void NUTServer::setClock(ClockFn now) {
+    _now = now ? now : defaultClock;
+}
+
+void NUTServer::setRandom(NutTracking::RandomFn rnd) {
+    _tracking.setRandom(rnd ? rnd : defaultRandom);
+}
+
+void NUTServer::log(const char* level, const char* fmt, ...) const {
+    if (!_log_cb) return;
+    char buf[320];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    _log_cb(level, buf);
+}
+
+// Variables GET VAR answers (sstate_getinfo() of upsd): the status, device.type, the
+// device.* aliases and the keys of UPSData. Shared by GET VAR, LIST ENUM/RANGE and SET VAR.
+bool NUTServer::isVarPresent(const UPSData& data, const String& varNameLower) {
+    if (varNameLower == "ups.status" || varNameLower == "device.type") return true;
+    const char* alias = deviceAliasSource(varNameLower);
+    return (alias && data.hasKey(alias)) || data.hasKey(varNameLower);
 }
 
 NUTServer::~NUTServer() {
@@ -92,28 +143,41 @@ void NUTServer::closeSession(int slot) {
         _clientLastActivity[slot] = 0;
         _clientBuffer[slot] = "";
         _clientUsername[slot] = "";
+        _clientUsernameSet[slot] = false;
+        _clientPasswordSet[slot] = false;
+        _clientTracking[slot] = false;
         Serial.printf("[NUTServer] Session for slot %d closed.\n", slot);
     }
 }
 
+// Words as pconf splits them (common/parseconf.c): a backslash takes the next character
+// literally, in or out of quotes (upsrw escapes quotes, backslashes and # with
+// pconf_encode()), and a pair of quotes ends a word even when it is empty.
 std::vector<String> NUTServer::splitTokens(const String& input) {
     std::vector<String> tokens;
     String currentToken = "";
     bool inQuotes = false;
+    bool quoted = false; // the word had a pair of quotes: kept even if empty
     for (size_t i = 0; i < input.length(); i++) {
         char c = input[i];
-        if (c == '"') {
+        if (c == '\\') {
+            if (i + 1 < input.length()) {
+                currentToken += input[++i];
+            }
+        } else if (c == '"') {
+            if (inQuotes) quoted = true;
             inQuotes = !inQuotes;
         } else if (c == ' ' && !inQuotes) {
-            if (currentToken.length() > 0) {
+            if (currentToken.length() > 0 || quoted) {
                 tokens.push_back(currentToken);
                 currentToken = "";
             }
+            quoted = false;
         } else {
             currentToken += c;
         }
     }
-    if (currentToken.length() > 0) {
+    if (currentToken.length() > 0 || quoted) {
         tokens.push_back(currentToken);
     }
     return tokens;
@@ -123,6 +187,9 @@ void NUTServer::loop() {
     if (!_initialized) {
         return;
     }
+
+    // tracking_cleanup() of the upsd main loop: expired entries go before millis() wraps
+    _tracking.cleanup(_now());
 
 #ifndef PIO_UNIT_TESTING
     // 1. Accetta nuove connessioni client
@@ -149,6 +216,9 @@ void NUTServer::loop() {
                 _clientBuffer[slot] = "";
                 _clientBuffer[slot].reserve(256);
                 _clientUsername[slot] = "";
+                _clientUsernameSet[slot] = false;
+                _clientPasswordSet[slot] = false;
+                _clientTracking[slot] = false;
                 Serial.printf("[NUTServer] Client connected to slot %d from %s:%d\n", 
                               slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
             } else {
@@ -213,6 +283,23 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
     bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
 
+    // upsd check_command(): FLAG_USER commands need USERNAME and PASSWORD before any
+    // other check, arguments included
+    if (cmd == "LOGIN" || cmd == "SET" || cmd == "INSTCMD") {
+        const char* missing = missingCredentials(slot);
+        if (missing) {
+            String subcmd = tokens.size() > 1 ? tokens[1] : String("");
+            subcmd.toUpperCase();
+            if (cmd == "SET" && subcmd == "VAR" && tokens.size() >= 5) {
+                // A refused SET VAR goes to the System Log like the others
+                rejectSet(client, slot, tokens[3], tokens[4], missing);
+            } else {
+                client.printf("ERR %s\n", missing);
+            }
+            return;
+        }
+    }
+
     if (cmd == "VER") {
         client.printf("Network UPS Tools esp32-nut %s\n", FIRMWARE_VERSION);
         return;
@@ -229,6 +316,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         _clientUsername[slot] = tokens[1];
+        _clientUsernameSet[slot] = true;
         client.print("OK\n");
         return;
     }
@@ -239,6 +327,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         String password = tokens[1];
+        // Sent, right or wrong: LOGIN, SET and INSTCMD then answer ACCESS-DENIED, not PASSWORD-REQUIRED
+        _clientPasswordSet[slot] = true;
         if (_clientUsername[slot] == _config.username && password == _config.password) {
             _clientAuthenticated[slot] = true;
             client.print("OK\n");
@@ -410,9 +500,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             bool present = false;
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
-                const char* alias = deviceAliasSource(varNameLower);
-                present = varNameLower == "ups.status" || varNameLower == "device.type" ||
-                          (alias && data->hasKey(alias)) || data->hasKey(varNameLower);
+                present = isVarPresent(data.get(), varNameLower);
             }
             if (!present) {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
@@ -475,6 +563,44 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         return;
     }
 
+    if (cmd == "SET") {
+        // netset.c net_set(): every malformed SET is ERR INVALID-ARGUMENT
+        if (tokens.size() < 3) {
+            client.print("ERR INVALID-ARGUMENT\n");
+            return;
+        }
+        String subcmd = tokens[1];
+        subcmd.toUpperCase();
+
+        if (subcmd == "VAR") {
+            // SET VAR <ups> <var> <value>
+            if (tokens.size() < 5) {
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
+            }
+            setVar(client, slot, tokens[2], tokens[3], tokens[4]);
+            return;
+        }
+        if (subcmd == "TRACKING") {
+            // Per session; USERNAME and PASSWORD are required (FLAG_USER) but not checked,
+            // as net_set() does not call user_checkaction()
+            String mode = tokens[2];
+            mode.toUpperCase();
+            if (mode == "ON") {
+                _clientTracking[slot] = true;
+            } else if (mode == "OFF") {
+                _clientTracking[slot] = false;
+            } else {
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
+            }
+            client.print("OK\n");
+            return;
+        }
+        client.print("ERR INVALID-ARGUMENT\n");
+        return;
+    }
+
     if (cmd == "GET") {
         if (tokens.size() < 2) {
             client.print("ERR INVALID-ARGUMENT\n");
@@ -482,6 +608,18 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
         String subcmd = tokens[1];
         subcmd.toUpperCase();
+
+        // netget.c net_get(): GET TRACKING [<id>], before the subcommands that need a UPS
+        if (subcmd == "TRACKING") {
+            if (tokens.size() == 2) {
+                client.print(_clientTracking[slot] ? "ON\n" : "OFF\n");
+            } else if (_clientTracking[slot]) {
+                client.printf("%s\n", _tracking.get(tokens[2].c_str(), _now()));
+            } else {
+                client.print("ERR FEATURE-NOT-CONFIGURED\n");
+            }
+            return;
+        }
 
         if (subcmd == "VAR") {
             String upsName;
@@ -520,6 +658,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             String varNameLower = varName;
             varNameLower.toLowerCase();
 
+            if (!isVarPresent(data.get(), varNameLower)) {
+                client.print("ERR VAR-NOT-SUPPORTED\n");
+                return;
+            }
             const char* alias = deviceAliasSource(varNameLower);
             if (varNameLower == "ups.status") {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
@@ -527,10 +669,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
             } else if (alias && data->hasKey(alias)) {
                 client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(alias).c_str());
-            } else if (data->hasKey(varNameLower)) {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
             } else {
-                client.print("ERR VAR-NOT-SUPPORTED\n");
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
             }
             return;
         }
@@ -622,6 +762,117 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     }
 
     client.print("ERR UNKNOWN-COMMAND\n");
+}
+
+// upsd check_command(), FLAG_USER: USERNAME-REQUIRED / PASSWORD-REQUIRED when the
+// client has not sent them. Whether they are right is checked by each command
+// (ACCESS-DENIED). With no NUT credentials configured every client is allowed.
+const char* NUTServer::missingCredentials(int slot) const {
+    bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
+    if (!authRequired) return nullptr;
+    if (!_clientUsernameSet[slot]) return "USERNAME-REQUIRED";
+    if (!_clientPasswordSet[slot]) return "PASSWORD-REQUIRED";
+    return nullptr;
+}
+
+// A SET VAR refused by the checks of upsd: the error goes to the client and to the
+// System Log. Valid requests are logged by the host with their outcome.
+void NUTServer::rejectSet(Print& client, int slot, const String& varName, const String& value, const char* err) {
+    client.printf("ERR %s\n", err);
+    const char* user = _clientUsername[slot].length() > 0 ? _clientUsername[slot].c_str() : "-";
+    log("WARN", "SET %s \"%s\" from %s: ERR %s", varName.c_str(), value.c_str(), user, err);
+}
+
+// netset.c set_var(): the checks of upsd, in its order. Nothing reaches the UPS unless
+// every check passes.
+void NUTServer::setVar(Print& client, int slot, const String& upsName, const String& varName, const String& value) {
+    String upsNameLower = upsName;
+    upsNameLower.toLowerCase();
+    String configUpsNameLower = _config.ups_name;
+    configUpsNameLower.toLowerCase();
+    if (upsNameLower != configUpsNameLower) {
+        rejectSet(client, slot, varName, value, "UNKNOWN-UPS");
+        return;
+    }
+
+    // ups_available(): driver socket first, then stale data
+    if (!_usb_ups || !_usb_ups->isConnected()) {
+        rejectSet(client, slot, varName, value, "DRIVER-NOT-CONNECTED");
+        return;
+    }
+    if (_usb_ups->isDataStale()) {
+        rejectSet(client, slot, varName, value, "DATA-STALE");
+        return;
+    }
+
+    // user_checkaction(): the credentials that allow INSTCMD allow SET. USERNAME and
+    // PASSWORD were sent (missingCredentials()), here they are wrong
+    bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
+    if (authRequired && !_clientAuthenticated[slot]) {
+        rejectSet(client, slot, varName, value, "ACCESS-DENIED");
+        return;
+    }
+
+    String varNameLower = varName;
+    varNameLower.toLowerCase();
+    bool present;
+    {
+        auto data = _usb_ups->getUPSData();
+        present = isVarPresent(data.get(), varNameLower);
+    }
+    if (!present) {
+        rejectSet(client, slot, varName, value, "VAR-NOT-SUPPORTED");
+        return;
+    }
+
+    // Listed after the data lock is released: getWritableVariables() takes it itself
+    std::vector<NutTable::RWVariable> rw = _usb_ups->getWritableVariables();
+    const NutTable::RWVariable* v = findWritable(rw, varName);
+    if (!v) {
+        rejectSet(client, slot, varName, value, "READONLY");
+        return;
+    }
+
+    // Every writable variable is ST_FLAG_STRING (US-066). aux 0 is the "insanity from the
+    // driver" of upsd, e.g. input.sensitivity of cps-hid: it cannot be written.
+    if (v->aux < 1) {
+        log("WARN", "auxdata for %s is invalid", v->name);
+        rejectSet(client, slot, varName, value, "SET-FAILED");
+        return;
+    }
+    if (value.length() > v->aux) {
+        rejectSet(client, slot, varName, value, "TOO-LONG");
+        return;
+    }
+
+    // ENUM values compared with strcmp; usbhid-ups declares no ranges (LIST RANGE is empty)
+    if (!v->enums.empty()) {
+        bool found = false;
+        for (const char* e : v->enums) {
+            if (strcmp(e, value.c_str()) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            rejectSet(client, slot, varName, value, "INVALID-VALUE");
+            return;
+        }
+    }
+
+    // Driver and server are one process, so the outcome is known before the reply: OK only
+    // once written, or the result kept for GET TRACKING (PENDING never shows up)
+    NutTable::SetStatus st = _usb_ups->setVariable(v->name, value.c_str());
+    if (_clientTracking[slot]) {
+        char id[NutTracking::ID_LEN];
+        _tracking.newId(id);
+        _tracking.add(id, st, _now());
+        client.printf("OK TRACKING %s\n", id);
+    } else if (st == NutTable::SetStatus::OK) {
+        client.print("OK\n");
+    } else {
+        client.print("ERR SET-FAILED\n");
+    }
 }
 
 

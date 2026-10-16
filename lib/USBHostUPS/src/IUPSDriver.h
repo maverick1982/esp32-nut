@@ -61,6 +61,42 @@ public:
     virtual void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {}
 
     /**
+     * @brief Decides what a SET VAR writes, as setvar() in usbhid-ups (US-067). No I/O and
+     * no change to data: the host runs the plan.
+     *
+     * @param data Current values (ups.delay.*, the other half of the MGE clock)
+     * @param usages Parsed usages of the attached device
+     * @param name Variable, matched case-insensitively as find_nut_info()
+     * @param value Text of the SET VAR
+     * @param plan Filled only when the result is OK; plan.name is the canonical name
+     */
+    virtual NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
+                                        const char* name, const char* value, NutTable::SetPlan& plan) const {
+        return NutTable::SetStatus::UNKNOWN;
+    }
+
+    /**
+     * @brief Keeps the value of a driver-side variable of the NUT table (HU_FLAG_ABSENT rows
+     * such as outlet.desc), like dstate_setinfo() in setvar(). setup() forgets it: the host
+     * sets it again after every setup().
+     */
+    virtual void setDriverSideValue(const char* name, const char* value) {}
+
+    /**
+     * @brief wLength of a GET_REPORT, given the length declared in the report descriptor.
+     *
+     * Used by the poll and by the host's own requests (SET VAR read-modify-write and read
+     * back), so a device that needs longer requests (APC Back-UPS BX) gets them everywhere.
+     */
+    virtual uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const { return expected; }
+
+    /**
+     * @brief Forgets that a report was decoded: the next poll requests it again even when
+     * static reports are read once (US-067, after a failed read back of a written report).
+     */
+    virtual void invalidateReport(uint8_t report_type, uint8_t report_id) {}
+
+    /**
      * @brief Parses a received String Descriptor
      * 
      * @param index The string index

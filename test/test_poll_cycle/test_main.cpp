@@ -373,6 +373,29 @@ void test_apc_other_models_request_declared_length(void) {
     TEST_ASSERT_EQUAL_UINT16(2, host._lengths[0]);
 }
 
+// US-067: the host asks the same wLength for the SET VAR read-modify-write and read back,
+// through the public IUPSDriver::requestLength()
+static uint16_t hostRequestLength(const char* model, uint16_t expected) {
+    host = MockPollHost();
+    data = UPSData();
+    bxLikeDevice();
+    data.set("ups.model", model);
+    APCDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1000); // onLoop() reads the model
+    const IUPSDriver& d = drv;
+    return d.requestLength(3, 12, expected);
+}
+
+void test_apc_back_ups_bx_request_length_public(void) {
+    TEST_ASSERT_EQUAL_UINT16(APCDriver::BX_MIN_REQUEST_LENGTH, hostRequestLength("Back-UPS BX750MI", 2));
+    TEST_ASSERT_EQUAL_UINT16(64, hostRequestLength("Back-UPS BX750MI", 64)); // never less than declared
+    TEST_ASSERT_EQUAL_UINT16(2, hostRequestLength("Back-UPS CS 650", 2));
+    GenericDriver gen;
+    const IUPSDriver& d = gen;
+    TEST_ASSERT_EQUAL_UINT16(2, d.requestLength(3, 12, 2));
+}
+
 // Issue #60, like HU_FLAG_STATIC in usbhid-ups: on the Back-UPS BX a report with static
 // values only is read once, then left out of the full poll
 static HIDUsageDef usageDef(uint32_t usage, const char* path) {
@@ -430,6 +453,43 @@ void test_apc_back_ups_bx_reads_static_reports_once(void) {
     host._reports.clear();
     runLoop(drv, 32000, 32500);
     TEST_ASSERT_EQUAL(3, host._reports.size());
+}
+
+// US-067: a written report whose read back failed is read again by the next full poll,
+// although the BX reads static reports once
+void test_apc_back_ups_bx_invalidated_static_report_requested_again(void) {
+    bxStaticDevice("Back-UPS BX750MI");
+    APCDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL(2, host._reports.size()); // 37 known: left out
+
+    IUPSDriver& d = drv;
+    // INPUT 37 is another report: FEATURE 37 stays known
+    d.invalidateReport(1, 37);
+    host._reports.clear();
+    runLoop(drv, 61000, 61500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(38, host._reports[0].first);
+
+    d.invalidateReport(3, 37);
+    host._reports.clear();
+    runLoop(drv, 91000, 91500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(37, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(3, host._reports[0].second);
+    TEST_ASSERT_EQUAL_UINT8(38, host._reports[1].first);
+    TEST_ASSERT_EQUAL_UINT8(50, host._reports[2].first);
+
+    // Decoded again: left out from then on
+    host._reports.clear();
+    runLoop(drv, 121000, 121500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(38, host._reports[0].first);
 }
 
 void test_apc_other_models_read_static_reports_every_full_poll(void) {
@@ -519,8 +579,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
     RUN_TEST(test_apc_back_ups_bx_requests_at_least_8_bytes);
     RUN_TEST(test_apc_other_models_request_declared_length);
+    RUN_TEST(test_apc_back_ups_bx_request_length_public);
     RUN_TEST(test_dynamic_usages);
     RUN_TEST(test_apc_back_ups_bx_reads_static_reports_once);
+    RUN_TEST(test_apc_back_ups_bx_invalidated_static_report_requested_again);
     RUN_TEST(test_apc_other_models_read_static_reports_every_full_poll);
     RUN_TEST(test_apc_back_ups_bx750mi_requests_per_minute);
     RUN_TEST(test_initial_poll_done_after_first_full_cycle);

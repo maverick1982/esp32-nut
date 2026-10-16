@@ -83,6 +83,15 @@ public:
     std::vector<NutTable::RWVariable> getWritableVariables() const override { return rw; }
     bool supportsBeeperToggle() const override { return beeperToggleSupported; }
 
+    // SET VAR requests that passed the checks of the server, {name, value}, and the
+    // outcome returned for them (US-067)
+    NutTable::SetStatus setResult = NutTable::SetStatus::OK;
+    std::vector<std::pair<std::string, std::string>> sets;
+    NutTable::SetStatus setVariable(const char* name, const char* value) override {
+        sets.push_back({name, value});
+        return setResult;
+    }
+
     std::vector<HIDUsageDef> _mockUsages;
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
@@ -99,7 +108,26 @@ static NUTServer server;
 static MockUSBHost mockHost;
 static MemoryPrinter printer;
 
+// System Log lines of the server, clock and random source of TRACKING (US-067)
+static std::vector<std::string> logLines;
+static void captureLog(const char* level, const char* msg) {
+    logLines.push_back(std::string(level) + " " + msg);
+}
+static uint32_t fakeNow = 0;
+static uint32_t fakeClock() { return fakeNow; }
+static uint32_t fakeSeed = 1;
+static uint32_t fakeRandom() {
+    fakeSeed = fakeSeed * 1664525u + 1013904223u;
+    return fakeSeed;
+}
+
 void setUp(void) {
+    logLines.clear();
+    fakeNow = 1000;
+    server.setLogCallback(captureLog);
+    server.setClock(fakeClock);
+    server.setRandom(fakeRandom);
+    server.clearTracking();
     printer.clear();
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
@@ -113,6 +141,8 @@ void setUp(void) {
     mockHost.writes.clear();
     mockHost.failPaths.clear();
     mockHost.rw.clear();
+    mockHost.setResult = NutTable::SetStatus::OK;
+    mockHost.sets.clear();
 
     NUTServerConfig config;
     config.username = "admin";
@@ -490,12 +520,50 @@ void test_instcmd_write_failed(void) {
 }
 
 void test_instcmd_requires_login(void) {
+    server.setClientUsername(0, "");
     server.setAuthenticated(0, false);
     mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
 
+    // check_command(), FLAG_USER: USERNAME, then PASSWORD, before the arguments
+    server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "USERNAME admin");
+    printer.clear();
+    server.processCommand(printer, 0, "INSTCMD");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", printer.getOutput().c_str());
+    printer.clear();
+    // Sent but wrong: user_checkinstcmd()
+    server.processCommand(printer, 0, "PASSWORD wrong");
+    printer.clear();
     server.processCommand(printer, 0, "INSTCMD testups test.battery.start.quick");
     TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", printer.getOutput().c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
+}
+
+static std::string request(int slot, const char* line);
+
+// LOGIN is FLAG_USER too; net_login() checks the UPS name, then the credentials
+void test_login_requires_credentials(void) {
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "LOGIN testups").c_str());
+    request(0, "USERNAME admin");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "LOGIN wrongups").c_str());
+    request(0, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "LOGIN wrongups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "LOGIN testups").c_str());
+    request(0, "PASSWORD secret");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+
+    // Without NUT credentials configured nothing is required, as before
+    NUTServer open;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    open.begin(config, &mockHost, 3493);
+    printer.clear();
+    open.processCommand(printer, 0, "LOGIN testups");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
 }
 
 // US-058: delay fields of the mock, 16 bits wide like the Eaton 3S
@@ -640,12 +708,13 @@ void test_instcmd_sequence_stops_at_first_failed_write(void) {
 }
 
 void test_instcmd_shutdown_requires_login(void) {
+    server.setClientUsername(0, "admin");
     server.setAuthenticated(0, false);
     addDelayUsages(true, true, true);
 
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups shutdown.return").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups shutdown.default").c_str());
-    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", instcmd("INSTCMD testups load.off.delay 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups shutdown.return").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups shutdown.default").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", instcmd("INSTCMD testups load.off.delay 30").c_str());
     TEST_ASSERT_EQUAL(0, mockHost.writes.size());
 }
 
@@ -962,6 +1031,461 @@ void test_gonut_newups_sequence(void) {
     }
 }
 
+// --- SET VAR, SET/GET TRACKING (US-067): netset.c set_var/net_set, netget.c net_get,
+// upsd.c tracking_get/nut_uuid_v4, clients/upsrw.c do_set ---
+
+static std::string request(int slot, const char* line) {
+    printer.clear();
+    server.processCommand(printer, slot, line);
+    return printer.getOutput();
+}
+
+static void setupSettable() {
+    server.setAuthenticated(0, true);
+    server.setClientUsername(0, "admin");
+    mockHost.data.set("battery.charge.low", "20");
+    mockHost.data.set("input.sensitivity", "normal");
+    mockHost.data.set("ups.load.high", "90");
+    mockHost.data.set("outlet.desc", "PowerSummary");
+    mockHost.data.set("battery.charge", "100"); // read-only
+    mockHost.rw = {
+        { "battery.charge.low", 10, {} },
+        { "input.sensitivity", 10, { "low", "normal", "high" } },
+        { "ups.load.high", 5, {} },
+        { "outlet.desc", 20, {} },
+    };
+}
+
+// nut_uuid_v4(): "%02X" x 16 in 8-4-4-4-12, version nibble 4, variant 10xx
+static bool isUuid4(const std::string& id) {
+    if (id.size() != 36) return false;
+    for (size_t i = 0; i < id.size(); i++) {
+        char c = id[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return id[14] == '4' && strchr("89AB", id[19]) != nullptr;
+}
+
+// "OK TRACKING <id>\n" -> <id>, empty if the line has another shape
+static std::string trackingId(const std::string& reply) {
+    const std::string prefix = "OK TRACKING ";
+    if (reply.compare(0, prefix.size(), prefix) != 0 || reply.empty() || reply.back() != '\n') return "";
+    return reply.substr(prefix.size(), reply.size() - prefix.size() - 1);
+}
+
+void test_set_malformed_is_invalid_argument(void) {
+    setupSettable();
+    // net_set(): fewer than 2 arguments, unknown subcommand, SET VAR with fewer than 4
+    const char* lines[] = {
+        "SET",
+        "SET FOO",
+        "SET FOO bar",
+        "SET TRACKING",
+        "SET VAR testups battery.charge.low",
+    };
+    for (const char* line : lines) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", request(0, line).c_str(), line);
+    }
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_unknown_ups(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_driver_not_connected(void) {
+    setupSettable();
+    // Unplugged: the host is also stale, but ups_available() tests the driver socket first
+    mockHost.connected = false;
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    // No host at all
+    NUTServer bare;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    bare.begin(config, nullptr, 3493);
+    printer.clear();
+    bare.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_data_stale(void) {
+    setupSettable();
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_access_denied(void) {
+    setupSettable();
+    // check_command(), FLAG_USER: USERNAME first, then PASSWORD
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "USERNAME admin").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    // Sent but wrong: user_checkaction() in set_var()
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD wrong").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "PASSWORD secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    mockHost.sets.clear();
+
+    // Without NUT credentials SET is allowed, as INSTCMD
+    NUTServer open;
+    NUTServerConfig config;
+    config.ups_name = "testups";
+    open.begin(config, &mockHost, 3493);
+    printer.clear();
+    open.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+}
+
+void test_set_var_not_supported_and_readonly(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups no.such.var 1").c_str());
+    // A writable variable the UPS does not report is not supported (sstate_getinfo() first)
+    mockHost.rw.push_back({ "battery.runtime.low", 10, {} });
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups battery.runtime.low 120").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups ups.status OB").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups device.type ups").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_aux_zero_is_set_failed(void) {
+    setupSettable();
+    // input.sensitivity of cps-hid is declared with aux 0: upsd refuses to write it
+    mockHost.rw = { { "input.sensitivity", 0, { "low", "normal", "high" } } };
+    TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups input.sensitivity high").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(2, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN auxdata for input.sensitivity is invalid", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET input.sensitivity \"high\" from admin: ERR SET-FAILED", logLines[1].c_str());
+}
+
+void test_set_var_too_long(void) {
+    setupSettable();
+    // aux < strlen(newval)
+    TEST_ASSERT_EQUAL_STRING("ERR TOO-LONG\n", request(0, "SET VAR testups ups.load.high 123456").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups ups.load.high 12345").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+}
+
+void test_set_var_invalid_enum_value(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity medium").c_str());
+    // strcmp: the case counts
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity High").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups input.sensitivity high").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", mockHost.sets[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("high", mockHost.sets[0].second.c_str());
+}
+
+// When a request fails more than one check, the error is the first one of set_var()
+void test_set_var_check_order(void) {
+    setupSettable();
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+
+    // No PASSWORD sent: check_command() refuses before net_set() reads the arguments
+    server.setAuthenticated(0, false);
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET").c_str());
+
+    // Wrong PASSWORD: ACCESS-DENIED comes after the UPS checks, as in set_var()
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD wrong").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "SET VAR wrongups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    mockHost.connected = true;
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "SET VAR testups no.such.var 30").c_str());
+
+    mockHost.stale = false;
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups no.such.var 30").c_str());
+
+    server.setAuthenticated(0, true);
+    // Read-only and too long: READONLY
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 12345678901").c_str());
+    // Too long and outside the ENUM: TOO-LONG
+    TEST_ASSERT_EQUAL_STRING("ERR TOO-LONG\n", request(0, "SET VAR testups input.sensitivity veryveryhigh").c_str());
+    // aux 0 and too long: SET-FAILED
+    mockHost.rw = { { "battery.charge.low", 0, {} } };
+    TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups battery.charge.low 123456789012").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_set_var_canonical_name(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR TESTUPS BATTERY.Charge.Low 30").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", mockHost.sets[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("30", mockHost.sets[0].second.c_str());
+}
+
+// Values as upsrw sends them: always quoted, with pconf_encode() escaping " \ and #
+void test_set_var_quoted_values(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"Rack A\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"say \\\"hi\\\" \\\\ \\#1\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"\"").c_str());
+    TEST_ASSERT_EQUAL(3, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("Rack A", mockHost.sets[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("say \"hi\" \\ #1", mockHost.sets[1].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("", mockHost.sets[2].second.c_str());
+}
+
+// Without TRACKING the reply waits for the write: OK only when it succeeded
+void test_set_var_synchronous_outcome(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+
+    const NutTable::SetStatus failures[] = {
+        NutTable::SetStatus::FAILED,
+        NutTable::SetStatus::CONVERSION_FAILED,
+        NutTable::SetStatus::UNKNOWN,
+        NutTable::SetStatus::NOT_CONNECTED,
+    };
+    for (NutTable::SetStatus st : failures) {
+        mockHost.setResult = st;
+        TEST_ASSERT_EQUAL_STRING("ERR SET-FAILED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    }
+    TEST_ASSERT_EQUAL(5, (int)mockHost.sets.size());
+    // Valid requests are logged by the host, not by the server
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// upsrw -w: SET TRACKING ON, SET VAR, then GET TRACKING <id> until it is not PENDING
+void test_upsrw_tracking_sequence(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING ON").c_str());
+
+    std::string reply = request(0, "SET VAR testups battery.charge.low \"25\"");
+    // upsrw.c:149, on the line without its newline: strlen("OK TRACKING ") + UUID4_LEN - 1
+    TEST_ASSERT_EQUAL(48, (int)reply.size() - 1);
+    std::string id = trackingId(reply);
+    TEST_ASSERT_TRUE_MESSAGE(isUuid4(id), reply.c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+
+    std::string get = "GET TRACKING " + id;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+
+    // strcasecmp in tracking_get()
+    std::string lower = id;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    get = "GET TRACKING " + lower;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+}
+
+void test_tracking_outcomes(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    const struct {
+        NutTable::SetStatus st;
+        const char* expected;
+    } cases[] = {
+        { NutTable::SetStatus::OK,                "SUCCESS\n" },
+        { NutTable::SetStatus::CONVERSION_FAILED, "ERR INVALID-ARGUMENT\n" },
+        { NutTable::SetStatus::FAILED,            "ERR FAILED\n" },
+        { NutTable::SetStatus::NOT_CONNECTED,     "ERR FAILED\n" },
+        { NutTable::SetStatus::UNKNOWN,           "ERR UNKNOWN\n" },
+    };
+    for (const auto& c : cases) {
+        mockHost.setResult = c.st;
+        std::string id = trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+        TEST_ASSERT_TRUE(isUuid4(id));
+        std::string get = "GET TRACKING " + id;
+        TEST_ASSERT_EQUAL_STRING(c.expected, request(0, get.c_str()).c_str());
+    }
+}
+
+// Validation errors stay immediate with TRACKING on: no id
+void test_tracking_validation_error_is_immediate(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge 50").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-VALUE\n", request(0, "SET VAR testups input.sensitivity medium").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+void test_get_and_set_tracking(void) {
+    setupSettable();
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR FEATURE-NOT-CONFIGURED\n",
+                             request(0, "GET TRACKING 00000000-0000-4000-8000-000000000000").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", request(0, "SET TRACKING MAYBE").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+
+    // strcasecmp on ON/OFF
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "set tracking on").c_str());
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(0, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET TRACKING off").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+
+    // SET is FLAG_USER in upsd: USERNAME and PASSWORD must be sent...
+    server.setClientUsername(1, "");
+    server.setAuthenticated(1, false);
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(1, "SET TRACKING ON").c_str());
+    request(1, "USERNAME admin");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(1, "SET TRACKING ON").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(1, "GET TRACKING").c_str());
+    // ...but net_set() does not check them for TRACKING (no user_checkaction())
+    request(1, "PASSWORD wrong");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "SET TRACKING ON").c_str());
+    TEST_ASSERT_EQUAL_STRING("ON\n", request(1, "GET TRACKING").c_str());
+}
+
+void test_tracking_unknown_and_expired_id(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, "GET TRACKING 00000000-0000-4000-8000-000000000000").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, "GET TRACKING not-an-id").c_str());
+
+    fakeNow = 5000;
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    // tracking_cleanup() drops an entry when difftime() > tracking_delay (3600 s)
+    fakeNow = 5000 + 3600000;
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+    fakeNow = 5000 + 3600001;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, get.c_str()).c_str());
+}
+
+void test_tracking_age_across_millis_wrap(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    fakeNow = 0xFFFFF000u;
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    fakeNow = 0x00001000u; // 8.192 s later
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, get.c_str()).c_str());
+
+    // The server loop drops the expired entry, so it cannot look young again once its
+    // age wraps around (2^32 ms later)
+    fakeNow = 0xFFFFF000u + 3600001u;
+    server.loop();
+    fakeNow = 0xFFFFF000u + 10u;
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, get.c_str()).c_str());
+}
+
+// 16 entries: the 17th outcome replaces the oldest one
+void test_tracking_table_drops_oldest(void) {
+    setupSettable();
+    request(0, "SET TRACKING ON");
+    std::vector<std::string> ids;
+    for (int i = 0; i < 17; i++) {
+        fakeNow = 1000 + (uint32_t)i * 1000;
+        ids.push_back(trackingId(request(0, "SET VAR testups battery.charge.low 30")));
+        TEST_ASSERT_TRUE(isUuid4(ids.back()));
+    }
+    for (size_t i = 0; i < ids.size(); i++) {
+        for (size_t j = i + 1; j < ids.size(); j++) TEST_ASSERT_TRUE(ids[i] != ids[j]);
+    }
+    std::string first = "GET TRACKING " + ids.front();
+    std::string second = "GET TRACKING " + ids[1];
+    std::string last = "GET TRACKING " + ids.back();
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN\n", request(0, first.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, second.c_str()).c_str());
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(0, last.c_str()).c_str());
+}
+
+// The flag is per session, the table is shared, as client->tracking in upsd
+void test_tracking_is_per_session(void) {
+    setupSettable();
+    server.setAuthenticated(1, true);
+    request(0, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(1, "GET TRACKING").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "SET VAR testups battery.charge.low 30").c_str());
+
+    std::string get = "GET TRACKING " + trackingId(request(0, "SET VAR testups battery.charge.low 30"));
+    request(1, "SET TRACKING ON");
+    TEST_ASSERT_EQUAL_STRING("SUCCESS\n", request(1, get.c_str()).c_str());
+
+    // The end of the session clears the flag
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL_STRING("OFF\n", request(0, "GET TRACKING").c_str());
+}
+
+void test_set_var_rejections_are_logged(void) {
+    setupSettable();
+    request(0, "SET VAR wrongups battery.charge.low 30");
+    request(0, "SET VAR testups battery.charge \"5 0\"");
+    request(0, "SET VAR testups input.sensitivity medium");
+    server.setClientUsername(0, "");
+    server.setAuthenticated(0, false);
+    request(0, "SET VAR testups battery.charge.low 30");
+    // Malformed lines are not SET VAR requests: nothing to log
+    request(0, "SET VAR testups battery.charge.low");
+    TEST_ASSERT_EQUAL(4, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from admin: ERR UNKNOWN-UPS", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge \"5 0\" from admin: ERR READONLY", logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET input.sensitivity \"medium\" from admin: ERR INVALID-VALUE", logLines[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from -: ERR USERNAME-REQUIRED", logLines[3].c_str());
+}
+
+// Ids built with the bit operations of nut_uuid_v4() on known random bytes
+void test_tracking_id_format(void) {
+    NutTracking zeros([]() -> uint32_t { return 0; });
+    char id[NutTracking::ID_LEN];
+    zeros.newId(id);
+    TEST_ASSERT_EQUAL_STRING("00000000-0000-4000-8000-000000000000", id);
+
+    NutTracking ones([]() -> uint32_t { return 0xFFFFFFFFu; });
+    ones.newId(id);
+    TEST_ASSERT_EQUAL_STRING("FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF", id);
+
+    // Bytes in call order, most significant first
+    NutTracking counting([]() -> uint32_t { static uint32_t n = 0; n += 0x11111111u; return n; });
+    counting.newId(id);
+    // b[0..15] = 11 11 11 11 22 22 22 22 33 33 33 33 44 44 44 44;
+    // b[6] = (0x22 & 0x0F) | 0x40 = 0x42, b[8] = (0x33 & 0x3F) | 0x80 = 0xB3
+    TEST_ASSERT_EQUAL_STRING("11111111-2222-4222-B333-333344444444", id);
+}
+
+void test_split_tokens_pconf(void) {
+    // Lines of the existing tests: same words
+    std::vector<String> t = NUTServer::splitTokens("INSTCMD testups load.off.delay 30");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("30", t[3].c_str());
+    t = NUTServer::splitTokens("LIST ENUM testups input.sensitivity");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", t[3].c_str());
+    t = NUTServer::splitTokens("GET  VAR   testups \"battery.charge\"  ");
+    TEST_ASSERT_EQUAL(4, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("VAR", t[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("battery.charge", t[3].c_str());
+
+    // Backslash: the next character is literal, in and out of quotes
+    t = NUTServer::splitTokens("SET VAR ups v \"a \\\"b\\\" \\\\ \\#\"");
+    TEST_ASSERT_EQUAL(5, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("a \"b\" \\ #", t[4].c_str());
+    t = NUTServer::splitTokens("x a\\ b");
+    TEST_ASSERT_EQUAL(2, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("a b", t[1].c_str());
+
+    // A pair of quotes is a word, even when empty
+    t = NUTServer::splitTokens("a \"\" b");
+    TEST_ASSERT_EQUAL(3, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("", t[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("b", t[2].c_str());
+    t = NUTServer::splitTokens("SET VAR testups outlet.desc \"\"");
+    TEST_ASSERT_EQUAL(5, (int)t.size());
+    TEST_ASSERT_EQUAL_STRING("", t[4].c_str());
+}
+
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
@@ -994,6 +1518,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_instcmd_driver_not_connected);
     RUN_TEST(test_instcmd_write_failed);
     RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_login_requires_credentials);
     RUN_TEST(test_instcmd_shutdown_sequences);
     RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
     RUN_TEST(test_instcmd_uses_configured_delays);
@@ -1008,6 +1533,30 @@ int main(int argc, char **argv) {
     RUN_TEST(test_list_cmd_includes_shutdown_default);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
+    RUN_TEST(test_set_malformed_is_invalid_argument);
+    RUN_TEST(test_set_var_unknown_ups);
+    RUN_TEST(test_set_var_driver_not_connected);
+    RUN_TEST(test_set_var_data_stale);
+    RUN_TEST(test_set_var_access_denied);
+    RUN_TEST(test_set_var_not_supported_and_readonly);
+    RUN_TEST(test_set_var_aux_zero_is_set_failed);
+    RUN_TEST(test_set_var_too_long);
+    RUN_TEST(test_set_var_invalid_enum_value);
+    RUN_TEST(test_set_var_check_order);
+    RUN_TEST(test_set_var_canonical_name);
+    RUN_TEST(test_set_var_quoted_values);
+    RUN_TEST(test_set_var_synchronous_outcome);
+    RUN_TEST(test_upsrw_tracking_sequence);
+    RUN_TEST(test_tracking_outcomes);
+    RUN_TEST(test_tracking_validation_error_is_immediate);
+    RUN_TEST(test_get_and_set_tracking);
+    RUN_TEST(test_tracking_unknown_and_expired_id);
+    RUN_TEST(test_tracking_age_across_millis_wrap);
+    RUN_TEST(test_tracking_table_drops_oldest);
+    RUN_TEST(test_tracking_is_per_session);
+    RUN_TEST(test_set_var_rejections_are_logged);
+    RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_split_tokens_pconf);
     return UNITY_END();
 }
 #else
@@ -1042,6 +1591,7 @@ void setup() {
     RUN_TEST(test_instcmd_driver_not_connected);
     RUN_TEST(test_instcmd_write_failed);
     RUN_TEST(test_instcmd_requires_login);
+    RUN_TEST(test_login_requires_credentials);
     RUN_TEST(test_instcmd_shutdown_sequences);
     RUN_TEST(test_instcmd_stayoff_writes_minus_one_as_twos_complement);
     RUN_TEST(test_instcmd_uses_configured_delays);
@@ -1056,6 +1606,30 @@ void setup() {
     RUN_TEST(test_list_cmd_includes_shutdown_default);
     RUN_TEST(test_instcmd_beeper_failure_and_toggle);
     RUN_TEST(test_instcmd_beeper_mute_and_toggle_from_muted);
+    RUN_TEST(test_set_malformed_is_invalid_argument);
+    RUN_TEST(test_set_var_unknown_ups);
+    RUN_TEST(test_set_var_driver_not_connected);
+    RUN_TEST(test_set_var_data_stale);
+    RUN_TEST(test_set_var_access_denied);
+    RUN_TEST(test_set_var_not_supported_and_readonly);
+    RUN_TEST(test_set_var_aux_zero_is_set_failed);
+    RUN_TEST(test_set_var_too_long);
+    RUN_TEST(test_set_var_invalid_enum_value);
+    RUN_TEST(test_set_var_check_order);
+    RUN_TEST(test_set_var_canonical_name);
+    RUN_TEST(test_set_var_quoted_values);
+    RUN_TEST(test_set_var_synchronous_outcome);
+    RUN_TEST(test_upsrw_tracking_sequence);
+    RUN_TEST(test_tracking_outcomes);
+    RUN_TEST(test_tracking_validation_error_is_immediate);
+    RUN_TEST(test_get_and_set_tracking);
+    RUN_TEST(test_tracking_unknown_and_expired_id);
+    RUN_TEST(test_tracking_age_across_millis_wrap);
+    RUN_TEST(test_tracking_table_drops_oldest);
+    RUN_TEST(test_tracking_is_per_session);
+    RUN_TEST(test_set_var_rejections_are_logged);
+    RUN_TEST(test_tracking_id_format);
+    RUN_TEST(test_split_tokens_pconf);
     UNITY_END();
 }
 void loop() {}

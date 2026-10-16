@@ -2,6 +2,7 @@
 #include <unity.h>
 #include <string>
 #include "CommandCatalog.h"
+#include "DriverVarStore.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -550,6 +551,147 @@ void test_apply_default_delays() {
     TEST_ASSERT_FALSE(apc_elsewhere.hasKey("ups.delay.shutdown"));
 }
 
+// --- US-067: driver-side variables saved with SET VAR ---
+
+typedef std::vector<std::pair<String, String>> SavedVars;
+
+void test_driver_var_store_json_round_trip() {
+    SavedVars vars;
+    vars.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
+    vars.push_back(std::make_pair(String("outlet.1.desc"), String("Rack \"A\" NAS")));
+    vars.push_back(std::make_pair(String("ups.delay.start"), String("0")));
+    String json = DriverVarStore::toJson(vars);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"ups.delay.shutdown\":\"60\",\"outlet.1.desc\":\"Rack \\\"A\\\" NAS\",\"ups.delay.start\":\"0\"}",
+        json.c_str());
+
+    SavedVars back;
+    TEST_ASSERT_TRUE(DriverVarStore::fromJson(json, back));
+    TEST_ASSERT_EQUAL(3, back.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", back[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("60", back[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("outlet.1.desc", back[1].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("Rack \"A\" NAS", back[1].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.start", back[2].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("0", back[2].second.c_str());
+
+    // Nothing saved yet
+    TEST_ASSERT_EQUAL_STRING("{}", DriverVarStore::toJson(SavedVars()).c_str());
+    TEST_ASSERT_TRUE(DriverVarStore::fromJson("{}", back));
+    TEST_ASSERT_EQUAL(0, back.size());
+}
+
+void test_driver_var_store_corrupt_json() {
+    const char* corrupt[] = {
+        "{\"ups.delay.shutdown\":\"60\"",   // truncated
+        "",                                 // empty
+        "[\"ups.delay.shutdown\",\"60\"]",  // not an object
+        "{\"ups.delay.shutdown\":60}",      // not a string
+        "{\"outlet.1.desc\":\"PC\",\"ups.delay.start\":null}",
+    };
+    for (size_t i = 0; i < sizeof(corrupt) / sizeof(corrupt[0]); i++) {
+        SavedVars out;
+        out.push_back(std::make_pair(String("stale"), String("1")));
+        TEST_ASSERT_FALSE_MESSAGE(DriverVarStore::fromJson(corrupt[i], out), corrupt[i]);
+        TEST_ASSERT_EQUAL_MESSAGE(0, out.size(), corrupt[i]);
+    }
+}
+
+void test_driver_var_store_upsert() {
+    SavedVars vars;
+    DriverVarStore::upsert(vars, "ups.delay.shutdown", "60");
+    DriverVarStore::upsert(vars, "outlet.1.desc", "PC");
+    DriverVarStore::upsert(vars, "ups.delay.shutdown", "90");
+    TEST_ASSERT_EQUAL(2, vars.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", vars[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("90", vars[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("outlet.1.desc", vars[1].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("PC", vars[1].second.c_str());
+    // Empty description: a value like any other
+    DriverVarStore::upsert(vars, "outlet.1.desc", "");
+    TEST_ASSERT_EQUAL(2, vars.size());
+    TEST_ASSERT_EQUAL_STRING("", vars[1].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("{\"ups.delay.shutdown\":\"90\",\"outlet.1.desc\":\"\"}",
+                             DriverVarStore::toJson(vars).c_str());
+}
+
+void test_apply_default_delays_with_saved_values() {
+    // Synthetic Eaton descriptor: mge-hid.c paths, driver defaults 20/30
+    std::vector<HIDUsageDef> eaton = allDelays();
+    SavedVars saved;
+    saved.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
+    UPSData d;
+    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", d.get("ups.delay.start").c_str());
+
+    // Next string descriptor: the host calls it again, the saved value stays
+    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", d.get("ups.delay.start").c_str());
+
+    // 0 is a valid delay
+    SavedVars zero;
+    zero.push_back(std::make_pair(String("ups.delay.start"), String("0")));
+    UPSData z;
+    CommandCatalog::applyDefaultDelays(z, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &zero);
+    TEST_ASSERT_EQUAL_STRING("20", z.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("0", z.get("ups.delay.start").c_str());
+
+    // Not an integer >= 0 any more: the default stays
+    const char* invalid[] = { "abc", "-1", "", "30.5", "60s" };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        SavedVars bad;
+        bad.push_back(std::make_pair(String("ups.delay.shutdown"), String(invalid[i])));
+        UPSData b;
+        CommandCatalog::applyDefaultDelays(b, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &bad);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("20", b.get("ups.delay.shutdown").c_str(), invalid[i]);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("30", b.get("ups.delay.start").c_str(), invalid[i]);
+    }
+
+    // Other saved variables are left alone
+    SavedVars other;
+    other.push_back(std::make_pair(String("outlet.1.desc"), String("90")));
+    other.push_back(std::make_pair(String("UPS.DELAY.SHUTDOWN"), String("90")));
+    UPSData o;
+    CommandCatalog::applyDefaultDelays(o, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &other);
+    TEST_ASSERT_EQUAL_STRING("20", o.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", o.get("ups.delay.start").c_str());
+    TEST_ASSERT_FALSE(o.hasKey("outlet.1.desc"));
+}
+
+void test_saved_delays_only_for_present_variables() {
+    SavedVars saved;
+    saved.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
+    saved.push_back(std::make_pair(String("ups.delay.start"), String("90")));
+
+    // Driver without delay variables (delay_vars false): no key at all
+    UPSData disabled;
+    CommandCatalog::applyDefaultDelays(disabled, allDelays(), 20, 30, false, nullptr, &saved);
+    TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.start"));
+
+    // Device without DelayBeforeStartup: ups.delay.start does not exist for it
+    UPSData only_sd;
+    CommandCatalog::applyDefaultDelays(only_sd, { mk(SD, 0x00840057, 0x03) }, 20, 30, true,
+                                       NutTable::mgeDelayPaths(), &saved);
+    TEST_ASSERT_EQUAL_STRING("60", only_sd.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(only_sd.hasKey("ups.delay.start"));
+
+    // No delay path at all
+    UPSData none;
+    CommandCatalog::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true, nullptr, &saved);
+    TEST_ASSERT_FALSE(none.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(none.hasKey("ups.delay.start"));
+
+    // Empty saved list: the driver defaults, as without the parameter
+    SavedVars empty;
+    UPSData dflt;
+    CommandCatalog::applyDefaultDelays(dflt, allDelays(), 20, 30, true, nullptr, &empty);
+    TEST_ASSERT_EQUAL_STRING("20", dflt.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", dflt.get("ups.delay.start").c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -584,5 +726,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_shutdown_default_availability);
     RUN_TEST(test_build_without_shutdown_commands);
     RUN_TEST(test_apply_default_delays);
+    RUN_TEST(test_driver_var_store_json_round_trip);
+    RUN_TEST(test_driver_var_store_corrupt_json);
+    RUN_TEST(test_driver_var_store_upsert);
+    RUN_TEST(test_apply_default_delays_with_saved_values);
+    RUN_TEST(test_saved_delays_only_for_present_variables);
     return UNITY_END();
 }

@@ -61,6 +61,7 @@ void GenericDriver::setup() {
     _nut_init_done = false;
     _nut_usage_count = 0;
     _nut_ctx = NutTable::Context();
+    _absent_overrides.clear(); // the host sets the saved values again right after setup()
 }
 
 bool GenericDriver::isStatusUsage(const HIDUsageDef& u) {
@@ -184,6 +185,12 @@ bool GenericDriver::isStaticAndKnown(const PollItem& item) const {
     uint8_t slot = typeSlot(item.report_type);
     uint32_t bit = 1u << (item.id % 32);
     return (_static_report[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
+}
+
+void GenericDriver::invalidateReport(uint8_t report_type, uint8_t report_id) {
+    if (report_type == 1 || report_type == 3) {
+        _decoded_report[typeSlot(report_type)][report_id / 32] &= ~(1u << (report_id % 32));
+    }
 }
 
 bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const {
@@ -528,6 +535,39 @@ void GenericDriver::bindNutTable(IUSBHostUPS* host) {
     _nut_bound = true;
     _nut_init_done = false;
     _nut_usage_count = usages.size();
+    // bind() gives the HU_FLAG_ABSENT rows their dfl: the values set since win
+    for (const auto& o : _absent_overrides) applyAbsentOverride(o.first, o.second);
+}
+
+void GenericDriver::applyAbsentOverride(const String& name, const String& value) {
+    for (auto& b : _nut_rows) {
+        if (!(b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (strcmp(b.info->info_type, name.c_str()) != 0) continue;
+        b.value = value;
+        b.has = true;
+    }
+}
+
+void GenericDriver::setDriverSideValue(const char* name, const char* value) {
+    if (!name || !value) return;
+    bool found = false;
+    for (auto& o : _absent_overrides) {
+        if (o.first == name) {
+            o.second = value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) _absent_overrides.push_back(std::make_pair(String(name), String(value)));
+    applyAbsentOverride(String(name), String(value));
+}
+
+void GenericDriver::completeInitialPoll() {
+    _first_full_done = true;
+    if (!_nut_init_done) {
+        NutTable::finishInit(_nut_rows);
+        _nut_init_done = true;
+    }
 }
 
 void GenericDriver::postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -587,4 +627,76 @@ void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable:
     std::sort(out.begin(), out.end(), [](const NutTable::RWVariable& a, const NutTable::RWVariable& b) {
         return NutTable::compareIgnoreCase(a.name, b.name) < 0;
     });
+}
+
+// setvar() of usbhid-ups.c:1167-1245, without the write: the host runs the plan (US-067)
+NutTable::SetStatus GenericDriver::planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
+                                           const char* name, const char* value, NutTable::SetPlan& plan) const {
+    using NutTable::SetStatus;
+    if (!name || !*name) return SetStatus::UNKNOWN;
+
+    // find_nut_info(): the row that owns the name (hiddata != NULL), strcasecmp
+    const NutTable::Bound* row = nullptr;
+    for (const auto& b : _nut_rows) {
+        if (b.role == NutTable::Bound::Role::ACTIVE && NutTable::equalsIgnoreCase(b.info->info_type, name)) {
+            row = &b;
+            break;
+        }
+    }
+
+    if (!row) {
+        // ups.delay.*: driver-side variables outside the table (applyDefaultDelays). Only an
+        // integer >= 0, as the commands read it (deviation: upstream keeps any string)
+        static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
+        for (const char* d : delays) {
+            if (!NutTable::equalsIgnoreCase(d, name) || !data.hasKey(d)) continue;
+            int32_t v;
+            if (!CommandCatalog::parseDelayParam(value, v) || v < 0) return SetStatus::CONVERSION_FAILED;
+            plan.kind = NutTable::SetPlan::Kind::DRIVER_SIDE;
+            plan.name = d;
+            plan.def = HIDUsageDef();
+            plan.raw = 0;
+            plan.value = String(v); // "007" and "-0" kept as the number they are
+            return SetStatus::OK;
+        }
+        return SetStatus::UNKNOWN;
+    }
+    const NutTable::HidInfo& info = *row->info;
+    if (!(info.info_flags & NutTable::ST_FLAG_RW)) return SetStatus::UNKNOWN;
+
+    // Server side variable: dstate_setinfo() with the value as it is
+    if (info.hidflags & NutTable::HU_FLAG_ABSENT) {
+        if (!value) return SetStatus::CONVERSION_FAILED;
+        plan.kind = NutTable::SetPlan::Kind::DRIVER_SIDE;
+        plan.name = info.info_type;
+        plan.def = HIDUsageDef();
+        plan.raw = 0;
+        plan.value = value;
+        return SetStatus::OK;
+    }
+
+    // hu_find_valinfo() / atol(), stricter (NutTable::encode)
+    double physical;
+    if (NutTable::encode(info, value, _nut_ctx, data, physical) != NutTable::EncodeResult::OK) {
+        return SetStatus::CONVERSION_FAILED;
+    }
+
+    // HIDSetDataValue() writes a FEATURE report: the row's usage or its twin. A row bound
+    // to an INPUT usage only cannot be written (deviation: upstream tries and fails)
+    int pick = -1;
+    for (int idx : { row->idx, row->twin_idx }) {
+        if (idx < 0 || (size_t)idx >= usages.size()) continue;
+        if (usages[idx].report_type == 3) { pick = idx; break; }
+    }
+    if (pick < 0) return SetStatus::FAILED;
+
+    int32_t raw;
+    if (!HIDParser::toLogical(usages[pick], physical, raw)) return SetStatus::CONVERSION_FAILED;
+
+    plan.kind = NutTable::SetPlan::Kind::HID;
+    plan.name = info.info_type;
+    plan.def = usages[pick];
+    plan.raw = raw;
+    plan.value = value;
+    return SetStatus::OK;
 }

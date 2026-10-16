@@ -9,6 +9,7 @@
 #include <vector>
 #include <Arduino.h>
 #include "HIDUsages.h"
+#include "UPSData.h"
 
 /**
  * HID -> NUT table of a subdriver, shaped like hid_info_t of usbhid-ups (US-066).
@@ -231,6 +232,159 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
     return DecodeResult::FAIL;
 }
 
+// --- Reverse conversions (US-067): NUT text -> HID value, as hu_find_valinfo() and the
+// nuf functions upstream. Every text upstream would turn into 0 (atol("abc"), a date
+// that does not parse) is FAIL here, so that a typo never reaches the UPS.
+
+enum class EncodeResult { OK, FAIL };
+
+// Seconds since 1970-01-01 00:00:00 UTC of a broken-down UTC time (days-from-civil):
+// the inverse of the gmtime() used by decode(). Never mktime(), which depends on the
+// time zone of the host.
+inline int64_t timegmUtc(int year, int month, int day, int hour, int minute, int second) {
+    int64_t y = (int64_t)year - (month <= 2 ? 1 : 0);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;                                          // [0, 399]
+    int64_t doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1; // [0, 365]
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;                  // [0, 146096]
+    int64_t days = era * 146097 + doe - 719468;
+    return days * 86400 + (int64_t)hour * 3600 + (int64_t)minute * 60 + second;
+}
+
+inline bool isSpaceChar(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+}
+
+// A decimal number as atol() reads it in setvar() (usbhid-ups.c:1231), integer part
+// truncated toward zero: spaces, optional sign, at least one digit, optional '.' and
+// digits, spaces. Anything else fails: exponents ("1e3", 1 for atol()), hex, trailing
+// characters ("30x", 30 for atol()), the empty string, an integer part outside int32_t.
+inline bool parseTruncatedNumber(const char* s, int32_t& out) {
+    if (!s) return false;
+    const char* p = s;
+    while (isSpaceChar(*p)) p++;
+    bool neg = false;
+    if (*p == '+' || *p == '-') neg = (*p++ == '-');
+    if (*p < '0' || *p > '9') return false;
+    int64_t v = 0;
+    while (*p >= '0' && *p <= '9') {
+        v = v * 10 + (*p++ - '0');
+        if (v > (int64_t)INT32_MAX + 1) return false; // stops before int64_t can overflow
+    }
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') p++;
+    }
+    while (isSpaceChar(*p)) p++;
+    if (*p != '\0') return false;
+    if (neg) v = -v;
+    if (v < INT32_MIN || v > INT32_MAX) return false;
+    out = (int32_t)v;
+    return true;
+}
+
+// Between min_digits and max_digits decimal digits at p, advanced past them
+inline bool parseDigits(const char*& p, int min_digits, int max_digits, int& out) {
+    int n = 0, v = 0;
+    while (n < max_digits && *p >= '0' && *p <= '9') {
+        v = v * 10 + (*p++ - '0');
+        n++;
+    }
+    if (n < min_digits) return false;
+    out = v;
+    return true;
+}
+
+inline int daysInMonth(int year, int month) {
+    static const int days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return (month == 2 && leap) ? 29 : days[month - 1];
+}
+
+// "%Y/%m/%d %H:%M:%S" in UTC, parsed by hand (strptime() is missing on mingw). Stricter
+// than strptime(): a 4-digit year from 1970, a real calendar day, nothing after the time.
+inline bool parseMgeDateTime(const char* s, int64_t& out) {
+    const char* p = s;
+    int y, mo, d, h, mi, sec;
+    if (!parseDigits(p, 4, 4, y) || *p++ != '/') return false;
+    if (!parseDigits(p, 1, 2, mo) || *p++ != '/') return false;
+    if (!parseDigits(p, 1, 2, d)) return false;
+    if (!isSpaceChar(*p)) return false;
+    while (isSpaceChar(*p)) p++;
+    if (!parseDigits(p, 1, 2, h) || *p++ != ':') return false;
+    if (!parseDigits(p, 1, 2, mi) || *p++ != ':') return false;
+    if (!parseDigits(p, 1, 2, sec) || *p != '\0') return false;
+    if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) return false;
+    if (h > 23 || mi > 59 || sec > 59) return false;
+    out = timegmUtc(y, mo, d, h, mi, sec);
+    return true;
+}
+
+/**
+ * Converts the text of a SET VAR into the HID value of the row (before the unit exponent:
+ * HIDParser::toLogical() does that). data holds the current ups.date / ups.time, the other
+ * half of the MGE clock. FAIL is STAT_SET_CONVERSION_FAILED.
+ */
+inline EncodeResult encode(const HidInfo& info, const char* val, const Context& ctx, const UPSData& data, double& out) {
+    if (!val) return EncodeResult::FAIL;
+    switch (info.conv) {
+    case Conv::Number: {
+        // setvar(): value = atol(val) when the row has no lookup (usbhid-ups.c:1231)
+        int32_t v;
+        if (!parseTruncatedNumber(val, v)) return EncodeResult::FAIL;
+        out = (double)v;
+        return EncodeResult::OK;
+    }
+    case Conv::Lookup:
+    case Conv::NominalVoltage:
+    case Conv::PegasusThreshold:
+        // hu_find_valinfo() (usbhid-ups.c:3090): strcmp on the table when the first entry
+        // has no nuf, as nominal_output_voltage_info and pegasus_threshold_info
+        for (uint8_t i = 0; i < info.lkp_count; i++) {
+            if (strcmp(info.lkp[i].nut, val) == 0) {
+                out = info.lkp[i].hid;
+                return EncodeResult::OK;
+            }
+        }
+        return EncodeResult::FAIL;
+    case Conv::PegasusYesNo:
+        // pegasus_yes_no_info_nuf() (mge-hid.c:877), literally: 0 on a non Pegasus model,
+        // 1 for any text starting with "yes", 0 otherwise ("assuming no")
+        if (!pegasusValid(ctx)) out = 0;
+        else out = (strncmp(val, "yes", 3) == 0) ? 1 : 0;
+        return EncodeResult::OK;
+    case Conv::BatteryDate: {
+        // date_conversion_reverse() (usbhid-ups.c:561), which writes 0 ("not set") for an
+        // out of range date: FAIL here. Exactly YYYY/MM/DD, 1980..2107 (7 bits of year).
+        const char* p = val;
+        int y, m, d;
+        if (!parseDigits(p, 4, 4, y) || *p++ != '/') return EncodeResult::FAIL;
+        if (!parseDigits(p, 2, 2, m) || *p++ != '/') return EncodeResult::FAIL;
+        if (!parseDigits(p, 2, 2, d) || *p != '\0') return EncodeResult::FAIL;
+        if (y < 1980 || y - 1980 > 127 || m < 1 || m > 12 || d < 1 || d > 31) return EncodeResult::FAIL;
+        out = (double)(((y - 1980) << 9) + (m << 5) + d);
+        return EncodeResult::OK;
+    }
+    case Conv::MgeDate:
+    case Conv::MgeTime: {
+        // mge_date_conversion_nuf() / mge_time_conversion_nuf() (mge-hid.c:626-655): the
+        // new half joined with the current other half, then mktime(). Here in UTC, as
+        // decode() uses gmtime(). Upstream writes 0 (1970) when the text does not parse.
+        bool date = info.conv == Conv::MgeDate;
+        String other = data.get(date ? "ups.time" : "ups.date");
+        if (other.length() == 0) return EncodeResult::FAIL;
+        char buf[64];
+        int n = snprintf(buf, sizeof(buf), "%s %s", date ? val : other.c_str(), date ? other.c_str() : val);
+        if (n < 0 || (size_t)n >= sizeof(buf)) return EncodeResult::FAIL;
+        int64_t sec;
+        if (!parseMgeDateTime(buf, sec)) return EncodeResult::FAIL;
+        out = (double)sec;
+        return EncodeResult::OK;
+    }
+    }
+    return EncodeResult::FAIL;
+}
+
 // LIST ENUM values of a row: only HU_FLAG_ENUM rows, each lookup value the conversion
 // accepts (usbhid-ups.c:2499-2512)
 inline std::vector<const char*> enumValues(const HidInfo& info, Context& ctx) {
@@ -425,6 +579,22 @@ struct RWVariable {
     const char* name;
     uint8_t aux;
     std::vector<const char*> enums;
+};
+
+// Outcome of a SET VAR (US-067): the STAT_SET_* results of upstream's setvar(), plus the
+// host without a device. HANDLED is OK.
+enum class SetStatus { OK, UNKNOWN, CONVERSION_FAILED, FAILED, NOT_CONNECTED };
+
+// What a SET VAR writes, decided by the driver without any I/O (IUPSDriver::planSet)
+struct SetPlan {
+    enum class Kind : uint8_t {
+        HID,         // raw into the FEATURE field def (read-modify-write of its report)
+        DRIVER_SIDE  // value kept by the firmware (HU_FLAG_ABSENT rows, ups.delay.*)
+    } kind = Kind::HID;
+    const char* name = nullptr; // canonical variable name (the table's info_type)
+    HIDUsageDef def;            // HID: the FEATURE usage to write
+    int32_t raw = 0;            // HID: logical value
+    String value;               // the value as set (DRIVER_SIDE: the value to keep)
 };
 
 // Paths of the HU_FLAG_ABSENT ups.delay.shutdown / ups.delay.start rows of a subdriver,
