@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |
   #### US-069: TRACKING per INSTCMD (upscmd -w)
 
@@ -37,3 +37,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-14T16:18:10Z"
+  - status: PLANNED
+    at: "2026-10-16T17:43:24Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T17:45:45Z"
+  - status: REVIEW
+    at: "2026-10-16T17:56:17Z"
+  - status: DONE
+    at: "2026-10-16T18:42:14Z"
