@@ -116,8 +116,31 @@ NUTServer::~NUTServer() {
 #endif
 }
 
+String NUTServer::defaultUpsName() {
+    return String("ups");
+}
+
+String NUTServer::normalizeUpsName(const String& name) {
+    return name.length() == 0 ? defaultUpsName() : name;
+}
+
+// Printable ASCII without spaces: the NUT line reader keeps only 0x20-0x7E and a space
+// splits the words. Also without " \ #, which pconf reads as quote, escape and comment
+// (an ups.conf section cannot hold them), and without @, where upscli_splitname() splits
+// "ups@host"
+bool NUTServer::isValidUpsName(const String& name) {
+    if (name.length() == 0) return false;
+    for (size_t i = 0; i < name.length(); i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x21 || c > 0x7E) return false;
+        if (c == '"' || c == '\\' || c == '#' || c == '@') return false;
+    }
+    return true;
+}
+
 bool NUTServer::begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint16_t port) {
     _config = config;
+    _config.ups_name = normalizeUpsName(config.ups_name);
     _usb_ups = usb_ups;
     _port = port;
 
@@ -399,12 +422,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         } 
         else if (subcmd == "VAR") {
-            String upsName;
+            // net_list() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
             if (tokens.size() < 3) {
-                upsName = _config.ups_name;
-            } else {
-                upsName = tokens[2];
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
             }
+            String upsName = tokens[2];
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
             String configUpsNameLower = _config.ups_name;
@@ -440,7 +463,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
         else if (subcmd == "RW") {
             // netlist.c list_rw(): same checks as LIST VAR, then "RW <ups> <var> <value>"
-            String upsName = (tokens.size() < 3) ? _config.ups_name : tokens[2];
+            // net_list() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
+            if (tokens.size() < 3) {
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
+            }
+            String upsName = tokens[2];
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
             String configUpsNameLower = _config.ups_name;
@@ -468,11 +496,25 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         else if (subcmd == "CMD" || subcmd == "CLIENT") {
-            String upsName;
+            // net_list() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
             if (tokens.size() < 3) {
-                upsName = _config.ups_name;
-            } else {
-                upsName = tokens[2];
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
+            }
+            String upsName = tokens[2];
+            // list_cmd() / list_clients() of netlist.c: an unknown UPS is an error, and
+            // list_cmd() also needs fresh data (ups_available())
+            String upsNameLower = upsName;
+            upsNameLower.toLowerCase();
+            String configUpsNameLower = _config.ups_name;
+            configUpsNameLower.toLowerCase();
+            if (upsNameLower != configUpsNameLower) {
+                client.print("ERR UNKNOWN-UPS\n");
+                return;
+            }
+            if (subcmd == "CMD" && _usb_ups && _usb_ups->isDataStale()) {
+                client.print("ERR DATA-STALE\n");
+                return;
             }
             client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             if (subcmd == "CMD" && _usb_ups) {
@@ -485,18 +527,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         else if (subcmd == "ENUM" || subcmd == "RANGE") {
-            String upsName;
-            String varName;
-            if (tokens.size() < 3) {
+            // net_list() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
+            if (tokens.size() < 4) {
                 client.print("ERR INVALID-ARGUMENT\n");
                 return;
-            } else if (tokens.size() == 3) {
-                upsName = _config.ups_name;
-                varName = tokens[2];
-            } else {
-                upsName = tokens[2];
-                varName = tokens[3];
             }
+            String upsName = tokens[2];
+            String varName = tokens[3];
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
             String configUpsNameLower = _config.ups_name;
@@ -536,7 +573,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         else {
-            client.print("ERR UNKNOWN-COMMAND\n");
+            // Unknown LIST subcommand: INVALID-ARGUMENT, as at the end of net_list()
+            client.print("ERR INVALID-ARGUMENT\n");
             return;
         }
     }
@@ -637,18 +675,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
         }
 
         if (subcmd == "VAR") {
-            String upsName;
-            String varName;
-            if (tokens.size() < 3) {
+            // net_get() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
+            if (tokens.size() < 4) {
                 client.print("ERR INVALID-ARGUMENT\n");
                 return;
-            } else if (tokens.size() == 3) {
-                upsName = _config.ups_name;
-                varName = tokens[2];
-            } else {
-                upsName = tokens[2];
-                varName = tokens[3];
             }
+            String upsName = tokens[2];
+            String varName = tokens[3];
 
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
@@ -690,18 +723,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         else if (subcmd == "DESC" || subcmd == "CMDDESC" || subcmd == "TYPE") {
-            String upsName;
-            String varName;
-            if (tokens.size() < 3) {
+            // net_get() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
+            if (tokens.size() < 4) {
                 client.print("ERR INVALID-ARGUMENT\n");
                 return;
-            } else if (tokens.size() == 3) {
-                upsName = _config.ups_name;
-                varName = tokens[2];
-            } else {
-                upsName = tokens[2];
-                varName = tokens[3];
             }
+            String upsName = tokens[2];
+            String varName = tokens[3];
 
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();
@@ -745,12 +773,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
         else if (subcmd == "UPSDESC" || subcmd == "NUMLOGINS") {
-            String upsName;
+            // net_get() of upsd: without the UPS name INVALID-ARGUMENT, no fallback (US-082)
             if (tokens.size() < 3) {
-                upsName = _config.ups_name;
-            } else {
-                upsName = tokens[2];
+                client.print("ERR INVALID-ARGUMENT\n");
+                return;
             }
+            String upsName = tokens[2];
 
             String upsNameLower = upsName;
             upsNameLower.toLowerCase();

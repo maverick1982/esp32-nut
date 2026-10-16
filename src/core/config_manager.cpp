@@ -1,12 +1,15 @@
 #include "core/config_manager.h"
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
+#include "NUTServer.h"
+#include "WebApiJson.h"
 
 ConfigManager::ConfigManager() : is_valid(false) {}
 
 bool ConfigManager::begin() {
     is_valid = false;
-    
+    bool migrate_ups_name = false;
+
     preferences.begin("nutos", false);
     String config_json = preferences.getString("config_json", "");
     
@@ -36,7 +39,11 @@ bool ConfigManager::begin() {
         JsonObject nut = doc["nut"].as<JsonObject>();
         nut_config.username = nut["username"].as<String>();
         nut_config.password = nut["password"].as<String>();
-        nut_config.ups_name = nut["ups_name"].as<String>();
+        nut_config.ups_name = WebApiJson::upsNameFromConfig(nut["ups_name"], &migrate_ups_name);
+        if (migrate_ups_name) {
+            // Saved before US-082 by the first Wi-Fi setup: the NUT server needs a name
+            AppLogger::log("WARN", "[CONFIG] Empty UPS name, using \"%s\"", nut_config.ups_name.c_str());
+        }
     } else {
         AppLogger::log("ERROR", "[CONFIG] ERROR: 'nut' section missing or invalid in JSON.");
         return false;
@@ -44,8 +51,12 @@ bool ConfigManager::begin() {
     
     // Se siamo arrivati qui, la configurazione è valida
     is_valid = true;
-    
+
     AppLogger::log("INFO", "[CONFIG] Configuration successfully loaded from NVS.");
+
+    // One-time migration: the default name is written back, so the WARN does not
+    // come back at every boot
+    if (migrate_ups_name) save();
     
     return true;
 }
@@ -77,6 +88,9 @@ bool ConfigManager::save() {
     wifi["ssid"] = wifi_config.ssid;
     wifi["password"] = wifi_config.password;
     
+    // Never an empty UPS name, also for the first Wi-Fi setup from the AP (US-082)
+    nut_config.ups_name = NUTServer::normalizeUpsName(nut_config.ups_name);
+
     JsonObject nut = doc["nut"].to<JsonObject>();
     nut["username"] = nut_config.username;
     nut["password"] = nut_config.password;

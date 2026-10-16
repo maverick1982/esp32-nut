@@ -1,4 +1,5 @@
 #include "WebApiJson.h"
+#include "NUTServer.h"
 
 String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     if (!usb_ups) {
@@ -330,4 +331,21 @@ int WebApiJson::resetUpsVariable(IUSBHostUPS* usb_ups, const String& body, Strin
         default:
             return sendError(response, 500, "Could not save the setting");
     }
+}
+
+String WebApiJson::upsNameFromConfig(JsonVariantConst value, bool* defaulted) {
+    // Not as<String>(): with ArduinoJson 7 a missing key gives the string "null"
+    const char* name = value.is<const char*>() ? value.as<const char*>() : nullptr;
+    bool use_default = !name || name[0] == '\0';
+    if (defaulted) *defaulted = use_default;
+    return use_default ? NUTServer::defaultUpsName() : String(name);
+}
+
+int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
+    JsonVariantConst name = body["ups_name"];
+    if (name.isNull()) return 0;
+    if (!name.is<const char*>() || !NUTServer::isValidUpsName(String(name.as<const char*>()))) {
+        return sendError(response, 400, "Invalid UPS name");
+    }
+    return 0;
 }

@@ -388,19 +388,20 @@ void test_device_aliases(void) {
 
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
-    // LIST CLIENT must be answered with a BEGIN/END pair. A bare "ERR" is what
+    // LIST CLIENT <ups> must be answered with a BEGIN/END pair. A bare "ERR" is what
     // breaks go.nut: it treats every "LIST " command as multi-line and only ends
     // its read loop on "END LIST ...", so a single error line blocks the client
-    // until i/o timeout instead of failing fast.
+    // until i/o timeout instead of failing fast. The same happens against upsd; go.nut
+    // always sends the UPS name, so the ERR without it below does not reach it.
     server.processCommand(printer, 0, "LIST CLIENT testups");
     TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n",
                              printer.getOutput().c_str());
 
-    // Unknown UPS names still fall through to the shared handler, not an error.
+    // Without the UPS name INVALID-ARGUMENT, as net_list() of upsd (US-082): the UPS name
+    // is never empty, so clients always send it
     printer.clear();
     server.processCommand(printer, 0, "LIST CLIENT");
-    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n",
-                             printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str());
 }
 
 void test_list_cmd_unaffected_by_client(void) {
@@ -1566,6 +1567,116 @@ void test_desc_and_cmddesc_lines_unchanged(void) {
     TEST_ASSERT_EQUAL_STRING("CMDDESC testups load.off \"Turn off the load immediately\"\n", printer.getOutput().c_str());
 }
 
+// ---- UPS name never empty, no fallback without it (US-082) ----
+
+void test_ups_name_rules(void) {
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::defaultUpsName().c_str());
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::normalizeUpsName("").c_str());
+    TEST_ASSERT_EQUAL_STRING("eaton", NUTServer::normalizeUpsName("eaton").c_str());
+    TEST_ASSERT_EQUAL_STRING("ups", NUTServer::normalizeUpsName("ups").c_str());
+
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("ups"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("eaton"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("Back-UPS_1"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName(""));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("my ups"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\tb"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("citt\xc3\xa0"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\x7f"));
+    // Edges of the printable range
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("!"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("~"));
+    TEST_ASSERT_TRUE(NUTServer::isValidUpsName("[ups]"));
+    // pconf quote, escape and comment; @ splits "ups@host" in upscli_splitname()
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\"b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a\\b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a#b"));
+    TEST_ASSERT_FALSE(NUTServer::isValidUpsName("a@b"));
+}
+
+// Malformed LIST/GET lines: INVALID-ARGUMENT as net_list() / net_get(), commands in any case
+void test_malformed_list_and_get_are_invalid(void) {
+    setupWritable();
+    const char* lines[] = {
+        "LIST", "LIST FOO", "LIST ENUM testups", "LIST RANGE testups",
+        "GET", "GET FOO testups", "GET VAR testups", "list var", "Get Var battery.charge",
+    };
+    for (const char* line : lines) {
+        printer.clear();
+        server.processCommand(printer, 0, line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str(), line);
+    }
+    // Lowercase commands with the UPS name work as before
+    printer.clear();
+    server.processCommand(printer, 0, "list var testups");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST VAR testups\n"));
+}
+
+// list_cmd() / list_clients() of netlist.c: unknown UPS → UNKNOWN-UPS; list_cmd() also
+// checks ups_available() (stale data → DATA-STALE)
+void test_list_cmd_and_client_unknown_ups(void) {
+    server.processCommand(printer, 0, "LIST CMD wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CLIENT wrongups");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD TestUPS");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST CMD TestUPS\n"));
+
+    printer.clear();
+    mockHost.stale = true;
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+    // list_clients() does not call ups_available()
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CLIENT testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CLIENT testups\nEND LIST CLIENT testups\n", printer.getOutput().c_str());
+}
+
+// A configuration with an empty name (first Wi-Fi setup before US-082) serves "ups"
+void test_empty_ups_name_defaults_to_ups(void) {
+    NUTServerConfig config;
+    config.ups_name = "";
+    NUTServer local;
+    local.begin(config, &mockHost, 3493);
+
+    local.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST UPS\nUPS ups \"ESP32-S3 UPS Bridge\"\nEND LIST UPS\n",
+                             printer.getOutput().c_str());
+    printer.clear();
+    local.processCommand(printer, 0, "LIST VAR ups");
+    TEST_ASSERT_EQUAL_INT(0, (int)printer.getOutput().find("BEGIN LIST VAR ups\n"));
+    // An empty name no longer matches, as get_ups_ptr("") of upsd
+    printer.clear();
+    local.processCommand(printer, 0, "LIST VAR \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", printer.getOutput().c_str());
+}
+
+void test_commands_without_ups_name_are_invalid(void) {
+    setupWritable();
+    const char* lines[] = {
+        "LIST VAR", "LIST RW", "LIST CMD", "LIST CLIENT",
+        "LIST ENUM input.sensitivity", "LIST RANGE battery.charge.low",
+        "GET VAR battery.charge", "GET TYPE battery.charge", "GET DESC battery.charge",
+        "GET CMDDESC load.off", "GET UPSDESC", "GET NUMLOGINS",
+    };
+    for (const char* line : lines) {
+        printer.clear();
+        server.processCommand(printer, 0, line);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str(), line);
+    }
+}
+
+void test_unknown_list_subcommand_is_invalid(void) {
+    server.processCommand(printer, 0, "LIST FOO testups");
+    TEST_ASSERT_EQUAL_STRING("ERR INVALID-ARGUMENT\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST UPS\nUPS testups \"ESP32-S3 UPS Bridge\"\nEND LIST UPS\n",
+                             printer.getOutput().c_str());
+}
+
 // upsrw sends the value escaped, the server stores it raw and sends it escaped again
 void test_set_var_escaped_round_trip(void) {
     setupSettable();
@@ -1652,6 +1763,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_enum_values_are_escaped);
     RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
     RUN_TEST(test_set_var_escaped_round_trip);
+    RUN_TEST(test_ups_name_rules);
+    RUN_TEST(test_empty_ups_name_defaults_to_ups);
+    RUN_TEST(test_commands_without_ups_name_are_invalid);
+    RUN_TEST(test_unknown_list_subcommand_is_invalid);
+    RUN_TEST(test_malformed_list_and_get_are_invalid);
+    RUN_TEST(test_list_cmd_and_client_unknown_ups);
     return UNITY_END();
 }
 #else
@@ -1730,6 +1847,12 @@ void setup() {
     RUN_TEST(test_enum_values_are_escaped);
     RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
     RUN_TEST(test_set_var_escaped_round_trip);
+    RUN_TEST(test_ups_name_rules);
+    RUN_TEST(test_empty_ups_name_defaults_to_ups);
+    RUN_TEST(test_commands_without_ups_name_are_invalid);
+    RUN_TEST(test_unknown_list_subcommand_is_invalid);
+    RUN_TEST(test_malformed_list_and_get_are_invalid);
+    RUN_TEST(test_list_cmd_and_client_unknown_ups);
     UNITY_END();
 }
 void loop() {}
