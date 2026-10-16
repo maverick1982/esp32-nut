@@ -1,6 +1,8 @@
 #include <unity.h>
 #include "HIDParser.h"
 #include "NUTUsages.h"
+#include "NutTable.h"
+#include <math.h>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -533,6 +535,123 @@ void test_eaton_3s_indexed_collections(void) {
     TEST_ASSERT_EQUAL_HEX8(0x06, outlet_indices);
 }
 
+// --- toLogical (US-067): inverse of extractUsage() ---
+
+static HIDUsageDef field(uint16_t bit_size, int8_t exponent = 0, uint32_t unit = 0,
+                         int32_t logical_min = 0, int32_t logical_max = 0) {
+    HIDUsageDef d;
+    d.found = true;
+    d.report_id = 0x20;
+    d.report_type = 3;
+    d.bit_size = bit_size;
+    d.exponent = exponent;
+    d.unit = unit;
+    d.logical_min = logical_min;
+    d.logical_max = logical_max;
+    return d;
+}
+
+void test_to_logical_exponent_zero(void) {
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(8, 0, 0, 0, 100), 30, raw));
+    TEST_ASSERT_EQUAL_INT32(30, raw);
+}
+
+void test_to_logical_negative_exponent(void) {
+    // extractUsage(): raw * 10^-2, so 12 is written as 12 * 10^2 = 1200
+    HIDUsageDef d = field(16, -2);
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(d, 12, raw));
+    TEST_ASSERT_EQUAL_INT32(1200, raw);
+    // 230.5 V with exponent -1 (as test_extract_exponent_and_unit_scaling): 2305
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, -1), 230.5, raw));
+    TEST_ASSERT_EQUAL_INT32(2305, raw);
+    // Round trip with the reader: 1200 = 0x04B0 little endian
+    const uint8_t report[] = { 0x20, 0xB0, 0x04 };
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 12.0, HIDParser::extractUsage(&d, 0x20, report, sizeof(report)));
+}
+
+void test_to_logical_rounds_instead_of_truncating(void) {
+    // 0.29 * 100 is 28.999999999999996 in double: (long) would give 28, lrint gives 29
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, -2), 0.29, raw));
+    TEST_ASSERT_EQUAL_INT32(29, raw);
+}
+
+void test_to_logical_volt_unit(void) {
+    // Volt unit 0x00F0D121 with exponent 7: unit_expo 7 - 7 = 0, 230 V is written as 230
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, 7, 0x00F0D121), 230, raw));
+    TEST_ASSERT_EQUAL_INT32(230, raw);
+    // Same unit with exponent 5: unit_expo -2, 230 V -> 230 * 10^2 = 23000
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, 5, 0x0000D121), 230, raw));
+    TEST_ASSERT_EQUAL_INT32(23000, raw);
+}
+
+void test_to_logical_one_bit_ignores_exponent(void) {
+    // extractUsage() applies the exponent only when bit_size > 1
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(1, -2), 1, raw));
+    TEST_ASSERT_EQUAL_INT32(1, raw);
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(1, -2), 2, raw)); // 2 needs two bits
+}
+
+void test_to_logical_declared_range(void) {
+    // Logical 0..100: 100 is the last value accepted, 101 is a conversion failure
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(8, 0, 0, 0, 100), 100, raw));
+    TEST_ASSERT_EQUAL_INT32(100, raw);
+    raw = -1;
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8, 0, 0, 0, 100), 101, raw));
+    TEST_ASSERT_EQUAL_INT32(-1, raw); // untouched
+    // Logical 10..60: below the minimum fails too
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8, 0, 0, 10, 60), 9, raw));
+}
+
+void test_to_logical_undeclared_range_uses_bits(void) {
+    // Logical Min = Max = 0: only the 8 bits limit, 0..255. Upstream would write
+    // 300 & 0xFF = 44: a conversion failure here
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(8), 255, raw));
+    TEST_ASSERT_EQUAL_INT32(255, raw);
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8), 300, raw));
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8), 256, raw));
+    // Unsigned field: a negative value has no representation
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8), -1, raw));
+    // 12 with exponent -2 in 8 bits: 1200 > 255
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8, -2), 12, raw));
+}
+
+void test_to_logical_signed_field(void) {
+    // Logical Minimum < 0: signed field, 8 bits -> -128..127 (declared range -128..127)
+    int32_t raw = 0;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(8, 0, 0, -128, 127), -5, raw));
+    TEST_ASSERT_EQUAL_INT32(-5, raw);
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(8, 0, 0, -128, 127), -129, raw));
+    // Range not usable (max < min) but signed: the bits still limit, 16 bits -> -32768..32767
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, 0, 0, -1, -2), -32768, raw));
+    TEST_ASSERT_EQUAL_INT32(-32768, raw);
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(16, 0, 0, -1, -2), 32768, raw));
+}
+
+void test_to_logical_rejects_nan_and_huge(void) {
+    int32_t raw = -1;
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(32), NAN, raw));
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(32), 1e12, raw));
+    TEST_ASSERT_FALSE(HIDParser::toLogical(field(0), 1, raw)); // a field with no bits
+}
+
+void test_encode_then_to_logical_truncates_first(void) {
+    // Plan US-067: atol() truncation comes before the unit conversion, as in setvar():
+    // "12.34" -> 12 -> 12 * 10^2 = 1200 in a field with exponent -2
+    NutTable::HidInfo info = { "x", NutTable::ST_FLAG_RW, 5, "UPS.X", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 };
+    double v = 0;
+    TEST_ASSERT_TRUE(NutTable::encode(info, "12.34", NutTable::Context(), UPSData(), v) == NutTable::EncodeResult::OK);
+    int32_t raw = -1;
+    TEST_ASSERT_TRUE(HIDParser::toLogical(field(16, -2), v, raw));
+    TEST_ASSERT_EQUAL_INT32(1200, raw);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -558,6 +677,16 @@ int main(int argc, char **argv) {
     RUN_TEST(test_path_truncated_to_buffer);
     RUN_TEST(test_indexed_collection_recorded);
     RUN_TEST(test_eaton_3s_indexed_collections);
+    RUN_TEST(test_to_logical_exponent_zero);
+    RUN_TEST(test_to_logical_negative_exponent);
+    RUN_TEST(test_to_logical_rounds_instead_of_truncating);
+    RUN_TEST(test_to_logical_volt_unit);
+    RUN_TEST(test_to_logical_one_bit_ignores_exponent);
+    RUN_TEST(test_to_logical_declared_range);
+    RUN_TEST(test_to_logical_undeclared_range_uses_bits);
+    RUN_TEST(test_to_logical_signed_field);
+    RUN_TEST(test_to_logical_rejects_nan_and_huge);
+    RUN_TEST(test_encode_then_to_logical_truncates_first);
     return UNITY_END();
 }
 #else
@@ -584,6 +713,16 @@ void setup() {
     RUN_TEST(test_path_truncated_to_buffer);
     RUN_TEST(test_indexed_collection_recorded);
     RUN_TEST(test_eaton_3s_indexed_collections);
+    RUN_TEST(test_to_logical_exponent_zero);
+    RUN_TEST(test_to_logical_negative_exponent);
+    RUN_TEST(test_to_logical_rounds_instead_of_truncating);
+    RUN_TEST(test_to_logical_volt_unit);
+    RUN_TEST(test_to_logical_one_bit_ignores_exponent);
+    RUN_TEST(test_to_logical_declared_range);
+    RUN_TEST(test_to_logical_undeclared_range_uses_bits);
+    RUN_TEST(test_to_logical_signed_field);
+    RUN_TEST(test_to_logical_rejects_nan_and_huge);
+    RUN_TEST(test_encode_then_to_logical_truncates_first);
     UNITY_END();
 }
 void loop() {}

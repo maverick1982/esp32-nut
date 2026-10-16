@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 5
-status: TODO
+status: REVIEW
 body: |
   #### US-067: Modifica dei parametri dell'UPS via NUT (SET VAR / upsrw)
 
@@ -54,3 +54,9 @@ body: |
 history:
   - status: TODO
     at: "2026-10-14T16:10:02Z"
+  - status: PLANNED
+    at: "2026-10-15T20:25:05Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T09:24:46Z"
+  - status: REVIEW
+    at: "2026-10-16T11:15:03Z"

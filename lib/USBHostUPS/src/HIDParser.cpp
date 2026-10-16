@@ -1,5 +1,6 @@
 #include "HIDParser.h"
 #include <map>
+#include <math.h>
 #include "NUTUsages.h"
 
 // Appends ".seg" (or "seg" to an empty path), truncated to cap. A NULL segment is
@@ -286,4 +287,44 @@ double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const 
         }
     }
     return val;
+}
+
+bool HIDParser::toLogical(const HIDUsageDef& def, double physical, int32_t& logical) {
+    // Same unit exponent as extractUsage(), applied the other way. Multiplying by the
+    // positive power keeps exact results (12 * 10^2 = 1200, while 12 / 10^-2 is not exact)
+    double val = physical;
+    if (def.bit_size > 1) {
+        int8_t unit_expo = def.exponent;
+        if (def.unit == 0x00F0D121 || def.unit == 0x0000D121) {
+            unit_expo -= 7;
+        }
+        if (unit_expo != 0) {
+            val *= pow(10.0, -unit_expo);
+        }
+    }
+    // Rounded rather than truncated as upstream's (long) cast, so that an inexact product
+    // (1199.9999) does not lose one unit. NaN and huge values fail here.
+    if (!(fabs(val) < 4.0e9)) return false;
+    long long v = llrint(val);
+
+    // Declared logical range (Physical Min/Max are not parsed, neither when reading)
+    if (def.logical_max > def.logical_min && (v < def.logical_min || v > def.logical_max)) return false;
+
+    // The value must fit the field's bits, as CommandCatalog::fitsField() for the delays:
+    // writeUsage() masks it to bit_size, so 300 in 8 bits would be written as 44. Signed
+    // when the Logical Minimum is negative, as extractUsage() reads it.
+    if (def.bit_size == 0) return false;
+    uint16_t bits = def.bit_size > 32 ? 32 : def.bit_size;
+    long long lo, hi;
+    if (def.logical_min < 0) {
+        lo = -(1LL << (bits - 1));
+        hi = (1LL << (bits - 1)) - 1;
+    } else {
+        lo = 0;
+        hi = (1LL << bits) - 1;
+    }
+    if (v < lo || v > hi) return false;
+    if (v < INT32_MIN || v > INT32_MAX) return false;
+    logical = (int32_t)v;
+    return true;
 }
