@@ -87,8 +87,11 @@ public:
     // outcome returned for them (US-067)
     NutTable::SetStatus setResult = NutTable::SetStatus::OK;
     std::vector<std::pair<std::string, std::string>> sets;
+    // Opt-in: an OK write lands in data, as the real host does after the read-back
+    bool storeOnSet = false;
     NutTable::SetStatus setVariable(const char* name, const char* value) override {
         sets.push_back({name, value});
+        if (storeOnSet && setResult == NutTable::SetStatus::OK) data.set(name, value);
         return setResult;
     }
 
@@ -143,6 +146,7 @@ void setUp(void) {
     mockHost.rw.clear();
     mockHost.setResult = NutTable::SetStatus::OK;
     mockHost.sets.clear();
+    mockHost.storeOnSet = false;
 
     NUTServerConfig config;
     config.username = "admin";
@@ -1486,6 +1490,92 @@ void test_split_tokens_pconf(void) {
     TEST_ASSERT_EQUAL_STRING("", t[4].c_str());
 }
 
+// ---- Values escaped as pconf_encode() (US-080) ----
+
+// PCONF_ESCAPE of common/parseconf.c: #, backslash and double quote
+void test_encode_value(void) {
+    TEST_ASSERT_EQUAL_STRING("", NUTServer::encodeValue("").c_str());
+    TEST_ASSERT_EQUAL_STRING("", NUTServer::encodeValue(nullptr).c_str());
+    TEST_ASSERT_EQUAL_STRING("Main Outlet 1.5 (A)", NUTServer::encodeValue("Main Outlet 1.5 (A)").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\"", NUTServer::encodeValue("\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\\", NUTServer::encodeValue("\\").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\#", NUTServer::encodeValue("#").c_str());
+    TEST_ASSERT_EQUAL_STRING("\\\"\\\"\\\\\\\\\\#\\#", NUTServer::encodeValue("\"\"\\\\##").c_str());
+    TEST_ASSERT_EQUAL_STRING("Rack \\\"A\\\" \\\\ 1", NUTServer::encodeValue("Rack \"A\" \\ 1").c_str());
+}
+
+static bool outputHas(const char* line) {
+    return printer.getOutput().find(line) != std::string::npos;
+}
+
+void test_var_replies_are_escaped(void) {
+    setupWritable();
+    mockHost.data.set("outlet.desc", "Rack \"A\" \\ #1");
+    mockHost.data.set("ups.model", "Back-UPS \"X\"");
+    mockHost.rw.push_back({ "outlet.desc", 20, {} });
+
+    server.processCommand(printer, 0, "GET VAR testups outlet.desc");
+    TEST_ASSERT_EQUAL_STRING("VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups device.model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Back-UPS \\\"X\\\"\"\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n"));
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups device.model \"Back-UPS \\\"X\\\"\"\n"));
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups ups.model \"Back-UPS \\\"X\\\"\"\n"));
+    // Plain values unchanged
+    TEST_ASSERT_TRUE(outputHas("\nVAR testups battery.charge.low \"20\"\n"));
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST RW testups");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST RW testups\n"
+        "RW testups battery.charge.low \"20\"\n"
+        "RW testups input.sensitivity \"normal\"\n"
+        "RW testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n"
+        "END LIST RW testups\n",
+        printer.getOutput().c_str());
+}
+
+// state_addenum() stores the ENUM values already encoded
+void test_enum_values_are_escaped(void) {
+    mockHost.data.set("ups.test.mode", "a");
+    mockHost.rw = { { "ups.test.mode", 10, { "a", "say \"hi\"", "#2" } } };
+    server.processCommand(printer, 0, "LIST ENUM testups ups.test.mode");
+    TEST_ASSERT_EQUAL_STRING(
+        "BEGIN LIST ENUM testups ups.test.mode\n"
+        "ENUM testups ups.test.mode \"a\"\n"
+        "ENUM testups ups.test.mode \"say \\\"hi\\\"\"\n"
+        "ENUM testups ups.test.mode \"\\#2\"\n"
+        "END LIST ENUM testups ups.test.mode\n",
+        printer.getOutput().c_str());
+}
+
+// Regression guard: get_desc() / get_cmddesc() of netget.c send the text without
+// pconf_encode(). No text of cmdvartab has #, \ or ", so this pins the line format and
+// cannot tell an escaped description from a raw one
+void test_desc_and_cmddesc_lines_unchanged(void) {
+    server.processCommand(printer, 0, "GET DESC testups battery.runtime.low");
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.runtime.low \"Remaining battery runtime when UPS switches to LB (seconds)\"\n",
+                             printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET CMDDESC testups load.off");
+    TEST_ASSERT_EQUAL_STRING("CMDDESC testups load.off \"Turn off the load immediately\"\n", printer.getOutput().c_str());
+}
+
+// upsrw sends the value escaped, the server stores it raw and sends it escaped again
+void test_set_var_escaped_round_trip(void) {
+    setupSettable();
+    mockHost.storeOnSet = true;
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"").c_str());
+    TEST_ASSERT_EQUAL_STRING("Rack \"A\" \\ #1", mockHost.data.get("outlet.desc").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups outlet.desc \"Rack \\\"A\\\" \\\\ \\#1\"\n",
+                             request(0, "GET VAR testups outlet.desc").c_str());
+}
+
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
@@ -1557,6 +1647,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_set_var_rejections_are_logged);
     RUN_TEST(test_tracking_id_format);
     RUN_TEST(test_split_tokens_pconf);
+    RUN_TEST(test_encode_value);
+    RUN_TEST(test_var_replies_are_escaped);
+    RUN_TEST(test_enum_values_are_escaped);
+    RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
+    RUN_TEST(test_set_var_escaped_round_trip);
     return UNITY_END();
 }
 #else
@@ -1630,6 +1725,11 @@ void setup() {
     RUN_TEST(test_set_var_rejections_are_logged);
     RUN_TEST(test_tracking_id_format);
     RUN_TEST(test_split_tokens_pconf);
+    RUN_TEST(test_encode_value);
+    RUN_TEST(test_var_replies_are_escaped);
+    RUN_TEST(test_enum_values_are_escaped);
+    RUN_TEST(test_desc_and_cmddesc_lines_unchanged);
+    RUN_TEST(test_set_var_escaped_round_trip);
     UNITY_END();
 }
 void loop() {}

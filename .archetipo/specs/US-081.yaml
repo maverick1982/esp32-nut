@@ -1,0 +1,41 @@
+schema: archetipo/spec/v2
+code: US-081
+title: GET VAR ripete il nome della variabile come l'ha scritto il client, come upsd
+epic:
+  code: EP-003
+  title: Server NUT
+priority: LOW
+points: 1
+status: TODO
+body: |
+  #### US-081: GET VAR ripete il nome della variabile come l'ha scritto il client, come upsd
+
+  **Epic:** EP-003 | **Priorità:** LOW | **Punti:** 1 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come amministratore che usa upsc, script o client NUT,
+  voglio che `GET VAR` ripeta il nome della variabile esattamente come l'ho scritto, come fa upsd,
+  in modo che i client che confrontano la risposta con la richiesta funzionino senza eccezioni.
+
+  **Dimostrazione**
+  Con `nc <ip> 3493`:
+  - `GET VAR ups Battery.Charge` risponde `VAR ups Battery.Charge "100"`, come upsd. Oggi risponde `VAR ups battery.charge "100"`.
+  - `GET VAR ups UPS.Status` risponde `VAR ups UPS.Status "OL"`.
+  - `GET VAR ups battery.charge` resta identico a oggi.
+
+  **Criteri di Accettazione**
+  - [ ] La riga `VAR` di `GET VAR` contiene il nome della variabile come l'ha inviato il client, per ogni variabile: dati UPS, alias `device.*`, `ups.status`, `device.type`.
+  - [ ] La ricerca resta indipendente da maiuscole e minuscole, come `state_tree_find()` di upstream (`strcasecmp`): il valore restituito non cambia.
+  - [ ] Il nome dell'UPS resta ripetuto come l'ha scritto il client, come oggi.
+  - [ ] Con nomi in minuscolo l'uscita è identica a oggi.
+  - [ ] I test nativi di `test_nut_server` coprono un nome con maiuscole per una variabile normale, un alias `device.*`, `ups.status` e `device.type`.
+
+  **Assunzioni**
+  - Riferimenti: `nut_repo/server/netget.c` (`get_var`), `nut_repo/common/state.c` (`state_tree_find`).
+  - `GET TYPE`, `GET DESC`, `GET CMDDESC` e `LIST ENUM` ripetono già il nome come scritto: non cambiano.
+  - La forma senza nome dell'UPS (`GET VAR battery.charge`) è trattata in US-082.
+  - Emerso nella code review di US-080 (2026-10-16).
+history:
+  - status: TODO
+    at: "2026-10-16T15:40:14Z"

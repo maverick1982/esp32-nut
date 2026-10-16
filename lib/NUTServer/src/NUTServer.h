@@ -33,6 +33,8 @@ public:
 
     // Metodi di utilità (esposti per facilitare il testing)
     static std::vector<String> splitTokens(const String& input);
+    // Valore escapato come pconf_encode() di upstream (#, \ e "), per VAR, RW ed ENUM
+    static String encodeValue(const char* raw);
     void processCommand(Print& client, int slot, const String& cmdLine);
 
     // Helpers per testing
