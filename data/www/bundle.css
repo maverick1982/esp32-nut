@@ -293,6 +293,15 @@ body {
     overflow-y: auto;
 }
 
+/* US-083: on desktop the sidebar keeps its width on every page. With the default
+   flex-shrink the flex row squeezed it whenever the active page had wide content
+   (UPS Commands, UPS Settings, Wi-Fi/NUT/Logs at 1024 px): the content area gives up
+   the space instead (it scrolls, so it can shrink). "not all and" is the exact
+   complement of the mobile query below, fractional widths included. */
+@media not all and (max-width: 768px) {
+    .sidebar { flex-shrink: 0; }
+}
+
 .topbar {
     display: flex;
     justify-content: space-between;
@@ -1366,8 +1375,13 @@ input[readonly] {
         gap: 10px;
         align-items: flex-start !important;
     }
-    
-    /* Responsive Data Table */
+}
+
+/* US-083: Responsive Data Table (UPS Telemetry), was mobile only. Next to the 260 px
+   sidebar the table needs ~450 px (parameter names and values do not wrap): below
+   ~850 px .details-table-container (overflow: hidden) clipped the Description column.
+   Up to 1000 px each row is stacked: parameter, value, description. */
+@media (max-width: 1000px) {
     .data-table, .data-table tbody, .data-table tr, .data-table td {
         display: block;
         width: 100%;
@@ -1564,6 +1578,33 @@ input[readonly] {
 }
 .cmd-empty span { font-size: 0.8rem; }
 
+/* US-083: next to the 260 px sidebar the 3-column row leaves the description under
+   200 px up to 1240 px (46 px at 1000 px): it moves under the command name, the action
+   stays on the right. Up to 1000 px even that does not fit: one column, as on mobile.
+   Before the mobile block, which wins below 768 px (UPS Settings rows override the
+   grid further down). */
+@media (max-width: 1240px) {
+    .cmd-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "name action"
+            "desc action";
+        row-gap: 0.3rem;
+    }
+    .cmd-row .cmd-name { grid-area: name; }
+    .cmd-row .cmd-desc { grid-area: desc; }
+    .cmd-row .cmd-action { grid-area: action; }
+}
+@media (max-width: 1000px) {
+    .cmd-row {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "name" "desc" "action";
+    }
+    .cmd-action { margin-top: 0.4rem; }
+    .cmd-action .cmd-result { white-space: normal; margin-right: auto; min-width: 0; justify-content: flex-start; }
+    .cmd-action .cmd-result:empty { display: none; }
+}
+
 /* --- Mobile (US-042 breakpoint) --- */
 @media (max-width: 768px) {
     .cmd-row {
@@ -1621,8 +1662,10 @@ input[readonly] {
 
 /* --- Row grid (overrides the 3-column .cmd-row) ---
    desktop:  variable | description | current (+ Reset) | new value + Apply
-   <1180px:  description moves under the variable name
-   <768px:   single column, see the media query at the bottom */
+   <=1400px: description moves under the variable name
+   <=1180px: the editor (new value + Apply) gets its own line
+   <=768px:  single column, see the media query at the bottom
+   The widths assume the 260 px sidebar (US-083), which no longer shrinks. */
 .set-row,
 .set-head {
     grid-template-columns: minmax(180px, 1fr) minmax(0, 1.3fr) 12rem 20rem;
@@ -1832,7 +1875,9 @@ input[readonly] {
 .set-row .cmd-result:empty { display: none; }
 .set-row .cmd-result .arrow { color: var(--text-secondary); margin: 0 0.15rem; }
 
-@media (max-width: 1180px) {
+/* US-083: up to 1400 px the description column of the 4-column grid is too narrow
+   next to the 260 px sidebar (20 px at 1200 px): it moves under the variable name */
+@media (max-width: 1400px) {
     .set-row,
     .set-head {
         grid-template-columns: minmax(0, 1fr) 12rem 19rem;
@@ -1844,6 +1889,22 @@ input[readonly] {
     .set-row .cmd-desc { padding-top: 0; }
     .set-head > :nth-child(2) { display: none; }
     .set-head > :nth-child(1)::after { content: ' / description'; }
+}
+
+/* US-083: up to 1180 px the editor (field + Apply) gets its own line under the name
+   and description: next to the 260 px sidebar the three columns above leave the
+   name/description column under 200 px (52 px at 1020 px) and, below 1000 px,
+   .cmd-group (overflow: hidden) clips Apply. Below 768 px the query after this wins. */
+@media (max-width: 1180px) {
+    .set-row,
+    .set-head {
+        grid-template-columns: minmax(0, 1fr) 12rem;
+        grid-template-areas:
+            "id   cur"
+            "desc cur"
+            "edit edit";
+    }
+    .set-head > :nth-child(4) { display: none; }
 }
 
 @media (max-width: 768px) {
