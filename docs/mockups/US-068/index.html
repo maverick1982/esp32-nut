@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | UPS Settings (US-068 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css (tokens, fonts, sidebar, panels, inputs, US-059 .cmd-* classes, US-061 session row) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-068 + mockup-only chrome -->
+    <link rel="stylesheet" href="settings.css">
+</head>
+
+<body class="mock-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-bar" id="mock-bar">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>US-068</span>
+            <button type="button" data-state="sta" class="on">STA &middot; populated</button>
+            <button type="button" data-state="sta-applied">STA &middot; applied</button>
+            <button type="button" data-state="sta-error">STA &middot; apply error</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="ap">AP mode</button>
+            <button type="button" data-state="empty">Empty / disconnected</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="mobile">Mobile 375px</button>
+        </div>
+        <p class="mock-note" id="mock-note"></p>
+    </div>
+
+    <!-- ===================== Mockup-only: phone frames (Mobile 375px state) ===================== -->
+    <div class="phone-stage" id="phone-stage" hidden>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; STA, after Apply</figcaption>
+            <iframe title="UPS Settings at 375px, STA" data-src="index.html?embed=1&amp;state=sta-applied"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; STA, apply error</figcaption>
+            <iframe title="UPS Settings at 375px, apply error" data-src="index.html?embed=1&amp;state=sta-error"></iframe>
+        </figure>
+    </div>
+
+    <div class="app-container" id="app">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.9.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <!-- NEW (US-068): third entry, right after UPS Commands -->
+                <button class="tab active" data-target="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
+                <button class="tab" data-target="wifi">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                    </svg>
+                    Wi-Fi Config
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="weblogin">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                    </svg>
+                    Web Login
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: Connected</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: Connected</span>
+                </div>
+            </div>
+
+            <!-- US-061 session row (hidden in AP mode) -->
+            <div class="sidebar-session" id="sidebar-session">
+                <div class="session-user" title="Signed in user">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span>admin</span>
+                </div>
+                <button type="button" class="btn btn-outline btn-logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Log out
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">UPS Settings</h1>
+                <div class="device-id">ID: <span>A4CF12F0C3E8</span></div>
+            </header>
+
+            <!-- NEW (US-068) tab -->
+            <div class="tab-content active" id="content-settings">
+                <div class="panel ups-panel set-panel">
+                    <div class="panel-header">
+                        <h2>Writable variables</h2>
+                        <div class="set-header-side">
+                            <!-- No polling: shows when the values were last read (page open / after Apply) -->
+                            <span class="set-snapshot" id="set-snapshot" title="Values are read when the page opens and after each Apply">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <polyline points="12 6 12 12 16 14" />
+                                </svg>
+                                Read <span id="set-snapshot-time">--:--:--</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <p class="set-lead" id="set-lead">Values are read from the UPS when this page opens and after
+                        each Apply. Changes take effect immediately.</p>
+
+                    <!-- Variable list, rows rendered from GET /api/ups/variables -->
+                    <div id="set-list"></div>
+
+                    <!-- Empty state (empty catalog or UPS disconnected) -->
+                    <div class="cmd-empty" id="set-empty" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="4" y1="21" x2="4" y2="14" />
+                            <line x1="4" y1="10" x2="4" y2="3" />
+                            <line x1="12" y1="21" x2="12" y2="12" />
+                            <line x1="12" y1="8" x2="12" y2="3" />
+                            <line x1="20" y1="21" x2="20" y2="16" />
+                            <line x1="20" y1="12" x2="20" y2="3" />
+                            <line x1="1" y1="14" x2="7" y2="14" />
+                            <line x1="9" y1="8" x2="15" y2="8" />
+                            <line x1="17" y1="16" x2="23" y2="16" />
+                        </svg>
+                        <strong>No settings available</strong>
+                        <span>The UPS is disconnected or does not expose any writable variable.</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

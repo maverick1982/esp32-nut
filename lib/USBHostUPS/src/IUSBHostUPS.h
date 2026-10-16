@@ -144,6 +144,14 @@ public:
      * is written: lock order is _op_mutex, then _mutex (ADR 0008), as executeCommand().
      */
     virtual NutTable::SetStatus setVariable(const char* name, const char* value) { return NutTable::SetStatus::NOT_CONNECTED; }
+    /**
+     * Drops the saved value of a driver-side variable (US-068): ups.delay.* and outlet.*.desc
+     * go back to the default of the attached driver, now and at the next connection. Only the
+     * variables of getWritableVariables() with driver_side; UNKNOWN for the others. The store
+     * is written before anything changes and with no lock held: lock order is _op_mutex, then
+     * _mutex (ADR 0008), as setVariable().
+     */
+    virtual NutTable::SetStatus resetVariable(const char* name) { return NutTable::SetStatus::NOT_CONNECTED; }
     // Command shutdown.default ran with its last success, empty if none (US-058)
     const String& lastDefaultShutdown() const { return _last_default_shutdown; }
     virtual uint32_t getQuirks() const = 0;

@@ -22,6 +22,9 @@ public:
     virtual bool load(std::vector<std::pair<String, String>>& out) = 0;
     // Adds or replaces one value; false when it was not written
     virtual bool save(const char* name, const char* value) = 0;
+    // Drops one value, so the driver default applies again (US-068); a name that is not
+    // saved is no error. false when the store was not written
+    virtual bool erase(const char* name) = 0;
 };
 
 // JSON form of the saved values, {name: value}: one NVS key holds them all, since an
@@ -38,6 +41,18 @@ inline void upsert(std::vector<std::pair<String, String>>& vars, const char* nam
         }
     }
     vars.push_back(std::make_pair(String(name), String(value ? value : "")));
+}
+
+// Drops the entry of name, keeping the order of the others; true when one was there
+inline bool remove(std::vector<std::pair<String, String>>& vars, const char* name) {
+    if (!name) return false;
+    for (auto it = vars.begin(); it != vars.end(); ++it) {
+        if (strcmp(it->first.c_str(), name) == 0) {
+            vars.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 
 // {name: value} in the order of vars

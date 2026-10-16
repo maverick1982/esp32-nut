@@ -827,37 +827,26 @@ void NUTServer::setVar(Print& client, int slot, const String& upsName, const Str
 
     // Listed after the data lock is released: getWritableVariables() takes it itself
     std::vector<NutTable::RWVariable> rw = _usb_ups->getWritableVariables();
-    const NutTable::RWVariable* v = findWritable(rw, varName);
-    if (!v) {
+
+    // Value checks of set_var(), shared with the Web UI (NutTable::checkSetValue, US-068).
+    // aux 0 is the "insanity from the driver" of upsd, e.g. input.sensitivity of cps-hid.
+    const NutTable::RWVariable* v = nullptr;
+    switch (NutTable::checkSetValue(rw, varName.c_str(), value.c_str(), v)) {
+    case NutTable::SetCheck::OK:
+        break;
+    case NutTable::SetCheck::NOT_WRITABLE:
         rejectSet(client, slot, varName, value, "READONLY");
         return;
-    }
-
-    // Every writable variable is ST_FLAG_STRING (US-066). aux 0 is the "insanity from the
-    // driver" of upsd, e.g. input.sensitivity of cps-hid: it cannot be written.
-    if (v->aux < 1) {
+    case NutTable::SetCheck::INVALID_AUX:
         log("WARN", "auxdata for %s is invalid", v->name);
         rejectSet(client, slot, varName, value, "SET-FAILED");
         return;
-    }
-    if (value.length() > v->aux) {
+    case NutTable::SetCheck::TOO_LONG:
         rejectSet(client, slot, varName, value, "TOO-LONG");
         return;
-    }
-
-    // ENUM values compared with strcmp; usbhid-ups declares no ranges (LIST RANGE is empty)
-    if (!v->enums.empty()) {
-        bool found = false;
-        for (const char* e : v->enums) {
-            if (strcmp(e, value.c_str()) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            rejectSet(client, slot, varName, value, "INVALID-VALUE");
-            return;
-        }
+    case NutTable::SetCheck::INVALID_VALUE:
+        rejectSet(client, slot, varName, value, "INVALID-VALUE");
+        return;
     }
 
     // Driver and server are one process, so the outcome is known before the reply: OK only

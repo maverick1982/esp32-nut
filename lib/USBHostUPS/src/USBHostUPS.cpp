@@ -994,6 +994,66 @@ NutTable::SetStatus USBHostUPS::runSetVariable(const char* name, const char* val
     return ok ? NutTable::SetStatus::OK : NutTable::SetStatus::FAILED;
 }
 
+NutTable::SetStatus USBHostUPS::resetVariable(const char* name) {
+    String value;
+    NutTable::SetStatus st = runResetVariable(name, value);
+    const char* var = name ? name : "(null)";
+    switch (st) {
+    case NutTable::SetStatus::OK:
+        // Empty: device gone or changed, only the saved value was erased
+        if (value.length() == 0) log("INFO", "Variable %s: saved value erased", var);
+        else log("INFO", "Variable %s reset to default \"%s\"", var, value.c_str());
+        break;
+    case NutTable::SetStatus::UNKNOWN:       log("WARN", "Variable %s: not supported", var); break;
+    case NutTable::SetStatus::NOT_CONNECTED: log("WARN", "Variable %s: UPS not connected", var); break;
+    default:                                 log("WARN", "Variable %s: reset failed", var); break;
+    }
+    return st;
+}
+
+NutTable::SetStatus USBHostUPS::runResetVariable(const char* name, String& value) {
+    value = "";
+    if (!isConnected()) return NutTable::SetStatus::NOT_CONNECTED;
+    if (!name) return NutTable::SetStatus::UNKNOWN;
+
+    // Only a driver-side variable of the catalog; canonical name, as the store keeps it.
+    // Copied: the catalog points into the driver, deleted under _mutex
+    String canonical;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_driver) return NutTable::SetStatus::NOT_CONNECTED;
+        for (const auto& v : getWritableVariables()) {
+            if (v.driver_side && NutTable::equalsIgnoreCase(v.name, name)) {
+                canonical = v.name;
+                break;
+            }
+        }
+    }
+    if (canonical.length() == 0) return NutTable::SetStatus::UNKNOWN;
+
+    // Erased first, outside _mutex (flash write): a value still saved changes nothing
+    if (!_var_store || !_var_store->erase(canonical.c_str())) return NutTable::SetStatus::FAILED;
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    DriverVarStore::remove(_saved_vars, canonical.c_str());
+    // Device gone meanwhile: the driver default applies at the next connection
+    if (!_driver || !isConnected()) return NutTable::SetStatus::OK;
+    if (strncmp(canonical.c_str(), "ups.delay.", 10) == 0) {
+        // Without the saved value applyDefaultDelays() sets the driver default again
+        applyDefaultDelays();
+        value = _ups_data.get(canonical);
+        return NutTable::SetStatus::OK;
+    }
+    // outlet.*.desc: the dfl of the table, also at the next bind; in UPSData too for LIST VAR
+    // No such ABSENT row: another device reconnected between the two locks. The store is
+    // clean and this driver does not have the variable, so the reset still succeeded
+    if (!_driver->resetDriverSideValue(canonical.c_str(), value)) {
+        value = "";
+        return NutTable::SetStatus::OK;
+    }
+    _ups_data.set(canonical, value);
+    return NutTable::SetStatus::OK;
+}
+
 std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {
     // _hid_parser is replaced under _mutex when a device (re)connects
     std::lock_guard<std::recursive_mutex> lock(_mutex);

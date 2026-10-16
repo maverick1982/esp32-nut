@@ -33,3 +33,22 @@ bool NvsDriverVarStore::save(const char* name, const char* value) {
     prefs.end();
     return ok;
 }
+
+bool NvsDriverVarStore::erase(const char* name) {
+    if (!name) return false;
+    Preferences prefs;
+    if (!prefs.begin(kNamespace, false)) return false;
+    // Corrupt data is dropped, as in save(): nothing saved is left
+    std::vector<std::pair<String, String>> vars;
+    DriverVarStore::fromJson(readJson(prefs), vars);
+    bool removed = DriverVarStore::remove(vars, name);
+    bool ok = true;
+    if (vars.empty()) {
+        // Last value gone: no key, as before the first SET VAR
+        if (prefs.isKey(kKeyVars)) ok = prefs.remove(kKeyVars);
+    } else if (removed) {
+        ok = prefs.putString(kKeyVars, DriverVarStore::toJson(vars)) > 0;
+    }
+    prefs.end();
+    return ok;
+}

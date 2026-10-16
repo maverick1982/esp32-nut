@@ -38,6 +38,21 @@
                     </svg>
                     UPS Commands
                 </button>
+                <!-- US-068: writable UPS variables -->
+                <button class="tab" data-target="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
                 <button class="tab" data-target="wifi">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path
@@ -450,14 +465,6 @@
                                 <span>Power control</span>
                                 <span class="cmd-group-count" id="cmd-count-power">0</span>
                             </div>
-                            <!-- US-062: shown only when at least one command is locked (AP mode) -->
-                            <div class="cmd-group-note" id="cmd-note-power" hidden>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="3" y="11" width="18" height="11" rx="2" />
-                                    <path d="M7 11V7a5 5 0 0110 0v4" />
-                                </svg>
-                                Available via NUT only in Access Point mode
-                            </div>
                         </section>
                     </div>
 
@@ -469,6 +476,48 @@
                         </svg>
                         <strong>No commands available</strong>
                         <span>The UPS is disconnected or does not expose any command.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- US-068: UPS Settings. Read on opening and after each Apply / Reset, no polling -->
+            <div class="tab-content" id="content-settings">
+                <div class="panel ups-panel set-panel">
+                    <div class="panel-header">
+                        <h2>Writable variables</h2>
+                        <div class="set-header-side">
+                            <span class="set-snapshot" id="set-snapshot"
+                                title="Values are read when the page opens and after each Apply">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <polyline points="12 6 12 12 16 14" />
+                                </svg>
+                                Read <span id="set-snapshot-time">--:--:--</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <p class="set-lead" id="set-lead">Values are read from the UPS when this page opens and after
+                        each Apply. Changes take effect immediately.</p>
+
+                    <!-- Variable list, rows rendered from GET /api/ups/variables -->
+                    <div id="set-list"></div>
+
+                    <!-- Empty state (empty catalog or UPS disconnected) -->
+                    <div class="cmd-empty" id="set-empty" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="4" y1="21" x2="4" y2="14" />
+                            <line x1="4" y1="10" x2="4" y2="3" />
+                            <line x1="12" y1="21" x2="12" y2="12" />
+                            <line x1="12" y1="8" x2="12" y2="3" />
+                            <line x1="20" y1="21" x2="20" y2="16" />
+                            <line x1="20" y1="12" x2="20" y2="3" />
+                            <line x1="1" y1="14" x2="7" y2="14" />
+                            <line x1="9" y1="8" x2="15" y2="8" />
+                            <line x1="17" y1="16" x2="23" y2="16" />
+                        </svg>
+                        <strong>No settings available</strong>
+                        <span>The UPS is disconnected or does not expose any writable variable.</span>
                     </div>
                 </div>
             </div>

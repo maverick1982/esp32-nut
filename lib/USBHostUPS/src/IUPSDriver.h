@@ -83,6 +83,16 @@ public:
     virtual void setDriverSideValue(const char* name, const char* value) {}
 
     /**
+     * @brief Forgets the value set with setDriverSideValue() (US-068): the HU_FLAG_ABSENT rows
+     * named name go back to the dfl of the table, also at the next bind.
+     *
+     * @param value The default now in force
+     * @return false when no HU_FLAG_ABSENT row of the table has that name; ups.delay.* is not
+     * one, the host sets it again with applyDefaultDelays()
+     */
+    virtual bool resetDriverSideValue(const char* name, String& value) { return false; }
+
+    /**
      * @brief wLength of a GET_REPORT, given the length declared in the report descriptor.
      *
      * Used by the poll and by the host's own requests (SET VAR read-modify-write and read
