@@ -1,0 +1,199 @@
+schema: archetipo/plan/v2
+spec_code: US-080
+body: |
+  ---
+  type: plan
+  title: "US-080: Escape di virgolette e backslash nei valori delle risposte VAR, RW ed ENUM del server NUT — Piano di Implementazione"
+  description: "Piano di Implementazione per US-080"
+  tags: [plan, implementation, US-080]
+  ---
+  # US-080: Escape di virgolette e backslash nei valori delle risposte VAR, RW ed ENUM del server NUT — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 2
+  **Bloccato da:** US-067 (DONE)
+
+  **User Story**
+  Come amministratore che usa upsc, upsrw, Home Assistant o PeaNUT, voglio che il server NUT dell'ESP32 faccia l'escape di `"` e `\` nei valori che invia, come fa upsd, in modo che una descrizione come `Rack "A"` non rompa la riga del protocollo e i client leggano il valore intero.
+
+  **Criteri di Accettazione (sintesi)**
+  - `VAR` (LIST VAR, GET VAR), `RW` (LIST RW) ed `ENUM` (LIST ENUM) con l'escape di `pconf_encode()`.
+  - Valori senza caratteri speciali identici a oggi, compreso `ups.status`.
+  - `GET DESC` / `GET CMDDESC` senza escape, come upsd.
+  - `SET VAR` con valore escapato → `GET VAR` lo restituisce escapato, senza perdite.
+  - Test nativi in `test_nut_server`; API JSON della Web UI invariate.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  L'escape si fa solo in uscita, nel server NUT, con una funzione pura equivalente a `pconf_encode()`. In `UPSData`, in NVS e nelle API JSON il valore resta grezzo, come `node->raw` di upstream (`common/state.c`, `val_escape()` tiene sia `raw` sia `val` escapato).
+
+  - **`NUTServer::encodeValue(const char* raw)`**, statica e pubblica come `splitTokens()` (testabile senza socket). Mette un backslash davanti a ogni carattere di `PCONF_ESCAPE`.
+  - **Fedeltà: `PCONF_ESCAPE` è `"#\\\""`, cioè `#`, `\` e `"`** (`nut_repo/common/parseconf.c:596`). La spec cita `"` e `\`, ma chiede "come `pconf_encode()`": il piano segue upstream ed escapa anche `#`. Un valore `Rack #1` esce come `Rack \#1`, esattamente come da upsd; upsc e i client pconf lo decodificano. Il nostro `splitTokens()` già toglie `\#` in ingresso (test `test_split_tokens_pconf`).
+  - **Dove si applica** (`lib/NUTServer/src/NUTServer.cpp`): tutte le righe che stampano un valore tra virgolette:
+    - `LIST VAR`: `ups.status`, gli alias `device.*`, ogni chiave di `UPSData` (righe ~411-420);
+    - `GET VAR`: `ups.status`, alias, valore normale (righe ~667-673);
+    - `LIST RW`: valore corrente (riga ~449), come `tree_dump()` con `rw` in `netlist.c`;
+    - `LIST ENUM`: ogni valore ammesso (riga ~516), come `state_addenum()` che li salva già codificati.
+    - `device.type "ups"` è una costante: si lascia com'è.
+  - **Dove NON si applica**, per fedeltà:
+    - `GET DESC` / `GET CMDDESC` (riga ~726): `get_desc()` / `get_cmddesc()` di `netget.c` stampano il testo di `desc_get_var()` senza `pconf_encode`;
+    - `LIST UPS` / `GET UPSDESC`: upstream codifica la descrizione, ma da noi è la costante `NUT_UPS_DESCRIPTION` senza caratteri speciali (assunzione della spec): nessun cambiamento;
+    - `TYPE`, `CMD`, `NUMLOGINS`: nessun valore tra virgolette.
+  - **Troncamento di upstream non replicato.** `pconf_encode()` tronca l'uscita a `ST_MAX_VALUE_LEN - 1` (255) senza spezzare una coppia di escape. Da noi è irraggiungibile: le stringhe HID sono al massimo 64 caratteri (`HID_STR_DESC_MAX_LENGTH`), le variabili lato driver al massimo aux 20, e il lettore di riga accetta 256 byte. Deviazione documentata nel commento della funzione, nessun codice.
+  - **Ingresso invariato.** `splitTokens()` decodifica già `\x` in `x` (US-067): il giro `SET VAR "Rack \"A\""` → `UPSData` = `Rack "A"` → `GET VAR` = `"Rack \"A\""` si chiude senza cambiare il parser.
+  - **Web UI**: `/api/ups-vars`, `/api/ups/variables` e le altre API serializzano con ArduinoJson, che fa il suo escape JSON: nessuna modifica.
+
+  ### Scelte e deviazioni
+
+  - `#` escapato come upstream, anche se la spec nomina solo `"` e `\`.
+  - Nessun troncamento a 255 caratteri: irraggiungibile con i limiti attuali.
+  - La funzione restituisce `String` (Arduino) per coerenza con il resto del server; il costo è una copia per riga, trascurabile rispetto a `client.printf`.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity in `test/test_nut_server` (`pio test -e native` con il PATH mingw, come da note di progetto). Nessun test e2e: la spec non ha superficie UI (le API JSON non cambiano).
+
+  - **Unità `encodeValue()`**: stringa vuota; valore senza caratteri speciali identico; `"`, `\` e `#` singoli e ripetuti; valore misto `Rack "A" \ 1` → `Rack \"A\" \\ 1`.
+  - **Protocollo**: con un valore speciale in `UPSData` (per esempio `outlet.desc` = `Rack "A" \ #1`):
+    - `GET VAR` e la riga corrispondente di `LIST VAR` sono escapate;
+    - `LIST RW` mostra il valore escapato;
+    - `LIST ENUM` di una variabile con un valore ENUM sintetico contenente `"` è escapato;
+    - un alias `device.*` (per esempio `device.model` da `ups.model` = `Back-UPS "X"`) è escapato.
+  - **`GET DESC` invariato**: la risposta a `GET DESC` resta uguale a oggi (nessun backslash aggiunto).
+  - **Giro completo**: `SET VAR testups outlet.desc "Rack \"A\" \\ 1"` → il mock salva `Rack "A" \ 1` → `GET VAR` risponde `VAR testups outlet.desc "Rack \"A\" \\ 1"`. Il mock di `test_nut_server` oggi non scrive in `data` su `setVariable()`: si aggiunge un flag opt-in (default spento) per non toccare gli altri test.
+  - **Regressione**: tutti i test esistenti di `test_nut_server` e della suite nativa restano verdi senza modifiche (valori senza caratteri speciali identici).
+  - **Verifica manuale** sull'Eaton 3S: `upsrw -s 'outlet.1.desc=Rack "A" \ 1'`, poi `upsc ups@<ip> outlet.1.desc` e la riga grezza con `nc`; Home Assistant continua a leggere le altre variabili.
+
+  _Piano generato via ARchetipo Planning — 2026-10-16_
+tasks:
+  - id: TASK-01
+    title: NUTServer::encodeValue() come pconf_encode() e applicazione alle righe VAR, RW ed ENUM
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ogni valore che il server NUT stampa tra virgolette in `VAR`, `RW` ed `ENUM` passa da una funzione equivalente a `pconf_encode()` di upstream.
+
+      **Da leggere:**
+      - `nut_repo/common/parseconf.c`, righe ~596-630: `PCONF_ESCAPE` (`#`, `\`, `"`) e `pconf_encode()`;
+      - `nut_repo/common/state.c`: `val_escape()` e `state_addenum()`;
+      - `nut_repo/server/netlist.c` (`tree_dump`) e `nut_repo/server/netget.c` (`get_var`, `get_desc`);
+      - `lib/NUTServer/src/NUTServer.h`, sezione "Metodi di utilità" (`splitTokens`);
+      - `lib/NUTServer/src/NUTServer.cpp`: `LIST VAR` (~408-423), `LIST RW` (~444-452), `LIST ENUM` (~509-520), `GET VAR` (~660-674), `GET DESC` (~726).
+
+      **Modifiche:**
+      - `NUTServer.h`: `static String encodeValue(const char* raw);` accanto a `splitTokens()`, con un commento che rimanda a `pconf_encode()`.
+      - `NUTServer.cpp`:
+        - implementazione: per ogni carattere di `raw`, se è `#`, `\` o `"` aggiunge prima un `\`; `raw` nullo dà stringa vuota;
+        - commento sulla deviazione: il troncamento di upstream a `ST_MAX_VALUE_LEN - 1` non è replicato perché irraggiungibile (stringhe HID ≤ 64, aux ≤ 20, riga ≤ 256);
+        - applicare `encodeValue(...).c_str()` al valore di: `VAR ... ups.status` (LIST VAR e GET VAR), alias `device.*` (LIST VAR e GET VAR), valore normale di LIST VAR e GET VAR, `RW` di LIST RW, `ENUM` di LIST ENUM;
+        - NON toccare `GET DESC` / `GET CMDDESC`, `LIST UPS`, `GET UPSDESC`, `device.type "ups"`, `TYPE`, `CMD`.
+
+      **Passi:** dichiarazione; implementazione; sostituzioni nelle righe elencate; build.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server` verde senza modificare i test esistenti, e build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto quando:** nessuna riga `VAR`/`RW`/`ENUM` stampa un valore grezzo e le righe di descrizione sono invariate.
+
+      **Blocchi:** se un test esistente di `test_nut_server` cambia esito, fermarsi: significa che un valore di test contiene `#`, `\` o `"` e l'aspettativa va discussa, non aggiornata a mano.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — dichiarazione di `encodeValue()`
+      - lib/NUTServer/src/NUTServer.cpp — implementazione e uso in LIST VAR, GET VAR, LIST RW, LIST ENUM
+
+      ## Criteri di Completamento
+      - [ ] `encodeValue()` escapa `#`, `\` e `"` come `PCONF_ESCAPE`
+      - [ ] applicata a tutti i valori di VAR, RW ed ENUM
+      - [ ] `GET DESC` / `GET CMDDESC` / `UPSDESC` invariati
+      - [ ] `test_nut_server` verde senza modifiche
+      - [ ] build ok
+    ref: TASK-01
+  - id: TASK-02
+    title: Test dell'escape in uscita e del giro SET VAR → GET VAR
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare con test nativi l'escape di ogni risposta e il giro completo di un valore con caratteri speciali.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp`: mock `setVariable()` (~righe 88-93), `setupSettable()` (~1043), `request()`, `test_set_var_quoted_values`, `test_split_tokens_pconf`, `test_list_rw_with_values`, `test_list_enum_and_range`, `test_get_desc_of_table_variables`.
+
+      **Modifiche in `test/test_nut_server/test_main.cpp`:**
+      - Mock: flag `bool storeOnSet = false;` azzerato in `setUp`; se vero e l'esito è OK, `setVariable()` scrive il valore in `data`. Gli altri test non cambiano.
+      - `test_encode_value`: vuoto e nullo; valore normale identico; `"`, `\`, `#` singoli e ripetuti; `Rack "A" \ 1` → `Rack \"A\" \\ 1`.
+      - `test_var_replies_are_escaped`: `outlet.desc` = `Rack "A" \ #1` in `data`; `GET VAR` e la riga di `LIST VAR` escapate; `LIST RW` escapato; alias `device.model` da `ups.model` = `Back-UPS "X"` escapato in GET VAR e LIST VAR.
+      - `test_enum_values_are_escaped`: una variabile RW con un ENUM sintetico contenente `"` → riga `ENUM` escapata.
+      - `test_get_desc_not_escaped`: la risposta di `GET DESC` resta quella di oggi.
+      - `test_set_var_escaped_round_trip`: con `storeOnSet`, `SET VAR testups outlet.desc "Rack \"A\" \\ 1"` → `OK`, `data` = `Rack "A" \ 1`, `GET VAR` → `VAR testups outlet.desc "Rack \"A\" \\ 1"`.
+      - Registrare i test nella lista `RUN_TEST`.
+
+      **Passi:** mock, test, registrazione.
+
+      **Verifica:** `pio test -e native -f test_nut_server` (con il PATH mingw).
+
+      **Fatto quando:** ogni tipo di riga (VAR, RW, ENUM, DESC) e il giro completo hanno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — flag `storeOnSet` nel mock e nuovi test
+
+      ## Criteri di Completamento
+      - [ ] `encodeValue()` coperta su `#`, `\`, `"`, vuoto e valore normale
+      - [ ] VAR, RW, ENUM escapati e DESC invariato verificati via protocollo
+      - [ ] giro `SET VAR` → `GET VAR` verificato
+      - [ ] suite verde
+    ref: TASK-02
+  - id: TASK-03
+    title: Regressione completa, build e verifica manuale sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla si è rotto e preparare la verifica sull'hardware.
+
+      **Da leggere:** il piano (Strategia di Test).
+
+      **Modifiche:** nessuna, salvo correzioni di regressioni trovate qui.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: tutte le suite verdi; riportare il numero di test. Un ERRORED transitorio su Windows va rilanciato da solo prima di considerarlo un errore.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: build ok; riportare RAM e flash.
+      3. `npx playwright test`: suite verde (le API JSON non devono essere cambiate).
+      4. Checklist manuale sull'Eaton 3S da preparare per la review:
+         - `upsrw -s 'outlet.1.desc=Rack "A" \ 1' -u <user> -p <pw> ups@<ip>` risponde OK;
+         - `upsc ups@<ip> outlet.1.desc` stampa `Rack "A" \ 1`;
+         - con `nc <ip> 3493`, `GET VAR ups outlet.1.desc` dà `VAR ups outlet.1.desc "Rack \"A\" \\ 1"`;
+         - Home Assistant continua a leggere tutte le variabili;
+         - "Reset to default" dalla pagina UPS Settings riporta il valore di default.
+
+      **Verifica:** output dei comandi riportato nella review.
+
+      **Fatto quando:** suite native ed e2e e build sono verdi e la checklist è pronta.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - nessun file nuovo; eventuali correzioni nei file dei task precedenti
+
+      ## Criteri di Completamento
+      - [ ] suite nativa completa verde
+      - [ ] suite Playwright verde
+      - [ ] build `esp32-s3-standard` ok
+      - [ ] checklist manuale pronta per la review
+    ref: TASK-03

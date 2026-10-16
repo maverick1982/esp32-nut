@@ -150,6 +150,21 @@ void NUTServer::closeSession(int slot) {
     }
 }
 
+// Value as upsd sends it in VAR, RW and ENUM replies: common/state.c val_escape() keeps
+// pconf_encode(raw), a backslash before each character of PCONF_ESCAPE ("#\\\""). The
+// raw value stays in UPSData, NVS and the JSON APIs. pconf_encode() also truncates the
+// result to ST_MAX_VALUE_LEN - 1: not reproduced, since it is unreachable here (HID
+// strings are at most 64 characters, driver-side values aux 20, a request line 256).
+String NUTServer::encodeValue(const char* raw) {
+    String out;
+    if (!raw) return out;
+    for (const char* p = raw; *p; p++) {
+        if (*p == '#' || *p == '\\' || *p == '"') out += '\\';
+        out += *p;
+    }
+    return out;
+}
+
 // Words as pconf splits them (common/parseconf.c): a backslash takes the next character
 // literally, in or out of quotes (upsrw escapes quotes, backslashes and # with
 // pconf_encode()), and a pair of quotes ends a word even when it is empty.
@@ -408,16 +423,16 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             client.printf("BEGIN LIST VAR %s\n", upsName.c_str());
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
                 client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
                 for (const auto& a : DEVICE_ALIASES) {
                     if (data->hasKey(a[1])) {
-                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), a[0], data->get(a[1]).c_str());
+                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), a[0], encodeValue(data->get(a[1]).c_str()).c_str());
                     }
                 }
                 for (const auto& param : data->getAll()) {
                     if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
-                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), param.value.c_str());
+                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), encodeValue(param.value.c_str()).c_str());
                 }
             }
             client.printf("END LIST VAR %s\n", upsName.c_str());
@@ -446,7 +461,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 auto data = _usb_ups->getUPSData();
                 for (const auto& v : rw) {
                     if (!data->hasKey(v.name)) continue;
-                    client.printf("RW %s %s \"%s\"\n", upsName.c_str(), v.name, data->get(v.name).c_str());
+                    client.printf("RW %s %s \"%s\"\n", upsName.c_str(), v.name, encodeValue(data->get(v.name).c_str()).c_str());
                 }
             }
             client.printf("END LIST RW %s\n", upsName.c_str());
@@ -513,7 +528,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 const NutTable::RWVariable* v = findWritable(rw, varName);
                 if (v) {
                     for (const char* e : v->enums) {
-                        client.printf("ENUM %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), e);
+                        client.printf("ENUM %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(e).c_str());
                     }
                 }
             }
@@ -664,13 +679,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             const char* alias = deviceAliasSource(varNameLower);
             if (varNameLower == "ups.status") {
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), _usb_ups->getUPSStatusString().c_str());
+                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
             } else if (varNameLower == "device.type") {
                 client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
             } else if (alias && data->hasKey(alias)) {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(alias).c_str());
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), encodeValue(data->get(alias).c_str()).c_str());
             } else {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), data->get(varNameLower).c_str());
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), encodeValue(data->get(varNameLower).c_str()).c_str());
             }
             return;
         }

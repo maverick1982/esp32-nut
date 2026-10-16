@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |
   #### US-080: Escape di virgolette e backslash nei valori delle risposte VAR, RW ed ENUM del server NUT
 
@@ -43,3 +43,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-16T14:44:27Z"
+  - status: PLANNED
+    at: "2026-10-16T15:05:02Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T15:08:59Z"
+  - status: REVIEW
+    at: "2026-10-16T15:19:40Z"
+  - status: DONE
+    at: "2026-10-16T15:42:54Z"
