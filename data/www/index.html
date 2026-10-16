@@ -186,8 +186,8 @@
                     <form id="nut-form" class="form-container">
                         <div class="form-group">
                             <label for="nut-upsname">UPS Name</label>
-                            <input type="text" id="nut-upsname" placeholder="eaton" pattern="^\S+$"
-                                title="Spaces are not allowed in the UPS Name" required>
+                            <input type="text" id="nut-upsname" placeholder="ups" pattern="[!$-?A-\[\]-~]+"
+                                title="Printable ASCII characters only, without spaces and &quot; \ # @" required>
                         </div>
                         <div class="form-group">
                             <label for="nut-username">Username</label>

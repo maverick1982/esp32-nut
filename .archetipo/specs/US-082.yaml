@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-082: Nome dell'UPS mai vuoto (default "ups") e rimozione del fallback senza nome dell'UPS nei comandi NUT
 
@@ -54,3 +54,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-16T15:40:14Z"
+  - status: PLANNED
+    at: "2026-10-16T15:51:22Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T15:54:23Z"
+  - status: REVIEW
+    at: "2026-10-16T16:09:46Z"
+  - status: DONE
+    at: "2026-10-16T17:38:23Z"

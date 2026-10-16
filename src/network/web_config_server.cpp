@@ -232,6 +232,13 @@ void WebConfigServer::handleNutConfig() {
         return;
     }
 
+    // ups_name not a string or not valid → 400, nothing saved and no restart (US-082)
+    String rejected;
+    if (int status = WebApiJson::checkNutConfigBody(doc, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+
     NutConfig nc = config_mgr.getNutConfig();
     if (doc["username"].is<String>()) {
         nc.username = doc["username"].as<String>();

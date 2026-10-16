@@ -788,6 +788,59 @@ void test_reset_variable_canonical_name() {
 
 // ---- needsConfirmation ----
 
+// ---- UPS name of the NUT configuration (US-082) ----
+
+static String nameFromConfig(const char* json, bool& defaulted) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::upsNameFromConfig(doc["nut"]["ups_name"], &defaulted);
+}
+
+void test_ups_name_from_config() {
+    bool defaulted = false;
+    // Missing key: as<String>() would give "null", the default is used instead
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"username\":\"\"}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":\"\"}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":null}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("ups", nameFromConfig("{\"nut\":{\"ups_name\":5}}", defaulted).c_str());
+    TEST_ASSERT_TRUE(defaulted);
+    TEST_ASSERT_EQUAL_STRING("eaton", nameFromConfig("{\"nut\":{\"ups_name\":\"eaton\"}}", defaulted).c_str());
+    TEST_ASSERT_FALSE(defaulted);
+    // defaulted is optional
+    JsonDocument doc;
+    TEST_ASSERT_EQUAL_STRING("ups", WebApiJson::upsNameFromConfig(doc["missing"]).c_str());
+}
+
+static int nutConfigStatus(const char* json, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkNutConfigBody(doc, out);
+}
+
+void test_nut_config_body_check() {
+    String out;
+    // Without ups_name (or null) the saved name stays: no error
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"username\":\"admin\",\"password\":\"x\"}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":null}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":\"ups\"}", out));
+    TEST_ASSERT_EQUAL(0, nutConfigStatus("{\"ups_name\":\"Back-UPS_1\"}", out));
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+
+    const char* invalid[] = {
+        "{\"ups_name\":\"\"}", "{\"ups_name\":\"my ups\"}", "{\"ups_name\":\"a#b\"}",
+        "{\"ups_name\":\"a@b\"}", "{\"ups_name\":\"citt\\u00e0\"}", "{\"ups_name\":123}",
+        "{\"ups_name\":true}", "{\"ups_name\":[\"ups\"]}",
+    };
+    for (const char* json : invalid) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, nutConfigStatus(json, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid UPS name\"}", out.c_str(), json);
+    }
+}
+
 void test_needs_confirmation_spec_names() {
     const char* names[] = {
         "ups.shutdown",
@@ -880,6 +933,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_reset_variable_ok);
     RUN_TEST(test_reset_variable_canonical_name);
     RUN_TEST(test_set_and_reset_variable_ok_then_disconnected);
+    RUN_TEST(test_ups_name_from_config);
+    RUN_TEST(test_nut_config_body_check);
     RUN_TEST(test_needs_confirmation_spec_names);
     RUN_TEST(test_needs_confirmation_other_names);
     return UNITY_END();

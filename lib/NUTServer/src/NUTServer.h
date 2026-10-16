@@ -35,6 +35,11 @@ public:
     static std::vector<String> splitTokens(const String& input);
     // Valore escapato come pconf_encode() di upstream (#, \ e "), per VAR, RW ed ENUM
     static String encodeValue(const char* raw);
+    // Nome dell'UPS (US-082). In upstream è una sezione di ups.conf e non è mai vuoto: con il
+    // nome vuoto LIST UPS stampava "UPS  ..." e aionut inviava "LIST VAR \n"
+    static String defaultUpsName();
+    static String normalizeUpsName(const String& name);   // vuoto → defaultUpsName()
+    static bool isValidUpsName(const String& name);       // non vuoto, byte 0x21-0x7E senza " \ # @
     void processCommand(Print& client, int slot, const String& cmdLine);
 
     // Helpers per testing

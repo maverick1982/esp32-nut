@@ -46,6 +46,15 @@ public:
     // come in runUpsVariable, riferito a resetVariable()
     static int resetUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response,
                                 bool* host_called = nullptr);
+
+    // Nome dell'UPS della configurazione salvata (US-082): la stringa se non vuota,
+    // altrimenti NUTServer::defaultUpsName() (chiave assente, null, non stringa o vuota).
+    // *defaulted dice se si è usato il default
+    static String upsNameFromConfig(JsonVariantConst value, bool* defaulted = nullptr);
+    // Controllo di ups_name nel body di POST /api/nut/config (US-082): assente o null resta
+    // il valore attuale; non stringa o non valido per NUTServer::isValidUpsName() → 400
+    // {"error":"Invalid UPS name"}. Restituisce 0 se il body va bene
+    static int checkNutConfigBody(JsonVariantConst body, String& response);
 };
 
 #endif
