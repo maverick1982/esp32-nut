@@ -884,6 +884,60 @@ void test_driver_side_value_set_before_first_bind() {
     TEST_ASSERT_FALSE(data.hasKey("outlet.1.desc"));
 }
 
+// --- reset of the driver-side values (US-068): resetDriverSideValue ---
+
+void test_reset_driver_side_value_back_to_dfl() {
+    PlanHost host;
+    EatonDriver drv;
+    drv.setup();
+    UPSData data;
+    eatonOutletId(host);
+    drv.setDriverSideValue("outlet.desc", "Rack A");
+    feedReport(drv, host, data, 0x0B, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("Rack A", data.get("outlet.desc").c_str());
+
+    // The dfl of mge-hid.c:2247 comes back, in the reset and in the next postDecode
+    String value = "stale";
+    TEST_ASSERT_TRUE(drv.resetDriverSideValue("outlet.desc", value));
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", value.c_str());
+    feedReport(drv, host, data, 0x0B, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", data.get("outlet.desc").c_str());
+
+    // The override is gone: a new bind (the usage list changed) does not set Rack A again
+    eatonChargeLow(host);
+    feedReport(drv, host, data, 0x0B, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", data.get("outlet.desc").c_str());
+
+    // Reset again without an override: still the default
+    value = "";
+    TEST_ASSERT_TRUE(drv.resetDriverSideValue("outlet.desc", value));
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", value.c_str());
+}
+
+void test_reset_driver_side_value_only_absent_rows() {
+    PlanHost host;
+    EatonDriver drv;
+    drv.setup();
+    UPSData data;
+    eatonOutletId(host);
+    eatonChargeLow(host);
+    feedReport(drv, host, data, 0x0B, 3, 1);
+    feedReport(drv, host, data, 0x22, 3, 40);
+    TEST_ASSERT_EQUAL_STRING("40", data.get("battery.charge.low").c_str());
+
+    // battery.charge.low is a HID row, not driver-side; an unknown name has no row
+    String value = "untouched";
+    TEST_ASSERT_FALSE(drv.resetDriverSideValue("battery.charge.low", value));
+    TEST_ASSERT_FALSE(drv.resetDriverSideValue("outlet.99.desc", value));
+    TEST_ASSERT_FALSE(drv.resetDriverSideValue(nullptr, value));
+    TEST_ASSERT_EQUAL_STRING("untouched", value.c_str());
+    feedReport(drv, host, data, 0x22, 3, 40);
+    TEST_ASSERT_EQUAL_STRING("40", data.get("battery.charge.low").c_str());
+
+    // ups.delay.* lives outside the table: the host sets it again with applyDefaultDelays()
+    TEST_ASSERT_FALSE(drv.resetDriverSideValue("ups.delay.shutdown", value));
+}
+
 void test_complete_initial_poll_applies_finish_init() {
     // Two rows with one name (kTwoCandidates shape): the second waits for the first, which
     // is never read. completeInitialPoll() ends INIT as the first full poll would.
@@ -910,6 +964,108 @@ void test_complete_initial_poll_applies_finish_init() {
     ASSERT_STATUS(SetStatus::OK, drv.planSet(data, host._usages, "input.sensitivity", "normal", plan));
     TEST_ASSERT_EQUAL_STRING("UPS.B", plan.def.path);
     TEST_ASSERT_EQUAL_INT32(1, plan.raw);
+}
+
+// --- checkSetValue: steps 5-8 of set_var() in nut_repo/server/netset.c (US-068) ---
+
+// A LIST RW catalog as the host reports it
+static std::vector<RWVariable> setCatalog() {
+    return {
+        { "battery.charge.low", 10, {}, false },
+        { "input.sensitivity", 10, { "low", "medium", "high" }, false },
+        { "input.broken", 0, {}, false }, // aux 0: the "insanity from the driver" of upsd
+        { "outlet.desc", 20, {}, true },
+    };
+}
+
+void test_check_set_value_ok_and_canonical_name() {
+    std::vector<RWVariable> rw = setCatalog();
+    const RWVariable* var = nullptr;
+    TEST_ASSERT_TRUE(checkSetValue(rw, "battery.charge.low", "30", var) == SetCheck::OK);
+    TEST_ASSERT_TRUE(var == &rw[0]);
+    // get_var_ptr() looks the name up with strcasecmp: var is the canonical entry
+    var = nullptr;
+    TEST_ASSERT_TRUE(checkSetValue(rw, "BATTERY.Charge.LOW", "30", var) == SetCheck::OK);
+    TEST_ASSERT_NOT_NULL(var);
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", var->name);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "Input.Sensitivity", "medium", var) == SetCheck::OK);
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", var->name);
+    // No ENUM: any string within aux, the empty one included
+    TEST_ASSERT_TRUE(checkSetValue(rw, "outlet.desc", "", var) == SetCheck::OK);
+    TEST_ASSERT_TRUE(var == &rw[3]);
+}
+
+void test_check_set_value_not_writable() {
+    std::vector<RWVariable> rw = setCatalog();
+    const RWVariable* var = &rw[0];
+    TEST_ASSERT_TRUE(checkSetValue(rw, "battery.charge", "30", var) == SetCheck::NOT_WRITABLE);
+    TEST_ASSERT_NULL(var);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "battery.charge.low.x", "30", var) == SetCheck::NOT_WRITABLE);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "", "30", var) == SetCheck::NOT_WRITABLE);
+    std::vector<RWVariable> empty;
+    TEST_ASSERT_TRUE(checkSetValue(empty, "battery.charge.low", "30", var) == SetCheck::NOT_WRITABLE);
+    TEST_ASSERT_NULL(var);
+}
+
+void test_check_set_value_invalid_aux() {
+    std::vector<RWVariable> rw = setCatalog();
+    const RWVariable* var = nullptr;
+    // aux < 1 comes before the length: even the empty value is refused
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.broken", "1", var) == SetCheck::INVALID_AUX);
+    TEST_ASSERT_TRUE(var == &rw[2]);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.broken", "", var) == SetCheck::INVALID_AUX);
+}
+
+void test_check_set_value_length_limit() {
+    std::vector<RWVariable> rw = setCatalog();
+    const RWVariable* var = nullptr;
+    // strlen(newval) > aux: exactly aux characters pass, aux + 1 do not
+    TEST_ASSERT_TRUE(checkSetValue(rw, "battery.charge.low", "1234567890", var) == SetCheck::OK);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "battery.charge.low", "12345678901", var) == SetCheck::TOO_LONG);
+    TEST_ASSERT_TRUE(var == &rw[0]);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "outlet.desc", "12345678901234567890", var) == SetCheck::OK);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "outlet.desc", "123456789012345678901", var) == SetCheck::TOO_LONG);
+    TEST_ASSERT_TRUE(var == &rw[3]);
+    // The length comes before the ENUM check
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.sensitivity", "veryveryhigh", var) == SetCheck::TOO_LONG);
+}
+
+void test_check_set_value_invalid_enum() {
+    std::vector<RWVariable> rw = setCatalog();
+    const RWVariable* var = nullptr;
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.sensitivity", "normal", var) == SetCheck::INVALID_VALUE);
+    TEST_ASSERT_TRUE(var == &rw[1]);
+    // ENUM values are compared with strcmp, not strcasecmp
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.sensitivity", "Medium", var) == SetCheck::INVALID_VALUE);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.sensitivity", "", var) == SetCheck::INVALID_VALUE);
+    TEST_ASSERT_TRUE(checkSetValue(rw, "input.sensitivity", "high", var) == SetCheck::OK);
+}
+
+void test_writable_variables_driver_side_flag() {
+    // Eaton: battery.charge.low is a HID FEATURE row, outlet.desc is HU_FLAG_ABSENT
+    // (mge-hid.c:2247) and ups.delay.* is set by CommandCatalog::applyDefaultDelays
+    PlanHost host;
+    EatonDriver drv;
+    drv.setup();
+    UPSData data;
+    eatonChargeLow(host);
+    eatonOutletId(host);
+    feedReport(drv, host, data, 0x22, 3, 20);
+    feedReport(drv, host, data, 0x0B, 3, 1);
+    data.set("ups.delay.shutdown", "20");
+    data.set("ups.delay.start", "30");
+    TEST_ASSERT_EQUAL_STRING("20", data.get("battery.charge.low").c_str());
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", data.get("outlet.desc").c_str());
+
+    std::vector<RWVariable> rw;
+    drv.writableVariables(data, rw);
+    TEST_ASSERT_EQUAL(4, rw.size());
+    const char* names[] = { "battery.charge.low", "outlet.desc", "ups.delay.shutdown", "ups.delay.start" };
+    const bool driver_side[] = { false, true, true, true };
+    for (size_t i = 0; i < 4; i++) {
+        TEST_ASSERT_EQUAL_STRING(names[i], rw[i].name);
+        TEST_ASSERT_EQUAL_MESSAGE(driver_side[i], rw[i].driver_side, names[i]);
+    }
 }
 
 // --- descriptions and tables ---
@@ -1000,7 +1156,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_plan_set_ups_delay);
     RUN_TEST(test_driver_side_value_survives_bind_until_setup);
     RUN_TEST(test_driver_side_value_set_before_first_bind);
+    RUN_TEST(test_reset_driver_side_value_back_to_dfl);
+    RUN_TEST(test_reset_driver_side_value_only_absent_rows);
     RUN_TEST(test_complete_initial_poll_applies_finish_init);
+    RUN_TEST(test_check_set_value_ok_and_canonical_name);
+    RUN_TEST(test_check_set_value_not_writable);
+    RUN_TEST(test_check_set_value_invalid_aux);
+    RUN_TEST(test_check_set_value_length_limit);
+    RUN_TEST(test_check_set_value_invalid_enum);
+    RUN_TEST(test_writable_variables_driver_side_flag);
     RUN_TEST(test_describe_case_insensitive);
     RUN_TEST(test_ecoflow_table);
     RUN_TEST(test_tables_hold_only_rw_rows_without_ups_delay);

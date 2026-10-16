@@ -11,6 +11,7 @@ tags: [pdr, prodotto, sicurezza, web-ui, autenticazione]
 * **Data:** 2026-10-10
 * **Autori:** @maverick1982, Claude
 * **Decisioni architetturali collegate:** [ADR 0009](../adr/0009-web-ui-authentication.md)
+* **Revisione:** 2026-10-16 (US-068): in AP i comandi di spegnimento non sono più bloccati (D7); in AP manuale con configurazione valida il server NUT resta attivo (D6).
 
 ## Problema
 
@@ -69,11 +70,14 @@ Per questo i comandi che spengono l'uscita dell'UPS (`load.*`, `shutdown.*`) nel
 - Entrare in AP **non cancella** le credenziali esistenti: chi entra in AP solo per cambiare Wi-Fi le ritrova invariate.
 
 ### D6. Nessuna procedura di recupero password
-Per recuperare l'accesso si porta la scheda in modalità AP con il **doppio reset entro 3 secondi**, che richiede accesso fisico, e si imposta una nuova password. Durante la modalità AP il server NUT non è attivo. La documentazione deve dirlo.
+Per recuperare l'accesso si porta la scheda in modalità AP con il **doppio reset entro 3 secondi**, che richiede accesso fisico, e si imposta una nuova password. In AP manuale con configurazione valida il server NUT resta attivo, ma lo raggiungono solo i dispositivi collegati all'AP: la scheda non è sulla rete di casa. Se la configurazione manca o non è valida, il server NUT non parte. La documentazione deve dirlo.
 
 ### D7. Modalità AP
 - In AP l'interfaccia è accessibile **senza login**, come oggi: chi è lì ha accesso fisico alla scheda.
-- In AP i comandi di spegnimento restano bloccati: si eseguono solo in STA, da autenticati, o via NUT.
+- In AP comandi e parametri dell'UPS funzionano come in STA, con le stesse conferme (revisione del 2026-10-16). Motivi:
+  - chi entra in AP ha già accesso totale: reset delle credenziali senza la vecchia password (D5), configurazione NUT, aggiornamento OTA;
+  - la protezione è l'ingresso in AP: doppio reset fisico e timeout;
+  - le conferme servono a evitare gli errori.
 - **Timeout:** se si entra in AP con il doppio reset e la configurazione è valida, la scheda riparte in modalità normale dopo **10 minuti senza client collegati all'AP**. Finché un dispositivo resta collegato, il timeout non scatta.
 - Se l'AP è partito perché la configurazione manca o non è valida (primo avvio, NVS vuoto o corrotto), non c'è una modalità normale a cui tornare e l'AP resta attivo.
 - La password dell'AP resta `12345678` (fuori ambito).
@@ -92,7 +96,7 @@ Per recuperare l'accesso si porta la scheda in modalità AP con il **doppio rese
 
 - **HTTP in chiaro.** Password e cookie di sessione viaggiano in chiaro sulla rete locale. L'interfaccia è pensata per una LAN fidata, e la documentazione consiglia di non riusare una password usata altrove.
 - **Durata "Rimani connesso".** La scheda non ha un orologio affidabile. I 30 giorni sono fatti rispettare dal browser, mentre il firmware revoca le sessioni con logout, "Esci da tutti i dispositivi" e cambio password (ADR 0009).
-- **Accesso fisico.** Chi ha in mano la scheda può reimpostare la password tramite AP, o leggere il flash. È il modello di fiducia scelto.
+- **Accesso fisico.** Chi ha in mano la scheda può reimpostare la password tramite AP, o leggere il flash. È il modello di fiducia scelto. Chi è collegato all'AP con la password `12345678` ha lo stesso accesso totale: credenziali, configurazione NUT, OTA, comandi e parametri dell'UPS. Una password dell'AP diversa resta un lavoro futuro.
 
 ## Suddivisione nel backlog
 

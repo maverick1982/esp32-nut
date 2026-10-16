@@ -692,6 +692,59 @@ void test_saved_delays_only_for_present_variables() {
     TEST_ASSERT_EQUAL_STRING("30", dflt.get("ups.delay.start").c_str());
 }
 
+// --- US-068: reset of the driver-side variables to the driver defaults ---
+
+void test_driver_var_store_remove() {
+    SavedVars vars;
+    DriverVarStore::upsert(vars, "ups.delay.shutdown", "60");
+    DriverVarStore::upsert(vars, "outlet.1.desc", "PC");
+    DriverVarStore::upsert(vars, "ups.delay.start", "90");
+
+    // The middle entry goes, the others keep their order
+    TEST_ASSERT_TRUE(DriverVarStore::remove(vars, "outlet.1.desc"));
+    TEST_ASSERT_EQUAL(2, vars.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", vars[0].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("60", vars[0].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.start", vars[1].first.c_str());
+    TEST_ASSERT_EQUAL_STRING("90", vars[1].second.c_str());
+    TEST_ASSERT_EQUAL_STRING("{\"ups.delay.shutdown\":\"60\",\"ups.delay.start\":\"90\"}",
+                             DriverVarStore::toJson(vars).c_str());
+
+    // Not saved (again, other case, null): nothing changes
+    TEST_ASSERT_FALSE(DriverVarStore::remove(vars, "outlet.1.desc"));
+    TEST_ASSERT_FALSE(DriverVarStore::remove(vars, "UPS.DELAY.START"));
+    TEST_ASSERT_FALSE(DriverVarStore::remove(vars, nullptr));
+    TEST_ASSERT_EQUAL(2, vars.size());
+
+    TEST_ASSERT_TRUE(DriverVarStore::remove(vars, "ups.delay.shutdown"));
+    TEST_ASSERT_TRUE(DriverVarStore::remove(vars, "ups.delay.start"));
+    TEST_ASSERT_EQUAL(0, vars.size());
+
+    // Empty list stays empty
+    TEST_ASSERT_FALSE(DriverVarStore::remove(vars, "ups.delay.start"));
+    TEST_ASSERT_EQUAL(0, vars.size());
+    TEST_ASSERT_EQUAL_STRING("{}", DriverVarStore::toJson(vars).c_str());
+}
+
+void test_default_delays_after_reset() {
+    // Synthetic Eaton descriptor: mge-hid.c paths, driver defaults 20/30
+    std::vector<HIDUsageDef> eaton = allDelays();
+    SavedVars saved;
+    saved.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
+    saved.push_back(std::make_pair(String("ups.delay.start"), String("90")));
+    UPSData d;
+    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("90", d.get("ups.delay.start").c_str());
+
+    // Reset of ups.delay.shutdown: the same UPSData gets the driver default again, the
+    // other saved delay stays
+    TEST_ASSERT_TRUE(DriverVarStore::remove(saved, "ups.delay.shutdown"));
+    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    TEST_ASSERT_EQUAL_STRING("20", d.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("90", d.get("ups.delay.start").c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -731,5 +784,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);
     RUN_TEST(test_saved_delays_only_for_present_variables);
+    RUN_TEST(test_driver_var_store_remove);
+    RUN_TEST(test_default_delays_after_reset);
     return UNITY_END();
 }

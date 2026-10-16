@@ -19,7 +19,7 @@ The web UI (`src/network/web_config_server.cpp`, Arduino `WebServer` on port 80)
 - change Wi-Fi and NUT settings;
 - upload firmware on `/update`.
 
-For this reason the web UI refuses destructive UPS commands with 403 (US-059). PDR 0001 requires a form login with "remember me" on every route in STA mode, first-use credential creation (TOFU), a single credentials form (current password required in STA, not in AP), recovery through the manual AP mode, and a timeout for that mode.
+For this reason the web UI refuses destructive UPS commands with 403 (US-059). With login this block is removed in every mode, AP included (see "Destructive commands"). PDR 0001 requires a form login with "remember me" on every route in STA mode, first-use credential creation (TOFU), a single credentials form (current password required in STA, not in AP), recovery through the manual AP mode, and a timeout for that mode.
 
 How should credentials, sessions and the route guard be implemented, given these platform constraints?
 
@@ -96,7 +96,7 @@ Chosen options: **P3**, **S2** and **T2**.
 * In STA without a valid session:
   - `/api/*` → `401 {"error":"unauthorized"}`, or `{"error":"setup_required"}` while no credentials exist;
   - page routes → `302` to `/login`.
-* In AP mode the guard lets everything through (PDR D7).
+* In AP mode the guard lets everything through (PDR D7), UPS commands and settings included. No API has an AP-only block.
 * A valid volatile session refreshes its `last_seen_ms`.
 
 **OTA**
@@ -127,9 +127,10 @@ The AP/STA decision uses the server-side `is_ap_mode`, never a request field.
 * DNS rebinding reaches the device without the cookie and gets 401.
 
 **Destructive commands**
-* `runUpsCommand()` gets an `allow_destructive` argument: true in STA, where the guard has already authenticated the caller, and false in AP.
-* The 403 path stays for AP mode.
-* `GET /api/ups/commands` reports per command whether it can run in the current mode, so the page draws the lock only when it applies.
+* `runUpsCommand()` runs every supported command, in STA and in AP. It has no `allow_destructive` argument, and there is no 403 for AP mode (US-068, PDR 0001 D7, revised on 2026-10-16).
+* Reason: whoever is connected to the AP already has full access (credential reset without the old password, NUT config, OTA without login). The protection is entering AP mode (physical double reset, 10-min idle timeout), not single checks.
+* `GET /api/ups/commands` has no `locked` field, and the page draws no lock.
+* The page asks for a confirmation before a destructive command, in both modes, to prevent mistakes.
 
 ### Frontend (`data/www`)
 
@@ -161,7 +162,7 @@ The AP/STA decision uses the server-side `is_ap_mode`, never a request field.
 * The 30-day limit of persistent sessions is enforced only by the browser. A stolen persistent cookie stays valid until logout-all, a password change, eviction, or an AP reset.
 * The TOFU window lets the first LAN client after an upgrade claim the device.
 * A PBKDF2 verification blocks the loop for about 100-200 ms per login attempt. This is bounded by throttling.
-* The AP mode (fixed password `12345678`) is an unauthenticated full-access channel for anyone in radio range while it is active. It is limited by the physical double reset and by the 10-min idle timeout.
+* The AP mode (fixed password `12345678`) is an unauthenticated full-access channel for anyone in radio range while it is active, UPS commands and settings included. It is limited by the physical double reset and by the 10-min idle timeout.
 * Persistent sessions are capped at 8: a 9th device evicts the oldest.
 
 ## Impact on Agent Implementation

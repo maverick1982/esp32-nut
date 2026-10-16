@@ -5,12 +5,12 @@ epic:
   code: EP-003
   title: Server NUT
 priority: HIGH
-points: 5
-status: TODO
+points: 8
+status: REVIEW
 body: |-
   #### US-068: Pagina "UPS Settings" nella Web UI
 
-  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 8 | **Stato:** TODO
   **Bloccato da:** US-066, US-067
 
   **User Story**
@@ -19,7 +19,7 @@ body: |-
   in modo da cambiarli dal browser senza un client NUT.
 
   **Dimostrazione**
-  Nel menu, subito dopo "UPS Commands", c'è la voce "UPS Settings". Ogni parametro ha nome, descrizione, valore attuale e un campo per modificarlo: una select per le variabili ENUM, un campo testo con lunghezza massima per le altre. Imposto `battery.charge.low` a 30 e premo "Apply": compaiono l'esito e il valore aggiornato. `ups.delay.shutdown` ha un pulsante "Reset to default". In modalità AP la pagina è in sola lettura, con il lucchetto.
+  Nel menu, subito dopo "UPS Commands", c'è la voce "UPS Settings". Ogni parametro ha nome, descrizione, valore attuale e un campo per modificarlo: una select per le variabili ENUM, un campo testo con lunghezza massima per le altre. Imposto `battery.charge.low` a 30 e premo "Apply": compaiono l'esito e il valore aggiornato. `ups.delay.shutdown` ha un pulsante "Reset to default". In modalità AP la pagina funziona come in STA, con le stesse conferme, e in "UPS Commands" i comandi di spegnimento non hanno più il lucchetto.
 
   **Criteri di Accettazione**
   - [ ] La voce "UPS Settings" è la terza del menu, dopo "UPS Commands". Il titolo della pagina e il layout responsive funzionano come negli altri tab.
@@ -27,20 +27,28 @@ body: |-
   - [ ] `POST /api/ups/variable` usa la stessa logica di `SET VAR` e risponde:
     - 200 se la scrittura è riuscita
     - 400 per valore non valido o troppo lungo, variabile sconosciuta o in sola lettura
-    - 403 in modalità AP
     - 500 se la scrittura sull'UPS fallisce
     - 503 se l'UPS non è connesso
 
     La pagina mostra l'esito di ogni caso.
   - [ ] Le variabili che commutano prese, bypass o modalità ECO chiedono conferma prima di essere applicate: `ups.shutdown`, `outlet.N.switchable`, `input.bypass.*`, `input.eco.switchable`, `input.transfer.bypass.forced`.
   - [ ] Per le variabili lato driver, "Reset to default" cancella il valore salvato in NVS e torna al default del driver.
-  - [ ] In modalità AP i valori restano visibili, ma i campi sono disabilitati e c'è il lucchetto.
+  - [ ] In modalità AP non ci sono blocchi: la pagina "UPS Settings" e i comandi di spegnimento di "UPS Commands" funzionano come in STA, con le stesse conferme. Spariscono il 403, il lucchetto e la nota "Available via NUT only in Access Point mode" introdotti da US-059/US-062.
+  - [ ] PDR 0001 (D6, D7), ADR 0009 e README spiegano il motivo. Chi entra in AP ha già accesso totale: reset delle credenziali web senza la vecchia password, configurazione NUT, OTA senza login. La protezione è l'ingresso in AP: doppio reset fisico e timeout di 10 minuti. Bloccare comandi e variabili non aggiunge sicurezza, mentre le conferme evitano gli errori.
+  - [ ] PDR 0001 D6 dice il vero: in AP manuale con configurazione valida il server NUT resta attivo, come fa già il codice (`src/core/main.cpp`), così l'UPS resta monitorato mentre si riconfigura il Wi-Fi.
   - [ ] La pagina carica i valori quando si apre e dopo ogni "Apply", senza aggiungere richieste periodiche.
 
   **Assunzioni**
   - Le etichette sono in inglese, come nel resto della UI.
   - Non ci sono range oltre quelli di NUT: se l'UPS rifiuta un valore, la risposta è 500.
   - La pagina si appoggia al login della Web UI (US-061, US-062), che è nell'epic EP-002.
+  - Decisione del 2026-10-16: tolto il blocco in AP per comandi e variabili (la sicurezza in AP dipende dall'ingresso in AP, non dai singoli controlli). Una password dell'AP diversa da `12345678` resta fuori ambito.
 history:
   - status: TODO
     at: "2026-10-14T16:10:02Z"
+  - status: PLANNED
+    at: "2026-10-16T12:36:15Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T13:10:42Z"
+  - status: REVIEW
+    at: "2026-10-16T14:20:07Z"

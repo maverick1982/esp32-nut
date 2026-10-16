@@ -1458,30 +1458,6 @@ input[readonly] {
     font-size: 0.7rem;
 }
 
-.cmd-group-note {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.7rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    background: rgba(255, 184, 0, 0.06);
-    color: var(--warning);
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-}
-.cmd-group-note svg { width: 14px; height: 14px; flex-shrink: 0; }
-.cmd-group-note[hidden] { display: none; }
-
-/* Power control: hazard stripe on the left edge, dimmed rows */
-.cmd-group.locked { border-color: rgba(255, 184, 0, 0.25); }
-.cmd-group.locked .cmd-group-header { color: var(--warning); }
-.cmd-group.locked .cmd-row {
-    background: repeating-linear-gradient(-45deg,
-        transparent 0 10px, rgba(255, 184, 0, 0.025) 10px 20px);
-}
-.cmd-group.locked .cmd-name { color: var(--text-secondary); }
-.cmd-group.locked .cmd-desc { color: rgba(138, 155, 179, 0.7); }
-
 /* --- Command row --- */
 .cmd-row {
     display: grid;
@@ -1493,7 +1469,7 @@ input[readonly] {
     transition: background 0.2s;
 }
 .cmd-row:last-child { border-bottom: none; }
-.cmd-group:not(.locked) .cmd-row:hover { background: rgba(0, 240, 255, 0.04); }
+.cmd-group .cmd-row:hover { background: rgba(0, 240, 255, 0.04); }
 
 .cmd-name {
     font-family: var(--font-mono);
@@ -1605,6 +1581,308 @@ input[readonly] {
 /* Static groups in index.html: no gap above the power group when the actions group is hidden */
 .cmd-group[hidden] { display: none; }
 .cmd-group[hidden] + .cmd-group { margin-top: 0; }
+
+/* --- US-068: UPS Settings (writable variables) --- */
+/* --- Panel header: "Read hh:mm:ss" (no Live pulse: there is no polling) --- */
+.set-header-side {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.set-snapshot {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+.set-snapshot svg { width: 13px; height: 13px; opacity: 0.7; }
+.set-snapshot span { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.set-snapshot[hidden] { display: none; }
+
+.set-lead {
+    margin: -0.75rem 0 1.25rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+.set-lead[hidden] { display: none; }
+
+/* --- Groups: reuse .cmd-group; secondary caption in the header --- */
+.set-group-sub {
+    color: rgba(138, 155, 179, 0.65);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 0.75rem;
+}
+.set-group-sub::before { content: '\00b7'; margin-right: 0.6rem; }
+
+/* --- Row grid (overrides the 3-column .cmd-row) ---
+   desktop:  variable | description | current (+ Reset) | new value + Apply
+   <1180px:  description moves under the variable name
+   <768px:   single column, see the media query at the bottom */
+.set-row,
+.set-head {
+    grid-template-columns: minmax(180px, 1fr) minmax(0, 1.3fr) 12rem 20rem;
+    grid-template-areas: "id desc cur edit";
+    align-items: start;
+}
+.set-row .set-id { grid-area: id; min-width: 0; }
+.set-row .cmd-desc { grid-area: desc; padding-top: 0.45rem; line-height: 1.4; }
+.set-row .set-current { grid-area: cur; }
+.set-row .set-edit { grid-area: edit; }
+.set-row .set-id { padding-top: 0.4rem; }
+
+/* Column captions, once per group (desktop only) */
+.set-head {
+    display: grid;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: rgba(138, 155, 179, 0.7);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.set-head > :nth-child(1) { grid-area: id; }
+.set-head > :nth-child(2) { grid-area: desc; }
+.set-head > :nth-child(3) { grid-area: cur; }
+.set-head > :nth-child(4) { grid-area: edit; }
+
+/* Small tags under the variable name */
+.set-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+.set-tags:empty { display: none; }
+.set-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.set-tag svg { width: 10px; height: 10px; }
+.set-tag.warn {
+    border-color: rgba(255, 184, 0, 0.4);
+    color: var(--warning);
+}
+
+/* --- Current value (+ Reset to default for driver-side variables) --- */
+.set-current {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
+    min-width: 0;
+}
+.set-current-label { display: none; }
+.set-current-value {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--border-radius);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.92rem;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    transition: color 0.4s, border-color 0.4s, box-shadow 0.4s;
+}
+.set-current-value.is-empty { color: rgba(138, 155, 179, 0.6); font-style: italic; }
+/* Flash after Apply / Reset: the re-read value glows green for ~2.5 s */
+.set-current-value.updated {
+    color: var(--success);
+    border-color: rgba(0, 255, 157, 0.45);
+    box-shadow: 0 0 12px rgba(0, 255, 157, 0.18);
+    animation: set-flash 0.9s ease-out;
+}
+@keyframes set-flash {
+    0% { background: rgba(0, 255, 157, 0.25); }
+    100% { background: rgba(255, 255, 255, 0.03); }
+}
+
+/* Reset to default: quiet secondary button under the current value */
+.set-reset {
+    background: transparent;
+    border: 1px solid rgba(138, 155, 179, 0.35);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.set-reset:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0, 240, 255, 0.06);
+}
+.set-reset svg, .set-apply svg { width: 12px; height: 12px; }
+
+/* --- New value editor --- */
+.set-edit {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+    min-width: 0;
+}
+.set-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Wrapper for text input / select: holds the length counter or the chevron */
+.set-field {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.set-field input[type="text"],
+.set-field select {
+    width: 100%;
+    padding: 0.5rem 3.2rem 0.5rem 0.7rem;
+    font-size: 0.85rem;
+}
+/* Native select, styled like the bundle.css text inputs */
+.set-field select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: rgba(0, 0, 0, 0.3)
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f0ff' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")
+        no-repeat right 0.6rem center / 14px;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    outline: none;
+    cursor: pointer;
+    padding-right: 2rem;
+    transition: var(--transition);
+}
+.set-field select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+.set-field select option { background: #0b111a; color: var(--text-primary); }
+.set-field select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* "2/5" counter inside the text input: shows the NUT max length */
+.set-counter {
+    position: absolute;
+    right: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(138, 155, 179, 0.6);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+}
+.set-counter.full { color: var(--warning); }
+
+/* Changed but not applied yet */
+.set-field.dirty input,
+.set-field.dirty select { border-color: rgba(0, 240, 255, 0.55); }
+/* Last Apply failed: red frame until the value is edited */
+.set-field.invalid input,
+.set-field.invalid select {
+    border-color: var(--danger);
+    box-shadow: 0 0 8px rgba(255, 51, 102, 0.25);
+}
+
+/* Apply: same look as the .cmd-run button (enabled only when the value changed) */
+.set-apply {
+    flex-shrink: 0;
+    min-width: 6.5rem;
+    justify-content: center;
+}
+.set-apply:disabled,
+.set-reset:disabled {
+    border-color: rgba(138, 155, 179, 0.3);
+    color: rgba(138, 155, 179, 0.6);
+    background: transparent;
+    box-shadow: none;
+    cursor: not-allowed;
+}
+.set-apply.running:disabled,
+.set-reset.running:disabled {
+    border-color: rgba(0, 240, 255, 0.4);
+    color: var(--accent);
+}
+
+/* Outcome under the editor (reuses .cmd-result colours and fade) */
+.set-row .cmd-result {
+    min-width: 0;
+    justify-content: flex-start;
+    white-space: normal;
+    line-height: 1.35;
+}
+.set-row .cmd-result:empty { display: none; }
+.set-row .cmd-result .arrow { color: var(--text-secondary); margin: 0 0.15rem; }
+
+@media (max-width: 1180px) {
+    .set-row,
+    .set-head {
+        grid-template-columns: minmax(0, 1fr) 12rem 19rem;
+        grid-template-areas:
+            "id   cur edit"
+            "desc cur edit";
+        row-gap: 0.3rem;
+    }
+    .set-row .cmd-desc { padding-top: 0; }
+    .set-head > :nth-child(2) { display: none; }
+    .set-head > :nth-child(1)::after { content: ' / description'; }
+}
+
+@media (max-width: 768px) {
+    .set-panel { padding: 1.1rem; }
+    .set-panel .panel-header { flex-wrap: wrap; gap: 0.5rem; }
+    .set-lead { margin-top: -0.75rem; font-size: 0.8rem; }
+
+    .set-head { display: none; }
+    .set-group-sub { display: none; }
+
+    .set-row {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "id" "desc" "cur" "edit";
+        gap: 0.5rem;
+        padding: 1rem 0.9rem;
+    }
+    .set-row .set-id { padding-top: 0; }
+    .set-row .cmd-desc { font-size: 0.8rem; }
+
+    /* "CURRENT  20 ............ [Reset to default]" on one line */
+    .set-current {
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.5rem 0.6rem;
+    }
+    .set-current-label {
+        display: inline;
+        color: var(--text-secondary);
+        font-family: var(--font-mono);
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+    }
+    .set-reset { margin-left: auto; }
+
+    /* field takes the line, Apply stays on its right */
+    .set-apply { min-width: 5.5rem; }
+}
 
 /* --- US-061: login page, first-use credentials, sidebar Log out --- */
 

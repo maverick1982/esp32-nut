@@ -156,9 +156,10 @@ The Web UI is protected by a username and password.
 - **Remember me**: tick it when you sign in and the session lasts 30 days, surviving reboots and firmware updates. At most 8 devices can be remembered: signing in on a 9th disconnects the oldest one.
 - **Log out of all devices**: the sidebar button closes every session, remembered ones included.
 - **Wrong passwords**: after 5 wrong passwords in a row, each further attempt has to wait 1 s, then 2, 4… up to 60 s. There is no permanent lockout, and NUT keeps running meanwhile.
-- **Shutdown commands**: load and shutdown commands (`load.off`, `shutdown.*`, …) can be run from the **UPS Commands** page after a confirmation. In Access Point mode they stay locked (NUT only).
+- **Shutdown commands**: load and shutdown commands (`load.off`, `shutdown.*`, …) can be run from the **UPS Commands** page after a confirmation, in Access Point mode too.
+- **UPS Settings**: the **UPS Settings** page lists the UPS parameters you can change, with their current values. Parameters that switch outlets, bypass or ECO mode ask for a confirmation first. Values saved on the ESP32 (`ups.delay.*`, outlet names) have a **Reset to default** button.
 - **Separate from NUT**: the Web UI credentials are independent of the NUT credentials (NUT tab), which keep working as before for Home Assistant, PeaNUT, `upscmd`, etc.
-- **Access Point mode** (double reset within 3 seconds): the Web UI is open without login, as before.
+- **Access Point mode** (double reset within 3 seconds): the Web UI is open without login, as before. It gives full access: credentials, NUT settings, OTA, UPS commands and settings. Keep the Access Point window short.
 - ⚠️ **Plain HTTP**: the Web UI is served over HTTP, so passwords travel unencrypted on the network. Use it on a trusted LAN and don't reuse a password you use elsewhere.
 - **Change credentials**: open the **Web Login** tab (sidebar, after **NUT Server**), enter the current password and the new username/password. Saving signs out every other device; the current one stays signed in.
 - **Forgotten password**:
@@ -166,7 +167,7 @@ The Web UI is protected by a username and password.
   2. Connect to it, open the Web UI and go to the **Web Login** tab.
   3. Set the new credentials with **Reset credentials** (no current password needed). All sessions are closed.
   4. Restart the board to go back to the home network (it also goes back by itself 10 minutes after the last device disconnects from the access point).
-- ⚠️ **While in Access Point mode** the board is not on the home network, so NUT clients (Home Assistant, PeaNUT, …) cannot reach it. Keep the recovery short.
+- ⚠️ **While in Access Point mode** the board is not on the home network, so NUT clients (Home Assistant, PeaNUT, …) cannot reach it. With a valid configuration the NUT server stays on, but only devices connected to the access point can reach it. Keep the recovery short.
 - **Credentials are kept**: entering Access Point mode does not erase the Web UI credentials, and changing only the Wi-Fi settings keeps them too.
 ### 4. Usage
 - Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.

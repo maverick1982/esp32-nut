@@ -45,6 +45,13 @@ private:
     void handleBeeper();
     void handleUpsCommands();
     void handleUpsCommand();
+    void handleUpsVariables();
+    void handleUpsVariable();
+    void handleUpsVariableReset();
+    // Chi ha inviato la richiesta, per il log: in AP non c'è sessione, quindi "(AP mode)"
+    String webUiUser();
+    // WARN per una scrittura o un reset rifiutati prima di arrivare all'host (with_value: scrittura)
+    void logVariableRejected(const String& body, bool with_value, const String& response);
 
     void handleLoginPage();
     void handleAuthLogin();

@@ -562,6 +562,27 @@ void GenericDriver::setDriverSideValue(const char* name, const char* value) {
     applyAbsentOverride(String(name), String(value));
 }
 
+bool GenericDriver::resetDriverSideValue(const char* name, String& value) {
+    if (!name) return false;
+    // Forgotten first: the next bind gives the rows their dfl, as bind() does
+    for (auto it = _absent_overrides.begin(); it != _absent_overrides.end(); ++it) {
+        if (it->first == name) {
+            _absent_overrides.erase(it);
+            break;
+        }
+    }
+    bool found = false;
+    for (auto& b : _nut_rows) {
+        if (!(b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (strcmp(b.info->info_type, name) != 0) continue;
+        b.value = b.info->dfl;
+        b.has = true;
+        if (!found) value = b.info->dfl;
+        found = true;
+    }
+    return found;
+}
+
 void GenericDriver::completeInitialPoll() {
     _first_full_done = true;
     if (!_nut_init_done) {
@@ -611,7 +632,10 @@ void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable:
         if (b.role != NutTable::Bound::Role::ACTIVE) continue;
         if (!(b.info->info_flags & NutTable::ST_FLAG_RW)) continue;
         if (!data.hasKey(b.info->info_type)) continue;
-        out.push_back({ b.info->info_type, b.info->info_len, NutTable::enumValues(*b.info, _nut_ctx) });
+        // driver_side: HU_FLAG_ABSENT rows (outlet.*.desc) and any ups.delay.* row
+        bool driver_side = (b.info->hidflags & NutTable::HU_FLAG_ABSENT) ||
+                           strncmp(b.info->info_type, "ups.delay.", 10) == 0;
+        out.push_back({ b.info->info_type, b.info->info_len, NutTable::enumValues(*b.info, _nut_ctx), driver_side });
     }
     // ups.delay.*: driver-side variables set by CommandCatalog::applyDefaultDelays
     static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
@@ -621,7 +645,7 @@ void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable:
         for (const auto& v : out) {
             if (strcmp(v.name, name) == 0) { listed = true; break; }
         }
-        if (!listed) out.push_back({ name, delayAux(), {} });
+        if (!listed) out.push_back({ name, delayAux(), {}, true });
     }
     // upsd keeps variables in a tree ordered with strcasecmp (common/state.c)
     std::sort(out.begin(), out.end(), [](const NutTable::RWVariable& a, const NutTable::RWVariable& b) {

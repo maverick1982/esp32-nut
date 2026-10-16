@@ -2,26 +2,24 @@ import { test, expect, Page } from '@playwright/test';
 import { serveIndex } from './support/webui';
 
 // US-059 — "UPS Commands" page. Serves the real data/www sources (support/webui.ts)
-// and mocks every API the page calls with page.route. US-062: destructive
-// commands are locked only when the catalog says `locked: true` (AP mode);
-// unlocked ones ask for confirmation before the POST.
+// and mocks every API the page calls with page.route. US-068: destructive
+// commands are never locked, also in Access Point mode: they always ask for
+// confirmation before the POST.
 
 type Vars = Record<string, unknown>;
 
 interface Mock {
   vars: Vars;
-  catalog: { connected: boolean; commands: { name: string; description: string; destructive: boolean; locked?: boolean }[] };
+  catalog: { connected: boolean; commands: { name: string; description: string; destructive: boolean }[] };
   commandStatus: number;
   posts: unknown[];
   upsVarsHits: number;
 }
 
-const LOCK_NOTE = 'Available via NUT only in Access Point mode';
 const CONFIRM_WARNING = 'This command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.';
 
 const ERROR_BODIES: Record<number, string> = {
   400: 'Command not supported',
-  403: LOCK_NOTE,
   500: 'Command rejected by the UPS',
   503: 'UPS not connected',
 };
@@ -208,55 +206,47 @@ test.describe('UPS Commands page (US-059)', () => {
     expect(await layout()).toEqual(before);
   });
 
-  test('AP mode: destructive commands with locked: true are locked, show the note, no POST', async ({ page }) => {
-    mock.catalog.commands = mock.catalog.commands.map(c => ({ ...c, locked: c.destructive }));
+  test('AP mode: a destructive command asks for confirmation and runs, without lock or note', async ({ page }) => {
+    // US-068: the Access Point mode no longer locks the power commands
+    await page.route('**/api/auth/status', route => route.fulfill({
+      json: { configured: true, authenticated: false, ap_mode: true },
+    }));
     await openCommandsTab(page);
 
     const row = page.locator('#cmd-group-power .cmd-row[data-cmd="shutdown.return"]');
     await expect(row).toBeVisible();
-    await expect(page.locator('#cmd-group-power')).toHaveClass(/locked/);
     await expect(page.locator('#cmd-group-actions .cmd-row[data-cmd="shutdown.return"]')).toHaveCount(0);
+    await expect(page.locator('#cmd-group-power')).not.toHaveClass(/locked/);
+    await expect(page.locator('#cmd-note-power')).toHaveCount(0);
 
     const btn = row.locator('button.cmd-run');
-    await expect(btn).toBeDisabled();
-    await expect(btn).toHaveAttribute('title', LOCK_NOTE);
-    await expect(page.locator('#cmd-note-power')).toBeVisible();
-    await expect(page.locator('#cmd-note-power')).toHaveText(LOCK_NOTE);
+    await expect(btn).toBeEnabled();
+    await expect(btn).toHaveText('Run');
+    await expect(btn).not.toHaveAttribute('title', /.+/);
 
-    // A forced click on a disabled button must not send anything
-    await btn.click({ force: true });
-    await btn.dispatchEvent('click');
-    // Let a full polling cycle pass, then make sure nothing was posted
-    const hits = mock.upsVarsHits;
-    await expect.poll(() => mock.upsVarsHits, { timeout: 5000 }).toBeGreaterThan(hits);
-    expect(mock.posts).toHaveLength(0);
-    await expect(row.locator('.cmd-result')).toHaveText('');
+    const seen = new Promise<{ type: string; message: string }>(resolve => {
+      page.once('dialog', async dialog => {
+        const d = { type: dialog.type(), message: dialog.message() };
+        await dialog.accept();
+        resolve(d);
+      });
+    });
+    await btn.click();
+    const { type, message } = await seen;
+    expect(type).toBe('confirm');
+    expect(message).toBe(`Run "shutdown.return"?
+
+${CONFIRM_WARNING}`);
+
+    await expect(row.locator('.cmd-result')).toHaveText('Command sent');
+    expect(mock.posts).toEqual([{
+      method: 'POST',
+      contentType: expect.stringContaining('application/json'),
+      body: { name: 'shutdown.return' },
+    }]);
   });
 
-  test('destructive command without locked field is locked', async ({ page }) => {
-    // Default catalog: shutdown.return has no `locked` field (prudent default = locked)
-    expect(mock.catalog.commands.find(c => c.name === 'shutdown.return')).not.toHaveProperty('locked');
-    let dialogs = 0;
-    page.on('dialog', dialog => { dialogs++; return dialog.dismiss(); });
-    await openCommandsTab(page);
-
-    const row = page.locator('#cmd-group-power .cmd-row[data-cmd="shutdown.return"]');
-    await expect(row).toBeVisible();
-    await expect(page.locator('#cmd-group-power')).toHaveClass(/locked/);
-    const btn = row.locator('button.cmd-run');
-    await expect(btn).toBeDisabled();
-    await expect(btn).toHaveAttribute('title', LOCK_NOTE);
-
-    await btn.click({ force: true });
-    await btn.dispatchEvent('click');
-    const hits = mock.upsVarsHits;
-    await expect.poll(() => mock.upsVarsHits, { timeout: 5000 }).toBeGreaterThan(hits);
-    expect(mock.posts).toHaveLength(0);
-    expect(dialogs).toBe(0);
-  });
-
-  test('STA: an unlocked destructive command asks for confirmation; Cancel sends nothing, OK sends it', async ({ page }) => {
-    mock.catalog.commands = mock.catalog.commands.map(c => ({ ...c, locked: false }));
+  test('STA: a destructive command asks for confirmation; Cancel sends nothing, OK sends it', async ({ page }) => {
     await openCommandsTab(page);
 
     const row = page.locator('#cmd-group-power .cmd-row[data-cmd="shutdown.return"]');
@@ -264,7 +254,7 @@ test.describe('UPS Commands page (US-059)', () => {
     await expect(row).toBeVisible();
     await expect(btn).toBeEnabled();
     await expect(page.locator('#cmd-group-power')).not.toHaveClass(/locked/);
-    await expect(page.locator('#cmd-note-power')).toBeHidden();
+    await expect(page.locator('#cmd-note-power')).toHaveCount(0);
 
     // Cancel: the dialog names the command and warns about the power, nothing is sent
     const dismissed = new Promise<{ type: string; message: string }>(resolve => {

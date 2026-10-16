@@ -579,11 +579,43 @@ struct RWVariable {
     const char* name;
     uint8_t aux;
     std::vector<const char*> enums;
+    bool driver_side; // value kept by the firmware (HU_FLAG_ABSENT rows, ups.delay.*), US-068
 };
 
 // Outcome of a SET VAR (US-067): the STAT_SET_* results of upstream's setvar(), plus the
 // host without a device. HANDLED is OK.
 enum class SetStatus { OK, UNKNOWN, CONVERSION_FAILED, FAILED, NOT_CONNECTED };
+
+// Outcome of the value checks of a SET VAR, before anything reaches the UPS (US-068)
+enum class SetCheck { OK, NOT_WRITABLE, INVALID_AUX, TOO_LONG, INVALID_VALUE };
+
+// Steps 5-8 of set_var() in upstream's server/netset.c, shared by the NUT server and the
+// Web UI: the variable must be in the LIST RW catalog (strcasecmp, else READONLY), aux < 1
+// is the "insanity from the driver" (SET-FAILED), then the length (TOO-LONG) and the ENUM
+// values compared with strcmp (INVALID-VALUE). Every writable variable is ST_FLAG_STRING
+// (US-066) and usbhid-ups declares no ranges. var points to the matching entry whenever
+// the lookup succeeds, also when a later check fails; nullptr for NOT_WRITABLE.
+inline SetCheck checkSetValue(const std::vector<RWVariable>& rw, const char* name, const char* value,
+                              const RWVariable*& var) {
+    var = nullptr;
+    for (const auto& v : rw) {
+        if (equalsIgnoreCase(v.name, name)) {
+            var = &v;
+            break;
+        }
+    }
+    if (!var) return SetCheck::NOT_WRITABLE;
+    if (var->aux < 1) return SetCheck::INVALID_AUX;
+    if (!value) value = "";
+    if (strlen(value) > var->aux) return SetCheck::TOO_LONG;
+    if (!var->enums.empty()) {
+        for (const char* e : var->enums) {
+            if (strcmp(e, value) == 0) return SetCheck::OK;
+        }
+        return SetCheck::INVALID_VALUE;
+    }
+    return SetCheck::OK;
+}
 
 // What a SET VAR writes, decided by the driver without any I/O (IUPSDriver::planSet)
 struct SetPlan {

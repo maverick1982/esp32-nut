@@ -37,6 +37,7 @@ public:
     NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
                                 const char* name, const char* value, NutTable::SetPlan& plan) const override;
     void setDriverSideValue(const char* name, const char* value) override;
+    bool resetDriverSideValue(const char* name, String& value) override;
     void invalidateReport(uint8_t report_type, uint8_t report_id) override;
 
     // Hook of the replay runner (US-067): ends the first full poll as loop() does, and applies
