@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 2
-status: TODO
+status: DONE
 body: |
   #### US-085: L'aggiornamento OTA dalla Web UI non fa scattare il watchdog con un Wi-Fi lento
 
@@ -47,3 +47,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-17T16:45:14Z"
+  - status: PLANNED
+    at: "2026-10-18T12:01:15Z"
+  - status: IN PROGRESS
+    at: "2026-10-18T12:03:00Z"
+  - status: REVIEW
+    at: "2026-10-18T12:11:11Z"
+  - status: DONE
+    at: "2026-10-18T12:34:11Z"
