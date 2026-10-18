@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-058: Esecuzione via NUT dei comandi di spegnimento e controllo del carico
 
@@ -45,3 +45,5 @@ history:
     at: "2026-10-09T17:00:10Z"
   - status: REVIEW
     at: "2026-10-09T17:50:08Z"
+  - status: DONE
+    at: "2026-10-18T11:30:43Z"

@@ -48,7 +48,6 @@ body: |-
   - No current fixture exposes `FullyDischarged`; the `DISCHRG` suppression stays unit-test-only.
   - `RB` only appears when `BatteryPresent = 0` (except OpenUPS, where it is ignored) and `LB` only when `RemainingTimeLimitExpired = 1`; both are normally inactive, so most devices gain no visible token.
   - `CHRG` qualification is the most visible change: CyberPower devices that report `FullyCharged` no longer surface a non-standard `FULLYCHARGED` token, they keep a standard `ups.status`.
-
 history:
   - status: TODO
     at: "2026-09-27T12:06:00Z"

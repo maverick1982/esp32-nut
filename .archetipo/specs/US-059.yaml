@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: HIGH
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-059: Pagina "UPS Commands" nella Web UI
 
@@ -47,3 +47,5 @@ history:
     at: "2026-10-09T15:45:52Z"
   - status: REVIEW
     at: "2026-10-09T15:58:14Z"
+  - status: DONE
+    at: "2026-10-18T11:30:43Z"

@@ -6,7 +6,7 @@ epic:
   title: CI/CD e Automazione
 priority: MEDIUM
 points: 3
-status: REVIEW
+status: DONE
 body: |
   #### US-060: Riparare la suite e2e Playwright della Web UI
 
@@ -47,3 +47,5 @@ history:
     at: "2026-10-09T18:06:51Z"
   - status: REVIEW
     at: "2026-10-09T18:19:31Z"
+  - status: DONE
+    at: "2026-10-18T11:30:44Z"
