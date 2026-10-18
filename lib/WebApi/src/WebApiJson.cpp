@@ -58,7 +58,7 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     return String(out_std.c_str());
 }
 
-String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups) {
+String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups, bool allow_destructive) {
     JsonDocument doc;
     bool connected = usb_ups && usb_ups->isConnected();
     doc["connected"] = connected;
@@ -70,6 +70,7 @@ String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups) {
             obj["name"] = c->name;
             obj["description"] = c->description;
             obj["destructive"] = c->destructive;
+            obj["locked"] = c->destructive && !allow_destructive;
         }
     }
 
@@ -78,7 +79,7 @@ String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups) {
     return String(out_std.c_str());
 }
 
-int WebApiJson::runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response) {
+int WebApiJson::runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response, bool allow_destructive) {
     // Serve solo "name": body lunghi rifiutati subito e filtro sul resto,
     // così un JSON grande non consuma heap
     if (body.length() > MAX_COMMAND_BODY_LENGTH) {
@@ -95,15 +96,16 @@ int WebApiJson::runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& 
         return 400;
     }
 
-    // L'ordine dei controlli fa parte del contratto: un comando distruttivo
-    // viene rifiutato prima di qualsiasi chiamata all'host
+    // L'ordine dei controlli fa parte del contratto: un comando distruttivo non
+    // permesso (allow_destructive falso, es. Access Point) viene rifiutato prima
+    // di qualsiasi chiamata all'host
     const UPSCommandInfo* info = CommandCatalog::find(name);
     if (!info) {
         response = "{\"error\":\"Command not supported\"}";
         return 400;
     }
-    if (info->destructive) {
-        response = "{\"error\":\"Available via NUT only\"}";
+    if (info->destructive && !allow_destructive) {
+        response = "{\"error\":\"Available via NUT only in Access Point mode\"}";
         return 403;
     }
     if (!usb_ups) {

@@ -39,6 +39,12 @@ test (or `beforeEach`), then register the test's own API mocks:
   (`update_inlined.html`, see `scripts/inline_update.py`): `shared.css` ->
   `bundle.css` + `shared_ota.css`, `mobile.css` empty, `fflate.min.js`.
   POST `/update` is left to the tests.
+- `serveLogin(page)`: `http://esp32.local/login`, with or without a query
+  (`/login?expired=1`), from `data/www/login.html` plus `login.js`,
+  `bundle.css`, logo and favicon, with the same API catch-all as `serveIndex`
+  (unmocked `/api/auth/status` -> `{}`, so the page shows "Sign in"). Call it
+  together with `serveIndex` when a flow redirects between `/login` and `/`
+  (see `auth.spec.ts`).
 
 In Playwright the route registered **last** wins, so mocks added after the
 helper override its defaults.

@@ -108,8 +108,13 @@ void begin() {
 void logBootInfo() {
     AppLogger::log("INFO", "[DIAG] Reset reason: %s", resetReasonName(s_reset_reason));
     if (s_last_restart_cause.length() > 0) {
-        AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
-                       s_last_restart_cause.c_str(), (unsigned)s_restart_count);
+        if (s_restart_count > 0) {
+            AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
+                           s_last_restart_cause.c_str(), (unsigned)s_restart_count);
+        } else {
+            // Restart that is not a USB recovery (e.g. manual AP timeout, US-064)
+            AppLogger::log("INFO", "[DIAG] Last controlled restart: %s", s_last_restart_cause.c_str());
+        }
     }
     if (s_has_crash) {
         AppLogger::log("ERROR", "[DIAG] Last crash: task '%s', PC 0x%08lx", s_crash_task.c_str(), (unsigned long)s_crash_pc);
@@ -121,10 +126,14 @@ void logBootInfo() {
     }
 }
 
-void recordControlledRestart(const char* reason) {
+void recordRestartReason(const char* reason) {
     strncpy(s_restart_reason, reason ? reason : "", sizeof(s_restart_reason) - 1);
     s_restart_reason[sizeof(s_restart_reason) - 1] = '\0';
     s_restart_magic = RESTART_MAGIC;
+}
+
+void recordControlledRestart(const char* reason) {
+    recordRestartReason(reason);
     if (s_restart_count < 255) s_restart_count++;
 }
 

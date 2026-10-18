@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-065
+title: Indicatori di stato Wi-Fi/UPS popolati subito al caricamento della Web UI
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 2
+status: DONE
+body: |
+  #### US-065: Indicatori di stato Wi-Fi/UPS popolati subito al caricamento della Web UI
+
+  **Epic:** EP-002 | **Priorità:** LOW | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente della Web UI,
+  voglio vedere lo stato di Wi-Fi e UPS e la versione del firmware appena apro la pagina,
+  in modo da non leggere "--" per alcuni secondi e non pensare che la scheda non risponda.
+
+  **Dimostrazione**
+  Aprendo la Web UI, gli indicatori "Wi-Fi: …" e "UPS: …" e la versione del firmware compaiono appena arriva la prima risposta di `/api/system-status`, senza i 3-6 s di attesa di oggi. Nei test e2e `e2e/system-status.spec.js` torna al timeout di default.
+
+  **Criteri di Accettazione**
+  - [ ] Al caricamento della pagina `/api/system-status` viene richiesto subito. La prima richiesta non viene più saltata perché è già in corso quella a `/api/ups-vars`, `/api/logs` o al catalogo comandi. Oggi tutti i polling condividono il flag `isFetchingAPI` in `data/www/bundle.js`.
+  - [ ] Le richieste periodiche restano le stesse per numero e frequenza: system-status ogni 3 s, ups-vars ogni 2 s e così via. Lo stesso polling non manda mai due richieste in parallelo.
+  - [ ] Se una risposta è lenta o fallisce, gli altri polling continuano a funzionare. Il caso "Offline" degli indicatori resta invariato.
+  - [ ] In `e2e/system-status.spec.js` il timeout di 10 s torna al default. Il commento "known UI delay, tracked separately" cita US-065 oppure viene rimosso. La suite e2e completa passa anche con `--repeat-each 15 --workers 8`, il carico con cui il problema era stato riprodotto.
+
+  **Assunzioni**
+  - Il comportamento dei singoli polling non cambia, a parte la regola di esclusione tra richieste. Ad esempio resta lo stop su sessione scaduta di US-061.
+  - Le etichette della UI restano invariate.
+  - Contesto verificato il 2026-10-10 durante US-062: la prima chiamata a `fetchSystemStatus()` viene saltata perché è in corso `/api/ups-vars`; il tentativo successivo arriva dopo 3 s (`setInterval` 3000) o 6 s se il flag è di nuovo occupato.
+history:
+  - status: TODO
+    at: "2026-10-10T17:31:44Z"
+  - status: PLANNED
+    at: "2026-10-11T09:28:02Z"
+  - status: IN PROGRESS
+    at: "2026-10-11T09:30:19Z"
+  - status: REVIEW
+    at: "2026-10-11T13:14:33Z"
+  - status: DONE
+    at: "2026-10-18T11:42:14Z"

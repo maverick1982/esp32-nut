@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-064
+title: Timeout della modalità AP manuale
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-064: Timeout della modalità AP manuale
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di esp32-nut,
+  voglio che la modalità AP attivata col doppio reset si chiuda da sola se nessuno la usa,
+  in modo che la scheda non resti esposta con la password AP fissa e torni a servire NUT.
+
+  **Dimostrazione**
+  Doppio reset con configurazione valida: se nessun dispositivo si collega all'AP, dopo 10 minuti la scheda riparte in modalità normale e il server NUT torna disponibile. Se un telefono resta collegato all'AP, la scheda non riparte.
+
+  **Criteri di Accettazione**
+  - [ ] Con AP attivato dal doppio reset e configurazione valida, la scheda riavvia in STA dopo 10 minuti consecutivi senza client collegati all'AP. Il motivo viene scritto nel log.
+  - [ ] Finché almeno un client è collegato, il timeout non scatta. Quando l'ultimo client si scollega, il conteggio dei 10 minuti riparte da zero.
+  - [ ] Con configurazione mancante o non valida (primo avvio, NVS vuoto o corrotto) l'AP resta attivo senza timeout.
+  - [ ] La password dell'AP non cambia.
+  - [ ] La logica del timeout ha test unitari nativi, con un orologio simulato.
+
+  **Assunzioni**
+  - Riferimenti: [PDR 0001](docs/pdr/0001-autenticazione-web.md) (D7), [ADR 0009](docs/adr/0009-web-ui-authentication.md).
+history:
+  - status: TODO
+    at: "2026-10-10T15:16:33Z"
+  - status: PLANNED
+    at: "2026-10-11T08:53:21Z"
+  - status: IN PROGRESS
+    at: "2026-10-11T08:55:12Z"
+  - status: REVIEW
+    at: "2026-10-11T09:04:32Z"
+  - status: DONE
+    at: "2026-10-18T11:42:14Z"

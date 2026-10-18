@@ -22,6 +22,9 @@ namespace CrashDiag {
     // Stores the reason of a controlled restart in RTC memory and counts it as one more
     // consecutive restart; the caller then restarts
     void recordControlledRestart(const char* reason);
+    // Stores only the reason, shown after the boot as the last controlled restart, without
+    // counting it as a USB recovery restart (manual AP timeout, US-064)
+    void recordRestartReason(const char* reason);
     // Controlled restarts in a row since the data was last healthy (review A7)
     uint8_t consecutiveRestarts();
     void clearConsecutiveRestarts();

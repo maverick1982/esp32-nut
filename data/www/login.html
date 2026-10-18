@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Sign in</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="bundle.css?v=1.2.0">
+</head>
+
+<body class="auth-page">
+    <div class="auth-shell">
+        <div class="auth-brand">
+            <div class="brand-icon"><img src="logo.png" alt="Logo"></div>
+            <div class="brand-name">ESP32-NUT</div>
+        </div>
+
+        <!-- Sign in: credentials exist -->
+        <section class="auth-view panel auth-card" id="view-signin" hidden>
+            <div class="panel-header">
+                <h2>Sign in</h2>
+            </div>
+            <p class="auth-lead">Enter your web credentials to manage this device.</p>
+
+            <form class="auth-form" id="signin-form" novalidate>
+                <!-- Notice shown after a redirect caused by an expired session (/login?expired=1) -->
+                <div class="auth-alert info" id="signin-expired" role="status" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                    </svg>
+                    <span>Your session has expired. Please sign in again.</span>
+                </div>
+
+                <!-- Inline error: deliberately generic -->
+                <div class="auth-alert" id="signin-error" role="alert" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 8v4M12 16h.01" />
+                    </svg>
+                    <span id="signin-error-text">Invalid username or password</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" autocomplete="username" autocapitalize="none"
+                        spellcheck="false" placeholder="admin" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <div class="input-wrapper">
+                        <input type="password" id="login-password" autocomplete="current-password"
+                            placeholder="••••••••••••" required>
+                        <button type="button" class="btn-icon" data-toggle="login-password"
+                            aria-label="Show password">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- US-062: persistent session (30 days) instead of the 30-minute one -->
+                <label class="auth-check" for="login-remember">
+                    <input type="checkbox" id="login-remember">
+                    <span>Remember me</span>
+                </label>
+
+                <button type="submit" class="btn btn-primary" id="btn-signin">
+                    <span class="glow"></span>
+                    <span class="btn-label">Sign in</span>
+                </button>
+            </form>
+        </section>
+
+        <!-- Create credentials: first use, no credentials stored -->
+        <section class="auth-view panel auth-card" id="view-create" hidden>
+            <div class="panel-header">
+                <h2>Create credentials</h2>
+                <span class="auth-badge">First use</span>
+            </div>
+            <p class="auth-lead">No web credentials are set on this device yet. The first account created
+                becomes the administrator.</p>
+
+            <form class="auth-form" id="create-form" novalidate>
+                <!-- Form-level error: invalid fields or a server-side rejection -->
+                <div class="auth-alert" id="create-error" role="alert" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 8v4M12 16h.01" />
+                    </svg>
+                    <span id="create-error-text">Please fix the highlighted fields.</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="new-username">Username</label>
+                    <input type="text" id="new-username" autocomplete="username" autocapitalize="none"
+                        spellcheck="false" maxlength="32" placeholder="admin" required>
+                    <span class="field-error" id="err-username" hidden>Username must be 1-32 printable
+                        characters</span>
+                </div>
+                <div class="form-group">
+                    <label for="new-password">Password</label>
+                    <div class="input-wrapper">
+                        <input type="password" id="new-password" autocomplete="new-password" maxlength="64"
+                            placeholder="••••••••••••" required>
+                        <button type="button" class="btn-icon" data-toggle="new-password"
+                            aria-label="Show password">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
+                            </svg>
+                        </button>
+                    </div>
+                    <span class="field-error" id="err-password" hidden>Password is too short (minimum 8
+                        characters)</span>
+                </div>
+                <div class="form-group">
+                    <label for="new-password2">Confirm password</label>
+                    <div class="input-wrapper">
+                        <input type="password" id="new-password2" autocomplete="new-password" maxlength="64"
+                            placeholder="••••••••••••" required>
+                        <button type="button" class="btn-icon" data-toggle="new-password2"
+                            aria-label="Show password">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
+                            </svg>
+                        </button>
+                    </div>
+                    <span class="field-error" id="err-password2" hidden>Passwords do not match</span>
+                </div>
+
+                <!-- Rules hint: each line lights up as it is satisfied -->
+                <ul class="rule-list" id="rule-list" aria-label="Credential rules">
+                    <li data-rule="user">Username: 1-32 printable characters</li>
+                    <li data-rule="pass">Password: 8-64 bytes (8-64 plain ASCII characters)</li>
+                    <li data-rule="match">Both passwords match</li>
+                </ul>
+
+                <button type="submit" class="btn btn-primary" id="btn-create">
+                    <span class="glow"></span>
+                    <span class="btn-label">Create and sign in</span>
+                </button>
+            </form>
+
+            <p class="auth-fineprint">The web UI runs over plain HTTP on your local network. Do not reuse a
+                password you use elsewhere. These credentials are separate from the NUT server credentials.</p>
+        </section>
+    </div>
+
+    <script src="login.js?v=1.2.0"></script>
+</body>
+
+</html>
