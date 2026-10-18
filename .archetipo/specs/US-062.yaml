@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-062: "Remember me", logout da tutti i dispositivi, limite tentativi e comandi di spegnimento dalla Web UI
 
@@ -41,3 +41,5 @@ history:
     at: "2026-10-10T16:40:00Z"
   - status: REVIEW
     at: "2026-10-10T17:23:59Z"
+  - status: DONE
+    at: "2026-10-18T11:42:12Z"

@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-061: Login e protezione di tutte le route della Web UI
 
@@ -46,3 +46,5 @@ history:
     at: "2026-10-10T15:28:41Z"
   - status: REVIEW
     at: "2026-10-10T16:06:10Z"
+  - status: DONE
+    at: "2026-10-18T11:42:12Z"

@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 2
-status: REVIEW
+status: DONE
 body: |
   #### US-064: Timeout della modalità AP manuale
 
@@ -39,3 +39,5 @@ history:
     at: "2026-10-11T08:55:12Z"
   - status: REVIEW
     at: "2026-10-11T09:04:32Z"
+  - status: DONE
+    at: "2026-10-18T11:42:14Z"

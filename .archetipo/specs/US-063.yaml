@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: HIGH
 points: 3
-status: REVIEW
+status: DONE
 body: |
   #### US-063: Form "Credentials": cambio password e reset dalla modalità AP
 
@@ -43,3 +43,5 @@ history:
     at: "2026-10-10T18:32:11Z"
   - status: REVIEW
     at: "2026-10-10T18:57:37Z"
+  - status: DONE
+    at: "2026-10-18T11:42:13Z"
