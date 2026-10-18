@@ -1,0 +1,127 @@
+schema: archetipo/plan/v2
+spec_code: US-085
+body: |
+  ---
+  type: plan
+  title: "US-085: L'aggiornamento OTA dalla Web UI non fa scattare il watchdog con un Wi-Fi lento — Piano di implementazione"
+  description: "Piano di implementazione per US-085"
+  tags: [plan, implementation, US-085]
+  ---
+  # US-085: L'aggiornamento OTA dalla Web UI non fa scattare il watchdog con un Wi-Fi lento — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-18
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** HIGH | **Punti:** 2
+
+  Un upload OTA che dura più di 30 s fa scattare il task watchdog del loopTask (`TASK_WDT`) e la scheda resta sul firmware vecchio (issue #73, APC Back-UPS ES 600M1, v1.7.2).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il loopTask è sotto il task watchdog con timeout 30 s (`setupLoopWatchdog()` in `src/core/main.cpp`, reset a ogni giro di `loop()`). `WebServer` legge l'upload multipart in modo sincrono dentro `handleClient()` e chiama `WebConfigServer::handleOTAUpload()` ogni 1436 byte (`HTTP_UPLOAD_BUFLEN`): finché l'upload non finisce `loop()` non riparte. La correzione è resettare il watchdog dentro la callback di upload, a ogni chiamata.
+
+  - `esp_task_wdt_reset()` all'inizio di `handleOTAUpload()`, subito dopo il controllo `multipart/`, prima di qualsiasi ramo: copre `UPLOAD_FILE_START`, `UPLOAD_FILE_WRITE`, `UPLOAD_FILE_END`, `UPLOAD_FILE_ABORTED` e il ramo `ota_rejected`. La callback gira nel loopTask, che è iscritto al watchdog da `setupLoopWatchdog()`.
+  - Il watchdog resta efficace: il reset avviene solo quando arriva un blocco di dati. Un client che smette di inviare viene abbandonato da `WebServer` dopo `HTTP_MAX_DATA_WAIT` (5 s), molto prima dei 30 s; un blocco dentro `Update.write()`/`Update.end()` più lungo di 30 s fa ancora scattare il watchdog, come deve.
+  - Timeout, `trigger_panic` e `idle_core_mask` del watchdog non cambiano. Nessuna modifica a `WebServer` o a `Update`.
+  - Il log `[OTA] Success` riporta anche la durata dell'upload (`millis()` salvato in `UPLOAD_FILE_START` in un nuovo membro `ota_start_ms`): serve per la verifica su hardware e per diagnosticare segnalazioni future.
+
+  Alternative scartate: allungare il timeout del watchdog (perde la protezione su tutto il firmware), togliere il loopTask dal watchdog durante l'OTA (un blocco vero non verrebbe più rilevato), OTA in un task separato (fuori ambito).
+
+  ---
+
+  ## Strategia di test
+
+  La modifica è dentro `src/network/web_config_server.cpp`, che non è compilato nell'ambiente `native` (dipende da `WebServer` e `Update`), e `test_ota_handler` è escluso da `test_ignore`. La prova principale è quindi su hardware; gli altri test fanno da regressione.
+
+  - Regressione: `pio test -e native` invariato, build `esp32-s3-standard` ok, suite e2e Playwright (in particolare `ota-update.spec.ts` e `ota_zip.spec.ts`) invariata. Le e2e simulano il firmware con mock di rete, quindi non possono riprodurre il watchdog.
+  - Hardware (Eaton 3S): OTA rallentata con `curl --limit-rate` fino a superare i 30 s, prima con il firmware senza fix (atteso `Reset reason: TASK_WDT`) e poi con il fix (atteso `[OTA] Success ... in N ms` con N > 30000 e riavvio sul firmware nuovo). Poi un upload interrotto a metà: atteso `[OTA] Upload aborted`, nessun crash, Web UI che risponde.
+  - Nessun test e2e nuovo: la spec non cambia l'interfaccia. Nessun video demo.
+
+  _Piano generato con ARchetipo Planning — 2026-10-18_
+tasks:
+  - id: TASK-01
+    title: Reset del watchdog nella callback di upload OTA e durata nel log
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'upload OTA non deve far scattare il task watchdog del loopTask quando dura più di 30 s, ma riceve dati con continuità.
+
+      **Leggere:** `src/network/web_config_server.cpp` (`handleOTAUpload()`, righe ~465-515, e la route `/update` ~117-138), la dichiarazione della classe `WebConfigServer` (membri `ota_upload_started`, `ota_rejected`), `src/core/main.cpp` (`setupLoopWatchdog()`, `LOOP_WDT_TIMEOUT_MS`).
+
+      **Modifiche:**
+      1. Includere `esp_task_wdt.h` in `web_config_server.cpp`.
+      2. In `handleOTAUpload()`, subito dopo `if (!server.header("Content-Type").startsWith("multipart/")) return;`, chiamare `esp_task_wdt_reset();` con un commento in italiano: WebServer legge tutto l'upload dentro handleClient() e loop() non riparte fino alla fine; il reset a ogni blocco tiene vivo il watchdog del loopTask (30 s) senza disattivarlo, e un upload fermo viene comunque abbandonato da WebServer dopo HTTP_MAX_DATA_WAIT (5 s).
+      3. Aggiungere il membro `uint32_t ota_start_ms = 0;` accanto a `ota_upload_started`; impostarlo con `millis()` in `UPLOAD_FILE_START` (solo nel ramo accettato).
+      4. Nel log di successo: `[OTA] Success: <bytes> bytes in <ms> ms` usando `millis() - ota_start_ms`.
+
+      **Vincoli:** non cambiare timeout né configurazione del watchdog, non toccare gli altri rami oltre al log di successo, mantenere i messaggi esistenti (`Upload rejected`, `Invalid magic byte`, `Upload aborted`, `Error at the end`).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `src/network/web_config_server.cpp` — include, reset del watchdog, `ota_start_ms`, log con durata
+      - header della classe `WebConfigServer` (dove sono dichiarati `ota_upload_started` e `ota_rejected`) — nuovo membro `ota_start_ms`
+
+      ## Criteri di Completamento
+      - [ ] `esp_task_wdt_reset()` è chiamato a ogni invocazione di `handleOTAUpload()` con body multipart, prima di qualsiasi ramo (START, rifiutato, WRITE, END, ABORTED)
+      - [ ] Nessuna modifica a `setupLoopWatchdog()` né al timeout di 30 s
+      - [ ] `[OTA] Success` riporta byte e durata in ms
+      - [ ] `pio run -e esp32-s3-standard` compila senza warning nuovi
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Regressione: test nativi, build ed e2e OTA'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il fix non cambia il comportamento esistente.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: stesso numero di test di `main` (549), tutti verdi.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: ok, annotare l'occupazione flash.
+      3. `npm run e2e`: tutta la suite verde, in particolare `e2e/ota-update.spec.ts` e `e2e/ota_zip.spec.ts`, senza modifiche ai test.
+
+      **Blocchi:** se una suite nativa risulta ERRORED in modo transitorio su Windows, rilanciarla da sola prima di considerarla fallita.
+
+      ## File Coinvolti
+      - nessun file modificato (solo esecuzione dei test)
+
+      ## Criteri di Completamento
+      - [ ] Test nativi tutti verdi, nessun test rimosso
+      - [ ] Build ok
+      - [ ] e2e tutte verdi, `ota-update.spec.ts` e `ota_zip.spec.ts` invariati
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Verifica su hardware: OTA rallentata oltre 30 s e upload interrotto'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riprodurre il bug e dimostrare il fix sull'Eaton 3S, come richiesto dalla Dimostrazione della spec. Va eseguita dall'utente sulla scheda: l'implementazione prepara i comandi e riporta i risultati nella review.
+
+      **Passi:**
+      1. Login con curl salvando il cookie di sessione: `curl -c cookie.txt -H "Content-Type: application/json" -d '{"username":"<user>","password":"<pwd>"}' http://<ip>/api/auth/login` (verificare in `handleAuthLogin()` il formato esatto del body).
+      2. Con il firmware SENZA fix (build di `main`): `curl -b cookie.txt --limit-rate 30k -F "firmware=@.pio/build/esp32-s3-standard/firmware.bin" http://<ip>/update`. Con circa 1,9 MB a 30 KB/s l'upload dura più di 60 s. Atteso: riavvio con `Reset reason: TASK_WDT` nel System Log, firmware invariato.
+      3. Con il firmware CON il fix (flash via USB o OTA veloce), ripetere il passo 2. Atteso: `[OTA] Success: <bytes> bytes in <ms> ms` con ms > 30000, riavvio sul firmware nuovo, nessun crash nel System Log al boot.
+      4. Upload interrotto: ripetere il passo 2 e fermare curl (Ctrl+C) a metà. Atteso: `[OTA] Upload aborted`, nessun riavvio, Web UI che risponde, una nuova OTA normale funziona.
+
+      ## File Coinvolti
+      - nessun file modificato (verifica manuale)
+
+      ## Criteri di Completamento
+      - [ ] Bug riprodotto senza fix (TASK_WDT) oppure annotato che non si riproduce, con la durata misurata
+      - [ ] Con il fix l'OTA lenta va a buon fine e la durata (> 30 s) è riportata nella review
+      - [ ] Upload interrotto: nessun crash e Web UI raggiungibile
+    ref: TASK-03

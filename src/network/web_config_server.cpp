@@ -9,6 +9,7 @@
 #include "core/crash_diag.h"
 #include "network/web_assets.h"
 #include <Update.h>
+#include "esp_task_wdt.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -468,6 +469,12 @@ void WebConfigServer::handleOTAUpload() {
     // dereferenzierebbe un puntatore nullo. Stesso test che il core usa per isForm
     if (!server.header("Content-Type").startsWith("multipart/")) return;
 
+    // WebServer legge tutto l'upload dentro handleClient(): loop() non riparte fino alla
+    // fine e con un Wi-Fi lento si superano i 30 s del watchdog del loopTask (US-085).
+    // Un reset a ogni blocco ricevuto non lo disattiva: un upload fermo viene comunque
+    // abbandonato da WebServer dopo HTTP_MAX_DATA_WAIT (5 s)
+    esp_task_wdt_reset();
+
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
         // uri, metodo e header raccolti sono già disponibili: WebServer analizza gli
@@ -479,6 +486,7 @@ void WebConfigServer::handleOTAUpload() {
             return;
         }
         AppLogger::log("INFO", String("[OTA] Upload started: ") + upload.filename);
+        ota_start_ms = millis();
         uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         if (!Update.begin(maxSketchSpace, U_FLASH)) { //start with max available size
             Update.printError(Serial);
@@ -501,7 +509,8 @@ void WebConfigServer::handleOTAUpload() {
         }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (Update.end(true)) { //true to set the size to the current progress
-            AppLogger::log("INFO", String("[OTA] Success: ") + String(upload.totalSize) + " bytes");
+            AppLogger::log("INFO", String("[OTA] Success: ") + String(upload.totalSize) + " bytes in " +
+                                   String(millis() - ota_start_ms) + " ms");
         } else {
             Update.printError(Serial);
             AppLogger::log("ERROR", "[OTA] Error at the end");

@@ -83,6 +83,8 @@ private:
     bool ota_rejected = false;
     // Un upload multipart autorizzato è partito: senza, il handler finale non dichiara successo
     bool ota_upload_started = false;
+    // millis() a UPLOAD_FILE_START: durata dell'upload nel log di successo (US-085)
+    uint32_t ota_start_ms = 0;
     USBHostUPS* usb_ups = nullptr;
 };
 
