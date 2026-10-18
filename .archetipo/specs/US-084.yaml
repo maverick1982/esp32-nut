@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-084: Fino a 8 client NUT contemporanei, slot dei client morti liberati prima e connessioni nel System Log
 
@@ -58,3 +58,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-17T15:50:11Z"
+  - status: PLANNED
+    at: "2026-10-18T12:39:43Z"
+  - status: IN PROGRESS
+    at: "2026-10-18T12:42:36Z"
+  - status: REVIEW
+    at: "2026-10-18T12:53:17Z"
+  - status: DONE
+    at: "2026-10-18T13:05:52Z"

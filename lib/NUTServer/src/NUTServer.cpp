@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #ifndef PIO_UNIT_TESTING
 #include <esp_random.h>
+#include <lwip/sockets.h>
 #endif
 
 // Default clock and random source of TRACKING (US-067); tests inject their own
@@ -18,6 +19,23 @@ static uint32_t defaultRandom() {
     return esp_random();
 #endif
 }
+
+#ifndef PIO_UNIT_TESTING
+// Keepalive TCP (US-084): senza, un client sparito senza FIN resta "connected()" e tiene
+// lo slot fino al timeout di inattività. Un errore va solo sulla seriale
+static void enableKeepalive(WiFiClient& client) {
+    const int on = 1;
+    const int idle = NUT_KEEPALIVE_IDLE_S;
+    const int intvl = NUT_KEEPALIVE_INTVL_S;
+    const int count = NUT_KEEPALIVE_COUNT;
+    if (client.setSocketOption(SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) < 0 ||
+        client.setSocketOption(IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) < 0 ||
+        client.setSocketOption(IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) < 0 ||
+        client.setSocketOption(IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) < 0) {
+        Serial.println("[NUTServer] TCP keepalive setup failed");
+    }
+}
+#endif
 
 // Shared by LIST UPS and GET UPSDESC so the two cannot drift.
 static const char* NUT_UPS_DESCRIPTION = "ESP32-S3 UPS Bridge";
@@ -79,6 +97,10 @@ NUTServer::NUTServer() :
 #ifndef PIO_UNIT_TESTING
     , _server(NUT_DEFAULT_PORT)
 #endif
+    , _lastSummaryMs(0)
+    , _rejectLogged(false)
+    , _lastRejectLogMs(0)
+    , _rejectsSinceLog(0)
     , _tracking(defaultRandom)
     , _now(defaultClock)
     , _log_cb(nullptr)
@@ -169,13 +191,91 @@ bool NUTServer::begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint1
     return true;
 }
 
-void NUTServer::closeSession(int slot) {
+int NUTServer::openSession(const String& peerIp, uint16_t peerPort) {
+    int slot = -1;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+#ifndef PIO_UNIT_TESTING
+        bool free_slot = !_clientActive[i] || !_clients[i].connected();
+#else
+        bool free_slot = !_clientActive[i];
+#endif
+        if (free_slot) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == -1) {
+        Serial.printf("[NUTServer] Connection from %s:%u rejected: max clients reached\n",
+                      peerIp.c_str(), (unsigned)peerPort);
+        // Un client che riprova di continuo non deve riempire il System Log
+        uint32_t now = _now();
+        if (!_rejectLogged || now - _lastRejectLogMs >= NUT_LOG_INTERVAL_MS) {
+            String others;
+            if (_rejectsSinceLog > 0) {
+                others = String(" (") + String(_rejectsSinceLog) + " more rejected since the last report)";
+            }
+            log("WARN", "[NUT] Connection from %s rejected: all %d slots in use (%s)%s", peerIp.c_str(),
+                NUT_MAX_CLIENTS, slotSummary().c_str(), others.c_str());
+            _rejectLogged = true;
+            _lastRejectLogMs = now;
+            _rejectsSinceLog = 0;
+        } else {
+            _rejectsSinceLog++;
+        }
+        return -1;
+    }
+
+    _clientActive[slot] = true;
+    _clientAuthenticated[slot] = false;
+    _clientLastActivity[slot] = millis();
+    _clientBuffer[slot] = "";
+    _clientBuffer[slot].reserve(256);
+    _clientUsername[slot] = "";
+    _clientUsernameSet[slot] = false;
+    _clientPasswordSet[slot] = false;
+    _clientTracking[slot] = false;
+    _clientPeer[slot] = peerIp;
+    Serial.printf("[NUTServer] Client connected to slot %d from %s:%u\n", slot, peerIp.c_str(),
+                  (unsigned)peerPort);
+    return slot;
+}
+
+String NUTServer::slotSummary() const {
+    String out;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        if (!_clientActive[i]) continue;
+        if (out.length() > 0) out += ", ";
+        out += _clientPeer[i];
+    }
+    return out;
+}
+
+void NUTServer::logClientsSummary(uint32_t now) {
+    if (now - _lastSummaryMs < NUT_LOG_INTERVAL_MS) return;
+    _lastSummaryMs = now;
+    String summary = slotSummary();
+    if (summary == _lastSummary) return;
+    _lastSummary = summary;
+    int in_use = 0;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        if (_clientActive[i]) in_use++;
+    }
+    log("INFO", "[NUT] Clients: %d/%d in use%s%s", in_use, NUT_MAX_CLIENTS, in_use ? " - " : "",
+        summary.c_str());
+}
+
+void NUTServer::closeSession(int slot, CloseReason reason) {
     if (slot >= 0 && slot < NUT_MAX_CLIENTS) {
 #ifndef PIO_UNIT_TESTING
         if (_clients[slot]) {
             _clients[slot].stop();
         }
 #endif
+        if (reason == CloseReason::Inactivity) {
+            log("INFO", "[NUT] Client %s on slot %d disconnected after %u s of inactivity",
+                _clientPeer[slot].c_str(), slot, (unsigned)(NUT_TIMEOUT_MS / 1000));
+        }
         _clientActive[slot] = false;
         _clientAuthenticated[slot] = false;
         _clientLastActivity[slot] = 0;
@@ -184,6 +284,7 @@ void NUTServer::closeSession(int slot) {
         _clientUsernameSet[slot] = false;
         _clientPasswordSet[slot] = false;
         _clientTracking[slot] = false;
+        _clientPeer[slot] = "";
         Serial.printf("[NUTServer] Session for slot %d closed.\n", slot);
     }
 }
@@ -243,39 +344,21 @@ void NUTServer::loop() {
 
     // tracking_cleanup() of the upsd main loop: expired entries go before millis() wraps
     _tracking.cleanup(_now());
+    logClientsSummary(_now());
 
 #ifndef PIO_UNIT_TESTING
     // 1. Accetta nuove connessioni client
     if (_server.hasClient()) {
         WiFiClient newClient = _server.accept();
         if (newClient) {
-            int slot = -1;
-            for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
-                if (!_clientActive[i] || !_clients[i].connected()) {
-                    slot = i;
-                    break;
-                }
-            }
-
+            int slot = openSession(newClient.remoteIP().toString(), newClient.remotePort());
             if (slot != -1) {
                 if (_clients[slot]) {
                     _clients[slot].stop();
                 }
                 _clients[slot] = newClient;
-                
-                _clientActive[slot] = true;
-                _clientAuthenticated[slot] = false;
-                _clientLastActivity[slot] = millis();
-                _clientBuffer[slot] = "";
-                _clientBuffer[slot].reserve(256);
-                _clientUsername[slot] = "";
-                _clientUsernameSet[slot] = false;
-                _clientPasswordSet[slot] = false;
-                _clientTracking[slot] = false;
-                Serial.printf("[NUTServer] Client connected to slot %d from %s:%d\n", 
-                              slot, newClient.remoteIP().toString().c_str(), newClient.remotePort());
+                enableKeepalive(_clients[slot]);
             } else {
-                Serial.println("[NUTServer] Connection rejected: max clients reached");
                 newClient.print("ERR FAILED - Max clients reached\n");
                 newClient.stop();
             }
@@ -286,15 +369,15 @@ void NUTServer::loop() {
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         if (_clientActive[i]) {
             if (!_clients[i].connected() && !_clients[i].available()) {
-                closeSession(i);
+                closeSession(i, CloseReason::PeerClosed);
                 continue;
             }
 
-            // Verifica timeout di inattività (60 secondi)
+            // Verifica timeout di inattività (NUT_TIMEOUT_MS)
             if (millis() - _clientLastActivity[i] > NUT_TIMEOUT_MS) {
                 Serial.printf("[NUTServer] Inactivity timeout for slot %d. Disconnecting.\n", i);
                 _clients[i].print("ERR ACCESS-DENIED\n");
-                closeSession(i);
+                closeSession(i, CloseReason::Inactivity);
                 continue;
             }
 
@@ -418,7 +501,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 
     if (cmd == "LOGOUT") {
         client.print("OK Goodbye\n");
-        closeSession(slot);
+        closeSession(slot, CloseReason::Logout);
         return;
     }
 

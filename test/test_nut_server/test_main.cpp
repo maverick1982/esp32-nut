@@ -131,6 +131,7 @@ void setUp(void) {
     server.setClock(fakeClock);
     server.setRandom(fakeRandom);
     server.clearTracking();
+    server.resetSessions();
     printer.clear();
     mockHost.data = UPSData();
     mockHost.statusString = "OL";
@@ -1835,6 +1836,102 @@ void test_set_var_escaped_round_trip(void) {
                              request(0, "GET VAR testups outlet.desc").c_str());
 }
 
+// --- Slot dei client (US-084) ---
+
+static void openClients(int n) {
+    for (int i = 0; i < n; i++) {
+        String ip = String("10.0.0.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(50000 + i)));
+    }
+}
+
+static size_t countLogs(const char* needle) {
+    size_t n = 0;
+    for (const auto& l : logLines) {
+        if (l.find(needle) != std::string::npos) n++;
+    }
+    return n;
+}
+
+void test_eight_clients_then_rejected(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50099));
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN [NUT] Connection from 10.0.0.99 rejected: all 8 slots in use "
+                             "(10.0.0.1, 10.0.0.2, 10.0.0.3, 10.0.0.4, 10.0.0.5, 10.0.0.6, 10.0.0.7, 10.0.0.8)",
+                             logLines[0].c_str());
+}
+
+// Connessioni e chiusure normali non vanno nel System Log
+void test_open_and_logout_do_not_log(void) {
+    openClients(2);
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(1, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+void test_logout_frees_the_slot_for_reuse(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(3, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(3, server.openSession("10.0.0.50", 50050));
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.51", 50051));
+}
+
+// Un client che riprova di continuo: una riga ogni NUT_LOG_INTERVAL_MS, con il conteggio
+void test_rejections_are_throttled(void) {
+    openClients(8);
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50099));
+    fakeNow += 10000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50100));
+    fakeNow += 10000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.99", 50101));
+    TEST_ASSERT_EQUAL(1, (int)countLogs("rejected"));
+    fakeNow += NUT_LOG_INTERVAL_MS - 20000;
+    TEST_ASSERT_EQUAL(-1, server.openSession("10.0.0.98", 50102));
+    TEST_ASSERT_EQUAL(2, (int)countLogs("rejected"));
+    TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                          logLines.back().find("Connection from 10.0.0.98 rejected: all 8 slots in use ("));
+    TEST_ASSERT_NOT_EQUAL(std::string::npos, logLines.back().find(") (2 more rejected since the last report)"));
+}
+
+void test_clients_summary_only_on_change(void) {
+    openClients(2);
+    server.loop();
+    TEST_ASSERT_EQUAL(0, (int)countLogs("Clients:"));  // prima dei 60 s
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 2/8 in use - 10.0.0.1, 10.0.0.2", logLines.back().c_str());
+
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));  // nessun cambiamento
+
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    fakeNow += 1000;
+    server.loop();
+    TEST_ASSERT_EQUAL(1, (int)countLogs("Clients:"));  // cambiato, ma entro 60 s dall'ultimo controllo
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL(2, (int)countLogs("Clients:"));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 1/8 in use - 10.0.0.2", logLines.back().c_str());
+
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(1, "LOGOUT").c_str());
+    fakeNow += NUT_LOG_INTERVAL_MS;
+    server.loop();
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Clients: 0/8 in use", logLines.back().c_str());
+}
+
+void test_inactivity_close_is_logged(void) {
+    openClients(3);
+    server.closeSession(2, NUTServer::CloseReason::Inactivity);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Client 10.0.0.3 on slot 2 disconnected after 300 s of inactivity",
+                             logLines[0].c_str());
+    server.closeSession(1, NUTServer::CloseReason::PeerClosed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.60", 50060));
+}
+
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
@@ -1924,6 +2021,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_unknown_list_subcommand_is_invalid);
     RUN_TEST(test_malformed_list_and_get_are_invalid);
     RUN_TEST(test_list_cmd_and_client_unknown_ups);
+    RUN_TEST(test_eight_clients_then_rejected);
+    RUN_TEST(test_open_and_logout_do_not_log);
+    RUN_TEST(test_logout_frees_the_slot_for_reuse);
+    RUN_TEST(test_rejections_are_throttled);
+    RUN_TEST(test_clients_summary_only_on_change);
+    RUN_TEST(test_inactivity_close_is_logged);
     return UNITY_END();
 }
 #else
@@ -2015,6 +2118,10 @@ void setup() {
     RUN_TEST(test_unknown_list_subcommand_is_invalid);
     RUN_TEST(test_malformed_list_and_get_are_invalid);
     RUN_TEST(test_list_cmd_and_client_unknown_ups);
+    RUN_TEST(test_eight_clients_then_rejected);
+    RUN_TEST(test_logout_frees_the_slot_for_reuse);
+    RUN_TEST(test_rejections_are_throttled);
+    RUN_TEST(test_clients_summary_only_on_change);
     UNITY_END();
 }
 void loop() {}

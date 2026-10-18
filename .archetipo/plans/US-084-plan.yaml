@@ -1,0 +1,221 @@
+schema: archetipo/plan/v2
+spec_code: US-084
+body: |
+  ---
+  type: plan
+  title: "US-084: Fino a 8 client NUT contemporanei, slot dei client morti liberati prima e connessioni nel System Log — Piano di implementazione"
+  description: "Piano di implementazione per US-084"
+  tags: [plan, implementation, US-084]
+  ---
+  # US-084: Fino a 8 client NUT contemporanei, slot dei client morti liberati prima e connessioni nel System Log — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-18
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  Issue #84: il server NUT accetta 4 connessioni e al terzo client risponde `ERR FAILED - Max clients reached`. Servono 8 slot, il keepalive TCP per liberare prima gli slot dei client morti e la visibilità di chi occupa gli slot nel System Log.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi la gestione degli slot è tutta dentro `NUTServer::loop()`, nel blocco `#ifndef PIO_UNIT_TESTING`, e i log vanno solo su `Serial`. Si estrae la contabilità degli slot in metodi testabili in nativo e si lasciano nel blocco WiFi solo `accept()`, il keepalive e l'I/O sul socket.
+
+  - **Limite:** `NUT_MAX_CLIENTS` da 4 a 8 in `lib/NUTServer/src/NUTServer.h`. Tutti gli array per slot sono già dimensionati sulla costante.
+  - **Apertura sessione testabile:** nuovo metodo pubblico `int openSession(const String& peerIp, uint16_t peerPort)` che cerca uno slot libero (`!_clientActive[i]`, più `!_clients[i].connected()` solo fuori dai test), azzera lo stato dello slot come fa oggi `loop()`, salva l'IP in un nuovo array `_clientPeer[NUT_MAX_CLIENTS]` e restituisce lo slot, oppure `-1` se sono tutti occupati. `loop()` lo chiama dopo `accept()`: con uno slot assegna `_clients[slot] = newClient` (fermando il vecchio socket come oggi) e attiva il keepalive; con `-1` invia `ERR FAILED - Max clients reached` e chiude, come oggi.
+  - **Chiusura con motivo:** `closeSession(int slot, CloseReason reason)` con `enum class CloseReason { PeerClosed, Logout, Inactivity }`. Il comando `LOGOUT` passa `Logout`, la disconnessione del peer `PeerClosed`, il timeout `Inactivity`. Il messaggio `ERR ACCESS-DENIED` al timeout resta (fuori ambito).
+  - **Log nel System Log (decisione dell'utente del 2026-10-18, al posto di una riga per ogni evento):** il System Log tiene 50 righe e i client che si riconnettono a ogni lettura (exporter, PeaNUT) lo riempirebbero in pochi minuti. Quindi:
+    - rifiuto per slot esauriti: `WARN` con l'IP del client e l'elenco degli IP che occupano gli slot, per esempio `[NUT] Connection from 10.0.0.7 rejected: all 8 slots in use (10.0.0.2, 10.0.0.2, 10.0.0.5, ...)`. Al massimo una riga ogni 60 s; i rifiuti nel frattempo vengono contati e riportati nella riga successiva (`... (3 more rejected since the last report)`);
+    - riepilogo degli slot: ogni 60 s (orologio `_now()`, già iniettabile con `setClock()`), se l'insieme degli IP connessi è diverso dall'ultimo registrato, una riga `INFO` `[NUT] Clients: 3/8 in use - 10.0.0.2, 10.0.0.5, 10.0.0.9` (con `0/8 in use` quando si svuota). Nessuna riga se non cambia nulla;
+    - timeout di inattività: sempre una riga `INFO` `[NUT] Client 10.0.0.5 on slot 2 disconnected after 300 s of inactivity`.
+    Le righe `Serial.printf` esistenti restano per la console seriale.
+  - **Keepalive TCP:** dopo l'assegnazione dello slot, `newClient.setSocketOption(SOL_SOCKET, SO_KEEPALIVE, ...)` e su `IPPROTO_TCP` `TCP_KEEPIDLE` 60, `TCP_KEEPINTVL` 10, `TCP_KEEPCNT` 3 (API `NetworkClient::setSocketOption(int level, int option, const void*, size_t)` del core 3.x, costanti in `lwip/sockets.h`; `LWIP_TCP_KEEPALIVE` è 1 nel core). Un client sparito senza FIN viene rilevato in circa 90 s; `connected()` diventa falso e lo slot si libera al giro successivo. Le costanti in `NUTServer.h` con un commento.
+  - **Fuori ambito (dalla spec):** limite configurabile, socket lwIP oltre 16, eviction dello slot più inattivo, `LIST CLIENT`, la risposta al timeout.
+
+  Perché 8: il core precompilato ha `CONFIG_LWIP_MAX_SOCKETS 16`; restano occupati il listener NUT, il listener web, la richiesta web in corso e in AP il DNS del captive portal. 8 client lasciano 4-5 socket liberi. La soglia di heap del criterio si fissa con la misura su hardware (TASK-05).
+
+  ---
+
+  ## Strategia di test
+
+  La contabilità degli slot e i log diventano testabili in nativo in `test/test_nut_server/test_main.cpp`, che ha già `captureLog`, `fakeClock` e il `MockUSBHost`. Il codice socket (`accept`, keepalive) resta coperto solo dalla verifica su hardware.
+
+  - Unit (nativo): 8 `openSession` riusciti con slot 0..7; il nono restituisce `-1` e produce un `WARN` con IP ed elenco degli slot; un secondo rifiuto entro 60 s non logga, quello dopo 60 s riporta il conteggio; `LOGOUT` su uno slot lo libera e il successivo `openSession` lo riusa; riepilogo `INFO` solo quando l'insieme cambia e al massimo ogni 60 s (con `fakeNow`); chiusura per inattività con la sua riga.
+  - Regressione: tutti i test nativi esistenti verdi (oggi 549), build `esp32-s3-standard`, suite e2e invariata (la spec non tocca la Web UI).
+  - Hardware (Eaton 3S): 8 sessioni `upsc` in loop più la Web UI aperta, il nono client rifiutato, la Web UI che risponde, heap minimo dalla riga `[DIAG] Heap` registrato nella review; un client staccato dalla rete libera lo slot in circa 90 s.
+  - Nessun e2e nuovo e nessun video: niente interfaccia nuova.
+
+  _Piano generato con ARchetipo Planning — 2026-10-18_
+tasks:
+  - id: TASK-01
+    title: Limite a 8 slot, openSession() e closeSession() con motivo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare il limite a 8 e rendere testabile in nativo l'apertura e la chiusura delle sessioni.
+
+      **Leggere:** `lib/NUTServer/src/NUTServer.h` (costanti, array per slot, helper di test), `lib/NUTServer/src/NUTServer.cpp` (`closeSession()`, `loop()`, gestione di `LOGOUT` in `processCommand()`).
+
+      **Modifiche:**
+      1. `#define NUT_MAX_CLIENTS 8`.
+      2. Nuovo array `String _clientPeer[NUT_MAX_CLIENTS]` (IP del client).
+      3. `enum class CloseReason { PeerClosed, Logout, Inactivity };` dentro `NUTServer` e firma `void closeSession(int slot, CloseReason reason)`. Aggiornare le tre chiamate: `LOGOUT` → `Logout`, peer disconnesso in `loop()` → `PeerClosed`, timeout → `Inactivity`. `closeSession` azzera anche `_clientPeer[slot]`.
+      4. Nuovo metodo pubblico `int openSession(const String& peerIp, uint16_t peerPort)`: cerca il primo slot con `!_clientActive[i]` (fuori da `PIO_UNIT_TESTING` anche `|| !_clients[i].connected()`), azzera lo stato dello slot esattamente come fa oggi `loop()` (active, autenticazione, last activity con `millis()`, buffer con `reserve(256)`, username e flag, tracking), salva `_clientPeer[slot] = peerIp`, scrive la riga `Serial.printf` di connessione e restituisce lo slot; se non c'è posto restituisce `-1` (il log del rifiuto lo aggiunge TASK-03).
+      5. In `loop()`, dopo `accept()`: `int slot = openSession(newClient.remoteIP().toString(), newClient.remotePort());` poi, se `slot >= 0`, fermare l'eventuale vecchio `_clients[slot]` e assegnare `newClient`; altrimenti il ramo di rifiuto attuale (`ERR FAILED - Max clients reached`, `stop()`).
+      6. Helper di test pubblico `void resetSessions()` che chiude tutti gli slot attivi (per `setUp()` dei test).
+
+      **Vincoli:** nessun cambiamento alle risposte del protocollo; le righe `Serial` restano.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h` — costante, `_clientPeer`, `CloseReason`, `openSession`, `resetSessions`
+      - `lib/NUTServer/src/NUTServer.cpp` — `openSession`, `closeSession`, `loop`, `LOGOUT`
+
+      ## Criteri di Completamento
+      - [ ] `NUT_MAX_CLIENTS` vale 8
+      - [ ] `openSession` restituisce slot 0..7 e poi `-1`, e azzera lo stato dello slot come prima
+      - [ ] Le tre chiusure passano il motivo corretto
+      - [ ] Build nativa e `esp32-s3-standard` compilano
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di apertura, rifiuto e riuso degli slot
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire in `test_nut_server` il nuovo limite e il riuso degli slot.
+
+      **Leggere:** `test/test_nut_server/test_main.cpp` (`setUp`, `captureLog`, `fakeClock`, registrazione dei test in `main`/`RUN_TEST`).
+
+      **Passi:**
+      1. In `setUp()` chiamare `server.resetSessions()`.
+      2. Test: 8 `openSession("10.0.0.N", 50000+N)` restituiscono 0..7; il nono restituisce `-1`.
+      3. Test: `processCommand(printer, 3, "LOGOUT")` risponde `OK Goodbye` e il successivo `openSession` restituisce 3.
+      4. Registrare i test con `RUN_TEST`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server`.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — nuovi test e `setUp`
+
+      ## Criteri di Completamento
+      - [ ] I nuovi test passano
+      - [ ] Tutti i test esistenti di `test_nut_server` restano verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Log nel System Log: rifiuti, riepilogo degli slot e timeout'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere visibile chi occupa gli slot senza riempire il System Log (50 righe), secondo la decisione dell'utente: rifiuti, riepilogo quando cambia e timeout, niente riga per ogni connessione.
+
+      **Leggere:** `NUTServer::log()` e `_now()`/`setClock()` in `lib/NUTServer/src/NUTServer.cpp`; `loop()`.
+
+      **Modifiche:**
+      1. Helper privato `String slotSummary() const`: IP degli slot attivi in ordine di slot, separati da `, `.
+      2. Rifiuto (in `openSession` quando restituisce `-1`): costante `NUT_LOG_INTERVAL_MS 60000`. Se è il primo rifiuto o sono passati almeno 60 s dall'ultima riga di rifiuto: `log("WARN", "[NUT] Connection from %s rejected: all %d slots in use (%s)", ...)` e, se nel frattempo ci sono stati altri rifiuti, aggiungere ` (%u more rejected since the last report)`; azzerare il contatore e salvare l'istante. Altrimenti solo incrementare il contatore.
+      3. Riepilogo: in `loop()`, prima del blocco `#ifndef PIO_UNIT_TESTING`, se `_now() - _lastSummaryMs >= NUT_LOG_INTERVAL_MS`: calcolare `slotSummary()` e il numero di slot attivi; se la stringa è diversa dall'ultima registrata, `log("INFO", "[NUT] Clients: %d/%d in use%s%s", n, NUT_MAX_CLIENTS, n ? " - " : "", summary)`; aggiornare `_lastSummaryMs` e la stringa salvata in ogni caso. Stato iniziale: stringa vuota, quindi nessuna riga finché non si connette qualcuno.
+      4. Timeout: in `closeSession` con `CloseReason::Inactivity`, `log("INFO", "[NUT] Client %s on slot %d disconnected after %u s of inactivity", ip, slot, NUT_TIMEOUT_MS / 1000)` (prima di azzerare `_clientPeer`).
+
+      **Vincoli:** usare solo `log()` (callback già collegata al System Log in `src/core/main.cpp`), nessun nuovo meccanismo di logging; le righe `Serial` restano.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h` — costante `NUT_LOG_INTERVAL_MS`, stato `_lastSummaryMs`, `_lastSummary`, `_lastRejectLogMs`, `_rejectsSinceLog`, `_rejectLogged`
+      - `lib/NUTServer/src/NUTServer.cpp` — `slotSummary`, log di rifiuto, riepilogo in `loop`, log del timeout
+
+      ## Criteri di Completamento
+      - [ ] Un rifiuto produce al più una riga `WARN` ogni 60 s, con il conteggio dei rifiuti intermedi
+      - [ ] Il riepilogo `INFO` compare solo se l'insieme degli IP cambia, al più ogni 60 s
+      - [ ] Il timeout di inattività produce sempre la sua riga
+      - [ ] Nessuna riga per le singole connessioni e chiusure normali
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi dei log di rifiuto, riepilogo e timeout
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare il formato e la frequenza delle righe di log con l'orologio finto.
+
+      **Passi (in `test/test_nut_server/test_main.cpp`, usando `logLines` e `fakeNow`):**
+      1. 8 sessioni aperte, nono `openSession` → una riga `WARN` che contiene l'IP rifiutato, `all 8 slots in use` e gli IP degli slot.
+      2. Secondo rifiuto a `fakeNow + 10000` → nessuna riga nuova; terzo a `fakeNow + 61000` → una riga con `1 more rejected since the last report`.
+      3. Riepilogo: chiamare `server.begin(...)` se serve per `_initialized`, aprire 2 sessioni, avanzare `fakeNow` di 60000 e chiamare `server.loop()` → una riga `INFO` `Clients: 2/8 in use - ...`; nuovo `loop()` dopo altri 60 s senza cambiamenti → nessuna riga; chiudere una sessione e avanzare → riga `1/8`.
+      4. Riepilogo prima dei 60 s: un cambiamento seguito da `loop()` entro 60 s dall'ultima riga non produce righe.
+      5. Timeout: il ramo di inattività è nel blocco socket; testare `closeSession(slot, CloseReason::Inactivity)` (renderlo accessibile come gli altri helper di test, o tramite un helper pubblico dedicato) e controllare la riga `disconnected after 300 s of inactivity`.
+
+      **Verifica:** `pio test -e native -f test_nut_server`, poi l'intera suite `pio test -e native`.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — nuovi test
+      - `lib/NUTServer/src/NUTServer.h` — solo se serve esporre `closeSession` agli helper di test
+
+      ## Criteri di Completamento
+      - [ ] I nuovi test passano e falliscono se si rimuove il throttling (verifica di mutazione manuale)
+      - [ ] Suite nativa completa verde, nessun test rimosso
+    ref: TASK-04
+  - id: TASK-05
+    title: Keepalive TCP sui socket accettati e regressione completa
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** liberare in circa 90 s gli slot dei client spariti senza chiudere la connessione.
+
+      **Leggere:** `loop()` in `lib/NUTServer/src/NUTServer.cpp`; `NetworkClient::setSocketOption(int level, int option, const void* value, size_t len)` del core (`framework-arduinoespressif32/libraries/Network/src/NetworkClient.h`).
+
+      **Modifiche:**
+      1. In `NUTServer.h`, costanti con commento: `NUT_KEEPALIVE_IDLE_S 60`, `NUT_KEEPALIVE_INTVL_S 10`, `NUT_KEEPALIVE_COUNT 3`.
+      2. Nel blocco `#ifndef PIO_UNIT_TESTING` di `loop()`, dopo l'assegnazione di `_clients[slot]`: `int one = 1; newClient.setSocketOption(SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));` e su `IPPROTO_TCP` `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, `TCP_KEEPCNT` con le costanti (includere `lwip/sockets.h` se le costanti non sono già visibili). Se una chiamata restituisce errore, una riga `Serial` (niente System Log).
+      3. Regressione: `pio test -e native` completo, `pio run -e esp32-s3-standard` (annotare RAM e flash), `npm run e2e`.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.h` — costanti del keepalive
+      - `lib/NUTServer/src/NUTServer.cpp` — opzioni socket dopo `accept()`
+
+      ## Criteri di Completamento
+      - [ ] Keepalive impostato su ogni socket accettato
+      - [ ] Test nativi tutti verdi, build ok, e2e tutte verdi
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Verifica su hardware: 8 client, nono rifiutato, heap e client morto'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la Dimostrazione della spec sull'Eaton 3S. La esegue l'utente; l'implementazione prepara i comandi e riporta i risultati nella review.
+
+      **Passi:**
+      1. Da un PC con NUT (o `nc`/script equivalente) aprire 8 sessioni persistenti che interrogano il server in loop (per esempio 8 processi `while true; do upsc ups@<ip>; sleep 2; done` non bastano perché chiudono la connessione: usare 8 `nc <ip> 3493` lasciati aperti, inviando `LIST VAR ups` periodicamente, oppure 8 istanze di upsmon/Home Assistant). Tenere aperta la Web UI.
+      2. Aprire una nona connessione: attesa la riga `ERR FAILED - Max clients reached` e nel System Log il `WARN` con l'elenco degli slot; la Web UI risponde.
+      3. Dopo 60 s: riga `[NUT] Clients: 8/8 in use - ...`.
+      4. Annotare dalla riga `[DIAG] Heap` il `min free` con 8 client attivi e fissare nella review la soglia del criterio (proposta: almeno 100 KB).
+      5. Staccare dalla rete un PC con una sessione aperta (o spegnergli il Wi-Fi) senza chiudere `nc`: lo slot deve liberarsi in circa 90 s (riepilogo con un client in meno), non in 300 s.
+
+      ## File Coinvolti
+      - nessun file modificato (verifica manuale)
+
+      ## Criteri di Completamento
+      - [ ] 8 client serviti, nono rifiutato con il log atteso, Web UI raggiungibile
+      - [ ] Heap minimo con 8 client riportato nella review
+      - [ ] Slot del client morto liberato in circa 90 s
+    ref: TASK-06
