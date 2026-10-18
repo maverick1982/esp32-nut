@@ -375,18 +375,6 @@
                         </div>
                     </div>
 
-                    <div class="ups-actions"
-                        style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
-                        <span class="toggle-label" style="font-weight: 500;">Beeper Alarm</span>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <label class="switch">
-                                <input type="checkbox" id="toggle-beeper" disabled>
-                                <span class="slider"></span>
-                            </label>
-                            <span id="beeper-state" class="state-text">--</span>
-                        </div>
-                    </div>
-
                     <div class="details-table-container">
                         <table class="data-table">
                             <thead>
@@ -409,33 +397,6 @@
                         <h2>UPS Actions</h2>
                         <div class="polling-indicator">
                             <span class="pulse-dot"></span> Live
-                        </div>
-                    </div>
-
-                    <!-- Same 4 cards as the telemetry page, fed by the same /api/ups-vars poll -->
-                    <div class="metrics-grid">
-                        <div class="metric-card highlight">
-                            <div class="metric-label">UPS Status</div>
-                            <div class="metric-value status-online" id="cmd-ups-status">--</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Battery Charge</div>
-                            <div class="metric-value"><span id="cmd-ups-charge">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar" id="cmd-bar-charge" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">UPS Load</div>
-                            <div class="metric-value"><span id="cmd-ups-load">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar load" id="cmd-bar-load" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Real Power</div>
-                            <div class="metric-value"><span id="cmd-ups-realpower">--</span><span class="unit">W</span>
-                            </div>
                         </div>
                     </div>
 

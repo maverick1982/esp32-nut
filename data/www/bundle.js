@@ -510,29 +510,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const toggleBeeper = document.getElementById('toggle-beeper');
-    if (toggleBeeper) {
-        toggleBeeper.addEventListener('change', async (e) => {
-            const isEnabled = e.target.checked;
-            toggleBeeper.disabled = true;
-            try {
-                const res = await apiFetch('/api/beeper', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enable: isEnabled })
-                });
-                if (!res.ok) {
-                    toggleBeeper.checked = !isEnabled;
-                }
-            } catch (err) {
-                console.error('Beeper API error:', err);
-                toggleBeeper.checked = !isEnabled;
-            }
-            toggleBeeper.disabled = false;
-            fetchUpsVars();
-        });
-    }
-
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
@@ -556,14 +533,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
 
-    // The 4 metric cards exist on the telemetry page and on the commands page (US-059)
+    // The 4 metric cards of the telemetry page (US-086 removed the copy on the commands page)
     const TELEMETRY_METRIC_IDS = {
         status: 'ups-status', charge: 'ups-charge', barCharge: 'bar-charge',
         load: 'ups-load', barLoad: 'bar-load', realPower: 'ups-realpower'
-    };
-    const COMMANDS_METRIC_IDS = {
-        status: 'cmd-ups-status', charge: 'cmd-ups-charge', barCharge: 'cmd-bar-charge',
-        load: 'cmd-ups-load', barLoad: 'cmd-bar-load', realPower: 'cmd-ups-realpower'
     };
 
     function renderMetrics(data, ids) {
@@ -663,7 +636,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Update primary metrics (telemetry and commands pages)
             renderMetrics(data, TELEMETRY_METRIC_IDS);
-            renderMetrics(data, COMMANDS_METRIC_IDS);
             renderTestResult(data);
 
             // Reload the command catalog when the UPS connects or disconnects, or when
@@ -677,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Update table
             if (upsTableBody) {
                 const sortedKeys = Object.keys(data)
-                    .filter(k => k !== 'ups.beeper.switchable' && (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
+                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
                     .sort();
                 let currentIndex = 0;
                 
@@ -712,29 +684,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Remove stale rows that are no longer in the payload
                 while (upsTableBody.children.length > currentIndex) {
                     upsTableBody.removeChild(upsTableBody.lastChild);
-                }
-            }
-            
-            const beeperActions = document.querySelector('.ups-actions');
-            const beeperToggle = document.getElementById('toggle-beeper');
-            const beeperState = document.getElementById('beeper-state');
-            
-            if (beeperActions) {
-                if (data['ups.beeper.switchable'] === true && data['ups.beeper.status'] !== undefined) {
-                    beeperActions.style.display = 'flex';
-                    if (beeperToggle && beeperState) {
-                        beeperToggle.disabled = false;
-                        // A muted beeper is still on: the switch disables it
-                        const isMuted = data['ups.beeper.status'] === 'muted';
-                        const isEnabled = data['ups.beeper.status'] !== 'disabled';
-                        if (beeperToggle.checked !== isEnabled) {
-                            beeperToggle.checked = isEnabled;
-                        }
-                        beeperState.textContent = isMuted ? 'Muted' : (isEnabled ? 'Enabled' : 'Disabled');
-                        beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
-                    }
-                } else {
-                    beeperActions.style.display = 'none';
                 }
             }
             

@@ -1,0 +1,183 @@
+schema: archetipo/plan/v2
+spec_code: US-086
+body: |
+  ---
+  type: plan
+  title: "US-086: Web UI senza il toggle del beeper in UPS Telemetry e senza i riquadri di stato in UPS Commands — Piano di implementazione"
+  description: "Piano di implementazione per US-086"
+  tags: [plan, implementation, US-086]
+  ---
+  # US-086: Web UI senza il toggle del beeper in UPS Telemetry e senza i riquadri di stato in UPS Commands — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-18
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 2
+
+  Due rimozioni nella Web UI prima di rifare gli screenshot del README: il toggle "Beeper Alarm" in UPS Telemetry (doppione dei comandi `beeper.*` della pagina UPS Commands) e i 4 riquadri di stato in testa a UPS Commands. Per decisione dell'utente si tolgono anche `POST /api/beeper` e il campo `ups.beeper.switchable` di `/api/ups-vars`.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Solo rimozioni, nessun comportamento nuovo. Il frontend sorgente è `data/www/index.html` + `data/www/bundle.js` + `data/www/bundle.css`; `index_inlined.html` e gli header embedded si rigenerano con `python scripts/embed_web.py` (che chiama `inline_web.py` e `inline_update.py`).
+
+  - **UPS Telemetry:** via il blocco `<div class="ups-actions" ...>` di `index.html` (righe ~378-388) con `#toggle-beeper` e `#beeper-state`; in `bundle.js` via il listener `change` di `toggle-beeper` (~513-531) e l'aggiornamento di `.ups-actions` a ogni poll (~718-736); via anche il filtro `k !== 'ups.beeper.switchable'` della tabella (~680), che non serve più. In `bundle.css` via la regola mobile `.ups-actions` (~1373). Le regole `.switch`/`.slider` restano: le usa anche l'interruttore di auto-refresh.
+  - **UPS Commands:** via la `<div class="metrics-grid">` con il suo commento in `#content-commands` (righe ~415-439). In `bundle.js` via `COMMANDS_METRIC_IDS` e la chiamata `renderMetrics(data, COMMANDS_METRIC_IDS)`; `renderMetrics` e `TELEMETRY_METRIC_IDS` restano per la telemetria. Il poll di `/api/ups-vars` sulla pagina resta, perché ricarica il catalogo dei comandi quando cambiano connessione o `ups.beeper.status` (`catalogKey`).
+  - **Firmware:** via la route `POST /api/beeper` e `WebConfigServer::handleBeeper()` (`src/network/web_config_server.cpp`, dichiarazione in `include/network/web_config_server.h`), e via `doc["ups.beeper.switchable"]` in `WebApiJson::generateUpsVars()` (`lib/WebApi/src/WebApiJson.cpp`). Restano `IUSBHostUPS::supportsBeeperToggle()` e `setBeeper()`, usati da `LIST CMD`, `INSTCMD` e dalla pagina UPS Commands.
+  - Fuori ambito: screenshot del README, mockup storico `docs/mockups/us-042`.
+
+  ---
+
+  ## Strategia di test
+
+  Le modifiche cambiano il comportamento atteso di alcuni test esistenti: vanno aggiornati, non solo fatti passare.
+
+  - **Nativo (`test/test_web_api/test_main.cpp`):** in `test_api_connected_host_with_data` l'asserzione `doc["ups.beeper.switchable"].as<bool>()` diventa `isNull()`; il caso disconnesso resta. Suite nativa completa verde.
+  - **E2E (Playwright, `e2e/ups-commands.spec.ts`):** rimuovere le asserzioni sui riquadri `#cmd-ups-*`/`#cmd-bar-*` e aggiornare i test che li usavano come punto di attesa; sostituire il test "telemetry unchanged: beeper toggle visible..." con uno che verifica l'assenza dei due elementi. Suite e2e completa verde.
+  - **Build:** `pio run -e esp32-s3-standard` dopo `python scripts/embed_web.py`.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`playwright.config.*`, `npm run e2e`, helper in `e2e/support/webui.ts`)
+  **Video demo:** non necessario (solo rimozioni; la decisione finale spetta ad `archetipo-review`)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Comandi senza riquadri | L'utente apre la Web UI, va su UPS Commands: vede subito i gruppi dei comandi, nessun `.metrics-grid` in `#content-commands`; il catalogo e i conteggi restano quelli di oggi |
+  | Telemetria senza toggle | Con `ups.beeper.status: enabled` nella risposta di `/api/ups-vars`, l'utente apre UPS Telemetry: non c'è `.ups-actions` né `#toggle-beeper`, e la riga `ups.beeper.status` è nella tabella |
+  | Mobile 375x812 | La pagina UPS Commands su mobile non scorre in orizzontale, attendendo le righe dei comandi invece di `#cmd-ups-status` |
+
+  _Piano generato con ARchetipo Planning — 2026-10-18_
+tasks:
+  - id: TASK-01
+    title: 'Frontend: via il toggle del beeper e i riquadri di UPS Commands'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere dall'interfaccia il blocco "Beeper Alarm" di UPS Telemetry e i 4 riquadri di UPS Commands, con il loro JavaScript e CSS.
+
+      **Leggere:** `data/www/index.html` (blocco `.ups-actions` ~378-388; `#content-commands` ~405-440), `data/www/bundle.js` (listener `toggle-beeper` ~513-531, `COMMANDS_METRIC_IDS` ~564-567, chiamate `renderMetrics` ~665-666, filtro tabella ~680, aggiornamento `.ups-actions` ~718-736), `data/www/bundle.css` (`.ups-actions` ~1373).
+
+      **Modifiche:**
+      1. `index.html`: rimuovere l'intero `<div class="ups-actions" ...>...</div>` della telemetria e, in `#content-commands`, il commento `<!-- Same 4 cards ... -->` con l'intera `<div class="metrics-grid">...</div>`. Nient'altro della pagina cambia.
+      2. `bundle.js`: rimuovere il blocco `const toggleBeeper = ...` con il suo listener; rimuovere `COMMANDS_METRIC_IDS` e `renderMetrics(data, COMMANDS_METRIC_IDS)`, aggiornando il commento sopra `TELEMETRY_METRIC_IDS` (i riquadri ora sono solo nella telemetria); rimuovere il blocco `beeperActions`/`beeperToggle`/`beeperState`; nel filtro della tabella togliere `k !== 'ups.beeper.switchable' &&`.
+      3. `bundle.css`: rimuovere la regola `.ups-actions` nel blocco mobile. Non toccare `.switch`/`.slider` (servono all'auto-refresh).
+      4. `python scripts/embed_web.py` per rigenerare `index_inlined.html` e gli asset embedded.
+
+      **Verifica:** `grep -n "toggle-beeper\|beeper-state\|ups-actions\|cmd-ups-\|cmd-bar-\|COMMANDS_METRIC_IDS\|ups.beeper.switchable" data/www/index.html data/www/bundle.js data/www/bundle.css` non trova nulla.
+
+      ## File Coinvolti
+      - `data/www/index.html` — rimozione dei due blocchi
+      - `data/www/bundle.js` — rimozione del JavaScript collegato
+      - `data/www/bundle.css` — rimozione della regola `.ups-actions`
+      - `data/www/index_inlined.html` e asset embedded — rigenerati da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] Nessun riferimento ai due elementi nei sorgenti web
+      - [ ] Asset rigenerati con `scripts/embed_web.py`
+      - [ ] La telemetria continua a mostrare i 4 riquadri e la tabella
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Firmware: via POST /api/beeper e ups.beeper.switchable'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere dal firmware l'endpoint e il campo che servivano solo al toggle.
+
+      **Leggere:** `src/network/web_config_server.cpp` (route ~94, `handleBeeper()` ~337), `include/network/web_config_server.h` (dichiarazione ~45), `lib/WebApi/src/WebApiJson.cpp` (`generateUpsVars`, ~55).
+
+      **Modifiche:**
+      1. Rimuovere `server.on("/api/beeper", ...)`, la definizione di `WebConfigServer::handleBeeper()` e la sua dichiarazione.
+      2. In `WebApiJson::generateUpsVars()` rimuovere `doc["ups.beeper.switchable"] = usb_ups->supportsBeeperToggle();` (e un eventuale commento collegato).
+      3. Non toccare `IUSBHostUPS::supportsBeeperToggle()` né `setBeeper()`: li usano `LIST CMD`, `INSTCMD` e la pagina UPS Commands.
+
+      **Verifica:** `pio run -e esp32-s3-standard` compila; `grep -rn "api/beeper\|handleBeeper\|ups.beeper.switchable" src lib include` non trova nulla.
+
+      ## File Coinvolti
+      - `src/network/web_config_server.cpp` — route e handler
+      - `include/network/web_config_server.h` — dichiarazione
+      - `lib/WebApi/src/WebApiJson.cpp` — campo della risposta
+
+      ## Criteri di Completamento
+      - [ ] Endpoint e campo rimossi
+      - [ ] `supportsBeeperToggle()` e `setBeeper()` invariati
+      - [ ] Build ok
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di /api/ups-vars senza ups.beeper.switchable
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** allineare `test_web_api` al nuovo contratto di `/api/ups-vars`.
+
+      **Passi:**
+      1. In `test/test_web_api/test_main.cpp`, `test_api_connected_host_with_data`: sostituire `TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].as<bool>());` con `TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());` (il campo non c'è più neanche con UPS connesso).
+      2. Lasciare invariata l'asserzione `isNull()` del caso disconnesso.
+      3. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api`, poi la suite nativa completa.
+
+      ## File Coinvolti
+      - `test/test_web_api/test_main.cpp` — asserzione aggiornata
+
+      ## Criteri di Completamento
+      - [ ] `test_web_api` verde
+      - [ ] Suite nativa completa verde, nessun test rimosso
+    ref: TASK-03
+  - id: TASK-04
+    title: 'E2E: UPS Commands senza riquadri e UPS Telemetry senza toggle'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiornare `e2e/ups-commands.spec.ts` al nuovo comportamento, secondo gli scenari del piano.
+
+      **Passi:**
+      1. Nel primo test della pagina (~righe 95-125): rimuovere le asserzioni su `#cmd-ups-*`/`#cmd-bar-*` e il blocco "Next polling cycle" che verificava i riquadri aggiornati; aggiungere `await expect(page.locator('#content-commands .metrics-grid')).toHaveCount(0);`. Le asserzioni sul catalogo (gruppi e conteggi) restano.
+      2. Sostituire il test `telemetry unchanged: beeper toggle visible and enabled with ups.beeper.switchable` (~307-322) con un test che apre UPS Telemetry con `ups.beeper.status: 'enabled'` nel mock e verifica: `.ups-actions` e `#toggle-beeper` con `toHaveCount(0)`, la riga `ups.beeper.status` presente nella tabella `#ups-table-body`, e i riquadri della telemetria (`#ups-status`) ancora visibili.
+      3. Nel test mobile (~325) sostituire l'attesa su `#cmd-ups-status` con l'attesa delle righe dei comandi (già presente `toHaveCount(3)`).
+      4. Cercare in tutto `e2e/` altri riferimenti a `cmd-ups-`, `cmd-bar-`, `toggle-beeper`, `ups-actions`, `ups.beeper.switchable`, `/api/beeper` e aggiornarli allo stesso modo.
+      5. `npm run e2e`.
+
+      ## File Coinvolti
+      - `e2e/ups-commands.spec.ts` — test aggiornati
+      - altri file in `e2e/` solo se contengono riferimenti agli elementi rimossi
+
+      ## Criteri di Completamento
+      - [ ] Nessun test e2e fa riferimento agli elementi rimossi, se non per verificarne l'assenza
+      - [ ] Suite e2e completa verde
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Regressione finale: nativo, build ed e2e'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il resto del firmware e della Web UI non cambia.
+
+      **Passi:**
+      1. `python scripts/embed_web.py` (se i sorgenti web sono cambiati dopo TASK-01) e verifica che `git status` non mostri asset non rigenerati.
+      2. Suite nativa completa (`pio test -e native`), build `esp32-s3-standard` (annotare flash e RAM), `npm run e2e`.
+      3. Controllo manuale sulla Web UI servita dai test o dalla scheda, se disponibile: UPS Commands parte dai comandi, UPS Telemetry senza il riquadro del beeper.
+
+      ## File Coinvolti
+      - nessun file modificato (solo esecuzione)
+
+      ## Criteri di Completamento
+      - [ ] Nativo, build ed e2e verdi
+      - [ ] Asset embedded allineati ai sorgenti
+    ref: TASK-05

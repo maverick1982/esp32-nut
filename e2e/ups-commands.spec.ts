@@ -33,7 +33,6 @@ function defaultMock(): Mock {
       'ups.realpower': '120',
       'ups.mfr': 'Eaton',
       'ups.beeper.status': 'enabled',
-      'ups.beeper.switchable': true,
     },
     catalog: {
       connected: true,
@@ -88,7 +87,7 @@ test.describe('UPS Commands page (US-059)', () => {
     });
   });
 
-  test('navigation: second tab, page title and the 4 cards follow the polling', async ({ page }) => {
+  test('navigation: second tab, page title, commands without status cards, polling still on', async ({ page }) => {
     await page.goto('http://esp32.local/');
 
     const secondTab = page.locator('nav.tabs button.tab').nth(1);
@@ -99,12 +98,8 @@ test.describe('UPS Commands page (US-059)', () => {
     await expect(page.locator('.page-title')).toHaveText('UPS Commands');
     await expect(page.locator('#content-commands')).toBeVisible();
 
-    await expect(page.locator('#cmd-ups-status')).toHaveText('OL');
-    await expect(page.locator('#cmd-ups-charge')).toHaveText('100');
-    await expect(page.locator('#cmd-bar-charge')).toHaveAttribute('style', /width:\s*100%/);
-    await expect(page.locator('#cmd-ups-load')).toHaveText('15');
-    await expect(page.locator('#cmd-bar-load')).toHaveAttribute('style', /width:\s*15%/);
-    await expect(page.locator('#cmd-ups-realpower')).toHaveText('120');
+    // US-086: the page starts with the commands, the status cards stay on the telemetry page
+    await expect(page.locator('#content-commands .metrics-grid')).toHaveCount(0);
 
     // Catalog rendered in the two groups
     await expect(page.locator('#cmd-group-actions .cmd-row')).toHaveCount(2);
@@ -113,13 +108,9 @@ test.describe('UPS Commands page (US-059)', () => {
     await expect(page.locator('#cmd-count-power')).toHaveText('1');
     await expect(page.locator('#cmd-empty')).toBeHidden();
 
-    // Next polling cycle (2 s) brings the new values
-    mock.vars = { ...mock.vars, 'ups.status': 'OB', 'battery.charge': '87', 'ups.load': '42', 'ups.realpower': '310' };
-    await expect(page.locator('#cmd-ups-status')).toHaveText('OB', { timeout: 5000 });
-    await expect(page.locator('#cmd-ups-charge')).toHaveText('87');
-    await expect(page.locator('#cmd-bar-charge')).toHaveAttribute('style', /width:\s*87%/);
-    await expect(page.locator('#cmd-ups-load')).toHaveText('42');
-    await expect(page.locator('#cmd-ups-realpower')).toHaveText('310');
+    // The /api/ups-vars poll keeps running: it refreshes the catalog when the UPS changes
+    const hits = mock.upsVarsHits;
+    await expect.poll(() => mock.upsVarsHits, { timeout: 5000 }).toBeGreaterThan(hits);
   });
 
   test('battery test: Run sends the POST, shows "Command sent" and the test result box', async ({ page }) => {
@@ -305,27 +296,25 @@ ${CONFIRM_WARNING}`);
     await expect(page.locator('#cmd-test-result')).toBeHidden();
   });
 
-  test('telemetry unchanged: beeper toggle visible and enabled with ups.beeper.switchable', async ({ page }) => {
+  // US-086: the beeper is driven from this page (beeper.*), the telemetry toggle is gone
+  test('telemetry: no beeper toggle, beeper status still in the table', async ({ page }) => {
     await openCommandsTab(page);
-    await expect(page.locator('#cmd-ups-status')).toHaveText('OL');
+    await expect(page.locator('.cmd-row')).toHaveCount(3);
 
     await page.locator('button.tab[data-target="ups"]').click();
     await expect(page.locator('.page-title')).toHaveText('UPS Telemetry');
     await expect(page.locator('#content-ups')).toBeVisible();
 
-    await expect(page.locator('.ups-actions')).toBeVisible({ timeout: 5000 });
-    // The checkbox is visually replaced by the .switch slider
-    await expect(page.locator('.ups-actions .switch')).toBeVisible();
-    await expect(page.locator('#toggle-beeper')).toBeEnabled();
-    await expect(page.locator('#toggle-beeper')).toBeChecked();
-    await expect(page.locator('#beeper-state')).toHaveText('Enabled');
+    await expect(page.locator('#ups-status')).toHaveText('OL');
+    await expect(page.locator('#row-ups-beeper-status .ups-val')).toHaveText('enabled');
+    await expect(page.locator('.ups-actions')).toHaveCount(0);
+    await expect(page.locator('#toggle-beeper')).toHaveCount(0);
   });
 
   test('mobile 375x812: no horizontal scroll', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await openCommandsTab(page);
     await expect(page.locator('.cmd-row')).toHaveCount(3);
-    await expect(page.locator('#cmd-ups-status')).toHaveText('OL');
 
     const overflow = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,

@@ -1381,12 +1381,6 @@ input[readonly] {
         flex: 1 1 45%;
         justify-content: center;
     }
-    
-    .ups-actions {
-        flex-direction: column;
-        gap: 10px;
-        align-items: flex-start !important;
-    }
 }
 
 /* US-083: Responsive Data Table (UPS Telemetry), was mobile only. Next to the 260 px
@@ -2647,18 +2641,6 @@ body.auth-page {
                         </div>
                     </div>
 
-                    <div class="ups-actions"
-                        style="display: none; margin-top: 15px; align-items: center; justify-content: space-between; padding: 15px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-color);">
-                        <span class="toggle-label" style="font-weight: 500;">Beeper Alarm</span>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <label class="switch">
-                                <input type="checkbox" id="toggle-beeper" disabled>
-                                <span class="slider"></span>
-                            </label>
-                            <span id="beeper-state" class="state-text">--</span>
-                        </div>
-                    </div>
-
                     <div class="details-table-container">
                         <table class="data-table">
                             <thead>
@@ -2681,33 +2663,6 @@ body.auth-page {
                         <h2>UPS Actions</h2>
                         <div class="polling-indicator">
                             <span class="pulse-dot"></span> Live
-                        </div>
-                    </div>
-
-                    <!-- Same 4 cards as the telemetry page, fed by the same /api/ups-vars poll -->
-                    <div class="metrics-grid">
-                        <div class="metric-card highlight">
-                            <div class="metric-label">UPS Status</div>
-                            <div class="metric-value status-online" id="cmd-ups-status">--</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Battery Charge</div>
-                            <div class="metric-value"><span id="cmd-ups-charge">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar" id="cmd-bar-charge" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">UPS Load</div>
-                            <div class="metric-value"><span id="cmd-ups-load">--</span><span class="unit">%</span></div>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar load" id="cmd-bar-load" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Real Power</div>
-                            <div class="metric-value"><span id="cmd-ups-realpower">--</span><span class="unit">W</span>
-                            </div>
                         </div>
                     </div>
 
@@ -3362,29 +3317,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const toggleBeeper = document.getElementById('toggle-beeper');
-    if (toggleBeeper) {
-        toggleBeeper.addEventListener('change', async (e) => {
-            const isEnabled = e.target.checked;
-            toggleBeeper.disabled = true;
-            try {
-                const res = await apiFetch('/api/beeper', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enable: isEnabled })
-                });
-                if (!res.ok) {
-                    toggleBeeper.checked = !isEnabled;
-                }
-            } catch (err) {
-                console.error('Beeper API error:', err);
-                toggleBeeper.checked = !isEnabled;
-            }
-            toggleBeeper.disabled = false;
-            fetchUpsVars();
-        });
-    }
-
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
@@ -3408,14 +3340,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
 
-    // The 4 metric cards exist on the telemetry page and on the commands page (US-059)
+    // The 4 metric cards of the telemetry page (US-086 removed the copy on the commands page)
     const TELEMETRY_METRIC_IDS = {
         status: 'ups-status', charge: 'ups-charge', barCharge: 'bar-charge',
         load: 'ups-load', barLoad: 'bar-load', realPower: 'ups-realpower'
-    };
-    const COMMANDS_METRIC_IDS = {
-        status: 'cmd-ups-status', charge: 'cmd-ups-charge', barCharge: 'cmd-bar-charge',
-        load: 'cmd-ups-load', barLoad: 'cmd-bar-load', realPower: 'cmd-ups-realpower'
     };
 
     function renderMetrics(data, ids) {
@@ -3515,7 +3443,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Update primary metrics (telemetry and commands pages)
             renderMetrics(data, TELEMETRY_METRIC_IDS);
-            renderMetrics(data, COMMANDS_METRIC_IDS);
             renderTestResult(data);
 
             // Reload the command catalog when the UPS connects or disconnects, or when
@@ -3529,7 +3456,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Update table
             if (upsTableBody) {
                 const sortedKeys = Object.keys(data)
-                    .filter(k => k !== 'ups.beeper.switchable' && (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
+                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
                     .sort();
                 let currentIndex = 0;
                 
@@ -3564,29 +3491,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Remove stale rows that are no longer in the payload
                 while (upsTableBody.children.length > currentIndex) {
                     upsTableBody.removeChild(upsTableBody.lastChild);
-                }
-            }
-            
-            const beeperActions = document.querySelector('.ups-actions');
-            const beeperToggle = document.getElementById('toggle-beeper');
-            const beeperState = document.getElementById('beeper-state');
-            
-            if (beeperActions) {
-                if (data['ups.beeper.switchable'] === true && data['ups.beeper.status'] !== undefined) {
-                    beeperActions.style.display = 'flex';
-                    if (beeperToggle && beeperState) {
-                        beeperToggle.disabled = false;
-                        // A muted beeper is still on: the switch disables it
-                        const isMuted = data['ups.beeper.status'] === 'muted';
-                        const isEnabled = data['ups.beeper.status'] !== 'disabled';
-                        if (beeperToggle.checked !== isEnabled) {
-                            beeperToggle.checked = isEnabled;
-                        }
-                        beeperState.textContent = isMuted ? 'Muted' : (isEnabled ? 'Enabled' : 'Disabled');
-                        beeperState.className = 'state-text ' + (isEnabled ? 'active' : 'paused');
-                    }
-                } else {
-                    beeperActions.style.display = 'none';
                 }
             }
             

@@ -162,7 +162,8 @@ void test_api_connected_host_with_data() {
     TEST_ASSERT_TRUE(doc["_disconnected"].isNull());
     TEST_ASSERT_EQUAL_STRING("OL", doc["ups.status"].as<const char*>());
     TEST_ASSERT_EQUAL_STRING("Eaton", doc["ups.mfr"].as<const char*>());
-    TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].as<bool>());
+    // The Web UI beeper toggle is gone (US-086): no ups.beeper.switchable even when connected
+    TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());
 }
 
 // --- US-059: generateUpsCommands ---

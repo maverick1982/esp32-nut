@@ -51,8 +51,6 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
             doc[param.key] = param.value;
         }
     }
-    
-    doc["ups.beeper.switchable"] = usb_ups->supportsBeeperToggle();
 
     std::string out_std;
     serializeJson(doc, out_std);

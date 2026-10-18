@@ -1,0 +1,60 @@
+schema: archetipo/spec/v2
+code: US-086
+title: Web UI senza il toggle del beeper in UPS Telemetry e senza i riquadri di stato in UPS Commands
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-086: Web UI senza il toggle del beeper in UPS Telemetry e senza i riquadri di stato in UPS Commands
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente della Web UI,
+  voglio che ogni comando dell'UPS stia in un solo posto e che la pagina UPS Commands mostri solo i comandi,
+  in modo da non avere due controlli diversi per il beeper e da trovare subito i comandi senza ripetere i dati della telemetria.
+
+  **Dimostrazione**
+  - **UPS Telemetry:** con un UPS che supporta il beeper (per esempio l'Eaton 3S), il riquadro "Beeper Alarm" con l'interruttore non c'è più. Lo stato del beeper resta visibile nella tabella come `ups.beeper.status`.
+  - **UPS Commands:** la pagina parte direttamente con l'ultimo risultato del test, quando c'è, e l'elenco dei comandi. I 4 riquadri UPS Status, Battery Charge, UPS Load e Real Power non ci sono più.
+  - **Beeper:** si comanda ancora dalla pagina UPS Commands e via NUT (`beeper.enable`, `beeper.disable`, `beeper.mute`).
+
+  **Criteri di Accettazione**
+  - [ ] La pagina UPS Telemetry non contiene più il blocco del beeper: il contenitore `.ups-actions`, `#toggle-beeper` e `#beeper-state`. Sparisce anche il JavaScript che lo gestiva: il listener `change` e l'aggiornamento a ogni poll.
+  - [ ] La pagina UPS Commands non contiene più i 4 riquadri `.metrics-grid` (`#cmd-ups-status`, `#cmd-ups-charge`, `#cmd-bar-charge`, `#cmd-ups-load`, `#cmd-bar-load`, `#cmd-ups-realpower`), né il codice che li aggiorna.
+  - [ ] Il resto della pagina UPS Commands funziona come prima:
+    - ultimo risultato del test;
+    - gruppi "Tests & beeper" e "Power control";
+    - conferme dei comandi distruttivi;
+    - messaggio "No commands available";
+    - aggiornamento del catalogo quando cambiano la connessione dell'UPS o la presenza di `ups.beeper.status`.
+  - [ ] Il firmware non espone più `POST /api/beeper` (route e `handleBeeper()`) né il campo `ups.beeper.switchable` nella risposta di `GET /api/ups-vars`. Restano invariati i comandi `beeper.*` via NUT e la pagina UPS Commands, compresi `supportsBeeperToggle()` e `setBeeper()` usati da `LIST CMD` e `INSTCMD`.
+  - [ ] La tabella della telemetria resta uguale. Non serve più escludere `ups.beeper.switchable`.
+  - [ ] Gli asset web embedded sono rigenerati (`python scripts/embed_web.py`) e la build compila.
+  - [ ] Test aggiornati, perché il comportamento atteso cambia:
+    - in `e2e/ups-commands.spec.ts` vanno rimosse le verifiche dei riquadri `#cmd-ups-*`/`#cmd-bar-*` e il test "telemetry unchanged: beeper toggle visible…", sostituiti da verifiche che i due elementi non ci siano più;
+    - in `test/test_web_api` vanno adattate le asserzioni su `ups.beeper.switchable` (il campo non c'è più);
+    - le altre suite nativa ed e2e devono passare.
+
+  **Assunzioni**
+  - **Motivazione:** prima di rifare gli screenshot del README (2026-10-18). Il toggle del beeper in UPS Telemetry (US-042) è diventato un doppione dei comandi `beeper.*` della pagina UPS Commands (US-056/059). I riquadri di UPS Commands (US-059) ripetevano i dati della telemetria.
+  - **Decisione dell'utente (2026-10-18):** si rimuovono anche `POST /api/beeper` e `ups.beeper.switchable`, perché nessuno li usa più.
+  - **Poll di `/api/ups-vars` nella pagina UPS Commands:** resta, perché serve a ricaricare il catalogo dei comandi quando cambiano la connessione o il beeper. Smette solo di aggiornare i riquadri.
+  - **Fuori ambito:**
+    - gli screenshot del README (lavoro separato, dopo questa spec);
+    - il mockup storico `docs/mockups/us-042`.
+history:
+  - status: TODO
+    at: "2026-10-18T13:33:02Z"
+  - status: PLANNED
+    at: "2026-10-18T13:35:18Z"
+  - status: IN PROGRESS
+    at: "2026-10-18T13:36:42Z"
+  - status: REVIEW
+    at: "2026-10-18T13:46:36Z"
+  - status: DONE
+    at: "2026-10-18T13:50:58Z"

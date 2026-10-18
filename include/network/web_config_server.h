@@ -42,7 +42,6 @@ private:
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
-    void handleBeeper();
     void handleUpsCommands();
     void handleUpsCommand();
     void handleUpsVariables();

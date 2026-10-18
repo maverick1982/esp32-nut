@@ -91,7 +91,6 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
     server.on("/api/system-status", HTTP_GET, guarded([this]() { handleSystemStatus(); }));
-    server.on("/api/beeper", HTTP_POST, guarded([this]() { handleBeeper(); }));
     server.on("/api/ups/commands", HTTP_GET, guarded([this]() { handleUpsCommands(); }));
     server.on("/api/ups/command", HTTP_POST, guarded([this]() { handleUpsCommand(); }));
     server.on("/api/ups/variables", HTTP_GET, guarded([this]() { handleUpsVariables(); }));
@@ -332,33 +331,6 @@ void WebConfigServer::handleSystemStatus() {
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);
-}
-
-void WebConfigServer::handleBeeper() {
-    if (!requireJson()) return;
-    if (server.hasArg("plain") == false) {
-        server.send(400, "application/json", "{\"error\": \"Body not received\"}");
-        return;
-    }
-
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, server.arg("plain"));
-
-    if (error) {
-        server.send(400, "application/json", "{\"error\": \"Invalid JSON\"}");
-        return;
-    }
-
-    if (doc["enable"].is<bool>()) {
-        bool enable = doc["enable"].as<bool>();
-        if (usb_ups) {
-            usb_ups->setBeeper(enable);
-            server.send(200, "application/json", "{\"success\": true}");
-            return;
-        }
-    }
-    
-    server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
 }
 
 // Catalogo dei comandi supportati dall'UPS (US-059), uguale in STA e in AP (US-068)
