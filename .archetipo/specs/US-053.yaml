@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: REVIEW
+status: DONE
 body: |-
   #### US-053: EcoFlow River 3 Plus / Delta 3 Plus UPS support via EcoFlowDriver (HID)
 
@@ -38,3 +38,5 @@ history:
     at: "2026-09-27T12:20:00Z"
   - status: REVIEW
     at: "2026-09-27T12:30:00Z"
+  - status: DONE
+    at: "2026-10-09T13:30:10Z"

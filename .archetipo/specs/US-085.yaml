@@ -1,0 +1,49 @@
+schema: archetipo/spec/v2
+code: US-085
+title: L'aggiornamento OTA dalla Web UI non fa scattare il watchdog con un Wi-Fi lento
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: HIGH
+points: 2
+status: TODO
+body: |
+  #### US-085: L'aggiornamento OTA dalla Web UI non fa scattare il watchdog con un Wi-Fi lento
+
+  **Epic:** EP-002 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che aggiorna il firmware dalla pagina Firmware OTA di una scheda lontana dal router,
+  voglio che l'upload vada a buon fine anche quando dura più di 30 secondi,
+  in modo da non dover staccare la scheda e collegarla a un PC per ogni aggiornamento.
+
+  **Dimostrazione**
+  Sull'Eaton 3S, con l'upload di `firmware.bin` rallentato fino a durare più di 30 s (per esempio un client con banda limitata):
+  - prima del fix la scheda si riavvia con `Reset reason: TASK_WDT` e resta sul firmware vecchio;
+  - dopo il fix l'upload termina, compare `[OTA] Success`, la scheda si riavvia sul firmware nuovo e il System Log non riporta crash.
+
+  **Criteri di Accettazione**
+  - [ ] Un upload OTA che dura più del timeout del watchdog del loopTask (30 s), ma riceve dati con continuità, va a buon fine.
+  - [ ] Il watchdog del loopTask resta attivo durante l'upload e per tutto il resto del firmware: non viene disattivato né allungato.
+  - [ ] Un upload bloccato (il client smette di inviare dati) viene abbandonato come oggi. La scheda non si blocca e la Web UI torna a rispondere.
+  - [ ] Anche il corpo di un upload rifiutato (sessione non valida, ramo `ota_rejected`) e di un upload interrotto (`UPLOAD_FILE_ABORTED`) non fa scattare il watchdog.
+  - [ ] Un upload normale (pochi secondi), il rifiuto di un file non valido (primo byte diverso da `0xE9`) e il caricamento dello zip della release si comportano come oggi. Le suite e2e `ota-update.spec.ts` e `ota_zip.spec.ts` passano invariate.
+  - [ ] La verifica su hardware della Dimostrazione è riportata nella review, con la durata dell'upload misurata.
+
+  **Assunzioni**
+  - Segnalazione: JSylvia007 sulla issue #73 (issuecomment-6236484226). Scheda ESP32-S3 con APC Back-UPS ES 600M1, v1.7.2: ogni OTA finisce con `TASK_WDT`. Il backtrace (`IDLE1`, core 1 in idle) non indica il colpevole.
+  - Analisi del 2026-10-17, ipotesi non ancora riprodotta:
+    - il loopTask è sotto il task watchdog con timeout 30 s (`setupLoopWatchdog()` in `src/core/main.cpp`), con il reset a ogni giro di `loop()`;
+    - `WebServer` legge l'upload multipart in modo sincrono (`_parseForm`) e chiama l'handler ogni 1436 byte (`HTTP_UPLOAD_BUFLEN`), quindi `loop()` non riparte fino alla fine dell'upload;
+    - l'handler in `src/network/web_config_server.cpp` non resetta mai il watchdog;
+    - `firmware.bin` pesa circa 1,6 MB, più la cancellazione e la scrittura della flash: con un Wi-Fi lento si superano i 30 s.
+  - Un upload fermo viene abbandonato da `WebServer` dopo 5 s senza dati (`HTTP_MAX_DATA_WAIT`). Quindi un reset del watchdog a ogni blocco ricevuto non nasconde un blocco vero.
+  - Il bug è nella v1.7.2 e anche sui branch di sviluppo. Il branch su cui fare il fix (hotfix su `main` o sui branch di sviluppo) è da decidere al momento del piano.
+  - Fuori ambito:
+    - OTA asincrona o in un task separato;
+    - riduzione della dimensione del firmware;
+    - altri handler HTTP lunghi.
+history:
+  - status: TODO
+    at: "2026-10-17T16:45:14Z"

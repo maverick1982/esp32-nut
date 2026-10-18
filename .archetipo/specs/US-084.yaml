@@ -1,0 +1,60 @@
+schema: archetipo/spec/v2
+code: US-084
+title: Fino a 8 client NUT contemporanei, slot dei client morti liberati prima e connessioni nel System Log
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-084: Fino a 8 client NUT contemporanei, slot dei client morti liberati prima e connessioni nel System Log
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-067
+
+  **User Story**
+  Come amministratore che collega allo stesso ESP32 più client NUT (upsmon su più server, Home Assistant, PeaNUT, exporter),
+  voglio che il server NUT accetti fino a 8 connessioni contemporanee e mi mostri chi occupa gli slot,
+  in modo da collegare 5-6 client senza `ERR FAILED - Max clients reached` e capire subito chi tiene occupato uno slot.
+
+  **Dimostrazione**
+  Sull'Eaton 3S:
+  - 8 sessioni `upsc ups@<ip>` in loop, più la Web UI aperta, ricevono tutte i dati;
+  - un nono client riceve il rifiuto, mentre la Web UI continua a rispondere;
+  - il System Log mostra connessione, chiusura e rifiuto con slot e IP;
+  - se si stacca dalla rete un client collegato senza chiudere la connessione, il suo slot si libera in circa 90 s, non più in 300 s.
+
+  **Criteri di Accettazione**
+  - [ ] Il server NUT accetta fino a 8 connessioni contemporanee (oggi 4).
+  - [ ] Oltre le 8 connessioni il nuovo client riceve `ERR FAILED - Max clients reached` e la connessione viene chiusa, come oggi.
+  - [ ] Ogni connessione accettata ha il keepalive TCP attivo: idle 60 s, intervallo 10 s, 3 tentativi. Un client che sparisce senza chiudere la connessione libera lo slot in circa 90 s. Il timeout di inattività di 300 s resta invariato.
+  - [ ] Nel System Log della Web UI compaiono:
+    - la connessione accettata (slot e IP:porta del client);
+    - la chiusura della sessione (slot e motivo: chiusa dal client, `LOGOUT`, timeout di inattività);
+    - il rifiuto per slot esauriti (IP del client), a livello WARN.
+
+    Oggi questi eventi vanno solo sulla seriale.
+  - [ ] Con 8 client attivi e la Web UI aperta, l'heap minimo resta sopra una soglia sicura, da fissare nel piano dopo la misura. Il valore misurato va nella review.
+  - [ ] Con 1-4 client il comportamento e le risposte del protocollo sono identici a oggi.
+  - [ ] I test nativi di `test_nut_server` coprono il nuovo limite e i messaggi di log di connessione, chiusura e rifiuto.
+
+  **Assunzioni**
+  - Nata dalla issue #84 (bryan065, CyberPower CP1500PFCRM2U, v1.7.2): il terzo client viene rifiutato e servono 5-6 client.
+  - Perché 8 e non di più:
+    - il core precompilato (IDF 5.1) ha `CONFIG_LWIP_MAX_SOCKETS 16` e `CONFIG_LWIP_MAX_ACTIVE_TCP 16`;
+    - restano occupati il listener NUT, il listener web, la richiesta web in corso e, in AP, il DNS del captive portal;
+    - 8 client lasciano 4-5 socket liberi. Il tetto teorico sarebbe circa 12, ma senza margine la Web UI può smettere di rispondere.
+  - Memoria: circa 1,4 KB di buffer di ricezione di `NetworkClient` per client, più i dati in coda in lwIP. L'heap libero misurato è circa 200 KB.
+  - I log usano il meccanismo del System Log di `NUTServer` introdotto con US-067.
+  - La spec si implementa dopo il merge su `main` di `feature/ups-commands`, `feature/web-auth` e `feature/ups-settings`. Decisione del 2026-10-17: nessun hotfix su `main`.
+  - Riferimento upstream: `upsd` non rifiuta con un messaggio. Ha `MAXCONN` e oltre il limite smette di servire i client (`nut_repo/server/upsd.c`). Il messaggio di rifiuto resta una deviazione nota.
+  - Fuori ambito:
+    - limite configurabile dalla Web UI;
+    - aumento dei socket lwIP (richiede IDF 5.5);
+    - liberare lo slot più inattivo quando sono tutti occupati;
+    - `LIST CLIENT`;
+    - la risposta `ERR ACCESS-DENIED` al timeout di inattività.
+history:
+  - status: TODO
+    at: "2026-10-17T15:50:11Z"
