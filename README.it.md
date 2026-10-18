@@ -1,6 +1,6 @@
 # <img src="docs/images/logo.png" width="40" height="40" align="left" style="margin-right: 15px;"> ESP32 NUT Server Bridge
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 *🇬🇧 [Read in English](README.md)*
 
@@ -202,4 +202,6 @@ Grazie di cuore a chiunque decida di contribuire! 🚀
 
 ## 📄 Licenza
 
-Questo progetto è rilasciato sotto licenza MIT. Consulta il file [LICENSE](LICENSE) per maggiori dettagli.
+Questo progetto è rilasciato sotto licenza **GNU General Public License v3.0 o successiva**. Consulta il file [LICENSE](LICENSE) per maggiori dettagli.
+
+esp32-nut segue il comportamento di [Network UPS Tools](https://networkupstools.org/) (GPL v2 o successiva), e parte delle sue tabelle HID-NUT e della logica dei driver deriva dai sorgenti di NUT. I file derivati riportano gli avvisi di copyright dei file di NUT da cui provengono, e il file [NOTICE](NOTICE) elenca i componenti di terze parti. Le release fino alla v1.8.0 sono state pubblicate con licenza MIT e restano disponibili con quella licenza.

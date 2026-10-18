@@ -1,3 +1,19 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/ecoflow-hid.c:
+ *   Copyright (C) 2003 - 2012 Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2013 Charles Lepple <clepple+nut@gmail.com>
+ *                 2024 Yevgeniy Kuksenko <2882631+ykuksenko@users.noreply.github.com>
+ *                 2025 M. Greyson Christoforo <grey@christoforo.net>
+ */
+
 #include "EcoFlowDriver.h"
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"

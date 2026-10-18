@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
         sessionExpired = true;
         window.location.replace('/login?expired=1');
     }
+    // Descriptions from Network UPS Tools data/cmdvartab (https://networkupstools.org/),
+    // GPL-2.0-or-later. esp32-nut is licensed GPL-3.0-or-later: see NOTICE
     const NUT_DESCRIPTIONS = {
     'ups.alarm': 'UPS alarms',
     'ups.status': 'UPS status',

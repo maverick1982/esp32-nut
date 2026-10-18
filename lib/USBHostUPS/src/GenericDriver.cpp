@@ -1,3 +1,25 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/usbhid-ups.c:
+ *   Copyright (C) 2003-2022 Arnaud Quette <arnaud.quette@gmail.com>
+ *                 2005 John Stamp <kinsayder@hotmail.com>
+ *                 2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2016 Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2020-2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * drivers/libhid.c:
+ *   Copyright (C) 2003 - 2007 Arnaud Quette <arnaud.quette@free.fr> && <arnaud.quette@mgeups.com>
+ *                 John Stamp <kinsayder@hotmail.com>
+ *                 Peter Selinger <selinger@users.sourceforge.net>
+ *                 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ */
+
 #include "GenericDriver.h"
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"

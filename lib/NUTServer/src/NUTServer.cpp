@@ -1,3 +1,37 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Follows the behaviour of the NUT upsd server; small parts are translated from Network UPS Tools
+ * (https://networkupstools.org/), GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * server/upsd.c:
+ *   Copyright (C) 1999 Russell Kroll <rkroll@exploits.org>
+ *                 2008 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2011 - 2012 Arnaud Quette <arnaud.quette.free.fr>
+ *                 2019 Eaton (author: Arnaud Quette <ArnaudQuette@eaton.com>)
+ *                 2020 - 2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * server/netget.c:
+ *   Copyright (C) 2003 Russell Kroll <rkroll@exploits.org>
+ *
+ * server/netlist.c:
+ *   Copyright (C) 2003 Russell Kroll <rkroll@exploits.org>
+ *                 2012 Arnaud Quette <arnaud.quette@free.fr>
+ *
+ * server/netset.c:
+ *   Copyright (C) 2003 Russell Kroll <rkroll@exploits.org>
+ *
+ * common/state.c:
+ *   Copyright (C) 2003 Russell Kroll <rkroll@exploits.org>
+ *                 2008 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2012 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2020-2024 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * common/parseconf.c:
+ *   Copyright (C) 2002 Russell Kroll <rkroll@exploits.org>
+ */
+
 #include "NUTServer.h"
 #include <stdarg.h>
 #include <stdlib.h>

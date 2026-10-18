@@ -1,3 +1,17 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/libhid.c:
+ *   Copyright (C) 2003 - 2007 Arnaud Quette <arnaud.quette@free.fr> && <arnaud.quette@mgeups.com>
+ *                 John Stamp <kinsayder@hotmail.com>
+ *                 Peter Selinger <selinger@users.sourceforge.net>
+ *                 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ */
+
 #ifndef NUT_USAGES_H
 #define NUT_USAGES_H
 

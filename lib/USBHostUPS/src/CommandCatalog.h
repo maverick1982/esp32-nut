@@ -1,3 +1,45 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/usbhid-ups.c:
+ *   Copyright (C) 2003-2022 Arnaud Quette <arnaud.quette@gmail.com>
+ *                 2005 John Stamp <kinsayder@hotmail.com>
+ *                 2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2016 Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2020-2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * drivers/mge-hid.c:
+ *   Copyright (C) 2003 - 2015 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2015 - 2024 Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2020 - 2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *                 2024 - 2025 "DaRK AnGeL" <28630321+masterwishx@users.noreply.github.com>
+ *
+ * drivers/apc-hid.c:
+ *   Copyright (C) 2003 - 2009 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 John Stamp <kinsayder@hotmail.com>
+ *                 2005 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2009 - 2010 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *
+ * drivers/cps-hid.c:
+ *   Copyright (C) 2003 - 2008 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2020 - 2025 Jim Klimov <jimklimov+nut@gmail.com>
+ *                 2024 Alejandro González <me@alegon.dev>
+ *
+ * drivers/powercom-hid.c:
+ *   Copyright (C) 2003 - 2009 Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2020 - 2024 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * data/cmdvartab (variable and command descriptions): Network UPS Tools project.
+ */
+
 #ifndef COMMAND_CATALOG_H
 #define COMMAND_CATALOG_H
 

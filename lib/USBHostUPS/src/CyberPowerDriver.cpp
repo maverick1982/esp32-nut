@@ -1,3 +1,17 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/cps-hid.c:
+ *   Copyright (C) 2003 - 2008 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2020 - 2025 Jim Klimov <jimklimov+nut@gmail.com>
+ *                 2024 Alejandro González <me@alegon.dev>
+ */
+
 #include "CyberPowerDriver.h"
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"

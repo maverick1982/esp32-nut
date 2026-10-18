@@ -1,3 +1,17 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/apc-hid.c:
+ *   Copyright (C) 2003 - 2009 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 John Stamp <kinsayder@hotmail.com>
+ *                 2005 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2009 - 2010 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ */
+
 #include "APCDriver.h"
 #include "IUSBHostUPS.h"
 #include "HIDParser.h"
