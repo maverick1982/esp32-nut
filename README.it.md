@@ -13,15 +13,17 @@
 >
 > Dopo questa installazione, una tantum, gli aggiornamenti successivi si possono di nuovo fare via OTA.
 
-Un firmware open-source per ESP32-S3 che funge da **Server NUT (Network UPS Tools) bridge** standalone via Wi-Fi. Si connette a un gruppo di continuità (UPS) Eaton (come l'Eaton 3S 700) tramite USB Host e ne espone i dati sulla rete locale utilizzando il protocollo standard NUT (porta 3493) e un'interfaccia web integrata.
+Un firmware open-source per ESP32-S3 che funge da **Server NUT (Network UPS Tools) bridge** standalone via Wi-Fi. Si connette a un gruppo di continuità (UPS) USB (Eaton, APC, CyberPower, Powercom e altri) tramite USB Host e ne espone i dati sulla rete locale utilizzando il protocollo standard NUT (porta 3493) e un'interfaccia web integrata.
 
 Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone solo della porta USB) in sistemi come Home Assistant, TrueNAS, Synology o qualsiasi altro client NUT senza la necessità di tenere acceso un Raspberry Pi o un PC 24 ore su 24.
 
 ## 🌟 Funzionalità
 
 - **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton, APC, CyberPower, Powercom).
-- **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti.
-- **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva.
+- **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), fino a 8 contemporaneamente.
+- **Comandi UPS**: Test della batteria e del pannello, beeper, comandi di carico e di spegnimento, dalla Web UI oppure con `upscmd` e Home Assistant, come con il driver `usbhid-ups` di NUT.
+- **Parametri UPS**: Modifica dei parametri che l'UPS permette di cambiare (soglie di batteria scarica, punti di intervento, data della batteria, ritardi di spegnimento, …) dalla Web UI oppure con `upsrw`.
+- **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva, protetta da login.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
 
@@ -41,10 +43,10 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 - APC Back-UPS CS 500
 - APC BackUPS Pro 900
-- APC Back-UPS XS 700U
+- APC Back-UPS XS 700U, XS 1500M
 - APC Back-UPS BX750MI, BX1200MI
-- APC Back-UPS ES 700G
-- APC Smart-UPS 750
+- APC Back-UPS ES 600M1, ES 700G
+- APC Smart-UPS 750, 750L, 1000L
 
 **Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). Dalla v1.7.1 la scheda si riavvia da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
 </details>
@@ -56,6 +58,8 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
 - CyberPower CP1500EPFCLCD, CP1600EPFCLCD
+- CyberPower CP1500PFCLCDa
+- CyberPower CP1500PFCRM2U
 - CyberPower SL700U
 </details>
 
@@ -82,24 +86,28 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 <br>
 
-- **Generici / Altre Marche**: Se un UPS non è esplicitamente riconosciuto, il sistema utilizzerà un driver generico di fallback. Attualmente questo driver è solo un abbozzo (stub) e non può leggere statistiche reali. Se il tuo UPS rientra in questa categoria, puoi usare il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`). Allega questo file quando apri una Issue su GitHub per richiedere il supporto dedicato o segnalare problemi sui driver esistenti.
+- **Generici / Altre Marche**: Se la marca dell'UPS non è riconosciuta, il sistema usa un driver generico che legge i valori standard USB HID (carica e autonomia della batteria, carico, tensioni, stato). I valori specifici della marca possono mancare. In questo caso, o per segnalare un problema su un driver esistente, usa il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`) e allegalo quando apri una Issue su GitHub.
 
 > [!NOTE]
 > **Requisito Protocollo USB HID:** Questo firmware supporta attualmente solo UPS conformi allo standard **USB HID Power Device Class** (`usbhid-ups`). I gruppi di continuità che comunicano tramite convertitori USB-Seriale o protocolli seriali proprietari (es. Megatec/Q1, serial over USB CDC) non sono attualmente supportati.
 
 ## 📸 Screenshot
 
-| Telemetria UPS | Configurazione Wi-Fi |
+| Telemetria UPS | Comandi UPS |
 | :---: | :---: |
-| [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
+| [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Comandi UPS](docs/images/ui-commands.png)](docs/images/ui-commands.png) |
 
-| Server NUT | Log di Sistema |
+| Parametri UPS | Configurazione Wi-Fi |
 | :---: | :---: |
-| [![Server NUT](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![Log di Sistema](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+| [![Parametri UPS](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
 
-| Aggiornamento OTA | |
+| Server NUT | Login Web |
 | :---: | :---: |
-| [![Aggiornamento OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
+| [![Server NUT](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![Login Web](docs/images/ui-weblogin.png)](docs/images/ui-weblogin.png) |
+
+| Log di Sistema | Aggiornamento OTA |
+| :---: | :---: |
+| [![Log di Sistema](docs/images/ui-logs.png)](docs/images/ui-logs.png) | [![Aggiornamento OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) |
 
 ## 🛠 Requisiti Hardware & Cablaggio
 
@@ -173,13 +181,17 @@ La Web UI è protetta da nome utente e password.
 - Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.
 - **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).
 - **Client NUT**: Configura Home Assistant o il tuo NAS per connettersi all'IP dell'ESP32 sulla porta `3493` utilizzando le credenziali definite in precedenza.
+- **Nome dell'UPS**: i client NUT indicano l'UPS con il campo **UPS Name** della scheda NUT (predefinito `ups`), non con il modello, per esempio `upsc ups@192.168.1.50`.
+- **Fino a 8 client NUT** possono essere connessi contemporaneamente. Oltre questo numero una nuova connessione viene rifiutata, e il System Log mostra quali indirizzi occupano le connessioni. Un client che sparisce senza chiudere la connessione libera il suo posto dopo circa 90 secondi.
 
 ## 🛠 Supporta il Progetto
 
 Questo progetto è completamente open-source e gratuito. 
 Se ti è stato utile per integrare il tuo UPS nella domotica o nel tuo server rack, prendi in considerazione l'idea di supportarne lo sviluppo!
 
-Le donazioni verranno utilizzate per l'acquisto di nuovi modelli di UPS da testare, schede di sviluppo ESP32 e altri strumenti hardware necessari per migliorare il codice e garantire la compatibilità con un numero sempre maggiore di dispositivi.
+⭐ **Il modo più semplice per supportarlo è mettere una stellina al repository su GitHub.** Non costa nulla e aiuta altre persone a trovare il progetto.
+
+Se vuoi fare di più, le donazioni verranno utilizzate per l'acquisto di nuovi modelli di UPS da testare, schede di sviluppo ESP32 e altri strumenti hardware necessari per migliorare il codice e garantire la compatibilità con un numero sempre maggiore di dispositivi.
 
 Puoi supportare il progetto tramite:
 

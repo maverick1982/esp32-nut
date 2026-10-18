@@ -13,15 +13,17 @@
 >
 > After this one-time install, later updates can be installed via OTA again.
 
-An open-source firmware for ESP32-S3 that acts as a standalone **Network UPS Tools (NUT) Server bridge** over Wi-Fi. It connects to an Eaton UPS (like the Eaton 3S 700) via USB Host and exposes its data to your local network using the standard NUT protocol (port 3493) and a built-in Web Interface.
+An open-source firmware for ESP32-S3 that acts as a standalone **Network UPS Tools (NUT) Server bridge** over Wi-Fi. It connects to a USB UPS (Eaton, APC, CyberPower, Powercom and more) via USB Host and exposes its data to your local network using the standard NUT protocol (port 3493) and a built-in Web Interface.
 
 This allows you to easily integrate your USB-only UPS into Home Assistant, TrueNAS, Synology, or any other NUT-compatible client without needing a dedicated Raspberry Pi or PC running 24/7.
 
 ## 🌟 Features
 
 - **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton, APC, CyberPower, Powercom).
-- **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients.
-- **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface.
+- **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), up to 8 at the same time.
+- **UPS Commands**: Battery and panel tests, beeper, load and shutdown commands, from the Web UI or with `upscmd` and Home Assistant, as with NUT's `usbhid-ups` driver.
+- **UPS Settings**: Change the parameters your UPS allows (low battery thresholds, transfer points, battery date, shutdown delays, …) from the Web UI or with `upsrw`.
+- **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface, protected by a login.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.
 
@@ -41,10 +43,10 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - APC Back-UPS CS 500
 - APC BackUPS Pro 900
-- APC Back-UPS XS 700U
+- APC Back-UPS XS 700U, XS 1500M
 - APC Back-UPS BX750MI, BX1200MI
-- APC Back-UPS ES 700G
-- APC Smart-UPS 750
+- APC Back-UPS ES 600M1, ES 700G
+- APC Smart-UPS 750, 750L, 1000L
 
 **Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). Since v1.7.1 the board restarts on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
 </details>
@@ -56,6 +58,8 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
 - CyberPower CP1500EPFCLCD, CP1600EPFCLCD
+- CyberPower CP1500PFCLCDa
+- CyberPower CP1500PFCRM2U
 - CyberPower SL700U
 </details>
 
@@ -82,24 +86,28 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 <br>
 
-- **Generic / Other Brands**: If an UPS is not recognized, the system will fall back to a generic stub driver. Currently, this driver cannot read dynamic stats (like Battery Level). If your UPS falls into this category, you can use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`). Please attach this file when opening an issue on GitHub to request dedicated support or report bugs on existing drivers.
+- **Generic / Other Brands**: If a UPS brand is not recognized, the system falls back to a generic driver that reads the standard USB HID values (battery charge and runtime, load, voltages, status). Brand-specific values may be missing. In that case, or to report a bug on an existing driver, use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`) and attach it when opening an issue on GitHub.
 
 > [!NOTE]
 > **USB HID Protocol Requirement:** This firmware currently supports only UPS models using the standard **USB HID Power Device Class** (`usbhid-ups`). UPS units communicating via USB-to-Serial protocols (such as Megatec/Q1, USB CDC/serial bridges, or proprietary serial protocols) are not currently supported.
 
 ## 📸 Screenshots
 
-| UPS Telemetry | Wi-Fi Config |
+| UPS Telemetry | UPS Commands |
 | :---: | :---: |
-| [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
+| [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![UPS Commands](docs/images/ui-commands.png)](docs/images/ui-commands.png) |
 
-| NUT Server | System Logs |
+| UPS Settings | Wi-Fi Config |
 | :---: | :---: |
-| [![NUT Server](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![System Logs](docs/images/ui-logs.png)](docs/images/ui-logs.png) |
+| [![UPS Settings](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
 
-| Firmware OTA | |
+| NUT Server | Web Login |
 | :---: | :---: |
-| [![Firmware OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) | |
+| [![NUT Server](docs/images/ui-nut.png)](docs/images/ui-nut.png) | [![Web Login](docs/images/ui-weblogin.png)](docs/images/ui-weblogin.png) |
+
+| System Logs | Firmware OTA |
+| :---: | :---: |
+| [![System Logs](docs/images/ui-logs.png)](docs/images/ui-logs.png) | [![Firmware OTA](docs/images/ui-ota.png)](docs/images/ui-ota.png) |
 
 ## 🛠 Hardware Requirements & Wiring
 
@@ -173,13 +181,17 @@ The Web UI is protected by a username and password.
 - Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.
 - **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
 - **NUT Client**: Configure your Home Assistant or NAS to connect to the ESP32's IP on port `3493` using the credentials you defined.
+- **UPS name**: NUT clients address the UPS by the **UPS Name** of the NUT tab (default `ups`), not by its model, e.g. `upsc ups@192.168.1.50`.
+- **Up to 8 NUT clients** can be connected at the same time. Beyond that a new connection is rejected, and the System Log shows which addresses hold the connections. A client that disappears without closing its connection frees its slot after about 90 seconds.
 
 ## 🛠 Support the Project
 
 This project is entirely open-source and free to use. 
 If it helped you integrate your UPS into your smart home or server rack, please consider supporting its ongoing development! 
 
-Donations will be explicitly used to purchase new UPS models for testing, ESP32 development boards, and other hardware tools necessary to improve the code and expand compatibility with a wider range of devices.
+⭐ **The simplest way to support it is to star the repository on GitHub.** It costs nothing and helps other people find the project.
+
+If you want to do more, donations will be explicitly used to purchase new UPS models for testing, ESP32 development boards, and other hardware tools necessary to improve the code and expand compatibility with a wider range of devices.
 
 You can support the project via:
 
