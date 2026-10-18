@@ -4,10 +4,12 @@
 #include <stdint.h>
 #include <string.h>
 #include <vector>
+#include <utility>
 #include <stdlib.h>
 #include <limits.h>
 #include "HIDUsages.h"
 #include "UPSData.h"
+#include "NutTable.h"
 
 // A NUT instant command the bridge knows about. Descriptions come verbatim from
 // nut_repo/data/cmdvartab; destructive commands cut power to the load.
@@ -348,18 +350,50 @@ inline StepsResult resolveShutdownSteps(const char* name, const char* param, con
     return StepsResult::NOT_SUPPORTED;
 }
 
+// True when a usage of the group exists in any report type: the presence rule of the
+// HU_FLAG_ABSENT rows (HIDGetItemData() takes the path whatever the report type, US-066)
+inline bool hasPath(const std::vector<HIDUsageDef>& usages, const UsageGroup& g) {
+    for (const auto& u : usages) {
+        for (size_t i = 0; i < g.n_paths; i++) {
+            if (strcmp(u.path, g.paths[i]) == 0) return true;
+        }
+        for (size_t i = 0; i < g.n_codes; i++) {
+            if (u.usage == g.codes[i]) return true;
+        }
+    }
+    return false;
+}
+
 /**
  * ups.delay.shutdown and ups.delay.start with NUT semantics: configured delays, never read
- * from the device (HU_FLAG_ABSENT in mge-hid.c, apc-hid.c, cps-hid.c), set by the host at
- * connection with the driver defaults (IUPSDriver::defaultOffDelay/defaultOnDelay). Only
- * when the device has the group and the driver supports the shutdown commands; what the
- * device reports in DelayBeforeShutdown/Startup is ups.timer.*.
+ * from the device (HU_FLAG_ABSENT in mge-hid.c, apc-hid.c, cps-hid.c, powercom-hid.c), set
+ * by the host at connection with the driver defaults (IUPSDriver::defaultOffDelay /
+ * defaultOnDelay). Only when the driver's subdriver declares them (delay_vars, see
+ * IUPSDriver::delayVariablesSupported) and the device has one of their paths in any report
+ * type, as upstream; what the device reports in DelayBeforeShutdown/Startup is ups.timer.*.
+ * paths: the subdriver's own paths (IUPSDriver::delayPaths, US-066); nullptr for a driver
+ * without an upstream subdriver, which uses the paths of every subdriver (US-058).
+ * saved: the values written with SET VAR (IDriverVarStore, US-067). A saved value replaces
+ * the default only for a variable set by this call, and only while it is still an integer
+ * >= 0; the host calls this again after each string descriptor, so it never falls back.
  */
 inline void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& usages,
-                               int32_t off_delay, int32_t on_delay, bool shutdown_cmds) {
-    if (!shutdown_cmds) return;
-    if (hasFeature(usages, kShutdown)) data.set("ups.delay.shutdown", String((int)off_delay));
-    if (hasFeature(usages, kStartup)) data.set("ups.delay.start", String((int)on_delay));
+                               int32_t off_delay, int32_t on_delay, bool delay_vars,
+                               const NutTable::DelayPaths* paths = nullptr,
+                               const std::vector<std::pair<String, String>>* saved = nullptr) {
+    if (!delay_vars) return;
+    bool sd = paths ? NutTable::hasAnyPath(usages, paths->shutdown, paths->n_shutdown) : hasPath(usages, kShutdown);
+    bool st = paths ? NutTable::hasAnyPath(usages, paths->startup, paths->n_startup) : hasPath(usages, kStartup);
+    if (saved) {
+        for (const auto& kv : *saved) {
+            int32_t v = 0;
+            if (!parseDelayParam(kv.second.c_str(), v) || v < 0) continue;
+            if (sd && strcmp(kv.first.c_str(), "ups.delay.shutdown") == 0) off_delay = v;
+            if (st && strcmp(kv.first.c_str(), "ups.delay.start") == 0) on_delay = v;
+        }
+    }
+    if (sd) data.set("ups.delay.shutdown", String((int)off_delay));
+    if (st) data.set("ups.delay.start", String((int)on_delay));
 }
 
 } // namespace CommandCatalog

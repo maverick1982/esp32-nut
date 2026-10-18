@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-083
+title: Menu laterale identico in tutte le pagine, comprese "UPS Commands" e "UPS Settings"
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-083: Menu laterale identico in tutte le pagine, comprese "UPS Commands" e "UPS Settings"
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-059, US-068
+
+  **User Story**
+  Come amministratore che usa la Web UI,
+  voglio che il menu a sinistra resti identico quando passo da una pagina all'altra,
+  in modo che l'interfaccia sembri stabile e coerente e i comandi del menu restino dove me li aspetto.
+
+  **Dimostrazione**
+  Si apre la Web UI su desktop (finestra di 1280 px). Passando da Status a "UPS Commands", poi a "UPS Settings" e poi a NUT, il menu a sinistra non cambia larghezza. Logo, titolo, icone, voci e la sezione Log out in basso non si spostano e non cambiano dimensione.
+
+  **Criteri di Accettazione**
+  - [ ] Su desktop il menu a sinistra ha la stessa larghezza in tutte le pagine, anche in "UPS Commands" e "UPS Settings", con qualsiasi contenuto: liste lunghe, messaggi di errore, valori lunghi.
+  - [ ] In tutte le pagine logo, titolo, icone e voci del menu, nome utente e pulsante Log out hanno la stessa posizione e la stessa dimensione.
+  - [ ] I contenuti di "UPS Commands" e "UPS Settings" restano interamente utilizzabili nello spazio rimasto (nessun pulsante tagliato o nascosto) da 1024 px in su.
+  - [ ] Il layout mobile, sotto il breakpoint con il menu in alto, non cambia.
+  - [ ] Un test e2e Playwright confronta la posizione e la dimensione del menu, del logo e del Log out tra le pagine e fallisce se differiscono.
+
+  **Assunzioni**
+  - Causa probabile, da verificare in fase di planning: il contenitore flex comprime il menu quando il contenuto delle due pagine è più largo dello spazio disponibile.
+  - Le pagine di riferimento sono quelle di oggi (Status, NUT, Wi-Fi, ecc.): il loro menu non cambia.
+history:
+  - status: TODO
+    at: "2026-10-16T20:24:35Z"
+  - status: PLANNED
+    at: "2026-10-16T20:29:01Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T20:30:32Z"
+  - status: REVIEW
+    at: "2026-10-16T20:40:44Z"
+  - status: DONE
+    at: "2026-10-16T21:22:51Z"

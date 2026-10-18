@@ -3,6 +3,7 @@
 #include "network/web_config_server.h"
 #include "core/app_logger.h"
 #include "core/crash_diag.h"
+#include "core/driver_var_store.h"
 #include <Preferences.h>
 #include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
@@ -15,6 +16,9 @@ AppNetworkManager network_mgr;
 NUTServer nut_server;
 DiagnosticLED diagnostic_led;
 WebConfigServer web_server(config_mgr);
+
+// Driver-side variables written with SET VAR (ups.delay.*, outlet.*.desc), NVS "nutrw" (US-067)
+static NvsDriverVarStore driver_var_store;
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -128,9 +132,12 @@ void setup() {
     }
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
+    // "%s": messages can carry values sent by NUT clients (SET VAR, US-067)
     usb_ups.setLogCallback([](const char* level, const char* msg) {
-        AppLogger::log(level, msg);
+        AppLogger::log(level, "%s", msg);
     });
+    // The host loads the saved values once, before the first connection (US-067)
+    usb_ups.setDriverVarStore(&driver_var_store);
 
     // Delay USB host initialization on cold boot to allow the UPS USB interface to stabilize
     // Many UPS devices (like APC) take a few seconds to properly handle USB requests after power on.
@@ -149,6 +156,10 @@ void setup() {
     if (config_ok) {
         NutConfig nut_config = config_mgr.getNutConfig();
         NUTServerConfig nut_server_config = {nut_config.username, nut_config.password, nut_config.ups_name};
+        // SET VAR refused by the server checks (US-067)
+        nut_server.setLogCallback([](const char* level, const char* msg) {
+            AppLogger::log(level, "%s", msg);
+        });
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
             AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {

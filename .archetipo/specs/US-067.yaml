@@ -1,0 +1,64 @@
+schema: archetipo/spec/v2
+code: US-067
+title: Modifica dei parametri dell'UPS via NUT (SET VAR / upsrw)
+epic:
+  code: EP-003
+  title: Server NUT
+priority: HIGH
+points: 5
+status: DONE
+body: |
+  #### US-067: Modifica dei parametri dell'UPS via NUT (SET VAR / upsrw)
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-066
+
+  **User Story**
+  Come amministratore che usa upsrw o Home Assistant,
+  voglio cambiare via NUT le soglie e i ritardi dell'UPS e sapere se la modifica è andata a buon fine,
+  in modo da configurarlo senza il software del produttore e senza collegarlo a un PC.
+
+  **Dimostrazione**
+  `upsrw -s battery.charge.low=30 -u <user> -p <pw> ups@<ip>` risponde OK. Al poll successivo `upsc` mostra 30, valore riletto dall'UPS. `upsrw -w -s battery.charge.low=25 ...` attiva TRACKING e stampa `SUCCESS` invece dell'avviso "'OK' only means the NUT data server accepted the request". `upsrw -s ups.delay.shutdown=60` risponde OK; il valore resta 60 dopo un riavvio dell'ESP32, e `shutdown.return` aspetta 60 s. Un valore fuori elenco dà `ERR INVALID-VALUE` e all'UPS non arriva nulla.
+
+  **Criteri di Accettazione**
+  - [ ] `SET VAR <ups> <var> "<value>"` accetta valori tra virgolette, anche con spazi. Senza TRACKING risponde OK solo a scrittura riuscita.
+  - [ ] Gli errori sono quelli di upsd: `ACCESS-DENIED`, `UNKNOWN-UPS`, `DRIVER-NOT-CONNECTED`, `VAR-NOT-SUPPORTED`, `READONLY`, `TOO-LONG`, `INVALID-VALUE`, `SET-FAILED`. In caso di errore all'UPS non arriva nulla.
+  - [ ] Per le variabili HID il valore viene convertito come in usbhid-ups:
+    - tabelle di lookup (yes/no, enable/disable, sensitivity)
+    - date (`battery.mfr.date`, `ups.date`, `ups.time`)
+    - interi negli altri casi
+
+    Poi viene scritto nel Feature report, il report viene riletto e `LIST VAR` mostra il valore restituito dall'UPS.
+  - [ ] Per le variabili lato driver (`ups.delay.*`, `outlet.*.desc`) non c'è I/O USB: il valore si salva in NVS, sopravvive a riavvio e OTA e alla connessione sostituisce il default del driver. `ups.delay.*` accetta solo interi >= 0.
+  - [ ] `load.off.delay`, `shutdown.return` e gli altri comandi usano subito il nuovo ritardo, senza riavvio.
+  - [ ] TRACKING come in upsd (`docs/net-protocol.txt`):
+    - `SET TRACKING ON|OFF` vale per la sessione del client e risponde `OK`; un altro valore dà `ERR INVALID-ARGUMENT`.
+    - `GET TRACKING` risponde `ON` o `OFF`.
+    - Con TRACKING attivo, gli errori di validazione (permessi, variabile, READONLY, TOO-LONG, INVALID-VALUE) restano immediati. Se la richiesta è valida, `SET VAR` risponde `OK TRACKING <uuid4>`.
+    - `GET TRACKING <id>` risponde `SUCCESS`, `ERR INVALID-ARGUMENT` (conversione fallita) o `ERR FAILED` (scrittura fallita). L'esito è già noto quando arriva la risposta, quindi `PENDING` non compare mai.
+    - Un id sconosciuto o scaduto dà `ERR UNKNOWN`. `GET TRACKING <id>` con TRACKING disattivo dà `ERR FEATURE-NOT-CONFIGURED`.
+    - Gli esiti si conservano in una tabella a dimensione fissa: i più vecchi vengono scartati, senza allocazioni che crescono nel tempo.
+  - [ ] Ogni SET, riuscito o fallito, va nel System Log con variabile, valore ed esito.
+  - [ ] I test nativi coprono ogni codice d'errore, il ciclo scrittura/rilettura sulle fixture e la sequenza di TRACKING usata da `upsrw -w`.
+  - [ ] Il replay di ogni fixture verifica anche l'elenco finale di `LIST RW`, cioè `writableVariables()` dopo il replay e dopo la fine simulata del primo poll completo (`finishInit`), con nomi e lunghezze massime e con `ups.delay.*` compreso. Oggi il replay controlla solo quali righe della tabella il descriptor lega (miglioramento aperto dalla code review di US-066). Gli attesi si ricavano dai byte dei report, mai dall'output del codice.
+
+  **Assunzioni**
+  - Riferimenti: `setvar()` in `nut_repo/drivers/usbhid-ups.c`; `set_var()` e `SET TRACKING` in `nut_repo/server/netset.c`; `GET TRACKING` in `nut_repo/server/netget.c`; `tracking_get()` in `nut_repo/server/upsd.c`; `do_set()` in `nut_repo/clients/upsrw.c`.
+  - `DelayBeforeShutdown` / `DelayBeforeStartup` dell'UPS sono timer: `ups.delay.*` non si scrive mai sull'UPS al momento del SET, ma solo quando parte un comando (US-058).
+  - Senza TRACKING la risposta è sincrona: OK solo a scrittura avvenuta, altrimenti `ERR SET-FAILED`. upsd invece risponde OK appena inoltra la richiesta al driver. Qui server e driver sono lo stesso processo, quindi l'esito è già noto. Con TRACKING il comportamento è quello di upsd.
+  - Le credenziali NUT che autorizzano `INSTCMD` autorizzano anche `SET`.
+  - TRACKING per `INSTCMD` (`upscmd -w`) è in US-069.
+  - Il reset ai default delle variabili lato driver è nella Web UI (US-068).
+  - Il controllo end-to-end di `LIST RW` nel replay viene dalla code review di US-066 (2026-10-15).
+history:
+  - status: TODO
+    at: "2026-10-14T16:10:02Z"
+  - status: PLANNED
+    at: "2026-10-15T20:25:05Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T09:24:46Z"
+  - status: REVIEW
+    at: "2026-10-16T11:15:03Z"
+  - status: DONE
+    at: "2026-10-16T14:58:41Z"

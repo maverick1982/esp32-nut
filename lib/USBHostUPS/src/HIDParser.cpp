@@ -1,5 +1,6 @@
 #include "HIDParser.h"
 #include <map>
+#include <math.h>
 #include "NUTUsages.h"
 
 // Appends ".seg" (or "seg" to an empty path), truncated to cap. A NULL segment is
@@ -39,6 +40,8 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
 
     std::vector<uint32_t> local_usages;
     std::vector<String> collection_names;
+    // Parallel to collection_names: index+1 of indexed collections, 0 otherwise
+    std::vector<uint8_t> collection_indices;
     // Usage Minimum / Maximum (review M1): expanded into local_usages once both are known
     bool have_usage_min = false, have_usage_max = false;
     uint32_t usage_min = 0, usage_max = 0;
@@ -103,6 +106,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                             appendPathSegment(def.path, sizeof(def.path), n.c_str());
                         }
                         appendPathSegment(def.path, sizeof(def.path), get_nut_usage_name(usage).c_str());
+                        for (size_t d = 0; d < collection_indices.size() && d < sizeof(def.coll_index); d++) {
+                            def.coll_index[d] = collection_indices[d];
+                        }
                         _usages.push_back(def);
                     }
                     if (offsets_map) {
@@ -117,11 +123,14 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                     usage = local_usages.back();
                 }
                 collection_names.push_back(get_nut_usage_name(usage));
+                // Vendor-defined collection types (>= 0x80) carry an index, as in hidparser.c
+                collection_indices.push_back(data >= 0x80 ? (uint8_t)((data & 0x7F) + 1) : 0);
                 local_usages.clear();
                 have_usage_min = have_usage_max = false;
             } else if (bTag == 12) { // End Collection
                 if (!collection_names.empty()) {
                     collection_names.pop_back();
+                    collection_indices.pop_back();
                 }
             }
         } else if (bType == 1) { // Global
@@ -278,4 +287,44 @@ double HIDParser::extractUsage(const HIDUsageDef* def, uint8_t report_id, const 
         }
     }
     return val;
+}
+
+bool HIDParser::toLogical(const HIDUsageDef& def, double physical, int32_t& logical) {
+    // Same unit exponent as extractUsage(), applied the other way. Multiplying by the
+    // positive power keeps exact results (12 * 10^2 = 1200, while 12 / 10^-2 is not exact)
+    double val = physical;
+    if (def.bit_size > 1) {
+        int8_t unit_expo = def.exponent;
+        if (def.unit == 0x00F0D121 || def.unit == 0x0000D121) {
+            unit_expo -= 7;
+        }
+        if (unit_expo != 0) {
+            val *= pow(10.0, -unit_expo);
+        }
+    }
+    // Rounded rather than truncated as upstream's (long) cast, so that an inexact product
+    // (1199.9999) does not lose one unit. NaN and huge values fail here.
+    if (!(fabs(val) < 4.0e9)) return false;
+    long long v = llrint(val);
+
+    // Declared logical range (Physical Min/Max are not parsed, neither when reading)
+    if (def.logical_max > def.logical_min && (v < def.logical_min || v > def.logical_max)) return false;
+
+    // The value must fit the field's bits, as CommandCatalog::fitsField() for the delays:
+    // writeUsage() masks it to bit_size, so 300 in 8 bits would be written as 44. Signed
+    // when the Logical Minimum is negative, as extractUsage() reads it.
+    if (def.bit_size == 0) return false;
+    uint16_t bits = def.bit_size > 32 ? 32 : def.bit_size;
+    long long lo, hi;
+    if (def.logical_min < 0) {
+        lo = -(1LL << (bits - 1));
+        hi = (1LL << (bits - 1)) - 1;
+    } else {
+        lo = 0;
+        hi = (1LL << bits) - 1;
+    }
+    if (v < lo || v > hi) return false;
+    if (v < INT32_MIN || v > INT32_MAX) return false;
+    logical = (int32_t)v;
+    return true;
 }

@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-076
+title: 'Tabella unica APC (apc-hid): voci RO, stati e comandi'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-076: Tabella unica APC (apc-hid): voci RO, stati e comandi
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come utente di un UPS APC,
+  voglio che variabili, stati e comandi vengano dalla tabella `apcHid2Nut()` copiata da `apc_hid2nut`,
+  in modo da avere gli stessi dati di usbhid-ups senza perdere le correzioni fatte per i Back-UPS BX, CS ed ES.
+
+  **Dimostrazione**
+  Sulle 10 fixture APC, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che apc-hid ricava da quei descriptor. Sul BX750MI restano invariati il poll ridotto e il recupero dei blocchi EP0 (issue #60).
+
+  **Criteri di Accettazione**
+  - [ ] `apcHid2Nut()` contiene tutte le righe di `apc_hid2nut` nell'ordine upstream, comprese le conversioni APC (`apc_date_conversion` e simili). Le esclusioni sono motivate.
+  - [ ] `APCDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: `splitProduct` (issue #76), poll BX, quirk.
+  - [ ] Per ogni fixture APC, gli elenchi attesi di variabili e comandi, ricavati in modo indipendente, coincidono con quelli pubblicati. Le differenze rispetto a prima sono nelle note di rilascio.
+  - [ ] Il comportamento del BX (`pollStaticReportsOnce`, restart dopo blocchi EP0) e i suoi test restano invariati.
+  - [ ] Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Prima del rilascio serve la prova di un tester APC (per esempio miskor-bgd o Sr-psycho, Smart-UPS).
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

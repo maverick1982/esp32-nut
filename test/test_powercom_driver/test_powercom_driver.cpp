@@ -278,8 +278,9 @@ void test_powercom_full_poll_spd750u_descriptor(void) {
 }
 
 // US-058, user decision of 2026-10-09: DelayBeforeShutdown (minutes/seconds bytes) is
-// the timer only; no ups.delay.*, and no load/shutdown commands (powercom-hid.c uses
-// its own encodings)
+// the timer only, and there are no load/shutdown commands (powercom-hid.c uses its own
+// encodings). ups.delay.* is never read from the device: the host sets it (see
+// test_powercom_delay_variables_as_upstream, US-066)
 void test_powercom_delay_sets_only_timer(void) {
     PowercomDriver driver;
     UPSData ups_data;
@@ -302,6 +303,48 @@ void test_powercom_delay_sets_only_timer(void) {
     TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
 }
 
+// US-066: powercom-hid.c:620-639 declares ups.delay.start (default "60") and
+// ups.delay.shutdown (DEFAULT_OFFDELAY, 20) as RW with info_len 8, on
+// UPS.PowerSummary.DelayBeforeStartup/Shutdown or PCMDelayBeforeShutdown (0x00ff0057).
+// The variables exist even without the shutdown commands.
+void test_powercom_delay_variables_as_upstream(void) {
+    PowercomDriver driver;
+    TEST_ASSERT_TRUE(driver.delayVariablesSupported());
+    TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
+
+    std::vector<HIDUsageDef> usages(2);
+    strcpy(usages[0].path, "UPS.PowerSummary.DelayBeforeStartup");
+    usages[0].usage = 0x00840056;
+    usages[0].report_type = 3;
+    strcpy(usages[1].path, "UPS.PowerSummary.DelayBeforeShutdown");
+    usages[1].usage = 0x00840057;
+    usages[1].report_type = 3;
+    UPSData data;
+    CommandCatalog::applyDefaultDelays(data, usages, driver.defaultOffDelay(), driver.defaultOnDelay(),
+                                       driver.delayVariablesSupported(), driver.delayPaths());
+    TEST_ASSERT_EQUAL_STRING("60", data.get("ups.delay.start").c_str());
+    TEST_ASSERT_EQUAL_STRING("20", data.get("ups.delay.shutdown").c_str());
+
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(data, rw);
+    TEST_ASSERT_EQUAL(2, rw.size());
+    TEST_ASSERT_EQUAL_STRING("ups.delay.shutdown", rw[0].name);
+    TEST_ASSERT_EQUAL(8, rw[0].aux);
+    TEST_ASSERT_EQUAL_STRING("ups.delay.start", rw[1].name);
+    TEST_ASSERT_EQUAL(8, rw[1].aux);
+
+    // PCMDelayBeforeShutdown alone gives ups.delay.shutdown only (powercom-hid.c:639)
+    std::vector<HIDUsageDef> pcm(1);
+    strcpy(pcm[0].path, "UPS.PowerSummary.0x00FF0057");
+    pcm[0].usage = 0x00ff0057;
+    pcm[0].report_type = 3;
+    UPSData only_pcm;
+    CommandCatalog::applyDefaultDelays(only_pcm, pcm, driver.defaultOffDelay(), driver.defaultOnDelay(),
+                                       driver.delayVariablesSupported(), driver.delayPaths());
+    TEST_ASSERT_EQUAL_STRING("20", only_pcm.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(only_pcm.hasKey("ups.delay.start"));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -315,6 +358,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_real_descriptor_parsing);
     RUN_TEST(test_powercom_full_poll_spd750u_descriptor);
     RUN_TEST(test_powercom_delay_sets_only_timer);
+    RUN_TEST(test_powercom_delay_variables_as_upstream);
     return UNITY_END();
 }
 #else
@@ -329,6 +373,7 @@ void setup() {
     RUN_TEST(test_powercom_real_descriptor_parsing);
     RUN_TEST(test_powercom_full_poll_spd750u_descriptor);
     RUN_TEST(test_powercom_delay_sets_only_timer);
+    RUN_TEST(test_powercom_delay_variables_as_upstream);
     UNITY_END();
 }
 void loop() {}

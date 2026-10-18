@@ -1,0 +1,725 @@
+schema: archetipo/plan/v2
+spec_code: US-066
+body: |
+  ---
+  type: plan
+  title: "US-066: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM — Piano di Implementazione"
+  description: "Piano di Implementazione per US-066"
+  tags: [plan, implementation, US-066]
+  ---
+  # US-066: Catalogo delle variabili scrivibili esposto con LIST RW, GET TYPE e LIST ENUM — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-15 (rev. 4: note di implementazione dalla code review)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** HIGH | **Punti:** 8
+
+  **User Story**
+  Come amministratore che usa upsrw o Home Assistant, voglio vedere quali parametri del mio UPS si possono modificare, con il loro tipo e i valori ammessi, in modo da sapere cosa posso configurare senza leggere il descriptor HID.
+
+  **Criteri di Accettazione**
+  - Il catalogo contiene tutte le variabili `ST_FLAG_RW` dei subdriver upstream mge-hid, apc-hid, cps-hid, powercom-hid ed ecoflow-hid, con lo stesso nome NUT, lo stesso percorso HID e la stessa lunghezza massima. Ogni driver usa la tabella del proprio subdriver.
+  - Una variabile compare in `LIST RW` con le stesse regole di usbhid-ups: il suo percorso esiste nel descriptor, qualunque sia il tipo di report, e la prima lettura del valore riesce. Le variabili lato driver (`HU_FLAG_ABSENT`, come `ups.delay.*`) compaiono quando il loro percorso esiste, con il default del subdriver.
+  - `GET TYPE` risponde come upsd: `TYPE <ups> <var> RW [ENUM] STRING:<n>` per le variabili scrivibili. Per le altre la risposta resta quella attuale.
+  - `LIST ENUM` restituisce i valori ammessi per le variabili che upstream marca `HU_FLAG_ENUM`. `LIST RANGE` resta vuota, come in usbhid-ups.
+  - `GET DESC` restituisce la descrizione standard NUT di ogni variabile del catalogo, e `"Description unavailable"` quando non c'è, come upsd.
+  - Con UPS scollegato o dati stale, `LIST RW` dà gli stessi errori di `LIST VAR`.
+  - Nei test nativi, le fixture Eaton, APC, CyberPower e Powercom verificano l'elenco RW atteso. EcoFlow, che non ha una fixture, si verifica con usage sintetici.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Il catalogo è la **futura tabella unica HID→NUT** di ogni subdriver (approccio C, decisione del 2026-10-15): ha la stessa forma di `hid_info_t` di upstream, ma in US-066 contiene solo le voci `ST_FLAG_RW`. Le spec di migrazione (US-073 e seguenti, EP-001) vi sposteranno poi le voci in sola lettura, i bit di stato (`BOOL`) e i comandi (`HU_TYPE_CMD`), fino a rimuovere le mappature scritte a mano e `CommandCatalog`. È header-only (`lib/USBHostUPS/src/NutTable.h`), come `CommandCatalog.h`: l'env `native` elenca i `.cpp` a mano in `build_src_filter`, quindi non serve toccare `platformio.ini`. Come in usbhid-ups, la stessa tabella serve sia a leggere i valori sia, in US-067, a scriverli. Diverse variabili RW oggi non vengono pubblicate dalle mappature scritte a mano: per questo il catalogo deve anche decodificare.
+
+  Vincolo di progetto: tutto ciò che US-066 costruisce (struttura delle voci, binding, decodifica, ultima parola) deve valere anche per le voci in sola lettura. Nessuna parte del codice deve presumere che una voce sia RW, tranne `writableVariables()` e il server NUT.
+
+  - **Collection indicizzate nel parser (prerequisito).** Upstream aggiunge `[N]` al percorso quando una Collection ha valore `>= 0x80` (`hidparser.c:207-211`, indice `valore & 0x7F`). L'Eaton 3S espone per esempio `UPS.Flow.[4].ConfigVoltage` e `UPS.OutletSystem.Outlet.[2].OutletID`. `HIDUsageDef::path` non cambia, perché da quella stringa dipendono tutte le mappature esistenti. Si aggiunge `uint8_t coll_index[8]`: per la collection a profondità `d` vale indice+1, e 0 significa senza indice. Costo: 8 byte per usage.
+  - **Notazione dei percorsi nel catalogo.** È quella di `HIDUsageDef::path`, cioè i nomi di `NUTUsages.h`, con gli usage senza nome scritti come `0x%08X` maiuscolo. A questa si aggiunge `[N]` dopo una collection indicizzata. È la stessa scelta di `CommandCatalog.h` per i codici APC. Esempi:
+    - `RemainingCapacityLimitSetting` (mge 0xffff004d) → `UPS.PowerSummary.0xFFFF004D`
+    - `APCSensitivity` → `UPS.Input.0xFF860061`
+    - `CPSInputSensitivity` → `UPS.Output.0xFF010043`
+
+    Ogni voce porta in commento il percorso upstream e la riga del file `nut_repo/drivers/*-hid.c`. È solo notazione: corrisponde uno a uno ai nomi upstream.
+  - **Contratto dati (`NutTable.h`):**
+    - `enum class Conv { Number, Lookup, BatteryDate, MgeDate, MgeTime, NominalVoltage, PegasusThreshold, PegasusYesNo }`
+    - `struct Lookup { int32_t hid; const char* nut; }`
+    - `struct HidInfo { const char* info_type; uint16_t info_flags; uint8_t info_len; const char* hidpath; const char* dfl; uint16_t hidflags; Conv conv; const Lookup* lkp; uint8_t lkp_count; }`. I campi e i loro nomi ricalcano `hid_info_t` (`usbhid-ups.h`). `dfl` è il formato (`"%.0f"`) o il default delle voci ABSENT.
+    - Flag con gli stessi valori di upstream: `ST_FLAG_RW` 0x0001, `ST_FLAG_STRING` 0x0002 (`include/extstate.h`); `HU_FLAG_STATIC` 2, `HU_FLAG_SEMI_STATIC` 4, `HU_FLAG_ABSENT` 8, `HU_FLAG_QUICK_POLL` 16, `HU_TYPE_CMD` 64, `HU_FLAG_ENUM` 128, `HU_FLAG_PARAM_REQUIRED` 256 (`drivers/usbhid-ups.h`). I flag di poll si copiano già ora dalle righe upstream, anche se li userà US-072.
+    - `struct RWVariable { const char* name; uint8_t aux; std::vector<const char*> enums; }`
+    - Tabelle: `mgeHid2Nut()`, `apcHid2Nut()`, `cpsHid2Nut()`, `ecoflowHid2Nut()`, con i nomi delle tabelle upstream (`mge_hid2nut` e così via). In US-066 sono parziali: solo voci RW, nell'ordine upstream, così le migrazioni aggiungono le altre righe al loro posto. `ups.delay.*` è escluso (vedi sotto). openups-hid e il driver generico non hanno voci RW.
+    - Le descrizioni stanno in `describe(name)`, con le righe `VARDESC` di `nut_repo/data/cmdvartab` e confronto case-insensitive come `desc.c:list_get`. Se manca, `nullptr`.
+  - **Regola di binding (fedele a `hid_ups_walk` in modalità INIT, `usbhid-ups.c:2250-2345`).**
+    - Le voci si scorrono nell'ordine della tabella.
+    - Una voce si lega al primo usage del descriptor, in ordine di descriptor, con lo stesso percorso (path più `coll_index`), **qualunque sia il tipo di report**. È ciò che fa `HIDGetItemData`: la natura RW la decide la tabella, non il tipo di report.
+    - Per ogni nome vince la prima voce legata la cui **prima** lettura del valore si converte. Una voce che fallisce alla prima lettura (lookup senza corrispondenza, classe di tensione, controllo Pegasus) lascia il posto alla voce successiva con lo stesso nome. Se non ce ne sono, la variabile non è RW. La decisione resta fissa fino al prossimo `setup()`: upstream imposta il flag RW solo durante INIT.
+    - Il binding ricorda anche l'usage "gemello" con lo stesso `report_id`, lo stesso percorso e un tipo diverso (Input o Feature). I report gemelli APC (`GenericDriver::findInputTwins`, issue #60) aggiornano così il valore da qualunque dei due arrivi, come il buffer unico per report ID di libhid.
+    - Le voci `absent` (`outlet.*.desc`) si legano con la stessa regola di presenza del percorso e pubblicano subito `dfl`.
+  - **`ups.delay.*` (variabili lato driver).** Le gestisce già `CommandCatalog::applyDefaultDelays` (US-058). Due allineamenti a upstream:
+    - la presenza si basa sul percorso in qualunque tipo di report, non solo Feature, e sui percorsi del subdriver del driver (`IUPSDriver::delayPaths()`, `NutTable::*DelayPaths()`: mge solo PowerSummary, cps solo Output, apc PowerSummary/Output/APCGeneralCollection, powercom PowerSummary più PCM). Il driver generico, senza subdriver upstream, mantiene l'unione dei percorsi di US-058;
+    - le variabili esistono anche quando il driver non offre i comandi di spegnimento, se il subdriver upstream le dichiara. È il caso di powercom-hid: `ups.delay.start` = 60 e `ups.delay.shutdown` = 20, aux 8, percorsi `UPS.PowerSummary.DelayBeforeStartup/Shutdown` e `PCMDelayBeforeShutdown` (0x00FF0057).
+
+    Si aggiunge `IUPSDriver::delayVariablesSupported()`, che di default vale `shutdownCommandsSupported()`, e `delayAux()` (default 10). Powercom li sovrascrive. EcoFlow e OpenUPS restano senza, come in upstream. I comandi Powercom restano assenti come deciso in US-058.
+  - **Conversioni in lettura (porting da upstream).**
+    - `Number`: `%.0f`, cioè `lrint`.
+    - `Lookup`: corrispondenza esatta. Senza corrispondenza la variabile non viene pubblicata (`ups_infoval_set`).
+    - `BatteryDate`: `date_conversion_fun`. Il valore 0 diventa `"not set"`.
+    - `MgeDate` / `MgeTime`: `strftime` su `gmtime`. Upstream usa `localtime`, ma l'ESP32 non ha fuso, quindi il risultato coincide con un host in UTC.
+    - `NominalVoltage`: `nominal_output_voltage_fun`, con la classe fissata dal primo valore e azzerata a ogni `setup()`.
+    - `PegasusThreshold` / `PegasusYesNo`: `eaton_check_pegasus_fun` / `pegasus_yes_no_info_fun`. Valgono per i modelli Pegasus. Upstream fa lo `switch` su `mge_type & 0xFF00`, quindi `MGE_3S` (0x110) ricade nel caso `MGE_PEGASUS` e il controllo sul paese non viene mai raggiunto: un 3S 700/750 è sempre valido. Lo riproduciamo così com'è. `mge_type` si ricava come `mge_format_model()`/`get_model_name()`: iProduct più la stringa `UPS.PowerSummary.iModel` (0xFFFF00F0), oppure `UPS.Flow.[4].ConfigApparentPower` se la stringa è vuota o non arriva. Il paese arriva da `UPS.PowerSummary.0xFFFF0095` (Country). Finché questi dati non sono noti, al più tardi alla fine del primo poll completo, le righe che ne dipendono restano in attesa (`DecodeResult::DEFER`).
+    - `ups.date` / `ups.time`: si usa la variante RW di `mge-hid.c:2097-2098` (`HAVE_STRPTIME`, il caso standard su Linux).
+  - **Proprietà del valore.** Il catalogo ha l'ultima parola sulle variabili legate, come upstream che disabilita le voci duplicate successive (`item->hiddata = NULL`). L'hook virtuale `IUPSDriver::postDecode(...)` viene chiamato subito dopo ogni `decodeReport`, in `USBHostUPS.cpp` (righe 479 e 613) e nel replay runner. `GenericDriver` lo implementa così:
+    1. decodifica i campi legati del report e ne salva il valore in cache;
+    2. riscrive in `UPSData` le variabili legate che hanno un valore.
+  - **Esposizione.**
+    - `IUPSDriver::writableVariables(const UPSData&, std::vector<RWVariable>&)` riempie l'elenco: variabili legate e RW con chiave presente, più `ups.delay.*` se presenti (aux `delayAux()`). L'elenco è ordinato con `strcasecmp`, come l'albero di upsd (`state.c`).
+    - `IUSBHostUPS::getWritableVariables()` ha un default vuoto; `USBHostUPS` lo sovrascrive prendendo `_mutex`.
+  - **Server NUT.**
+    - `LIST RW`: controlla `UNKNOWN-UPS` e `DATA-STALE` come `LIST VAR`, poi risponde `RW <ups> <var> "<valore>"`.
+    - `GET TYPE`: per le variabili RW risponde `RW[ ENUM] STRING:<aux>`. Per le altre resta invariato.
+    - `LIST ENUM`: valori della variabile, oppure `ERR VAR-NOT-SUPPORTED` se assente (`netlist.c:list_enum`).
+    - `LIST RANGE`: sempre vuota.
+    - `GET DESC`: `describe()`, oppure `"Description unavailable"`. Si allinea alla stessa stringa anche `GET CMDDESC` (`netget.c:98`, `:130`): oggi risponde `"Unavailable"`, un difetto ereditato da US-056.
+  - **Pulizia.** Le mappature `UPS.Input.APCSensitivity` (APCDriver) e `UPS.Output.CPSInputSensitivity` (CyberPowerDriver) non scattano mai, perché il percorso reale contiene il codice esadecimale. In più usano valori 1-3 invece degli 0-2 di upstream. Si rimuovono: `input.sensitivity` arriva dal catalogo.
+
+  ### Deviazioni residue da upstream (accettate)
+  - **Fuori dal catalogo:** `input.bypass.switch.on`, `input.bypass.switch.off` e `input.eco.switchable`, rinviate a US-070.
+  - **In US-071 (allineamento del protocollo):** `GET TYPE` delle variabili non RW (`STRING:64` invece di `NUMBER`/`STRING:n`, senza `DATA-STALE`/`VAR-NOT-SUPPORTED`) e `LIST VAR`/`LIST RW` senza UPS (lista vuota invece di `ERR DRIVER-NOT-CONNECTED`).
+  - **Voci RO duplicate:** quelle che upstream usa quando la voce RW manca (`outlet.power` da `ApparentPower`, `outlet.N.switchable` RO, `battery.mfr.date` APC da `APCBattReplaceDate` e CPS da `iOEMInformation`) non entrano nel catalogo. Non cambiano `LIST RW`, perché in upstream la variabile risulta comunque non RW. Il loro valore in `LIST VAR` resta affidato alle mappature dei driver, come oggi.
+  - **Frequenza di lettura (comportamento preesistente, non introdotto da US-066):** il poll del firmware legge tutti i report Feature/Input a ogni poll completo (30 s, `GenericDriver::buildPollLists`), tranne i report statici dell'APC BX (`pollStaticReportsOnce`, issue #60). Il catalogo decodifica questi report senza aggiungere letture. Upstream invece salta le voci `HU_FLAG_SEMI_STATIC` e le rilegge solo all'avvio e dopo un SET o un INSTCMD (`data_has_changed`, `usbhid-ups.c:2357-2362`). Per i client cambia solo questo: un valore modificato fuori da NUT, per esempio dal pannello, da noi compare entro 30 s, in upsd no. L'allineamento è in US-072.
+  - **`aux` di cps `input.sensitivity`:** upstream ha 0 e lo copiamo com'è (`STRING:0`). Come trattarlo in scrittura si decide in US-067.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity (`pio test -e native`, con il PATH del toolchain mingw come da note di progetto), senza hardware. La logica del catalogo è pura e si testa su `HIDUsageDef` sintetici. Il binding si verifica sui descriptor reali di tutte le fixture, il protocollo sul mock del server NUT.
+
+  - **Parser (`test/test_hid_parser`)**: `coll_index` su un descriptor sintetico e sull'Eaton 3S.
+  - **Catalogo (nuovo `test/test_rw_catalog`)**:
+    - match dei percorsi;
+    - binding su un usage di qualunque tipo e primo in ordine di descriptor;
+    - una voce che fallisce alla prima lettura lascia il posto alla successiva con lo stesso nome, e la decisione resta fissa;
+    - usage gemello;
+    - conversioni, ENUM, controllo Pegasus;
+    - `describe()` case-insensitive;
+    - EcoFlow con usage sintetici.
+  - **Driver**: `input.sensitivity` APC e CPS con i valori upstream; ultima parola del catalogo su `battery.charge.low` Eaton; `ups.delay.*` su Powercom (60/20, aux 8).
+  - **Protocollo (`test/test_nut_server`)**:
+    - `LIST RW` con errori e ordinamento;
+    - `GET TYPE` RW, ENUM e non RW invariato;
+    - `LIST ENUM` e `LIST RANGE`;
+    - `GET DESC` / `GET CMDDESC` con `"Description unavailable"`.
+  - **Replay (`test/test_record_replay`)**: per ogni fixture l'elenco delle variabili legate dal descriptor. Gli attesi sono stati ricavati in pianificazione da un'analisi indipendente dei descriptor con i percorsi upstream, e non cambiano se l'usage si cerca in qualunque tipo di report invece che solo Feature (verificato). Le aspettative che cambiano si ricalcolano dai byte dei report.
+  - **Regressione**: suite nativa completa verde e build `esp32-s3-standard` ok, riportando l'aumento di `sizeof(HIDUsageDef)`.
+  - **Nessun test e2e**: la spec non ha superficie UI. La verifica manuale è `upsrw ups@<ip>` sull'Eaton 3S.
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-15_
+tasks:
+  - id: TASK-01
+    title: Indici delle collection in HIDUsageDef (coll_index) nel parser
+    type: Impl
+    status: DONE
+    body: |
+      ## Descrizione
+      **Obiettivo:** registrare per ogni usage l'indice delle collection che lo contengono, come fa upstream con `[N]`, senza cambiare `HIDUsageDef::path`.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/HIDParser.cpp`, righe 70-125;
+      - `lib/USBHostUPS/src/HIDUsages.h`;
+      - `nut_repo/drivers/hidparser.c`, righe 190-222.
+
+      **Modifiche:**
+      - In `HIDUsageDef` aggiungere `uint8_t coll_index[8] = {0};`. `coll_index[d]` vale `(valore Collection & 0x7F) + 1` se la collection a profondità `d` ha valore `>= 0x80`, altrimenti 0. La profondità è la posizione in `collection_names`.
+      - In `HIDParser::parseReportDescriptor` tenere un `std::vector<uint8_t> collection_indices` parallelo a `collection_names`: push sulla Collection (tag 10, usando `data`), pop sulla End Collection.
+      - Nella creazione di ogni `HIDUsageDef` copiare i primi `min(8, size)` elementi.
+
+      **Passi:**
+      1. Aggiungere il campo con un commento che rimandi a `hidparser.c:207`.
+      2. Aggiungere il vettore parallelo e copiarlo nel def.
+      3. Non toccare `appendPathSegment` né il formato di `path`.
+
+      **Verifica:** compilano sia l'env `native` sia `esp32-s3-standard`, e `test_hid_parser` resta verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/HIDUsages.h — nuovo campo `coll_index[8]`
+      - lib/USBHostUPS/src/HIDParser.cpp — stack degli indici e copia nel def
+
+      ## Criteri di Completamento
+      - [ ] `HIDUsageDef::path` è identico a prima per ogni usage
+      - [ ] `coll_index` vale indice+1 per le collection con valore >= 0x80 e 0 per le altre
+      - [ ] La suite nativa esistente resta verde
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del parser per le collection indicizzate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |
+      ## Descrizione
+      **Obiettivo:** verificare `coll_index` su un descriptor sintetico e su un descriptor reale Eaton.
+
+      **Da leggere:** `test/test_hid_parser/test_hid_parser.cpp` e `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`.
+
+      **Modifiche:** nuovi test in `test/test_hid_parser/test_hid_parser.cpp`:
+      - Descriptor sintetico: `Collection(0x00)` UPS che contiene `Collection(0x84)` Flow, che contiene un Feature ConfigVoltage. Atteso `path == "UPS.Flow.ConfigVoltage"`, `coll_index[0] == 0`, `coll_index[1] == 5`.
+      - Un usage dopo la End Collection indicizzata non eredita l'indice.
+      - Eaton 3S: tra gli usage con `path == "UPS.Flow.ConfigVoltage"` ce n'è uno con `coll_index[1] == 5`, cioè `Flow.[4]`, e almeno uno con un indice diverso.
+
+      **Verifica:** `pio test -e native -f test_hid_parser`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_hid_parser/test_hid_parser.cpp — nuovi casi di test
+
+      ## Criteri di Completamento
+      - [ ] I tre casi descritti passano
+      - [ ] I test esistenti del parser passano senza modifiche
+    ref: TASK-02
+  - id: TASK-03
+    title: NutTable.h — strutture, match dei percorsi, binding con regola INIT di upstream, conversioni base e descrizioni
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |
+      ## Descrizione
+      **Obiettivo:** creare il nucleo header-only del catalogo, con la regola di binding di `hid_ups_walk` (INIT).
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/CommandCatalog.h`, per lo stile;
+      - la sezione "Soluzione Tecnica" del piano;
+      - `nut_repo/drivers/usbhid-ups.c`, righe 2250-2345 (INIT), 2470-2512 (valore, flag ed ENUM), 3158-3180 (`ups_infoval_set`), 519-560 (`yes_no_info`, `date_conversion_fun`);
+      - `nut_repo/drivers/libhid.c` (`HIDGetItemData`: primo item con quel percorso);
+      - `nut_repo/server/desc.c` (`list_get`, case-insensitive);
+      - `nut_repo/data/cmdvartab`.
+
+      **Modifiche:** nuovo `lib/USBHostUPS/src/NutTable.h`, namespace `NutTable`:
+      - Tipi: `Conv`, `Lookup`, `HidInfo`, `RWVariable`, con i campi definiti nel piano.
+      - `bool pathMatches(const HIDUsageDef& u, const char* path)`:
+        - suddivide `path` su `.`; `[N]` si applica alla collection che lo precede;
+        - richiede `u.coll_index[d] == N+1` se il catalogo ha `[N]`, e `== 0` se non lo ha;
+        - gli altri segmenti si confrontano esattamente con quelli di `u.path`.
+      - `struct Bound { const HidInfo* def; int idx; int twin_idx; String value; bool has; enum { PENDING, ACTIVE, DEAD } state; }`. ACTIVE vuol dire "la voce che vince per quel nome"; è RW solo se `def->info_flags & ST_FLAG_RW`.
+      - `std::vector<Bound> bind(const HidInfo* t, size_t n, const std::vector<HIDUsageDef>& usages)`:
+        - per ogni voce, in ordine di tabella, `idx` è il primo usage in ordine di descriptor con `pathMatches`, di qualunque tipo;
+        - `twin_idx` è un usage con lo stesso `report_id`, lo stesso percorso e un tipo diverso, oppure -1;
+        - le voci senza percorso si scartano;
+        - possono restare più candidati con lo stesso nome, in ordine di tabella;
+        - le voci `absent` nascono con `state = ACTIVE`, `has = true` e `value = dfl`.
+      - `void onValue(std::vector<Bound>&, size_t i, double v, const Context&)`, che implementa la regola INIT:
+        1. se la conversione riesce, `value` e `has` si aggiornano, e una voce `PENDING` diventa `ACTIVE` purché nessun candidato precedente con lo stesso nome sia già `ACTIVE`;
+        2. se fallisce mentre la voce è `PENDING`, diventa `DEAD` per sempre e il nome passa al candidato successivo;
+        3. se fallisce dopo, il valore precedente resta, come `ups_infoval_set` che non aggiorna.
+
+        Solo la voce `ACTIVE` di ogni nome pubblica, RW o meno.
+      - Conversioni `bool decode(const HidInfo&, double v, const Context&, String& out)`: `Number` (`String((long)lrint(v))`), `Lookup`, `BatteryDate` ("not set" per 0), `MgeDate`, `MgeTime`. `Context` è vuoto qui e lo completa TASK-05.
+      - Lookup condivisi:
+        - `yes_no` {0 no, 1 yes}
+        - `enable_disable` {0 disabled, 1 enabled}
+        - `apc_sensitivity` {0 low, 1 medium, 2 high}
+        - `cps_sensitivity` {0 low, 1 normal, 2 high}
+        - `mge_sensitivity` {0 normal, 1 high, 2 low}
+      - `std::vector<const char*> enumValues(const HidInfo&, const Context&)`, come il loop di `usbhid-ups.c:2504`.
+      - `const char* describe(const char* name)`: righe `VARDESC` di cmdvartab per ogni nome delle tabelle di TASK-04, più `ups.delay.shutdown` e `ups.delay.start`. Confronto con `strcasecmp`; se manca, `nullptr`.
+
+      **Passi:**
+      1. Strutture e `pathMatches`.
+      2. `bind` e `onValue`.
+      3. Conversioni, lookup ed `enumValues`.
+      4. `describe`.
+
+      **Verifica:** l'header compila incluso da sé nel native env.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — nuovo header
+
+      ## Criteri di Completamento
+      - [ ] Il binding usa il primo usage in ordine di descriptor, di qualunque tipo
+      - [ ] La natura RW di un nome si decide alla prima lettura del valore e resta fissa, con passaggio al candidato successivo se fallisce
+      - [ ] Le conversioni seguono le funzioni upstream citate
+      - [ ] `describe` è case-insensitive e copia cmdvartab parola per parola
+    ref: TASK-03
+  - id: TASK-04
+    title: Tabelle RW per subdriver (mge, apc, cps, ecoflow) e hook hid2nut() nei driver
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |
+      ## Descrizione
+      **Obiettivo:** trascrivere le voci `ST_FLAG_RW` dei subdriver upstream nella notazione dei nostri percorsi e collegarle ai driver.
+
+      **Da leggere:**
+      - `nut_repo/drivers/mge-hid.c`, righe 2013-2373, più `mge_usage_lkp` a 1572;
+      - `apc-hid.c`, righe 335-414, più `apc_usage_lkp` a 211;
+      - `cps-hid.c`, righe 367-416, più `cps_usage_lkp` a 340;
+      - `ecoflow-hid.c`, riga 181;
+      - `nut_repo/drivers/libhid.c` (`hid_usage_lkp`);
+      - `lib/USBHostUPS/src/NUTUsages.h`.
+
+      **Modifiche:**
+      - In `NutTable.h`, `mgeHid2Nut()`, `apcHid2Nut()`, `cpsHid2Nut()` ed `ecoflowHid2Nut()`, nell'ordine del file upstream, con `info_type`, `info_flags`, `info_len`, `dfl`, `hidflags` (compresi i flag di poll STATIC/SEMI_STATIC/QUICK_POLL) e lookup copiati esattamente.
+      - Conversione dei percorsi segmento per segmento:
+        - un nome presente in `nut_usages[]` resta uguale;
+        - un nome assente si sostituisce con il codice upstream in `0x%08X` maiuscolo, preso dal `*_usage_lkp` del subdriver o da `hid_usage_lkp`;
+        - `[N]` resta com'è.
+      - Ogni voce ha un commento con il percorso upstream e la riga.
+      - Per `ups.date` e `ups.time` usare la variante RW (`HAVE_STRPTIME`, righe 2097-2098).
+      - Escludere:
+        - `ups.delay.*`, gestito da `applyDefaultDelays` (TASK-12);
+        - `input.bypass.switch.on`, `input.bypass.switch.off` e `input.eco.switchable` (US-070), con un commento.
+      - Le voci mge con `nominal_output_voltage_info`, `pegasus_threshold_info` e `pegasus_yes_no_info` usano `Conv::NominalVoltage`, `PegasusThreshold` e `PegasusYesNo`, implementate in TASK-05.
+      - In `GenericDriver.h` aggiungere `virtual const NutTable::HidInfo* hid2nut(size_t& n) const { n = 0; return nullptr; }`. Sovrascriverlo in `EatonDriver` (mge), `APCDriver` (apc), `CyberPowerDriver` (cps) ed `EcoFlowDriver` (ecoflow).
+
+      **Passi:**
+      1. Trascrivere apc, cps ed ecoflow.
+      2. Trascrivere mge.
+      3. Aggiungere gli override nei driver.
+
+      **Verifica:** la build native compila. Ogni voce ha il commento con la riga upstream.
+
+      **Blocchi:** se un nome upstream non ha né un nome in `NUTUsages.h` né un codice nei lookup upstream, fermarsi e segnalarlo invece di inventare il codice.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — tabelle dei subdriver
+      - lib/USBHostUPS/src/GenericDriver.h — hook `hid2nut()`
+      - lib/USBHostUPS/src/EatonDriver.h / EatonDriver.cpp — override mge
+      - lib/USBHostUPS/src/APCDriver.h / APCDriver.cpp — override apc
+      - lib/USBHostUPS/src/CyberPowerDriver.h / CyberPowerDriver.cpp — override cps
+      - lib/USBHostUPS/src/EcoFlowDriver.h / EcoFlowDriver.cpp — override ecoflow
+
+      ## Criteri di Completamento
+      - [ ] Ogni voce `ST_FLAG_RW` dei subdriver citati è nella tabella o esclusa con un commento motivato
+      - [ ] `info_type`, `info_flags`, `info_len`, `dfl`, `hidflags` e lookup coincidono con upstream
+      - [ ] I percorsi usano la notazione di `HIDUsageDef::path` più `[N]`
+    ref: TASK-04
+  - id: TASK-05
+    title: Conversioni mge con contesto — classe di tensione nominale e controllo Pegasus/3S
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |
+      ## Descrizione
+      **Obiettivo:** portare le conversioni mge che dipendono dal modello o dal primo valore letto.
+
+      **Da leggere:** in `nut_repo/drivers/mge-hid.c`:
+      - `nominal_output_voltage_fun` (1434) e `nominal_output_voltage_info` (1525);
+      - `eaton_check_pegasus_fun` (819), `pegasus_threshold_info` (848), `pegasus_yes_no_info_fun` (858);
+      - i tipi `MGE_PEGASUS` / `MGE_3S` (127) e `COUNTRY_*` (155-164, `COUNTRY_UNKNOWN = -1`), più la riga 1381;
+      - `mge_model_names` (1780-1810) e l'assegnazione di `mge_type` (2408).
+
+      **Modifiche:**
+      - `NutTable::Context { long nominal = -1; int mge_type = 0; int country = -1; }`.
+      - `NominalVoltage`:
+        - il primo valore fissa `nominal`;
+        - si accettano solo i valori della stessa classe, secondo lo switch upstream;
+        - `enumValues` restituisce i valori della lookup accettati dalla classe.
+      - `PegasusThreshold` / `PegasusYesNo`: validi solo se `mge_type & 0xFF00` è `MGE_PEGASUS`. Per lo switch mascherato di upstream anche `MGE_3S` (0x110) ricade lì, quindi il controllo sul paese non scatta mai.
+      - In `EatonDriver`:
+        - ricavare `mge_type` come `get_model_name()`: iProduct (`ups.model`) più la stringa iModel, o `ConfigApparentPower` di `Flow.[4]` come ripiego, confrontati con le righe di `mge_model_names` sotto `MGE_DEFAULT` (offline, Pegasus, 3S). Il calcolo avviene in `onLoop()` quando i dati sono noti, o alla fine del primo poll completo;
+        - leggere `country` dall'usage `UPS.PowerSummary.0xFFFF0095` (Country);
+        - esporre il contesto (`rwContext()`).
+      - Il contesto si azzera in `setup()`.
+
+      **Passi:**
+      1. Context e NominalVoltage.
+      2. Il controllo Pegasus.
+      3. Il collegamento in EatonDriver.
+
+      **Verifica:** la build native compila, e i test arrivano in TASK-06.
+
+      **Blocchi:** se la logica di confronto del modello upstream non si può applicare a `ups.model` com'è formattato oggi, segnalarlo con un esempio reale preso dalla fixture Eaton.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — Context, NominalVoltage, Pegasus
+      - lib/USBHostUPS/src/EatonDriver.h / EatonDriver.cpp — `mge_type`, paese, contesto
+
+      ## Criteri di Completamento
+      - [ ] La classe di tensione si fissa al primo valore e filtra decode ed ENUM come `nominal_output_voltage_fun`
+      - [ ] Le voci Pegasus compaiono solo per i modelli e i paesi previsti da upstream
+      - [ ] Il contesto riparte da zero a ogni `setup()`
+    ref: TASK-05
+  - id: TASK-06
+    title: Test unitari del catalogo (nuovo test_rw_catalog)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |
+      ## Descrizione
+      **Obiettivo:** coprire con test puri il match dei percorsi, la regola di binding INIT, le conversioni, gli ENUM, le descrizioni e la tabella EcoFlow.
+
+      **Da leggere:** `test/test_command_catalog/test_main.cpp`, in particolare l'helper `mk()`.
+
+      **Modifiche:** nuovo `test/test_rw_catalog/test_main.cpp` con un helper `mk(path, usage, report_type, report_id, coll_index...)`. Casi:
+      - `pathMatches`:
+        - `UPS.Flow.[4].ConfigVoltage` combacia con `coll_index[1] == 5` e non con 0 o 3;
+        - `UPS.Flow.ConfigVoltage` non combacia con un usage indicizzato;
+        - i segmenti `0xFFFF004D` combaciano.
+      - `bind`:
+        - un usage solo Input si lega, perché il tipo non conta;
+        - con Input e Feature sullo stesso percorso, si lega il primo in ordine di descriptor e l'altro è il gemello;
+        - per mge, con `RemainingCapacityLimitSetting` e `RemainingCapacityLimit` presenti, `battery.charge.low` usa il primo;
+        - le voci absent hanno `dfl`.
+      - `onValue`:
+        - due candidati con lo stesso nome, il primo fallisce la prima conversione: diventa DEAD e il secondo diventa ACTIVE;
+        - se il primo poi riceve un valore valido resta DEAD;
+        - un fallimento dopo RW mantiene il valore precedente.
+      - Conversioni:
+        - Number arrotonda (19.6 → "20");
+        - Lookup fuori tabella fallisce;
+        - BatteryDate 0 → "not set" e 0x4D68 → la data calcolata a mano;
+        - MgeDate e MgeTime su un timestamp noto.
+      - `enumValues`:
+        - `ups.shutdown` → disabled, enabled;
+        - cps `input.sensitivity` → low, normal, high;
+        - tensione nominale: prima lettura 230, poi ENUM della classe HV e un valore LV rifiutato.
+      - Pegasus: Protection Station 650 → valido; 3S 700 valido anche con paese 0 (switch mascherato upstream); "Eaton 3S" (iProduct reale della fixture) → `MGE_DEFAULT`, non valido.
+      - `describe`: "battery.charge.low" e "BATTERY.CHARGE.LOW" danno la stringa di cmdvartab; "outlet.1.desc" dà `nullptr`.
+      - EcoFlow: `UPS.PowerSummary.RemainingCapacityLimit` si lega a `battery.charge.low` con `info_len` 5.
+      - Voce in sola lettura sintetica (senza `ST_FLAG_RW`): si lega, diventa ACTIVE e pubblica il valore, ma non compare in `writableVariables()`. Una voce RO che precede una RW con lo stesso nome vince e la variabile non è RW, come in upstream. Garantisce che il motore sia pronto per le migrazioni.
+
+      **Verifica:** `pio test -e native -f test_rw_catalog`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_rw_catalog/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati sono presenti e passano
+      - [ ] I valori attesi sono calcolati a mano o presi da upstream, mai copiati dall'output del codice
+    ref: TASK-06
+  - id: TASK-07
+    title: Binding e postDecode in GenericDriver, hook nei punti di decode e rimozione delle mappature sensitivity morte
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |
+      ## Descrizione
+      **Obiettivo:** far decodificare al catalogo le variabili legate e dargli l'ultima parola sui loro valori, qualunque sia l'ordine dei report.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/IUPSDriver.h`;
+      - `lib/USBHostUPS/src/GenericDriver.h` / `.cpp` (`setup`, `decodeReport`, `findInputTwins`);
+      - `lib/USBHostUPS/src/UsageMapIndex.h`, per il pattern di fingerprint;
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, righe 470-485 e 600-620;
+      - `test/test_record_replay/FixtureReplayRunner.h`, righe 205-215.
+
+      **Modifiche:**
+      - In `IUPSDriver.h`:
+        - `virtual void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length, UPSData& ups_data) {}`
+        - `virtual void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {}`
+      - In `GenericDriver`:
+        - membro `std::vector<NutTable::Bound> _rw` più fingerprint degli usage. Si ricostruisce con `NutTable::bind(hid2nut(...), host->getUsages())` quando cambia, e si invalida in `setup()`.
+        - `postDecode`:
+          1. per ogni Bound il cui `idx` o `twin_idx` appartiene al report ricevuto (stesso `report_type` e `report_id`), estrarre il valore con `HIDParser::extractUsage` usando quel def e chiamare `NutTable::onValue`;
+          2. per ogni Bound in stato ACTIVE con `has`, chiamare `ups_data.set(name, value)`.
+        - `writableVariables`:
+          - aggiunge i Bound in stato ACTIVE con `ST_FLAG_RW` la cui chiave è in `data`, con `aux` ed `enumValues`;
+          - aggiunge `ups.delay.shutdown` e `ups.delay.start` se `data.hasKey`, con aux `delayAux()` (TASK-12) e senza ENUM;
+          - ordina con `strcasecmp`.
+        - `virtual const NutTable::Context& rwContext() const`, con un default vuoto statico; EatonDriver lo sovrascrive (TASK-05).
+      - Chiamare `_driver->postDecode(...)` subito dopo ciascun `_driver->decodeReport(...)` in `USBHostUPS.cpp` (due chiamate), con gli stessi argomenti e sotto lo stesso lock. Fare lo stesso nel replay runner.
+      - Rimuovere le mappature `"UPS.Input.APCSensitivity"` (`APCDriver.cpp`) e `"UPS.Output.CPSInputSensitivity"` (`CyberPowerDriver.cpp`): non scattano mai e usano valori diversi da upstream.
+
+      **Passi:**
+      1. Hook in IUPSDriver.
+      2. Binding e postDecode.
+      3. writableVariables.
+      4. Chiamate nell'host e nel runner.
+      5. Pulizia delle mappature.
+
+      **Verifica:** suite nativa verde, a parte le aspettative di replay che TASK-11 deve ricalcolare.
+
+      **Blocchi:** se `decodeReport` a riga 479 o 613 non è sotto `_mutex`, fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — hook `postDecode` / `writableVariables`
+      - lib/USBHostUPS/src/GenericDriver.h / GenericDriver.cpp — binding, cache, re-assert, contesto
+      - lib/USBHostUPS/src/EatonDriver.h / EatonDriver.cpp — override di `rwContext()`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — chiamate a `postDecode`
+      - lib/USBHostUPS/src/APCDriver.cpp — rimozione della mappatura APCSensitivity
+      - lib/USBHostUPS/src/CyberPowerDriver.cpp — rimozione della mappatura CPSInputSensitivity
+      - test/test_record_replay/FixtureReplayRunner.h — chiamata a `postDecode`
+
+      ## Criteri di Completamento
+      - [ ] Il valore di una variabile legata è quello del suo campo di catalogo anche se un'altra mappatura scrive la stessa chiave dopo
+      - [ ] I report gemelli aggiornano le variabili legate
+      - [ ] `writableVariables` è ordinato con `strcasecmp` e include `ups.delay.*` solo se presenti in UPSData
+      - [ ] Host e replay runner chiamano `postDecode` dopo ogni `decodeReport`
+    ref: TASK-07
+  - id: TASK-08
+    title: getWritableVariables() in IUSBHostUPS e USBHostUPS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |
+      ## Descrizione
+      **Obiettivo:** esporre al server NUT l'elenco delle variabili scrivibili dell'UPS connesso.
+
+      **Da leggere:** `lib/USBHostUPS/src/IUSBHostUPS.h` (`getSupportedCommands`, righe 53-59) e `lib/USBHostUPS/src/USBHostUPS.cpp` (`getSupportedCommands`).
+
+      **Modifiche:**
+      - In `IUSBHostUPS.h`: `virtual std::vector<NutTable::RWVariable> getWritableVariables() const { return {}; }`. Il default non è puro, quindi i mock esistenti non cambiano.
+      - In `USBHostUPS.h` / `.cpp`, override:
+        - prende `std::lock_guard<std::recursive_mutex> lock(_mutex)`;
+        - restituisce vuoto se `!_driver` o `!isConnected()`;
+        - altrimenti prende `auto lk = getUPSData();` e chiama `_driver->writableVariables(*lk, out)`.
+
+      **Passi:**
+      1. Default nell'interfaccia.
+      2. Override con il lock.
+
+      **Verifica:** la build `esp32-s3-standard` compila.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUSBHostUPS.h — metodo virtuale con default vuoto
+      - lib/USBHostUPS/src/USBHostUPS.h / USBHostUPS.cpp — override sotto `_mutex`
+
+      ## Criteri di Completamento
+      - [ ] Senza UPS connesso l'elenco è vuoto
+      - [ ] L'override prende `_mutex` come `getSupportedCommands()`
+    ref: TASK-08
+  - id: TASK-09
+    title: Server NUT — LIST RW, GET TYPE, LIST ENUM/RANGE, GET DESC e GET CMDDESC
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |
+      ## Descrizione
+      **Obiettivo:** rispondere ai comandi usati da upsrw come fa upsd.
+
+      **Da leggere:**
+      - `lib/NUTServer/src/NUTServer.cpp`, righe 284-360 (LIST) e 461-500 (GET DESC/CMDDESC/TYPE);
+      - `nut_repo/server/netlist.c`: `list_rw` 84, `list_enum` 156, `tree_dump` riga 53;
+      - `nut_repo/server/netget.c`: `get_desc` 69-98, `get_cmddesc` 130, `get_type` 134.
+
+      **Modifiche:**
+      - `LIST RW [<ups>]`:
+        - stessi controlli di `LIST VAR`: `ERR UNKNOWN-UPS` con nome errato, `ERR DATA-STALE` se `isDataStale()`;
+        - poi `BEGIN LIST RW <ups>`, una riga `RW <ups> <var> "<valore>"` per ogni elemento di `getWritableVariables()` e `END LIST RW <ups>`;
+        - prendere l'elenco prima di bloccare i dati;
+        - `LIST CMD` e `LIST CLIENT` restano invariati.
+      - `GET TYPE`: se la variabile è in `getWritableVariables()` (confronto `strcasecmp`), rispondere `TYPE <ups> <var> RW` più ` ENUM` se `enums` non è vuoto, più ` STRING:<aux>`. Altrimenti la risposta resta quella attuale.
+      - `LIST ENUM` / `LIST RANGE`:
+        - `ERR UNKNOWN-UPS`, `ERR DATA-STALE`, e `ERR VAR-NOT-SUPPORTED` se la variabile non è in `UPSData`;
+        - poi `BEGIN`, una riga `ENUM <ups> <var> "<v>"` per ogni valore se la variabile è RW enumerata, `END`;
+        - RANGE è sempre vuota.
+      - `GET DESC`: `NutTable::describe(var)` se non è null, altrimenti `"Description unavailable"`.
+      - `GET CMDDESC`: per un comando sconosciuto `"Description unavailable"` al posto di `"Unavailable"`. Aggiornare il commento che oggi attribuisce "Unavailable" a upsd.
+
+      **Passi:**
+      1. LIST RW.
+      2. GET TYPE.
+      3. LIST ENUM e RANGE.
+      4. GET DESC e CMDDESC.
+
+      **Verifica:** `pio test -e native -f test_nut_server` (vanno aggiornate le asserzioni su "Unavailable", TASK-10).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.cpp — gestori LIST RW, GET TYPE, LIST ENUM/RANGE, GET DESC/CMDDESC
+
+      ## Criteri di Completamento
+      - [ ] LIST RW ha lo stesso formato di upsd ed è ordinata come l'albero di upsd
+      - [ ] GET TYPE delle variabili non RW è identico a prima
+      - [ ] LIST ENUM restituisce `VAR-NOT-SUPPORTED` per una variabile assente
+      - [ ] DESC e CMDDESC senza descrizione rispondono `"Description unavailable"`
+    ref: TASK-09
+  - id: TASK-10
+    title: Test del protocollo NUT per le variabili RW e le descrizioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |
+      ## Descrizione
+      **Obiettivo:** verificare i nuovi comandi del server NUT sul mock dell'host.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp`, in particolare `MockUSBHost` (riga 35) e i test esistenti di `LIST CMD`, `GET TYPE`, `GET DESC` e `GET CMDDESC`.
+
+      **Modifiche:** in `MockUSBHost` aggiungere un vettore `rw` configurabile e l'override di `getWritableVariables()`. Casi:
+      - `LIST RW` con `battery.charge.low` "20" e `input.sensitivity` "normal" (ENUM): righe nel formato upsd, in ordine.
+      - `LIST RW` con nome UPS errato → `ERR UNKNOWN-UPS`; con dati stale → `ERR DATA-STALE`; senza variabili → BEGIN/END vuoti.
+      - `GET TYPE`:
+        - `battery.charge.low` → `RW STRING:10`;
+        - `input.sensitivity` → `RW ENUM STRING:10`;
+        - una variabile non RW → `STRING:64` invariato.
+      - `LIST ENUM`:
+        - di `input.sensitivity` → tre righe ENUM;
+        - di una variabile RW non ENUM → vuota;
+        - di una variabile assente → `ERR VAR-NOT-SUPPORTED`.
+      - `LIST RANGE` di una variabile presente → vuota.
+      - `GET DESC battery.charge.low` → la descrizione di cmdvartab; `GET DESC` di una variabile sconosciuta → `"Description unavailable"`.
+      - Aggiornare le asserzioni esistenti che si aspettano `"Unavailable"` per DESC o CMDDESC sconosciuti: ora `"Description unavailable"`, con un commento che cita `netget.c:98/130`.
+
+      **Verifica:** `pio test -e native -f test_nut_server`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — mock, nuovi casi, asserzioni sulla descrizione
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati sono presenti e passano
+      - [ ] Le sole asserzioni esistenti modificate sono quelle su "Unavailable", motivate nel commento
+    ref: TASK-10
+  - id: TASK-11
+    title: Replay delle fixture — elenco RW atteso per descriptor e aspettative ricalcolate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |
+      ## Descrizione
+      **Obiettivo:** fissare per ogni fixture reale le variabili che il catalogo lega e verificare i valori dove ci sono scenari.
+
+      **Da leggere:** `test/test_record_replay/test_main.cpp` e `test/test_record_replay/FixtureReplayRunner.h`.
+
+      **Modifiche:**
+      - Aggiungere a `runFixtureTest` un parametro opzionale `const char* expectedRW`: i nomi distinti dei candidati legati da `NutTable::bind(hid2nut, usages)`, ordinati e separati da spazio. Dipendono solo dal descriptor. Esclusi `ups.delay.*` (TASK-12).
+      - Attesi, ricavati in pianificazione da un'analisi indipendente dei descriptor con i percorsi upstream. Sono identici cercando l'usage solo tra i Feature o in qualunque tipo di report:
+        - Eaton 3S: `battery.charge.low input.transfer.high input.transfer.low outlet.1.desc outlet.desc output.voltage.nominal`
+        - Eaton 5P: `battery.charge.low battery.charge.restart battery.protection output.voltage.nominal ups.shutdown ups.start.reboot ups.test.interval`
+        - APC BX1500G, BX750MI, CS500, CS750RS, ES700G, RS900MI e Smart-UPS 750 (issue #78): `battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low`
+        - APC XS700U e Smart-UPS 750 (issue #13): `battery.charge.low battery.mfr.date battery.runtime.low`
+        - APC Smart-UPS 750 PID 0003 (issue #22): `battery.charge.low battery.runtime.low`
+        - CyberPower BR700ELCD e CP1350C: `battery.charge.low battery.runtime.low input.transfer.high input.transfer.low`
+        - CyberPower CP1500EPFCLCD e CP1600EPFCLCD: le stesse più `input.sensitivity`
+        - Powercom SPD-750U e OpenUPS: elenco vuoto
+      - Se il binding reale differisce, non correggere gli attesi copiando l'output: verificare il percorso nel descriptor e nel file upstream, e segnalare la differenza.
+      - Le aspettative di scenario (`expected_ups_data`) che cambiano per l'ultima parola del catalogo vanno ricalcolate dai byte dei report, con il calcolo nel commento. Per le fixture APC e CyberPower che replicano il report della sensitivity, aggiungere `input.sensitivity` con il valore upstream calcolato dai byte.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — parametro `expectedRW`
+      - test/test_record_replay/test_main.cpp — elenchi attesi per fixture
+      - test/fixtures/** — solo se un'aspettativa va ricalcolata (motivarlo nel commento)
+
+      ## Criteri di Completamento
+      - [ ] Ogni fixture ha un `expectedRW`
+      - [ ] Le aspettative modificate hanno il calcolo dai byte nel commento
+      - [ ] Il replay passa da `postDecode` come l'host
+    ref: TASK-11
+  - id: TASK-12
+    title: ups.delay.* come in upstream — presenza su qualunque tipo di report e variabili Powercom
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |
+      ## Descrizione
+      **Obiettivo:** allineare a upstream la presenza di `ups.delay.*`: percorso in qualunque tipo di report, e variabili presenti anche su Powercom, che le dichiara RW in powercom-hid pur senza i nostri comandi di spegnimento.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/CommandCatalog.h` (`applyDefaultDelays` e `hasFeature`, con `kShutdown` / `kStartup`);
+      - `lib/USBHostUPS/src/IUPSDriver.h`;
+      - `lib/USBHostUPS/src/PowercomDriver.h`;
+      - `nut_repo/drivers/powercom-hid.c` righe 528-529 (`PCMDelayBefore*` = 0x00ff0056/0x00ff0057) e 620-639 (default 60/20, aux 8);
+      - `test/test_powercom_driver/test_powercom_driver.cpp` (righe 281-301) e `test/test_command_catalog/test_main.cpp` (righe 480-510).
+
+      **Modifiche:**
+      - In `IUPSDriver`:
+        - `virtual bool delayVariablesSupported() const { return shutdownCommandsSupported(); }`
+        - `virtual uint8_t delayAux() const { return 10; }`
+      - In `PowercomDriver`: `delayVariablesSupported()` true, `defaultOnDelay()` 60, `defaultOffDelay()` 20, `delayAux()` 8. `shutdownCommandsSupported()` resta false: niente comandi, come in US-058.
+      - `CommandCatalog::applyDefaultDelays`:
+        - il parametro booleano diventa `delay_vars` e i chiamanti (`USBHostUPS::applyDefaultDelays`, replay runner) passano `delayVariablesSupported()`;
+        - la presenza si verifica sul percorso in qualunque tipo di report, con una nuova `hasPath()`;
+        - aggiungere tra i percorsi di `ups.delay.shutdown` il codice Powercom `PCMDelayBeforeShutdown` (0x00FF0057), solo per questa funzione;
+        - `hasFeature` resta invariato per i comandi, che scrivono e richiedono quindi un Feature.
+      - Aggiornare i commenti di US-058 che dicono "ups.delay.* is not set" per i driver senza comandi.
+      - Test:
+        - `test_powercom_driver`: l'asserzione della riga 301 si inverte. Ora `ups.delay.shutdown` = "20" e `ups.delay.start` = "60" ci sono, e `writableVariables` li riporta con aux 8. Nel commento spiegare il motivo: powercom-hid.c:620-639.
+        - `test_command_catalog`: un caso con il percorso presente solo come Input, che ora imposta `ups.delay.*`.
+        - Replay Powercom: verificare la presenza di `ups.delay.*` con 60/20.
+
+      **Passi:**
+      1. Hook in IUPSDriver e override Powercom.
+      2. `applyDefaultDelays` e chiamanti.
+      3. Test.
+
+      **Verifica:** `pio test -e native -f test_powercom_driver -f test_command_catalog -f test_record_replay`.
+
+      **Blocchi:** se il comportamento di qualche comando cambia (lista `LIST CMD` diversa su qualche fixture), fermarsi e segnalarlo: questa modifica deve toccare solo le variabili.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — `delayVariablesSupported()` e `delayAux()`
+      - lib/USBHostUPS/src/PowercomDriver.h — override 60/20/aux 8
+      - lib/USBHostUPS/src/CommandCatalog.h — `applyDefaultDelays` con `hasPath` e codice PCM
+      - lib/USBHostUPS/src/USBHostUPS.cpp — passaggio di `delayVariablesSupported()`
+      - test/test_record_replay/FixtureReplayRunner.h — stesso passaggio
+      - test/test_powercom_driver/test_powercom_driver.cpp — asserzioni aggiornate
+      - test/test_command_catalog/test_main.cpp — caso solo Input
+
+      ## Criteri di Completamento
+      - [ ] Su Powercom `ups.delay.start` = 60 e `ups.delay.shutdown` = 20 sono RW con aux 8, senza comandi di spegnimento
+      - [ ] `LIST CMD` non cambia su nessuna fixture
+      - [ ] EcoFlow e OpenUPS restano senza `ups.delay.*`
+    ref: TASK-12
+  - id: TASK-13
+    title: Test dei driver, regressione completa e build firmware
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |
+      ## Descrizione
+      **Obiettivo:** coprire i cambiamenti visibili nei driver e confermare che il resto non regredisce.
+
+      **Da leggere:** `test/test_apc_driver/test_main.cpp`, `test/test_cyberpower_driver/test_main.cpp`, `test/test_eaton_driver/test_main.cpp`, e le note di build (pio fuori PATH, toolchain mingw).
+
+      **Modifiche:**
+      - APC: `0xFF860061 = 0/1/2` dà `input.sensitivity` low, medium, high. Con 3 la prima lettura fallisce e la variabile non è RW.
+      - CyberPower: `0xFF010043 = 0/1/2` dà low, normal, high.
+      - Eaton:
+        - `RemainingCapacityLimitSetting` (20) e `RemainingCapacityLimit` (10) decodificati in entrambi gli ordini danno sempre `battery.charge.low` = "20";
+        - `outlet.desc` = "Main Outlet" se esiste `Outlet.[1].OutletID`.
+      - Eseguire la suite nativa completa:
+        `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - Eseguire la build: `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+      - Riportare il numero di test, l'esito e la differenza di RAM/flash rispetto a prima della spec, più `sizeof(HIDUsageDef)` prima e dopo.
+
+      **Verifica:** suite verde e build ok.
+
+      **Blocchi:** se un test esistente fallisce per un motivo non legato a questa spec, fermarsi e segnalarlo invece di adattarlo.
+
+      ## File Coinvolti
+      - test/test_apc_driver/test_main.cpp — sensitivity APC
+      - test/test_cyberpower_driver/test_main.cpp — sensitivity CPS
+      - test/test_eaton_driver/test_main.cpp — ultima parola del catalogo e outlet.desc
+
+      ## Criteri di Completamento
+      - [ ] I nuovi test dei driver passano
+      - [ ] La suite nativa completa è verde
+      - [ ] La build `esp32-s3-standard` compila e il report riporta l'impatto su memoria e `sizeof(HIDUsageDef)`
+    ref: TASK-13

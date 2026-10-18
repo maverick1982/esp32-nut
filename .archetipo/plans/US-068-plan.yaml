@@ -1,0 +1,606 @@
+schema: archetipo/plan/v2
+spec_code: US-068
+body: "---\ntype: plan\ntitle: \"US-068: Pagina \\\"UPS Settings\\\" nella Web UI — Piano di Implementazione\"\ndescription: \"Piano di Implementazione per US-068\"\ntags: [plan, implementation, US-068]\n---\n# US-068: Pagina \"UPS Settings\" nella Web UI — Piano di Implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-10-16\n\n---\n\n## Spec\n\n**Epic:** EP-003 — Server NUT\n**Priorità:** HIGH | **Punti:** 8 (rivisti da 5: oltre alla pagina ci sono il reset delle variabili lato driver, la validazione condivisa con `SET VAR` e la rimozione del blocco in AP dei comandi)\n**Bloccato da:** US-066 e US-067 (in REVIEW, codice su `feature/ups-settings`, commit 3132480 e 9f9b169)\n\n**User Story**\nCome utente autenticato della Web UI, voglio una pagina con i parametri modificabili dell'UPS e i loro valori attuali, in modo da cambiarli dal browser senza un client NUT.\n\n**Criteri di Accettazione (sintesi)**\n- \"UPS Settings\" è la terza voce del menu, dopo \"UPS Commands\"; titolo e layout responsive come gli altri tab.\n- `GET /api/ups/variables`: nome, descrizione, valore, lunghezza massima, valori ENUM, flag lato driver; catalogo vuoto o UPS scollegato → \"No settings available\".\n- `POST /api/ups/variable` con la logica di `SET VAR`: 200 / 400 / 500 / 503, esito mostrato in pagina.\n- Conferma prima di applicare `ups.shutdown`, `outlet.N.switchable`, `input.bypass.*`, `input.eco.switchable`, `input.transfer.bypass.forced`.\n- \"Reset to default\" per le variabili lato driver: cancella il valore in NVS e torna al default del driver.\n- In AP nessun blocco: \"UPS Settings\" e i comandi di spegnimento di \"UPS Commands\" funzionano come in STA, con le conferme (decisione del 2026-10-16).\n- PDR 0001 (D6, D7), ADR 0009 e README spiegano perché; D6 dice che in AP manuale il server NUT resta attivo.\n- Caricamento all'apertura e dopo ogni \"Apply\", senza richieste periodiche.\n\n---\n\n## Soluzione Tecnica\n\nLa pagina riusa lo schema del tab \"UPS Commands\" (US-059/US-062). La logica HTTP sta in funzioni pure di `WebApiJson` (testabili in nativo, perché `web_config_server.cpp` non è compilato nell'env native). Il server web registra solo le route. Nelle API dell'UPS non c'è più distinzione STA/AP: il blocco in AP dei comandi di spegnimento viene rimosso nella stessa spec. La validazione di `SET VAR` viene estratta in una funzione pura condivisa con il server NUT, così le due strade non possono divergere.\n\n### 1. Validazione condivisa (`NutTable.h`)\n- `enum class SetCheck { OK, NOT_WRITABLE, INVALID_AUX, TOO_LONG, INVALID_VALUE }` e `inline SetCheck checkSetValue(const std::vector<RWVariable>& rw, const char* name, const char* value, const RWVariable*& var)`. Sono i passi 5-8 di `set_var()` (`nut_repo/server/netset.c`): ricerca senza distinzione di maiuscole (READONLY se assente), `aux < 1`, `strlen(value) > aux`, ENUM con `strcmp`.\n- `NUTServer::setVar()` usa `checkSetValue()` al posto del codice inline (stesso ordine, stessi errori, stesso WARN `auxdata for %s is invalid`). La presenza (`VAR-NOT-SUPPORTED`, `isVarPresent`) resta nel server NUT: la Web UI lavora solo sul catalogo `LIST RW`, dove una variabile assente è \"non scrivibile\".\n- `RWVariable` ottiene un quarto campo `bool driver_side`. `GenericDriver::writableVariables()` lo imposta per le righe `HU_FLAG_ABSENT` (`outlet.*.desc`) e per `ups.delay.*`. Gli inizializzatori aggregati vanno aggiornati ovunque, senza default member initializer: l'env native usa GCC 5.1.\n\n### 2. Reset delle variabili lato driver\n- `IDriverVarStore::erase(const char* name)` (virtuale pura), `DriverVarStore::remove(vars, name)` (helper puro). `NvsDriverVarStore::erase()` legge il JSON, rimuove la voce e lo riscrive; se la lista resta vuota rimuove la chiave `vars`. Una voce assente non è un errore (true).\n- `IUPSDriver::resetDriverSideValue(const char* name, String& value)` restituisce false per default. `GenericDriver` lo implementa per le righe ABSENT legate con quel nome: toglie l'override da `_absent_overrides`, riporta `value` della riga al `dfl` della tabella e lo restituisce. `ups.delay.*` non passa da qui.\n- `IUSBHostUPS::resetVariable(const char* name)` restituisce `NutTable::SetStatus` (NOT_CONNECTED per default). `USBHostUPS::resetVariable`:\n  - NOT_CONNECTED se l'host o il driver non c'è;\n  - UNKNOWN se la variabile non è nel catalogo con `driver_side`;\n  - prima `erase()` nello store (store assente o erase fallito → FAILED, nulla cambia), poi rimozione dalla cache `_saved_vars`;\n  - `ups.delay.*` → `applyDefaultDelays()`, che senza valore salvato riscrive il default del driver;\n  - `outlet.*.desc` → `resetDriverSideValue()` + `_ups_data.set(name, default)`;\n  - INFO nel System Log `Variable %s reset to default \"%s\"`. Il default è sempre quello del driver collegato, come `offdelay`/`ondelay` senza `ups.conf`.\n\n### 3. API (`WebApiJson`)\n- `generateUpsVariables(IUSBHostUPS*)` → `{\"connected\":bool,\"variables\":[{\"name\",\"description\",\"value\",\"max_length\",\"enum\":[...],\"driver_side\",\"confirm\"}]}`.\n  - Variabili nell'ordine di `getWritableVariables()`. `description` da `NutTable::describe()`, altrimenti `\"Description unavailable\"` come il server NUT. `value` da `getUPSData()`.\n  - Senza host o con UPS scollegato: `connected:false` e lista vuota.\n- `needsConfirmation(const char* name)`: `ups.shutdown`, `outlet.switchable` e `outlet.<N>.switchable`, prefisso `input.bypass.`, `input.eco.switchable`, `input.transfer.bypass.forced`. È un flag `confirm` nel payload; la conferma la chiede la pagina (`window.confirm`, come i comandi).\n- `runUpsVariable(IUSBHostUPS*, const String& body, String& response)`, body `{\"name\",\"value\"}` di al massimo `MAX_COMMAND_BODY_LENGTH`, in quest'ordine:\n  1. JSON non valido, `name` mancante o vuoto, `value` mancante o non stringa → 400 `Invalid request`;\n  2. host assente o `!isConnected()` → 503 `UPS not connected`; `isDataStale()` → 503 `UPS data stale`;\n  3. `checkSetValue()` su `getWritableVariables()`: NOT_WRITABLE e INVALID_AUX → 400 `Variable not writable`; TOO_LONG → 400 `Value too long (max N)`; INVALID_VALUE → 400 `Invalid value`;\n  4. `setVariable(nome canonico, value)`. OK → 200 `{\"success\":true,\"value\":<valore riletto da UPSData>}`. CONVERSION_FAILED → 400 `Invalid value`. UNKNOWN → 400 `Variable not supported`. FAILED → 500 `Rejected by the UPS`. NOT_CONNECTED → 503.\n- `resetUpsVariable(IUSBHostUPS*, const String& body, String& response)`, body `{\"name\"}`. Stessi passi 1-2, poi la variabile deve essere nel catalogo con `driver_side`, altrimenti 400 `Not a driver-side variable`. `resetVariable()`: OK → 200 `{\"success\":true,\"value\":...}`; UNKNOWN → 400; FAILED → 500 `Could not save the setting`; NOT_CONNECTED → 503.\n\n### 4. Server web (`web_config_server.cpp`)\n- Route `GET /api/ups/variables`, `POST /api/ups/variable`, `POST /api/ups/variable/reset`, tutte con `guarded()` (sessione in STA, aperte in AP come tutte le altre API). Le POST chiamano prima `requireJson()` (415, anti-CSRF).\n- Esito di una scrittura: lo registra già l'host (`Variable ... : OK|failed|...`). Il server web registra solo i rifiuti che non arrivano all'host (400/503 prima di `setVariable`), con un WARN `Variable %s = \"%s\" from the Web UI by '%s': %s`, così il System Log ha una riga per ogni tentativo, come per `SET VAR`. In AP, dove non c'è sessione, l'utente è `(AP mode)`. Lo stesso vale per il WARN dei comandi distruttivi, che oggi in AP riporta l'utente configurato.\n\n### 5. Pagina \"UPS Settings\"\n- Il mockup `docs/mockups/US-068/` è la fonte di verità per layout, classi e stati.\n- Nuovo tab `data-target=\"settings\"` subito dopo `commands`, con il titolo della pagina dalla voce del menu.\n- `loadSettings()`:\n  - parte all'apertura del tab e dopo ogni Apply o Reset, con la stessa guardia di sequenza di `loadCommands`;\n  - nessun `setInterval`; il tab non entra in `UPS_POLL_TABS`.\n- Una riga per variabile, costruita con DOM e `textContent` (mai `innerHTML` con dati dell'API):\n  - nome e descrizione;\n  - valore attuale;\n  - input: `<select>` con i valori ENUM, oppure `<input type=\"text\" maxlength=max_length>`;\n  - pulsanti: \"Apply\", più \"Reset to default\" se `driver_side`.\n- Apply:\n  - con `confirm`, chiede `window.confirm` e Annulla non invia nulla;\n  - POST JSON, poi risultato `.cmd-result` success/error con i messaggi per 400/500/503 e \"Network error\";\n  - quindi `loadSettings()`.\n- `connected:false` o lista vuota: \"No settings available\". Nessuno stato di sola lettura.\n- Dopo le modifiche a `data/www/*` si esegue a mano `python scripts/embed_web.py`, che rigenera `index_inlined.html` e `include/network/web_assets.h`.\n\n### 6. Nessun blocco in AP (decisione del 2026-10-16)\nChi entra in AP ha già accesso totale:\n- reset delle credenziali web senza la vecchia password (PDR D5);\n- tutte le API senza login (guard in AP, ADR 0009);\n- `POST /api/nut/config`;\n- OTA senza login.\n\nLa protezione è l'ingresso in AP (doppio reset fisico, timeout di 10 minuti), non i singoli controlli. Le conferme restano, contro gli errori. Si rimuovono:\n- in `WebApiJson`: il parametro `allow_destructive` di `generateUpsCommands` e `runUpsCommand`, il campo `locked` del payload e il 403 `Available via NUT only in Access Point mode`;\n- in `web_config_server.cpp`: gli argomenti `!is_ap_mode` e i commenti relativi;\n- in `bundle.js`/`index.html`/`bundle.css`: `isCommandLocked`, `CMD_LOCK_NOTE`, l'icona lucchetto sui pulsanti, `#cmd-note-power`, `.cmd-group.locked`. Oggi un campo `locked` mancante vale \"bloccato\", quindi frontend e backend cambiano insieme;\n- nei test:\n  - in `test_web_api` i test del 403 e di `locked` diventano test dei distruttivi eseguiti senza blocco;\n  - in `e2e/ups-commands.spec.ts` i due test del lucchetto diventano \"in AP un comando distruttivo chiede conferma e viene eseguito\".\n  È un cambiamento semantico di test esistenti, deciso con l'utente.\n\n### 7. Documentazione\n- **PDR 0001:**\n  - D7: tolto \"In AP i comandi di spegnimento restano bloccati\", aggiunta la motivazione (accesso all'AP = accesso totale; protezione = ingresso in AP; conferme contro gli errori);\n  - D6: \"Durante la modalità AP il server NUT non è attivo\" diventa \"in AP manuale con configurazione valida il server NUT resta attivo, raggiungibile solo dai dispositivi collegati all'AP\", come `src/core/main.cpp`;\n  - una nota di revisione con la data.\n- **ADR 0009:** contesto (riga ~22), sezione \"Destructive commands\" (riga ~129) e guard in AP: il blocco non esiste più, con la motivazione.\n- **README.md / README.it.md:**\n  - la riga dei comandi di spegnimento (~159) perde \"In Access Point mode they stay locked\";\n  - nuova riga sulla pagina **UPS Settings**;\n  - nella sezione Access Point (~161-170), una frase esplicita: in AP l'interfaccia dà accesso completo (credenziali, NUT, OTA, comandi e parametri), quindi la finestra AP va tenuta breve.\n\n### Scelte e deviazioni\n- La Web UI non ha TRACKING: la risposta è sincrona, come `SET VAR` senza TRACKING (US-067).\n- `aux < 1` dà 400 e non 500: la variabile non è scrivibile, e all'UPS non arriva nulla. Il server NUT continua a rispondere `SET-FAILED` come upsd.\n- Data stale → 503, come `DATA-STALE` di upsd. La spec chiede 503 per \"UPS non connesso\".\n- Fuori ambito: una password dell'AP diversa da `12345678`, l'unica modifica che renderebbe la modalità AP davvero più sicura.\n- La conferma è solo lato pagina, come per i comandi: le API non la impongono.\n\n---\n\n## Strategia di Test\n\nTest nativi Unity (`pio test -e native`, con il PATH del toolchain mingw) per tutta la logica, e Playwright per la pagina. Gli attesi si ricavano dalla spec, da `netset.c` e dalle tabelle, mai dall'output del codice.\n\n- **Validazione (`test/test_rw_catalog`):**\n  - `checkSetValue()` per ogni esito, nome con maiuscole diverse → variabile canonica, valore di lunghezza esattamente `aux` accettato;\n  - `driver_side` vero per `outlet.desc`/`outlet.1.desc` e `ups.delay.*`, falso per `battery.charge.low`;\n  - `test_nut_server` resta verde senza modifiche.\n- **Reset:**\n  - `DriverVarStore::remove()` (`test/test_command_catalog`);\n  - `GenericDriver::resetDriverSideValue()` (`test/test_rw_catalog`): override tolto, valore tornato a `Main Outlet`, nome non ABSENT → false;\n  - `applyDefaultDelays()` senza il valore rimosso → default.\n- **API (`test/test_web_api`):** il mock implementa `getWritableVariables`, `setVariable` e `resetVariable`.\n  - Payload GET con descrizione, fallback `Description unavailable`, ENUM, `driver_side`, `confirm`, UPS scollegato.\n  - Ogni ramo di `runUpsVariable`/`resetUpsVariable`, con lo stato HTTP e il messaggio.\n  - 503; nome canonico passato a `setVariable`; nessuna chiamata all'host per i 400 di forma.\n  - Comandi: un distruttivo viene eseguito senza parametri di modalità e il payload non ha più `locked`.\n  - `needsConfirmation()` sui nomi della spec e su un nome simile che non deve chiedere conferma (`outlet.1.desc`).\n- **Regressione:** suite nativa completa e build `esp32-s3-standard`.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts` → `serveIndex`), API simulate con `page.route` come in `e2e/ups-commands.spec.ts`.\n**Video demo:** previsto (la Dimostrazione è filmabile). Lo registra `archetipo-review`, non l'implementazione.\n\n| Scenario | Flusso utente |\n|---|---|\n| Apertura del tab | L'utente apre \"UPS Settings\", terza voce del menu. Il titolo della pagina cambia e le righe mostrano nome, descrizione e valore. Le variabili ENUM hanno una select, le altre un input con `maxlength`. |\n| Apply riuscito | Imposta `battery.charge.low` a 30 e preme Apply. La POST ha corpo JSON `{name,value}`. Compaiono l'esito \"Applied\" e il valore aggiornato, ricaricato con una nuova GET. |\n| Errori | Le risposte 400, 500 e 503 mostrano ciascuna il proprio messaggio, e il valore resta quello precedente. |\n| Conferma | Su `ups.shutdown` compare il dialog con il nome. Annulla non invia nulla, OK invia. |\n| Reset to default | Su `ups.delay.shutdown` \"Reset to default\" invia la POST di reset e mostra il nuovo valore. Le variabili non lato driver non hanno il pulsante. |\n| Modalità AP | Con `/api/auth/status` in `ap_mode`, \"UPS Settings\" funziona come in STA e Apply invia la POST. In \"UPS Commands\" un comando distruttivo chiede conferma e viene eseguito, senza lucchetto né nota. |\n| Vuoto | Con `connected:false` o lista vuota compare \"No settings available\". |\n| Nessun polling | Dopo il caricamento, in 6 s non partono altre GET di `/api/ups/variables`. |\n| Mobile | A 375x812 non c'è scroll orizzontale. |\n\n---\n\n> \U0001F3A8 Mockup della spec disponibili in `docs/mockups/US-068/`\n\n_Piano generato tramite ARchetipo Planning — 2026-10-16_\n"
+tasks:
+  - id: TASK-01
+    title: Validazione condivisa di SET VAR (checkSetValue) e flag driver_side nel catalogo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** una sola funzione pura decide se un valore può essere scritto (passi 5-8 di `set_var()`), usata dal server NUT e poi dalla Web UI. Inoltre il catalogo `LIST RW` dice quali variabili sono lato driver.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/NutTable.h`, intorno a `struct RWVariable` (riga ~578) e `SetStatus`;
+      - `lib/NUTServer/src/NUTServer.cpp`: `setVar()`, `findWritable()` (statica, righe ~42-55), passi READONLY / aux / TOO-LONG / INVALID-VALUE;
+      - `lib/USBHostUPS/src/GenericDriver.cpp`: `writableVariables()` (riga ~608);
+      - `nut_repo/server/netset.c`: `set_var()`.
+
+      **Modifiche:**
+      - `NutTable.h`:
+        - `enum class SetCheck { OK, NOT_WRITABLE, INVALID_AUX, TOO_LONG, INVALID_VALUE };`
+        - `inline SetCheck checkSetValue(const std::vector<RWVariable>& rw, const char* name, const char* value, const RWVariable*& var)`:
+          - ricerca con `equalsIgnoreCase` → NOT_WRITABLE se assente;
+          - `aux < 1` → INVALID_AUX;
+          - `strlen(value) > aux` → TOO_LONG;
+          - `enums` non vuoto e nessun `strcmp` uguale → INVALID_VALUE;
+          - `var` punta alla voce trovata anche negli esiti di errore successivi alla ricerca.
+        - Commento con il riferimento a `netset.c`.
+      - `RWVariable`: quarto campo `bool driver_side`. Aggiorna ogni inizializzatore aggregato (cerca `RWVariable` e `rw = {` in `lib/` e `test/`) senza default member initializer. `GenericDriver::writableVariables()` lo imposta a true per le righe con `HU_FLAG_ABSENT` e per `ups.delay.*`.
+      - `NUTServer::setVar()`:
+        - sostituisce i passi READONLY → INVALID-VALUE con `checkSetValue()`, mappando NOT_WRITABLE → READONLY, INVALID_AUX → SET-FAILED con il WARN `auxdata for %s is invalid` (invariato), TOO_LONG → TOO-LONG, INVALID_VALUE → INVALID-VALUE;
+        - rimuove `findWritable()` se non serve più.
+
+      **Passi:** tipi e funzione; campo `driver_side`; refactoring di `setVar()`; build.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server -f test_rw_catalog -f test_record_replay` verde senza modificare i test esistenti, e build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto quando:** il server NUT risponde come prima a ogni `SET VAR` e la logica dei passi 5-8 esiste in un solo punto.
+
+      **Blocchi:** se un test esistente di `test_nut_server` cambia esito, fermarsi: il refactoring deve essere a comportamento invariato.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `SetCheck`, `checkSetValue()`, campo `driver_side`
+      - lib/USBHostUPS/src/GenericDriver.cpp — `driver_side` in `writableVariables()`
+      - lib/NUTServer/src/NUTServer.cpp — `setVar()` usa `checkSetValue()`
+
+      ## Criteri di Completamento
+      - [ ] `checkSetValue()` pura, con riferimento a `set_var()`
+      - [ ] `driver_side` vero solo per righe ABSENT e `ups.delay.*`
+      - [ ] `test_nut_server` e `test_record_replay` verdi senza modifiche
+      - [ ] build ok
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di checkSetValue e del flag driver_side
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare con test nativi la validazione condivisa e il flag lato driver.
+
+      **Da leggere:** `test/test_rw_catalog/test_main.cpp` (driver e usage sintetici di US-066/067).
+
+      **Modifiche:** in `test/test_rw_catalog/test_main.cpp`:
+      - `checkSetValue()`:
+        - OK con nome canonico, e con maiuscole diverse (`var->name` è il canonico);
+        - NOT_WRITABLE per un nome assente;
+        - INVALID_AUX con aux 0;
+        - TOO_LONG con `aux + 1` caratteri, OK con esattamente `aux`;
+        - INVALID_VALUE fuori ENUM e per `Medium` contro `medium` (`strcmp`);
+        - valore vuoto con ENUM → INVALID_VALUE;
+      - `writableVariables()` con un descriptor Eaton sintetico:
+        - `outlet.desc` e `ups.delay.shutdown` con `driver_side` vero;
+        - `battery.charge.low` con `driver_side` falso.
+
+      **Passi:** scrivere i test e registrarli in tutte le liste `RUN_TEST` del file.
+
+      **Verifica:** `pio test -e native -f test_rw_catalog` (con il PATH mingw).
+
+      **Fatto quando:** ogni valore di `SetCheck` ha almeno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_rw_catalog/test_main.cpp — test di `checkSetValue()` e `driver_side`
+
+      ## Criteri di Completamento
+      - [ ] tutti gli esiti di `SetCheck` coperti, compreso il limite esatto di lunghezza
+      - [ ] `driver_side` verificato su righe ABSENT, `ups.delay.*` e righe HID
+      - [ ] suite verde
+    ref: TASK-02
+  - id: TASK-03
+    title: Reset ai default delle variabili lato driver (store, driver, host)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** cancellare un valore salvato in NVS e tornare al default del driver collegato, senza riavvio.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/DriverVarStore.h`;
+      - `src/core/driver_var_store.h/.cpp`;
+      - `lib/USBHostUPS/src/IUPSDriver.h` (`setDriverSideValue`);
+      - `lib/USBHostUPS/src/GenericDriver.h/.cpp` (`_absent_overrides`, `setDriverSideValue`, `bindNutTable`);
+      - `lib/USBHostUPS/src/NutTable.h` (`bind`, `Bound`, `dfl` delle righe ABSENT);
+      - `lib/USBHostUPS/src/IUSBHostUPS.h` (`setVariable`);
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` (`runSetVariable`, `applyDefaultDelays`, `applySavedDriverValues`, `setVariable`).
+
+      **Modifiche:**
+      - `DriverVarStore.h`:
+        - `virtual bool erase(const char* name) = 0;` in `IDriverVarStore`;
+        - `inline bool DriverVarStore::remove(std::vector<std::pair<String, String>>& vars, const char* name)`, che restituisce true se ha tolto qualcosa.
+      - `NvsDriverVarStore::erase`:
+        - legge, chiama `remove()` e riscrive;
+        - se la lista resta vuota, rimuove la chiave `vars`;
+        - una voce assente restituisce true;
+        - un errore di scrittura restituisce false;
+        - JSON corrotto: lo scarta, come in `save()`.
+      - `IUPSDriver`: `virtual bool resetDriverSideValue(const char* name, String& value) { return false; }`.
+      - `GenericDriver::resetDriverSideValue`:
+        - toglie l'override con quel nome;
+        - per ogni riga ABSENT legata con quel nome riporta `value` al `dfl` della tabella e `has` a true;
+        - restituisce il default in `value`; false se nessuna riga ABSENT ha quel nome.
+      - `IUSBHostUPS`: `virtual NutTable::SetStatus resetVariable(const char* name) { return NutTable::SetStatus::NOT_CONNECTED; }`, con il commento sull'ordine dei lock come `setVariable`.
+      - `USBHostUPS::resetVariable`:
+        - NOT_CONNECTED se `!isConnected()` o `!_driver`;
+        - UNKNOWN se `name` non è in `getWritableVariables()` con `driver_side`;
+        - `_var_store` assente o `erase()` false → FAILED, nulla cambia. L'erase avviene fuori da `_mutex`, perché scrive in flash, come `save()` in `runSetVariable`;
+        - poi sotto `_mutex`: `DriverVarStore::remove(_saved_vars, canonico)`;
+        - per `ups.delay.*` → `applyDefaultDelays()`, che riscrive il default perché il valore salvato non c'è più;
+        - per gli altri nomi → `_driver->resetDriverSideValue()` + `_ups_data.set(nome, default)`;
+        - log INFO `Variable %s reset to default "%s"` oppure WARN `Variable %s: reset failed` / `not supported` / `UPS not connected`.
+
+      **Passi:** store; driver; host; build.
+
+      **Verifica:** `pio test -e native` verde (store e driver compilano in nativo) e build `esp32-s3-standard`.
+
+      **Fatto quando:** un reset riporta `ups.delay.*` e `outlet.*.desc` al default del driver e il valore non viene più riapplicato alla connessione successiva.
+
+      **Blocchi:** se `applyDefaultDelays()` non riscrive il default dopo la rimozione (per esempio perché lo salta quando la chiave esiste), fermarsi e riportarlo invece di cambiare la semantica di US-067.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/DriverVarStore.h — `erase()`, `DriverVarStore::remove()`
+      - src/core/driver_var_store.h — dichiarazione di `erase()`
+      - src/core/driver_var_store.cpp — `erase()` su NVS
+      - lib/USBHostUPS/src/IUPSDriver.h — `resetDriverSideValue()`
+      - lib/USBHostUPS/src/GenericDriver.h — dichiarazione
+      - lib/USBHostUPS/src/GenericDriver.cpp — implementazione
+      - lib/USBHostUPS/src/IUSBHostUPS.h — `resetVariable()` virtuale
+      - lib/USBHostUPS/src/USBHostUPS.h — override
+      - lib/USBHostUPS/src/USBHostUPS.cpp — implementazione e log
+
+      ## Criteri di Completamento
+      - [ ] erase nello store prima di cambiare la cache e il valore pubblicato
+      - [ ] `ups.delay.*` e `outlet.*.desc` tornano al default del driver
+      - [ ] nessun `_mutex` tenuto durante la scrittura in flash
+      - [ ] una riga di System Log per ogni reset
+      - [ ] build ok
+    ref: TASK-03
+  - id: TASK-04
+    title: Test del reset lato driver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire in nativo le parti pure del reset.
+
+      **Da leggere:** `test/test_command_catalog/test_main.cpp` (test di `DriverVarStore`), `test/test_rw_catalog/test_main.cpp` (test degli override di US-067).
+
+      **Modifiche:**
+      - In `test/test_command_catalog/test_main.cpp`:
+        - `DriverVarStore::remove()`: toglie la voce giusta e lascia le altre nell'ordine; un nome assente restituisce false; la lista vuota resta vuota;
+        - `applyDefaultDelays()` con la lista salvata dopo `remove("ups.delay.shutdown")` restituisce il default del driver (20 su Eaton sintetico).
+      - In `test/test_rw_catalog/test_main.cpp`, `GenericDriver::resetDriverSideValue()`:
+        - dopo `setDriverSideValue("outlet.desc", "Rack A")` restituisce true e `Main Outlet`; il `postDecode` successivo pubblica `Main Outlet`; un nuovo bind non riapplica `Rack A`;
+        - `battery.charge.low` e un nome inesistente restituiscono false.
+
+      **Passi:** scrivere i test e registrarli.
+
+      **Verifica:** `pio test -e native -f test_command_catalog -f test_rw_catalog`.
+
+      **Fatto quando:** ogni ramo puro del reset ha un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — `remove()` e ritardi dopo il reset
+      - test/test_rw_catalog/test_main.cpp — `resetDriverSideValue()`
+
+      ## Criteri di Completamento
+      - [ ] `remove()` coperto anche sul nome assente
+      - [ ] reset dell'override verificato anche dopo un nuovo bind
+      - [ ] suite verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: Rimozione del blocco in AP dei comandi in WebApiJson e nei test nativi
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le API dei comandi non distinguono più STA e AP (decisione del 2026-10-16, piano sezione 6).
+
+      **Da leggere:**
+      - `lib/WebApi/src/WebApiJson.h/.cpp`: `generateUpsCommands`, `runUpsCommand` (righe ~61-134);
+      - `test/test_web_api/test_main.cpp`: i test che passano `allow_destructive` o controllano `locked` e il 403.
+
+      **Modifiche:**
+      - `generateUpsCommands(IUSBHostUPS* usb_ups)`: senza parametro e senza il campo `locked`; restano `name`, `description`, `destructive`.
+      - `runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response)`: senza parametro e senza il ramo 403. Aggiornare i commenti dell'header che citano AP e `allow_destructive`.
+      - `test/test_web_api/test_main.cpp`: i test del 403 e di `locked` diventano test dello stesso comando distruttivo eseguito (200, `executeCalls == 1`) e del payload senza `locked`. È un cambiamento semantico deciso con l'utente.
+      - `src/network/web_config_server.cpp` va aggiornato insieme, perché le firme cambiano: togliere `!is_ap_mode` da `handleUpsCommands`/`handleUpsCommand` e i commenti su AP. Nel WARN dei distruttivi, in AP l'utente è `(AP mode)` invece di `credentials.username()`.
+
+      **Passi:** firme, test nativi, server web, build.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` e build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto quando:** nessun riferimento a `allow_destructive` o `locked` resta in `lib/WebApi` e `web_config_server.cpp`.
+
+      **Blocchi:** il frontend tratta un `locked` mancante come bloccato: fino al TASK-09 la pagina dei comandi mostra il lucchetto. È atteso; non serve compensare lato server.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — firme senza `allow_destructive`
+      - lib/WebApi/src/WebApiJson.cpp — niente `locked` né 403
+      - src/network/web_config_server.cpp — chiamate e WARN dei distruttivi
+      - test/test_web_api/test_main.cpp — test aggiornati
+
+      ## Criteri di Completamento
+      - [ ] nessun 403 né `locked` nelle API dei comandi
+      - [ ] WARN dei distruttivi con `(AP mode)` in AP
+      - [ ] `test_web_api` verde
+      - [ ] build ok
+    ref: TASK-05
+  - id: TASK-06
+    title: API della pagina in WebApiJson (catalogo, scrittura, reset, conferma)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le tre risposte HTTP della pagina come funzioni pure, con la mappatura degli stati della spec.
+
+      **Da leggere:**
+      - `lib/WebApi/src/WebApiJson.h/.cpp` (`generateUpsCommands`, `runUpsCommand`, `MAX_COMMAND_BODY_LENGTH`);
+      - `lib/USBHostUPS/src/NutTable.h` (`describe()`, `checkSetValue()`, `RWVariable`);
+      - piano, sezione 3.
+
+      **Modifiche in `WebApiJson`:**
+      - `static bool needsConfirmation(const char* name)`:
+        - true per `ups.shutdown`, `outlet.switchable` e `outlet.<cifre>.switchable`, il prefisso `input.bypass.`, `input.eco.switchable` e `input.transfer.bypass.forced`;
+        - false per il resto (per esempio `outlet.1.desc`).
+      - `static String generateUpsVariables(IUSBHostUPS* usb_ups)`:
+        - risponde `{"connected","variables":[{"name","description","value","max_length","enum","driver_side","confirm"}]}`;
+        - `description` viene da `NutTable::describe()`, altrimenti `"Description unavailable"`;
+        - `value` viene da `getUPSData()`, stringa vuota se la chiave manca;
+        - senza host o con UPS scollegato: `connected:false`, `variables:[]`.
+      - `static int runUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response)`:
+        - ordine e messaggi esatti della sezione 3 del piano;
+        - successo: `{"success":true,"value":"<valore in UPSData dopo la scrittura>"}`;
+        - errori: `{"error":"..."}`.
+      - `static int resetUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response)`: come da piano.
+      - Parsing con ArduinoJson e filtro, come `runUpsCommand`. `value` deve essere una stringa JSON: un numero dà 400.
+
+      **Passi:** funzioni e dichiarazioni; build native ed esp32.
+
+      **Verifica:** `pio test -e native -f test_web_api` verde e build `esp32-s3-standard`.
+
+      **Fatto quando:** le tre funzioni coprono 200/400/500/503 senza toccare l'host nei 400 di forma.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — dichiarazioni
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] payload GET con tutti i campi della spec più `confirm`
+      - [ ] mappatura `SetStatus` → HTTP come da piano
+      - [ ] nessuna chiamata all'host nei 400 di forma
+      - [ ] build ok
+    ref: TASK-06
+  - id: TASK-07
+    title: Test delle API della pagina
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire ogni stato HTTP e il payload del catalogo.
+
+      **Da leggere:**
+      - `test/test_web_api/test_main.cpp`: `APIMockUSBHost`, helper e `setUp`;
+      - `test/test_nut_server/test_main.cpp`, righe ~81-93: mock con `rw`, `sets` e `setResult`.
+
+      **Modifiche in `test/test_web_api/test_main.cpp`:**
+      - Estendere `APIMockUSBHost`:
+        - `rw` per `getWritableVariables()`;
+        - `setVariable()`: registra `{name, value}` e restituisce `setResult`; se l'esito è OK scrive il valore nei dati del mock;
+        - `resetVariable()`: registra il nome e restituisce `resetResult`;
+        - `stale`.
+      - Catalogo (`generateUpsVariables`):
+        - descrizione nota e fallback `Description unavailable`;
+        - `enum`, `max_length` e `driver_side`;
+        - `confirm` per `ups.shutdown` e `outlet.1.switchable`;
+        - con UPS scollegato, `connected:false` e lista vuota.
+      - Scrittura (`runUpsVariable`):
+        - 400 per body invalido, `value` numerico, nome mancante, variabile non scrivibile, aux 0, valore troppo lungo, ENUM non valido, CONVERSION_FAILED e UNKNOWN;
+        - 503 con host scollegato e con dati stale;
+        - 500 per FAILED;
+        - 200 con il valore aggiornato;
+        - un nome con maiuscole diverse arriva a `setVariable` in forma canonica;
+        - nessuna chiamata all'host per i 400 di forma.
+      - Reset (`resetUpsVariable`):
+        - 400 per una variabile non lato driver;
+        - 503;
+        - 500 per FAILED;
+        - 200 con il valore.
+      - `needsConfirmation()`: true per tutti i nomi della spec; false per `outlet.1.desc`, `battery.charge.low` e `input.transfer.low`.
+
+      **Passi:** estendere il mock, scrivere i test e registrarli.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      **Fatto quando:** ogni riga della tabella degli stati ha un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — mock esteso e test
+
+      ## Criteri di Completamento
+      - [ ] tutti gli stati HTTP di scrittura e reset coperti
+      - [ ] nessuna chiamata all'host nei 400 di forma
+      - [ ] suite verde
+    ref: TASK-07
+  - id: TASK-08
+    title: Route del server web per catalogo, scrittura e reset
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre le tre API con la sessione della Web UI.
+
+      **Da leggere:**
+      - `src/network/web_config_server.cpp`:
+        - registrazione delle route (righe ~59-90);
+        - `guarded()` e `requireJson()`;
+        - `handleUpsCommands()` / `handleUpsCommand()`, come aggiornati nel TASK-05, compreso l'utente nel log;
+      - `include/network/web_config_server.h`.
+
+      **Modifiche:**
+      - Route con `guarded()`:
+        - `GET /api/ups/variables` → `WebApiJson::generateUpsVariables(usb_ups)`;
+        - `POST /api/ups/variable` → `requireJson()` + `WebApiJson::runUpsVariable(...)`;
+        - `POST /api/ups/variable/reset` → `requireJson()` + `WebApiJson::resetUpsVariable(...)`.
+      - Log per 400/503 che non arrivano all'host: WARN `Variable %s = "%s" from the Web UI by '%s': %s`, con `(AP mode)` come utente in AP.
+        - Gli esiti arrivati all'host li registra già `USBHostUPS`: la stessa richiesta non deve produrre due righe.
+        - Scegli la forma più semplice, per esempio un flag di uscita della funzione pura che dice se l'host è stato chiamato.
+      - Dichiarazioni degli handler nel `.h`.
+
+      **Passi:** handler, route, build.
+
+      **Verifica:** build `esp32-s3-standard` ok; `pio test -e native` verde.
+
+      **Fatto quando:** le tre route rispondono con la sessione della Web UI in STA e sono aperte in AP come le altre API.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — route e handler
+      - include/network/web_config_server.h — dichiarazioni
+
+      ## Criteri di Completamento
+      - [ ] tre route registrate con `guarded()`, POST con `requireJson()`
+      - [ ] nessuna riga di log duplicata per una stessa richiesta
+      - [ ] build ok
+    ref: TASK-08
+  - id: TASK-09
+    title: Tab "UPS Settings" nella Web UI, comandi senza lucchetto e assets incorporati
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la pagina della spec, fedele al mockup, e la pagina dei comandi senza blocco in AP.
+
+      **Da leggere:**
+      - mockup `docs/mockups/US-068/`, tutti i file: è la fonte di verità per struttura, classi e stati. Non ha stati di sola lettura;
+      - `data/www/index.html`: tab e `#content-commands` (righe ~28-74, ~391-474), compresa `#cmd-note-power` (~459);
+      - `data/www/bundle.js`:
+        - `apiFetch`, titolo (~227-257), click sui tab (~936-953);
+        - `loadCommands`/`renderCommands`/`buildCommandRow`/`runCommand`/`isCommandLocked`/`CMD_LOCK_NOTE`/`CMD_ERRORS` (~750-920);
+      - `data/www/bundle.css`: sezione US-059 (~1402) e media query (~1592);
+      - `scripts/embed_web.py`.
+
+      **Modifiche:**
+      - **UPS Commands:**
+        - togliere `isCommandLocked`, `CMD_LOCK_NOTE`, l'icona lucchetto sui pulsanti, la classe `.locked` sul gruppo, `#cmd-note-power` e le regole CSS che non servono più;
+        - i distruttivi chiedono sempre conferma, come oggi in STA;
+        - togliere la voce 403 da `CMD_ERRORS` se non resta un caso che la produce.
+      - **`index.html`:**
+        - tab `<button class="tab" data-target="settings">` con icona ed etichetta "UPS Settings", subito dopo "UPS Commands";
+        - contenitore `#content-settings` come da mockup.
+      - **`bundle.js`, pagina UPS Settings:**
+        - `loadSettings()` con guardia di sequenza, chiamata al click del tab e dopo ogni Apply o Reset. Nessun polling, la pagina non entra in `UPS_POLL_TABS`;
+        - righe costruite con DOM e `textContent`:
+          - `<select>` per ENUM, con il valore corrente selezionato, e aggiunto come opzione se manca;
+          - `<input type="text" maxlength>` per le altre variabili;
+          - "Apply" e, se `driver_side`, "Reset to default";
+        - Apply:
+          - con `confirm` chiede `window.confirm`; Annulla non invia nulla;
+          - invia una POST JSON `{name, value}`;
+          - mostra l'esito: messaggio dal campo `error`, fallback "Failed (HTTP n)" o "Network error";
+          - ricarica;
+        - Reset: POST `{name}` sulla route di reset, messaggio e ricarica;
+        - catalogo vuoto o UPS scollegato: "No settings available".
+      - **`bundle.css`:** solo le classi nuove del mockup (`settings.css`), con le regole mobile a 768px.
+      - Eseguire `python scripts/embed_web.py`, che rigenera `data/www/index_inlined.html` e `include/network/web_assets.h`.
+
+      **Passi:** comandi senza lucchetto, HTML, JS, CSS, embed, build.
+
+      **Verifica:** build `esp32-s3-standard` ok; la pagina servita da `e2e/support/webui.ts` si apre senza errori in console (verificato nel TASK-10).
+
+      **Fatto quando:** la pagina mostra tutti gli stati del mockup senza richieste periodiche e la pagina dei comandi non ha più lucchetti.
+
+      **Blocchi:** se il mockup e la spec divergono su un comportamento, prevale la spec; riportarlo nella review.
+
+      ## File Coinvolti
+      - data/www/index.html — voce di menu, contenitore, nota del lucchetto rimossa
+      - data/www/bundle.js — pagina UPS Settings e comandi senza blocco
+      - data/www/bundle.css — stili della pagina, regole `.locked` rimosse
+      - data/www/index_inlined.html — rigenerato da `scripts/embed_web.py`
+      - include/network/web_assets.h — rigenerato da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] "UPS Settings" terza voce del menu, con titolo della pagina
+      - [ ] select per ENUM, input con `maxlength` per le altre
+      - [ ] conferma, Reset to default, stato vuoto
+      - [ ] nessun lucchetto né nota AP nella pagina dei comandi
+      - [ ] nessun `setInterval` per la pagina
+      - [ ] assets rigenerati e build ok
+    ref: TASK-09
+  - id: TASK-10
+    title: Test E2E di UPS Settings e aggiornamento di UPS Commands senza blocco in AP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare con Playwright i flussi della tabella E2E del piano e allineare i test dei comandi alla nuova regola su AP.
+
+      **Da leggere:**
+      - `e2e/ups-commands.spec.ts`: mock delle API, conteggio delle richieste, dialog, i test `AP mode: destructive commands with locked: true…` e `destructive command without locked field is locked`;
+      - `e2e/support/webui.ts` (`serveIndex`);
+      - `e2e/responsive.spec.ts`, `e2e/default-tab.spec.js`, `e2e/auth.spec.ts` (mock di `ap_mode`);
+      - `playwright.config.ts`.
+
+      **Modifiche:**
+      - Nuovo `e2e/ups-settings.spec.ts`.
+        - `beforeEach` simula `/api/config`, `/api/system-status`, `/api/ups-vars`, `/api/auth/status` e `GET /api/ups/variables` (catalogo Eaton 3S con un ENUM `ups.shutdown` con confirm). Simula anche le due POST: registrano metodo, content type e corpo, e rispondono con uno stato configurabile.
+        - Test:
+          - terza voce del menu e titolo;
+          - nome, descrizione e valore;
+          - select per ENUM e `maxlength`;
+          - Apply `battery.charge.low=30`: corpo JSON, messaggio e nuova GET con 30;
+          - messaggi per 400, 500 e 503;
+          - conferma su `ups.shutdown`: Annulla non invia nulla, OK invia;
+          - "Reset to default" solo sulle righe `driver_side`, con la POST di reset;
+          - AP (`ap_mode:true`): Apply invia la POST come in STA;
+          - stato vuoto con "No settings available";
+          - nessuna GET in più di `/api/ups/variables` in 6 s;
+          - viewport 375x812 senza scroll orizzontale.
+      - `e2e/ups-commands.spec.ts`: i due test del lucchetto diventano un solo test, "in AP un comando distruttivo chiede conferma e viene eseguito, senza lucchetto né nota". Togliere `locked` dal tipo del catalogo e la costante `LOCK_NOTE`. È un cambiamento semantico deciso con l'utente.
+      - Se uno spec esistente controlla numero o ordine delle voci di menu, aggiornarlo meccanicamente: la nuova voce è la terza.
+
+      **Passi:** scrivere e aggiornare gli spec, poi eseguire tutta la suite.
+
+      **Verifica:** `npx playwright test e2e/ups-settings.spec.ts e2e/ups-commands.spec.ts`, poi `npx playwright test`.
+
+      **Fatto quando:** tutti gli scenari della tabella E2E del piano passano e la suite completa è verde.
+
+      **Blocchi:** se un test e2e esistente fallisce per un motivo diverso dall'ordine dei tab o dal blocco in AP, fermarsi e riportarlo.
+
+      ## File Coinvolti
+      - e2e/ups-settings.spec.ts — nuovo spec
+      - e2e/ups-commands.spec.ts — test del lucchetto sostituiti
+
+      ## Criteri di Completamento
+      - [ ] tutti gli scenari della tabella E2E coperti
+      - [ ] nessuna POST alla conferma annullata
+      - [ ] comandi distruttivi eseguibili in AP dopo conferma
+      - [ ] assenza di polling verificata
+      - [ ] suite Playwright completa verde
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Documentazione: PDR 0001, ADR 0009 e README'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione del 2026-10-16 sulla modalità AP e la pagina UPS Settings (piano, sezione 7).
+
+      **Da leggere:**
+      - `docs/pdr/0001-autenticazione-web.md`: D5, D6, D7, Limiti accettati;
+      - `docs/adr/0009-web-ui-authentication.md`: contesto (~22), guard (~99), "Destructive commands" (~129-132);
+      - `README.md` e `README.it.md`: righe ~140-170;
+      - `src/core/main.cpp`, righe ~150-170: il server NUT parte con `config_ok` anche in AP.
+
+      **Modifiche:**
+      - PDR 0001:
+        - D7: togliere "In AP i comandi di spegnimento restano bloccati…" e scrivere la motivazione:
+          - chi entra in AP ha accesso totale: reset delle credenziali, configurazione NUT, OTA;
+          - la protezione è l'ingresso in AP (doppio reset fisico, timeout);
+          - le conferme evitano gli errori;
+          - comandi e parametri dell'UPS funzionano come in STA;
+        - D6: il server NUT resta attivo in AP manuale con configurazione valida, raggiungibile solo dai dispositivi collegati all'AP;
+        - una riga di revisione datata 2026-10-16 (US-068);
+        - nei "Limiti accettati", sotto "Accesso fisico": chi è collegato all'AP con la password `12345678` ha lo stesso accesso totale, e una password dell'AP diversa resta un lavoro futuro.
+      - ADR 0009: aggiornare contesto, guard e la sezione "Destructive commands" con il rimando al PDR. Il blocco è stato rimosso: `runUpsCommand()` non ha più `allow_destructive`.
+      - README.md / README.it.md:
+        - riga dei comandi di spegnimento senza "In Access Point mode they stay locked (NUT only)";
+        - nuova riga sulla pagina **UPS Settings**: parametri modificabili dell'UPS, conferma per quelli che commutano prese/bypass/ECO, reset ai default per i valori salvati sull'ESP32;
+        - nella sezione Access Point, una frase esplicita: in AP l'interfaccia dà accesso completo (credenziali, NUT, OTA, comandi e parametri), quindi la finestra AP va tenuta breve.
+      - Stessi contenuti in inglese e in italiano.
+
+      **Passi:** PDR, ADR, README.
+
+      **Verifica:** rilettura; `grep -rn "stay locked\|restano bloccati\|server NUT non è attivo" docs/pdr docs/adr README.md README.it.md` non trova nulla.
+
+      **Fatto quando:** documenti e codice dicono la stessa cosa su AP, comandi e server NUT.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/pdr/0001-autenticazione-web.md — D6, D7, limiti accettati, revisione
+      - docs/adr/0009-web-ui-authentication.md — contesto, guard, comandi distruttivi
+      - README.md — comandi, UPS Settings, sezione AP
+      - README.it.md — comandi, UPS Settings, sezione AP
+
+      ## Criteri di Completamento
+      - [ ] D6 e D7 coerenti con il codice
+      - [ ] motivazione della decisione scritta nel PDR e richiamata nell'ADR
+      - [ ] README en/it aggiornati allo stesso modo
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build e verifica manuale sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-07
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla si è rotto e preparare la verifica sull'hardware.
+
+      **Da leggere:** il piano (Strategia di Test e Scelte).
+
+      **Modifiche:** nessuna, salvo correzioni di regressioni trovate qui.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: tutte le suite verdi; riporta il numero di test.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: build ok; riporta RAM e flash.
+      3. `npx playwright test`: suite verde.
+      4. Rieseguire `python scripts/embed_web.py`: non deve produrre differenze, cioè gli assets sono già rigenerati.
+      5. `grep -rn "allow_destructive\|isCommandLocked\|CMD_LOCK_NOTE" lib src data/www e2e test` non trova nulla.
+      6. Checklist manuale sull'Eaton 3S da preparare per la review:
+         - la pagina elenca `battery.charge.low`, `input.transfer.*`, `outlet.desc`, `outlet.1.desc` e `ups.delay.*`;
+         - Apply `battery.charge.low=30` mostra l'esito e il valore 30, che compare anche in `upsc`;
+         - `ups.delay.shutdown=60` mostra 60; "Reset to default" lo riporta a 20, e dopo un riavvio resta 20;
+         - `outlet.desc` impostato a "Rack A", poi "Reset to default" lo riporta a `Main Outlet`;
+         - un valore troppo lungo dà il messaggio 400;
+         - in AP (doppio reset) la pagina modifica i valori e un comando di spegnimento chiede conferma e parte. Da provare senza carichi importanti collegati;
+         - il System Log ha una riga per ogni Apply e Reset.
+
+      **Verifica:** output dei comandi riportato nella review.
+
+      **Fatto quando:** suite native ed e2e e build sono verdi e la checklist è pronta.
+
+      **Blocchi:** se RAM o flash peggiorano in modo sensibile, riportarlo.
+
+      ## File Coinvolti
+      - nessun file nuovo; eventuali correzioni nei file dei task precedenti
+
+      ## Criteri di Completamento
+      - [ ] suite nativa completa verde
+      - [ ] suite Playwright verde
+      - [ ] build `esp32-s3-standard` ok
+      - [ ] nessun residuo del blocco in AP
+      - [ ] checklist manuale pronta per la review
+    ref: TASK-12

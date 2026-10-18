@@ -1,0 +1,64 @@
+schema: archetipo/spec/v2
+code: US-082
+title: Nome dell'UPS mai vuoto (default "ups") e rimozione del fallback senza nome dell'UPS nei comandi NUT
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-082: Nome dell'UPS mai vuoto (default "ups") e rimozione del fallback senza nome dell'UPS nei comandi NUT
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che collega l'ESP32 a Home Assistant, upsc o PeaNUT,
+  voglio che il server NUT abbia sempre un nome dell'UPS valido e risponda ai comandi come upsd,
+  in modo che i client trovino l'UPS anche se non ho mai compilato il form NUT e che il server non accetti comandi che upsd rifiuta.
+
+  **Dimostrazione**
+  Su una scheda appena configurata solo con il Wi-Fi dall'AP:
+  - `LIST UPS` risponde `UPS ups "ESP32-S3 UPS Bridge"` (oggi `UPS  "..."`, con il nome vuoto);
+  - Home Assistant aggiunge l'integrazione NUT senza errori e legge le variabili;
+  - `upsc ups@<ip>` funziona.
+
+  Con `nc <ip> 3493`, `LIST VAR`, `GET VAR battery.charge` e `LIST FOO ups` rispondono `ERR INVALID-ARGUMENT`, come upsd.
+
+  **Criteri di Accettazione**
+  - [ ] `ups_name` non è mai vuoto. Se manca o è vuoto nella configurazione salvata, al caricamento vale `ups`, anche sulle schede già sul campo con il nome vuoto in NVS. Anche la prima configurazione Wi-Fi dall'AP salva `ups`.
+  - [ ] `POST` della configurazione NUT rifiuta con 400 un `ups_name` vuoto o con spazi, come già fa il form della Web UI (`pattern="^\S+$"`, `required`). Il placeholder del form diventa `ups`.
+  - [ ] Senza il nome dell'UPS, i comandi rispondono `ERR INVALID-ARGUMENT` come upsd (`net_list()` di `netlist.c`, `net_get()` di `netget.c`):
+    - `LIST VAR`, `LIST RW`, `LIST CMD`;
+    - `LIST ENUM`, `LIST RANGE`;
+    - `GET VAR`, `GET TYPE`, `GET DESC`, `GET CMDDESC`.
+    Il fallback sull'UPS configurato introdotto da US-023 sparisce.
+  - [ ] Un sottocomando `LIST` sconosciuto risponde `ERR INVALID-ARGUMENT` come upsd, non più `ERR UNKNOWN-COMMAND`.
+  - [ ] Con il nome dell'UPS le risposte sono identiche a oggi.
+  - [ ] Test nativi:
+    - default `ups` al caricamento con nome assente o vuoto;
+    - validazione 400 della configurazione NUT;
+    - ogni comando senza nome dell'UPS e il sottocomando `LIST` sconosciuto.
+  - [ ] Prima del merge si verifica Home Assistant su una scheda appena configurata e su una con `ups_name` vuoto già salvato in NVS.
+
+  **Assunzioni**
+  - Analisi del 2026-10-16. L'errore `LIST VAR: ERR INVALID-ARGUMENT` di Home Assistant, corretto in US-023 con il fallback, nasceva dal nome dell'UPS vuoto:
+    - US-023 ha cancellato `data/config.json`, che conteneva `"ups_name": "eaton"`, e da allora la prima configurazione Wi-Fi salva la sezione `nut` con campi vuoti;
+    - `LIST UPS` stampa `UPS  "ESP32-S3 UPS Bridge"`, e aionut (`list_ups`, `line.split(" ", 2)`) legge il nome `""` e invia `LIST VAR \n`;
+    - con upsd non succede, perché il nome è una sezione di `ups.conf` e non è mai vuoto.
+  - Le integrazioni Home Assistant esistenti senza alias trovano il nuovo nome con `LIST UPS`.
+  - Chi aveva il nome vuoto e un client configurato a mano senza nome deve usare `ups`: va scritto nelle note di release.
+  - Fuori ambito: `LIST CLIENT` (presente in upstream, assente qui).
+  - Riferimenti: `nut_repo/server/netlist.c` (`net_list`), `nut_repo/server/netget.c` (`net_get`), `src/core/config_manager.cpp`, `src/network/web_config_server.cpp` (`handleWifiConfig`, `handleNutConfig`).
+history:
+  - status: TODO
+    at: "2026-10-16T15:40:14Z"
+  - status: PLANNED
+    at: "2026-10-16T15:51:22Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T15:54:23Z"
+  - status: REVIEW
+    at: "2026-10-16T16:09:46Z"
+  - status: DONE
+    at: "2026-10-16T17:38:23Z"

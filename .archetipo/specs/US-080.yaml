@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-080
+title: Escape di virgolette e backslash nei valori delle risposte VAR, RW ed ENUM del server NUT
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: DONE
+body: |
+  #### US-080: Escape di virgolette e backslash nei valori delle risposte VAR, RW ed ENUM del server NUT
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-067
+
+  **User Story**
+  Come amministratore che usa upsc, upsrw, Home Assistant o PeaNUT,
+  voglio che il server NUT dell'ESP32 faccia l'escape di `"` e `\` nei valori che invia, come fa upsd,
+  in modo che una descrizione come `Rack "A"` non rompa la riga del protocollo e i client leggano il valore intero.
+
+  **Dimostrazione**
+  Si imposta da `upsrw` o dalla pagina "UPS Settings" il valore `Rack "A" \ 1` su `outlet.1.desc`. Poi:
+  - `upsc ups@<ip> outlet.1.desc` stampa `Rack "A" \ 1`;
+  - la riga grezza di `GET VAR` (per esempio da `nc`) è `VAR ups outlet.1.desc "Rack \"A\" \\ 1"`, come quella di upsd;
+  - Home Assistant continua a leggere tutte le altre variabili.
+
+  **Criteri di Accettazione**
+  - [ ] Le righe `VAR` di `LIST VAR` e `GET VAR`, le righe `RW` di `LIST RW` e le righe `ENUM` di `LIST ENUM` mettono un backslash davanti a ogni `"` e `\` del valore, come `pconf_encode()` (`PCONF_ESCAPE`).
+  - [ ] I valori senza caratteri speciali restano identici a oggi, compreso il caso `ups.status` con FSD.
+  - [ ] `GET DESC` e `GET CMDDESC` restano senza escape, come `get_desc()` / `get_cmddesc()` di upsd.
+  - [ ] Un `SET VAR` con valore escapato (`"Rack \"A\""`) salva `Rack "A"` e il successivo `GET VAR` lo restituisce escapato: il valore fa il giro completo senza perdere caratteri.
+  - [ ] I test nativi di `test_nut_server` coprono:
+    - `"` e `\` in `LIST VAR`, `GET VAR`, `LIST RW` e `LIST ENUM`;
+    - il giro completo `SET VAR` → `GET VAR`;
+    - un valore senza caratteri speciali, invariato.
+  - [ ] Le API JSON della Web UI non cambiano: i valori restano grezzi e l'escape lo fa ArduinoJson.
+
+  **Assunzioni**
+  - Riferimenti: `nut_repo/common/parseconf.c` (`pconf_encode`), `nut_repo/common/state.c` (`val_escape`, `state_addenum`), `nut_repo/server/netlist.c`, `nut_repo/server/netget.c`.
+  - L'escape vale solo in uscita. In NVS e in `UPSData` il valore resta grezzo, come `node->raw` di upstream.
+  - `UPSDESC` / `LIST UPS` stampano una costante senza caratteri speciali: non serve cambiarle.
+  - Era già possibile via `upsrw` prima di US-068, ma la pagina "UPS Settings" lo rende più facile. Il problema è emerso nella code review di US-068.
+history:
+  - status: TODO
+    at: "2026-10-16T14:44:27Z"
+  - status: PLANNED
+    at: "2026-10-16T15:05:02Z"
+  - status: IN PROGRESS
+    at: "2026-10-16T15:08:59Z"
+  - status: REVIEW
+    at: "2026-10-16T15:19:40Z"
+  - status: DONE
+    at: "2026-10-16T15:42:54Z"

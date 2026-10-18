@@ -156,9 +156,10 @@ La Web UI è protetta da nome utente e password.
 - **Remember me**: se spunti la casella al login, la sessione dura 30 giorni e sopravvive a riavvii e aggiornamenti firmware. Al massimo 8 dispositivi possono essere ricordati: il login su un 9° disconnette il più vecchio.
 - **Log out of all devices**: il pulsante nella barra laterale chiude tutte le sessioni, comprese quelle ricordate.
 - **Password sbagliate**: dopo 5 password sbagliate di fila, ogni tentativo successivo deve attendere 1 s, poi 2, 4… fino a 60 s. Nessun blocco permanente, e intanto NUT continua a funzionare.
-- **Comandi di spegnimento**: i comandi di carico e spegnimento (`load.off`, `shutdown.*`, …) si eseguono dalla pagina **UPS Commands** dopo una conferma. In modalità Access Point restano bloccati (solo via NUT).
+- **Comandi di spegnimento**: i comandi di carico e spegnimento (`load.off`, `shutdown.*`, …) si eseguono dalla pagina **UPS Commands** dopo una conferma, anche in modalità Access Point.
+- **UPS Settings**: la pagina **UPS Settings** elenca i parametri dell'UPS che puoi cambiare, con i valori attuali. I parametri che commutano prese, bypass o modalità ECO chiedono prima una conferma. I valori salvati sull'ESP32 (`ups.delay.*`, nomi delle prese) hanno il pulsante **Reset to default**.
 - **Separate da NUT**: le credenziali della Web UI sono indipendenti da quelle NUT (scheda NUT), che continuano a funzionare come prima per Home Assistant, PeaNUT, `upscmd`, ecc.
-- **Modalità Access Point** (doppio reset entro 3 secondi): la Web UI è accessibile senza login, come prima.
+- **Modalità Access Point** (doppio reset entro 3 secondi): la Web UI è accessibile senza login, come prima. Dà accesso completo: credenziali, impostazioni NUT, OTA, comandi e parametri dell'UPS. Tieni la finestra Access Point breve.
 - ⚠️ **HTTP in chiaro**: la Web UI è servita in HTTP, quindi le password viaggiano non cifrate sulla rete. Usala su una rete locale fidata e non riutilizzare una password usata altrove.
 - **Cambiare le credenziali**: apri la scheda **Web Login** (barra laterale, dopo **NUT Server**), inserisci la password attuale e il nuovo nome utente/password. Il salvataggio disconnette tutti gli altri dispositivi; quello in uso resta connesso.
 - **Password dimenticata**:
@@ -166,7 +167,7 @@ La Web UI è protetta da nome utente e password.
   2. Collegati, apri la Web UI e vai alla scheda **Web Login**.
   3. Imposta le nuove credenziali con **Reset credentials** (senza la password attuale). Tutte le sessioni vengono chiuse.
   4. Riavvia la scheda per tornare sulla rete di casa (ci torna anche da sola 10 minuti dopo che l'ultimo dispositivo si è scollegato dall'access point).
-- ⚠️ **In modalità Access Point** la scheda non è sulla rete di casa, quindi i client NUT (Home Assistant, PeaNUT, …) non la raggiungono. Fai il recupero in tempi brevi.
+- ⚠️ **In modalità Access Point** la scheda non è sulla rete di casa, quindi i client NUT (Home Assistant, PeaNUT, …) non la raggiungono. Con una configurazione valida il server NUT resta attivo, ma lo raggiungono solo i dispositivi collegati all'access point. Fai il recupero in tempi brevi.
 - **Le credenziali restano**: entrare in modalità Access Point non cancella le credenziali della Web UI, e cambiare solo le impostazioni Wi-Fi le mantiene.
 ### 4. Utilizzo Quotidiano
 - Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.

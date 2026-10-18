@@ -359,6 +359,58 @@ void test_apc_delays_set_only_timers(void) {
     TEST_ASSERT_EQUAL_INT32(30, driver.defaultOnDelay());
 }
 
+
+// --- NUT table (US-066) ---
+
+static HIDUsageDef nutField(const char* path, uint32_t usage, uint8_t report_id, uint8_t report_type,
+                            uint16_t bit_size = 8, std::initializer_list<uint8_t> coll = {}) {
+    HIDUsageDef d;
+    strcpy(d.path, path);
+    d.usage = usage;
+    d.report_id = report_id;
+    d.report_type = report_type;
+    d.bit_offset = 0;
+    d.bit_size = bit_size;
+    d.found = true;
+    size_t i = 0;
+    for (uint8_t c : coll) d.coll_index[i++] = c;
+    return d;
+}
+
+static void feed(uint8_t report_id, uint8_t report_type, uint8_t value) {
+    uint8_t data[] = { report_id, value };
+    driver.decodeReport(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+    driver.postDecode(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+}
+
+// apc-hid.c:414 + apc_sensitivity_info: UPS.Input.APCSensitivity (0xff860061), 0/1/2
+void test_apc_input_sensitivity_from_nut_table(void) {
+    mockHost._usages.push_back(nutField("UPS.Input.0xFF860061", 0xff860061, 0x35, 3));
+    feed(0x35, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("low", ups_data.get("input.sensitivity").c_str());
+    feed(0x35, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("medium", ups_data.get("input.sensitivity").c_str());
+    feed(0x35, 3, 2);
+    TEST_ASSERT_EQUAL_STRING("high", ups_data.get("input.sensitivity").c_str());
+
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(ups_data, rw);
+    TEST_ASSERT_EQUAL(1, rw.size());
+    TEST_ASSERT_EQUAL_STRING("input.sensitivity", rw[0].name);
+    TEST_ASSERT_EQUAL(10, rw[0].aux);
+    TEST_ASSERT_EQUAL(0, rw[0].enums.size()); // no HU_FLAG_ENUM upstream
+}
+
+// A first value outside apc_sensitivity_info: upstream never creates the variable
+void test_apc_input_sensitivity_unknown_first_value(void) {
+    mockHost._usages.push_back(nutField("UPS.Input.0xFF860061", 0xff860061, 0x35, 3));
+    feed(0x35, 3, 3);
+    TEST_ASSERT_FALSE(ups_data.hasKey("input.sensitivity"));
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(ups_data, rw);
+    TEST_ASSERT_EQUAL(0, rw.size());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -372,6 +424,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_split_product_real_strings);
     RUN_TEST(test_apc_format_device_strings);
     RUN_TEST(test_apc_delays_set_only_timers);
+    RUN_TEST(test_apc_input_sensitivity_from_nut_table);
+    RUN_TEST(test_apc_input_sensitivity_unknown_first_value);
     return UNITY_END();
 }
 #else
@@ -386,6 +440,8 @@ void setup() {
     RUN_TEST(test_apc_split_product_real_strings);
     RUN_TEST(test_apc_format_device_strings);
     RUN_TEST(test_apc_delays_set_only_timers);
+    RUN_TEST(test_apc_input_sensitivity_from_nut_table);
+    RUN_TEST(test_apc_input_sensitivity_unknown_first_value);
     UNITY_END();
 }
 void loop() {}

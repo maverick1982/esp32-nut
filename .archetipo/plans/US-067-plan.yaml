@@ -1,0 +1,712 @@
+schema: archetipo/plan/v2
+spec_code: US-067
+body: |
+  ---
+  type: plan
+  title: "US-067: Modifica dei parametri dell'UPS via NUT (SET VAR / upsrw) — Piano di Implementazione"
+  description: "Piano di Implementazione per US-067"
+  tags: [plan, implementation, US-067]
+  ---
+  # US-067: Modifica dei parametri dell'UPS via NUT (SET VAR / upsrw) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-15 (rev. 2: numeri decimali accettati e troncati come `atol()`)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** HIGH | **Punti:** 5 (probabile revisione a 8: conversioni inverse, persistenza NVS e TRACKING sono tre blocchi indipendenti)
+  **Bloccato da:** US-066 (in REVIEW, codice sul branch `feature/ups-settings`, commit 3132480)
+
+  **User Story**
+  Come amministratore che usa upsrw o Home Assistant, voglio cambiare via NUT le soglie e i ritardi dell'UPS e sapere se la modifica è andata a buon fine, in modo da configurarlo senza il software del produttore e senza collegarlo a un PC.
+
+  **Criteri di Accettazione (sintesi)**
+  - `SET VAR` con valori tra virgolette, anche con spazi; senza TRACKING OK solo a scrittura riuscita.
+  - Errori di upsd: ACCESS-DENIED, UNKNOWN-UPS, DRIVER-NOT-CONNECTED, VAR-NOT-SUPPORTED, READONLY, TOO-LONG, INVALID-VALUE, SET-FAILED; in caso di errore all'UPS non arriva nulla.
+  - Variabili HID convertite come usbhid-ups (lookup, date, interi), scritte nel Feature report, report riletto, `LIST VAR` mostra il valore restituito dall'UPS.
+  - Variabili lato driver (`ups.delay.*`, `outlet.*.desc`) in NVS, senza I/O USB; `ups.delay.*` solo interi >= 0; i comandi usano subito il nuovo ritardo.
+  - TRACKING come upsd; tabella degli esiti a dimensione fissa.
+  - Ogni SET nel System Log; test nativi su errori, scrittura/rilettura e sequenza di `upsrw -w`; il replay verifica l'elenco finale di `LIST RW`.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  In upstream il lavoro è diviso tra upsd (`set_var()` in `server/netset.c`: permessi, esistenza, RW, lunghezza, ENUM) e il driver (`setvar()` in `drivers/usbhid-ups.c`: conversione e scrittura). Qui server e driver sono lo stesso processo: il server NUT fa i controlli di upsd, il driver costruisce la scrittura, l'host la esegue. Ogni pezzo con logica è puro e testabile in nativo; `USBHostUPS.cpp`, che il nativo non compila, contiene solo l'orchestrazione.
+
+  ### 1. Conversione inversa (`NutTable.h`)
+
+  `NutTable::encode(const HidInfo&, const char* val, const Context&, const UPSData&, double& out)` restituisce `EncodeResult { OK, FAIL }`. È il porting di `hu_find_valinfo()` e delle funzioni `nuf` upstream:
+  - `Number`: come `atol()` di `setvar()` (`usbhid-ups.c:1231`) per ogni testo che è un numero decimale. La sintassi accettata è: spazi iniziali, segno opzionale, almeno una cifra, parte decimale opzionale (`.` seguito da zero o più cifre), spazi finali. Il valore è la parte intera, troncata verso zero come fa `atol()`: `30.7` → 30, `-0.5` → 0. Tutto il resto è FAIL: testo che non è un numero, esponenti (`1e3`, che `atol()` leggerebbe come 1), esadecimale, caratteri dopo il numero, stringa vuota, parte intera fuori da `int32_t`. Il troncamento avviene prima della conversione in valore logico, come in upstream: `12.34` in un campo con esponente -2 diventa 1200.
+  - `Lookup`, `NominalVoltage`, `PegasusThreshold`: `strcmp` sulla tabella `lkp`, come `hu_find_valinfo()` quando la prima voce non ha `nuf` (`nominal_output_voltage_info` e `pegasus_threshold_info` non ce l'hanno). Nessuna corrispondenza: FAIL.
+  - `PegasusYesNo`: `pegasus_yes_no_info_nuf()` alla lettera (`mge-hid.c:877`): modello non Pegasus → 0; testo che inizia con `yes` → 1; altro → 0.
+  - `BatteryDate`: `date_conversion_reverse()` (`usbhid-ups.c:561`): `YYYY/MM/DD` → `((y-1980)<<9) + (m<<5) + d`. Testo non analizzabile o fuori range (anno < 1980 o > 2107, mese > 12, giorno > 31) → FAIL.
+  - `MgeDate` / `MgeTime`: `mge_date_conversion_nuf()` / `mge_time_conversion_nuf()` (`mge-hid.c:626-655`): il valore più l'altra metà presa dai valori correnti di `ups.time` / `ups.date`, formato `%Y/%m/%d %H:%M:%S`, convertito in secondi UTC con un `timegm` portabile (days-from-civil), simmetrico al `gmtime()` della lettura di US-066. Mai `mktime()`: in nativo dipende dal fuso dell'host. Analisi fallita → FAIL.
+
+  ### 2. Valore logico (`HIDParser`)
+
+  `static bool HIDParser::toLogical(const HIDUsageDef& def, double physical, int32_t& logical)`, inverso di `extractUsage()`: stesso esponente di unità, con la stessa correzione -7 per le unità in volt e solo per `bit_size > 1`, poi `lrint`. Restituisce false quando il valore è fuori dal range logico dichiarato (`logical_max > logical_min`) o non entra nei bit del campo (`CommandCatalog::fitsField`). Il parser non legge Physical Min/Max, né in lettura né in scrittura: comportamento simmetrico e preesistente.
+
+  ### 3. Piano di scrittura nel driver
+
+  In `NutTable.h`:
+  - `enum class SetStatus { OK, UNKNOWN, CONVERSION_FAILED, FAILED, NOT_CONNECTED }`: gli esiti `STAT_SET_*` di upstream più il caso host scollegato;
+  - `struct SetPlan { enum class Kind { HID, DRIVER_SIDE } kind; const char* name; HIDUsageDef def; int32_t raw; String value; }`.
+
+  `IUPSDriver::planSet(const UPSData&, const std::vector<HIDUsageDef>&, const char* name, const char* value, NutTable::SetPlan&) const` restituisce `SetStatus` (default UNKNOWN). `GenericDriver` lo implementa:
+  - cerca la riga `ACTIVE` con `ST_FLAG_RW` e nome uguale senza distinzione di maiuscole, come `find_nut_info()`; se non c'è → UNKNOWN;
+  - riga `HU_FLAG_ABSENT` (`outlet.*.desc`) → DRIVER_SIDE con il valore così com'è, come `dstate_setinfo()` in `setvar()`;
+  - `ups.delay.shutdown` / `ups.delay.start` (fuori dalla tabella, US-066), se presenti in `UPSData` → DRIVER_SIDE; accettati solo interi >= 0 (`CommandCatalog::parseDelayParam` e `v >= 0`), altrimenti CONVERSION_FAILED;
+  - riga HID: `encode()` → FAIL diventa CONVERSION_FAILED. Si sceglie l'usage Feature tra `idx` e `twin_idx`; se nessuno dei due è Feature → FAILED. `toLogical()` false → CONVERSION_FAILED. Altrimenti piano HID con `def` (l'usage Feature) e `raw`.
+
+  `IUPSDriver::setDriverSideValue(const char* name, const char* value)`: per le righe ABSENT `GenericDriver` tiene un override (`_absent_overrides`), lo applica subito alla riga legata e a ogni nuovo `bindNutTable()`. `setup()` lo azzera: l'host lo riapplica subito dopo.
+
+  `GenericDriver::completeInitialPoll()` (pubblico, solo per il replay runner): imposta `_first_full_done` e applica `finishInit` come il ramo di `postDecode()`, così il replay simula la fine del primo poll completo.
+
+  ### 4. Esecuzione nell'host
+
+  `IUSBHostUPS::setVariable(const char* name, const char* value)` restituisce `NutTable::SetStatus` (default NOT_CONNECTED). `USBHostUPS` lo implementa:
+  - host non connesso o driver assente → NOT_CONNECTED;
+  - sotto `_mutex`: `_driver->planSet(_ups_data, usages, name, value, plan)`; un esito diverso da OK termina qui;
+  - DRIVER_SIDE: prima il salvataggio nello store. Se fallisce → FAILED e nulla cambia. Poi la cache in memoria e il valore: `_ups_data.set()` per `ups.delay.*`, `_driver->setDriverSideValue()` per `outlet.*.desc`. Nessun I/O USB;
+  - HID: `_op_mutex` con `OP_WAIT_MS`, come `setBeeper()` e `writeUsage()`, poi `writeUsageLocked(def, raw)`. Se riesce, `requestReport(def.report_id, FEATURE, lunghezza attesa)` rilegge il report e lo decodifica (`decodeReport` + `postDecode`, come il poll): `LIST VAR` mostra il valore restituito dall'UPS. Una rilettura fallita non cambia l'esito, perché la scrittura è riuscita: WARN nel log, e il prossimo poll completo aggiorna il valore. Prende il posto di `data_has_changed` di upstream, che rilegge le SEMI_STATIC al poll successivo;
+  - System Log con lo stesso callback di `executeCommand()`: `Variable <var> = "<value>": OK` a livello INFO, e a livello WARN `failed`, `invalid value`, `not supported` o `UPS not connected`.
+
+  I comandi di US-058 leggono `ups.delay.*` da `UPSData` a ogni esecuzione (`configuredDelay()`): il nuovo ritardo vale subito, senza riavvio.
+
+  ### 5. Persistenza in NVS
+
+  - `lib/USBHostUPS/src/DriverVarStore.h` (header-only): interfaccia `IDriverVarStore { virtual bool load(std::vector<std::pair<String, String>>&); virtual bool save(const char* name, const char* value); }` più `DriverVarStore::toJson()` / `fromJson()` (ArduinoJson, oggetto `{nome: valore}`), testabili in nativo.
+  - `src/core/driver_var_store.cpp` / `.h`: implementazione con `Preferences`, namespace `nutrw`, una sola chiave `vars` con il JSON. Le chiavi NVS hanno al massimo 15 caratteri, quindi `ups.delay.shutdown` non può essere una chiave. Le variabili lato driver sono poche (2 ritardi, al massimo 4 descrizioni di prese): la dimensione è limitata.
+  - `src/core/main.cpp` crea lo store e lo passa con `usb_ups.setDriverVarStore(&store)` prima di `begin()`; l'host carica la cache una volta.
+  - Alla connessione `CommandCatalog::applyDefaultDelays()` riceve un parametro opzionale con i valori salvati. Dopo i default del driver, un valore salvato sostituisce `ups.delay.*` solo se la variabile esiste per questo driver e il valore è ancora un intero >= 0. È la funzione che l'host richiama dopo ogni string descriptor: un valore salvato non torna mai al default. Subito dopo `_driver->setup()` l'host chiama `setDriverSideValue()` per gli altri valori salvati (`outlet.*.desc`).
+  - I valori valgono per qualunque UPS collegato, come `offdelay`/`ondelay` in `ups.conf`. NVS sopravvive a riavvio e OTA. Il reset ai default è in US-068.
+
+  ### 6. Server NUT
+
+  - **Parser.** `splitTokens()` si comporta come `pconf`: un backslash rende letterale il carattere successivo (upsrw codifica virgolette, backslash e `#` con `pconf_encode()`), e una coppia di virgolette vuota produce un token vuoto. Oggi il token vuoto viene scartato, e `SET VAR ups outlet.desc ""` darebbe ERR INVALID-ARGUMENT. Il limite di 256 caratteri per riga resta.
+  - **`SET` (`net_set`).** Meno di 2 argomenti, sottocomando sconosciuto o `SET VAR` con meno di 4 argomenti → ERR INVALID-ARGUMENT.
+  - **`SET VAR <ups> <var> <value>`**, controlli nell'ordine di `set_var()`:
+    1. UNKNOWN-UPS;
+    2. DRIVER-NOT-CONNECTED (nessun host o `!isConnected()`), poi DATA-STALE (`ups_available()`);
+    3. ACCESS-DENIED, con la stessa regola di INSTCMD;
+    4. VAR-NOT-SUPPORTED, con la stessa regola di presenza di `GET VAR`;
+    5. READONLY, se la variabile non è in `getWritableVariables()`;
+    6. `aux < 1` → ERR SET-FAILED con WARN `auxdata for <var> is invalid`. È il caso di `input.sensitivity` di cps-hid, che upstream dichiara con aux 0: come con upsd, non si può scrivere;
+    7. TOO-LONG se `strlen(value) > aux`;
+    8. INVALID-VALUE se la variabile ha un ENUM e il valore non c'è (`strcmp`). `LIST RANGE` è vuota, quindi non c'è controllo di range.
+  - **Richiesta valida.** `setVariable(nome canonico, valore)`. Senza TRACKING: `OK` solo con `SetStatus::OK`, altrimenti `ERR SET-FAILED`. Con TRACKING: si genera l'id, si registra l'esito e si risponde `OK TRACKING <id>`.
+  - **Log.** Un rifiuto di validazione va nel System Log tramite il nuovo `NUTServer::setLogCallback()` (WARN, `SET <var> "<value>" from <user>: ERR <code>`). Gli esiti delle richieste valide li registra l'host, così una richiesta non viene registrata due volte. `main.cpp` collega il callback ad `AppLogger`.
+  - **`SET TRACKING ON|OFF`** (senza distinzione di maiuscole) → OK, con flag per slot (`_clientTracking`). Un altro valore → ERR INVALID-ARGUMENT. Nessun controllo di autenticazione, come `net_set`. `closeSession()` azzera il flag.
+  - **`GET TRACKING`** → `ON` o `OFF`. `GET TRACKING <id>`: con il flag spento ERR FEATURE-NOT-CONFIGURED, altrimenti la risposta di `tracking_get()`.
+
+  ### 7. Tabella di tracking (`lib/NUTServer/src/NutTracking.h`, header-only)
+
+  - 16 voci fisse `{ char id[37]; status; uint32_t created_ms; bool used; }`. `add()` sostituisce la voce più vecchia; nessuna allocazione dinamica.
+  - `get()` confronta l'id senza distinzione di maiuscole (`strcasecmp` in `tracking_get()`); una voce più vecchia di 3600 s (`tracking_delay` di upsd) vale come sconosciuta. Differenze di `millis()` sicure al wrap.
+  - Id UUID v4 nel formato di `nut_uuid_v4()`: 36 caratteri, esadecimale maiuscolo, nibble di versione 4 e variante `10xx`. La sorgente casuale è iniettabile: `esp_random()` sul dispositivo, deterministica nei test.
+  - Esiti: OK → `SUCCESS`; CONVERSION_FAILED → `ERR INVALID-ARGUMENT`; FAILED e NOT_CONNECTED → `ERR FAILED`; UNKNOWN, id sconosciuto o scaduto → `ERR UNKNOWN`. `PENDING` non compare mai, perché l'esito è noto prima della risposta.
+  - La tabella è unica, il flag è per client, come in upsd: un client con TRACKING attivo può leggere l'esito di un id generato da un altro.
+
+  ### Deviazioni da upstream
+
+  Verificate sui sorgenti in `nut_repo/`. Le prime tre evitano che un errore di battitura arrivi all'UPS come un valore diverso:
+  - **Numeri:** si rifiuta solo il testo che non è un numero, che `atol()` trasforma in 0 (`battery.charge.low=abc` scriverebbe una soglia di LB a 0%). Un numero, anche con decimali, si comporta come `atol()`, troncato verso zero. Le uniche altre differenze sono testi che `atol()` legge solo in parte: `1e3` (1 per `atol()`) e `30x` (30) vengono rifiutati.
+  - **Range:** un valore fuori dal range logico dichiarato o dai bit del campo è una conversione fallita. Upstream lo satura (`physical_to_logical()`, solo con Physical Min/Max dichiarati) o ne tronca i bit (`SetValue()`): 300 in un campo da 8 bit diventerebbe 44.
+  - **Date:** testo non valido o fuori range è una conversione fallita. Upstream scrive 0 (`date_conversion_reverse()`, `mge_*_conversion_nuf()`), cioè una data `not set` o il 1970.
+  - **Arrotondamento:** `lrint` nella conversione fisico → logico invece del troncamento `(long)`. Il risultato è lo stesso sui valori esatti, e si evita che 12 con esponente -2 diventi 1199.
+  - **Esito sincrono senza TRACKING:** OK solo a scrittura riuscita (upsd risponde OK appena inoltra). Deciso nella spec.
+  - **Scrittura fallita con TRACKING:** `ERR FAILED`, come chiede la spec. usbhid-ups restituisce `STAT_SET_UNKNOWN` (FIXME in `setvar()`), quindi upsd risponderebbe `ERR UNKNOWN`.
+  - **`ups.delay.*`:** solo interi >= 0; upstream accetta qualunque stringa. Deciso nella spec.
+  - **Rilettura immediata** del report dopo la scrittura; upstream rilegge al poll successivo.
+  - **Riga legata solo a un usage Input, senza Feature:** FAILED senza scrivere.
+  - **Senza credenziali NUT configurate** SET è permesso, come INSTCMD oggi; upsd senza utenti lo nega sempre. Comportamento preesistente.
+  - **Nessuna differenza** su `aux` 0 di cps `input.sensitivity` (SET-FAILED come upsd), sull'ordine dei controlli e sui testi di errore.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity (`pio test -e native`, con il PATH del toolchain mingw). Gli attesi si ricavano dai sorgenti upstream e dai byte dei report delle fixture, mai dall'output del codice in prova.
+
+  - **Conversioni (`test/test_rw_catalog`, `test/test_hid_parser`)**:
+    - `encode()`, per ogni `Conv`: valori validi, testo non valido, fuori range, Pegasus/non Pegasus, `ups.date`/`ups.time` combinati con l'altra metà;
+    - andata e ritorno `decode(encode(x)) == x` sui casi tabellari;
+    - `toLogical()` con esponenti 0, -2 e unità volt (+7), range dichiarato e non dichiarato, campi con segno.
+  - **Piano del driver (`test/test_rw_catalog`)**: `planSet()` per ogni `SetStatus`; scelta del gemello Feature; righe ABSENT; `ups.delay.*`; override di `outlet.*.desc` che sopravvive a un nuovo bind e si azzera con `setup()`.
+  - **Persistenza (`test/test_command_catalog`)**: `toJson`/`fromJson`, JSON corrotto ignorato; `applyDefaultDelays()` con valori salvati: sostituzione, variabile assente per il driver, valore salvato non valido scartato, idempotenza alla seconda chiamata.
+  - **Protocollo (`test/test_nut_server`)**:
+    - ogni codice d'errore, nell'ordine di `set_var()`, controllando che il mock non riceva `setVariable()`;
+    - valori con spazi, virgolette ed escape;
+    - OK e SET-FAILED sincroni;
+    - sequenza di `upsrw -w`: `SET TRACKING ON` → OK; `SET VAR` → `OK TRACKING <36 caratteri>`, lunghezza totale 48 come il controllo di `upsrw.c:149`; `GET TRACKING <id>` → SUCCESS;
+    - esiti INVALID-ARGUMENT, FAILED e UNKNOWN; FEATURE-NOT-CONFIGURED; id sconosciuto e scaduto (orologio iniettato); 17 SET che scartano la voce più vecchia; flag azzerato a fine sessione;
+    - una riga di log per ogni rifiuto.
+  - **Replay (`test/test_record_replay`)**:
+    - per ogni fixture, `LIST RW` finale (nome:aux, ordinata come upsd) dopo il replay e dopo `completeInitialPoll()`, con `ups.delay.*`;
+    - ciclo scrittura/rilettura su Eaton 3S, APC e CyberPower: `planSet` → byte attesi del Feature report (l'ultimo della fixture con il campo riscritto) → `decodeReport`/`postDecode` → valore in `UPSData`.
+  - **Regressione**: suite nativa completa verde e build `esp32-s3-standard`.
+  - **Nessun test e2e**: la spec non ha superficie UI (la pagina Web è in US-068). Non è prevista una demo video: la dimostrazione è da terminale con `upsrw`.
+  - **Verifica manuale sull'Eaton 3S** (riportata nel task finale):
+    - `upsrw -s battery.charge.low=30` → OK, e `upsc` mostra 30;
+    - `upsrw -w -s ...` → SUCCESS;
+    - `upsrw -s ups.delay.shutdown=60`, riavvio, `upsc` mostra 60;
+    - un valore ENUM non valido → INVALID-VALUE;
+    - System Log con una riga per ogni SET.
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-15_
+tasks:
+  - id: TASK-01
+    title: Conversione inversa dei valori NUT (NutTable::encode) e valore logico (HIDParser::toLogical)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** trasformare il testo di un `SET VAR` nel valore HID da scrivere, come `hu_find_valinfo()` e le funzioni `nuf` upstream, con le deviazioni elencate nel piano.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/NutTable.h`, righe 39-246 (`Conv`, `Lookup`, `decode()`, `pegasusValid()`);
+      - `lib/USBHostUPS/src/HIDParser.cpp`, righe 242-289 (`extractUsage`);
+      - `lib/USBHostUPS/src/CommandCatalog.h`, righe 256-287 (`parseDelayParam`, `fitsField`);
+      - upstream: `nut_repo/drivers/usbhid-ups.c` righe 561-578 (`date_conversion_reverse`) e 3090-3120 (`hu_find_valinfo`); `nut_repo/drivers/mge-hid.c` righe 626-665 e 877-895.
+
+      **Modifiche:**
+      - In `NutTable.h`: `enum class EncodeResult { OK, FAIL }` e `inline EncodeResult encode(const HidInfo& info, const char* val, const Context& ctx, const UPSData& data, double& out)`.
+        - `Number`: parser scritto a mano (niente `strtod`, che accetterebbe esponenti, esadecimale, `inf` e `nan`). Accetta spazi iniziali, segno opzionale, almeno una cifra, un `.` opzionale seguito da zero o più cifre e spazi finali. `out` è la parte intera troncata verso zero (`30.7` → 30, `-0.5` → 0, come `atol()`). FAIL per ogni altro testo, per la stringa vuota e per una parte intera fuori da `int32_t`.
+        - `Lookup` / `NominalVoltage` / `PegasusThreshold`: `strcmp` sulla `lkp`.
+        - `PegasusYesNo`: `pegasusValid(ctx)` falso → 0, altrimenti `strncmp(val, "yes", 3) == 0` → 1, altro → 0.
+        - `BatteryDate`: formato `YYYY/MM/DD` esatto, range 1980-2107 / 1-12 / 1-31, altrimenti FAIL.
+        - `MgeDate` / `MgeTime`: unisce `val` con `data.get("ups.time")` / `data.get("ups.date")`, analizza `%Y/%m/%d %H:%M:%S` a mano (niente `strptime`, che manca su mingw) e converte con un `timegmUtc()` days-from-civil.
+        - Commento di riga con il riferimento upstream di ogni ramo.
+      - Includere `UPSData.h` in `NutTable.h` se non è già raggiungibile, evitando include circolari: in alternativa passare a `encode()` le due stringhe `ups.date`/`ups.time` invece di `UPSData`.
+      - In `HIDParser.h/.cpp`: `static bool toLogical(const HIDUsageDef& def, double physical, int32_t& logical)`. Per `bit_size > 1` applica l'esponente inverso di `extractUsage()` (stessa correzione -7 per le unità 0x00F0D121 / 0x0000D121), poi `lrint`. False se `logical_max > logical_min` e il valore è fuori range, oppure se `CommandCatalog::fitsField()` fallisce. Per non includere `CommandCatalog.h` nel parser si può replicare il controllo dei bit con un commento che rimandi a `fitsField`.
+
+      **Passi:**
+      1. Scrivere `timegmUtc()` e `encode()` vicino a `decode()`.
+      2. Scrivere `toLogical()` accanto a `extractUsage()`.
+      3. Compilare l'env `native` e `esp32-s3-standard`.
+
+      **Verifica:** `pio test -e native -f test_rw_catalog -f test_hid_parser` resta verde; la build `esp32-s3-standard` compila.
+
+      **Fatto quando:** le due funzioni esistono, sono pure (nessun I/O) e coprono tutti i valori di `Conv`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `EncodeResult`, `encode()`, `timegmUtc()`
+      - lib/USBHostUPS/src/HIDParser.h — dichiarazione di `toLogical()`
+      - lib/USBHostUPS/src/HIDParser.cpp — implementazione di `toLogical()`
+
+      ## Criteri di Completamento
+      - [ ] `encode()` gestisce ogni `Conv` con il riferimento upstream in commento
+      - [ ] nessun uso di `mktime`, `strptime` o `atol`
+      - [ ] `toLogical()` è l'inverso di `extractUsage()` e rifiuta i valori fuori range o fuori dai bit
+      - [ ] build native ed esp32-s3-standard ok
+    ref: TASK-01
+  - id: TASK-02
+    title: Test delle conversioni inverse e di toLogical
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare con test nativi il comportamento di `encode()` e `toLogical()`, compresi i casi di deviazione da upstream.
+
+      **Da leggere:** `test/test_rw_catalog/test_main.cpp` (stile e helper degli usage sintetici), `test/test_hid_parser/test_main.cpp`.
+
+      **Modifiche:**
+      - `test/test_rw_catalog/test_main.cpp`:
+        - `Number`: `30` → 30, `-5` → -5, `+7` → 7, ` 30 ` (spazi) → 30, `30.0` → 30, `30.7` → 30, `-0.5` → 0, `12.34` → 12, `30.` → 30; `abc`, `30x`, `1e3`, `0x10`, `.`, `-`, `.5`, stringa vuota e `99999999999` → FAIL;
+        - `Lookup` APC sensitivity: `medium` → 1, `Medium` → FAIL (`strcmp`);
+        - `NominalVoltage`: `230` → 230;
+        - `PegasusThreshold`: `25` → 25, `30` → FAIL;
+        - `PegasusYesNo`: con `mge_type` Pegasus `yes` → 1 e `nope` → 0; con modello non Pegasus → 0;
+        - `BatteryDate`: `2024/03/15` → `(44<<9)+(3<<5)+15`; `2200/01/01`, `2024/13/01` e `not set` → FAIL;
+        - `MgeDate` con `ups.time` = `12:34:56` e `MgeTime` con `ups.date` = `2026/10/15`: secondi UTC attesi calcolati a mano nel test (commento con il calcolo);
+        - andata e ritorno `decode(encode(x))` per `Lookup`, `BatteryDate` e `MgeDate`/`MgeTime`.
+      - `test/test_hid_parser/test_main.cpp`: `toLogical()` con esponente 0, esponente -2 (12 → 1200), unità volt con esponente 7, range dichiarato (101 con max 100 → false), range non dichiarato con campo da 8 bit (300 → false), campo con segno (`logical_min < 0`, -5 ok).
+
+      **Passi:** aggiungere i test e registrarli in `main()` / `RUN_TEST`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_rw_catalog -f test_hid_parser`.
+
+      **Fatto quando:** tutti i nuovi test passano e nessun atteso è stato copiato dall'output del codice.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_rw_catalog/test_main.cpp — test di `encode()`
+      - test/test_hid_parser/test_main.cpp — test di `toLogical()`
+
+      ## Criteri di Completamento
+      - [ ] ogni `Conv` ha almeno un caso valido e uno non valido
+      - [ ] le deviazioni (numeri stretti, date fuori range, range/bit) hanno un test dedicato
+      - [ ] suite verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Piano di scrittura nel driver (planSet, setDriverSideValue) e interfaccia setVariable
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver decide cosa scrivere per un `SET` (HID o lato driver), senza I/O, e l'interfaccia dell'host espone `setVariable()`.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/IUPSDriver.h`;
+      - `lib/USBHostUPS/src/GenericDriver.h/.cpp`, righe 519-590 (`bindNutTable`, `postDecode`, `writableVariables`);
+      - `lib/USBHostUPS/src/NutTable.h`, righe 309-421 (`Bound`, `bind`, `finishInit`);
+      - `lib/USBHostUPS/src/IUSBHostUPS.h`;
+      - upstream `setvar()`, `nut_repo/drivers/usbhid-ups.c:1167-1245`.
+
+      **Modifiche:**
+      - `NutTable.h`: `enum class SetStatus { OK, UNKNOWN, CONVERSION_FAILED, FAILED, NOT_CONNECTED }`; `struct SetPlan { enum class Kind : uint8_t { HID, DRIVER_SIDE } kind; const char* name; HIDUsageDef def; int32_t raw; String value; }`.
+      - `IUPSDriver.h`:
+        - `virtual NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages, const char* name, const char* value, NutTable::SetPlan& plan) const` (default UNKNOWN);
+        - `virtual void setDriverSideValue(const char* name, const char* value) {}`.
+      - `GenericDriver`:
+        - `planSet` come descritto nel piano, sezione 3: riga ACTIVE e RW con `equalsIgnoreCase`; ABSENT → DRIVER_SIDE; `ups.delay.*` presenti → interi >= 0; riga HID → `encode()` con `_nut_ctx`, usage Feature tra `idx`/`twin_idx`, `HIDParser::toLogical()`;
+        - `plan.name` punta sempre al nome canonico (`info_type` o la costante di `ups.delay.*`);
+        - `setDriverSideValue`: salva in `std::vector<std::pair<String, String>> _absent_overrides` (sostituisce se presente) e aggiorna `value`/`has` della riga ABSENT legata con quel nome;
+        - in `bindNutTable()`, dopo `NutTable::bind`, riapplica gli override; `setup()` svuota `_absent_overrides`;
+        - `void completeInitialPoll()` pubblico: `_first_full_done = true`, poi `finishInit` se non ancora fatto (`_nut_init_done`), con un commento che lo dichiara hook del replay runner.
+      - `IUSBHostUPS.h`: `virtual NutTable::SetStatus setVariable(const char* name, const char* value) { return NutTable::SetStatus::NOT_CONNECTED; }` con un commento sull'ordine dei lock (come `executeCommand`).
+
+      **Passi:**
+      1. Tipi in `NutTable.h`.
+      2. Metodi virtuali nelle interfacce.
+      3. Implementazione in `GenericDriver`.
+      4. Build native ed esp32.
+
+      **Verifica:** `pio test -e native` (suite esistenti verdi) e build `esp32-s3-standard`.
+
+      **Fatto quando:** `planSet` copre tutti i rami senza toccare `UPSData` né l'USB.
+
+      **Blocchi:** se un driver derivato sovrascrive `setup()` senza chiamare `GenericDriver::setup()`, gli override non si azzerano: controllare `EatonDriver`, `APCDriver`, `CyberPowerDriver`, `PowercomDriver`, `EcoFlowDriver` e `OpenUPSDriver`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `SetStatus`, `SetPlan`
+      - lib/USBHostUPS/src/IUPSDriver.h — `planSet`, `setDriverSideValue`
+      - lib/USBHostUPS/src/GenericDriver.h — dichiarazioni, `_absent_overrides`, `completeInitialPoll`
+      - lib/USBHostUPS/src/GenericDriver.cpp — implementazione
+      - lib/USBHostUPS/src/IUSBHostUPS.h — `setVariable` virtuale
+
+      ## Criteri di Completamento
+      - [ ] `planSet` restituisce UNKNOWN, CONVERSION_FAILED, FAILED o OK secondo le regole del piano
+      - [ ] gli override ABSENT sopravvivono a un nuovo bind e si azzerano con `setup()`
+      - [ ] `completeInitialPoll()` esiste e applica `finishInit`
+      - [ ] build ok
+    ref: TASK-03
+  - id: TASK-04
+    title: Test di planSet e degli override lato driver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire ogni ramo di `planSet()` con usage sintetici.
+
+      **Da leggere:** `test/test_rw_catalog/test_main.cpp` (driver e usage sintetici di US-066).
+
+      **Modifiche:** in `test/test_rw_catalog/test_main.cpp` aggiungere test con un `EatonDriver` (o un driver di test che restituisce una tabella ridotta) e usage sintetici:
+      - variabile assente o riga DEAD → UNKNOWN; nome con maiuscole diverse → trovato, `plan.name` canonico;
+      - `battery.charge.low` su usage Feature: `30` → HID, `def.path` e `raw` attesi; `abc` → CONVERSION_FAILED; 150 con `logical_max` 100 → CONVERSION_FAILED;
+      - riga legata a un usage Input con gemello Feature → `def` è il Feature; solo Input → FAILED;
+      - `input.sensitivity` (lookup): `high` → raw 2 (APC), `foo` → CONVERSION_FAILED;
+      - `outlet.desc` ABSENT → DRIVER_SIDE con il valore invariato, anche con spazi;
+      - `ups.delay.shutdown` presente: `60` → DRIVER_SIDE; `-1` e `abc` → CONVERSION_FAILED; non presente → UNKNOWN;
+      - `setDriverSideValue("outlet.desc", "Rack A")`: il valore pubblicato da `postDecode` diventa `Rack A`, resta dopo un nuovo bind e torna al default dopo `setup()` più un nuovo bind.
+
+      **Passi:** scrivere i test e registrarli.
+
+      **Verifica:** `pio test -e native -f test_rw_catalog`.
+
+      **Fatto quando:** ogni valore di `SetStatus` restituibile dal driver ha almeno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_rw_catalog/test_main.cpp — test di `planSet` e degli override
+
+      ## Criteri di Completamento
+      - [ ] tutti i rami di `planSet` coperti
+      - [ ] override ABSENT verificato su bind e `setup()`
+      - [ ] suite verde
+    ref: TASK-04
+  - id: TASK-05
+    title: Store NVS delle variabili lato driver e ritardi salvati alla connessione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** salvare `ups.delay.*` e `outlet.*.desc` in NVS e farli sostituire ai default del driver a ogni connessione.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/CommandCatalog.h`, righe 366-384 (`applyDefaultDelays`);
+      - `src/network/auth_platform.cpp` (uso di `Preferences`) e `lib/WebAuth/src/AuthPlatform.h` (interfaccia + implementazione in `src/`);
+      - `src/core/main.cpp`, righe 120-160;
+      - `test/test_record_replay/FixtureReplayRunner.h`, righe 193-196.
+
+      **Modifiche:**
+      - Nuovo `lib/USBHostUPS/src/DriverVarStore.h` (header-only):
+        - `class IDriverVarStore { public: virtual ~IDriverVarStore() = default; virtual bool load(std::vector<std::pair<String, String>>& out) = 0; virtual bool save(const char* name, const char* value) = 0; };`
+        - `namespace DriverVarStore { String toJson(const std::vector<std::pair<String, String>>&); bool fromJson(const String&, std::vector<std::pair<String, String>>&); void upsert(std::vector<std::pair<String, String>>&, const char* name, const char* value); }` con ArduinoJson. Un JSON non valido restituisce false e una lista vuota.
+      - `CommandCatalog::applyDefaultDelays(..., const NutTable::DelayPaths* paths = nullptr, const std::vector<std::pair<String, String>>* saved = nullptr)`: dopo i default, per `ups.delay.shutdown`/`ups.delay.start` già impostati in questa chiamata, un valore salvato che è un intero >= 0 (`parseDelayParam`) sostituisce il default.
+      - Nuovi `src/core/driver_var_store.h/.cpp`: `class NvsDriverVarStore : public IDriverVarStore`, `Preferences` namespace `nutrw`, chiave `vars`. `save()` legge, fa l'upsert e riscrive il JSON; false se `putString` scrive 0 byte.
+      - `src/core/main.cpp`: istanza statica di `NvsDriverVarStore` e `usb_ups.setDriverVarStore(&store)` prima di `usb_ups.begin()`. Il metodo dell'host è aggiunto nel TASK-07: se questo task viene eseguito prima, lasciare la riga commentata con `TODO TASK-07` e rimuovere il commento nel TASK-07.
+
+      **Passi:**
+      1. Header dello store.
+      2. Parametro opzionale di `applyDefaultDelays`, con le chiamate esistenti invariate.
+      3. Implementazione NVS e cablaggio in `main.cpp`.
+
+      **Verifica:** `pio test -e native -f test_command_catalog` verde; build `esp32-s3-standard`.
+
+      **Fatto quando:** lo store compila sul dispositivo e la sostituzione dei ritardi è una funzione pura.
+
+      **Blocchi:** `src/core/*.cpp` non è nel `build_src_filter` dell'env native: l'implementazione NVS si verifica solo con la build e a mano.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/DriverVarStore.h — interfaccia e helper JSON (nuovo)
+      - lib/USBHostUPS/src/CommandCatalog.h — `applyDefaultDelays` con i valori salvati
+      - src/core/driver_var_store.h — store NVS (nuovo)
+      - src/core/driver_var_store.cpp — store NVS (nuovo)
+      - src/core/main.cpp — istanza e cablaggio dello store
+
+      ## Criteri di Completamento
+      - [ ] interfaccia e helper JSON testabili in nativo
+      - [ ] `applyDefaultDelays` applica solo valori salvati validi e solo alle variabili presenti
+      - [ ] store NVS con namespace `nutrw`, chiave `vars`
+      - [ ] build ok
+    ref: TASK-05
+  - id: TASK-06
+    title: Test dello store e della sostituzione dei ritardi
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare in nativo gli helper JSON e la sostituzione dei default.
+
+      **Da leggere:** `test/test_command_catalog/test_main.cpp` (test esistenti di `applyDefaultDelays`).
+
+      **Modifiche:** in `test/test_command_catalog/test_main.cpp`:
+      - `toJson` / `fromJson`: andata e ritorno con 3 voci, una con spazi e virgolette; JSON corrotto → false e lista vuota; `upsert` sostituisce senza duplicare;
+      - `applyDefaultDelays` con `saved = {ups.delay.shutdown: 60}` su un descriptor Eaton sintetico → `ups.delay.shutdown` = 60 e `ups.delay.start` = default;
+      - valore salvato `abc` o `-1` → resta il default;
+      - driver senza variabili di ritardo (`delay_vars` falso) → nessuna chiave, anche con valori salvati;
+      - seconda chiamata (string descriptor successivo) → il valore salvato resta.
+
+      **Passi:** scrivere i test e registrarli.
+
+      **Verifica:** `pio test -e native -f test_command_catalog`.
+
+      **Fatto quando:** tutti i casi passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — test di store e ritardi salvati
+
+      ## Criteri di Completamento
+      - [ ] helper JSON coperti, compreso il JSON corrotto
+      - [ ] sostituzione e idempotenza dei ritardi coperte
+      - [ ] suite verde
+    ref: TASK-06
+  - id: TASK-07
+    title: 'USBHostUPS::setVariable: scrittura, rilettura, valori lato driver e log'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** eseguire il piano del driver: scrittura HID con rilettura del report, oppure salvataggio lato driver, con una riga nel System Log.
+
+      **Da leggere:**
+      - `lib/USBHostUPS/src/USBHostUPS.h`;
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, righe 386-405 (claim e `setup()` del driver), 593-631 (`requestReport`), 676-684 (string descriptor), 773-851 (`writeUsage`, `executeCommand`) e 883-908 (`applyDefaultDelays`, `getWritableVariables`).
+
+      **Modifiche:**
+      - `USBHostUPS.h`: `void setDriverVarStore(IDriverVarStore* store)`; membri `IDriverVarStore* _var_store` e `std::vector<std::pair<String, String>> _saved_vars` (cache); override di `setVariable`.
+      - `setDriverVarStore`: salva il puntatore e carica la cache con `load()`.
+      - `applyDefaultDelays()`: passa `&_saved_vars` a `CommandCatalog::applyDefaultDelays`.
+      - Dopo `_driver->setup()` (riga ~400): per ogni valore salvato diverso da `ups.delay.*`, `_driver->setDriverSideValue(name, value)`.
+      - `setVariable(name, value)`:
+        1. `!isConnected()` o `!_driver` → NOT_CONNECTED;
+        2. sotto `_mutex`: `planSet` con `_ups_data` e `_hid_parser.getUsages()`;
+        3. DRIVER_SIDE: `_var_store` assente o `save()` false → FAILED; altrimenti `DriverVarStore::upsert` sulla cache, poi `_ups_data.set()` (`ups.delay.*`) o `_driver->setDriverSideValue()`, sotto `_mutex`;
+        4. HID: `_op_mutex` con `OP_WAIT_MS` (timeout → FAILED), `writeUsageLocked(plan.def, (uint32_t)plan.raw)`. Se riesce, `requestReport(plan.def.report_id, HID_REPORT_TYPE_FEATURE, _hid_parser.getExpectedLength(...))`; se la rilettura fallisce, WARN `Variable %s written, read back failed` e l'esito resta OK. Rilasciare `_op_mutex`. Nessun `_mutex` tenuto durante i trasferimenti (ADR 0008);
+        5. log: INFO `Variable %s = \"%s\": OK`; WARN `...: failed`, `...: invalid value`, `...: not supported`, `...: UPS not connected`.
+      - `src/core/main.cpp`: attivare la riga `usb_ups.setDriverVarStore(&store)` se il TASK-05 l'ha lasciata commentata.
+
+      **Passi:**
+      1. Store e cache.
+      2. Riapplicazione alla connessione.
+      3. `setVariable`.
+      4. Build.
+
+      **Verifica:** build `esp32-s3-standard`; `pio test -e native` verde (`USBHostUPS.cpp` non è compilato in nativo: la logica è nei task 01-06).
+
+      **Fatto quando:** `setVariable` copre i due tipi di piano, il log e l'ordine dei lock.
+
+      **Blocchi:** se `requestReport` in fase di rilettura viene chiamato mentre `isPollingPaused()` o `!_link.canPoll()`, restituisce false: va bene, è il caso della rilettura fallita.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — store, cache, `setVariable`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — implementazione
+      - src/core/main.cpp — cablaggio dello store
+
+      ## Criteri di Completamento
+      - [ ] scrittura HID sotto `_op_mutex`, seguita dalla rilettura e dalla decodifica del report
+      - [ ] valori lato driver salvati prima di essere applicati; salvataggio fallito → FAILED
+      - [ ] valori salvati riapplicati a ogni connessione e dopo ogni string descriptor
+      - [ ] una riga di System Log per ogni chiamata
+      - [ ] build ok
+    ref: TASK-07
+  - id: TASK-08
+    title: Tabella di tracking a dimensione fissa con id UUID v4 (NutTracking.h)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** conservare gli esiti delle richieste con TRACKING come `tracking_add()`/`tracking_get()` di upsd, con memoria fissa.
+
+      **Da leggere:** `nut_repo/server/upsd.c` righe 1537-1596 (`tracking_cleanup`, `tracking_get`) e la funzione `nut_uuid_v4` (riga ~1628); `nut_repo/include/common.h:784` (`UUID4_LEN` 37).
+
+      **Modifiche:** nuovo `lib/NUTServer/src/NutTracking.h` (header-only, perché l'env native compila solo i `.cpp` elencati):
+      - `class NutTracking` con `static const size_t CAPACITY = 16` e `static const uint32_t MAX_AGE_MS = 3600000` (`tracking_delay`);
+      - `struct Entry { char id[37]; NutTable::SetStatus status; uint32_t created_ms; bool used; }` in un array fisso;
+      - `typedef uint32_t (*RandomFn)();` passato al costruttore;
+      - `void newId(char out[37])`: 16 byte casuali (4 chiamate), `b[6] = (b[6] & 0x0F) | 0x40`, `b[8] = (b[8] & 0x3F) | 0x80`, formato `%02X` con trattini 8-4-4-4-12;
+      - `void add(const char* id, NutTable::SetStatus st, uint32_t now)`: prima voce libera, altrimenti la più vecchia per `now - created_ms`;
+      - `const char* get(const char* id, uint32_t now) const`: confronto senza distinzione di maiuscole; non trovato o `now - created_ms > MAX_AGE_MS` → `ERR UNKNOWN`. Mappatura: OK → `SUCCESS`; CONVERSION_FAILED → `ERR INVALID-ARGUMENT`; FAILED e NOT_CONNECTED → `ERR FAILED`; UNKNOWN → `ERR UNKNOWN`.
+
+      **Passi:** scrivere l'header con i riferimenti upstream in commento.
+
+      **Verifica:** compila nell'env native; i test sono nel TASK-10.
+
+      **Fatto quando:** l'header non usa allocazioni dinamiche e non dipende da Arduino oltre a `NutTable.h`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NutTracking.h — tabella e id (nuovo)
+
+      ## Criteri di Completamento
+      - [ ] capacità fissa di 16, sostituzione della voce più vecchia
+      - [ ] scadenza di 3600 s sicura al wrap di `millis()`
+      - [ ] id nel formato di `nut_uuid_v4`
+      - [ ] mappatura degli esiti come `tracking_get()`
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Server NUT: parser pconf, SET VAR, SET/GET TRACKING e log dei rifiuti'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** implementare `SET VAR`, `SET TRACKING` e `GET TRACKING` con i controlli e le risposte di upsd.
+
+      **Da leggere:**
+      - `lib/NUTServer/src/NUTServer.h/.cpp` (in particolare `splitTokens`, INSTCMD alle righe 441-476, GET alle righe 478-622);
+      - `nut_repo/server/netset.c` righe 30-248;
+      - `nut_repo/server/netget.c` righe 266-285;
+      - `nut_repo/common/parseconf.c` (escape `#`, backslash, virgolette).
+
+      **Modifiche:**
+      - `splitTokens()`:
+        - un backslash, dentro o fuori virgolette, aggiunge il carattere successivo letterale;
+        - una coppia di virgolette chiude un token anche se è vuoto (`""` → token vuoto);
+        - il comportamento sulle righe esistenti non cambia (test in TASK-10).
+      - `NUTServer.h`:
+        - `bool _clientTracking[NUT_MAX_CLIENTS]`, inizializzato nel costruttore e azzerato in `closeSession()` e alla nuova connessione;
+        - `NutTracking _tracking`;
+        - `typedef void (*LogFn)(const char* level, const char* msg); void setLogCallback(LogFn)`;
+        - `void setClock(uint32_t (*now)())` e `void setRandom(uint32_t (*rnd)())` per i test, con default `millis` ed `esp_random`; in `PIO_UNIT_TESTING` il default casuale è `rand`.
+      - `processCommand`, nuovo ramo `SET`:
+        - argomenti come `net_set` (tutti gli errori di forma → `ERR INVALID-ARGUMENT`);
+        - `TRACKING ON|OFF` → flag e `OK`;
+        - `VAR`: controlli nell'ordine del piano (sezione 6); una funzione `setVarPresent()` condivisa con `GET VAR` per la presenza (stato, `device.type`, alias, chiave);
+        - `aux < 1` → `ERR SET-FAILED` con WARN `auxdata for %s is invalid`;
+        - richiesta valida → `_usb_ups->setVariable(v->name, value)`; risposta sincrona o con tracking (`newId`, `add`, `OK TRACKING <id>`).
+      - `GET TRACKING`: gestito prima degli altri sottocomandi di `GET`; `tokens.size() == 2` → `ON`/`OFF`; altrimenti FEATURE-NOT-CONFIGURED o `_tracking.get(id, now)`.
+      - Ogni rifiuto di `SET VAR` dopo il parsing: `log("WARN", "SET %s \"%s\" from %s: ERR %s")`, con utente `-` se manca.
+      - `src/core/main.cpp`: `nut_server.setLogCallback(...)` verso `AppLogger::log`.
+
+      **Passi:**
+      1. Parser.
+      2. Stato per slot e tracking.
+      3. `SET`.
+      4. `GET TRACKING`.
+      5. Log e cablaggio.
+
+      **Verifica:** `pio test -e native -f test_nut_server` (i test esistenti restano verdi) e build `esp32-s3-standard`.
+
+      **Fatto quando:** il server risponde a tutte le forme di `SET` e `GET TRACKING` di `netset.c`/`netget.c`.
+
+      **Blocchi:** il buffer di riga del client è di 256 caratteri e accetta solo ASCII stampabile (righe 188-191): valori più lunghi vengono troncati prima del parsing; non cambiare questo limite in questa spec.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — stato TRACKING, callback di log, iniezioni per i test
+      - lib/NUTServer/src/NUTServer.cpp — parser, `SET`, `GET TRACKING`
+      - src/core/main.cpp — callback di log del server NUT
+
+      ## Criteri di Completamento
+      - [ ] escape pconf e token vuoti nel parser
+      - [ ] ordine dei controlli identico a `set_var()`
+      - [ ] risposta sincrona e con tracking come nel piano
+      - [ ] `GET TRACKING` con e senza id
+      - [ ] ogni rifiuto registrato nel System Log
+      - [ ] build ok
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Test di protocollo: errori di SET VAR, sequenza di upsrw -w e parser'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire ogni codice d'errore, l'esito sincrono, la sequenza di TRACKING di `upsrw -w` e il parser.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp` (`MockUSBHost`, `MemoryPrinter`), `nut_repo/clients/upsrw.c` righe 123-235 e 260-285.
+
+      **Modifiche:**
+      - `MockUSBHost`: override di `setVariable` che registra `{name, value}` e restituisce `setResult` (default OK); `rwVars` restituito da `getWritableVariables()`.
+      - Test (uno per caso):
+        - `SET`, `SET FOO`, `SET VAR ups var` → INVALID-ARGUMENT;
+        - UNKNOWN-UPS; DRIVER-NOT-CONNECTED; DATA-STALE; ACCESS-DENIED con credenziali e sessione non autenticata;
+        - VAR-NOT-SUPPORTED; READONLY (variabile presente ma non RW); aux 0 → SET-FAILED con una riga WARN; TOO-LONG (aux 5, valore di 6 caratteri); INVALID-VALUE fuori ENUM;
+        - in tutti questi casi il mock non riceve `setVariable`;
+        - nome con maiuscole diverse → `setVariable` riceve il nome canonico;
+        - valore `"Rack A"` con spazio, valore con virgolette escapate e valore vuoto `""` arrivano intatti;
+        - sincrono: OK → `OK`; FAILED e CONVERSION_FAILED → `ERR SET-FAILED`;
+        - sequenza di `upsrw -w`: `SET TRACKING ON` → `OK`; `SET VAR ...` → riga `OK TRACKING ` più 36 caratteri (48 in totale senza newline, come `upsrw.c:149`), id con il formato UUID v4; `GET TRACKING <id>` → `SUCCESS`; id in minuscolo → `SUCCESS`;
+        - esiti con tracking: CONVERSION_FAILED → `ERR INVALID-ARGUMENT`; FAILED → `ERR FAILED`; UNKNOWN → `ERR UNKNOWN`;
+        - con TRACKING attivo, un errore di validazione resta immediato (`ERR READONLY`, nessun id);
+        - `GET TRACKING` → `OFF`/`ON`; `GET TRACKING <id>` con TRACKING spento → `ERR FEATURE-NOT-CONFIGURED`; `SET TRACKING MAYBE` → INVALID-ARGUMENT;
+        - id sconosciuto → `ERR UNKNOWN`; id più vecchio di 3600 s (orologio iniettato) → `ERR UNKNOWN`;
+        - 17 SET con tracking: il primo id → `ERR UNKNOWN`, l'ultimo → `SUCCESS`;
+        - TRACKING per slot: lo slot 1 resta OFF quando lo slot 0 è ON;
+        - `splitTokens`: le righe dei test esistenti producono gli stessi token; escape del backslash; token vuoto.
+
+      **Passi:** estendere il mock, scrivere i test e registrarli.
+
+      **Verifica:** `pio test -e native -f test_nut_server`.
+
+      **Fatto quando:** ogni codice d'errore della spec e ogni risposta di `GET TRACKING` hanno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — mock esteso e test di protocollo
+
+      ## Criteri di Completamento
+      - [ ] tutti i codici d'errore coperti, senza chiamate a `setVariable` in caso di errore
+      - [ ] sequenza di `upsrw -w` riprodotta
+      - [ ] tabella fissa e scadenza verificate
+      - [ ] suite verde
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Replay: LIST RW finale per ogni fixture e ciclo scrittura/rilettura'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nel replay, verificare l'elenco finale di `LIST RW` di ogni fixture e il ciclo scrittura/rilettura sui byte reali dei report (miglioramento chiesto dalla code review di US-066).
+
+      **Da leggere:** `test/test_record_replay/FixtureReplayRunner.h`, `test/test_record_replay/test_main.cpp`, le fixture in `test/fixtures/*/`.
+
+      **Modifiche:**
+      - `FixtureReplayRunner::runFixtureTest`: due parametri opzionali `expectedListRW` (dopo il replay) ed `expectedListRWFinal` (dopo `static_cast<GenericDriver*>(driver)->completeInitialPoll()`), entrambi `nome:aux` separati da spazi, nell'ordine di `writableVariables()` (`strcasecmp`).
+      - Nuovo helper `runSetCycle(fixture, var, value, expectedRaw, expectedValue)`:
+        - esegue il replay;
+        - chiama `planSet`;
+        - verifica `kind` HID e `raw`;
+        - prende l'ultimo Feature report della fixture con quel report ID, scrive il campo con `BeeperLogic::writeField(def, raw, ...)`, lo passa a `decodeReport` + `postDecode` e controlla `UPSData[var] == expectedValue`.
+      - `test_main.cpp`:
+        - attesi di `LIST RW` per tutte le fixture (Eaton, APC, CyberPower, Powercom, OpenUPS, generic), compresi `ups.delay.*` con aux 10 (8 su Powercom);
+        - cicli: Eaton 3S `battery.charge.low=30`; un APC `battery.charge.low=25`; CyberPower CP1600 `input.transfer.low` con un valore entro il range del descriptor; APC `input.sensitivity=high` dove il descriptor lo lega.
+
+      **Passi:**
+      1. Per ricavare gli attesi, decodificare a mano o con uno script indipendente (nella scratchpad, non nel repo) i byte dei report e il descriptor di ogni fixture, partendo dalle righe di `NutTable.h` e dai percorsi upstream. Mai copiare l'output del codice.
+      2. Annotare in commento, accanto a ogni atteso, il report e i byte da cui viene.
+      3. Se un atteso differisce dal risultato del codice, fermarsi e segnalarlo: non correggere l'atteso.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      **Fatto quando:** ogni fixture ha gli attesi di `LIST RW` prima e dopo `completeInitialPoll()`, e almeno quattro cicli scrittura/rilettura passano.
+
+      **Blocchi:** se `completeInitialPoll()` cambia l'elenco in modo inatteso (righe DEFER su Eaton), riportarlo nella review invece di adattare il test.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — attesi di `LIST RW` e `runSetCycle`
+      - test/test_record_replay/test_main.cpp — attesi per fixture e cicli
+
+      ## Criteri di Completamento
+      - [ ] `LIST RW` finale verificata per ogni fixture, con nomi, aux e `ups.delay.*`
+      - [ ] almeno 4 cicli scrittura/rilettura su fixture reali
+      - [ ] attesi ricavati dai byte, con la fonte in commento
+      - [ ] suite verde
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build e verifica manuale con upsrw
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-07
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla si è rotto e preparare la verifica sull'hardware.
+
+      **Da leggere:** il piano (sezioni Strategia di Test e Deviazioni).
+
+      **Modifiche:** nessuna modifica al codice, salvo correzioni di regressioni trovate qui (da annotare nel commit).
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: tutte le suite verdi, riportando il numero di test.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: build ok, riportando RAM e flash.
+      3. Preparare per la review la lista dei controlli manuali sull'Eaton 3S:
+         - `upsrw -s battery.charge.low=30 -u <user> -p <pw> ups@<ip>` → OK, e `upsc` mostra 30;
+         - `upsrw -w -s battery.charge.low=25 ...` → SUCCESS;
+         - `upsrw -s ups.delay.shutdown=60` → OK; dopo un riavvio `upsc` mostra 60;
+         - `upsrw -s input.sensitivity=foo` (o un altro ENUM) → INVALID-VALUE;
+         - System Log con una riga per ogni SET.
+
+      **Verifica:** output dei due comandi riportato nella review.
+
+      **Fatto quando:** suite e build sono verdi e la lista manuale è pronta.
+
+      **Blocchi:** se `sizeof` delle strutture o la RAM libera peggiorano in modo sensibile (tabella di tracking, cache dei valori), riportarlo.
+
+      ## File Coinvolti
+      - nessun file nuovo; eventuali correzioni nei file dei task precedenti
+
+      ## Criteri di Completamento
+      - [ ] suite nativa completa verde
+      - [ ] build `esp32-s3-standard` ok
+      - [ ] checklist manuale con upsrw pronta per la review
+    ref: TASK-12

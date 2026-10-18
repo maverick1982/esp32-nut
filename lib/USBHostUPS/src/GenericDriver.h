@@ -5,6 +5,7 @@
 #include "UsageMapIndex.h"
 #include <Arduino.h>
 #include <vector>
+#include <utility>
 
 /**
  * @brief Base of every driver: standard HID PDC mappings and the poll state machine.
@@ -31,6 +32,23 @@ public:
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     bool initialPollDone() const override { return _first_full_done; }
+    void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const override;
+    NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
+                                const char* name, const char* value, NutTable::SetPlan& plan) const override;
+    void setDriverSideValue(const char* name, const char* value) override;
+    bool resetDriverSideValue(const char* name, String& value) override;
+    void invalidateReport(uint8_t report_type, uint8_t report_id) override;
+
+    // Hook of the replay runner (US-067): ends the first full poll as loop() does, and applies
+    // NutTable::finishInit() as postDecode() then would. Not called by the firmware.
+    void completeInitialPoll();
+
+    // NUT table of the driver's upstream subdriver (US-066). Empty for drivers whose
+    // subdriver has no rows yet.
+    virtual const NutTable::HidInfo* hid2nut(size_t& n) const { n = 0; return nullptr; }
+    // Rows bound to the attached device; built on the first decoded report
+    const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }
 
     // One control request of a poll cycle
     struct PollItem {
@@ -60,8 +78,7 @@ protected:
     // Static reports are read once per enumeration, then left out of the full poll, like
     // HU_FLAG_STATIC in usbhid-ups (issue #60). False = every full poll reads them.
     virtual bool pollStaticReportsOnce() const { return false; }
-    // wLength of a GET_REPORT, given the length declared in the report descriptor
-    virtual uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const { return expected; }
+    // wLength of a GET_REPORT: IUPSDriver::requestLength(), public as the host uses it too
     // Reports a driver must never request (e.g. ones that freeze the firmware)
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too
@@ -75,8 +92,20 @@ protected:
 
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
+    // Inputs of the model-dependent conversions (mge_type, country, nominal voltage
+    // class); mutable because LIST ENUM evaluates them like the upstream functions do
+    mutable NutTable::Context _nut_ctx;
 
 private:
+    void bindNutTable(IUSBHostUPS* host);
+
+    std::vector<NutTable::Bound> _nut_rows;
+    bool _nut_bound;
+    bool _nut_init_done;                  // finishInit() applied after the first full poll
+    size_t _nut_usage_count;
+    // Values set for the HU_FLAG_ABSENT rows (name, value): applied again at every bind
+    std::vector<std::pair<String, String>> _absent_overrides;
+    void applyAbsentOverride(const String& name, const String& value);
     void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
     void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
     void findInputTwins(IUSBHostUPS* host);

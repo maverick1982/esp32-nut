@@ -1,0 +1,34 @@
+schema: archetipo/spec/v2
+code: US-078
+title: Tabelle uniche EcoFlow (ecoflow-hid) e OpenUPS (openups-hid)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 3
+status: TODO
+body: |
+  #### US-078: Tabelle uniche EcoFlow (ecoflow-hid) e OpenUPS (openups-hid)
+
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come utente di una power station EcoFlow o di un OpenUPS,
+  voglio che variabili e stati vengano dalle tabelle `ecoflowHid2Nut()` e `openupsHid2Nut()` copiate da upstream,
+  in modo da avere gli stessi dati di usbhid-ups.
+
+  **Dimostrazione**
+  Sulla fixture Wallecube W150 (OpenUPS) e su usage sintetici EcoFlow, `upsc` dà l'elenco di variabili che i due subdriver upstream ricavano. Restano le scelte di US-054 e US-058 su beeper e comandi.
+
+  **Criteri di Accettazione**
+  - [ ] `ecoflowHid2Nut()` e `openupsHid2Nut()` contengono tutte le righe upstream nell'ordine originale. Le esclusioni sono motivate.
+  - [ ] `EcoFlowDriver` e `OpenUPSDriver` non hanno più mappature scritte a mano. Restano gli hook non tabellari: per esempio il beeper non controllabile su EcoFlow.
+  - [ ] Per la fixture OpenUPS e per i casi sintetici EcoFlow, gli elenchi attesi coincidono con quelli pubblicati. Le differenze rispetto a prima sono nelle note di rilascio.
+  - [ ] Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Per EcoFlow non c'è una fixture: se ne arriva una dai tester (PR #66), va aggiunta.
+history:
+  - status: TODO
+    at: "2026-10-15T18:45:06Z"

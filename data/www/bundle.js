@@ -751,13 +751,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // US-059: UPS command list
-    const CMD_LOCK_NOTE = 'Available via NUT only in Access Point mode';
     const CMD_CONFIRM_WARNING = 'This command switches off the power to the UPS outlets: the devices connected to the UPS will lose power.';
     const CMD_ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4l13 8-13 8z"/></svg>';
-    const CMD_ICON_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
     const CMD_ERRORS = {
         400: 'Command not supported',
-        403: CMD_LOCK_NOTE,
         500: 'Command rejected by the UPS',
         503: 'UPS not connected'
     };
@@ -812,12 +809,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, CMD_RESULT_MS + 600);
     }
 
-    // US-062: a destructive command is locked unless the API says otherwise
-    // (missing field = locked, the prudent default)
-    function isCommandLocked(cmd) {
-        return !!cmd.destructive && cmd.locked !== false;
-    }
-
     function buildCommandRow(cmd, destructive) {
         const row = document.createElement('div');
         row.className = 'cmd-row';
@@ -841,13 +832,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-outline btn-sm cmd-run';
-        if (destructive && cmd.locked !== false) {
-            // Locked: no listener, nothing can be sent from the web UI
-            btn.disabled = true;
-            btn.title = CMD_LOCK_NOTE;
-            setRunButtonContent(btn, CMD_ICON_LOCK, 'Run');
-        } else if (destructive) {
-            // Unlocked destructive command: native confirmation first, Cancel sends nothing
+        if (destructive) {
+            // US-068: never locked, also in AP mode. Native confirmation first, Cancel sends nothing
             setRunButtonContent(btn, CMD_ICON_PLAY, 'Run');
             btn.addEventListener('click', () => {
                 if (btn.disabled) return;
@@ -875,13 +861,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let nActions = 0;
         let nPower = 0;
-        let nLocked = 0;
         for (const cmd of commands) {
             if (!cmd || typeof cmd.name !== 'string' || cmd.name === '') continue;
             const destructive = !!cmd.destructive;
             (destructive ? groupPower : groupActions).appendChild(buildCommandRow(cmd, destructive));
             if (destructive) nPower++; else nActions++;
-            if (isCommandLocked(cmd)) nLocked++;
         }
 
         const countActions = document.getElementById('cmd-count-actions');
@@ -890,10 +874,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (countPower) countPower.textContent = String(nPower);
         groupActions.hidden = nActions === 0;
         groupPower.hidden = nPower === 0;
-        // US-062: the group looks locked (and shows the note) only if a row is locked
-        groupPower.classList.toggle('locked', nLocked > 0);
-        const notePower = document.getElementById('cmd-note-power');
-        if (notePower) notePower.hidden = nLocked === 0;
 
         const isEmpty = nActions + nPower === 0;
         list.hidden = isEmpty;
@@ -919,6 +899,417 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCommands(commands);
     }
 
+    // US-068: UPS Settings (writable variables). Read when the tab opens and after
+    // each Apply or Reset: no polling, the tab is not in UPS_POLL_TABS.
+    const SET_CONFIRM_WARNING = 'This setting can switch the UPS outlets, bypass or ECO mode: the devices connected to the UPS may lose power.';
+    // Fallback texts by HTTP status: the server's {"error": "..."} wins when present
+    const SET_ERRORS = {
+        400: 'Invalid value',
+        500: 'Rejected by the UPS',
+        503: 'UPS not connected'
+    };
+    const SET_RESET_ERRORS = {
+        400: 'Not a driver-side variable',
+        500: 'Could not save the setting',
+        503: 'UPS not connected'
+    };
+    const SET_RESULT_MS = 4000;
+    const SET_ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+    const SET_ICON_RESET = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>';
+    const SET_ICON_ZAP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>';
+    const SET_ICON_BATTERY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="18" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/></svg>';
+    const SET_ICON_CHIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>';
+
+    const SET_ASCII_RE = /^[\x20-\x7e]*$/;
+    const SET_ASCII_MSG = 'Only printable ASCII characters (no accents or symbols such as €)';
+
+    let settingsLoadSeq = 0;
+    let settingsLastVars = [];          // catalog of the last successful GET
+    const settingsBusy = new Map();     // name -> 'apply' | 'reset', request in flight
+    const settingsOutcomes = new Map(); // name -> outcome to show after the next render
+
+    function settingText(v) {
+        return v === undefined || v === null ? '' : String(v);
+    }
+
+    function clockTime(d) {
+        return [d.getHours(), d.getMinutes(), d.getSeconds()]
+            .map(n => String(n).padStart(2, '0')).join(':');
+    }
+
+    function buildCurrentValue(value) {
+        const span = document.createElement('span');
+        span.className = 'set-current-value' + (value === '' ? ' is-empty' : '');
+        span.textContent = value === '' ? '(empty)' : value;
+        return span;
+    }
+
+    function setRowBusy(row, kind) {
+        const btn = kind === 'reset' ? row._set.reset : row._set.apply;
+        if (!btn) return;
+        btn.disabled = true;
+        btn.classList.add('running');
+        setRunButtonContent(btn, '<span class="cmd-spinner"></span>', kind === 'reset' ? 'Resetting…' : 'Applying…');
+        if (kind === 'apply') row._set.input.disabled = true;
+        row._set.out.className = 'cmd-result';
+        row._set.out.textContent = '';
+    }
+
+    // Apply turns on only when the field differs from the current value and holds only
+    // printable ASCII (0x20-0x7E), the bytes the firmware accepts, as the NUT line reader
+    function refreshSettingRow(row) {
+        const p = row._set;
+        const dirty = p.input.value !== p.v.value;
+        const ascii = p.input.tagName === 'SELECT' || SET_ASCII_RE.test(p.input.value);
+        p.field.classList.toggle('dirty', dirty);
+        if (!ascii) {
+            p.field.classList.add('invalid');
+            p.out.className = 'cmd-result error';
+            p.out.textContent = `✕ ${SET_ASCII_MSG}`;
+            p.asciiError = true;
+        } else if (p.asciiError) {
+            p.field.classList.remove('invalid');
+            p.out.className = 'cmd-result';
+            p.out.textContent = '';
+            p.asciiError = false;
+        }
+        if (!p.apply.classList.contains('running')) p.apply.disabled = !dirty || !ascii;
+        if (p.counter) {
+            p.counter.textContent = `${p.input.value.length}/${p.v.max_length}`;
+            p.counter.classList.toggle('full', p.input.value.length >= p.v.max_length);
+        }
+    }
+
+    function showSettingOutcome(row, outcome) {
+        const p = row._set;
+        p.out.className = 'cmd-result ' + (outcome.ok ? 'success' : 'error');
+        p.out.textContent = outcome.ok ? `✓ ${outcome.label} ` : `✕ ${outcome.label}`;
+        if (outcome.ok) {
+            // "Applied 20 → 30": old value dimmed, then the value re-read by the firmware
+            const arrow = document.createElement('span');
+            arrow.className = 'arrow';
+            arrow.textContent = `${outcome.from} →`;
+            p.out.append(arrow, document.createTextNode(' ' + outcome.to));
+            p.current.classList.add('updated');
+            setTimeout(() => p.current.classList.remove('updated'), 2500);
+            // Success fades like the command results
+            setTimeout(() => p.out.classList.add('fade'), SET_RESULT_MS);
+            setTimeout(() => {
+                p.out.className = 'cmd-result';
+                p.out.textContent = '';
+            }, SET_RESULT_MS + 600);
+        } else if (outcome.draft !== undefined) {
+            // A failed Apply: message and red frame stay until the value is edited
+            p.field.classList.add('invalid');
+        }
+    }
+
+    async function postSetting(url, payload, errors) {
+        try {
+            const res = await apiFetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            let json = null;
+            try { json = await res.json(); } catch (e) { json = null; }
+            if (res.status === 200) {
+                return { ok: true, value: json && typeof json.value === 'string' ? json.value : null };
+            }
+            const error = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+            return { ok: false, message: error || errors[res.status] || `Failed (HTTP ${res.status})` };
+        } catch (err) {
+            console.error('UPS setting error:', err);
+            return { ok: false, message: 'Network error' };
+        }
+    }
+
+    async function applySetting(row) {
+        const p = row._set;
+        if (p.apply.disabled || settingsBusy.has(p.v.name)) return;
+        const name = p.v.name;
+        const from = p.v.value;
+        const value = p.input.value;
+        // Native confirmation, as for the destructive UPS commands; Cancel sends nothing
+        if (p.v.confirm && !window.confirm(`Set "${name}" to "${value}"?\n\n${SET_CONFIRM_WARNING}`)) return;
+
+        settingsBusy.set(name, 'apply');
+        setRowBusy(row, 'apply');
+        const r = await postSetting('/api/ups/variable', { name: name, value: value }, SET_ERRORS);
+        settingsBusy.delete(name);
+        settingsOutcomes.set(name, r.ok
+            ? { ok: true, label: 'Applied', from: from, to: r.value !== null ? r.value : value }
+            : { ok: false, label: r.message, draft: value });
+        loadSettings();
+    }
+
+    async function resetSetting(row) {
+        const p = row._set;
+        if (!p.reset || p.reset.disabled || settingsBusy.has(p.v.name)) return;
+        const name = p.v.name;
+        const from = p.v.value;
+
+        settingsBusy.set(name, 'reset');
+        setRowBusy(row, 'reset');
+        const r = await postSetting('/api/ups/variable/reset', { name: name }, SET_RESET_ERRORS);
+        settingsBusy.delete(name);
+        settingsOutcomes.set(name, r.ok
+            ? { ok: true, label: 'Reset to default', from: from, to: r.value !== null ? r.value : '' }
+            : { ok: false, label: r.message });
+        loadSettings();
+    }
+
+    function buildSettingRow(v) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row set-row';
+        row.dataset.var = v.name;
+
+        // Name + tags
+        const id = document.createElement('div');
+        id.className = 'set-id';
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = v.name;
+        const tags = document.createElement('div');
+        tags.className = 'set-tags';
+        if (v.enum.length) {
+            const tag = document.createElement('span');
+            tag.className = 'set-tag';
+            tag.textContent = 'enum';
+            tags.appendChild(tag);
+        }
+        if (v.confirm) {
+            const tag = document.createElement('span');
+            tag.className = 'set-tag warn';
+            tag.title = 'Asks for confirmation before applying';
+            tag.innerHTML = SET_ICON_ZAP;
+            tag.appendChild(document.createTextNode('confirm'));
+            tags.appendChild(tag);
+        }
+        id.append(name, tags);
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = v.description;
+
+        // Current value (+ Reset to default for the driver-side variables)
+        const cur = document.createElement('div');
+        cur.className = 'set-current';
+        const curLabel = document.createElement('span');
+        curLabel.className = 'set-current-label';
+        curLabel.textContent = 'Current';
+        const current = buildCurrentValue(v.value);
+        cur.append(curLabel, current);
+        let reset = null;
+        if (v.driver_side) {
+            reset = document.createElement('button');
+            reset.type = 'button';
+            reset.className = 'btn btn-sm set-reset';
+            setRunButtonContent(reset, SET_ICON_RESET, 'Reset to default');
+            reset.addEventListener('click', () => resetSetting(row));
+            cur.appendChild(reset);
+        }
+
+        // New value: <select> for ENUM, text input with the NUT max length otherwise
+        const edit = document.createElement('div');
+        edit.className = 'set-edit';
+        const controls = document.createElement('div');
+        controls.className = 'set-controls';
+        const field = document.createElement('label');
+        field.className = 'set-field' + (v.enum.length ? ' enum' : '');
+        let input;
+        let counter = null;
+        if (v.enum.length) {
+            input = document.createElement('select');
+            const options = v.enum.slice();
+            // The current value is always selectable, even if the UPS reports it outside the list
+            if (!options.includes(v.value)) options.unshift(v.value);
+            for (const o of options) {
+                const opt = document.createElement('option');
+                opt.value = o;
+                opt.textContent = o;
+                input.appendChild(opt);
+            }
+            input.value = v.value;
+        } else {
+            input = document.createElement('input');
+            input.type = 'text';
+            input.value = v.value;
+            input.spellcheck = false;
+            input.autocomplete = 'off';
+            if (v.max_length > 0) {
+                input.maxLength = v.max_length;
+                counter = document.createElement('span');
+                counter.className = 'set-counter';
+            }
+            input.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                applySetting(row);
+            });
+        }
+        input.setAttribute('aria-label', `New value for ${v.name}`);
+        field.appendChild(input);
+        if (counter) field.appendChild(counter);
+
+        const apply = document.createElement('button');
+        apply.type = 'button';
+        apply.className = 'btn btn-outline btn-sm set-apply';
+        setRunButtonContent(apply, SET_ICON_CHECK, 'Apply');
+        apply.addEventListener('click', () => applySetting(row));
+        controls.append(field, apply);
+
+        const out = document.createElement('span');
+        out.className = 'cmd-result';
+        out.setAttribute('aria-live', 'polite');
+        edit.append(controls, out);
+
+        row.append(id, desc, cur, edit);
+        row._set = { v, field, input, counter, apply, reset, out, current };
+
+        input.addEventListener('input', () => {
+            field.classList.remove('invalid');
+            if (out.classList.contains('error')) {
+                out.className = 'cmd-result';
+                out.textContent = '';
+            }
+            refreshSettingRow(row);
+        });
+        refreshSettingRow(row);
+        return row;
+    }
+
+    function buildSettingGroup(id, title, sub, icon, vars) {
+        const group = document.createElement('section');
+        group.className = 'cmd-group set-group';
+        group.id = id;
+
+        const header = document.createElement('div');
+        header.className = 'cmd-group-header';
+        header.innerHTML = icon;
+        const titleEl = document.createElement('span');
+        titleEl.textContent = title;
+        const subEl = document.createElement('span');
+        subEl.className = 'set-group-sub';
+        subEl.textContent = sub;
+        const count = document.createElement('span');
+        count.className = 'cmd-group-count';
+        count.textContent = String(vars.length);
+        header.append(titleEl, subEl, count);
+
+        const head = document.createElement('div');
+        head.className = 'set-head';
+        for (const caption of ['Variable', 'Description', 'Current', 'New value']) {
+            const s = document.createElement('span');
+            s.textContent = caption;
+            head.appendChild(s);
+        }
+
+        group.append(header, head);
+        for (const v of vars) group.appendChild(buildSettingRow(v));
+        return group;
+    }
+
+    function renderSettings(connected, variables) {
+        const list = document.getElementById('set-list');
+        const empty = document.getElementById('set-empty');
+        const snapshot = document.getElementById('set-snapshot');
+        const snapshotTime = document.getElementById('set-snapshot-time');
+        const lead = document.getElementById('set-lead');
+        if (!list || !empty) return;
+
+        const vars = [];
+        for (const raw of variables) {
+            if (!raw || typeof raw.name !== 'string' || raw.name === '') continue;
+            vars.push({
+                name: raw.name,
+                description: typeof raw.description === 'string' ? raw.description : '',
+                value: settingText(raw.value),
+                max_length: Number.isFinite(raw.max_length) ? raw.max_length : 0,
+                enum: Array.isArray(raw.enum) ? raw.enum.map(settingText) : [],
+                driver_side: raw.driver_side === true,
+                confirm: raw.confirm === true
+            });
+        }
+
+        // Values typed but not applied yet survive the reload (not the ones just applied)
+        const drafts = new Map();
+        list.querySelectorAll('.set-row').forEach(row => {
+            const p = row._set;
+            if (p && p.input.value !== p.v.value) drafts.set(p.v.name, p.input.value);
+        });
+
+        const isEmpty = !connected || vars.length === 0;
+        if (snapshot) snapshot.hidden = isEmpty;
+        if (lead) lead.hidden = isEmpty;
+        if (snapshotTime) snapshotTime.textContent = clockTime(new Date());
+        empty.hidden = !isEmpty;
+        list.hidden = isEmpty;
+        if (isEmpty) {
+            list.replaceChildren();
+            settingsOutcomes.clear();
+            return;
+        }
+
+        const groups = [];
+        const ups = vars.filter(v => !v.driver_side);
+        const driver = vars.filter(v => v.driver_side);
+        if (ups.length) groups.push(buildSettingGroup('set-group-ups', 'UPS parameters', 'stored in the UPS', SET_ICON_BATTERY, ups));
+        if (driver.length) groups.push(buildSettingGroup('set-group-driver', 'Driver parameters', 'saved on the ESP32', SET_ICON_CHIP, driver));
+        list.replaceChildren(...groups);
+
+        list.querySelectorAll('.set-row').forEach(row => {
+            const p = row._set;
+            const name = p.v.name;
+            const outcome = settingsOutcomes.get(name);
+            let draft = drafts.get(name);
+            if (outcome && outcome.ok) draft = undefined;
+            if (outcome && !outcome.ok && outcome.draft !== undefined) draft = outcome.draft;
+            if (draft !== undefined && draft !== p.v.value) {
+                const allowed = p.input.tagName !== 'SELECT' ||
+                    Array.from(p.input.options).some(o => o.value === draft);
+                if (allowed) p.input.value = draft;
+                refreshSettingRow(row);
+            }
+            if (settingsBusy.has(name)) setRowBusy(row, settingsBusy.get(name));
+            if (outcome) showSettingOutcome(row, outcome);
+        });
+        settingsOutcomes.clear();
+    }
+
+    async function loadSettings() {
+        if (sessionExpired) return;
+        const seq = ++settingsLoadSeq;
+        let connected = false;
+        let variables = [];
+        let failed = false;
+        try {
+            const res = await apiFetch('/api/ups/variables');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            if (json && json.connected === true && Array.isArray(json.variables)) {
+                connected = true;
+                variables = json.variables;
+            }
+        } catch (err) {
+            console.error('Failed to fetch UPS settings:', err);
+            failed = true;
+        }
+        // A newer request started meanwhile: its answer wins
+        if (seq !== settingsLoadSeq) return;
+        if (failed && settingsOutcomes.size && settingsLastVars.length) {
+            // Re-read after Apply/Reset failed: keep the last list, with the values just
+            // written, so that the outcome stays visible on its row
+            variables = settingsLastVars.map(v => {
+                const o = settingsOutcomes.get(v.name);
+                return o && o.ok ? Object.assign({}, v, { value: o.to }) : v;
+            });
+            connected = true;
+        }
+        settingsLastVars = connected ? variables : [];
+        renderSettings(connected, variables);
+    }
+
     function startUpsPolling() {
         if (!upsPollInterval) {
             fetchUpsVars();
@@ -942,6 +1333,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (target === 'commands') loadCommands();
             } else {
                 stopUpsPolling();
+                // US-068: one read per opening, no periodic requests
+                if (target === 'settings') loadSettings();
             }
         });
     });
@@ -950,6 +1343,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeTab && UPS_POLL_TABS.includes(activeTab.getAttribute('data-target'))) {
         startUpsPolling();
         if (activeTab.getAttribute('data-target') === 'commands') loadCommands();
+    } else if (activeTab && activeTab.getAttribute('data-target') === 'settings') {
+        loadSettings();
     }
 
     // Issue #47: surface crash diagnostics without a serial console

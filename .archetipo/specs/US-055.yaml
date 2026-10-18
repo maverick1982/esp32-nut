@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: LOW
 points: 3
-status: REVIEW
+status: DONE
 body: |-
   #### US-055: Derive standard NUT status tokens from standard HID PresentStatus flags
 
@@ -61,3 +61,5 @@ history:
     at: "2026-09-28T10:00:00Z"
   - status: REVIEW
     at: "2026-09-28T10:30:00Z"
+  - status: DONE
+    at: "2026-10-09T13:30:25Z"

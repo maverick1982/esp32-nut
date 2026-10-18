@@ -22,6 +22,10 @@ public:
     // 64 bit) instead of the declared length. Here at least 8, never less than declared.
     static const uint16_t BX_MIN_REQUEST_LENGTH = 8;
     static bool isBackUpsBX(const String& model) { return model.startsWith("Back-UPS BX"); }
+    // Public: the host asks the same length for the SET VAR read-modify-write and read back
+    uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
+        return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
+    }
 
     // apc-hid.c apc_format_model(): "<model> FW:<firmware> USB FW:<aux>". False when
     // the product string has no "FW:" (already split, or a model without firmware).
@@ -29,15 +33,16 @@ public:
     // ups.model without the firmware, which goes to ups.firmware / ups.firmware.aux (issue #76)
     void formatDeviceStrings(UPSData& data) override;
 
+    // Rows of apc_hid2nut (apc-hid.c) (NutTable.h, US-066)
+    const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::apcHid2Nut(n); }
+    const NutTable::DelayPaths* delayPaths() const override { return NutTable::apcDelayPaths(); }
+
 protected:
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
     uint32_t quickPollMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }
     uint32_t maxReportAgeMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::maxReportAgeMs(); }
     // Nominal values, limits, dates: half of the full poll of a BX750MI (issue #60)
     bool pollStaticReportsOnce() const override { return _back_ups_bx; }
-    uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
-        return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
-    }
 
 private:
     UsageMapIndex<APCDriver> _map;

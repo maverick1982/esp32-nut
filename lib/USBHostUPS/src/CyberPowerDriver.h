@@ -19,6 +19,10 @@ public:
     int32_t defaultOffDelay() const override { return 60; }
     int32_t defaultOnDelay() const override { return 120; }
 
+    // Rows of cps_hid2nut (cps-hid.c) (NutTable.h, US-066)
+    const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::cpsHid2Nut(n); }
+    const NutTable::DelayPaths* delayPaths() const override { return NutTable::cpsDelayPaths(); }
+
 protected:
     uint32_t quickPollMs() const override { return 0; }
     uint32_t fullPollMs() const override { return 30000; }

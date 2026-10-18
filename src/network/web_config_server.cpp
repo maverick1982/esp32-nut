@@ -19,6 +19,17 @@ WebConfigServer::WebConfigServer(ConfigManager& config_mgr)
       credentials(auth_crypto, auth_storage), sessions(auth_crypto, auth_storage),
       auth(credentials, sessions, throttle) {}
 
+// Testo inviato dal client, solo per il log: caratteri non stampabili sostituiti e al
+// massimo max_len caratteri, così il client non può sporcare il log
+static String loggableText(const String& raw, size_t max_len) {
+    String out;
+    for (size_t i = 0; i < raw.length() && i < max_len; i++) {
+        char c = raw[i];
+        out += (c >= 0x20 && c <= 0x7E) ? c : '?';
+    }
+    return out;
+}
+
 // Username tentato in un body di login, solo per il log: caratteri non stampabili
 // sostituiti e lunghezza limitata, così il client non può sporcare il log
 static String loggableUsername(const String& body) {
@@ -29,13 +40,7 @@ static String loggableUsername(const String& body) {
     if (deserializeJson(req, body, DeserializationOption::Filter(filter)) || !req["username"].is<const char*>()) {
         return String("?");
     }
-    String raw = req["username"].as<String>();
-    String out;
-    for (size_t i = 0; i < raw.length() && i < 32; i++) {
-        char c = raw[i];
-        out += (c >= 0x20 && c <= 0x7E) ? c : '?';
-    }
-    return out;
+    return loggableText(req["username"].as<String>(), 32);
 }
 
 void WebConfigServer::begin(bool isAPMode) {
@@ -88,6 +93,9 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/beeper", HTTP_POST, guarded([this]() { handleBeeper(); }));
     server.on("/api/ups/commands", HTTP_GET, guarded([this]() { handleUpsCommands(); }));
     server.on("/api/ups/command", HTTP_POST, guarded([this]() { handleUpsCommand(); }));
+    server.on("/api/ups/variables", HTTP_GET, guarded([this]() { handleUpsVariables(); }));
+    server.on("/api/ups/variable", HTTP_POST, guarded([this]() { handleUpsVariable(); }));
+    server.on("/api/ups/variable/reset", HTTP_POST, guarded([this]() { handleUpsVariableReset(); }));
     server.on("/api/usb/dump", HTTP_GET, guarded([this]() {
         if (!usb_ups) {
             server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
@@ -224,6 +232,13 @@ void WebConfigServer::handleNutConfig() {
         return;
     }
 
+    // ups_name not a string or not valid → 400, nothing saved and no restart (US-082)
+    String rejected;
+    if (int status = WebApiJson::checkNutConfigBody(doc, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+
     NutConfig nc = config_mgr.getNutConfig();
     if (doc["username"].is<String>()) {
         nc.username = doc["username"].as<String>();
@@ -345,19 +360,18 @@ void WebConfigServer::handleBeeper() {
     server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
 }
 
-// Catalogo dei comandi supportati dall'UPS (US-059); i distruttivi sono bloccati
-// in Access Point, dove la Web UI è aperta (US-062)
+// Catalogo dei comandi supportati dall'UPS (US-059), uguale in STA e in AP (US-068)
 void WebConfigServer::handleUpsCommands() {
-    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups, !is_ap_mode));
+    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups));
 }
 
-// Esegue un comando: la logica e gli status sono in WebApiJson::runUpsCommand. I
-// distruttivi sono ammessi solo in STA, dove il guard ha già richiesto la sessione
+// Esegue un comando: la logica e gli status sono in WebApiJson::runUpsCommand. Nessun
+// blocco dei distruttivi in AP (US-068): la conferma la chiede la pagina
 void WebConfigServer::handleUpsCommand() {
     if (!requireJson()) return;
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
-    int status = WebApiJson::runUpsCommand(usb_ups, body, response, !is_ap_mode);
+    int status = WebApiJson::runUpsCommand(usb_ups, body, response);
     if (status == 200) {
         // Il nome è quello del catalogo (stringa costante), non quello del client
         JsonDocument filter;
@@ -367,11 +381,79 @@ void WebConfigServer::handleUpsCommand() {
             const UPSCommandInfo* info = CommandCatalog::find(req["name"].as<const char*>());
             if (info && info->destructive) {
                 AppLogger::log("WARN", String("[CMD] Destructive command '") + info->name +
-                               "' run from the Web UI by '" + credentials.username() + "'");
+                               "' run from the Web UI by '" + webUiUser() + "'");
             }
         }
     }
     server.send(status, "application/json", response);
+}
+
+// Variabili scrivibili dell'UPS (US-068), uguale in STA e in AP
+void WebConfigServer::handleUpsVariables() {
+    server.send(200, "application/json", WebApiJson::generateUpsVariables(usb_ups));
+}
+
+// Scrive una variabile: la logica e gli status sono in WebApiJson::runUpsVariable
+void WebConfigServer::handleUpsVariable() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    String response;
+    bool host_called = false;
+    int status = WebApiJson::runUpsVariable(usb_ups, body, response, &host_called);
+    // L'esito di setVariable() lo registra già l'host: una sola riga per richiesta
+    if (status != 200 && !host_called) logVariableRejected(body, true, response);
+    server.send(status, "application/json", response);
+}
+
+// Riporta al default una variabile lato driver: logica in WebApiJson::resetUpsVariable
+void WebConfigServer::handleUpsVariableReset() {
+    if (!requireJson()) return;
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    String response;
+    bool host_called = false;
+    int status = WebApiJson::resetUpsVariable(usb_ups, body, response, &host_called);
+    // L'esito di resetVariable() lo registra già l'host
+    if (status != 200 && !host_called) logVariableRejected(body, false, response);
+    server.send(status, "application/json", response);
+}
+
+String WebConfigServer::webUiUser() {
+    // In AP non c'è sessione: l'utente configurato non è chi ha inviato la richiesta
+    return is_ap_mode ? String("(AP mode)") : credentials.username();
+}
+
+// Nome e valore riletti dal body, che può essere JSON non valido: "?" se mancano, testo
+// del client ripulito e troncato. Il motivo è il campo "error" della risposta
+void WebConfigServer::logVariableRejected(const String& body, bool with_value, const String& response) {
+    String name("?");
+    String value("?");
+    if (body.length() <= WebApiJson::MAX_COMMAND_BODY_LENGTH) {
+        JsonDocument filter;
+        filter["name"] = true;
+        if (with_value) filter["value"] = true;
+        JsonDocument req;
+        if (!deserializeJson(req, body, DeserializationOption::Filter(filter))) {
+            if (req["name"].is<const char*>()) {
+                String raw = req["name"].as<String>();
+                if (raw.length() > 0) name = loggableText(raw, 48);
+            }
+            if (with_value && req["value"].is<const char*>()) {
+                String raw = req["value"].as<String>();
+                value = loggableText(raw, 32);
+                if (raw.length() > 32) value += "...";
+            }
+        }
+    }
+    String reason("rejected");
+    JsonDocument res;
+    if (!deserializeJson(res, response) && res["error"].is<const char*>()) {
+        reason = res["error"].as<String>();
+    }
+    String msg = String("Variable ") + name;
+    if (with_value) msg += String(" = \"") + value + "\"";
+    else msg += " reset";
+    msg += String(" from the Web UI by '") + webUiUser() + "': " + reason;
+    AppLogger::log("WARN", msg);
 }
 
 void WebConfigServer::handleOTAPage() {

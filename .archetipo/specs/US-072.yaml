@@ -1,0 +1,41 @@
+schema: archetipo/spec/v2
+code: US-072
+title: 'Poll delle variabili semi-statiche come usbhid-ups: all''avvio e dopo SET/INSTCMD'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 5
+status: TODO
+body: |-
+  #### US-072: Poll delle variabili semi-statiche come usbhid-ups: all'avvio e dopo SET/INSTCMD
+
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-079
+
+  **User Story**
+  Come manutentore del firmware,
+  voglio che le variabili che upstream marca `HU_FLAG_SEMI_STATIC` si leggano solo all'avvio e dopo un SET o un INSTCMD, come in usbhid-ups,
+  in modo da ridurre le richieste di controllo USB, la causa dei blocchi EP0 sugli APC BX (issue #60), e restare fedeli a upstream.
+
+  **Dimostrazione**
+  Con il log di debug del poll, su un Eaton 3S e su un APC dalle fixture:
+  - i report che contengono solo campi semi-statici si leggono all'avvio e poi non più;
+  - dopo `upsrw -s battery.charge.low=...` o un `upscmd`, quei report si rileggono una volta al ciclo successivo;
+  - il numero di GET_REPORT al minuto scende.
+
+  **Criteri di Accettazione**
+  - [ ] Un report si considera semi-statico quando tutti i suoi campi corrispondono a voci upstream marcate `HU_FLAG_SEMI_STATIC` o `HU_FLAG_STATIC` del subdriver del driver attivo. Il criterio sostituisce l'euristica `isDynamicUsage` solo per questa decisione.
+  - [ ] I report semi-statici si leggono nel primo poll completo, e di nuovo nel poll successivo a un SET VAR o INSTCMD riuscito, come `data_has_changed` in `usbhid-ups.c:2357-2362`. Tutti gli altri report restano letti come oggi.
+  - [ ] Il comportamento dell'APC BX (`pollStaticReportsOnce`, issue #60) resta valido e i suoi test passano invariati.
+  - [ ] Restano invariati `LIST CMD`, i valori pubblicati nelle fixture di replay e la rilevazione dei dati stale.
+  - [ ] I test nativi del poll (`test_poll_cycle`) coprono: primo poll, poll successivi senza modifiche, rilettura dopo SET e dopo INSTCMD, report misti (dinamici + semi-statici) sempre letti.
+  - [ ] Prima del merge, prova sul campo di almeno 24 h su un APC BX e su un Eaton, con il conteggio delle richieste prima e dopo.
+
+  **Assunzioni**
+  - Da fare a migrazione delle tabelle completata (US-079): i flag `HU_FLAG_SEMI_STATIC`/`HU_FLAG_STATIC` di ogni campo vengono dalle tabelle uniche. Va fatta anche dopo US-067 (EP-003), che introduce SET VAR e il segnale "dati cambiati" dopo una scrittura. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
+  - Nasce dalla verifica di fedeltà del piano di US-066 (2026-10-15). Il poll a 30 s di tutti i report esiste già prima di US-066.
+  - Effetto noto e accettato, come in upstream: un parametro cambiato fuori da NUT (pannello, software del produttore) non compare fino al prossimo SET, INSTCMD o riconnessione.
+history:
+  - status: TODO
+    at: "2026-10-15T17:16:58Z"

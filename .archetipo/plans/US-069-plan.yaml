@@ -1,0 +1,197 @@
+schema: archetipo/plan/v2
+spec_code: US-069
+body: |
+  # US-069: TRACKING per INSTCMD (upscmd -w) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 2
+
+  **User Story**
+  Come amministratore che lancia comandi all'UPS con upscmd o da script, voglio usare `upscmd -w` per avere l'esito reale del comando, in modo che gli script di test e di spegnimento si comportino come con upsd e non si fermino su un errore del protocollo.
+
+  **Criteri di Accettazione**
+  - Con TRACKING attivo nella sessione, gli errori di validazione di `INSTCMD` restano immediati (`ACCESS-DENIED`, `UNKNOWN-UPS`, `DRIVER-NOT-CONNECTED`, `CMD-NOT-SUPPORTED`); se il comando è valido la risposta è `OK TRACKING <uuid4>`.
+  - `GET TRACKING <id>` restituisce `SUCCESS`, `ERR INVALID-ARGUMENT` (parametro mancante o non valido) o `ERR FAILED` (scrittura fallita).
+  - Gli esiti di `INSTCMD` e `SET VAR` usano la stessa tabella e le stesse regole di scadenza di US-067.
+  - Senza TRACKING, `INSTCMD` risponde come oggi, compreso `ERR INSTCMD-FAILED`.
+  - I test nativi coprono la sequenza di `upscmd -w` per un comando riuscito, uno fallito e uno con parametro non valido.
+
+  ---
+
+  ## Stato attuale
+
+  US-067 (DONE) ha già introdotto `SET TRACKING ON|OFF` per sessione (`_clientTracking[slot]`), `GET TRACKING [<id>]` e la tabella `NutTracking` (16 voci, 3600 s, id uuid4 maiuscolo, confronto case-insensitive). Quindi oggi `upscmd -w` NON termina più con "Enabling command status tracking failed" come dice la Dimostrazione: `SET TRACKING ON` risponde `OK`, ma `INSTCMD` risponde `OK` senza id. `upscmd.c` (do_cmd, righe ~210-230) controlla la lunghezza `strlen("OK TRACKING ") + UUID4_LEN - 1` = 48, non la trova, stampa `OK` e il WARNING "'OK' only means the NUT data server accepted the request...". Manca solo il ramo TRACKING in `INSTCMD` (`lib/NUTServer/src/NUTServer.cpp`, blocco `if (cmd == "INSTCMD")`).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Driver e server sono nello stesso processo: come per `SET VAR` (US-067), `executeCommand()` viene eseguito prima della risposta e l'esito è già noto. Con TRACKING attivo l'esito va nella tabella condivisa e il client riceve `OK TRACKING <id>`; `PENDING` non compare mai. In upsd `send_instcmd()` risponde `OK TRACKING` appena la riga è inviata al driver, e l'esito arriva dopo tramite `TRACKING <id> <status>` (sstate.c): il risultato visibile al client con `upscmd -w` è lo stesso.
+
+  - **Helper unico `NUTServer::replyTracking(Print& client, NutTable::SetStatus st)`** (privato): genera l'id con `_tracking.newId()`, salva l'esito con `_tracking.add(id, st, _now())` e stampa `OK TRACKING <id>\n`. `setVar()` e `INSTCMD` lo usano entrambi, quindi stessa tabella, capacità (16, si scarta la più vecchia), scadenza (`MAX_AGE_MS` 3600 s, `cleanup()` nel loop) e formato id. Criterio 3 soddisfatto per costruzione.
+  - **Mappatura `CommandResult` → esito** (funzione statica locale in `NUTServer.cpp`, ad es. `instcmdTrackingStatus()`), coerente con `tracking_get()` di upsd e con gli `STAT_INSTCMD_*` di usbhid-ups:
+    - `CommandResult::OK` → `SetStatus::OK` → `SUCCESS` (STAT_INSTCMD_HANDLED)
+    - `CommandResult::FAILED` → `SetStatus::FAILED` → `ERR FAILED` (STAT_INSTCMD_FAILED, `HIDSetDataValue` fallita)
+    - `CommandResult::INVALID_ARGUMENT` → `SetStatus::CONVERSION_FAILED` → `ERR INVALID-ARGUMENT` (STAT_INSTCMD_CONVERSION_FAILED: parametro non convertibile o fuori dal campo)
+  - **Errori immediati anche con TRACKING** (nessuna voce in tabella, nessun id): `ERR ACCESS-DENIED`, `ERR INVALID-ARGUMENT` per meno di 3 token (`net_instcmd` numarg < 2), `ERR UNKNOWN-UPS`, `ERR DRIVER-NOT-CONNECTED` (`_usb_ups` nullo o `CommandResult::NOT_CONNECTED`), `ERR CMD-NOT-SUPPORTED` (`CommandResult::NOT_SUPPORTED`). Restano anche `USERNAME-REQUIRED`/`PASSWORD-REQUIRED` del gate FLAG_USER, che precede tutto.
+  - **Senza TRACKING** lo `switch` attuale resta invariato: `OK`, `ERR CMD-NOT-SUPPORTED`, `ERR DRIVER-NOT-CONNECTED`, `ERR INSTCMD-FAILED`, `ERR INVALID-ARGUMENT`.
+  - **`NutTracking.h`**: cambia solo il commento di testa ("SET VAR e INSTCMD"). Il tipo dell'esito resta `NutTable::SetStatus`, perché i suoi valori coprono già SUCCESS / ERR INVALID-ARGUMENT / ERR FAILED. `NutTracking` non dipende da `CommandCatalog.h`.
+  - **System Log**: invariato. L'host (`USBHostUPS::executeCommand`) registra già "Command X: OK/failed/invalid argument". L'id di tracking non entra nel log (upsd lo scrive in "Instant command: ... (tracking ID: ...)"): deviazione minore, già presente per SET VAR.
+  - **Comandi che spengono il carico**: `SUCCESS` vuol dire che le scritture HID sono andate a buon fine, non che il carico sia già spento, come in upsd (Assunzioni della spec).
+  - **Web UI** (`WebApiJson`): non coinvolta, chiama `executeCommand()` direttamente.
+
+  ### Deviazioni da upstream verificate (restano, da confermare in review)
+
+  1. **`shutdown.default` senza sottocomando riuscito**: upstream `do_loop_shutdown_commands()` restituisce STAT_INSTCMD_INVALID, quindi `GET TRACKING` → `ERR INVALID-ARGUMENT`. Noi restituiamo `CommandResult::FAILED`, quindi `ERR FAILED`, come chiede il criterio "scrittura sull'UPS fallita".
+  2. **Ritardo `ups.delay.*` mancante** (`resolveShutdownSteps` → NOT_SUPPORTED): resta `ERR CMD-NOT-SUPPORTED` immediato, anche con TRACKING, come oggi senza. In upstream il comando passa il controllo della cmdlist e l'esito arriverebbe dal driver.
+  3. **Ordine dei controlli preesistente**: `ACCESS-DENIED` prima di `UNKNOWN-UPS` (upstream lo controlla dopo `CMD-NOT-SUPPORTED`) e nessun `DATA-STALE` per INSTCMD (upstream `ups_available()`). Fuori dallo scope di questa spec, non toccati.
+  4. **Esito noto prima della risposta**: `PENDING` non viene mai restituito e la risposta arriva dopo la scrittura (fino a ~125 ms per le sequenze di spegnimento), come già per SET VAR.
+
+  ---
+
+  ## Strategia di test
+
+  Solo test nativi Unity in `test/test_nut_server/test_main.cpp`: la spec non ha superficie UI, quindi niente e2e né video demo. I test usano gli helper esistenti `request(slot, line)`, `trackingId()`, `isUuid4()`, `addDelayUsages()`, `mockHost.failPaths`, `mockHost.setBeeperOk`, `fakeNow`. `setUp()` chiama già `server.clearTracking()`.
+
+  - **Sequenza `upscmd -w`** (upscmd.c do_cmd): `SET TRACKING ON` → `OK`; `INSTCMD testups beeper.disable` → riga di 48 caratteri senza newline e uuid4 valido; `GET TRACKING <id>` → `SUCCESS`. Stessa sequenza per un comando fallito (`setBeeperOk=false` o `failPaths`) → `ERR FAILED`, e per `load.off.delay abc` / `65536` → `ERR INVALID-ARGUMENT`. Si verifica anche che la scrittura sia avvenuta (o no) su `mockHost`.
+  - **Errori immediati con TRACKING ON**: credenziali errate, UPS sconosciuto, `connected=false`, comando assente o non supportato, meno di 3 token. Nessun `OK TRACKING` e nessuna voce nuova in tabella.
+  - **Tabella condivisa con SET VAR**: un id di INSTCMD e uno di SET VAR convivono e sono leggibili; dopo 3600 s + 1 ms e `loop()`/`get` l'id di INSTCMD dà `ERR UNKNOWN`; riempire la tabella alternando INSTCMD e SET VAR scarta la voce più vecchia.
+  - **Per sessione**: TRACKING ON sullo slot 0 non cambia la risposta di INSTCMD sullo slot 1 (`OK\n`).
+  - **Regressione senza TRACKING**: i test INSTCMD esistenti restano verdi senza modifiche, compreso `ERR INSTCMD-FAILED`. Un test esplicito verifica `OK` / `ERR INSTCMD-FAILED` / `ERR INVALID-ARGUMENT` dopo `SET TRACKING OFF`.
+  - **Regressione SET VAR**: i test di tracking di US-067 restano verdi dopo il refactor di `replyTracking()`.
+  - **Verifica manuale (review, Eaton 3S)**: `upscmd -w -u <user> -p <pw> ups@<ip> beeper.disable` stampa `SUCCESS`; `upscmd -w ... load.off.delay abc` stampa `ERR INVALID-ARGUMENT`; `upscmd` senza `-w` stampa `OK` e il WARNING di upstream.
+
+  _Piano generato con ARchetipo Planning — 2026-10-16_
+tasks:
+  - id: TASK-01
+    title: Estrarre replyTracking() da setVar e aggiornare il commento di NutTracking
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** avere un solo punto che crea una voce di TRACKING e risponde `OK TRACKING <id>`, da riusare per INSTCMD. Nessun cambio di comportamento.
+
+      **Leggi:** `lib/NUTServer/src/NUTServer.cpp` (fine di `NUTServer::setVar`, il blocco `if (_clientTracking[slot]) { char id[...]; _tracking.newId(id); _tracking.add(id, st, _now()); client.printf("OK TRACKING %s\n", id); }`), `lib/NUTServer/src/NUTServer.h` (sezione private), `lib/NUTServer/src/NutTracking.h` (commento di testa).
+
+      **Modifica:**
+      1. In `NUTServer.h`, sezione private, accanto a `setVar`/`rejectSet`, dichiarare `void replyTracking(Print& client, NutTable::SetStatus st);` con un commento in italiano (stile dell'header), per esempio: `// Esito di SET VAR o INSTCMD con TRACKING ON: voce nella tabella condivisa e OK TRACKING <id>`.
+      2. In `NUTServer.cpp` implementare `replyTracking` con le tre istruzioni oggi in `setVar` e un commento in inglese (stile del .cpp).
+      3. In `setVar` sostituire il blocco con `replyTracking(client, st);`. I rami `OK` / `ERR SET-FAILED` restano invariati.
+      4. In `NutTracking.h` aggiornare il commento di testa: "Results of the SET VAR and INSTCMD requests sent with TRACKING ON (US-067, US-069)". Nessun'altra modifica alla classe.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server`: tutti i test esistenti passano, compresi quelli di tracking di US-067.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — dichiarazione di replyTracking()
+      - lib/NUTServer/src/NUTServer.cpp — implementazione e uso in setVar()
+      - lib/NUTServer/src/NutTracking.h — solo il commento di testa
+
+      ## Criteri di Completamento
+      - [ ] `setVar()` non chiama più direttamente `_tracking.newId`/`_tracking.add`
+      - [ ] `replyTracking()` è l'unico punto del server che stampa `OK TRACKING`
+      - [ ] La suite `test_nut_server` passa senza modifiche ai test
+    ref: TASK-01
+  - id: TASK-02
+    title: Rispondere OK TRACKING a INSTCMD quando la sessione ha TRACKING ON
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** con `_clientTracking[slot]` attivo, un INSTCMD valido risponde `OK TRACKING <uuid4>` e l'esito è leggibile con `GET TRACKING`; gli errori di validazione restano immediati; senza TRACKING il comportamento non cambia.
+
+      **Leggi:** `lib/NUTServer/src/NUTServer.cpp`, blocco `if (cmd == "INSTCMD")` (switch su `_usb_ups->executeCommand(cmdName.c_str(), param)`); `lib/USBHostUPS/src/CommandCatalog.h` (`enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED, INVALID_ARGUMENT }`); `nut_repo/server/netinstcmd.c` (send_instcmd, net_instcmd); `tracking_get()` in `nut_repo/server/upsd.c`.
+
+      **Modifica:**
+      1. In `NUTServer.cpp`, vicino alle altre funzioni statiche di file, aggiungere `static NutTable::SetStatus instcmdTrackingStatus(CommandResult r)` con questa mappatura: `OK`→`SetStatus::OK`, `FAILED`→`SetStatus::FAILED`, `INVALID_ARGUMENT`→`SetStatus::CONVERSION_FAILED`. Gli altri casi non vengono mai passati: restituire `SetStatus::UNKNOWN`. Commento in inglese che cita STAT_INSTCMD_HANDLED / FAILED / CONVERSION_FAILED di usbhid-ups.
+      2. Nel blocco INSTCMD salvare il risultato: `CommandResult r = _usb_ups->executeCommand(cmdName.c_str(), param);`.
+      3. Prima dello switch esistente: se `_clientTracking[slot]` e `r` è `OK`, `FAILED` o `INVALID_ARGUMENT`, chiamare `replyTracking(client, instcmdTrackingStatus(r)); return;`. `NOT_SUPPORTED` e `NOT_CONNECTED` cadono nello switch esistente (errori immediati anche con TRACKING).
+      4. Lo switch esistente resta identico per il caso senza TRACKING (`ERR INSTCMD-FAILED` compreso).
+      5. Non cambiare l'ordine dei controlli che precedono (gate credenziali, ACCESS-DENIED, token < 3, UNKNOWN-UPS, `_usb_ups` nullo): è fuori scope (deviazioni 3 del piano).
+      6. Commento in inglese sopra il ramo TRACKING: l'esito è noto prima della risposta (stesso processo del driver), quindi PENDING non compare mai, come in setVar.
+
+      **Verifica:** build nativa della suite `test_nut_server` verde (i test esistenti non usano TRACKING con INSTCMD).
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.cpp — mappatura CommandResult→SetStatus e ramo TRACKING in INSTCMD
+
+      ## Criteri di Completamento
+      - [ ] Con TRACKING ON, INSTCMD riuscito/fallito/con parametro non valido risponde `OK TRACKING <uuid4>`
+      - [ ] Con TRACKING ON, NOT_SUPPORTED e NOT_CONNECTED restano `ERR CMD-NOT-SUPPORTED` / `ERR DRIVER-NOT-CONNECTED` immediati, senza voce in tabella
+      - [ ] Senza TRACKING le risposte sono byte per byte quelle di prima
+      - [ ] Nessuna modifica a `IUSBHostUPS`, `USBHostUPS` o `WebApiJson`
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi della sequenza upscmd -w e degli errori immediati
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con test Unity la sequenza di `upscmd -w` (nut_repo/clients/upscmd.c, do_cmd) e le regole di US-069.
+
+      **Leggi:** `test/test_nut_server/test_main.cpp`: `setUp()` (chiama `server.clearTracking()`, `fakeNow = 1000`), helper `request(slot, line)`, `trackingId()`, `isUuid4()`, `addDelayUsages()`, `setupSettable()`, i test `test_upsrw_tracking_sequence`, `test_tracking_outcomes`, `test_tracking_unknown_and_expired_id`, `test_tracking_table_drops_oldest`, `test_tracking_is_per_session`; le macro `P_SD`/`P_ST` usate dai test INSTCMD di US-058.
+
+      **Modifica:** aggiungere i test DOPO le definizioni di `trackingId()` / `isUuid4()` (vicino ai test di tracking di US-067), con commenti in inglese che citano upscmd.c / netinstcmd.c:
+      1. `test_upscmd_tracking_sequence`: `server.setAuthenticated(0, true)`, `mockHost.data.set("ups.beeper.status", "enabled")`; `SET TRACKING ON` → `OK\n`; `INSTCMD testups beeper.disable` → risposta lunga 48 senza `\n` e `isUuid4(trackingId(reply))`; `mockHost.beeperState` falso; `GET TRACKING <id>` → `SUCCESS\n`.
+      2. `test_instcmd_tracking_failed`: TRACKING ON, `addDelayUsages(true, true, false)`, `mockHost.failPaths.push_back(P_ST)`; `INSTCMD testups shutdown.return` → `OK TRACKING <id>`; `GET TRACKING` → `ERR FAILED\n`. Ripetere con `setBeeperOk = false` e `beeper.enable`.
+      3. `test_instcmd_tracking_invalid_argument`: TRACKING ON, `addDelayUsages(true, true, true)`; per `load.off.delay abc`, `load.off.delay 65536`, `shutdown.reboot 12x` → `OK TRACKING <id>`, `GET TRACKING` → `ERR INVALID-ARGUMENT\n`, nessuna scrittura in `mockHost.writes`.
+      4. `test_instcmd_tracking_validation_errors_are_immediate`: TRACKING ON; `INSTCMD testups invalid.cmd` → `ERR CMD-NOT-SUPPORTED\n`; `INSTCMD otherups beeper.enable` → `ERR UNKNOWN-UPS\n`; `INSTCMD testups` → `ERR INVALID-ARGUMENT\n`; `mockHost.connected = false` → `ERR DRIVER-NOT-CONNECTED\n`; credenziali errate (`setClientUsername(0, "admin")`, `setAuthenticated(0, false)` ma password inviata: usare lo stesso schema di `test_instcmd_requires_login`) → `ERR ACCESS-DENIED\n`. Nessuna risposta inizia con `OK TRACKING`.
+      5. `test_instcmd_tracking_shares_table_with_set_var`: `setupSettable()` più beeper; TRACKING ON; un id da `SET VAR testups battery.charge.low 30` e uno da `INSTCMD testups beeper.disable`, tutti e due `SUCCESS`; poi `fakeNow += NutTracking::MAX_AGE_MS + 1` → l'id di INSTCMD dà `ERR UNKNOWN\n`. Riempire la tabella con `NutTracking::CAPACITY` INSTCMD (avanzando `fakeNow` di 1 ms ciascuno) dopo un SET VAR: il primo id (SET VAR) dà `ERR UNKNOWN\n`, l'ultimo `SUCCESS\n`.
+      6. `test_instcmd_tracking_is_per_session`: TRACKING ON sullo slot 0 e slot 1 autenticato → `INSTCMD testups beeper.enable` sullo slot 1 risponde `OK\n`.
+      7. `test_instcmd_without_tracking_unchanged`: `SET TRACKING ON` poi `SET TRACKING OFF`; `beeper.disable` → `OK\n`; con `setBeeperOk=false` → `ERR INSTCMD-FAILED\n`; `load.off.delay abc` (con `addDelayUsages`) → `ERR INVALID-ARGUMENT\n`.
+      8. Registrare ogni test in ENTRAMBE le liste RUN_TEST: quella in `int main(...)` e quella in `void setup()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server` → tutti verdi.
+
+      **Blocchi:** TASK-02. Se `test_instcmd_requires_login` usa uno schema diverso per "password inviata ma errata", copiarlo invece di inventarne uno nuovo.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — 7 nuovi test e registrazione nelle due liste RUN_TEST
+
+      ## Criteri di Completamento
+      - [ ] La sequenza di upscmd -w è coperta per un comando riuscito (SUCCESS), uno fallito (ERR FAILED) e uno con parametro non valido (ERR INVALID-ARGUMENT)
+      - [ ] Gli errori di validazione con TRACKING ON sono immediati e non producono id
+      - [ ] Scadenza e capacità della tabella valgono insieme per INSTCMD e SET VAR
+      - [ ] Le risposte senza TRACKING (OK, ERR INSTCMD-FAILED, ERR INVALID-ARGUMENT) sono verificate
+      - [ ] La suite test_nut_server passa
+    ref: TASK-03
+  - id: TASK-04
+    title: Regressione completa nativa e build del firmware
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il refactor e il nuovo ramo non rompono altre suite o la build ESP32-S3.
+
+      **Leggi:** nulla di nuovo.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`. Su Windows una suite può risultare ERRORED in modo transitorio: rilanciarla da sola con `-f <suite>` prima di considerarla rotta.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+      3. Annotare nel resoconto il numero di test (base: 542 prima di questa spec) e la percentuale di flash.
+
+      **Blocchi:** TASK-03.
+
+      ## File Coinvolti
+      - nessun file modificato (solo verifica)
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test nativi passano (542 + i nuovi)
+      - [ ] La build `esp32-s3-standard` termina senza errori né nuovi warning in `lib/NUTServer`
+    ref: TASK-04

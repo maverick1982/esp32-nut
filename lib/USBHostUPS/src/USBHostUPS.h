@@ -15,6 +15,7 @@
 #include "IUSBHostUPS.h"
 #include "LinkMonitor.h"
 #include "InputReassembler.h"
+#include "DriverVarStore.h"
 #include <map>
 #include <vector>
 
@@ -84,8 +85,13 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
+    std::vector<NutTable::RWVariable> getWritableVariables() const override;
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override;
     CommandResult executeCommand(const char* name, const char* param = nullptr) override;
+    NutTable::SetStatus setVariable(const char* name, const char* value) override;
+    NutTable::SetStatus resetVariable(const char* name) override;
+    // Store of the driver-side SET VAR values (US-067): loaded once, call it before begin()
+    void setDriverVarStore(IDriverVarStore* store);
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) override;
@@ -98,6 +104,12 @@ public:
 private:
     // ups.delay.* defaults of the driver (CommandCatalog::applyDefaultDelays, US-058)
     void applyDefaultDelays();
+    // Saved driver-side values other than ups.delay.* (outlet.*.desc), after each _driver->setup()
+    void applySavedDriverValues();
+    // setVariable() without the log line
+    NutTable::SetStatus runSetVariable(const char* name, const char* value);
+    // resetVariable() without the log line; value is the default now in force
+    NutTable::SetStatus runResetVariable(const char* name, String& value);
 
     struct HidEvent {
         enum Type : uint8_t { CONNECTED, OPEN_FAILED, INPUT_REPORT, DISCONNECTED, TRANSFER_ERROR };
@@ -205,6 +217,9 @@ private:
     UPSData _ups_data;
     IUPSDriver* _driver;
     LogCallback _log_cb;
+    IDriverVarStore* _var_store;
+    // Cache of what _var_store holds, under _mutex (US-067)
+    std::vector<std::pair<String, String>> _saved_vars;
 
     std::map<uint16_t, CachedReport> _cached_reports;
 

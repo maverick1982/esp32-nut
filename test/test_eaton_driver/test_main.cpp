@@ -188,6 +188,129 @@ void test_eaton_realpower_recalculated_when_config_arrives_after_load(void) {
     TEST_ASSERT_EQUAL_UINT16(400, ups_data.getFloat("ups.realpower"));
 }
 
+
+// --- NUT table (US-066) ---
+
+static HIDUsageDef nutField(const char* path, uint32_t usage, uint8_t report_id, uint8_t report_type,
+                            uint16_t bit_size = 8, std::initializer_list<uint8_t> coll = {}) {
+    HIDUsageDef d;
+    strcpy(d.path, path);
+    d.usage = usage;
+    d.report_id = report_id;
+    d.report_type = report_type;
+    d.bit_offset = 0;
+    d.bit_size = bit_size;
+    d.found = true;
+    size_t i = 0;
+    for (uint8_t c : coll) d.coll_index[i++] = c;
+    return d;
+}
+
+static void feed(uint8_t report_id, uint8_t report_type, uint8_t value) {
+    uint8_t data[] = { report_id, value };
+    driver.decodeReport(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+    driver.postDecode(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+}
+
+static void feedString(uint8_t index, const char* s) {
+    uint8_t buf[64] = { 0 };
+    size_t n = strlen(s);
+    buf[0] = (uint8_t)(2 + 2 * n);
+    buf[1] = 0x03;
+    for (size_t i = 0; i < n; i++) buf[2 + 2 * i] = (uint8_t)s[i];
+    driver.parseStringDescriptor(&mockHost, index, buf, buf[0], ups_data);
+}
+
+// mge-hid.c:2013-2014: battery.charge.low comes from RemainingCapacityLimitSetting, the
+// first row; the generic RemainingCapacityLimit mapping never overrides it
+void test_eaton_battery_charge_low_owned_by_table(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 0x08, 3));
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF004D", 0xffff004d, 0x22, 3));
+    feed(0x22, 3, 20);
+    feed(0x08, 3, 10);
+    TEST_ASSERT_EQUAL_STRING("20", ups_data.get("battery.charge.low").c_str());
+
+    driver.setup();
+    ups_data = UPSData();
+    feed(0x08, 3, 10);
+    feed(0x22, 3, 20);
+    TEST_ASSERT_EQUAL_STRING("20", ups_data.get("battery.charge.low").c_str());
+}
+
+// mge-hid.c:2247: outlet.desc, HU_FLAG_ABSENT, default "Main Outlet" when
+// UPS.OutletSystem.Outlet.[1].OutletID exists
+void test_eaton_outlet_desc_default(void) {
+    mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 0x0B, 3, 8, { 0, 0, 2 }));
+    feed(0x0B, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", ups_data.get("outlet.desc").c_str());
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(ups_data, rw);
+    TEST_ASSERT_EQUAL(1, rw.size());
+    TEST_ASSERT_EQUAL_STRING("outlet.desc", rw[0].name);
+    TEST_ASSERT_EQUAL(20, rw[0].aux);
+}
+
+// mge_format_model(): iProduct "Protection Station" + iModel "650" is MGE_PEGASUS, so
+// outlet.power (pegasus_threshold_info) is published with ENUM 10/25/60. The row waits
+// for the model before its first value counts.
+void test_eaton_model_type_from_imodel(void) {
+    mockHost._iProduct = 2;
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF00F0", 0xffff00f0, 0x01, 3));
+    mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.ConfigApparentPower", 0x00840043, 0x0C, 3, 8, { 0, 0, 2 }));
+
+    feed(0x01, 3, 5);   // iModel string index
+    feed(0x0C, 3, 25);  // before the model is known: deferred
+    TEST_ASSERT_FALSE(ups_data.hasKey("outlet.power"));
+
+    feedString(2, "Protection Station");
+    feedString(5, "650");
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_TRUE(driver.nutContext().ready);
+    TEST_ASSERT_EQUAL_HEX(NutTable::MGE_PEGASUS, driver.nutContext().mge_type);
+
+    feed(0x0C, 3, 25);
+    TEST_ASSERT_EQUAL_STRING("25", ups_data.get("outlet.power").c_str());
+    std::vector<NutTable::RWVariable> rw;
+    driver.writableVariables(ups_data, rw);
+    TEST_ASSERT_EQUAL(1, rw.size());
+    TEST_ASSERT_EQUAL_STRING("outlet.power", rw[0].name);
+    TEST_ASSERT_EQUAL(3, rw[0].enums.size());
+}
+
+// mge_format_model(): an iModel string that never arrives counts as empty, so the model
+// falls back to UPS.Flow.[4].ConfigApparentPower ("650" -> Protection Station 650 is
+// MGE_PEGASUS). Decided at the end of the first full poll, upstream's initinfo.
+void test_eaton_model_falls_back_to_apparent_power(void) {
+    mockHost._iProduct = 2;
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF00F0", 0xffff00f0, 0x01, 3));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigApparentPower", 0x00840043, 0x0D, 3, 16, { 0, 5 }));
+    feedString(2, "Protection Station");
+    feed(0x01, 3, 5);    // iModel string index, whose string is never received
+    uint8_t ap[] = { 0x0D, 0x8A, 0x02 }; // 650
+    driver.decodeReport(&mockHost, 0x0D, 3, ap, sizeof(ap), ups_data);
+    driver.postDecode(&mockHost, 0x0D, 3, ap, sizeof(ap), ups_data);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 500 && !driver.initialPollDone(); i++, now += 1000) driver.loop(&mockHost, ups_data, now);
+    TEST_ASSERT_TRUE(driver.initialPollDone());
+    driver.loop(&mockHost, ups_data, now);
+    TEST_ASSERT_TRUE(driver.nutContext().ready);
+    TEST_ASSERT_EQUAL_HEX(NutTable::MGE_PEGASUS, driver.nutContext().mge_type);
+}
+
+// The Eaton 3S of the fixtures reports iProduct "Eaton 3S": no mge_model_names row, so
+// MGE_DEFAULT as upstream, and outlet.power is never published
+void test_eaton_3s_model_is_default(void) {
+    mockHost._iProduct = 2;
+    mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.ConfigApparentPower", 0x00840043, 0x0C, 3, 8, { 0, 0, 2 }));
+    feedString(2, "Eaton 3S");
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_TRUE(driver.nutContext().ready);
+    TEST_ASSERT_EQUAL_HEX(NutTable::MGE_DEFAULT, driver.nutContext().mge_type);
+    feed(0x0C, 3, 25);
+    TEST_ASSERT_FALSE(ups_data.hasKey("outlet.power"));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -197,6 +320,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
     RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_eaton_battery_charge_low_owned_by_table);
+    RUN_TEST(test_eaton_outlet_desc_default);
+    RUN_TEST(test_eaton_model_type_from_imodel);
+    RUN_TEST(test_eaton_model_falls_back_to_apparent_power);
+    RUN_TEST(test_eaton_3s_model_is_default);
     return UNITY_END();
 }
 #else
@@ -207,6 +335,11 @@ void setup() {
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
     RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
+    RUN_TEST(test_eaton_battery_charge_low_owned_by_table);
+    RUN_TEST(test_eaton_outlet_desc_default);
+    RUN_TEST(test_eaton_model_type_from_imodel);
+    RUN_TEST(test_eaton_model_falls_back_to_apparent_power);
+    RUN_TEST(test_eaton_3s_model_is_default);
     UNITY_END();
 }
 void loop() {}

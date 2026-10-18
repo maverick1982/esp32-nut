@@ -1,0 +1,334 @@
+schema: archetipo/plan/v2
+spec_code: US-082
+body: |
+  ---
+  type: plan
+  title: "US-082: Nome dell'UPS mai vuoto (default \"ups\") e rimozione del fallback senza nome dell'UPS nei comandi NUT — Piano di Implementazione"
+  description: "Piano di Implementazione per US-082"
+  tags: [plan, implementation, US-082]
+  ---
+  # US-082: Nome dell'UPS mai vuoto (default "ups") e rimozione del fallback senza nome dell'UPS nei comandi NUT — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utente che collega l'ESP32 a Home Assistant, upsc o PeaNUT, voglio che il server NUT abbia sempre un nome dell'UPS valido e risponda ai comandi come upsd, in modo che i client trovino l'UPS anche se non ho mai compilato il form NUT e che il server non accetti comandi che upsd rifiuta.
+
+  **Criteri di Accettazione (sintesi)**
+  - `ups_name` mai vuoto: default `ups` al caricamento (anche per le schede già sul campo) e nella prima configurazione Wi-Fi.
+  - `POST /api/nut/config` rifiuta con 400 un nome vuoto o con spazi; placeholder del form `ups`.
+  - Senza nome dell'UPS: `ERR INVALID-ARGUMENT` per LIST VAR/RW/CMD, LIST ENUM/RANGE, GET VAR/TYPE/DESC/CMDDESC.
+  - Sottocomando `LIST` sconosciuto: `ERR INVALID-ARGUMENT`.
+  - Con il nome dell'UPS nessun cambiamento; test nativi; verifica con Home Assistant prima del merge.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Le regole sul nome dell'UPS diventano funzioni pure del server NUT, testabili in nativo; `ConfigManager` (solo su scheda, usa `Preferences`) e il server web le usano. Il fallback nato in US-023 si toglie da ogni comando, così le risposte coincidono con `net_list()` / `net_get()` di upsd.
+
+  - **Regole del nome** (`lib/NUTServer/src/NUTServer.h/.cpp`), statiche e pubbliche come `splitTokens()`:
+    - `static String defaultUpsName()` → `"ups"`;
+    - `static String normalizeUpsName(const String& name)`: vuoto → `ups`, altrimenti invariato (la spec parla di nome "mancante o vuoto": un nome non vuoto non si tocca);
+    - `static bool isValidUpsName(const String& name)`: non vuoto e ogni byte in `0x21-0x7E`, cioè ASCII stampabile senza spazi. È la regola del form (`^\S+$`) ristretta ai byte che il lettore di riga NUT accetta (`0x20-0x7E`, e lo spazio separa i token): un nome con accenti non potrebbe mai essere inviato da un client.
+    - `NUTServer::begin()` applica `normalizeUpsName()` alla configurazione ricevuta: difesa in profondità, e rende testabile in nativo che `LIST UPS` non stampi mai un nome vuoto.
+  - **Configurazione** (`src/core/config_manager.cpp`):
+    - al caricamento `ups_name` si legge con `nut["ups_name"] | ""` invece di `as<String>()`. Con ArduinoJson 7.4.3 `as<String>()` di una chiave assente restituisce la stringa `"null"` (`convertFromJson` fa `serializeJson` dei valori non stringa): con `| ""` una chiave assente diventa vuota e quindi `ups`. Poi `normalizeUpsName()`, con un WARN `[CONFIG] Empty UPS name, using "ups"` quando il default si applica;
+    - in `save()` si salva `normalizeUpsName(nut_config.ups_name)` (e si aggiorna `nut_config`), così la prima configurazione Wi-Fi dall'AP (`handleWifiConfig` → `save()` con la sezione `nut` vuota) scrive `ups`.
+    - Le schede sul campo con `"ups_name": ""` in NVS ricevono `ups` al primo avvio del nuovo firmware; il valore viene riscritto in NVS al primo `save()` successivo, ma vale subito in memoria.
+  - **Server web** (`src/network/web_config_server.cpp`, `handleNutConfig`): se `ups_name` è presente e `!NUTServer::isValidUpsName()` → 400 `{"error": "Invalid UPS name"}`, nessun salvataggio né riavvio. Se `ups_name` manca dal body resta il valore attuale (comportamento di oggi).
+  - **Web UI** (`data/www/index.html`): placeholder `ups` e `pattern="[!-~]+"` (ASCII stampabile senza spazi, come il backend) con il title aggiornato; poi `python scripts/embed_web.py`. La gestione dell'errore del form (alert "Failed to save NUT configuration.") resta com'è.
+  - **Comandi senza nome dell'UPS** (`lib/NUTServer/src/NUTServer.cpp`), come upsd:
+    - `LIST VAR`, `LIST RW`, `LIST CMD`, `LIST CLIENT`: con meno di 3 token → `ERR INVALID-ARGUMENT` (`net_list()`: `numarg < 2`). `LIST CLIENT` è nello stesso ramo di `LIST CMD` e segue la stessa regola; il suo contenuto resta fuori ambito come da spec;
+    - `LIST ENUM`, `LIST RANGE`: con meno di 4 token → `ERR INVALID-ARGUMENT` (`numarg < 3`);
+    - `GET VAR`, `GET TYPE`, `GET DESC`, `GET CMDDESC`: con meno di 4 token → `ERR INVALID-ARGUMENT` (`net_get()`: `numarg < 3`);
+    - `GET UPSDESC`, `GET NUMLOGINS`: con meno di 3 token → `ERR INVALID-ARGUMENT` (`net_get()`: `numarg < 2`). Non sono elencati nella spec, ma hanno lo stesso fallback (aggiunto con #35) e lo stesso criterio "il fallback sparisce": si allineano anche loro;
+    - sottocomando `LIST` sconosciuto → `ERR INVALID-ARGUMENT` invece di `ERR UNKNOWN-COMMAND`. Il `ERR UNKNOWN-COMMAND` finale per un comando di primo livello sconosciuto resta, come in upsd;
+    - `LIST UPS` e `GET TRACKING` non cambiano: non chiedono il nome nemmeno in upstream.
+  - **Perché è sicuro per i client.** Il fallback serviva solo con il nome vuoto: aionut (`list_ups`, `line.split(" ", 2)`) leggeva il nome `""` e inviava `LIST VAR \n`; go.nut (nut_exporter) costruisce i comandi dal nome letto da `LIST UPS`. Con il nome mai vuoto i client inviano sempre il nome, come con upsd. La nota di #35 su go.nut (un `ERR` a un `LIST` lo blocca fino al timeout) vale anche contro upsd e riguarda solo comandi senza nome, che con un nome valido non partono più.
+
+  ### Scelte e deviazioni
+
+  - `GET UPSDESC` / `GET NUMLOGINS` senza nome: allineati anche se la spec non li elenca (stesso fallback, stesso criterio).
+  - `isValidUpsName()` più rigida del form attuale (solo ASCII stampabile): il form viene allineato con `pattern="[!-~]+"`.
+  - Un nome salvato non vuoto ma non valido (impossibile dal form) non viene sostituito al caricamento: la spec chiede il default solo per nome mancante o vuoto.
+  - Cambiamento semantico di un test esistente, imposto dalla spec: in `test_list_client_terminates` la riga `LIST CLIENT` senza nome passa da `BEGIN/END LIST CLIENT testups` a `ERR INVALID-ARGUMENT`.
+  - Note di release (da preparare alla release): chi aveva il nome vuoto vede ora `ups`; un client configurato a mano senza nome deve usare `ups`; i comandi senza nome rispondono `ERR INVALID-ARGUMENT`.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity in `test/test_nut_server` (`pio test -e native` con il PATH mingw). `ConfigManager` e `WebConfigServer` non girano in nativo (`Preferences`, `WebServer`): la loro parte di logica passa dalle funzioni pure testate in nativo, il resto si verifica con la build e sulla scheda.
+
+  - **Regole del nome**: `normalizeUpsName()` (vuoto → `ups`, `eaton` invariato, `ups` invariato); `isValidUpsName()` (`ups`, `eaton`, `Back-UPS_1` validi; vuoto, `my ups`, tab, `città`, carattere 0x7F non validi).
+  - **Default nel server**: `begin()` con `ups_name` vuoto → `LIST UPS` risponde `UPS ups "ESP32-S3 UPS Bridge"` e `LIST VAR ups` funziona.
+  - **Comandi senza nome**: `LIST VAR`, `LIST RW`, `LIST CMD`, `LIST CLIENT`, `LIST ENUM battery.charge.low` (3 token), `LIST RANGE x`, `GET VAR battery.charge`, `GET TYPE x`, `GET DESC x`, `GET CMDDESC x`, `GET UPSDESC`, `GET NUMLOGINS` → `ERR INVALID-ARGUMENT`; `LIST FOO testups` → `ERR INVALID-ARGUMENT`; `LIST UPS` invariato.
+  - **Regressione**: tutti i test con il nome dell'UPS restano verdi senza modifiche; unica eccezione la riga senza nome di `test_list_client_terminates` (cambiamento imposto dalla spec).
+  - **E2E (Playwright, `e2e/nut_config.spec.ts`)**: la spec tocca solo il campo "UPS Name" di un form esistente (placeholder e pattern), quindi niente mockup e niente demo video. Scenari:
+    - il campo ha placeholder `ups`;
+    - con un nome con spazio o accento il browser blocca l'invio: nessuna POST a `/api/nut/config`;
+    - con `ups` il salvataggio procede come oggi ("Saved!").
+  - **Verifica manuale prima del merge** (criterio della spec): Home Assistant su una scheda appena configurata solo con il Wi-Fi, e su una scheda aggiornata via OTA che aveva `ups_name` vuoto in NVS; `nc` per `LIST UPS`, `LIST VAR` senza nome e `LIST FOO ups`.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`)
+  **Demo video:** non previsto (modifica di un campo di un form esistente)
+
+  | Scenario | Descrizione del flusso |
+  |---|---|
+  | Placeholder del nome | L'utente apre il tab NUT e vede il campo "UPS Name" con placeholder `ups` |
+  | Nome non valido | L'utente scrive `my ups` (poi `città`) e preme Save: il browser segnala il campo e non parte nessuna POST |
+  | Salvataggio valido | L'utente scrive `ups`, username e password, preme Save e vede "Saved!"; il corpo della POST contiene `ups_name: "ups"` |
+
+  _Piano generato via ARchetipo Planning — 2026-10-16_
+tasks:
+  - id: TASK-01
+    title: Regole del nome dell'UPS nel server NUT (default, normalizzazione, validazione) e default in begin()
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** funzioni pure per il nome dell'UPS, usate da server NUT, configurazione e server web.
+
+      **Da leggere:**
+      - `lib/NUTServer/src/NUTServer.h`: `NUTServerConfig`, sezione "Metodi di utilità" (`splitTokens`, `encodeValue`);
+      - `lib/NUTServer/src/NUTServer.cpp`: `NUTServer::begin()` e il commento di `encodeValue()` come modello.
+
+      **Modifiche:**
+      - `NUTServer.h`, accanto a `encodeValue()`:
+        - `static String defaultUpsName();` → `"ups"`;
+        - `static String normalizeUpsName(const String& name);` → `defaultUpsName()` se `name` è vuoto, altrimenti `name`;
+        - `static bool isValidUpsName(const String& name);` → true se non vuoto e ogni byte è in `0x21-0x7E`.
+        - Commento: il nome è una sezione di `ups.conf` in upstream e non è mai vuoto; con il nome vuoto aionut inviava `LIST VAR \n` (analisi di US-082).
+      - `NUTServer.cpp`: implementazioni; in `begin()` `_config.ups_name = normalizeUpsName(config.ups_name)` dopo la copia della configurazione.
+      - Niente variabili `static constexpr` di tipo stringa nella classe: la toolchain nativa è GCC 5.1 (C++11/14).
+
+      **Passi:** dichiarazioni; implementazioni; `begin()`; build.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server` verde senza modificare i test.
+
+      **Fatto quando:** le tre funzioni esistono e un server avviato con nome vuoto usa `ups`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — dichiarazioni
+      - lib/NUTServer/src/NUTServer.cpp — implementazioni e default in `begin()`
+
+      ## Criteri di Completamento
+      - [ ] `defaultUpsName()`, `normalizeUpsName()`, `isValidUpsName()` pure e statiche
+      - [ ] `begin()` non lascia mai il nome vuoto
+      - [ ] `test_nut_server` verde senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Rimozione del fallback senza nome dell'UPS e ERR INVALID-ARGUMENT come upsd
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i comandi senza nome dell'UPS e i sottocomandi `LIST` sconosciuti rispondono come `net_list()` / `net_get()` di upsd.
+
+      **Da leggere:**
+      - `nut_repo/server/netlist.c`, `net_list()`: controlli `numarg < 1/2/3` e `send_err(NUT_ERR_INVALID_ARGUMENT)` finale;
+      - `nut_repo/server/netget.c`, `net_get()`: `numarg < 1/2/3`;
+      - `lib/NUTServer/src/NUTServer.cpp`, `processCommand()`: rami `LIST` (`VAR` ~401, `RW` ~441, `CMD`/`CLIENT` ~470, `ENUM`/`RANGE` ~487, `else` ~538) e `GET` (`VAR` ~640, `DESC`/`CMDDESC`/`TYPE` ~693, `UPSDESC`/`NUMLOGINS` ~747).
+
+      **Modifiche in `NUTServer.cpp`:**
+      - `LIST VAR`, `LIST RW`, `LIST CMD`, `LIST CLIENT`: se `tokens.size() < 3` → `ERR INVALID-ARGUMENT`; altrimenti `upsName = tokens[2]`. Togliere ogni `upsName = _config.ups_name` di fallback.
+      - `LIST ENUM`, `LIST RANGE`: `tokens.size() < 4` → `ERR INVALID-ARGUMENT`; togliere il ramo `tokens.size() == 3`.
+      - `GET VAR`, `GET DESC`, `GET CMDDESC`, `GET TYPE`: `tokens.size() < 4` → `ERR INVALID-ARGUMENT`; togliere il ramo `tokens.size() == 3`.
+      - `GET UPSDESC`, `GET NUMLOGINS`: `tokens.size() < 3` → `ERR INVALID-ARGUMENT`.
+      - `else` finale del ramo `LIST`: `ERR INVALID-ARGUMENT` invece di `ERR UNKNOWN-COMMAND`, con il riferimento a `net_list()`.
+      - Non toccare `LIST UPS`, `GET TRACKING`, il `ERR UNKNOWN-COMMAND` dei comandi di primo livello e le risposte con il nome.
+      - Aggiornare i commenti che citano il fallback.
+
+      **Passi:** modifiche ramo per ramo; test della suite.
+
+      **Verifica:** `pio test -e native -f test_nut_server` (PATH mingw). Atteso: fallisce solo l'asserzione senza nome di `test_list_client_terminates`, che il TASK-03 aggiorna. Ogni altro fallimento è un blocco.
+
+      **Fatto quando:** nel server NUT non resta nessun `upsName = _config.ups_name` come fallback dei comandi.
+
+      **Blocchi:** se fallisce un test che usa il nome dell'UPS, fermarsi: le risposte con il nome non devono cambiare.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.cpp — controlli sul numero di token e risposta del `LIST` sconosciuto
+
+      ## Criteri di Completamento
+      - [ ] nessun fallback sul nome configurato nei comandi LIST/GET
+      - [ ] `LIST` sconosciuto → `ERR INVALID-ARGUMENT`
+      - [ ] risposte con il nome invariate
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi delle regole del nome e dei comandi senza nome dell'UPS
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare le regole del nome, il default del server e le risposte di upsd ai comandi senza nome.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp`: `setUp()` (configurazione con `ups_name` = `testups`), `test_list_client_terminates`, `test_encode_value` come modello, le due liste `RUN_TEST` (nativa e `ARDUINO`).
+
+      **Modifiche in `test/test_nut_server/test_main.cpp`:**
+      - `test_list_client_terminates`: l'asserzione su `LIST CLIENT` senza nome diventa `ERR INVALID-ARGUMENT`; aggiornare il commento ("Unknown UPS names still fall through…"). Cambiamento semantico imposto dalla spec US-082. La parte con `testups` resta invariata.
+      - `test_ups_name_rules`: `normalizeUpsName("")` = `ups`, `eaton` e `ups` invariati; `isValidUpsName` vero per `ups`, `eaton`, `Back-UPS_1`; falso per vuoto, `my ups`, `a\tb`, `citt\xc3\xa0`, `a\x7f`.
+      - `test_empty_ups_name_defaults_to_ups`: un `NUTServer` locale avviato con `ups_name` vuoto risponde a `LIST UPS` con `UPS ups "ESP32-S3 UPS Bridge"` e a `LIST VAR ups` con `BEGIN LIST VAR ups`. Seguire il modo in cui `setUp()` crea la configurazione e collega il mock.
+      - `test_commands_without_ups_name_are_invalid`: `LIST VAR`, `LIST RW`, `LIST CMD`, `LIST CLIENT`, `LIST ENUM input.sensitivity`, `LIST RANGE battery.charge.low`, `GET VAR battery.charge`, `GET TYPE battery.charge`, `GET DESC battery.charge`, `GET CMDDESC load.off`, `GET UPSDESC`, `GET NUMLOGINS` → `ERR INVALID-ARGUMENT\n`.
+      - `test_unknown_list_subcommand_is_invalid`: `LIST FOO testups` → `ERR INVALID-ARGUMENT\n`; `LIST UPS` invariato.
+      - Registrare i test in entrambe le liste `RUN_TEST`.
+
+      **Passi:** aggiornare il test esistente; scrivere e registrare i nuovi.
+
+      **Verifica:** `pio test -e native -f test_nut_server` verde.
+
+      **Fatto quando:** ogni comando senza nome e ogni regola del nome hanno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — test aggiornato e nuovi test
+
+      ## Criteri di Completamento
+      - [ ] regole del nome coperte, compresi spazi e non ASCII
+      - [ ] default `ups` del server verificato via `LIST UPS`
+      - [ ] tutti i comandi senza nome → `ERR INVALID-ARGUMENT`
+      - [ ] suite verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Default ups in ConfigManager, validazione in POST /api/nut/config e campo UPS Name della Web UI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il nome dell'UPS non viene mai salvato né caricato vuoto, e la Web UI e il server web accettano solo nomi validi.
+
+      **Da leggere:**
+      - `src/core/config_manager.cpp` (`begin()`, `save()`) e `include/core/config_manager.h`;
+      - `src/network/web_config_server.cpp`: `handleWifiConfig()` (~190-210) e `handleNutConfig()` (~220-255);
+      - `data/www/index.html`, campo `#nut-upsname` (~188-190);
+      - `scripts/embed_web.py`.
+
+      **Modifiche:**
+      - `config_manager.cpp`:
+        - `#include` dell'header del server NUT (come già fa `main.cpp` per `NUTServerConfig`);
+        - in `begin()`: `nut_config.ups_name = String(nut["ups_name"] | "")`, poi se è vuoto WARN `[CONFIG] Empty UPS name, using "ups"` e `normalizeUpsName()`. Commento: con ArduinoJson 7 `as<String>()` di una chiave assente dà `"null"`;
+        - in `save()`: `nut_config.ups_name = NUTServer::normalizeUpsName(nut_config.ups_name)` prima di serializzare.
+      - `web_config_server.cpp`, `handleNutConfig()`: se `doc["ups_name"]` è stringa e `!NUTServer::isValidUpsName(...)` → `server.send(400, "application/json", "{\"error\": \"Invalid UPS name\"}")` e `return`, prima di `setNutConfig()`; nessun riavvio.
+      - `data/www/index.html`: `placeholder="ups"`, `pattern="[!-~]+"`, title `Printable ASCII characters only, no spaces`.
+      - Eseguire `python scripts/embed_web.py` (rigenera `data/www/index_inlined.html` e `include/network/web_assets.h`).
+
+      **Passi:** configurazione; server web; HTML; embed; build.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok.
+
+      **Fatto quando:** nessun percorso di caricamento o salvataggio lascia `ups_name` vuoto e un nome non valido non viene salvato.
+
+      **Blocchi:** se il server NUT non è raggiungibile da `src/core` per le dipendenze di PlatformIO, spostare le tre funzioni in un header della stessa libreria senza dipendenze (per esempio `lib/NUTServer/src/UpsName.h`) e riportarlo.
+
+      ## File Coinvolti
+      - src/core/config_manager.cpp — default al caricamento e al salvataggio
+      - src/network/web_config_server.cpp — 400 per nome non valido
+      - data/www/index.html — placeholder e pattern
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] `ups_name` mancante o vuoto → `ups` al caricamento
+      - [ ] `save()` non scrive mai un nome vuoto (prima configurazione Wi-Fi compresa)
+      - [ ] `POST /api/nut/config` con nome non valido → 400, nulla salvato
+      - [ ] placeholder `ups`, pattern allineato, assets rigenerati
+      - [ ] build ok
+    ref: TASK-04
+  - id: TASK-05
+    title: Test E2E del campo UPS Name
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare in Playwright il placeholder, il blocco dei nomi non validi e il salvataggio valido.
+
+      **Da leggere:** `e2e/nut_config.spec.ts`, `e2e/support/webui.ts`, `playwright.config.ts`.
+
+      **Modifiche in `e2e/nut_config.spec.ts`:**
+      - il test esistente: aggiungere che il corpo della POST contiene `ups_name: 'eaton'` (il valore che già scrive);
+      - `UPS Name placeholder is ups`: il campo `#nut-upsname` ha `placeholder` `ups`;
+      - `invalid UPS names are blocked by the form`: con `my ups` e poi `città` (username e password compilati) il click su `#btn-save-nut` non produce nessuna POST a `/api/nut/config` (contatore delle richieste a 0) e `#nut-upsname` è `:invalid`;
+      - `the default name ups is saved`: con `ups` la POST parte con `ups_name: 'ups'` e il pulsante mostra "Saved!".
+
+      **Passi:** scrivere i test; eseguire lo spec e poi la suite completa.
+
+      **Verifica:** `npx playwright test e2e/nut_config.spec.ts`, poi `npx playwright test`.
+
+      **Fatto quando:** i tre scenari della tabella E2E passano e la suite completa è verde.
+
+      **Blocchi:** se un test e2e esistente fallisce per un motivo diverso dal campo UPS Name, fermarsi e riportarlo.
+
+      ## File Coinvolti
+      - e2e/nut_config.spec.ts — scenari del campo UPS Name
+
+      ## Criteri di Completamento
+      - [ ] placeholder verificato
+      - [ ] nessuna POST con nome non valido
+      - [ ] salvataggio con `ups` verificato
+      - [ ] suite Playwright verde
+    ref: TASK-05
+  - id: TASK-06
+    title: Regressione completa, build e verifica manuale con Home Assistant
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla si è rotto e preparare la verifica sull'hardware richiesta dalla spec prima del merge.
+
+      **Da leggere:** il piano (Strategia di Test, Scelte e deviazioni).
+
+      **Modifiche:** nessuna, salvo correzioni di regressioni trovate qui.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: tutte le suite verdi; riportare il numero di test. Un ERRORED transitorio su Windows va rilanciato da solo.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: build ok; riportare RAM e flash.
+      3. `npx playwright test`: suite verde.
+      4. `python scripts/embed_web.py` non produce differenze.
+      5. `grep -n "_config.ups_name;" lib/NUTServer/src/NUTServer.cpp`: nessun fallback rimasto nei rami dei comandi (restano solo i confronti e `LIST UPS`).
+      6. Checklist manuale da preparare per la review:
+         - scheda azzerata, configurata solo con il Wi-Fi dall'AP: `LIST UPS` con `nc` dà `UPS ups "ESP32-S3 UPS Bridge"`, la Web UI mostra `ups` nel campo UPS Name, Home Assistant aggiunge l'integrazione NUT e legge le variabili;
+         - scheda con `ups_name` vuoto già in NVS (firmware precedente, solo Wi-Fi configurato), aggiornata via OTA: al riavvio `LIST UPS` dà `ups` e l'integrazione Home Assistant esistente continua a funzionare;
+         - `nc`: `LIST VAR`, `GET VAR battery.charge` e `LIST FOO ups` danno `ERR INVALID-ARGUMENT`; `LIST VAR ups` funziona;
+         - `upsc ups@<ip>` funziona;
+         - salvare dal form NUT un nome con spazio è bloccato dal browser.
+
+      **Verifica:** output dei comandi riportato nella review.
+
+      **Fatto quando:** suite native ed e2e e build sono verdi e la checklist è pronta.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - nessun file nuovo; eventuali correzioni nei file dei task precedenti
+
+      ## Criteri di Completamento
+      - [ ] suite nativa completa verde
+      - [ ] suite Playwright verde
+      - [ ] build `esp32-s3-standard` ok
+      - [ ] checklist manuale pronta per la review
+    ref: TASK-06

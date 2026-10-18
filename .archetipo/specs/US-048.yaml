@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-048: Parsing Dinamico HID e Sistema a Quirks
 
@@ -34,3 +34,5 @@ history:
     at: "2026-08-15T20:10:00Z"
   - status: REVIEW
     at: "2026-08-15T20:17:00Z"
+  - status: DONE
+    at: "2026-10-09T13:29:59Z"

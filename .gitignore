@@ -4,6 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 .agents/mcp_config.json
+.claude/
 data/config.json.pwd
 docs/no-commit/
 docs/issues/
