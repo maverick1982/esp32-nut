@@ -14,6 +14,11 @@ public:
     void setup() override;
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
+    // DEFAULT_OFFDELAY_CPS / DEFAULT_ONDELAY_CPS of usbhid-ups.h: the CPS firmware rounds
+    // the delays down to multiples of 60 s, so 20 s would shut down at once
+    int32_t defaultOffDelay() const override { return 60; }
+    int32_t defaultOnDelay() const override { return 120; }
+
 protected:
     uint32_t quickPollMs() const override { return 0; }
     uint32_t fullPollMs() const override { return 30000; }

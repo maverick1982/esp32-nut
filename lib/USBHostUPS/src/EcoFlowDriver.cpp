@@ -92,9 +92,11 @@ void EcoFlowDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         } },
         // ecoflow-hid.c lists UPS.PowerSummary.DelayBeforeShutdown under
         // WITH_UNMAPPED_DATA_POINTS ("does not seem to work") and exposes no
-        // ups.delay.shutdown on these devices. GenericDriver maps it to both
-        // ups.delay.shutdown and ups.timer.shutdown, so undo that: only the Outlet
-        // value may survive, and the result must not depend on the decode order.
+        // ups.delay.shutdown on these devices. GenericDriver maps it to
+        // ups.timer.shutdown, so undo that: only the Outlet value may survive, and the
+        // result must not depend on the decode order. ups.delay.* is no longer written
+        // by any driver nor set by the host here (no shutdown commands, US-058): the
+        // removal is kept as a harmless guard.
         { "UPS.PowerSummary.DelayBeforeShutdown", [](EcoFlowDriver* drv, UPSData& d, double, const HIDUsageDef*) {
             d.remove("ups.delay.shutdown");
             if (drv->_outletShutdownSeen) d.set("ups.timer.shutdown", drv->_outletShutdownTimer);

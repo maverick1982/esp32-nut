@@ -331,10 +331,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             client.printf("BEGIN LIST %s %s\n", subcmd.c_str(), upsName.c_str());
             if (subcmd == "CMD" && _usb_ups) {
-                if (_usb_ups->supportsBeeperToggle() && _usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                    client.printf("CMD %s beeper.enable\n", upsName.c_str());
-                    client.printf("CMD %s beeper.disable\n", upsName.c_str());
-                    client.printf("CMD %s beeper.toggle\n", upsName.c_str());
+                // Commands the device supports, from its HID descriptor (US-056)
+                for (const auto* c : _usb_ups->getSupportedCommands()) {
+                    client.printf("CMD %s %s\n", upsName.c_str(), c->name);
                 }
             }
             client.printf("END LIST %s %s\n", subcmd.c_str(), upsName.c_str());
@@ -384,34 +383,19 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
 
-        if (cmdName == "beeper.enable") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                _usb_ups->setBeeper(true);
-                client.print("OK\n");
-            }
-            return;
-        } else if (cmdName == "beeper.disable") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                _usb_ups->setBeeper(false);
-                client.print("OK\n");
-            }
-            return;
-        } else if (cmdName == "beeper.toggle") {
-            if (!_usb_ups || !_usb_ups->supportsBeeperToggle() || !_usb_ups->getUPSData()->hasKey("ups.beeper.status")) {
-                client.print("ERR CMD-NOT-SUPPORTED\n");
-            } else {
-                // Read first: the data lock must not be held across setBeeper() (USBHostUPS lock order)
-                bool enabled = _usb_ups->getUPSData()->getBool("ups.beeper.status");
-                _usb_ups->setBeeper(!enabled);
-                client.print("OK\n");
-            }
+        if (!_usb_ups) {
+            client.print("ERR DRIVER-NOT-CONNECTED\n");
             return;
         }
-        client.print("ERR CMD-NOT-SUPPORTED\n");
+        // INSTCMD <ups> <cmd> [value]: the value is used by the delay commands only
+        const char* param = tokens.size() > 3 ? tokens[3].c_str() : nullptr;
+        switch (_usb_ups->executeCommand(cmdName.c_str(), param)) {
+        case CommandResult::OK:            client.print("OK\n"); break;
+        case CommandResult::NOT_SUPPORTED: client.print("ERR CMD-NOT-SUPPORTED\n"); break;
+        case CommandResult::NOT_CONNECTED: client.print("ERR DRIVER-NOT-CONNECTED\n"); break;
+        case CommandResult::FAILED:        client.print("ERR INSTCMD-FAILED\n"); break;
+        case CommandResult::INVALID_ARGUMENT: client.print("ERR INVALID-ARGUMENT\n"); break;
+        }
         return;
     }
 
@@ -504,10 +488,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("TYPE %s %s STRING:64\n", upsName.c_str(), varName.c_str());
             } else {
                 // DESC and CMDDESC share a shape. upsd answers "Unavailable"
-                // when no description database is installed; this bridge
-                // carries none for either variables or commands.
-                client.printf("%s %s %s \"Unavailable\"\n", subcmd.c_str(),
-                              upsName.c_str(), varName.c_str());
+                // when no description database is installed: the bridge carries
+                // none for variables, while known commands take their cmdvartab
+                // description from the command catalog.
+                const UPSCommandInfo* info = (subcmd == "CMDDESC") ? CommandCatalog::find(varName.c_str()) : nullptr;
+                client.printf("%s %s %s \"%s\"\n", subcmd.c_str(),
+                              upsName.c_str(), varName.c_str(),
+                              info ? info->description : "Unavailable");
             }
             return;
         }

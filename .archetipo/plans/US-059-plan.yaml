@@ -1,0 +1,266 @@
+schema: archetipo/plan/v2
+spec_code: US-059
+body: "---\ntype: plan\ntitle: \"US-059: Pagina UPS Commands nella Web UI — Piano di Implementazione\"\ndescription: \"Piano di Implementazione per US-059\"\ntags: [plan, implementation, US-059]\n---\n# US-059: Pagina \"UPS Commands\" nella Web UI — Piano di Implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-10-09\n\n---\n\n## Spec\n\n**Epic:** EP-003 — Server NUT\n**Priorità:** HIGH | **Punti:** 5\n\n**User Story**\nCome utente della Web UI, voglio una pagina dedicata con i 4 indicatori principali dell'UPS e l'elenco delle azioni che il mio UPS supporta, ognuna con un pulsante per eseguirla, in modo da lanciare un test batteria o gestire il beeper dal browser senza client NUT.\n\n**Criteri di Accettazione**\n- Voce \"UPS Commands\" seconda nel menu, titolo della pagina aggiornato, layout responsive.\n- I 4 box mostrano gli stessi valori della telemetria con la stessa frequenza, senza aumentare le richieste.\n- `GET /api/ups/commands` restituisce il catalogo (nome, descrizione, flag distruttivo); UPS non connesso o catalogo vuoto → \"No commands available\".\n- `POST /api/ups/command` esegue solo i comandi non distruttivi: distruttivo 403 (nulla inviato all'UPS), sconosciuto/non supportato 400, scrittura fallita 500; la pagina mostra l'esito.\n- I comandi distruttivi sono elencati con pulsante disabilitato e nota.\n- \"Last test result\" mostra `ups.test.result` quando presente, altrimenti è nascosto.\n- Il toggle del beeper nella pagina UPS Telemetry resta e funziona.\n\n---\n\n## Soluzione Tecnica\n\nIl backend aggiunge due endpoint sottili. La logica sta in funzioni pure di `WebApiJson`, testabili in nativo. Il frontend aggiunge un tab al bundle esistente e riusa il polling di `/api/ups-vars` della telemetria, così le richieste non aumentano. L'esecuzione passa da `IUSBHostUPS::executeCommand()` (US-057), quindi web e NUT hanno la stessa semantica.\n\n- **Backend (contratto JSON):**\n  - `GET /api/ups/commands` → `{\"connected\": bool, \"commands\": [{\"name\": \"test.battery.start.quick\", \"description\": \"Start a quick battery test\", \"destructive\": false}, ...]}`, nell'ordine di `getSupportedCommands()`. Con host nullo o disconnesso: `connected: false` e `commands` vuoto.\n  - `POST /api/ups/command` con body `{\"name\": \"...\"}`. Esiti:\n    - 200 `{\"success\": true}`\n    - 400 body non valido o `name` mancante (`{\"error\": \"Invalid request\"}`)\n    - 400 comando sconosciuto o non supportato dall'UPS (`{\"error\": \"Command not supported\"}`)\n    - 403 comando distruttivo (`{\"error\": \"Available via NUT only\"}`): il controllo avviene con `CommandCatalog::find()` **prima** di qualsiasi chiamata all'host, quindi nulla arriva all'UPS\n    - 503 UPS non connesso o host nullo (`{\"error\": \"UPS not connected\"}`)\n    - 500 scrittura fallita (`{\"error\": \"Command rejected by the UPS\"}`)\n  - Funzioni pure: `static String WebApiJson::generateUpsCommands(IUSBHostUPS*)` e `static int WebApiJson::runUpsCommand(IUSBHostUPS*, const String& body, String& response)`, che restituisce lo status HTTP. Gli handler in `WebConfigServer` si limitano a chiamarle e a fare `server.send`, come `handleUpsVars`.\n  - Tempi: la chiamata blocca il server web quanto `/api/beeper` oggi (attesa di `_op_mutex` più due control transfer).\n- **Frontend:** `data/www/index.html`, `data/www/bundle.css` e `data/www/bundle.js` sono i sorgenti. Dopo ogni modifica si esegue `python scripts/embed_web.py`, che rigenera `index_inlined.html` e `include/network/web_assets.h`.\n  - Tab `data-target=\"commands\"`, secondo nel `<nav class=\"tabs\">`, con l'icona `>_` del mockup e il testo \"UPS Commands\". Il titolo della pagina si aggiorna già dal testo del tab.\n  - Contenuto `#content-commands`, markup e classi da `docs/mockups/US-059/` (`index.html`, `commands.css`): 4 card con id con prefisso `cmd-` (`cmd-ups-status`, `cmd-ups-charge`, `cmd-bar-charge`, `cmd-ups-load`, `cmd-bar-load`, `cmd-ups-realpower`), riquadro `#cmd-test-result` (`#cmd-test-result-dot`, `#cmd-test-result-value`), lista `#cmd-list` con i gruppi `#cmd-group-actions` e `#cmd-group-power` (`.cmd-group.locked`), stato vuoto `#cmd-empty`. Le classi nuove di `commands.css` (`.test-result`, `.cmd-group*`, `.cmd-row`, `.cmd-name`, `.cmd-desc`, `.cmd-action`, `.cmd-result`, `.cmd-run`, `.cmd-spinner`, `.cmd-empty` e il blocco `@media (max-width: 768px)`) si aggiungono in fondo a `bundle.css`. Il selettore di stato del mockup e il suo JS simulato **non** vanno copiati.\n  - **Polling condiviso:** `fetchUpsVars` oggi esce se `#content-ups` non è attivo. Diventa attivo quando è attivo il tab `ups` **o** `commands`, con lo stesso intervallo di 2 s, avviato o fermato dal click sui tab. Il rendering delle 4 card si estrae in `renderMetrics(data, ids)`, chiamata per gli id della telemetria e per quelli `cmd-`. Una sola richiesta per ciclo, qualunque sia il tab attivo.\n  - **Last test result:** visibile solo se `data['ups.test.result']` esiste. Classe `running` con \"In progress\", `failed` con \"Done and error\" o \"Aborted\".\n  - **Lista comandi:** `GET /api/ups/commands` all'apertura del tab e quando cambia lo stato di connessione visto dal polling (`data._disconnected`). I comandi `destructive` vanno nel gruppo \"Power control\" con il pulsante `disabled`, `title` con la nota e nessun listener. Lista vuota → `#cmd-empty` \"No commands available\". Il DOM si crea con `textContent`, mai con `innerHTML` su testo che arriva dall'API.\n  - **Run:** il pulsante viene disabilitato con `.running` e lo spinner; poi `POST /api/ups/command`. L'esito va in `.cmd-result`: 200 \"Command sent\" (success); 400 \"Command not supported\"; 403 \"Available via NUT only\"; 500 \"Command rejected by the UPS\"; 503 \"UPS not connected\"; errore di rete \"Network error\" (tutti error). Il messaggio sparisce dopo circa 4 s e il pulsante si riabilita.\n  - Il toggle del beeper nella telemetria e `/api/beeper` restano invariati.\n- **Fuori scope:** abilitare i comandi distruttivi dal web (dopo l'autenticazione), storico dei comandi, riparazione degli e2e esistenti che puntano ancora ai vecchi `app.js` e `ups.css` (falliscono già su questo branch per motivi indipendenti da questa spec).\n\n---\n\n## Strategia di Test\n\nLa logica degli endpoint si testa in nativo (Unity) con il mock di `test_web_api`. La pagina si testa end-to-end con Playwright, servendo i file reali di `data/www` e simulando le API con `page.route`.\n\n- **Nativo (`test/test_web_api`):** `generateUpsCommands` con host nullo, disconnesso e con usage che producono comandi di test e distruttivi (verifica di nome, descrizione e flag). `runUpsCommand` per ogni esito: 200 con il valore scritto registrato dal mock, 400 body non JSON e senza `name`, 400 comando sconosciuto, 403 distruttivo senza nessuna scrittura, 503 disconnesso, 500 scrittura fallita.\n- **Regressione:** suite nativa completa e build `esp32-s3-standard`.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`playwright.config.ts`, `testDir: ./e2e`), da lanciare con `npx playwright test e2e/ups-commands.spec.ts`. Il nuovo spec serve `data/www/index.html`, `bundle.css` e `bundle.js` (route `**/bundle.css*`, `**/bundle.js*`) e simula `/api/config`, `/api/system-status`, `/api/ups-vars`, `/api/ups/commands` e `/api/ups/command`.\n**Video demo:** sì, la Dimostrazione descrive un incremento visibile (lo registrerà `archetipo-review`, non l'implementazione).\n\n| Scenario | Flusso utente |\n|---|---|\n| Navigazione e card | L'utente apre la UI, vede \"UPS Commands\" come seconda voce, la apre: il titolo diventa \"UPS Commands\", le 4 card mostrano stato, carica, carico e potenza dai dati simulati e si aggiornano al ciclo di polling successivo |\n| Test batteria | L'utente preme Run su `test.battery.start.quick`: il pulsante si disabilita, parte una POST con `{\"name\":\"test.battery.start.quick\"}`, compare \"Command sent\"; con `ups.test.result` = \"In progress\" il riquadro Last test result è visibile |\n| Comando rifiutato | La POST risponde 500: compare \"Command rejected by the UPS\" e il pulsante torna attivo |\n| Comandi distruttivi | `shutdown.return` è nel gruppo Power control, il pulsante è disabilitato e cliccarlo non genera nessuna POST |\n| Stato vuoto | `/api/ups/commands` restituisce `connected: false` e lista vuota: compare \"No commands available\"; senza `ups.test.result` il riquadro è nascosto |\n| Telemetria invariata | Tornando su UPS Telemetry, il toggle del beeper è visibile e abilitato con `ups.beeper.switchable` = true |\n| Mobile | Con viewport 375×812 la pagina non ha scroll orizzontale |\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono in `docs/mockups/US-059/`\n\n_Piano generato tramite ARchetipo Planning — 2026-10-09_\n"
+tasks:
+  - id: TASK-01
+    title: 'WebApiJson: generateUpsCommands() e runUpsCommand()'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la logica dei due endpoint in funzioni pure, testabili in nativo.
+
+      **Da leggere:** `lib/WebApi/src/WebApiJson.h/.cpp` (`generateUpsVars`), `lib/USBHostUPS/src/CommandCatalog.h` (`UPSCommandInfo`, `CommandResult`, `find`), `lib/USBHostUPS/src/IUSBHostUPS.h` (`getSupportedCommands`, `executeCommand`), la sezione "Soluzione Tecnica" del piano (contratto JSON e status).
+
+      **Passi:**
+      1. In `WebApiJson.h` dichiarare `static String generateUpsCommands(IUSBHostUPS* usb_ups);` e `static int runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response);`.
+      2. `generateUpsCommands`:
+         - con host nullo o `!isConnected()` → `{"connected":false,"commands":[]}`
+         - altrimenti `connected:true` e un oggetto `{name, description, destructive}` per ogni voce di `getSupportedCommands()`
+         - serializzazione come in `generateUpsVars`
+      3. `runUpsCommand`:
+         - deserializza `body` con ArduinoJson; se fallisce o `name` non è una stringa non vuota → 400 `{"error":"Invalid request"}`
+         - `CommandCatalog::find(name)`: nullptr → 400 `{"error":"Command not supported"}`; `destructive` → 403 `{"error":"Available via NUT only"}`, senza chiamare l'host
+         - host nullo → 503 `{"error":"UPS not connected"}`
+         - `executeCommand(name)`:
+           - OK → 200 `{"success":true}`
+           - NOT_SUPPORTED → 400 `Command not supported`
+           - NOT_CONNECTED → 503 `UPS not connected`
+           - FAILED → 500 `{"error":"Command rejected by the UPS"}`
+      4. Restituire lo status e scrivere il JSON in `response`.
+
+      **Verifica:** compila con i test di TASK-02.
+
+      **Blocchi:** l'ordine dei controlli è parte del contratto di sicurezza: il 403 arriva prima di qualsiasi chiamata all'host.
+
+      ## File Coinvolti
+      - `lib/WebApi/src/WebApiJson.h` — dichiarazioni
+      - `lib/WebApi/src/WebApiJson.cpp` — implementazione
+
+      ## Criteri di Completamento
+      - [ ] Le due funzioni seguono il contratto JSON e gli status del piano
+      - [ ] Un comando distruttivo non arriva mai a `executeCommand`
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi degli endpoint comandi
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire tutti gli esiti di `generateUpsCommands` e `runUpsCommand`.
+
+      **Da leggere:** `test/test_web_api/test_main.cpp` (`APIMockUSBHost`, struttura dei test e di `main`).
+
+      **Passi:**
+      1. Estendere `APIMockUSBHost` con `bool writeOk = true;`, `std::vector<std::pair<std::string,uint32_t>> writes;` e un override di `writeUsage` che registra e restituisce `writeOk`. Aggiungere un helper per un usage FEATURE (path e codice).
+      2. Test di `generateUpsCommands`:
+         - nullptr → `connected` false e lista vuota
+         - disconnesso → idem
+         - con `UPS.BatterySystem.Battery.Test` e `UPS.PowerSummary.DelayBeforeShutdown` → contiene `test.battery.start.quick` con `destructive` false e la descrizione "Start a quick battery test", e `load.off` con `destructive` true
+      3. Test di `runUpsCommand`:
+         - `{"name":"test.battery.start.quick"}` → 200 e scrittura con valore 1
+         - `not json` e `{}` → 400
+         - `{"name":"foo"}` → 400
+         - `{"name":"shutdown.return"}` → 403 e `writes` vuoto
+         - disconnesso → 503
+         - `writeOk=false` → 500
+         - nullptr → 503
+      4. Ripristinare lo stato del mock (`connected`, `usages`, `writes`, `writeOk`) all'inizio di ogni test o in `setUp`, così i test esistenti non cambiano.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api`
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `test/test_web_api/test_main.cpp` — mock esteso e nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi presenti e verdi
+      - [ ] Test preesistenti di `test_web_api` verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Route HTTP /api/ups/commands e /api/ups/command
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre gli endpoint nel server web.
+
+      **Da leggere:** `src/network/web_config_server.cpp` (registrazione delle route alle righe ~45-60, `handleUpsVars`, `handleBeeper`), `include/network/web_config_server.h`.
+
+      **Passi:**
+      1. Dichiarare `void handleUpsCommands();` e `void handleUpsCommand();` in `web_config_server.h`.
+      2. Registrare `server.on("/api/ups/commands", HTTP_GET, ...)` e `server.on("/api/ups/command", HTTP_POST, ...)` vicino a `/api/beeper`.
+      3. `handleUpsCommands`: `server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups));`.
+      4. `handleUpsCommand`: `String response; int status = WebApiJson::runUpsCommand(usb_ups, server.hasArg("plain") ? server.arg("plain") : String(), response); server.send(status, "application/json", response);`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `include/network/web_config_server.h` — dichiarazioni
+      - `src/network/web_config_server.cpp` — route e handler
+
+      ## Criteri di Completamento
+      - [ ] Le due route sono registrate e delegano a WebApiJson
+      - [ ] Build firmware ok
+    ref: TASK-03
+  - id: TASK-04
+    title: Markup e stili della pagina UPS Commands dal mockup
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiungere il tab e il contenuto statico della pagina, fedeli al mockup.
+
+      **Da leggere:** `docs/mockups/US-059/index.html` e `docs/mockups/US-059/commands.css` (fonte di verità per layout e classi), `data/www/index.html` (nav alle righe ~27-60 e `#content-ups` alle righe ~152-220).
+
+      **Passi:**
+      1. In `data/www/index.html` inserire nel `<nav class="tabs">`, subito dopo il tab `ups`, `<button class="tab" data-target="commands">` con l'SVG `>_` del mockup e il testo `UPS Commands`.
+      2. Subito dopo `#content-ups` aggiungere `<div class="tab-content" id="content-commands">` con il markup del mockup:
+         - panel e header
+         - le 4 card con id `cmd-ups-status`, `cmd-ups-charge`, `cmd-bar-charge`, `cmd-ups-load`, `cmd-bar-load`, `cmd-ups-realpower`
+         - il riquadro `#cmd-test-result`, nascosto di default, con `#cmd-test-result-dot` e `#cmd-test-result-value`
+         - `#cmd-list` con i contenitori dei gruppi `#cmd-group-actions` e `#cmd-group-power` (header, contatore, nota del gruppo power) e le righe vuote
+         - `#cmd-empty` nascosto
+         - **non** copiare le righe di esempio, il selettore di stato del mockup né `app.js` del mockup
+      3. Aggiungere in fondo a `data/www/bundle.css` le regole di `docs/mockups/US-059/commands.css`, escluse quelle del solo selettore di stato del mockup, con un commento `/* US-059: UPS Commands */`.
+      4. Eseguire `python scripts/embed_web.py`.
+
+      **Verifica:** aprendo `data/www/index.html` nel browser il tab compare secondo e il contenuto, anche se vuoto, si vede quando lo si attiva. Lo verifica l'e2e di TASK-06.
+
+      **Blocchi:** se `commands.css` dipende da variabili non presenti in `bundle.css`, usare i token esistenti più vicini e annotarlo.
+
+      ## File Coinvolti
+      - `data/www/index.html` — tab e contenuto
+      - `data/www/bundle.css` — stili della pagina
+      - `data/www/index_inlined.html`, `include/network/web_assets.h`, `include/network/.web_assets.hash` — rigenerati da embed_web.py
+
+      ## Criteri di Completamento
+      - [ ] Tab "UPS Commands" secondo nel menu, con l'icona del mockup
+      - [ ] Markup con gli id del piano e le classi del mockup
+      - [ ] Asset embedded rigenerati
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Logica JS: polling condiviso, card, test result, lista e Run'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere viva la pagina riusando il polling della telemetria.
+
+      **Da leggere:** `data/www/bundle.js` righe ~215-245 (tab), ~540-705 (`fetchUpsVars`, card, beeper, avvio e stop del polling); `docs/mockups/US-059/app.js` solo come riferimento per le interazioni (stati del pulsante, messaggi, timing).
+
+      **Passi:**
+      1. Estrarre il rendering delle 4 card da `fetchUpsVars` in `renderMetrics(data, ids)`, dove `ids` è un oggetto `{status, charge, barCharge, load, barLoad, realPower}`. Chiamarla con gli id della telemetria (comportamento invariato) e con quelli `cmd-`.
+      2. La guardia iniziale di `fetchUpsVars` diventa "attivo `#content-ups` oppure `#content-commands`". Avvio e stop dell'intervallo al click dei tab valgono per `ups` e per `commands`, e all'avvio se uno dei due è attivo. Resta una sola richiesta ogni 2 s.
+      3. In `fetchUpsVars` aggiornare `#cmd-test-result`: nascosto se `ups.test.result` manca; altrimenti testo in `#cmd-test-result-value`, classe `running` con "In progress", `failed` con "Done and error" o "Aborted".
+      4. `loadCommands()`: `fetch('/api/ups/commands')`, poi svuota e ricrea le righe dei due gruppi con `document.createElement` e `textContent` (mai `innerHTML` con dati dell'API). Ogni riga ha `data-cmd` e la struttura `.cmd-row`/`.cmd-name`/`.cmd-desc`/`.cmd-action` (`.cmd-result` + `button.btn.btn-outline.btn-sm.cmd-run`) del mockup. I comandi `destructive` vanno in `#cmd-group-power` con il pulsante `disabled`, `title="Available via NUT only until web authentication is implemented"` e nessun listener. Nascondere un gruppo vuoto e aggiornare i contatori. Lista vuota → mostrare `#cmd-empty` e nascondere `#cmd-list`.
+      5. Chiamare `loadCommands()` al click sul tab `commands`, all'avvio se è attivo, e in `fetchUpsVars` quando `!!data._disconnected` cambia rispetto al ciclo precedente.
+      6. Click su Run: pulsante `disabled` con `.running` e spinner, POST `/api/ups/command` con `Content-Type: application/json` e body `{"name": cmd}`. Messaggio in `.cmd-result`:
+         - 200 "Command sent" (success)
+         - 400 "Command not supported"
+         - 403 "Available via NUT only"
+         - 500 "Command rejected by the UPS"
+         - 503 "UPS not connected"
+         - eccezione "Network error"
+         - Tutti gli esiti diversi da 200 sono error. Riabilitare il pulsante e far sparire il messaggio dopo circa 4 s.
+      7. Non toccare la logica del toggle beeper né `/api/beeper`.
+      8. Eseguire `python scripts/embed_web.py`.
+
+      **Verifica:** l'e2e di TASK-06.
+
+      **Blocchi:** se l'estrazione di `renderMetrics` cambia ciò che appare nelle card della telemetria (per esempio 0 W contro `--`), mantenere la logica attuale riga per riga.
+
+      ## File Coinvolti
+      - `data/www/bundle.js` — polling condiviso, renderMetrics, test result, lista comandi, Run
+      - `data/www/index_inlined.html`, `include/network/web_assets.h`, `include/network/.web_assets.hash` — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Una sola richiesta `/api/ups-vars` per ciclo con uno qualsiasi dei due tab attivo
+      - [ ] Lista, stato vuoto e gruppi conformi al mockup
+      - [ ] Run mostra l'esito corretto per ogni status
+      - [ ] Nessun `innerHTML` con dati dell'API
+    ref: TASK-05
+  - id: TASK-06
+    title: E2E Playwright della pagina UPS Commands
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente della tabella E2E del piano.
+
+      **Da leggere:** `playwright.config.ts`, `e2e/ups-parameters.spec.ts` (schema `page.route` e `http://esp32.local/`). Attenzione: gli spec esistenti instradano i vecchi `app.js` e `ups.css`; il nuovo spec deve instradare `**/bundle.css*` e `**/bundle.js*` da `data/www/`.
+
+      **Passi:**
+      1. Creare `e2e/ups-commands.spec.ts`. Nel `beforeEach`:
+         - instradare `http://esp32.local/` → `data/www/index.html`, `**/bundle.css*`, `**/bundle.js*`, immagini vuote
+         - simulare `/api/config` → `{}` e `/api/system-status`
+         - `/api/ups-vars` con dati modificabili dal test
+         - `/api/ups/commands` con un catalogo che contiene `beeper.enable`, `test.battery.start.quick` (non distruttivi) e `shutdown.return` (distruttivo)
+         - `/api/ups/command` registra le richieste e risponde con lo status deciso dal test
+      2. Uno scenario per riga della tabella E2E del piano:
+         - navigazione e card con aggiornamento al polling successivo
+         - test batteria con la POST verificata e il riquadro test result
+         - rifiuto 500
+         - distruttivo senza POST
+         - stato vuoto
+         - toggle beeper della telemetria ancora visibile
+         - mobile 375×812 senza scroll orizzontale (`document.documentElement.scrollWidth <= window.innerWidth`)
+      3. Usare attese su locator (`expect(...).toHaveText`), non `waitForTimeout`, salvo il ciclo di polling, che si attende con `expect.poll` o con il timeout dell'expect.
+
+      **Verifica:** `npx playwright test e2e/ups-commands.spec.ts` (headless, senza video).
+
+      **Blocchi:** se `bundle.js` richiede altri asset per avviarsi, instradarli invece di modificare il bundle per il test.
+
+      ## File Coinvolti
+      - `e2e/ups-commands.spec.ts` — nuovo spec
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari della tabella E2E presenti e verdi
+      - [ ] Nessuna modifica agli spec e2e esistenti
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Regressione completa: suite nativa, build ed e2e della spec'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che nulla si è rotto e che gli asset embedded sono aggiornati.
+
+      **Passi:**
+      1. `python scripts/embed_web.py`, poi verificare con `git status` che `index_inlined.html` e `web_assets.h` siano coerenti con i sorgenti: un secondo run non deve produrre differenze.
+      2. Suite nativa completa (dopo il fix di beeper.mute erano 232 test).
+      3. Build del firmware.
+      4. `npx playwright test e2e/ups-commands.spec.ts`.
+      5. Riportare numeri ed esiti. Ricordare che gli altri spec e2e falliscono già per i vecchi nomi degli asset (fuori scope).
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+      - `npx playwright test e2e/ups-commands.spec.ts`
+
+      **Blocchi:** un test preesistente che fallisce si corregge nel codice, non nel test.
+
+      ## File Coinvolti
+      - nessun file nuovo; verifica dell'intera spec
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa con 0 failures
+      - [ ] Build `esp32-s3-standard` ok
+      - [ ] `e2e/ups-commands.spec.ts` verde
+      - [ ] Asset embedded allineati ai sorgenti
+    ref: TASK-07

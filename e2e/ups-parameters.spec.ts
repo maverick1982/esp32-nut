@@ -1,21 +1,10 @@
 import { test, expect } from '@playwright/test';
-import * as path from 'path';
+import { serveIndex } from './support/webui';
 
 test.describe('UPS Parameters UI', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('http://esp32.local/', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/index.html') });
-    });
-    await page.route('**/*shared.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/shared.css') });
-    });
-    await page.route('**/*app.js*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/app.js') });
-    });
-    await page.route('**/*ups.css*', async route => {
-      await route.fulfill({ path: path.resolve(process.cwd(), 'data/www/ups.css') });
-    });
-    // Mock the global config so app.js doesn't fail fetching it
+    await serveIndex(page);
+    // Mock the global config so bundle.js does not fail fetching it
     await page.route('**/api/config', async route => {
         await route.fulfill({ json: {} });
     });

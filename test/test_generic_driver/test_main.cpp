@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "GenericDriver.h"
+#include "OpenUPSDriver.h"
 #include "IUSBHostUPS.h"
 
 class MockGenericHost : public IUSBHostUPS {
@@ -18,7 +19,8 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
-    String getActiveBeeperPath() const override { return ""; }
+    String activeBeeper;
+    String getActiveBeeperPath() const override { return activeBeeper; }
     uint32_t getQuirks() const override { return 0; }
     bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t, uint8_t, uint16_t) override { return true; }
@@ -45,6 +47,7 @@ static void addUsage(const char* path, uint8_t report_id, uint8_t report_type,
 void setUp(void) {
     ups_data = UPSData();
     mockHost._usages.clear();
+    mockHost.activeBeeper = "";
     driver.setup();
 }
 
@@ -117,6 +120,86 @@ void test_battery_voltage_nominal_is_rounded(void) {
     TEST_ASSERT_EQUAL_STRING("24", ups_data.get("battery.voltage.nominal").c_str());
 }
 
+// ups.test.result follows test_read_info of usbhid-ups (US-057)
+void test_test_result_decoded(void) {
+    addUsage("UPS.BatterySystem.Battery.Test", 0x0A, 3, 0, 8);
+
+    uint8_t passed[] = { 0x0A, 1 };
+    driver.decodeReport(&mockHost, 0x0A, 3, passed, sizeof(passed), ups_data);
+    TEST_ASSERT_EQUAL_STRING("Done and passed", ups_data.get("ups.test.result").c_str());
+
+    uint8_t running[] = { 0x0A, 5 };
+    driver.decodeReport(&mockHost, 0x0A, 3, running, sizeof(running), ups_data);
+    TEST_ASSERT_EQUAL_STRING("In progress", ups_data.get("ups.test.result").c_str());
+
+    uint8_t none[] = { 0x0A, 6 };
+    driver.decodeReport(&mockHost, 0x0A, 3, none, sizeof(none), ups_data);
+    TEST_ASSERT_EQUAL_STRING("No test initiated", ups_data.get("ups.test.result").c_str());
+}
+
+void test_test_result_unknown_value_ignored(void) {
+    addUsage("UPS.BatterySystem.Battery.Test", 0x0A, 3, 0, 8);
+
+    uint8_t zero[] = { 0x0A, 0 };
+    driver.decodeReport(&mockHost, 0x0A, 3, zero, sizeof(zero), ups_data);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.test.result"));
+
+    uint8_t nine[] = { 0x0A, 9 };
+    driver.decodeReport(&mockHost, 0x0A, 3, nine, sizeof(nine), ups_data);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.test.result"));
+}
+
+// CyberPower reports the test on UPS.Output.Test
+void test_test_result_from_output_test(void) {
+    addUsage("UPS.Output.Test", 0x14, 3, 0, 8);
+
+    uint8_t passed[] = { 0x14, 1 };
+    driver.decodeReport(&mockHost, 0x14, 3, passed, sizeof(passed), ups_data);
+    TEST_ASSERT_EQUAL_STRING("Done and passed", ups_data.get("ups.test.result").c_str());
+}
+
+// AudibleAlarmControl 3 is "muted", as beeper_info in usbhid-ups
+void test_beeper_status_muted(void) {
+    addUsage("UPS.PowerSummary.AudibleAlarmControl", 0x18, 3, 0, 8);
+    mockHost.activeBeeper = "UPS.PowerSummary.AudibleAlarmControl";
+
+    uint8_t muted[] = { 0x18, 3 };
+    driver.decodeReport(&mockHost, 0x18, 3, muted, sizeof(muted), ups_data);
+    TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
+
+    uint8_t enabled[] = { 0x18, 2 };
+    driver.decodeReport(&mockHost, 0x18, 3, enabled, sizeof(enabled), ups_data);
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+
+    uint8_t disabled[] = { 0x18, 1 };
+    driver.decodeReport(&mockHost, 0x18, 3, disabled, sizeof(disabled), ups_data);
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+}
+
+// US-058, user decision of 2026-10-09: DelayBeforeShutdown is the timer (ups.timer.shutdown);
+// ups.delay.* are configured delays set by the host, never written by the driver
+void test_delay_before_shutdown_sets_only_timer(void) {
+    addUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x15, 3, 0, 16);
+    uint8_t report[] = { 0x15, 30, 0 };
+    driver.decodeReport(&mockHost, 0x15, 3, report, sizeof(report), ups_data);
+    TEST_ASSERT_EQUAL_STRING("30", ups_data.get("ups.timer.shutdown").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.start"));
+}
+
+// DEFAULT_OFFDELAY / DEFAULT_ONDELAY of usbhid-ups.h, shutdown commands offered
+void test_default_delays_and_shutdown_commands(void) {
+    TEST_ASSERT_EQUAL_INT32(20, driver.defaultOffDelay());
+    TEST_ASSERT_EQUAL_INT32(30, driver.defaultOnDelay());
+    TEST_ASSERT_TRUE(driver.shutdownCommandsSupported());
+}
+
+// US-058: openups-hid.c has no load/shutdown commands (no dedicated OpenUPS test env)
+void test_openups_no_shutdown_commands(void) {
+    OpenUPSDriver openups;
+    TEST_ASSERT_FALSE(openups.shutdownCommandsSupported());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -126,6 +209,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_fully_charged_and_discharged);
     RUN_TEST(test_unrelated_report_creates_no_extended_keys);
     RUN_TEST(test_battery_voltage_nominal_is_rounded);
+    RUN_TEST(test_test_result_decoded);
+    RUN_TEST(test_test_result_unknown_value_ignored);
+    RUN_TEST(test_test_result_from_output_test);
+    RUN_TEST(test_beeper_status_muted);
+    RUN_TEST(test_delay_before_shutdown_sets_only_timer);
+    RUN_TEST(test_default_delays_and_shutdown_commands);
+    RUN_TEST(test_openups_no_shutdown_commands);
     return UNITY_END();
 }
 #else
@@ -136,6 +226,13 @@ void setup() {
     RUN_TEST(test_fully_charged_and_discharged);
     RUN_TEST(test_unrelated_report_creates_no_extended_keys);
     RUN_TEST(test_battery_voltage_nominal_is_rounded);
+    RUN_TEST(test_test_result_decoded);
+    RUN_TEST(test_test_result_unknown_value_ignored);
+    RUN_TEST(test_test_result_from_output_test);
+    RUN_TEST(test_beeper_status_muted);
+    RUN_TEST(test_delay_before_shutdown_sets_only_timer);
+    RUN_TEST(test_default_delays_and_shutdown_commands);
+    RUN_TEST(test_openups_no_shutdown_commands);
     UNITY_END();
 }
 void loop() {}

@@ -279,6 +279,20 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     }
 }
 
+// ups.test.result text for a Test value, test_read_info in usbhid-ups.c; nullptr otherwise
+static const char* testResultText(int v) {
+    switch (v) {
+    case 1: return "Done and passed";
+    case 2: return "Done and warning";
+    case 3: return "Done and error";
+    case 4: return "Aborted";
+    case 5: return "In progress";
+    case 6: return "No test initiated";
+    case 7: return "Test scheduled";
+    default: return nullptr;
+    }
+}
+
 void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
     if (report_type == 1 || report_type == 3) {
@@ -423,22 +437,29 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
             if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
             if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
             else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2 || v == 3) { d.set("ups.beeper.status", "enabled"); } 
+            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
+            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
         } },
         
-        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.delay.shutdown", String((int)v)); d.set("ups.timer.shutdown", String((int)v)); } },
+        { "UPS.BatterySystem.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
+        { "UPS.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
+        { "UPS.Output.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
+        // Timer read from the device; ups.delay.* are the configured delays (US-058, applyDefaultDelays)
+        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.shutdown", String((int)v)); } },
         
         { "UPS.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
         { "UPS.Input.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },

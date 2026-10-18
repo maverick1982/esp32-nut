@@ -14,6 +14,9 @@ public:
     void setup() override;
     void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
+    // openups-hid.c has no load.* or shutdown.* commands
+    bool shutdownCommandsSupported() const override { return false; }
+
 private:
     UsageMapIndex<OpenUPSDriver> _map;
 };

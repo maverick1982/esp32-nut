@@ -50,6 +50,8 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/ups-vars", HTTP_GET, [this]() { handleUpsVars(); });
     server.on("/api/system-status", HTTP_GET, [this]() { handleSystemStatus(); });
     server.on("/api/beeper", HTTP_POST, [this]() { handleBeeper(); });
+    server.on("/api/ups/commands", HTTP_GET, [this]() { handleUpsCommands(); });
+    server.on("/api/ups/command", HTTP_POST, [this]() { handleUpsCommand(); });
     server.on("/api/usb/dump", HTTP_GET, [this]() {
         if (!usb_ups) {
             server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
@@ -82,6 +84,10 @@ void WebConfigServer::begin(bool isAPMode) {
             server.send(404, "text/plain", "Not found");
         }
     });
+
+    // Content-Type serve a handleUpsCommand (controllo anti-CSRF)
+    static const char* collectedHeaders[] = {"Content-Type"};
+    server.collectHeaders(collectedHeaders, 1);
 
     server.begin();
     AppLogger::log("INFO", "[WEB] Server started on port 80");
@@ -278,6 +284,26 @@ void WebConfigServer::handleBeeper() {
     }
     
     server.send(500, "application/json", "{\"error\": \"Failed to set beeper\"}");
+}
+
+// Catalogo dei comandi supportati dall'UPS (US-059)
+void WebConfigServer::handleUpsCommands() {
+    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups));
+}
+
+// Esegue un comando non distruttivo: la logica e gli status sono in WebApiJson::runUpsCommand
+void WebConfigServer::handleUpsCommand() {
+    // Solo application/json: una pagina di un'altra origine non può inviarlo
+    // senza preflight CORS, che il server non gestisce (niente CSRF con text/plain)
+    String contentType = server.header("Content-Type");
+    contentType.toLowerCase();
+    if (!contentType.startsWith("application/json")) {
+        server.send(415, "application/json", "{\"error\":\"Unsupported content type\"}");
+        return;
+    }
+    String response;
+    int status = WebApiJson::runUpsCommand(usb_ups, server.hasArg("plain") ? server.arg("plain") : String(), response);
+    server.send(status, "application/json", response);
 }
 
 void WebConfigServer::handleOTAPage() {

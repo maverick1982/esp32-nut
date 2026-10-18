@@ -1639,7 +1639,7 @@
         "input.voltage.nominal": "230",
         "battery.voltage": "13.76",
         "battery.charge.low": "10",
-        "ups.delay.shutdown": "-1",
+        "ups.delay.shutdown": "20",
         "ups.timer.shutdown": "-1",
         "ups.beeper.status": "disabled",
         "battery.date": "2001/09/25",

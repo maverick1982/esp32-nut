@@ -399,7 +399,9 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         }
         _driver->setup();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
+        _device_product = _ups_data.get("ups.model");
         _driver->formatDeviceStrings(_ups_data);
+        applyDefaultDelays();
     }
 
     _link.reset(millis());
@@ -489,6 +491,7 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     _is_ready_to_poll = false;
     _in_restart_pending = false;
     _ups_data = UPSData();
+    _device_product = "";
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
     _cached_reports.clear();
@@ -670,7 +673,9 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (_driver) {
         _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+        if (string_index == _iProduct) _device_product = _ups_data.get("ups.model");
         _driver->formatDeviceStrings(_ups_data);
+        applyDefaultDelays();
     }
     return true;
 }
@@ -711,16 +716,8 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     bool shared_report = true;
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        String active_path = getActiveBeeperPath();
-        if (active_path == "") return false;
-
-        const HIDUsageDef* found = nullptr;
-        for (const auto& u : _hid_parser.getUsages()) {
-            if (strcmp(u.path, active_path.c_str()) == 0) {
-                found = &u;
-                break;
-            }
-        }
+        // Feature/Output item of the active beeper path, as beeper.mute writes it
+        const HIDUsageDef* found = CommandCatalog::activeBeeper(_hid_parser.getUsages());
         if (!found) {
             return false;
         }
@@ -770,6 +767,86 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     return err == ESP_OK;
 }
 
+bool USBHostUPS::writeUsage(const HIDUsageDef& def, uint32_t value) {
+    // Same serialisation as setBeeper(): wait for the current poll step, never overlap it
+    if (!_op_mutex || xSemaphoreTake(_op_mutex, pdMS_TO_TICKS(OP_WAIT_MS)) != pdTRUE) return false;
+    bool ok = writeUsageLocked(def, value);
+    xSemaphoreGive(_op_mutex);
+    return ok;
+}
+
+bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
+    if (!_is_ready_to_poll || !_hid_dev_handle) return false;
+    if (!_link.canPoll(millis())) return false;
+
+    uint16_t expected_length = 0;
+    bool shared_report = true;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        expected_length = _hid_parser.getExpectedLength(def.report_id, HID_REPORT_TYPE_FEATURE);
+        shared_report = BeeperLogic::reportHasOtherFields(_hid_parser.getUsages(), def);
+    }
+    if (expected_length > sizeof(_request_buffer)) expected_length = sizeof(_request_buffer);
+
+    memset(_request_buffer, 0, sizeof(_request_buffer));
+    size_t fetched_len = expected_length;
+
+    // Read back the report to preserve its other fields (no application lock held, ADR 0008)
+    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, HID_REPORT_TYPE_FEATURE, def.report_id, _request_buffer, &fetched_len);
+    noteControlResult(err, millis());
+
+    bool fetched = (err == ESP_OK && fetched_len > 0);
+    if (!BeeperLogic::canWriteBack(shared_report, def, fetched, fetched_len)) {
+        // Writing zeros over the other fields could switch the load off (review C1)
+        log("WARN", "%s not written: report %u shares fields and could not be read back (%s)",
+            def.path, (unsigned)def.report_id, fetched ? "short answer" : esp_err_to_name(err));
+        return false;
+    }
+    if (!fetched) {
+        if (!_link.canPoll(millis())) return false; // pipe not answering, do not insist
+        // The report holds only this field: write it from scratch
+        fetched_len = expected_length;
+        if (def.report_id != 0) _request_buffer[0] = def.report_id;
+    }
+
+    fetched_len = BeeperLogic::writeField(def, value, _request_buffer, fetched_len);
+    if (fetched_len == 0) return false;
+
+    err = hid_class_request_set_report(_hid_dev_handle, HID_REPORT_TYPE_FEATURE, def.report_id, _request_buffer, fetched_len);
+    noteControlResult(err, millis());
+    if (err != ESP_OK) {
+        log("WARN", "%s = %u not written: %s", def.path, (unsigned)value, esp_err_to_name(err));
+    }
+    return err == ESP_OK;
+}
+
+CommandResult USBHostUPS::executeCommand(const char* name, const char* param) {
+    CommandResult r = IUSBHostUPS::executeCommand(name, param);
+    // "load.off.delay 30": the parameter is part of what was asked
+    String cmd = name ? name : "(null)";
+    if (param && *param) {
+        cmd += " ";
+        cmd += param;
+    }
+    const UPSCommandInfo* info = CommandCatalog::find(name);
+    const bool destructive = info && info->destructive;
+    switch (r) {
+    case CommandResult::OK:
+        // Commands that cut power to the load stay visible at WARN even when they succeed
+        if (name && strcmp(name, "shutdown.default") == 0) {
+            log("WARN", "Command %s: OK via %s", cmd.c_str(), _last_default_shutdown.c_str());
+        } else {
+            log(destructive ? "WARN" : "INFO", "Command %s: OK", cmd.c_str());
+        }
+        break;
+    case CommandResult::FAILED:           log("WARN", "Command %s: failed", cmd.c_str()); break;
+    case CommandResult::NOT_SUPPORTED:    log("WARN", "Command %s: not supported", cmd.c_str()); break;
+    case CommandResult::NOT_CONNECTED:    log("WARN", "Command %s: UPS not connected", cmd.c_str()); break;
+    case CommandResult::INVALID_ARGUMENT: log("WARN", "Command %s: invalid argument", cmd.c_str()); break;
+    }
+    return r;
+}
+
 bool USBHostUPS::isConnected() const {
     return _is_ready_to_poll;
 }
@@ -794,6 +871,28 @@ bool USBHostUPS::supportsBeeperToggle() const {
     return getActiveBeeperPath() != "";
 }
 
+bool USBHostUPS::shutdownCommandsSupported() const {
+    // Same lock as supportsBeeperToggle(): _driver is deleted under _mutex
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver ? _driver->shutdownCommandsSupported() : true;
+}
+
+void USBHostUPS::applyDefaultDelays() {
+    // ups.delay.* with NUT semantics: driver defaults set at connection, never read from
+    // the device (US-058). Right after formatDeviceStrings(); _mutex is recursive and
+    // the callers already hold it.
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_driver) return;
+    CommandCatalog::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
+                                       _driver->defaultOnDelay(), _driver->shutdownCommandsSupported());
+}
+
+std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {
+    // _hid_parser is replaced under _mutex when a device (re)connects
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return IUSBHostUPS::getSupportedCommands();
+}
+
 String USBHostUPS::dumpUSBDiagnostics() {
     JsonDocument doc;
 
@@ -803,7 +902,7 @@ String USBHostUPS::dumpUSBDiagnostics() {
         doc["vid"] = String(_vid, HEX);
         doc["pid"] = String(_pid, HEX);
         doc["manufacturer"] = _ups_data.get("ups.mfr");
-        doc["product"] = _ups_data.get("ups.model");
+        doc["product"] = _device_product.length() > 0 ? _device_product : _ups_data.get("ups.model");
         doc["serial_number"] = _ups_data.get("ups.serial");
 
         // Format hex string as a custom 10-items-per-line JSON Array

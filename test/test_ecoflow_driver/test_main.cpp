@@ -261,6 +261,11 @@ void test_ecoflow_battery_voltage_nominal_one_decimal(void) {
     TEST_ASSERT_EQUAL_STRING("13.6", ups_data.get("battery.voltage.nominal").c_str());
 }
 
+// US-058: ecoflow-hid.c leaves the shutdown commands commented out
+void test_ecoflow_no_shutdown_commands(void) {
+    TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -279,6 +284,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first);
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_powersummary_first);
     RUN_TEST(test_ecoflow_shutdown_timer_absent_without_outlet);
+    RUN_TEST(test_ecoflow_no_shutdown_commands);
     RUN_TEST(test_ecoflow_battery_voltage_nominal_one_decimal);
     return UNITY_END();
 }
@@ -299,6 +305,7 @@ void setup() {
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first);
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_powersummary_first);
     RUN_TEST(test_ecoflow_shutdown_timer_absent_without_outlet);
+    RUN_TEST(test_ecoflow_no_shutdown_commands);
     RUN_TEST(test_ecoflow_battery_voltage_nominal_one_decimal);
     UNITY_END();
 }

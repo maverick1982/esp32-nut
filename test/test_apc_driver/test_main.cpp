@@ -322,6 +322,43 @@ void test_apc_format_device_strings(void) {
     TEST_ASSERT_TRUE(APCDriver::isBackUpsBX(bx1500.get("ups.model")));
 }
 
+// US-058, user decision of 2026-10-09: the DelayBefore* fields are the timers
+// (ups.timer.*); ups.delay.* are configured delays the host sets, never the driver
+static void addDelayUsage(const char* path, uint8_t report_id) {
+    HIDUsageDef u;
+    u.report_id = report_id;
+    u.report_type = 3;
+    u.bit_offset = 0;
+    u.bit_size = 16;
+    strcpy(u.path, path);
+    u.found = true;
+    mockHost._usages.push_back(u);
+}
+
+void test_apc_delays_set_only_timers(void) {
+    addDelayUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x15);
+    addDelayUsage("UPS.APCGeneralCollection.APCDelayBeforeShutdown", 0x16);
+    addDelayUsage("UPS.APCGeneralCollection.APCDelayBeforeStartup", 0x17);
+
+    uint8_t r_ps[] = { 0x15, 30, 0 };
+    driver.decodeReport(&mockHost, 0x15, 3, r_ps, sizeof(r_ps), ups_data);
+    TEST_ASSERT_EQUAL_STRING("30", ups_data.get("ups.timer.shutdown").c_str());
+
+    uint8_t r_sd[] = { 0x16, 40, 0 };
+    driver.decodeReport(&mockHost, 0x16, 3, r_sd, sizeof(r_sd), ups_data);
+    TEST_ASSERT_EQUAL_STRING("40", ups_data.get("ups.timer.shutdown").c_str());
+
+    uint8_t r_st[] = { 0x17, 50, 0 };
+    driver.decodeReport(&mockHost, 0x17, 3, r_st, sizeof(r_st), ups_data);
+    TEST_ASSERT_EQUAL_STRING("50", ups_data.get("ups.timer.start").c_str());
+
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.start"));
+    TEST_ASSERT_TRUE(driver.shutdownCommandsSupported());
+    TEST_ASSERT_EQUAL_INT32(20, driver.defaultOffDelay());
+    TEST_ASSERT_EQUAL_INT32(30, driver.defaultOnDelay());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -334,6 +371,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
     RUN_TEST(test_apc_split_product_real_strings);
     RUN_TEST(test_apc_format_device_strings);
+    RUN_TEST(test_apc_delays_set_only_timers);
     return UNITY_END();
 }
 #else
@@ -347,6 +385,7 @@ void setup() {
     RUN_TEST(test_apc_battery_voltage_nominal_one_decimal);
     RUN_TEST(test_apc_split_product_real_strings);
     RUN_TEST(test_apc_format_device_strings);
+    RUN_TEST(test_apc_delays_set_only_timers);
     UNITY_END();
 }
 void loop() {}

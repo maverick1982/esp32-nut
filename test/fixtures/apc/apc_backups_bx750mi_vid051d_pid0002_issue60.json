@@ -1135,7 +1135,7 @@
         "ups.status.battery_low": "0",
         "battery.runtime": "2362",
         "battery.charge.low": "10",
-        "ups.delay.shutdown": "-1",
+        "ups.delay.shutdown": "20",
         "ups.timer.shutdown": "-1",
         "ups.beeper.status": "disabled",
         "battery.mfr.date": "2001/01/01",

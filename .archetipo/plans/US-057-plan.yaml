@@ -1,0 +1,388 @@
+schema: archetipo/plan/v2
+spec_code: US-057
+body: |
+  ---
+  type: plan
+  title: "US-057: Esecuzione via NUT dei comandi di test batteria e test pannello — Piano di Implementazione"
+  description: "Piano di Implementazione per US-057"
+  tags: [plan, implementation, US-057]
+  ---
+  # US-057: Esecuzione via NUT dei comandi di test batteria e test pannello — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-09
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come utente di Home Assistant o amministratore NUT, voglio avviare e fermare il test delle batterie e del pannello con `upscmd`, in modo da controllare periodicamente lo stato delle batterie, anche da un'automazione.
+
+  **Criteri di Accettazione**
+  - INSTCMD test.battery.start.quick/deep/stop e test.panel.start/stop scrivono il valore di usbhid-ups (Test: 1 = quick, 2 = deep, 3 = stop).
+  - Comando assente dal catalogo → `ERR CMD-NOT-SUPPORTED`; UPS non connesso → `ERR DRIVER-NOT-CONNECTED`; scrittura fallita o timeout → `ERR INSTCMD-FAILED`.
+  - Senza login, con autenticazione attiva → `ERR ACCESS-DENIED`.
+  - Il comando non blocca server NUT e polling oltre il timeout del control transfer; nome ed esito vanno nel log di sistema.
+  - I comandi beeper passano dallo stesso percorso di esecuzione senza regressioni.
+  - Test nativi: successo, non supportato, UPS disconnesso, scrittura fallita.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Un unico punto di esecuzione, `IUSBHostUPS::executeCommand(name)`, sostituisce i rami beeper scritti a mano in `NUTServer`. Per sapere cosa scrivere si usa il catalogo di US-056 (funzione pura e testabile). Per il come, la scrittura sul dispositivo riusa il read-modify-write sicuro già usato per il beeper.
+
+  - **Esito (contratto):** in `CommandCatalog.h`, `enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED };`. `NUTServer` lo traduce in `OK`, `ERR CMD-NOT-SUPPORTED`, `ERR DRIVER-NOT-CONNECTED`, `ERR INSTCMD-FAILED`. Cambio voluto: un beeper.* la cui scrittura fallisce oggi risponde `OK`, d'ora in poi `ERR INSTCMD-FAILED`.
+  - **Cosa scrivere (pura):** `bool CommandCatalog::resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value)`. Risolve solo i comandi di test:
+    - `test.battery.start.quick` = 1, `test.battery.start.deep` = 2, `test.battery.stop` = 3 (`test_write_info` di usbhid-ups), sul primo usage FEATURE tra `UPS.BatterySystem.Battery.Test`, `UPS.Battery.Test`, `UPS.Output.Test`, in quest'ordine.
+    - `test.panel.start` = 1, `test.panel.stop` = 0 (apc-hid.c), sull'usage FEATURE con codice 0xff860072.
+    - Restituisce false per beeper.* (percorso dedicato), per load.*/shutdown.* (US-058) e per i comandi sconosciuti.
+    - Va scelto l'usage FEATURE (report_type 3): diversi APC dichiarano `UPS.Battery.Test` sia INPUT sia FEATURE.
+  - **Logica di esecuzione (default in `IUSBHostUPS`, inline):**
+    1. `!isConnected()` → NOT_CONNECTED.
+    2. Comando assente da `getSupportedCommands()` → NOT_SUPPORTED.
+    3. `beeper.enable` / `beeper.disable` → `setBeeper(true/false)`. `beeper.toggle` legge `ups.beeper.status` con il lock dei dati, lo rilascia e chiama `setBeeper(!enabled)`. Esito OK o FAILED.
+    4. Altrimenti `resolveWrite` dentro un blocco `{ UPSDataLock lk = getUPSData(); ... }` che copia `HIDUsageDef` per valore. Se fallisce → NOT_SUPPORTED (succede per load.*/shutdown.* finché non c'è US-058).
+    5. Lock rilasciato, poi `writeUsage(def, value)` → OK o FAILED.
+    - L'ordine dei lock resta `_op_mutex` → `_mutex` (ADR 0008): non si tiene mai `_mutex` mentre si chiama `writeUsage` o `setBeeper`.
+  - **Scrittura sul dispositivo:** nuovo virtuale `virtual bool writeUsage(const HIDUsageDef& def, uint32_t value)`, con default `return false` così i mock non vanno toccati. `USBHostUPS` lo implementa come `setBeeper`:
+    - prende `_op_mutex` con `OP_WAIT_MS`
+    - controlla `_is_ready_to_poll`, `_hid_dev_handle` e `_link.canPoll()`
+    - legge con GET_REPORT il report FEATURE
+    - applica la regola `BeeperLogic::canWriteBack` (un report condiviso che non si riesce a rileggere non si scrive: gli zeri potrebbero valere DelayBeforeShutdown = 0)
+    - scrive il campo, fa SET_REPORT e chiama `noteControlResult`
+    - non tiene lock applicativi durante i transfer
+    - `setBeeperLocked` non cambia.
+  - **Codifica del campo:** si estrae da `BeeperLogic::manipulateBeeperBuffer` una funzione `static size_t writeField(const HIDUsageDef& def, uint32_t raw, uint8_t* buffer, size_t len)` (mascheratura, shift, allargamento del buffer). `manipulateBeeperBuffer` la richiama dopo `encodeBeeperValue`. È un refactor senza cambi di comportamento, coperto da `test_beeper_logic`.
+  - **Log:** `USBHostUPS::executeCommand` sovrascrive il default solo per scrivere nel log di sistema: `INFO "Command <name>: OK"`, `WARN "Command <name>: failed"` / `not supported` / `UPS not connected`. `NUTServer` non ha un logger proprio.
+  - **ups.test.result:** oggi nessun driver lo decodifica, ma serve alla Dimostrazione. Va aggiunto alla tabella di `GenericDriver::decodeReport` per i tre path Test con la `test_read_info` di usbhid-ups:
+    - 1 Done and passed
+    - 2 Done and warning
+    - 3 Done and error
+    - 4 Aborted
+    - 5 In progress
+    - 6 No test initiated
+    - 7 Test scheduled
+    - altri valori: chiave non impostata
+    - Tutti i driver delegano prima a `GenericDriver::decodeReport`. Test (0x58) è già tra gli usage dinamici sottoposti a polling.
+  - **Tempi:** il loopTask resta bloccato al più come oggi con il beeper: attesa di `_op_mutex` (`OP_WAIT_MS` = 4 s) più due control transfer (GET + SET, 1,5 s ciascuno). Non aggiungiamo attese nuove. Il polling non si sovrappone perché c'è `_op_mutex`.
+  - **Fuori scope:** load.* e shutdown.* (US-058), Web UI (US-059), endpoint HTTP.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi Unity (`pio test -e native`). La parte pura (risoluzione, codifica del campo, decodifica di test.result) ha test unitari. Il protocollo si verifica con il `MockUSBHost` di `test_nut_server`, che registra cosa viene scritto. La scrittura USB reale si verifica a mano sull'Eaton 5P o su un APC dei tester; l'Eaton 3S dell'utente non espone Test.
+
+  - **`test_command_catalog`:** valori e usage scelti da `resolveWrite` per ogni comando di test; preferenza per il FEATURE rispetto all'INPUT sullo stesso path; false per beeper, load/shutdown e nomi sconosciuti.
+  - **`test_beeper_logic`:** i test esistenti restano verdi dopo l'estrazione di `writeField`, più un caso diretto di `writeField` su campo a 2 bit non allineato.
+  - **`test_generic_driver`:** decodifica di `ups.test.result` per i valori 1, 5 e 6 e per un valore fuori tabella.
+  - **`test_nut_server`:**
+    - INSTCMD test.battery.start.quick → `OK`, con usage e valore registrati dal mock
+    - comando fuori catalogo → `ERR CMD-NOT-SUPPORTED`
+    - UPS disconnesso → `ERR DRIVER-NOT-CONNECTED`
+    - `writeUsage` che fallisce → `ERR INSTCMD-FAILED`
+    - senza login → `ERR ACCESS-DENIED`
+    - shutdown.return elencato ma non ancora eseguibile → `ERR CMD-NOT-SUPPORTED`
+    - beeper enable/disable/toggle invariati; beeper con `setBeeper` che fallisce → `ERR INSTCMD-FAILED`
+  - **Regressione:** suite nativa completa e build `esp32-s3-standard`.
+  - **Nessun test e2e:** la spec non ha UI.
+
+  ---
+
+  _Piano generato tramite ARchetipo Planning — 2026-10-09_
+tasks:
+  - id: TASK-01
+    title: CommandResult e resolveWrite() per i comandi di test in CommandCatalog.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** definire l'esito di un comando e la funzione pura che, per i comandi di test, sceglie l'usage da scrivere e il valore.
+
+      **Da leggere:** `lib/USBHostUPS/src/CommandCatalog.h` (struttura di `build()` e `hasFeature()`), la sezione "Soluzione Tecnica" del piano.
+
+      **Passi:**
+      1. Aggiungere `enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED };` dopo `UPSCommandInfo`.
+      2. Aggiungere un helper interno `findFeature(usages, paths, n_paths, codes, n_codes)` che restituisce il puntatore al primo usage FEATURE che corrisponde, scorrendo i path nell'ordine dato: per ogni path si cerca nel vettore, poi si passa ai codici. `hasFeature()` diventa `findFeature(...) != nullptr`, così le due funzioni non divergono.
+      3. Spostare le liste di path e codici (test, panel, shutdown, startup, reboot) in costanti a livello di namespace, usate sia da `build()` sia da `resolveWrite()`.
+      4. Implementare `inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value)`:
+         - test.battery.start.quick = 1, test.battery.start.deep = 2, test.battery.stop = 3, sull'usage Test trovato
+         - test.panel.start = 1, test.panel.stop = 0, su 0xff860072
+         - ogni altro nome, o usage non trovato → false
+      5. Commento con il riferimento a `test_write_info` (usbhid-ups.c) e ad apc-hid.c.
+
+      **Verifica:** compila con i test di TASK-02.
+
+      **Blocchi:** non cambiare l'output di `build()`: i test di US-056 (`test_command_catalog`, `test_record_replay`) devono restare verdi.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/CommandCatalog.h` — CommandResult, findFeature, resolveWrite
+
+      ## Criteri di Completamento
+      - [ ] `resolveWrite` restituisce usage e valore corretti per i 5 comandi di test
+      - [ ] `resolveWrite` restituisce false per beeper.*, load.*, shutdown.* e nomi sconosciuti
+      - [ ] `build()` invariato nel comportamento
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari di resolveWrite
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `CommandCatalog::resolveWrite`.
+
+      **Da leggere:** `test/test_command_catalog/test_main.cpp` (helper `mk()`).
+
+      **Passi:** aggiungere a `test/test_command_catalog/test_main.cpp`:
+      1. `UPS.BatterySystem.Battery.Test` FEATURE: quick → valore 1 e path giusto; deep → 2; stop → 3.
+      2. `UPS.Battery.Test` presente sia INPUT (report_id 10) sia FEATURE (report_id 20): `def.report_type == 3` e `def.report_id == 20`.
+      3. Usage 0xff860072 FEATURE: test.panel.start → 1, test.panel.stop → 0.
+      4. Descriptor senza Test: test.battery.start.quick → false.
+      5. beeper.enable, shutdown.return (con i delay presenti), `foo` e `nullptr` → false.
+      6. Registrare i nuovi test in `main()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog`
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `test/test_command_catalog/test_main.cpp` — nuovi casi per resolveWrite
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti e verdi, insieme ai 10 esistenti
+    ref: TASK-02
+  - id: TASK-03
+    title: Estrarre BeeperLogic::writeField senza cambiare il comportamento del beeper
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere riusabile la scrittura di un campo HID in un buffer di report.
+
+      **Da leggere:** `lib/USBHostUPS/src/BeeperLogic.h` (`manipulateBeeperBuffer`), `test/test_beeper_logic/test_main.cpp`.
+
+      **Passi:**
+      1. Aggiungere `static size_t writeField(const HIDUsageDef& def, uint32_t raw, uint8_t* buffer, size_t fetched_len)`, che contiene la parte attuale di `manipulateBeeperBuffer` dopo il calcolo di `val`: allargamento a `requiredLength` (max 256, altrimenti 0), maschera, shift e scrittura byte per byte. Restituisce la lunghezza da inviare, 0 se `buffer` è nullo o il campo è troppo grande.
+      2. Riscrivere `manipulateBeeperBuffer` come calcolo di `val` (come oggi, con `encodeBeeperValue`) seguito da `return writeField(*def, val, buffer, fetched_len);`.
+      3. Aggiungere in `test/test_beeper_logic/test_main.cpp` un caso diretto: campo di 2 bit con `bit_offset` 3, report_id 0, buffer 0xFF → solo quei 2 bit cambiano al valore scritto.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_beeper_logic`
+
+      **Blocchi:** se un test esistente di `test_beeper_logic` cambia esito, il refactor è sbagliato: correggere il codice, non il test.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/BeeperLogic.h` — writeField estratto
+      - `test/test_beeper_logic/test_main.cpp` — un nuovo caso
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test preesistenti di `test_beeper_logic` verdi senza modifiche
+      - [ ] Nuovo caso di `writeField` verde
+    ref: TASK-03
+  - id: TASK-04
+    title: executeCommand() e writeUsage() su IUSBHostUPS e USBHostUPS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** un unico punto di esecuzione dei comandi, con scrittura sicura sul dispositivo e log dell'esito.
+
+      **Da leggere:** `lib/USBHostUPS/src/IUSBHostUPS.h` (`getSupportedCommands`, `UPSDataLock`), `lib/USBHostUPS/src/USBHostUPS.h` (commento sul threading, `OP_WAIT_MS`, `setBeeperLocked`, `log`), `lib/USBHostUPS/src/USBHostUPS.cpp` righe ~695-770 (`setBeeper`/`setBeeperLocked`).
+
+      **Passi:**
+      1. In `IUSBHostUPS.h` aggiungere `virtual bool writeUsage(const HIDUsageDef& def, uint32_t value) { return false; }`.
+      2. In `IUSBHostUPS.h` aggiungere `virtual CommandResult executeCommand(const char* name)` inline, con la logica a 5 passi della sezione "Soluzione Tecnica". `name` nullo → NOT_SUPPORTED. Il confronto con `getSupportedCommands()` usa `strcmp`. Per `beeper.toggle` leggere `getUPSData()->getBool("ups.beeper.status")` in un'istruzione a sé, prima di `setBeeper`. `resolveWrite` va dentro `{ UPSDataLock lk = getUPSData(); ... }` e `def` si copia per valore.
+      3. In `USBHostUPS.h` dichiarare gli override `writeUsage` e `executeCommand`, più il privato `bool writeUsageLocked(const HIDUsageDef& def, uint32_t value); // _op_mutex held`.
+      4. In `USBHostUPS.cpp`:
+         - `writeUsage` prende `_op_mutex` con `OP_WAIT_MS` (come `setBeeper`), chiama `writeUsageLocked` e rilascia.
+         - `writeUsageLocked` segue `setBeeperLocked`:
+           - verifica `_is_ready_to_poll`, `_hid_dev_handle` e `_link.canPoll(millis())`
+           - sotto `_mutex` calcola `expected_length = _hid_parser.getExpectedLength(def.report_id, HID_REPORT_TYPE_FEATURE)` e `shared = BeeperLogic::reportHasOtherFields(...)`
+           - fa GET_REPORT FEATURE senza lock e chiama `noteControlResult`
+           - applica `BeeperLogic::canWriteBack`: se è false, log WARN e `return false`
+           - se il GET fallisce ma il report non è condiviso, procede come il beeper (buffer azzerato con report_id)
+           - `BeeperLogic::writeField(def, value, ...)`, poi SET_REPORT FEATURE e `noteControlResult`
+           - restituisce `err == ESP_OK`
+         - `executeCommand` chiama `IUSBHostUPS::executeCommand(name)` e logga: OK → `log("INFO", "Command %s: OK", name)`; FAILED → `WARN "Command %s: failed"`; NOT_SUPPORTED → `WARN "Command %s: not supported"`; NOT_CONNECTED → `WARN "Command %s: UPS not connected"`.
+      5. Nessun lock applicativo durante i control transfer. Ordine dei lock `_op_mutex` → `_mutex`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila. La suite nativa compila senza modifiche ai mock.
+
+      **Blocchi:** non toccare `setBeeper`/`setBeeperLocked` e non rendere puri i nuovi virtuali (romperebbe i mock dei test).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUSBHostUPS.h` — writeUsage (default false), executeCommand (logica)
+      - `lib/USBHostUPS/src/USBHostUPS.h` — dichiarazioni
+      - `lib/USBHostUPS/src/USBHostUPS.cpp` — writeUsage/writeUsageLocked, executeCommand con log
+
+      ## Criteri di Completamento
+      - [ ] executeCommand restituisce NOT_CONNECTED, NOT_SUPPORTED, OK, FAILED secondo la logica del piano
+      - [ ] writeUsageLocked rifiuta di scrivere un report condiviso non riletto
+      - [ ] Ogni esecuzione lascia una riga nel log di sistema
+      - [ ] Build firmware ok
+    ref: TASK-04
+  - id: TASK-05
+    title: INSTCMD del server NUT tramite executeCommand
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** sostituire i rami beeper scritti a mano di INSTCMD con l'esecuzione generica.
+
+      **Da leggere:** `lib/NUTServer/src/NUTServer.cpp`, ramo `if (cmd == "INSTCMD")` (righe ~365-415).
+
+      **Passi:**
+      1. Mantenere invariati: controllo `ERR ACCESS-DENIED`, `ERR INVALID-ARGUMENT` con meno di 3 token, `ERR UNKNOWN-UPS`.
+      2. Se `_usb_ups` è nullo → `ERR DRIVER-NOT-CONNECTED`.
+      3. Sostituire i blocchi beeper.enable/disable/toggle e il `ERR CMD-NOT-SUPPORTED` finale con uno `switch` su `_usb_ups->executeCommand(cmdName.c_str())`: OK → `OK`, NOT_SUPPORTED → `ERR CMD-NOT-SUPPORTED`, NOT_CONNECTED → `ERR DRIVER-NOT-CONNECTED`, FAILED → `ERR INSTCMD-FAILED`.
+      4. Ignorare un eventuale quarto token (valore): serve solo a US-058.
+
+      **Verifica:** build firmware ok. Comportamento verificato da TASK-07.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `lib/NUTServer/src/NUTServer.cpp` — ramo INSTCMD
+
+      ## Criteri di Completamento
+      - [ ] Nessun nome di comando scritto a mano nel ramo INSTCMD
+      - [ ] I quattro esiti sono tradotti nei codici NUT del piano
+    ref: TASK-05
+  - id: TASK-06
+    title: Decodifica di ups.test.result in GenericDriver
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre l'esito del test batteria, come fa usbhid-ups.
+
+      **Da leggere:** `lib/USBHostUPS/src/GenericDriver.cpp`, tabella `mappings` in `decodeReport` (righe ~289-450); `nut_repo/drivers/usbhid-ups.c` (`test_read_info`, riga ~501).
+
+      **Passi:**
+      1. Aggiungere una funzione statica `testResultText(int v)` che restituisce il testo di `test_read_info`: 1 Done and passed, 2 Done and warning, 3 Done and error, 4 Aborted, 5 In progress, 6 No test initiated, 7 Test scheduled. Altri valori → nullptr.
+      2. Aggiungere tre voci alla tabella, per `UPS.BatterySystem.Battery.Test`, `UPS.Battery.Test` e `UPS.Output.Test`. Ognuna imposta `ups.test.result` solo se `testResultText((int)v)` non è nullptr.
+      3. Non toccare i driver derivati: delegano già a `GenericDriver::decodeReport`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` resta verde (le fixture verificano solo le chiavi elencate).
+
+      **Blocchi:** se una fixture di replay fallisce per una chiave `ups.test.result` inattesa, fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/GenericDriver.cpp` — mapping ups.test.result
+
+      ## Criteri di Completamento
+      - [ ] `ups.test.result` decodificato dai tre path Test
+      - [ ] Valori fuori tabella non impostano la chiave
+      - [ ] `test_record_replay` verde
+    ref: TASK-06
+  - id: TASK-07
+    title: Test INSTCMD nel server NUT
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare tutti i casi dei criteri di accettazione a livello di protocollo.
+
+      **Da leggere:** `test/test_nut_server/test_main.cpp` (`MockUSBHost`, `setUp`, `test_instcmd_beeper`, `featureUsage`).
+
+      **Passi:**
+      1. Estendere `MockUSBHost`:
+         - `bool writeOk = true;`, `bool setBeeperOk = true;` e `std::vector<std::pair<std::string, uint32_t>> writes;`
+         - override `writeUsage(def, value)` che registra `{def.path, value}` e restituisce `writeOk`
+         - `setBeeper` restituisce `setBeeperOk`, senza cambiare lo stato quando è false
+         - reset di tutto in `setUp`
+      2. Nuovi test (con `server.setAuthenticated(0, true)` dove serve):
+         - usage `UPS.BatterySystem.Battery.Test` FEATURE + `INSTCMD testups test.battery.start.quick` → `OK\n`, `writes` = {"UPS.BatterySystem.Battery.Test", 1}
+         - `test.battery.stop` → valore 3
+         - `INSTCMD testups test.panel.start` senza usage panel → `ERR CMD-NOT-SUPPORTED\n`, nessuna scrittura
+         - `connected = false` → `ERR DRIVER-NOT-CONNECTED\n`
+         - `writeOk = false` → `ERR INSTCMD-FAILED\n`
+         - non autenticato con credenziali configurate → `ERR ACCESS-DENIED\n`, nessuna scrittura
+         - delay di shutdown e startup presenti + `INSTCMD testups shutdown.return` → `ERR CMD-NOT-SUPPORTED\n`, nessuna scrittura (US-058)
+         - beeper con `setBeeperOk = false` → `ERR INSTCMD-FAILED\n`
+         - `beeper.toggle` da enabled → beeperState false
+      3. `test_instcmd_beeper` e `test_beeper_hidden_when_not_controllable` devono restare verdi senza modifiche semantiche.
+      4. Registrare i test in entrambi i blocchi `RUN_TEST` (native e Arduino).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server`
+
+      **Blocchi:** se l'autenticazione del server di test non è attiva di default, usare lo stesso schema dei test di autenticazione esistenti.
+
+      ## File Coinvolti
+      - `test/test_nut_server/test_main.cpp` — mock esteso e nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti e verdi
+      - [ ] Test preesistenti di `test_nut_server` verdi
+    ref: TASK-07
+  - id: TASK-08
+    title: Test della decodifica di ups.test.result
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire la nuova mappatura di `GenericDriver`.
+
+      **Da leggere:** `test/test_generic_driver/test_main.cpp` (mock host e costruzione di usage e report).
+
+      **Passi:**
+      1. Con un usage FEATURE `UPS.BatterySystem.Battery.Test` (8 bit, report_id dedicato), decodificare report con valore 1, 5 e 6 → `ups.test.result` = "Done and passed", "In progress", "No test initiated".
+      2. Valore 0 o 9 su un `UPSData` nuovo → chiave assente.
+      3. Ripetere il valore 1 con il path `UPS.Output.Test` (caso CyberPower).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver`
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - `test/test_generic_driver/test_main.cpp` — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Casi presenti e verdi
+      - [ ] Test preesistenti verdi
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Regressione completa: suite nativa e build firmware'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il cambiamento non rompe nulla e che il firmware compila.
+
+      **Passi:**
+      1. Eseguire l'intera suite nativa: dopo US-056 erano 212 test.
+      2. Eseguire la build del firmware.
+      3. Riportare il numero di test e l'esito della build.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+
+      **Blocchi:** un test preesistente che fallisce si corregge nel codice, non nel test.
+
+      ## File Coinvolti
+      - nessun file nuovo; verifica dell'intera spec
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa con 0 failures
+      - [ ] Build `esp32-s3-standard` senza errori
+    ref: TASK-09
