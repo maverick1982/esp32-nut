@@ -1,0 +1,42 @@
+schema: archetipo/spec/v2
+code: US-088
+title: Le chiavi interne ups.status.* non sono variabili NUT in GET VAR, LIST ENUM/RANGE e SET VAR
+epic:
+  code: EP-003
+  title: Server NUT
+priority: LOW
+points: 1
+status: TODO
+body: |
+  #### US-088: Le chiavi interne ups.status.* non sono variabili NUT in GET VAR, LIST ENUM/RANGE e SET VAR
+
+  **Epic:** EP-003 | **Priorità:** LOW | **Punti:** 1 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come amministratore che interroga la scheda con upsc, upsrw o script NUT,
+  voglio che le chiavi interne da cui si compone `ups.status` non risultino variabili NUT,
+  in modo che il server risponda come `upsd`, che queste variabili non le ha, e che `GET VAR` sia coerente con `LIST VAR`.
+
+  **Dimostrazione**
+  Con `nc <ip> 3493` e un UPS collegato:
+  - `GET VAR ups ups.status.charging` risponde `ERR VAR-NOT-SUPPORTED`. Oggi restituisce il valore interno, per esempio `"0"`;
+  - `LIST ENUM ups ups.status.ac_present`, `LIST RANGE ups ups.status.ac_present` e `SET VAR ups ups.status.battery_low 1` rispondono `ERR VAR-NOT-SUPPORTED`;
+  - `GET VAR ups ups.status` continua a restituire lo stato, per esempio `"OL"`, e `LIST VAR` è identico a oggi.
+
+  **Criteri di Accettazione**
+  - [ ] `GET VAR`, `LIST ENUM`, `LIST RANGE` e `SET VAR` trattano ogni chiave `ups.status.<qualcosa>` di `UPSData` come una variabile inesistente: `ERR VAR-NOT-SUPPORTED`, come `get_var()`, `list_enum()`/`list_range()` e `set_var()` di upstream.
+  - [ ] Il confronto non distingue maiuscole e minuscole: per esempio `UPS.Status.Charging` è rifiutata allo stesso modo.
+  - [ ] `ups.status`, `device.type`, gli alias `device.*` e le altre variabili di `UPSData` si comportano come oggi.
+  - [ ] `LIST VAR` resta invariato: salta già le chiavi `ups.status.*`.
+  - [ ] Il rifiuto di `SET VAR` resta registrato nel System Log come gli altri rifiuti.
+  - [ ] I test nativi di `test_nut_server` coprono `GET VAR`, `LIST ENUM`, `LIST RANGE` e `SET VAR` su una chiave `ups.status.*`, e `GET VAR ups.status` come regressione.
+
+  **Assunzioni**
+  - **Origine:** analisi del piano di US-081 (2026-10-19). I comandi interessati passano tutti da `NUTServer::isVarPresent()` (`lib/NUTServer/src/NUTServer.cpp`).
+  - **Riferimenti:** `nut_repo/server/netget.c` (`get_var`), `nut_repo/server/netlist.c` (`list_enum`, `list_range`), `nut_repo/server/netset.c` (`set_var`).
+  - **Fuori ambito:** le chiavi interne restano visibili nella Web UI e nelle API JSON (`/api/ups-vars`), che non fanno parte del protocollo NUT.
+  - **Ordine con US-081:** nessuna dipendenza, ma toccano la stessa funzione. Va implementata dopo US-081, o nello stesso branch, per evitare conflitti.
+history:
+  - status: TODO
+    at: "2026-10-19T14:40:47Z"

@@ -850,15 +850,16 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
                 return;
             }
+            // get_var() of upsd: the lookup ignores case, the reply repeats the name as sent (US-081)
             const char* alias = deviceAliasSource(varNameLower);
             if (varNameLower == "ups.status") {
-                client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
             } else if (varNameLower == "device.type") {
-                client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
+                client.printf("VAR %s %s \"ups\"\n", upsName.c_str(), varName.c_str());
             } else if (alias && data->hasKey(alias)) {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), encodeValue(data->get(alias).c_str()).c_str());
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(alias).c_str()).c_str());
             } else {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varNameLower.c_str(), encodeValue(data->get(varNameLower).c_str()).c_str());
+                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(varNameLower).c_str()).c_str());
             }
             return;
         }

@@ -387,6 +387,44 @@ void test_device_aliases(void) {
     TEST_ASSERT_TRUE(out.find("VAR testups ups.model \"Back-UPS BX750MI\"\n") != std::string::npos);
 }
 
+// US-081: get_var() of upsd finds the variable ignoring case (state_tree_find(),
+// strcasecmp) and repeats the name as the client sent it
+void test_get_var_echoes_client_var_name(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data.set("battery.charge", "100");
+    mockHost.data.set("ups.model", "Back-UPS BX750MI");
+    mockHost.statusString = "OL";
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Battery.Charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Battery.Charge \"100\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Model");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Device.Model \"Back-UPS BX750MI\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups UPS.Status");
+    TEST_ASSERT_EQUAL_STRING("VAR testups UPS.Status \"OL\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Type");
+    TEST_ASSERT_EQUAL_STRING("VAR testups Device.Type \"ups\"\n", printer.getOutput().c_str());
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR TestUPS Battery.Charge");
+    TEST_ASSERT_EQUAL_STRING("VAR TestUPS Battery.Charge \"100\"\n", printer.getOutput().c_str());
+
+    // Lower case: unchanged
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups battery.charge");
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"100\"\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups No.Such.Var");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+    // Alias without its source (no ups.serial)
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups Device.Serial");
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", printer.getOutput().c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 void test_list_client_terminates(void) {
     // LIST CLIENT <ups> must be answered with a BEGIN/END pair. A bare "ERR" is what
@@ -1955,6 +1993,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
+    RUN_TEST(test_get_var_echoes_client_var_name);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
@@ -2052,6 +2091,7 @@ void setup() {
     RUN_TEST(test_data_stale);
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
+    RUN_TEST(test_get_var_echoes_client_var_name);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);

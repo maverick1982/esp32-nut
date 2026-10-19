@@ -1,0 +1,173 @@
+schema: archetipo/plan/v2
+spec_code: US-081
+body: |-
+  ---
+  type: plan
+  title: "US-081: GET VAR ripete il nome della variabile come l'ha scritto il client, come upsd — Piano di Implementazione"
+  description: "Piano di Implementazione per US-081"
+  tags: [plan, implementation, US-081]
+  ---
+  # US-081: GET VAR ripete il nome della variabile come l'ha scritto il client, come upsd — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-19
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** LOW | **Punti:** 1
+  **Bloccato da:** -
+
+  **User Story**
+  Come amministratore che usa upsc, script o client NUT,
+  voglio che `GET VAR` ripeta il nome della variabile esattamente come l'ho scritto, come fa upsd,
+  in modo che i client che confrontano la risposta con la richiesta funzionino senza eccezioni.
+
+  **Criteri di Accettazione**
+  - [ ] La riga `VAR` di `GET VAR` contiene il nome della variabile come l'ha inviato il client, per ogni variabile: dati UPS, alias `device.*`, `ups.status`, `device.type`.
+  - [ ] La ricerca resta indipendente da maiuscole e minuscole, come `state_tree_find()` di upstream (`strcasecmp`): il valore restituito non cambia.
+  - [ ] Il nome dell'UPS resta ripetuto come l'ha scritto il client, come oggi.
+  - [ ] Con nomi in minuscolo l'uscita è identica a oggi.
+  - [ ] I test nativi di `test_nut_server` coprono un nome con maiuscole per una variabile normale, un alias `device.*`, `ups.status` e `device.type`.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  In upstream (`nut_repo/server/netget.c:231-264`, `get_var()`), il server cerca la variabile nell'albero di stato in modo case-insensitive tramite `sstate_getinfo(ups, var)` → `state_tree_find()` (`strcasecmp` in `nut_repo/common/state.c:724-742`), ma nella risposta `sendback(client, "VAR %s %s \"%s\"\n", upsname, var, val)` stampa direttamente l'argomento `var` così come inviato dal client. Nel nostro `NUTServer::processCommand()` (`lib/NUTServer/src/NUTServer.cpp:846-862`), la ricerca converte già `varName` in minuscolo (`varNameLower`), ma i quattro rami di stampa (`ups.status`, `device.type`, alias `device.*` e variabili di `UPSData`) emettono il nome fisso in minuscolo o `varNameLower.c_str()` invece di `varName.c_str()`.
+
+  - **Allineamento di `GET VAR` (`lib/NUTServer/src/NUTServer.cpp:853-862`)**:
+    - Il lookup di presenza (`isVarPresent(data.get(), varNameLower)`), la risoluzione degli alias (`deviceAliasSource(varNameLower)`), il controllo dei casi speciali (`varNameLower == "ups.status"`, `varNameLower == "device.type"`) e la lettura del valore da `UPSData` (`data->get(varNameLower)`) continuano a usare `varNameLower`, mantenendo l'indipendenza da maiuscole e minuscole perché tutte le chiavi in `UPSData` e `DEVICE_ALIASES` sono in minuscolo.
+    - Le quattro chiamate `client.printf` nel ramo `GET VAR` vengono aggiornate per stampare `varName.c_str()` come secondo parametro `%s` dopo `upsName.c_str()`:
+      - `ups.status`: `client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());`
+      - `device.type`: `client.printf("VAR %s %s \"ups\"\n", upsName.c_str(), varName.c_str());`
+      - alias `device.*`: `client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(alias).c_str()).c_str());`
+      - variabile `UPSData`: `client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(varNameLower).c_str()).c_str());`
+  - **Comandi già conformi (nessuna modifica)**:
+    - `GET TYPE`, `GET DESC`, `GET CMDDESC` (`lib/NUTServer/src/NUTServer.cpp:883-912`) e `LIST ENUM` / `LIST RANGE` (`lib/NUTServer/src/NUTServer.cpp:693-705`) stampano già `varName.c_str()`.
+    - `LIST VAR` e `LIST RW` elencano i nomi canonici dal dizionario (`tree_dump` di `netlist.c` stampa `node->var`), quindi restano in minuscolo.
+  - **Conformità ADR (`docs/adr/README.md`)**:
+    - Il lavoro rispetta pienamente **ADR 0003** (*Faithfully Mirror Official NUT Drivers and Subdrivers Behavior*, applicato anche alla fedeltà protocollare di `upsd` verso `nut_repo/server/netget.c` e `nut_repo/common/state.c`) e non tocca né viola gli altri ADR accettati (ADR 0001–0009), né richiede l'introduzione di un nuovo ADR. L'ADR 0003 riguarda i driver: qui lo si applica per analogia al comportamento di `upsd`, come per US-080 e US-082.
+
+  ---
+
+  ## Strategia di Test
+
+  Test unitari nativi Unity nella suite `test/test_nut_server` (`~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server`, con la toolchain MinGW nel `PATH`), più una prova di mutazione al posto del passo *Red*: il test viene scritto dopo l'implementazione (TASK-02 dipende da TASK-01). Non sono previsti test E2E né mockup poiché la modifica riguarda esclusivamente la formattazione della risposta TCP `GET VAR` del server NUT e non tocca la Web UI né le API HTTP/JSON.
+
+  - **Test unitario dedicato `test_get_var_echoes_client_var_name` in `test/test_nut_server/test_main.cpp`**:
+    - Variabile normale in `UPSData`: `GET VAR testups Battery.Charge` → `VAR testups Battery.Charge "100"\n`.
+    - Alias `device.*`: `GET VAR testups Device.Model` (con `ups.model` valorizzato) → `VAR testups Device.Model "..."\n`.
+    - Stato speciale `ups.status`: `GET VAR testups UPS.Status` → `VAR testups UPS.Status "OL"\n`.
+    - Costante `device.type`: `GET VAR testups Device.Type` → `VAR testups Device.Type "ups"\n`.
+    - Combinazione con nome UPS con maiuscole: `GET VAR TestUPS Battery.Charge` → `VAR TestUPS Battery.Charge "100"\n`.
+    - Variabile non supportata con maiuscole: `GET VAR testups No.Such.Var` → `ERR VAR-NOT-SUPPORTED\n`.
+    - Alias senza sorgente: `GET VAR testups Device.Serial` senza `ups.serial` → `ERR VAR-NOT-SUPPORTED\n`.
+  - **Regressione**:
+    - Esecuzione dell'intera suite nativa e verifica che tutti i test con nomi in minuscolo (`test_get_var_compliance`, `test_device_aliases`, `test_var_replies_are_escaped`, ecc.) restino verdi senza alcuna modifica.
+    - Verifica di compilazione del firmware target (`esp32-s3-standard`).
+
+  ---
+
+  ## Fuori ambito
+
+  - Le chiavi interne `ups.status.*` di `UPSData` (per esempio `ups.status.charging`), che oggi `GET VAR` restituisce mentre `LIST VAR` le nasconde e `upsd` non le ha: spec separata (US-088).
+  - Deviazioni di `get_var()` non coperte: le variabili `server.*` (`get_var_server()`, che ignora il nome dell'UPS) e il prefisso `FSD` su `ups.status` quando lo spegnimento è stato forzato.
+
+  _Piano generato via ARchetipo Planning — 2026-10-19_
+tasks:
+  - id: TASK-01
+    title: Ripetizione del nome della variabile inviato dal client in GET VAR come get_var() di upsd
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Fare in modo che `GET VAR <ups> <varname>` ripeta nella riga `VAR <ups> <varname> "<val>"` esattamente la stringa `<varname>` inviata dal client (inclusa la capitalizzazione), mantenendo la ricerca case-insensitive su `varNameLower`, come `get_var()` in `nut_repo/server/netget.c`.
+
+      **Read:**
+      - `nut_repo/server/netget.c`, righe 231-264 (`get_var()`)
+      - `nut_repo/common/state.c`, righe 724-742 (`state_tree_find()`)
+      - `lib/NUTServer/src/NUTServer.cpp`, righe 817-864 (ramo `GET VAR` in `NUTServer::processCommand()`)
+
+      **Change:**
+      - `lib/NUTServer/src/NUTServer.cpp` (righe 853-863):
+        - Nel ramo `varNameLower == "ups.status"`, sostituire la costante `"VAR %s ups.status \"%s\"\n"` con `"VAR %s %s \"%s\"\n"` passando `upsName.c_str(), varName.c_str()`.
+        - Nel ramo `varNameLower == "device.type"`, sostituire `"VAR %s device.type \"ups\"\n"` con `"VAR %s %s \"ups\"\n"` passando `upsName.c_str(), varName.c_str()`.
+        - Nel ramo `alias && data->hasKey(alias)`, passare `varName.c_str()` al posto di `varNameLower.c_str()` nella stampa del nome della variabile, continuando a leggere il valore con `data->get(alias)`.
+        - Nel ramo `else`, passare `varName.c_str()` al posto di `varNameLower.c_str()` nella stampa del nome della variabile, continuando a leggere il valore con `data->get(varNameLower)`.
+        - Non modificare `LIST VAR`, `LIST RW`, `GET TYPE`, `GET DESC`, `GET CMDDESC` o `LIST ENUM`.
+
+      **Steps:**
+      1. Aggiornare le quattro istruzioni `client.printf` del blocco `GET VAR` in `lib/NUTServer/src/NUTServer.cpp`.
+      2. Compilare ed eseguire `test_nut_server` in ambiente `native` per verificare che tutti i test esistenti continuino a passare.
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server` (bash; `pio` non è nel PATH)
+
+      **Done:**
+      - Tutti i rami di `GET VAR` stampano `varName.c_str()` nella risposta `VAR` mentre usano `varNameLower` per la ricerca.
+
+      **Blockers:**
+      - Se un test esistente in `test_nut_server` fallisce, fermarsi e verificare se il test assumeva una normalizzazione in minuscolo non conforme a `upsd`.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.cpp — stampa di `varName.c_str()` nei quattro rami di `GET VAR`
+
+      ## Criteri di Completamento
+      - [ ] `GET VAR` stampa `varName.c_str()` per `ups.status`, `device.type`, alias `device.*` e variabili `UPSData`
+      - [ ] Il lookup resta case-insensitive tramite `varNameLower`
+      - [ ] I test esistenti di `test_nut_server` passano senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi in test_nut_server per GET VAR con nomi con maiuscole e verifica di regressione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Aggiungere un test unitario nativo in `test/test_nut_server/test_main.cpp` che verifichi che `GET VAR` ripeta il nome della variabile e dell'UPS come scritti dal client per variabili normali, alias `device.*`, `ups.status` e `device.type`, ed eseguire la suite completa e la build firmware.
+
+      **Read:**
+      - `test/test_nut_server/test_main.cpp`, righe 210-273 (`test_get_var_compliance`), righe 360-388 (`test_device_aliases`) e righe 1935-2130 (liste `RUN_TEST` per `native` e `ARDUINO`).
+
+      **Change:**
+      - `test/test_nut_server/test_main.cpp`:
+        - Aggiungere `test_get_var_echoes_client_var_name(void)` che imposta `battery.charge` = `"100"` e `ups.model` = `"Back-UPS BX750MI"` (con `statusString = "OL"`) e verifica:
+          - `GET VAR testups Battery.Charge` → `VAR testups Battery.Charge "100"\n`
+          - `GET VAR testups Device.Model` → `VAR testups Device.Model "Back-UPS BX750MI"\n`
+          - `GET VAR testups UPS.Status` → `VAR testups UPS.Status "OL"\n`
+          - `GET VAR testups Device.Type` → `VAR testups Device.Type "ups"\n`
+          - `GET VAR TestUPS Battery.Charge` → `VAR TestUPS Battery.Charge "100"\n`
+          - `GET VAR testups battery.charge` → `VAR testups battery.charge "100"\n`
+          - `GET VAR testups No.Such.Var` → `ERR VAR-NOT-SUPPORTED\n`
+          - `GET VAR testups Device.Serial` senza `ups.serial` nei dati → `ERR VAR-NOT-SUPPORTED\n` (alias senza sorgente)
+        - Registrare `RUN_TEST(test_get_var_echoes_client_var_name);` in entrambe le sezioni `main()` (`#ifndef ARDUINO`) e `setup()` (`#else`).
+
+      **Steps:**
+      1. Scrivere `test_get_var_echoes_client_var_name` e registrarlo nei due blocchi `RUN_TEST` di `test/test_nut_server/test_main.cpp`.
+      2. Prova di mutazione (TASK-01 è già applicato): rimettere temporaneamente `varNameLower.c_str()` in uno dei quattro rami e verificare che il test fallisca, poi ripristinare. Annotare l'esito nella review.
+      3. Eseguire l'intera suite nativa e la build `esp32-s3-standard` (comandi in Verify).
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (bash; `pio` non è nel PATH)
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+
+      **Done:**
+      - `test_get_var_echoes_client_var_name` è registrato e verde, l'intera suite nativa passa al 100% e la build `esp32-s3-standard` compila senza errori.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — aggiunta e registrazione di `test_get_var_echoes_client_var_name`
+
+      ## Criteri di Completamento
+      - [ ] `test_get_var_echoes_client_var_name` copre variabile normale (`Battery.Charge`), alias (`Device.Model`), `UPS.Status`, `Device.Type`, nome UPS con maiuscole (`TestUPS`), minuscolo (`battery.charge`), variabile inesistente (`No.Such.Var`) e alias senza sorgente (`Device.Serial`)
+      - [ ] Test registrato sia in `main()` sia in `setup()`
+      - [ ] Prova di mutazione eseguita: il test fallisce con la stampa in minuscolo
+      - [ ] Suite nativa completa verde
+      - [ ] Build `esp32-s3-standard` completata con successo
+    ref: TASK-02
