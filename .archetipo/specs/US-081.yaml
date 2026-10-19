@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: LOW
 points: 1
-status: REVIEW
+status: DONE
 body: |
   #### US-081: GET VAR ripete il nome della variabile come l'ha scritto il client, come upsd
 
@@ -45,3 +45,5 @@ history:
     at: "2026-10-19T14:44:48Z"
   - status: REVIEW
     at: "2026-10-19T14:58:06Z"
+  - status: DONE
+    at: "2026-10-19T15:19:07Z"

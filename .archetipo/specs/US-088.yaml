@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: LOW
 points: 1
-status: TODO
+status: DONE
 body: |
   #### US-088: Le chiavi interne ups.status.* non sono variabili NUT in GET VAR, LIST ENUM/RANGE e SET VAR
 
@@ -40,3 +40,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-19T14:40:47Z"
+  - status: PLANNED
+    at: "2026-10-19T15:04:52Z"
+  - status: IN PROGRESS
+    at: "2026-10-19T15:06:26Z"
+  - status: REVIEW
+    at: "2026-10-19T15:16:00Z"
+  - status: DONE
+    at: "2026-10-19T15:18:30Z"

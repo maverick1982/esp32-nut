@@ -1,0 +1,139 @@
+schema: archetipo/plan/v2
+spec_code: US-088
+body: |
+  ---
+  type: plan
+  title: "US-088: Le chiavi interne ups.status.* non sono variabili NUT in GET VAR, LIST ENUM/RANGE e SET VAR — Piano di implementazione"
+  description: "Piano di implementazione per US-088"
+  tags: [plan, implementation, US-088]
+  ---
+  # US-088: Le chiavi interne ups.status.* non sono variabili NUT in GET VAR, LIST ENUM/RANGE e SET VAR — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-19
+
+  ---
+
+  ## Soluzione tecnica
+
+  `GET VAR`, `LIST ENUM`, `LIST RANGE` e `SET VAR` decidono se una variabile esiste tramite `NUTServer::isVarPresent()` (`lib/NUTServer/src/NUTServer.cpp`), che oggi accetta qualunque chiave di `UPSData`, comprese le chiavi interne `ups.status.*` (per esempio `ups.status.charging`, scritta da `GenericDriver`) da cui `getUPSStatusString()` compone `ups.status`. In `upsd` queste variabili non esistono: `sstate_getinfo()` restituisce NULL e `get_var()`, `list_enum()`/`list_range()` e `set_var()` rispondono `ERR VAR-NOT-SUPPORTED`. La correzione rifiuta le chiavi interne in un solo punto.
+
+  - Nuovo helper statico `isInternalStatusKey(const String& keyLower)` in `NUTServer.cpp`, accanto a `deviceAliasSource()`: vero per ogni chiave che inizia con `ups.status.` (con il punto), quindi falso per `ups.status`.
+  - `isVarPresent()` restituisce `false` per le chiavi interne prima di cercarle in `UPSData`. Riceve già il nome in minuscolo, quindi anche `UPS.Status.Charging` è rifiutata.
+  - Il filtro di `LIST VAR` (`param.key.startsWith("ups.status.") && param.key != "ups.status"`) usa lo stesso helper. Le chiavi di `UPSData` sono in minuscolo, quindi l'uscita di `LIST VAR` non cambia.
+  - I quattro comandi non cambiano: rispondono già `ERR VAR-NOT-SUPPORTED` quando `isVarPresent()` è falso, e `SET VAR` passa da `rejectSet()`, che scrive la riga WARN nel System Log.
+  - Nessun cambio di interfaccia: `isVarPresent()` resta statico con la stessa firma. Nessun ADR coinvolto; l'ADR 0003 si applica per analogia al comportamento di `upsd`, come per US-080 e US-081.
+
+  ---
+
+  ## Strategia di test
+
+  Test unitari nativi Unity nella suite `test/test_nut_server`, con il mock `mockHost` e gli helper esistenti (`request()`, `setupSettable()`, `logLines`), più una prova di mutazione.
+
+  - `GET VAR testups ups.status.charging` e `GET VAR testups UPS.Status.Charging` con la chiave presente in `UPSData` → `ERR VAR-NOT-SUPPORTED\n`.
+  - `LIST ENUM testups ups.status.ac_present` e `LIST RANGE testups ups.status.ac_present` → `ERR VAR-NOT-SUPPORTED\n`.
+  - `SET VAR testups ups.status.battery_low 1` → `ERR VAR-NOT-SUPPORTED\n`, nessuna scrittura (`mockHost.sets` vuoto) e riga di log `WARN SET ups.status.battery_low "1" from admin: ERR VAR-NOT-SUPPORTED`.
+  - Regressioni: `GET VAR testups ups.status` → `VAR testups ups.status "OL"\n`; `LIST VAR` contiene ancora `ups.status` e non contiene `ups.status.charging`.
+  - Prova di mutazione: togliere temporaneamente il controllo da `isVarPresent()` e verificare che il nuovo test fallisca.
+  - Suite nativa completa e build `esp32-s3-standard`.
+
+  ---
+
+  ## Fuori ambito
+
+  - La Web UI e le API JSON (`/api/ups-vars`) continuano a mostrare le chiavi interne: non fanno parte del protocollo NUT.
+  - `GET TYPE` e `GET DESC` non controllano se la variabile esiste (allineamento con `upsd` da trattare a parte).
+
+  _Piano generato dal team ARchetipo._
+tasks:
+  - id: TASK-01
+    title: isVarPresent() rifiuta le chiavi interne ups.status.* con un helper condiviso da LIST VAR
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Fare in modo che `NUTServer::isVarPresent()` restituisca `false` per ogni chiave `ups.status.<qualcosa>`, così che `GET VAR`, `LIST ENUM`, `LIST RANGE` e `SET VAR` rispondano `ERR VAR-NOT-SUPPORTED` come `upsd`, e che il filtro di `LIST VAR` usi la stessa regola.
+
+      **Read:**
+      - `lib/NUTServer/src/NUTServer.cpp`: `deviceAliasSource()` (riga ~94), `isVarPresent()` (righe 172-178), filtro di `LIST VAR` (riga ~589).
+      - `nut_repo/server/netget.c` (`get_var`), `nut_repo/server/netlist.c` (`list_enum`, `list_range`), `nut_repo/server/netset.c` (`set_var`) per conferma del codice di errore.
+
+      **Change:**
+      - `lib/NUTServer/src/NUTServer.cpp`:
+        - Aggiungere dopo `deviceAliasSource()` un helper `static bool isInternalStatusKey(const String& keyLower)` che restituisce `keyLower.startsWith("ups.status.")`, con un commento di una riga: chiavi interne di `UPSData` da cui si compone `ups.status`, assenti in `upsd` (US-088).
+        - In `isVarPresent()`, come prima istruzione: `if (isInternalStatusKey(varNameLower)) return false;`. Aggiornare il commento sopra la funzione citando l'esclusione.
+        - Nel ciclo di `LIST VAR`, sostituire `if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;` con `if (isInternalStatusKey(param.key)) continue;`.
+        - Non modificare i rami di `GET VAR`, `LIST ENUM/RANGE`, `SET VAR`, `GET TYPE`, `GET DESC`.
+
+      **Steps:**
+      1. Aggiungere l'helper e usarlo in `isVarPresent()` e in `LIST VAR`.
+      2. Eseguire `test_nut_server` in ambiente `native`.
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server` (bash; `pio` non è nel PATH)
+
+      **Done:**
+      - `isVarPresent()` è falso per `ups.status.*` e vero come oggi per `ups.status`, `device.type`, alias `device.*` e altre chiavi; `LIST VAR` usa l'helper; i test esistenti passano.
+
+      **Blockers:**
+      - Se un test esistente si aspetta un valore da `GET VAR` o `SET VAR` su una chiave `ups.status.*`, fermarsi: il contratto cambia.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.cpp — helper `isInternalStatusKey()`, uso in `isVarPresent()` e nel filtro di `LIST VAR`
+
+      ## Criteri di Completamento
+      - [ ] `isInternalStatusKey()` aggiunto e usato in `isVarPresent()` e in `LIST VAR`
+      - [ ] `ups.status` resta presente (il prefisso include il punto)
+      - [ ] I test esistenti di `test_nut_server` passano senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi per le chiavi ups.status.* in GET VAR, LIST ENUM/RANGE e SET VAR, con regressioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Aggiungere in `test/test_nut_server/test_main.cpp` un test che verifichi il rifiuto delle chiavi interne `ups.status.*` nei quattro comandi, la riga di log di `SET VAR` e le regressioni su `ups.status` e `LIST VAR`; poi eseguire la suite completa e la build firmware.
+
+      **Read:**
+      - `test/test_nut_server/test_main.cpp`: `setUp()` (riga ~127), `setupSettable()` (riga ~1087), `request()`, `test_set_var_rejections_are_logged` (riga ~1466), `test_get_var_echoes_client_var_name` e le due liste `RUN_TEST` (`main()` sotto `#ifndef ARDUINO` e `setup()` sotto `#else`).
+
+      **Change:**
+      - `test/test_nut_server/test_main.cpp`:
+        - Aggiungere `test_internal_status_keys_are_not_variables(void)` che chiama `setupSettable()`, imposta `ups.status.charging` = `"0"`, `ups.status.ac_present` = `"1"`, `ups.status.battery_low` = `"0"` (con `statusString = "OL"`) e verifica:
+          - `GET VAR testups ups.status.charging` → `ERR VAR-NOT-SUPPORTED\n`
+          - `GET VAR testups UPS.Status.Charging` → `ERR VAR-NOT-SUPPORTED\n`
+          - `LIST ENUM testups ups.status.ac_present` → `ERR VAR-NOT-SUPPORTED\n`
+          - `LIST RANGE testups ups.status.ac_present` → `ERR VAR-NOT-SUPPORTED\n`
+          - `SET VAR testups ups.status.battery_low 1` → `ERR VAR-NOT-SUPPORTED\n`, `mockHost.sets` vuoto e ultima riga di `logLines` = `WARN SET ups.status.battery_low "1" from admin: ERR VAR-NOT-SUPPORTED`
+          - `GET VAR testups ups.status` → `VAR testups ups.status "OL"\n`
+          - `LIST VAR testups` contiene `VAR testups ups.status "OL"\n` e non contiene `ups.status.charging`
+        - Registrare `RUN_TEST(test_internal_status_keys_are_not_variables);` in entrambe le liste, dopo `test_get_var_echoes_client_var_name`.
+
+      **Steps:**
+      1. Scrivere e registrare il test.
+      2. Prova di mutazione (TASK-01 già applicato): togliere temporaneamente la riga `if (isInternalStatusKey(varNameLower)) return false;` da `isVarPresent()`, verificare che il test fallisca, poi ripristinare. Annotare l'esito nella review.
+      3. Eseguire la suite nativa completa e la build (comandi in Verify).
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (bash; `pio` non è nel PATH)
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+
+      **Done:**
+      - Il test è registrato e verde, la prova di mutazione lo fa fallire, la suite nativa passa al 100% e la build compila.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — aggiunta e registrazione di `test_internal_status_keys_are_not_variables`
+
+      ## Criteri di Completamento
+      - [ ] Il test copre `GET VAR` (minuscolo e maiuscole), `LIST ENUM`, `LIST RANGE` e `SET VAR` su chiavi `ups.status.*`
+      - [ ] Il test verifica la riga WARN del rifiuto di `SET VAR` e l'assenza di scritture
+      - [ ] Regressioni su `GET VAR ups.status` e `LIST VAR` incluse
+      - [ ] Test registrato sia in `main()` sia in `setup()`
+      - [ ] Prova di mutazione eseguita
+      - [ ] Suite nativa completa verde e build `esp32-s3-standard` riuscita
+    ref: TASK-02

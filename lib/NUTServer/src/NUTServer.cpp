@@ -98,6 +98,12 @@ static const char* deviceAliasSource(const String& var) {
     return nullptr;
 }
 
+// Internal UPSData keys ups.status is built from (ups.status.charging, ...): upsd has no
+// such variables (US-088)
+static bool isInternalStatusKey(const String& keyLower) {
+    return keyLower.startsWith("ups.status.");
+}
+
 // upsd looks variables up with strcasecmp (common/state.c)
 static const NutTable::RWVariable* findWritable(const std::vector<NutTable::RWVariable>& rw, const String& var) {
     for (const auto& v : rw) {
@@ -170,8 +176,10 @@ void NUTServer::log(const char* level, const char* fmt, ...) const {
 }
 
 // Variables GET VAR answers (sstate_getinfo() of upsd): the status, device.type, the
-// device.* aliases and the keys of UPSData. Shared by GET VAR, LIST ENUM/RANGE and SET VAR.
+// device.* aliases and the keys of UPSData but the internal ups.status.* ones. Shared by
+// GET VAR, LIST ENUM/RANGE and SET VAR.
 bool NUTServer::isVarPresent(const UPSData& data, const String& varNameLower) {
+    if (isInternalStatusKey(varNameLower)) return false;
     if (varNameLower == "ups.status" || varNameLower == "device.type") return true;
     const char* alias = deviceAliasSource(varNameLower);
     return (alias && data.hasKey(alias)) || data.hasKey(varNameLower);
@@ -586,7 +594,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                     }
                 }
                 for (const auto& param : data->getAll()) {
-                    if (param.key.startsWith("ups.status.") && param.key != "ups.status") continue;
+                    if (isInternalStatusKey(param.key)) continue;
                     client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), encodeValue(param.value.c_str()).c_str());
                 }
             }

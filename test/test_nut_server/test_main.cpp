@@ -1480,6 +1480,33 @@ void test_set_var_rejections_are_logged(void) {
     TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from -: ERR USERNAME-REQUIRED", logLines[3].c_str());
 }
 
+// US-088: ups.status is built from internal ups.status.* keys of UPSData, which upsd does
+// not have: sstate_getinfo() finds nothing, so VAR-NOT-SUPPORTED as for any unknown name
+void test_internal_status_keys_are_not_variables(void) {
+    setupSettable();
+    mockHost.data.set("ups.status.charging", "0");
+    mockHost.data.set("ups.status.ac_present", "1");
+    mockHost.data.set("ups.status.battery_low", "0");
+    mockHost.statusString = "OL";
+
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups ups.status.charging").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups UPS.Status.Charging").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "LIST ENUM testups ups.status.ac_present").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "LIST RANGE testups ups.status.ac_present").c_str());
+
+    logLines.clear();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "SET VAR testups ups.status.battery_low 1").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET ups.status.battery_low \"1\" from admin: ERR VAR-NOT-SUPPORTED", logLines[0].c_str());
+
+    // ups.status itself and LIST VAR are unchanged
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.status \"OL\"\n", request(0, "GET VAR testups ups.status").c_str());
+    std::string list = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(list.find("VAR testups ups.status \"OL\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(list.find("ups.status.") == std::string::npos);
+}
+
 // Ids built with the bit operations of nut_uuid_v4() on known random bytes
 void test_tracking_id_format(void) {
     NutTracking zeros([]() -> uint32_t { return 0; });
@@ -1994,6 +2021,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
     RUN_TEST(test_get_var_echoes_client_var_name);
+    RUN_TEST(test_internal_status_keys_are_not_variables);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
@@ -2092,6 +2120,7 @@ void setup() {
     RUN_TEST(test_disconnected_is_stale);
     RUN_TEST(test_device_aliases);
     RUN_TEST(test_get_var_echoes_client_var_name);
+    RUN_TEST(test_internal_status_keys_are_not_variables);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
