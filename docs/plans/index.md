@@ -15,3 +15,5 @@ Questa directory contiene i piani di migrazione, i task di sviluppo lunghi e il 
 - [Issue #47: crash dopo control transfer timeout](issue-47-usb-ctrl-timeout-crash.md)
 - [Review del layer USB ESP32 ↔ UPS](usb-layer-review.md)
 - [Aggiornamento della piattaforma a pioarduino 55.03.x (ESP-IDF 5.5)](platform-upgrade-idf55.md)
+- [Supporto agli UPS Q* (`nutdrv_qx`): analisi preliminare](nutdrv-qx-support.md)
+- [Supporto MQTT (stato UPS e log): analisi preliminare](mqtt-support.md)
