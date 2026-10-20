@@ -198,6 +198,17 @@ You can support the project via:
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/maverick1982)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/pasqualecuorpo)
 
+### 💻 Hardware donations: a development laptop
+
+The biggest bottleneck for this project right now is my development machine: an 11-year-old laptop where every build and test cycle takes more than 10 minutes. A faster machine would directly mean quicker fixes, more test builds for the community and more supported UPS models.
+
+If your company is retiring laptops, one of them could make a real difference here. Ideally:
+- **16+ GB of RAM**
+- **SSD** storage
+- **CPU no older than 5–6 years**
+
+It doesn't need to be new or perfect. If you can help, please write to **support [at] esp32-nut [dot] simplelogin [dot] com**.
+
 Thank you to everyone who supports this project! 🚀
 
 ## 📄 License

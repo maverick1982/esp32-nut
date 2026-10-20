@@ -198,6 +198,17 @@ Puoi supportare il progetto tramite:
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/maverick1982)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/pasqualecuorpo)
 
+### 💻 Donazioni hardware: un notebook per lo sviluppo
+
+Oggi il limite più grande del progetto è la mia macchina di sviluppo: un notebook di 11 anni su cui ogni ciclo di build e test richiede più di 10 minuti. Un computer più veloce vorrebbe dire correzioni più rapide, più build di test per la community e più modelli di UPS supportati.
+
+Se la tua azienda sta dismettendo dei notebook, uno di questi potrebbe fare una grande differenza. Idealmente:
+- **16+ GB di RAM**
+- disco **SSD**
+- **CPU di non più di 5-6 anni**
+
+Non serve che sia nuovo o perfetto. Se puoi aiutare, scrivi a **support [at] esp32-nut [dot] simplelogin [dot] com**.
+
 Grazie di cuore a chiunque decida di contribuire! 🚀
 
 ## 📄 Licenza
