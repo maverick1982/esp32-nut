@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: HIGH
 points: 5
-status: PLANNED
+status: REVIEW
 body: |
   #### US-089: Piattaforma ESP-IDF 5.5 (pioarduino 55.03.312-1) senza cambi di comportamento
 
@@ -39,3 +39,7 @@ history:
     at: "2026-10-21T16:16:13Z"
   - status: PLANNED
     at: "2026-10-21T16:30:15Z"
+  - status: IN PROGRESS
+    at: "2026-10-21T16:44:08Z"
+  - status: REVIEW
+    at: "2026-10-21T20:37:41Z"

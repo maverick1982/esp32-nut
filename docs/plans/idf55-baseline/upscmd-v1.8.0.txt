@@ -1,0 +1,14 @@
+Instant commands supported on UPS [eaton-3s-700]:
+
+beeper.enable - Enable the UPS beeper
+beeper.disable - Disable the UPS beeper
+beeper.toggle - Toggle the UPS beeper
+beeper.mute - Temporarily mute the UPS beeper
+load.off - Turn off the load immediately
+load.on - Turn on the load immediately
+load.off.delay - Turn off the load with a delay (seconds)
+load.on.delay - Turn on the load with a delay (seconds)
+shutdown.return - Turn off the load and return when power is back
+shutdown.stayoff - Turn off the load and remain off
+shutdown.stop - Stop a shutdown in progress
+shutdown.default - Run the driver-defined UPS shutdown sequence (as opposed to user-configured 'sdcommands')

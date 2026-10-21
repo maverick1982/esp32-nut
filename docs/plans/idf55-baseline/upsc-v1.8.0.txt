@@ -1,0 +1,32 @@
+Init SSL without certificate database
+ups.status: OL
+device.type: ups
+device.mfr: EATON
+device.model: Eaton 3S
+device.serial: Blank
+ups.mfr: EATON
+ups.model: Eaton 3S
+ups.delay.shutdown: 20
+ups.delay.start: 30
+ups.type: EatonDriver
+ups.serial: Blank
+ups.beeper.status: disabled
+outlet.desc: Main Outlet
+outlet.1.desc: PowerShare Outlet 1
+ups.load: 5
+ups.power.nominal: 700
+ups.realpower: 21
+input.frequency.nominal: 50
+output.frequency.nominal: 50
+input.voltage.nominal: 230
+outlet.1.switch: 1
+outlet.2.switch: 1
+input.transfer.high: 264
+input.transfer.low: 161
+output.voltage: 230.0
+ups.timer.shutdown: -1
+battery.charge: 100
+battery.runtime: 3360
+battery.charge.low: 20
+battery.type: PbAc
+output.voltage.nominal: 230
