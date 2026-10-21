@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Unify Sub-Driver Inheritance via GenericDriver
 
 * **ADR ID:** 0004
-* **Status:** Accepted
+* **Status:** Accepted (amended by [ADR 0010](0010-modular-architecture-and-board-profiles.md): the inheritance rule applies to the USB HID drivers)
 * **Date:** 2026-09-05
 * **Authors:** Antigravity / @maverick1982
 

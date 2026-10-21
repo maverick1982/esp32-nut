@@ -12,6 +12,7 @@ tags: [pdr, prodotto, sicurezza, web-ui, autenticazione]
 * **Autori:** @maverick1982, Claude
 * **Decisioni architetturali collegate:** [ADR 0009](../adr/0009-web-ui-authentication.md)
 * **Revisione:** 2026-10-16 (US-068): in AP i comandi di spegnimento non sono più bloccati (D7); in AP manuale con configurazione valida il server NUT resta attivo (D6).
+* **Revisione:** 2026-10-21 ([PDR 0002](0002-supporto-multi-scheda-esp32-p4-ethernet.md), D5): il recupero tramite AP (D6, D7) vale per le schede con Wi-Fi. Sulle schede senza Wi-Fi il doppio reset apre invece una finestra di recupero di pochi minuti, che non cancella le credenziali esistenti.
 
 ## Problema
 
