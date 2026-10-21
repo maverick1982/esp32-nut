@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-090
+title: Profili delle schede e livello di rete per capacità (ESP32-S3, comportamento invariato)
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: HIGH
+points: 5
+status: TODO
+body: |
+  #### US-090: Profili delle schede e livello di rete per capacità (ESP32-S3, comportamento invariato)
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-089
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio che pin e capacità della scheda stiano in un profilo e che la rete passi da un'interfaccia di link,
+  in modo che una nuova scheda o un nuovo tipo di link si aggiungano senza `#if` nel codice comune (ADR 0010).
+
+  **Dimostrazione**
+  La build S3 usa il profilo `esp32s3_devkit` e si comporta esattamente come prima. I test nativi verificano le decisioni di avvio (AP o rete, quale link) con un profilo con Wi-Fi e uno senza. Fuori da `board` e dagli adattatori di rete non resta nessun `#if` sulla scheda o sul chip.
+
+  **Criteri di Accettazione**
+  - [ ] Esistono un profilo di scheda (nome, Wi-Fi presente, Ethernet presente e relativa configurazione RMII o SPI, pin del LED e della sua alimentazione, porta USB, valori iniziali delle impostazioni) e il profilo `esp32s3_devkit`, scelto dall'ambiente PlatformIO.
+  - [ ] LED, porta USB host e ID del dispositivo leggono pin e valori dal profilo: nessun pin scritto direttamente nel codice che lo usa.
+  - [ ] La rete passa da un'interfaccia di link (avvio, ciclo, connesso, testo di stato, MAC). Il link Wi-Fi (STA e AP) si comporta come oggi, e un selettore garantisce un solo link attivo.
+  - [ ] AP e captive portal dipendono dalla capacità Wi-Fi del profilo e non da `#if`. La logica di decisione è in un'unità pura con test nativi per profili con e senza Wi-Fi.
+  - [ ] Le API di stato aggiungono il tipo di rete (`wifi`) senza cambiare i campi attuali; la Web UI dell'S3 è invariata.
+  - [ ] Regressione: test nativi, replay ed e2e verdi. Sull'S3 primo avvio in AP, doppio reset, timeout dell'AP e connessione STA funzionano come prima.
+
+  **Assunzioni**
+  - **Riferimento:** ADR 0010, §1-§3 e passo 2 della migrazione; PDR 0002, spec B.
+  - **Fuori ambito:** il link Ethernet reale e il profilo P4 (US-092); la scelta della modalità di rete nella Web UI (spec successiva).
+history:
+  - status: TODO
+    at: "2026-10-21T16:16:13Z"

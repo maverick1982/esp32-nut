@@ -1,0 +1,41 @@
+schema: archetipo/spec/v2
+code: US-089
+title: Piattaforma ESP-IDF 5.5 (pioarduino 55.03.312-1) senza cambi di comportamento
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: HIGH
+points: 5
+status: PLANNED
+body: |
+  #### US-089: Piattaforma ESP-IDF 5.5 (pioarduino 55.03.312-1) senza cambi di comportamento
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio compilare l'ESP32-S3 sulla piattaforma pioarduino 55.03.312-1 (ESP-IDF 5.5.5, Arduino 3.3.12),
+  in modo che S3 e P4 condividano un'unica piattaforma e sparisca l'assert USB che manda in loop di riavvii il Powercom (#36).
+
+  **Dimostrazione**
+  `pio run -e esp32-s3-standard` compila sulla nuova piattaforma. Test nativi, replay ed e2e sono verdi. Sull'Eaton 3S, `upsc` restituisce gli stessi valori della v1.8.0. È pronta una build di test per i tester.
+
+  **Criteri di Accettazione**
+  - [ ] `esp32-s3-standard` usa pioarduino `55.03.312-1`; `partitions.csv` è invariata e il firmware sta nello slot OTA.
+  - [ ] `USBHostUPS` registra il callback del filtro di enumerazione quando la piattaforma lo richiede (soluzione del fork #94); senza, nessun UPS si enumera.
+  - [ ] `hid_host.c` vendorizzato conserva tutte le deviazioni `[esp32-nut, ...]`. I vincoli dell'ADR 0008 sono riverificati sulla 5.5 e l'esito è annotato nel piano: EP0 non annullabile, `timeout_ms` non supportato, `usb_host_transfer_free()` con un trasferimento in volo, data toggle.
+  - [ ] Task WDT e core dump (`--wrap=esp_core_dump_write`) funzionano: un panic di prova lascia il core dump e riavvia.
+  - [ ] CI e release producono lo zip con lo stesso nome e la stessa struttura (bootloader, partizioni, `boot_app0.bin`, firmware).
+  - [ ] Regressione: test nativi, replay ed e2e invariati; `upsc` sull'Eaton 3S identico alla v1.8.0, a parte la versione del firmware.
+  - [ ] È pubblicata una build di test per i tester di Powercom (#36), CyberPower e APC. Il rilascio della versione attende i loro riscontri, fuori da questa spec.
+
+  **Assunzioni**
+  - **Riferimento:** `docs/plans/platform-upgrade-idf55.md`. Il fork #94 mostra che `hid_host.c` compila e funziona sulla 5.5 senza modifiche.
+  - **Fuori ambito:** reset della porta USB senza riavvio (`usb_host_lib_set_root_port_power`), `custom_sdkconfig`, qualsiasi refactoring.
+  - **Branch:** `feature/pdr-0002-multi-board` (PDR 0002, spec A).
+history:
+  - status: TODO
+    at: "2026-10-21T16:16:13Z"
+  - status: PLANNED
+    at: "2026-10-21T16:30:15Z"

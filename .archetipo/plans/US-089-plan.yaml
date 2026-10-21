@@ -1,0 +1,405 @@
+schema: archetipo/plan/v2
+spec_code: US-089
+body: |
+  ---
+  type: plan
+  title: "US-089: Piattaforma ESP-IDF 5.5 (pioarduino 55.03.312-1) senza cambi di comportamento — Piano di implementazione"
+  description: "Piano di implementazione per US-089"
+  tags: [plan, implementation, US-089]
+  ---
+  # US-089: Piattaforma ESP-IDF 5.5 (pioarduino 55.03.312-1) senza cambi di comportamento — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-21
+
+  ---
+
+  ## Soluzione tecnica
+
+  L'ambiente `esp32-s3-standard` passa da pioarduino `51.03.04` (ESP-IDF 5.1, Arduino 3.0.4) a `55.03.312-1` (ESP-IDF 5.5.5, Arduino 3.3.12), la stessa piattaforma usata dal fork ESP32-P4 di #94. È un cambio di sola piattaforma (ADR 0010, passo 1 della migrazione): nessun refactoring e nessuna funzionalità nuova, così una regressione si attribuisce alla piattaforma. La decisione è già nell'ADR 0010, quindi non serve un nuovo ADR; i risultati delle verifiche vanno in `docs/plans/platform-upgrade-idf55.md`.
+
+  - **`platformio.ini`:** cambia solo la riga `platform` di `[env:esp32-s3-standard]`. `partitions.csv`, flash mode DIO, `-Wl,--wrap=esp_core_dump_write`, `ARDUINO_LOOP_STACK_SIZE` e `lib_deps` restano uguali. L'ambiente `native` non dipende dalla piattaforma.
+  - **Filtro di enumerazione USB:** con IDF 5.5.5 il core Arduino abilita `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK`, e senza callback nessun dispositivo si enumera ("Root port reset failed", arduino-esp32 #12783). In `USBHostUPS::begin()` si assegna `host_config.enum_filter_cb` a una lambda che accetta ogni dispositivo, dentro `#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK`. È la soluzione del fork di rtadams89 (#94, commit ee1e319): il commit lo cita con `Co-authored-by`.
+  - **`hid_host.c` vendorizzato:** nessuna modifica attesa. Il fork lo compila e lo usa sulla 5.5 senza cambiamenti. Le deviazioni `[esp32-nut, ...]` restano tutte.
+  - **Vincoli dell'ADR 0008 sulla 5.5:** si rileggono i sorgenti di `components/usb` di ESP-IDF v5.5.5 (la versione del core, non la 5.5.2 installata in `framework-espidf`) per confermare: EP0 non annullabile da un client, `timeout_ms` degli URB non supportato, `usb_host_transfer_free()` senza controllo di trasferimento in volo, gestione del data toggle in `_pipe_cmd_clear` (review A3), fine dei transfer interrupt IN multi-pacchetto (review A4). L'esito va in una nuova sezione del piano IDF 5.5; se un vincolo è cambiato, ci si ferma e si discute prima di toccare `hid_host.c`.
+  - **API di Arduino 3.3:** il fork non ha mai compilato Wi-Fi, AP, `DNSServer` e NeoPixel sulla 3.3, perché sul P4 non ci sono. Gli errori o gli avvisi di compilazione si correggono con il minimo indispensabile, senza cambiare il comportamento.
+  - **Bootloader e OTA:** l'aggiornamento OTA da v1.8.0 lascia il bootloader 5.1 e scrive un'app 5.5. Va provato sull'Eaton 3S, insieme al flash completo (bootloader 5.5) e alla conservazione di NVS: `nutos` (Wi-Fi, NUT), `web_auth` (credenziali e sessioni), `nutrw` (variabili scritte con SET VAR), `boot_state`.
+  - **CI e release:** `release.yml` cerca `boot_app0.bin` con `find` e non dipende dalla versione della piattaforma; va solo verificato che il percorso esista anche nel nuovo pacchetto. Nome e struttura dello zip non cambiano.
+
+  ---
+
+  ## Strategia di test
+
+  Il cambio è di piattaforma, quindi la strategia è di regressione: tutto ciò che oggi è verde deve restarlo senza modificare i test, e il comportamento sull'hardware deve essere lo stesso della v1.8.0.
+
+  - **Automatici:** suite nativa completa (`pio test -e native`, incluso il replay delle fixture) ed e2e Playwright (`npx playwright test`), senza modifiche ai test.
+  - **Build:** `esp32-s3-standard` compila senza nuovi avvisi nei nostri sorgenti; dimensione del firmware annotata e dentro lo slot OTA (`0x3F0000`).
+  - **Istantanea di riferimento:** prima del cambio, sull'Eaton 3S con la v1.8.0, si salva l'uscita di `upsc`, `upscmd -l` e `upsrw`; dopo il cambio si confrontano: l'unica differenza ammessa è la versione del firmware.
+  - **Manuali sull'Eaton 3S:** OTA da v1.8.0 e flash completo; NVS conservato; Web UI (login, telemetria, comandi, impostazioni UPS, log, OTA); AP con doppio reset e timeout dell'AP; riconnessione dopo aver staccato e riattaccato l'UPS; heap minimo dal log `[DIAG]`, confrontato con la v1.8.0.
+  - **Rete di sicurezza:** con una build temporanea non committata si provocano un panic (core dump salvato e riepilogo visibile dopo il riavvio) e un blocco del loopTask oltre 30 s (Task WDT, panic e riavvio).
+  - **Tester:** build di test `idf55-v1` per Powercom (#36, deve sparire l'assert `root_port_handle_events`), CyberPower e APC. Il rilascio della versione attende i loro riscontri e non fa parte di questa spec.
+  - Nessun nuovo test e2e e nessun video demo: la spec non ha superfici utente nuove.
+
+  ---
+
+  ## Fuori ambito
+
+  - Reset della porta USB senza riavvio (`usb_host_lib_set_root_port_power`), `custom_sdkconfig`, uso delle novità del WebServer 3.3 (risposte chunked).
+  - Qualsiasi refactoring (profili delle schede e link di rete sono US-090).
+  - Ambienti ESP32-P4 (US-092).
+
+  _Piano generato dal team ARchetipo Planning — 2026-10-21_
+tasks:
+  - id: TASK-01
+    title: Istantanea di riferimento della v1.8.0 sull'Eaton 3S (upsc, comandi, variabili, heap)
+    type: Test
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Objective:** Salvare il comportamento della v1.8.0 prima del cambio di piattaforma, per poterlo confrontare dopo (criterio di regressione della spec).
+
+      **Read:**
+      - `docs/plans/platform-upgrade-idf55.md` §6-§7 (validazione e criteri di accettazione).
+
+      **Change:**
+      - Nessun file di codice. Creare `docs/plans/idf55-baseline/` con i file di testo raccolti.
+
+      **Steps:**
+      1. Sull'Eaton 3S con la v1.8.0 (scheda dell'utente, richiede la sua presenza) salvare `upsc <ups>@<ip>` in `upsc-v1.8.0.txt`, `upscmd -l <ups>@<ip>` in `upscmd-v1.8.0.txt`, `upsrw <ups>@<ip>` in `upsrw-v1.8.0.txt`.
+      2. Dal System Log della Web UI annotare le righe `[DIAG] Heap` (free, min free, largest block) dopo almeno 10 minuti di funzionamento, in `heap-v1.8.0.txt`.
+      3. Annotare la dimensione di `firmware.bin` della v1.8.0.
+
+      **Verify:**
+      - I file esistono e non contengono credenziali (password NUT o web): verificarlo prima del commit.
+
+      **Done:**
+      - Riferimento completo, salvato nel repository.
+
+      **Blockers:**
+      - Serve la scheda fisica con l'Eaton 3S: se l'utente non è disponibile, rimandare questo task e i task hardware; i task 02-05 possono procedere.
+
+      ## File Coinvolti
+      - docs/plans/idf55-baseline/ — nuovi file di testo con upsc, upscmd, upsrw, heap e dimensione del firmware della v1.8.0
+
+      ## Criteri di Completamento
+      - [ ] `upsc`, `upscmd -l` e `upsrw` della v1.8.0 salvati
+      - [ ] Heap della v1.8.0 annotato dopo almeno 10 minuti
+      - [ ] Nessuna credenziale nei file salvati
+  - id: TASK-02
+    title: platformio.ini su pioarduino 55.03.312-1 e compilazione dell'ESP32-S3 senza errori
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Objective:** Compilare `esp32-s3-standard` sulla piattaforma `55.03.312-1` (IDF 5.5.5, Arduino 3.3.12) senza cambiare il comportamento.
+
+      **Read:**
+      - `platformio.ini` (`[env:esp32-s3-standard]`).
+      - `docs/plans/platform-upgrade-idf55.md` §5 (rischi: Task WDT, core dump, API Arduino 3.3).
+      - In caso di errori: `src/network/network_manager.cpp`, `src/network/web_config_server.cpp`, `src/core/main.cpp`, `src/core/crash_diag.cpp`, `lib/DiagnosticLED/src/DiagnosticLED.cpp`.
+
+      **Change:**
+      - `platformio.ini`: in `[env:esp32-s3-standard]` sostituire `platform = https://github.com/pioarduino/platform-espressif32.git#51.03.04` con `#55.03.312-1`. Aggiornare il commento sopra l'ambiente (ESP-IDF 5.5). Nient'altro.
+      - Solo se la build fallisce: correggere le chiamate cambiate nel core 3.3 con la modifica minima equivalente, con un commento di una riga che cita il cambio di API. Non cambiare la logica.
+
+      **Steps:**
+      1. Cambiare la piattaforma e lanciare la build (la prima scarica i pacchetti).
+      2. Correggere eventuali errori; elencare gli avvisi nuovi nei nostri sorgenti (non in quelli del framework) e correggere solo quelli che segnalano un cambio di comportamento.
+      3. Annotare RAM e flash usate dal riepilogo della build.
+
+      **Verify:**
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (bash; `pio` non è nel PATH)
+
+      **Done:**
+      - Build verde sulla nuova piattaforma; firmware entro lo slot OTA (`0x3F0000`); `partitions.csv` invariata.
+
+      **Blockers:**
+      - Se un errore richiede di cambiare `lib/usb_host_hid/hid_host.c` o il comportamento di un modulo, fermarsi e chiedere: non fa parte di questa spec.
+
+      ## File Coinvolti
+      - platformio.ini — piattaforma di `esp32-s3-standard`
+      - src/ e lib/ — solo se servono adattamenti minimi alle API del core 3.3
+
+      ## Criteri di Completamento
+      - [ ] `esp32-s3-standard` usa `55.03.312-1`
+      - [ ] La build compila; RAM e flash annotate
+      - [ ] `partitions.csv` e le altre opzioni dell'ambiente invariate
+  - id: TASK-03
+    title: Callback del filtro di enumerazione USB in USBHostUPS::begin() (dal fork
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Far enumerare gli UPS con IDF 5.5.5, dove il filtro di enumerazione è abilitato e senza callback nessun dispositivo si enumera.
+
+      **Read:**
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, `USBHostUPS::begin()` (costruzione di `host_config`, righe ~53-57).
+      - Il commit ee1e319 del fork `rtadams89/esp32-nut` ("Fixed issue with USB enumeration"), già recuperato in `refs/remotes/rtadams89/main`: `git show ee1e319 -- lib/USBHostUPS/src/USBHostUPS.cpp`.
+
+      **Change:**
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`: dopo l'inizializzazione di `host_config` aggiungere, dentro `#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK`, `host_config.enum_filter_cb = [](const usb_device_desc_t*, uint8_t*) { return true; };` con il commento del fork (filtro abilitato da IDF 5.5.5, con NULL nessun dispositivo si enumera, arduino-esp32 #12783; accetta ogni dispositivo e ne mantiene la configurazione).
+      - Non portare `NUT_USB_PERIPHERAL_MAP` (solo P4, US-092).
+
+      **Steps:**
+      1. Aggiungere il blocco e ricompilare.
+      2. Nel messaggio di commit aggiungere `Co-authored-by: rtadams89 <43024360+rtadams89@users.noreply.github.com>`.
+
+      **Verify:**
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`
+      - Sulla scheda (TASK-07): l'Eaton 3S si enumera e compare "UPS interface claimed and ready" nel System Log.
+
+      **Done:**
+      - Callback presente solo quando la piattaforma lo richiede; build verde.
+
+      **Blockers:**
+      - Se la macro non esiste nel `sdkconfig` del core 3.3.12 per esp32s3 (`framework-arduinoespressif32-libs/esp32s3/sdkconfig`), annotarlo: il blocco resta innocuo ma va verificato che l'enumerazione funzioni comunque.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `enum_filter_cb` in `begin()` dentro `#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK`
+
+      ## Criteri di Completamento
+      - [ ] `enum_filter_cb` assegnato quando `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` è attivo
+      - [ ] Stato della macro nel `sdkconfig` esp32s3 annotato nel piano IDF 5.5
+      - [ ] Commit con `Co-authored-by` di rtadams89
+  - id: TASK-04
+    title: Suite nativa, replay ed e2e invariati sulla nuova piattaforma
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** Dimostrare che nessun test cambia esito: è il criterio di regressione automatico della spec.
+
+      **Read:**
+      - `platformio.ini` (`[env:native]`), `playwright.config.ts`.
+
+      **Change:**
+      - Nessuna modifica ai test. Se un test fallisce, fermarsi e analizzare: con un cambio di sola piattaforma l'ambiente `native` non dovrebbe cambiare.
+
+      **Steps:**
+      1. Eseguire la suite nativa completa.
+      2. Rigenerare gli asset web solo se la build li ha toccati (`git status`), poi eseguire gli e2e.
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`
+      - `npx playwright test`
+
+      **Done:**
+      - Stesso numero di test verdi di `main` prima del cambio (557 nativi alla data del piano), e2e tutti verdi.
+
+      **Blockers:**
+      - Un test rosso blocca la spec.
+
+      ## File Coinvolti
+      - nessun file modificato (solo esecuzione dei test)
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde, con lo stesso numero di test
+      - [ ] e2e Playwright verdi
+      - [ ] Nessun test modificato
+  - id: TASK-05
+    title: Verifica dei vincoli dell'ADR 0008 sui sorgenti USB di ESP-IDF 5.5.5 e annotazione nel piano
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Objective:** Confermare che le protezioni di `hid_host.c` (ADR 0008 e review del layer USB) siano ancora necessarie e corrette sulla 5.5.5, e lasciarne traccia scritta.
+
+      **Read:**
+      - `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md`, `docs/plans/platform-upgrade-idf55.md` §4-§5, `docs/plans/usb-layer-review.md` (A3, A4).
+      - Sorgenti di ESP-IDF al tag `v5.5.5` (non la 5.5.2 locale): `components/usb/usb_host.c`, `usbh.c`, `hcd_dwc.c`, `hub.c`, `include/usb/usb_types_stack.h`, da GitHub (`espressif/esp-idf`, tag v5.5.5). Verificare la versione IDF esatta nel `versions.txt` di `framework-arduinoespressif32-libs` della nuova piattaforma.
+      - `lib/usb_host_hid/hid_host.c`: tutte le righe marcate `[esp32-nut, ADR 0008]` e `[esp32-nut, review A3/A4]`.
+
+      **Change:**
+      - `docs/plans/platform-upgrade-idf55.md`: nuova sezione "Verifica sulla 5.5.5 (US-089)" con, per ciascun vincolo, la conferma e il riferimento file:riga della 5.5.5:
+        - EP0 non annullabile/halt/flush da un client (`check_ep_addr()`);
+        - `usb_transfer_t::timeout_ms` non supportato;
+        - `usb_host_transfer_free()` senza controllo di trasferimento in volo;
+        - data toggle in `_pipe_cmd_clear` (review A3);
+        - interrupt IN multi-pacchetto che termina solo con pacchetto corto o buffer pieno (review A4);
+        - assert `root_dev_uid` del Powercom assente (§3.1).
+      - Aggiornare lo **Stato** del piano: "in corso (US-089)".
+      - Nessuna modifica a `hid_host.c`.
+
+      **Steps:**
+      1. Scaricare solo i file necessari del tag v5.5.5 in una cartella temporanea fuori dal repository.
+      2. Verificare i vincoli uno per uno e scrivere la sezione.
+
+      **Verify:**
+      - La sezione esiste e cita file e righe della 5.5.5 per ogni vincolo.
+
+      **Done:**
+      - Tutti i vincoli confermati, oppure differenze segnalate.
+
+      **Blockers:**
+      - Se un vincolo è cambiato in modo che una deviazione di `hid_host.c` diventi sbagliata o inutile, fermarsi e chiedere all'utente prima di procedere con i task hardware.
+
+      ## File Coinvolti
+      - docs/plans/platform-upgrade-idf55.md — sezione "Verifica sulla 5.5.5 (US-089)" e stato del piano
+
+      ## Criteri di Completamento
+      - [ ] Sei vincoli verificati con riferimento file:riga della 5.5.5
+      - [ ] Stato del piano aggiornato
+      - [ ] `hid_host.c` invariato, oppure differenze segnalate all'utente
+  - id: TASK-06
+    title: Verifica di CI e release con la nuova piattaforma (boot_app0.bin, zip, manifest)
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Garantire che la release produca lo stesso pacchetto di oggi con la nuova piattaforma.
+
+      **Read:**
+      - `.github/workflows/release.yml` (passi "Build firmware" e "Prepare Artifacts").
+
+      **Change:**
+      - Nessuna modifica attesa. Solo se il percorso di `boot_app0.bin` non esiste più nel nuovo pacchetto: aggiornare la ricerca in `release.yml` con il minimo indispensabile.
+
+      **Steps:**
+      1. Dopo la build di TASK-02, cercare `boot_app0.bin` con lo stesso comando della CI: `find ~/.platformio/packages -path "*/tools/partitions/boot_app0.bin"`, e verificare che quello trovato per primo appartenga al pacchetto della nuova piattaforma (o che sia identico byte per byte a quello vecchio).
+      2. Ricostruire a mano lo zip come la CI (firmware, bootloader, partitions, boot_app0, manifest) e controllare gli offset del manifest (0x0, 0x8000, 0xe000, 0x10000).
+
+      **Verify:**
+      - Confronto `cmp` tra il `boot_app0.bin` vecchio e quello nuovo, oppure percorso corretto.
+
+      **Done:**
+      - La CI troverebbe un `boot_app0.bin` valido; struttura e nome dello zip invariati.
+
+      **Blockers:**
+      - Nessuno previsto.
+
+      ## File Coinvolti
+      - .github/workflows/release.yml — solo se il percorso di `boot_app0.bin` è cambiato
+
+      ## Criteri di Completamento
+      - [ ] `boot_app0.bin` trovato e corretto con la nuova piattaforma
+      - [ ] Zip ricostruito con gli stessi file e gli stessi offset del manifest
+  - id: TASK-07
+    title: Prove sull'Eaton 3S - OTA da v1.8.0, flash completo, NVS, Web UI, AP, confronto con la baseline
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare sull'hardware che il comportamento sia quello della v1.8.0 e che l'aggiornamento OTA (bootloader 5.1 + app 5.5) funzioni conservando le impostazioni.
+
+      **Read:**
+      - `docs/plans/idf55-baseline/` (TASK-01).
+      - README, sezione OTA e flash completo (offset).
+
+      **Change:**
+      - Annotare i risultati in `docs/plans/platform-upgrade-idf55.md`, sezione "Validazione sull'Eaton 3S (US-089)". Nessuna modifica al codice.
+
+      **Steps:**
+      1. Build con `PLATFORMIO_BUILD_FLAGS='-DFIRMWARE_VERSION=\"idf55-v1\"'`.
+      2. Sulla scheda con la v1.8.0 e le impostazioni dell'utente: aggiornamento via OTA dalla Web UI. Verificare che riparta, che Wi-Fi, credenziali NUT, credenziali web (login senza ricrearle), nome UPS e variabili salvate con SET VAR siano conservati.
+      3. Confrontare `upsc`, `upscmd -l`, `upsrw` con la baseline: unica differenza ammessa la versione del firmware.
+      4. Web UI: login, telemetria, UPS Commands (beeper), UPS Settings, System Log, export diagnostica USB.
+      5. Staccare e riattaccare il cavo USB dell'UPS: riconnessione senza riavvio.
+      6. Doppio reset: AP `NUT_ESP32_Config`, Web UI raggiungibile; uscita dall'AP.
+      7. Dopo almeno 10 minuti, heap `[DIAG]` confrontato con la baseline.
+      8. Flash completo con esptool (bootloader 5.5) dallo zip del TASK-06, senza cancellare la flash: riparte con le impostazioni.
+
+      **Verify:**
+      - Esito di ogni punto annotato nel piano IDF 5.5.
+
+      **Done:**
+      - Tutti i punti verdi, oppure differenze segnalate all'utente con i log.
+
+      **Blockers:**
+      - Richiede la scheda e l'Eaton 3S dell'utente. Se l'OTA da v1.8.0 non riparte, fermarsi: va deciso se richiedere il flash completo per questa versione.
+
+      ## File Coinvolti
+      - docs/plans/platform-upgrade-idf55.md — sezione "Validazione sull'Eaton 3S (US-089)"
+
+      ## Criteri di Completamento
+      - [ ] OTA da v1.8.0 riuscito con NVS conservato (nutos, web_auth, nutrw)
+      - [ ] Flash completo riuscito
+      - [ ] `upsc`/`upscmd -l`/`upsrw` uguali alla baseline, versione a parte
+      - [ ] Web UI, riconnessione USB e AP con doppio reset funzionanti
+      - [ ] Heap confrontato con la baseline
+  - id: TASK-08
+    title: Prova di core dump e Task WDT con una build temporanea non committata
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare che la rete di sicurezza dell'ADR 0008 (core dump con `--wrap`, Task WDT a 30 s) funzioni sulla 5.5.
+
+      **Read:**
+      - `src/core/crash_diag.cpp` (`__wrap_esp_core_dump_write`, riepilogo del core dump), `src/core/main.cpp` (`setupLoopWatchdog()`).
+
+      **Change:**
+      - Solo in una copia di lavoro temporanea, **mai committata**: in `loop()`, dopo 90 s dall'avvio, provocare un panic (`abort()`); in una seconda build, un ciclo bloccante oltre 30 s nel loopTask.
+      - Annotare i risultati nel piano IDF 5.5.
+
+      **Steps:**
+      1. Build con il panic, flash, attendere il riavvio: verificare nel System Log e nella diagnostica le righe del riavvio (reset reason) e il riepilogo del core dump (task, PC, backtrace).
+      2. Build con il blocco: verificare il panic del Task WDT e il riavvio.
+      3. Ripristinare il codice (`git diff` vuoto) e riflashare la build di TASK-07.
+
+      **Verify:**
+      - `git status` e `git diff` senza modifiche ai sorgenti dopo la prova.
+
+      **Done:**
+      - Core dump e Task WDT verificati; nessuna traccia delle modifiche temporanee nel repository.
+
+      **Blockers:**
+      - Se il core dump non viene salvato o il riepilogo non si legge, fermarsi: la funzione intercettata dal `--wrap` potrebbe avere cambiato nome (piano IDF 5.5 §5).
+
+      ## File Coinvolti
+      - docs/plans/platform-upgrade-idf55.md — risultati della prova (nessun sorgente modificato in modo permanente)
+
+      ## Criteri di Completamento
+      - [ ] Panic: core dump salvato e riepilogo visibile dopo il riavvio
+      - [ ] Blocco del loopTask: panic del Task WDT e riavvio
+      - [ ] Nessuna modifica temporanea rimasta nei sorgenti
+  - id: TASK-09
+    title: Build di test idf55-v1 per i tester e bozze dei messaggi (#36 Powercom, CyberPower, APC)
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Objective:** Preparare la verifica sul campo con gli UPS che non abbiamo, a partire dal Powercom della #36, dove deve sparire l'assert `root_port_handle_events`.
+
+      **Read:**
+      - Zip di test precedenti in `firmware-to-test/` (struttura e README.txt), ad esempio `test_fix_issue_43_v1.zip`.
+      - `docs/plans/platform-upgrade-idf55.md` §3.1 e §7.
+
+      **Change:**
+      - `firmware-to-test/test_idf55_v1.zip` (cartella ignorata da git): firmware, bootloader, partitions, boot_app0 e `README.txt` in inglese (cosa cambia, OTA, flash completo, cosa riportare, versione `idf55-v1` della scheda distinta dal firmware dell'UPS).
+      - Bozze dei messaggi in inglese, da far approvare all'utente prima della pubblicazione: Powercom (#36, fox1047: assert e riavvii dopo la disconnessione), CyberPower e APC (nessuna regressione nelle 24 h, `upsc` prima/dopo).
+
+      **Steps:**
+      1. Build con `FIRMWARE_VERSION` `idf55-v1` e preparazione dello zip.
+      2. Scrittura delle bozze; nessuna pubblicazione senza conferma dell'utente.
+
+      **Verify:**
+      - `unzip -l firmware-to-test/test_idf55_v1.zip` mostra i 5 file; la stringa `idf55-v1` è nel firmware.
+
+      **Done:**
+      - Zip e bozze pronti; spec pronta per la review. Il rilascio attende i riscontri dei tester, fuori da questa spec.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - firmware-to-test/test_idf55_v1.zip — zip di test (non versionato)
+
+      ## Criteri di Completamento
+      - [ ] Zip con firmware, bootloader, partitions, boot_app0 e README.txt
+      - [ ] `idf55-v1` presente nel firmware
+      - [ ] Bozze dei messaggi per Powercom, CyberPower e APC pronte per l'approvazione

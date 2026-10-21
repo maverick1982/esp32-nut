@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-092
+title: 'Supporto ESP32-P4 con Ethernet: profilo, immagini, CI e web installer'
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-092: Supporto ESP32-P4 con Ethernet: profilo, immagini, CI e web installer
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-090, US-091
+
+  **User Story**
+  Come utente con una scheda ESP32-P4 Ethernet (per esempio Waveshare ESP32-P4-ETH, anche PoE),
+  voglio installare esp32-nut e collegarlo via cavo,
+  in modo da avere il server NUT con la stabilità della rete cablata e un solo cavo per dati e alimentazione.
+
+  **Dimostrazione**
+  La CI produce tre immagini: S3 con il nome di sempre, P4 v3.1+ e P4 pre-v3. Il web installer riconosce il chip. Sull'hardware di rtadams89: indirizzo via DHCP, Web UI con stato Ethernet e senza la scheda Wi-Fi, UPS letto sulla porta USB, OTA che rifiuta l'immagine sbagliata.
+
+  **Criteri di Accettazione**
+  - [ ] Profilo `esp32p4_eth` con il design di riferimento Espressif (PHY IP101, MDC 31, MDIO 52, reset 51, clock 50), senza LED, UPS sulla porta USB High-Speed. Ambienti `esp32-p4-eth` e `esp32-p4-eth-v1`, e range di revisione scritto nell'immagine (`chip_rev.py`).
+  - [ ] Link Ethernet (RMII) dietro l'interfaccia di US-090: DHCP, nome host `esp32-nut-xxxxxx`, stato `Ethernet: <IP> (<velocità> Mbps)`, riconnessione automatica, link su/giù nel log.
+  - [ ] Sulle schede senza Wi-Fi la Web UI nasconde la scheda Wi-Fi e mostra l'etichetta Ethernet. Gli asset incorporati sono rigenerati con `scripts/embed_web.py`.
+  - [ ] Al primo avvio senza configurazione la scheda entra in rete con i valori NUT predefiniti, e il recupero dell'accesso è quello di US-091.
+  - [ ] La diagnostica dei crash funziona anche su RISC-V (PC, RA, MCAUSE).
+  - [ ] CI: matrice delle tre immagini su `main`, tag e pull request (non su ogni push di ogni branch). La release pubblica tre zip, e quello dell'S3 mantiene il nome attuale.
+  - [ ] Web installer: un pulsante che sceglie l'immagine in base al chip; se la revisione del P4 non si può distinguere, due pulsanti P4 con le istruzioni per riconoscerla.
+  - [ ] README (EN e IT): sezione ESP32-P4, con l'immagine pre-v3 segnalata come non testata su hardware. Le note di rilascio citano rtadams89.
+  - [ ] Regressione: comportamento dell'S3 invariato; test nativi, replay ed e2e verdi.
+
+  **Assunzioni**
+  - **Origine:** implementazione della PR di rtadams89 (#94), adattata a profili e link. I commit restano a suo nome.
+  - **Fuori ambito:** Wi-Fi tramite il coprocessore C6 e scelta della modalità di rete; impostazioni di porta USB e LED nella Web UI (spec successive). La diagnostica USB opzionale (`-DNUT_USB_DIAG`) può restare come opzione di build.
+history:
+  - status: TODO
+    at: "2026-10-21T16:16:13Z"

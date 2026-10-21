@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-093
+title: Wi-Fi tramite coprocessore ESP32-C6 sul P4 e scelta della modalità di rete
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: LOW
+points: 5
+status: TODO
+body: |
+  #### US-093: Wi-Fi tramite coprocessore ESP32-C6 sul P4 e scelta della modalità di rete
+
+  **Epic:** EP-005 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-092
+
+  **User Story**
+  Come utente con una scheda ESP32-P4 che ha anche il coprocessore Wi-Fi ESP32-C6 (per esempio Waveshare ESP32-P4-WIFI6-POE-ETH),
+  voglio scegliere se collegare la scheda via Wi-Fi, via Ethernet o in automatico,
+  in modo da usarla anche senza cavo e avere la configurazione iniziale e il recupero tramite Access Point, come sull'S3.
+
+  **Dimostrazione**
+  Su una scheda P4 con C6, la Web UI mostra la scelta "Wi-Fi / Ethernet / Automatico". In automatico, collegando il cavo la scheda passa all'Ethernet; staccandolo torna al Wi-Fi. Su una scheda P4 senza C6 la scelta non compare e tutto resta come in US-092. I test nativi coprono selezione del link e commutazione con profili finti.
+
+  **Criteri di Accettazione**
+  - [ ] Il profilo della scheda indica se può esserci un coprocessore Wi-Fi e con quali pin SDIO. All'avvio il firmware prova ad avviarlo: se risponde, il Wi-Fi è disponibile (STA e AP); altrimenti la scheda continua solo in Ethernet, senza errori bloccanti.
+  - [ ] Con Wi-Fi ed Ethernet disponibili, la Web UI (pagina di rete) offre la modalità Wi-Fi / Ethernet / Automatico. Il valore viene salvato e si applica con un riavvio, come il cambio Wi-Fi di oggi. Il valore iniziale viene dal profilo (Ethernet sul P4).
+  - [ ] È attivo un solo link alla volta. In automatico si usa l'Ethernet quando il cavo ha il link, altrimenti il Wi-Fi; un cambio dello stato del cavo provoca la commutazione dopo un intervallo di stabilità di 10 s, scritta nel System Log.
+  - [ ] Sulle schede in cui il Wi-Fi è disponibile valgono configurazione iniziale e recupero tramite AP (PDR 0001), e dall'AP si può cambiare la modalità di rete. La finestra di recupero di US-091 vale solo quando il Wi-Fi non è disponibile.
+  - [ ] Una differenza di versione del firmware ESP-Hosted tra P4 e C6 viene registrata nel System Log come avviso, senza bloccare il Wi-Fi se funziona.
+  - [ ] Regressione: S3 e P4 senza C6 invariati; test nativi, replay ed e2e verdi.
+
+  **Assunzioni**
+  - **Riferimento:** PDR 0002 D3 e D4; ADR 0010 §3.
+  - **Recupero:** se l'utente sceglie "Ethernet" e il cavo non c'è, la scheda sparisce dalla rete; il doppio reset apre l'AP, da cui si cambia la modalità (regola del PDR 0002 D4).
+  - **Hardware:** la verifica finale richiede un tester con una scheda P4 e il C6. Finché non c'è, la spec resta in TODO o viene rilasciata come non testata su hardware, come l'immagine pre-v3.
+  - **Fuori ambito:** Wi-Fi ed Ethernet attivi insieme; aggiornamento del firmware del C6 dalla Web UI.
+history:
+  - status: TODO
+    at: "2026-10-21T16:25:57Z"
