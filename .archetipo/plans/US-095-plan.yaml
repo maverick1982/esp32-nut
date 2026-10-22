@@ -1,0 +1,476 @@
+schema: archetipo/plan/v2
+spec_code: US-095
+body: |
+  ---
+  type: plan
+  title: "US-095: Recupero della memoria heap su ESP-IDF 5.5 (sdkconfig personalizzato ed export della diagnostica a pezzi) — Piano di implementazione"
+  description: "Piano di implementazione per US-095"
+  tags: [plan, implementation, US-095]
+  ---
+  # US-095: Recupero della memoria heap su ESP-IDF 5.5 (sdkconfig personalizzato ed export della diagnostica a pezzi) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-22
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)
+  **Priorità:** HIGH | **Punti:** 5 | **Bloccato da:** US-089 (in REVIEW)
+
+  **User Story**
+  Come sviluppatore del firmware, voglio riportare il margine di heap della piattaforma ESP-IDF 5.5 vicino a quello della v1.8.0, in modo che la scheda regga il caso peggiore (8 client NUT, Web UI aperta, export della diagnostica) con un margine simile a prima del cambio di piattaforma.
+
+  **Criteri di Accettazione**
+  - Un `sdkconfig` del progetto (`custom_sdkconfig`) riduce il costo fisso della piattaforma; per ogni opzione cambiata, risparmio misurato e motivo per cui è sicura annotati nel piano IDF 5.5.
+  - Le opzioni USB che cambiano il comportamento dello stack (bias della FIFO, hub, filtro di enumerazione) restano quelle della US-089.
+  - `/api/usb/dump` invia l'export a pezzi: stesso contenuto JSON byte per byte, verificato da un test.
+  - Test di carico nelle condizioni della US-089: `min free` di almeno 90 KB, nessun errore NUT o web; heap a riposo e dopo 1 h annotati.
+  - Regressione: nativi, replay ed e2e verdi; `upsc`, `upscmd -l`, `upsrw` identici alla baseline; core dump e Task WDT funzionanti.
+  - Tempo della prima build e impatto sulla CI annotati.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Due interventi indipendenti. Il costo fisso a riposo della 5.5 (circa 37 KB in meno di heap libero, §10 del piano IDF 5.5) si recupera con un `sdkconfig` del progetto. Il picco sotto carico si abbassa mandando l'export della diagnostica a pezzi invece di costruirlo in un'unica `String`. Prima di cambiare l'`sdkconfig` si misura dove va la memoria: le dimensioni degli stack si scelgono dai dati, non a occhio.
+
+  - **Bilancio della memoria (prima di tutto).** Una build temporanea, non committata, logga heap totale interno, libero e blocco più grande a ogni fase dell'avvio (inizio `setup()`, Wi-Fi, `usb_ups.begin()`, server web e NUT, fine `setup()`) e lo stack massimo usato dai task di sistema (`esp_timer`, `ipc0`, `ipc1`, `Tmr Svc`, `sys_evt`, `tiT`, `usb_host_events`, task di background di `hid_host`, `ups_poll`, `loopTask`) dopo il test di carico. Si misura su idf55-v1 e sulla v1.8.0 con la stessa patch. Il risultato va in un nuovo §11 di `docs/plans/platform-upgrade-idf55.md`.
+  - **`custom_sdkconfig` di pioarduino.** In `[env:esp32-s3-standard]`: `custom_sdkconfig = file://sdkconfig.esp32-nut`. Il file contiene solo le opzioni cambiate, ciascuna preceduta da un commento `#` con il motivo e il risparmio misurato. Il nome non può essere `sdkconfig.defaults` né `sdkconfig.esp32-s3-standard`: la piattaforma genera e sovrascrive questi file nella radice del progetto (`builder/frameworks/espidf.py`, scrittura di `sdkconfig.defaults` e `SDKCONFIG_PATH`; `builder/frameworks/arduino.py`, `safe_remove_sdkconfig_files()`). I file generati vanno in `.gitignore`. Con `custom_sdkconfig` la piattaforma ricompila le librerie ESP-IDF (HybridCompile): scarica `framework-espidf`, la prima build è molto più lunga, ogni modifica del file ricompila tutto e il passaggio a un branch senza `custom_sdkconfig` reinstalla il framework precompilato.
+  - **Opzioni valutate e regola di decisione.** Ogni opzione si prova da sola (le tre di FreeRTOS insieme), con una build e l'heap a riposo dopo 10 minuti dal log `[DIAG] Heap`. Si tiene solo se risparmia memoria e non rompe nulla.
+    - `CONFIG_ESP_TIMER_TASK_STACK_SIZE` (oggi 8192): nuovo valore = massimo tra 4096 e (stack usato misurato + 1024), arrotondato a 512.
+    - `CONFIG_ESP_IPC_TASK_STACK_SIZE` (oggi 2048, un task per core): stessa regola, minimo 1024.
+    - `CONFIG_FREERTOS_USE_TRACE_FACILITY`, `CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS`, `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` disattivate: il nostro codice usa solo `uxTaskGetStackHighWaterMark()` (`src/core/main.cpp:282`, `lib/USBHostUPS/src/USBHostUPS.cpp:135`), che non dipende da queste opzioni. Se il core Arduino o una libreria le usa, la build fallisce al link e l'opzione si scarta.
+    - `CONFIG_BT_ENABLED` disattivata (`# CONFIG_BT_ENABLED is not set`): il firmware non usa il Bluetooth.
+    - `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE` da 3000 a 256, il valore della v1.8.0. `hid_host.c` alloca il proprio trasferimento di controllo della dimensione necessaria (`lib/usb_host_hid/hid_host.c:1209`, `1462`); questo valore dimensiona i buffer di enumerazione dello stack. Con 256 la v1.8.0 ha enumerato gli UPS di tutti i tester.
+    - Solo se dopo queste il `min free` resta sotto 90 KB: `CONFIG_SPIRAM` disattivata (la scheda N8 non ha PSRAM). Escluse a priori: buffer Wi-Fi e lwIP, IPv6, perché cambiano il comportamento della rete.
+    - Invariate, e verificate nel `sdkconfig` generato: `USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT`, `USB_HOST_HUBS_SUPPORTED`, `USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` (con il callback di `USBHostUPS::begin()`), core dump in flash in formato ELF, Task WDT con panic.
+  - **Export della diagnostica a pezzi.** Oggi `USBHostUPS::dumpUSBDiagnostics()` costruisce un `JsonDocument`, lo serializza in una `String` intera e `/api/usb/dump` la manda con `server.send()`. In memoria stanno insieme il documento e la `String`, che cresce per riallocazioni successive.
+    - `lib/WebApi/src/ChunkWriter.h` (header-only, solo libreria standard, compilato anche nei test nativi): writer compatibile con ArduinoJson (`write(uint8_t)`, `write(const uint8_t*, size_t)`) con buffer fornito dal chiamante, `flush()` e un sink `std::function<void(const char*, size_t)>`. Il sink non riceve mai un blocco vuoto: con HTTP/1.1 un blocco di 0 byte chiude la risposta chunked.
+    - `USBHostUPS::buildUSBDiagnostics(JsonDocument& doc)` sostituisce `dumpUSBDiagnostics()`: riempie il documento sotto `_mutex` con lo stesso codice di oggi. `USBHostUPS` non dipende dal web; la serializzazione resta nel web server.
+    - `/api/usb/dump`: documento locale, `buildUSBDiagnostics(doc)`, poi `sendHeader("Content-Disposition", ...)`, `setContentLength(CONTENT_LENGTH_UNKNOWN)`, `send(200, "application/json", "")`, `serializeJsonPretty(doc, writer)` con un buffer di 1024 byte sullo stack del loopTask (16 KB) e un sink che chiama `server.sendContent(data, len)`, `writer.flush()`, infine `server.sendContent("")`. L'I/O di rete resta fuori dal lock USB, come oggi.
+    - Si usa l'API classica `setContentLength()` + `sendContent()`, non `chunkResponseBegin()/chunkWrite()` del core 3.3: `sendContent()` aggiunge il framing chunked solo ai client HTTP/1.1 e manda i dati grezzi ai client HTTP/1.0 (fine segnalata dalla chiusura della connessione), mentre `chunkWrite()` scrive il framing sempre (`WebServer.cpp`, core 3.3.12).
+    - Contenuto identico byte per byte: il documento è costruito dallo stesso codice e ArduinoJson produce la stessa uscita su una stringa o su un writer; lo prova il test nativo.
+  - **CI.** `release.yml` (Ubuntu) farà la compilazione ibrida a ogni esecuzione. Il tempo si stima dalla build locale. **Non** si lancia `release.yml` con `workflow_dispatch` per misurarlo: pubblica una release e aggiorna il web installer su GitHub Pages. Una cache di `~/.platformio` in CI è un possibile seguito, fuori da questa spec.
+  - **Windows.** Build da PowerShell e `PLATFORMIO_CACHE_DIR` su un percorso corto per le installazioni (§9 del piano IDF 5.5). Se la compilazione di ESP-IDF supera i 260 caratteri nei percorsi, serve `LongPathsEnabled` (richiede l'amministratore): è una decisione dell'utente.
+
+  ---
+
+  ## Strategia di test
+
+  La spec non cambia funzionalità: la strategia è una prova di equivalenza per l'export, misure ripetibili per la memoria e una regressione completa sull'hardware.
+
+  - **Nativi, nuova suite `test/test_chunk_writer`:** un documento caricato da una fixture reale (`test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`) e un documento sintetico con la forma dell'export (parti `serialized()` per l'array del descriptor e i dati dei report, `expected_ups_data` con virgolette, backslash, a capo e caratteri UTF-8) serializzati con `serializeJsonPretty` in una `std::string` e nel `ChunkWriter` con buffer di 1, 7, 64, 1024 e 4096 byte: concatenazione uguale byte per byte. Inoltre: nessuna chiamata al sink con 0 byte, `flush()` ripetuto non manda nulla, un'uscita più corta del buffer arriva in un solo blocco. Mutazioni: perdere l'ultimo blocco o mandare un blocco vuoto deve far fallire almeno un test.
+  - **Regressione automatica:** suite nativa completa (replay compreso) ed e2e Playwright. `e2e/logs-viewer.spec.ts` simula `/api/usb/dump` e non cambia.
+  - **Eaton 3S:** export scaricato con `curl` in HTTP/1.1 e HTTP/1.0 e dal pulsante della Web UI, JSON valido con le stesse chiavi e lo stesso array del descriptor; test di carico di 900 s nelle condizioni della US-089 (`min free` di almeno 90 000 byte, nessun errore); heap a riposo dopo 10 minuti e dopo 1 h; `upsc`, `upscmd -l` e `upsrw` confrontati con `docs/plans/idf55-baseline/`; core dump e Task WDT con due build temporanee, come nella US-089.
+  - **Differenza attesa nella baseline:** `docs/plans/idf55-baseline/upsc-v1.8.0.txt` ha `ups.type: EatonDriver`; dopo il merge di #43 (main `906acd7`) il nome del driver è in `driver.name`. Questa differenza e la versione del firmware sono le sole ammesse.
+  - Nessun nuovo test e2e e nessun video demo: la spec non ha superfici utente nuove.
+
+  ---
+
+  ## Fuori ambito
+
+  - Invio a pezzi di `/api/logs` e degli altri endpoint.
+  - Buffer Wi-Fi e lwIP, IPv6, cache della CI.
+  - Reset della porta USB senza riavvio; sostituzione di `-Wl,--wrap=esp_core_dump_write` con opzioni dell'`sdkconfig`.
+
+  _Piano generato dal team ARchetipo Planning — 2026-10-22_
+tasks:
+  - id: TASK-01
+    title: Bilancio della memoria su idf55-v1 e v1.8.0 (build temporanea, non committata)
+    type: Test
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Objective:** Sapere dove vanno i circa 37 KB di heap in meno della 5.5 e quanto stack usano i task di sistema, per scegliere le opzioni dell'`sdkconfig` e le nuove dimensioni degli stack.
+
+      **Read:**
+      - `src/core/main.cpp` (`setup()` e il blocco `[DIAG]` ogni 60 s, righe 278-290).
+      - `docs/plans/platform-upgrade-idf55.md` §9-§10 (note di build su Windows, condizioni del test di carico).
+      - `scripts/load_test.py` (opzioni).
+      - `lib/usb_host_hid/hid_host.c:1612` (nome del task di background di `hid_host`).
+
+      **Change (temporanea, da non committare):**
+      - In `src/core/main.cpp`, una funzione `diagMem(const char* stage)` che logga con `AppLogger` `heap_caps_get_total_size(MALLOC_CAP_INTERNAL)`, `esp_get_free_heap_size()` e `heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)`, chiamata a inizio `setup()`, dopo l'avvio del Wi-Fi, dopo `usb_ups.begin()`, dopo l'avvio dei server web e NUT, a fine `setup()`.
+      - Nel blocco `[DIAG]` di 60 s: per `esp_timer`, `ipc0`, `ipc1`, `Tmr Svc`, `sys_evt`, `tiT`, `usb_host_events`, il task di `hid_host`, `ups_poll` e `loopTask`, `xTaskGetHandle(nome)` e `uxTaskGetStackHighWaterMark()`. Con `uxTaskGetSystemState()` (TRACE_FACILITY è attivo su entrambe le piattaforme) elencare anche i task non previsti.
+
+      **Steps:**
+      1. Applicare la patch su `feature/pdr-0002-multi-board`, compilare da PowerShell con `FIRMWARE_VERSION` `mem-idf55` (come in US-089, con `PLATFORMIO_BUILD_FLAGS`), aggiornare la scheda dell'Eaton 3S.
+      2. Annotare le righe di avvio; dopo 10 minuti a riposo, lanciare `scripts/load_test.py` per 900 s nelle condizioni del §10 (7 client dello script più un client esterno sull'ottavo slot, Web UI ogni 2 s, export ogni 60 s) e annotare gli stack massimi usati.
+      3. Applicare la stessa patch in un worktree dal tag `v1.8.0` (piattaforma 51.03.04), compilare con `FIRMWARE_VERSION` `mem-v180` e ripetere le misure.
+      4. Scrivere le tabelle (heap per fase, stack per task, differenze) in una bozza del §11 del piano IDF 5.5.
+      5. Eliminare la patch e il worktree; rimettere sulla scheda la build idf55-v1.
+
+      **Verify:**
+      - Tabelle complete per entrambe le versioni; `git status` senza modifiche a `src/core/main.cpp`.
+
+      **Done:**
+      - Si sa quanto costa ogni fase dell'avvio e quanto stack usa ciascun task di sistema, su entrambe le piattaforme.
+
+      **Blockers:**
+      - Serve la scheda con l'Eaton 3S e la presenza dell'utente. Se manca, i TASK-02..04 procedono.
+      - Se la scheda ha il bootloader della 5.5 (flash completo in US-089), la build `mem-v180` si carica con un flash completo via USB invece che via OTA.
+
+      ## File Coinvolti
+      - src/core/main.cpp — patch temporanea di misura, da non committare
+      - docs/plans/platform-upgrade-idf55.md — bozza del §11 con le tabelle del bilancio
+
+      ## Criteri di Completamento
+      - [ ] Heap totale, libero e blocco più grande per fase dell'avvio, su idf55-v1 e v1.8.0
+      - [ ] Stack massimo usato da ciascun task di sistema dopo il test di carico, su entrambe
+      - [ ] Patch di misura eliminata, nessuna modifica committata in `src/`
+  - id: TASK-02
+    title: 'ChunkWriter: writer a blocchi compatibile con ArduinoJson'
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Objective:** Un writer che ArduinoJson può usare come destinazione di `serializeJsonPretty()` e che passa l'uscita a un sink a blocchi di dimensione fissa, senza allocazioni dinamiche.
+
+      **Read:**
+      - `lib/WebApi/src/WebApiJson.h` (stile, intestazione e commenti della libreria).
+      - `platformio.ini` `[env:native]` (la libreria `WebApi` non è in `lib_ignore`, quindi è disponibile ai test nativi).
+
+      **Change:**
+      - Nuovo `lib/WebApi/src/ChunkWriter.h`, header-only, solo libreria standard (`<cstddef>`, `<cstdint>`, `<cstring>`, `<functional>`):
+        - `using Sink = std::function<void(const char*, size_t)>;`
+        - costruttore `ChunkWriter(char* buf, size_t cap, Sink sink)`; `cap` deve essere almeno 1 (commento che lo dice);
+        - `size_t write(uint8_t c)` e `size_t write(const uint8_t* s, size_t n)`: copiano nel buffer e chiamano il sink quando è pieno; ritornano i byte accettati;
+        - `void flush()`: manda il contenuto residuo, mai un blocco di 0 byte;
+        - `size_t total() const`: byte scritti in tutto.
+      - Commento in testa: a cosa serve (export a pezzi di `/api/usb/dump`) e perché il sink non riceve mai blocchi vuoti (un blocco di 0 byte chiude la risposta chunked HTTP/1.1).
+
+      **Steps:**
+      1. Scrivere la classe seguendo lo stile di `WebApiJson.h`.
+      2. Verificare che compili includendola da un test (TASK-03).
+
+      **Verify:**
+      - `pio test -e native -f test_chunk_writer` dopo TASK-03.
+
+      **Done:**
+      - Header pronto, senza dipendenze da Arduino.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/ChunkWriter.h — nuovo writer a blocchi
+
+      ## Criteri di Completamento
+      - [ ] Interfaccia `write(uint8_t)` / `write(const uint8_t*, size_t)` accettata da `serializeJsonPretty()`
+      - [ ] Nessuna allocazione dinamica nel writer
+      - [ ] Il sink non riceve mai un blocco di 0 byte
+  - id: TASK-03
+    title: 'Test nativi del ChunkWriter: stesso JSON byte per byte'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Provare che l'export serializzato a pezzi è identico, byte per byte, a quello serializzato in un'unica stringa (criterio della spec).
+
+      **Read:**
+      - `test/test_web_api/test_main.cpp` (struttura di una suite Unity nativa).
+      - `test/test_record_replay/FixtureReplayRunner.h` (come i test leggono un file di fixture dal disco).
+      - `lib/USBHostUPS/src/USBHostUPS.cpp:1085-1154` (forma dell'export: `serialized()` per `report_descriptor_hex` e per i `data` dei report).
+
+      **Change:**
+      - Nuova suite `test/test_chunk_writer/test_main.cpp`. Funzione di supporto: serializza un `JsonDocument` con `serializeJsonPretty` in una `std::string` e nel `ChunkWriter` (buffer di dimensione data, sink che concatena e conta le chiamate).
+      - Test:
+        1. fixture reale `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json` caricata con `deserializeJson`: uscite uguali con buffer di 1, 7, 64, 1024 e 4096 byte;
+        2. documento sintetico con la forma dell'export: `report_descriptor_hex` come `serialized()` di un array su più righe, 100 report con `data` `serialized()`, `link` annidato, `expected_ups_data` con virgolette, backslash, a capo e `°C`: uscite uguali con gli stessi buffer;
+        3. nessuna chiamata al sink con 0 byte in tutti i casi;
+        4. `flush()` chiamato due volte non produce una seconda chiamata;
+        5. uscita più corta del buffer: una sola chiamata al sink; `total()` uguale alla lunghezza dell'uscita.
+
+      **Steps:**
+      1. Scrivere la suite.
+      2. Lanciare `pio test -e native -f test_chunk_writer` (PATH con `toolchain-gccmingw32/bin`, vedi note di progetto).
+      3. Mutazioni a mano, poi annullate: `flush()` che non manda il residuo; `flush()` che manda anche un blocco vuoto. Almeno un test deve fallire per ciascuna.
+
+      **Verify:**
+      - Suite verde; mutazioni rilevate.
+
+      **Done:**
+      - L'equivalenza byte per byte è coperta da un test automatico.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - test/test_chunk_writer/test_main.cpp — nuova suite nativa
+
+      ## Criteri di Completamento
+      - [ ] Uscita identica byte per byte per fixture reale e documento sintetico, con 5 dimensioni di buffer
+      - [ ] Nessun blocco vuoto e `flush()` idempotente verificati
+      - [ ] Le due mutazioni fanno fallire la suite
+  - id: TASK-04
+    title: 'Export della diagnostica a pezzi: buildUSBDiagnostics e /api/usb/dump'
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** `/api/usb/dump` manda l'export a blocchi di 1024 byte invece di costruirlo in un'unica `String`, con lo stesso contenuto.
+
+      **Read:**
+      - `lib/USBHostUPS/src/USBHostUPS.cpp:1085-1154` (`dumpUSBDiagnostics()`) e `lib/USBHostUPS/src/USBHostUPS.h:60`.
+      - `src/network/web_config_server.cpp:99-106` (handler attuale).
+      - Core 3.3.12: `~/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/WebServer.cpp`, `_prepareHeader()` (riga 641) e `sendContent(const char*, size_t)` (riga 754).
+
+      **Change:**
+      - `USBHostUPS.h/.cpp`: `String dumpUSBDiagnostics()` diventa `void buildUSBDiagnostics(JsonDocument& doc)`. Il corpo è quello di oggi senza le ultime tre righe (`String output; serializeJsonPretty(...); return output;`): stesso ordine dei campi, stessi valori, lock su `_mutex` invariato. Nessun altro chiamante (unico uso in `web_config_server.cpp:105`).
+      - `web_config_server.cpp`, handler di `/api/usb/dump`: risposta 503 invariata se `usb_ups` è nullo; poi `JsonDocument doc; usb_ups->buildUSBDiagnostics(doc);`, `server.sendHeader("Content-Disposition", ...)` come oggi, `server.setContentLength(CONTENT_LENGTH_UNKNOWN)`, `server.send(200, "application/json", "")`, `char buf[1024]`, `ChunkWriter w(buf, sizeof(buf), [this](const char* d, size_t n) { server.sendContent(d, n); })`, `serializeJsonPretty(doc, w)`, `w.flush()`, `server.sendContent("")`.
+      - Commento di due righe sull'handler: perché a pezzi (picco di heap, US-095) e perché l'API classica e non `chunkWrite()` (HTTP/1.0).
+
+      **Steps:**
+      1. Modificare `USBHostUPS` e l'handler.
+      2. Build `esp32-s3-standard` da PowerShell.
+      3. Suite nativa completa.
+
+      **Verify:**
+      - Build senza nuovi avvisi nei nostri sorgenti; nativi verdi. La prova sulla scheda è nel TASK-08.
+
+      **Done:**
+      - Nessuna `String` con l'export intero; contenuto invariato.
+
+      **Blockers:**
+      - Nessuno (non serve la scheda).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — firma `buildUSBDiagnostics(JsonDocument&)`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — corpo dell'export senza serializzazione in `String`
+      - src/network/web_config_server.cpp — handler di `/api/usb/dump` a pezzi
+
+      ## Criteri di Completamento
+      - [ ] `dumpUSBDiagnostics()` rimosso, `buildUSBDiagnostics()` con lo stesso contenuto
+      - [ ] Handler con `setContentLength(CONTENT_LENGTH_UNKNOWN)`, `sendContent()` a blocchi e chiusura con `sendContent("")`
+      - [ ] Build e suite nativa verdi
+  - id: TASK-05
+    title: 'custom_sdkconfig: file del progetto, prima compilazione ibrida e file generati'
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** Attivare `custom_sdkconfig` con un file del progetto e la prima opzione (stack di `esp_timer`), verificando che la compilazione ibrida funzioni su Windows, cosa genera e quanto dura.
+
+      **Read:**
+      - `platformio.ini` `[env:esp32-s3-standard]`.
+      - `~/.platformio/platforms/espressif32/builder/frameworks/arduino.py` righe 238-300 e 404-460 (lettura di `custom_sdkconfig`, `file://`, reinstallazione del framework).
+      - `~/.platformio/platforms/espressif32/builder/frameworks/espidf.py` righe 428-470 e 876-880 (lettura del file, scrittura di `sdkconfig.defaults` nella radice).
+      - Bozza del §11 (TASK-01) per il valore dello stack di `esp_timer`.
+
+      **Change:**
+      - Nuovo `sdkconfig.esp32-nut` nella radice: intestazione `#` (cos'è, perché questo nome, regola "solo opzioni cambiate, ciascuna con motivo e risparmio"), poi `CONFIG_ESP_TIMER_TASK_STACK_SIZE=<valore da TASK-01>` con il suo commento.
+      - `platformio.ini`, in `[env:esp32-s3-standard]`: `custom_sdkconfig = file://sdkconfig.esp32-nut`, con un commento `;` sopra (US-095, ricompila ESP-IDF, prima build lunga).
+      - `.gitignore`: i file generati dalla build che compaiono in `git status` (attesi `sdkconfig.defaults` e `sdkconfig.esp32-s3-standard`; aggiungere solo quelli che compaiono davvero).
+
+      **Steps:**
+      0. Prima di tutto copiare `~/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig` (precompilato della 55.03.312-1) in `docs/plans/idf55-baseline/sdkconfig-precompiled-55.03.312-1.txt`: la ricompilazione può sostituirlo.
+      1. `pio run -e esp32-s3-standard -t clean`, poi build da PowerShell con `$env:PLATFORMIO_CACHE_DIR='D:\pc'`, misurata con `Measure-Command`.
+      2. Seconda build senza modifiche: tempo incrementale.
+      3. Confrontare il `sdkconfig` generato con la copia del passo 0: le sole differenze devono essere le opzioni del file; annotare qualsiasi altra differenza. Controllare che restino `CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT=y`, `CONFIG_USB_HOST_HUBS_SUPPORTED=y`, `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y`, `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`, `CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y`, `CONFIG_ESP_TASK_WDT_PANIC=y`.
+      4. Verificare in `.pio/build/esp32-s3-standard/firmware.map` che `__wrap_esp_core_dump_write` sia ancora collegato.
+      5. `git status`: aggiornare `.gitignore` con i file generati.
+      6. Suite nativa completa (l'ambiente `native` non deve risentirne).
+      7. Annotare tempi, RAM e flash nella bozza del §11.
+
+      **Verify:**
+      - Build verde senza nuovi avvisi nei nostri sorgenti; opzioni USB e core dump invariate; nativi verdi.
+
+      **Done:**
+      - Meccanismo attivo con la prima opzione; tempi della prima build e di quella incrementale annotati.
+
+      **Blockers:**
+      - Errori di percorsi oltre 260 caratteri durante la compilazione di ESP-IDF: fermarsi e chiedere all'utente se attivare `LongPathsEnabled` (richiede l'amministratore).
+      - Se la compilazione ibrida non funziona su questa piattaforma, fermarsi e riferire: la parte dell'export (TASK-02..04) resta valida da sola.
+
+      ## File Coinvolti
+      - sdkconfig.esp32-nut — nuovo file con le opzioni del progetto
+      - platformio.ini — `custom_sdkconfig` in `[env:esp32-s3-standard]`
+      - .gitignore — file generati dalla compilazione ibrida
+      - docs/plans/idf55-baseline/sdkconfig-precompiled-55.03.312-1.txt — copia di riferimento del sdkconfig precompilato
+
+      ## Criteri di Completamento
+      - [ ] Build con `custom_sdkconfig` riuscita, tempi della prima build e della build incrementale annotati
+      - [ ] Opzioni USB, core dump e Task WDT invariate nel sdkconfig generato
+      - [ ] `__wrap_esp_core_dump_write` presente nel map file
+      - [ ] File generati ignorati da git; nativi verdi
+  - id: TASK-06
+    title: Opzioni dell'sdkconfig una per volta, con il risparmio misurato sulla scheda
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Objective:** Applicare le opzioni della spec una per volta e tenere solo quelle che risparmiano heap senza rompere nulla, con il risparmio misurato (criterio della spec).
+
+      **Read:**
+      - Sezione "Opzioni valutate e regola di decisione" del piano.
+      - Bozza del §11 (TASK-01, TASK-05).
+      - `lib/usb_host_hid/hid_host.c:1209` e `1462` (allocazione del trasferimento di controllo di `hid_host`).
+
+      **Change:**
+      - `sdkconfig.esp32-nut`: le opzioni tenute, ciascuna con il commento (motivo, risparmio misurato).
+
+      **Steps:**
+      Per ogni passo: build, aggiornamento OTA dell'Eaton 3S, 10 minuti a riposo, riga `[DIAG] Heap` (free, min free, largest block) e confronto con il passo precedente.
+      1. Baseline della build di TASK-05 (solo `esp_timer`), poi la stessa senza l'opzione se TASK-01 non ha già il valore di idf55-v1 a riposo.
+      2. `CONFIG_ESP_IPC_TASK_STACK_SIZE` col valore dalla regola.
+      3. Le tre opzioni di FreeRTOS disattivate insieme (`# CONFIG_FREERTOS_USE_TRACE_FACILITY is not set`, `# CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS is not set`, `# CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is not set`). Se il link fallisce, scartarle e annotare il simbolo mancante.
+      4. `# CONFIG_BT_ENABLED is not set`.
+      5. `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256`; dopo l'aggiornamento staccare e riattaccare l'UPS e verificare enumerazione e dati.
+      6. Prova breve di carico (`scripts/load_test.py`, 300 s): se il `min free` è chiaramente sotto 90 KB, provare `# CONFIG_SPIRAM is not set` allo stesso modo; altrimenti non toccarla.
+      7. Tabella nel §11: opzione, valore prima e dopo, risparmio a riposo, motivo per cui è sicura, esito (tenuta o scartata).
+
+      **Verify:**
+      - Nessun crash né reset durante le prove (`Reset reason` nel log); l'UPS si enumera e i dati arrivano dopo ogni passo.
+
+      **Done:**
+      - `sdkconfig.esp32-nut` definitivo; ogni opzione documentata con il risparmio misurato.
+
+      **Blockers:**
+      - Serve la scheda con l'Eaton 3S. Ogni passo ricompila ESP-IDF (tempo della build in TASK-05): concordare con l'utente quando fare le prove.
+      - Le opzioni USB di comportamento (bias della FIFO, hub, filtro di enumerazione) non si toccano.
+
+      ## File Coinvolti
+      - sdkconfig.esp32-nut — opzioni definitive con i commenti
+      - docs/plans/platform-upgrade-idf55.md — tabella delle opzioni nel §11
+
+      ## Criteri di Completamento
+      - [ ] Ogni opzione della spec provata, con risparmio misurato a riposo
+      - [ ] Opzioni tenute documentate nel file con motivo e risparmio; opzioni scartate annotate nel §11
+      - [ ] Enumerazione e dati dell'Eaton 3S corretti con la configurazione finale
+  - id: TASK-07
+    title: Test di carico di 900 s e heap dopo 1 h con la build finale idf55-v2
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare il criterio principale della spec: `min free` di almeno 90 KB nel caso peggiore, senza errori, e heap stabile a riposo.
+
+      **Read:**
+      - `docs/plans/platform-upgrade-idf55.md` §10 (condizioni e numeri di v1.8.0 e idf55-v1).
+      - `docs/plans/idf55-baseline/stresstest-idf55-v1.txt` (formato del report).
+
+      **Change:**
+      - Nuovo `docs/plans/idf55-baseline/stresstest-idf55-v2.txt` con l'uscita dello script, senza credenziali.
+
+      **Steps:**
+      1. Build con `FIRMWARE_VERSION` `idf55-v2` (export a pezzi più `sdkconfig.esp32-nut` definitivo), aggiornamento OTA.
+      2. Heap a riposo dopo 10 minuti e dopo 1 h (righe `[DIAG] Heap`).
+      3. `python scripts/load_test.py --host <ip> --ups <ups> --web-user <utente> --clients 7 --duration 900 --threshold 90000`, con un client esterno sull'ottavo slot come nel §10.
+      4. Salvare il report; controllare che il nono client sia rifiutato.
+      5. Se il `min free` è sotto 90 000: fermarsi e riferire all'utente con i numeri (tornare al passo 6 di TASK-06 solo con il suo accordo).
+
+      **Verify:**
+      - Riga finale `PASS: heap_min_free ... vs threshold 90000`, 0 errori NUT e web.
+
+      **Done:**
+      - Risultati pronti per la tabella del §11, accanto a v1.8.0 e idf55-v1.
+
+      **Blockers:**
+      - Serve la scheda con l'Eaton 3S e il client esterno per l'ottavo slot.
+
+      ## File Coinvolti
+      - docs/plans/idf55-baseline/stresstest-idf55-v2.txt — report del test di carico
+
+      ## Criteri di Completamento
+      - [ ] `min free` di almeno 90 000 byte nel test di 900 s
+      - [ ] Nessun errore NUT o web, nono client rifiutato
+      - [ ] Heap a riposo e dopo 1 h annotati
+  - id: TASK-08
+    title: 'Regressione: export a pezzi, NUT, nativi ed e2e, core dump e Task WDT'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare che `idf55-v2` si comporti come la baseline e che la rete di sicurezza funzioni con le librerie ESP-IDF ricompilate.
+
+      **Read:**
+      - `docs/plans/idf55-baseline/` (`upsc-v1.8.0.txt`, `upscmd-v1.8.0.txt`, `upsrw-v1.8.0.txt`).
+      - `.archetipo/plans/US-089-plan.yaml`, task della rete di sicurezza (due build temporanee: `abort()` e loopTask bloccato).
+
+      **Change:**
+      - Nessun file di codice committato (le build della rete di sicurezza sono temporanee).
+
+      **Steps:**
+      1. **Export:** login con `curl` e cookie jar (`/api/auth/login`), poi `/api/usb/dump` in HTTP/1.1 e con `--http1.0`; entrambi validi con `python -m json.tool`, stesse chiavi di un export di idf55-v1 e stesso `report_descriptor_hex`. Download anche dal pulsante della Web UI (pagina dei log).
+      2. **NUT:** `upsc`, `upscmd -l`, `upsrw` confrontati con la baseline. Differenze ammesse: versione del firmware e `ups.type: EatonDriver` diventato `driver.name: EatonDriver` (merge di #43, main `906acd7`).
+      3. **Automatici:** `pio test -e native` completo ed e2e Playwright (`npx playwright test`).
+      4. **Rete di sicurezza:** due build temporanee come nella US-089: `abort()` nel loopTask dopo 90 s (riavvio con `Reset reason: PANIC` e riepilogo del core dump) e loopTask occupato 60 s senza `esp_task_wdt_reset()` (panic del Task WDT, `Reset reason: TASK_WDT`). Eliminare le patch.
+      5. **Stack del loopTask:** la riga `[DIAG] Loop Task Stack High Water Mark` resta coerente con uno stack di 16 KB (`-DARDUINO_LOOP_STACK_SIZE=16384` vale anche con la compilazione ibrida).
+
+      **Verify:**
+      - Tutti i passi conformi; nessuna patch temporanea rimasta.
+
+      **Done:**
+      - Regressione completa documentata.
+
+      **Blockers:**
+      - Serve la scheda con l'Eaton 3S.
+
+      ## File Coinvolti
+      - Nessun file del repository (verifiche e build temporanee)
+
+      ## Criteri di Completamento
+      - [ ] Export valido in HTTP/1.1, HTTP/1.0 e dalla Web UI
+      - [ ] `upsc`, `upscmd -l`, `upsrw` uguali alla baseline salvo le differenze ammesse
+      - [ ] Nativi ed e2e verdi
+      - [ ] Core dump e Task WDT funzionanti, patch eliminate
+  - id: TASK-09
+    title: 'Documentazione: §11 del piano IDF 5.5, tempi di build e impatto sulla CI'
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Objective:** Lasciare nel piano IDF 5.5 tutti i risultati richiesti dalla spec, in forma definitiva.
+
+      **Read:**
+      - `docs/plans/platform-upgrade-idf55.md` (intero, in particolare §3.3, §3.4, §9, §10 e la bozza del §11).
+      - `.github/workflows/release.yml`.
+      - `README.md` e `README.it.md`: solo se hanno una sezione di build dai sorgenti.
+
+      **Change:**
+      - `docs/plans/platform-upgrade-idf55.md`, nuovo §11 "Recupero della memoria (US-095)": bilancio di TASK-01; tabella delle opzioni (valore prima e dopo, risparmio misurato, motivo per cui è sicura, esito); opzioni USB lasciate invariate; export a pezzi (API scelta e motivo); tabella del carico con v1.8.0, idf55-v1 e idf55-v2 (stesse righe del §10); heap a riposo e dopo 1 h; tempi della prima build, della build incrementale e dopo una modifica di `sdkconfig.esp32-nut`; impatto sulla CI (compilazione ibrida a ogni run di `release.yml`, stima dal tempo locale, avviso di non usare `workflow_dispatch` per le prove perché pubblica una release e il web installer, cache come possibile seguito); note per Windows.
+      - Aggiornare §3.3 (`custom_sdkconfig` verificato, rimando al §11) e la voce delle risposte chunked in §3.4.
+      - `README.md` / `README.it.md`: una riga sulla prima build lunga, solo se esiste una sezione di build dai sorgenti.
+
+      **Steps:**
+      1. Scrivere il §11 dai dati dei task precedenti.
+      2. Aggiornare §3.3 e §3.4.
+      3. Rileggere: nessuna credenziale, IP della rete dell'utente o nome dell'UPS nei testi.
+
+      **Verify:**
+      - Ogni criterio della spec ha il suo dato nel §11.
+
+      **Done:**
+      - Piano IDF 5.5 aggiornato e coerente.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - docs/plans/platform-upgrade-idf55.md — nuovo §11, aggiornamento di §3.3 e §3.4
+      - README.md, README.it.md — solo se hanno una sezione di build dai sorgenti
+
+      ## Criteri di Completamento
+      - [ ] §11 con bilancio, opzioni, carico, heap a riposo e dopo 1 h
+      - [ ] Tempi di build e impatto sulla CI annotati, con l'avviso su `workflow_dispatch`
+      - [ ] Nessun dato sensibile nei documenti
