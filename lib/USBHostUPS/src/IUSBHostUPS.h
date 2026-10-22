@@ -46,6 +46,8 @@ public:
     virtual bool supportsBeeperToggle() const { return true; }
     // False when the driver offers no load.* or shutdown.* command (US-058)
     virtual bool shutdownCommandsSupported() const { return true; }
+    // False when the driver does not offer beeper.mute (US-087, Legrand)
+    virtual bool beeperMuteSupported() const { return true; }
 
     virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
@@ -56,7 +58,7 @@ public:
         if (!isConnected()) return {};
         // Data lock released before build(), as the NUT server does around setBeeper()
         bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");
-        return CommandCatalog::build(getUsages(), beeper, shutdownCommandsSupported());
+        return CommandCatalog::build(getUsages(), beeper, shutdownCommandsSupported(), beeperMuteSupported());
     }
     // Variables a NUT client may write (LIST RW), sorted as upsd; empty without a UPS (US-066)
     virtual std::vector<NutTable::RWVariable> getWritableVariables() const { return {}; }

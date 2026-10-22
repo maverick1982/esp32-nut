@@ -313,7 +313,8 @@ public:
             // Same inputs as IUSBHostUPS::getSupportedCommands(); ups_data is the replayed data
             bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
             std::string actual;
-            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported())) {
+            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported(),
+                                                               driver->beeperMuteSupported())) {
                 if (!actual.empty()) actual += " ";
                 actual += c->name;
             }

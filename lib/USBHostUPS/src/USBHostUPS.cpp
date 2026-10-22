@@ -890,6 +890,12 @@ bool USBHostUPS::shutdownCommandsSupported() const {
     return _driver ? _driver->shutdownCommandsSupported() : true;
 }
 
+bool USBHostUPS::beeperMuteSupported() const {
+    // Same lock as supportsBeeperToggle(): _driver is deleted under _mutex
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver ? _driver->beeperMuteSupported() : true;
+}
+
 void USBHostUPS::applyDefaultDelays() {
     // ups.delay.* with NUT semantics: driver defaults set at connection, never read from
     // the device (US-058). Right after formatDeviceStrings(); _mutex is recursive and

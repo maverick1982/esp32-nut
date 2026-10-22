@@ -64,6 +64,7 @@ public:
     bool isDataStale() const override;
     bool supportsBeeperToggle() const override;
     bool shutdownCommandsSupported() const override;
+    bool beeperMuteSupported() const override;
 
     void setLogCallback(LogCallback cb);
     void logDebug(const String& msg) const override;

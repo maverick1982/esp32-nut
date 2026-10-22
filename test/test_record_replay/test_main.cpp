@@ -165,6 +165,20 @@ void test_replay_apc_smartups750_issue78(void) {
         RW_APC_6 " " RW_DELAYS, RW_APC_6 " " RW_DELAYS);
 }
 
+// US-087: Legrand Keor PDU 800 from the #90 dump. legrand-hid.c: beeper.enable 2 /
+// beeper.disable 3 (no beeper.mute), test.battery.* on UPS.Output.Test, load.* and
+// shutdown.* on UPS.Output.DelayBefore*, no RW rows besides ups.delay.*
+void test_replay_legrand_keor_pdu800_issue90(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json",
+        "beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep test.battery.stop "
+        "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default", nullptr, /* no NUT table rows */ "",
+        { { "ups.mfr", "Legrand" }, { "ups.beeper.status", "enabled" }, { "battery.voltage", "13.70" },
+          { "battery.voltage.nominal", "12" }, { "ups.delay.shutdown", "20" }, { "ups.delay.start", "30" },
+          /* FEATURE 0x17 [23, 0]: UPS.Output.Overload */ { "ups.status.overload", "0" },
+          /* FEATURE 0x07 byte 4: PowerSummary.WarningCapacityLimit */ { "battery.charge.warning", "20" } },
+        RW_DELAYS, RW_DELAYS);
+}
+
 void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
         /* PowercomDriver: no shutdown commands (US-058) */ "test.battery.start.quick test.battery.start.deep test.battery.stop", nullptr, /* NUT table rows (US-066) */ "",
@@ -276,6 +290,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_legrand_keor_pdu800_issue90);
     RUN_TEST(test_replay_cyberpower_br700elcd);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
@@ -304,6 +319,7 @@ void setup() {
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
+    RUN_TEST(test_replay_legrand_keor_pdu800_issue90);
     RUN_TEST(test_replay_cyberpower_br700elcd);
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);

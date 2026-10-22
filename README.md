@@ -70,6 +70,12 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 </details>
 
 <details>
+<summary><b>Legrand</b> (Click to expand tested models)</summary>
+
+- Legrand Keor PDU 800
+</details>
+
+<details>
 <summary><b>EcoFlow</b> (Click to expand untested / community-contributed models)</summary>
 
 - EcoFlow River 3 Plus

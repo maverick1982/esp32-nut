@@ -223,11 +223,12 @@ inline const HIDUsageDef* muteField(const std::vector<HIDUsageDef>& usages) {
  * DelayBeforeShutdown. The beeper commands follow beeper_available, the
  * condition LIST CMD has always used (supportsBeeperToggle() and a reported
  * ups.beeper.status). shutdown_cmds is IUPSDriver::shutdownCommandsSupported():
- * false hides every load.* and shutdown.* command (US-058). shutdown.default is
+ * false hides every load.* and shutdown.* command (US-058). mute_allowed is
+ * IUPSDriver::beeperMuteSupported(): false hides beeper.mute (US-087). shutdown.default is
  * listed when at least one of the commands upsdrv_shutdown() tries is available.
  */
 inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available,
-                                                bool shutdown_cmds = true) {
+                                                bool shutdown_cmds = true, bool mute_allowed = true) {
     const bool test = hasFeature(usages, kTest);
     const bool panel = hasFeature(usages, kPanel);
     const bool shutdown = shutdown_cmds && hasFeature(usages, kShutdown);
@@ -240,7 +241,7 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
     for (size_t i = 0; i < count; i++) {
         const char* n = commands[i].name;
         bool available = false;
-        if (strcmp(n, "beeper.mute") == 0) available = beeper_available && muteField(usages);
+        if (strcmp(n, "beeper.mute") == 0) available = mute_allowed && beeper_available && muteField(usages);
         else if (strncmp(n, "beeper.", 7) == 0) available = beeper_available;
         else if (strncmp(n, "test.battery.", 13) == 0) available = test;
         else if (strncmp(n, "test.panel.", 11) == 0) available = panel;

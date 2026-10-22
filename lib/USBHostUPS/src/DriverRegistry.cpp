@@ -4,6 +4,7 @@
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
 #include "EcoFlowDriver.h"
+#include "LegrandDriver.h"
 #include "OpenUPSDriver.h"
 #include "PowercomDriver.h"
 
@@ -24,6 +25,10 @@ const DriverEntry DRIVERS[] = {
     { 0x0463, DriverRegistry::ANY_PID, make<EatonDriver> },      // Eaton / MGE
     { 0x3746, DriverRegistry::ANY_PID, make<EcoFlowDriver> },    // EcoFlow
     { 0x0D9F, DriverRegistry::ANY_PID, make<PowercomDriver> },   // Powercom
+    // legrand_usb_device_table: other Legrand products stay generic (upstream rejects them
+    // unless the productid option is given)
+    { 0x1CB0, 0x0038, make<LegrandDriver> },                     // Legrand Keor PDU
+    { 0x1CB0, 0x0032, make<LegrandDriver> },                     // Legrand Keor SP
     { 0x04D8, 0xD004, make<OpenUPSDriver> },                     // OpenUPS
     { 0x04D8, 0xD005, make<OpenUPSDriver> },                     // OpenUPS2 / WalleCube
 };

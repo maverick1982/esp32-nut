@@ -148,6 +148,14 @@ public:
     virtual bool beeperControllable() const { return true; }
 
     /**
+     * @brief True when beeper.mute is offered (US-087).
+     *
+     * beeper.mute writes 3 to the beeper field (beeper_info "muted" in usbhid-ups). On
+     * Legrand 3 means disabled and legrand-hid.c has no beeper.mute: the driver returns false.
+     */
+    virtual bool beeperMuteSupported() const { return true; }
+
+    /**
      * @brief True when the load.* and shutdown.* commands are offered (US-058).
      *
      * False for subdrivers whose NUT counterpart has no such commands or uses its own

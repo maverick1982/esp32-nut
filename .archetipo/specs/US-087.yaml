@@ -1,0 +1,68 @@
+schema: archetipo/spec/v2
+code: US-087
+title: Driver Legrand (Keor PDU, Keor SP) allineato al subdriver legrand-hid di NUT
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: DONE
+body: |
+  #### US-087: Driver Legrand (Keor PDU, Keor SP) allineato al subdriver legrand-hid di NUT
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di un UPS Legrand Keor collegato a esp32-nut,
+  voglio che la scheda lo riconosca con un driver dedicato che si comporta come `usbhid-ups` di NUT con il subdriver `legrand-hid`,
+  in modo che valori, comandi e parametri siano quelli che NUT mostrerebbe per lo stesso UPS, beeper e test della batteria compresi.
+
+  **Dimostrazione**
+  Con la fixture del Keor PDU 800 (issue #90), il replay nativo mostra:
+  - il driver Legrand al posto del generico;
+  - le variabili NUT con i valori di upstream: carica 100, autonomia 2160 s, tensione batteria 13,7 V, tensioni e frequenze di ingresso e uscita, carico, potenza, soglie di intervento;
+  - `ups.mfr` "Legrand";
+  - in `LIST CMD`:
+    - `beeper.enable` e `beeper.disable`, che scrivono 2 e 3 su `UPS.PowerSummary.AudibleAlarmControl`;
+    - `test.battery.start.quick/deep` e `test.battery.stop` su `UPS.Output.Test`;
+    - i comandi di carico e spegnimento su `UPS.Output.DelayBefore*`;
+  - in `LIST RW`: `ups.delay.shutdown` e `ups.delay.start`.
+
+  **Criteri di Accettazione**
+  - [ ] VID `0x1CB0` con PID `0x0038` (Keor PDU) e `0x0032` (Keor SP) usano il driver Legrand. Gli altri PID di Legrand restano al driver generico, come fa upstream per i "possibly supported".
+  - [ ] La tabella HID→NUT segue `legrand_hid2nut` di `legrand-hid.c`, nello stesso ordine di priorità. Comprende:
+    - le conversioni ×10, ×100k, ×1M e ×10M (`legrand_times*`);
+    - `divide_by_10` per `UPS.PowerSummary.ConfigVoltage` e `UPS.PowerSummary.Voltage`;
+    - gli stati BOOL ACPresent, BelowRemainingCapacityLimit, Charging, Discharging e `UPS.Output.Overload`.
+  - [ ] Comandi:
+    - `beeper.enable` scrive 2 e `beeper.disable` scrive 3, come upstream. Non ci sono `beeper.mute` né `beeper.toggle`, che la tabella Legrand non ha;
+    - `test.battery.start.quick`, `test.battery.start.deep` e `test.battery.stop` scrivono 1, 2 e 3 su `UPS.BatterySystem.Battery.Test` o su `UPS.Output.Test`, dove presenti;
+    - `load.off.delay` e `load.on.delay` usano `UPS.OutletSystem.Outlet.DelayBefore*` o `UPS.Output.DelayBefore*`, e da questi derivano i comandi `load.*` e `shutdown.*` con la semantica di `usbhid-ups`;
+    - `ups.delay.shutdown` e `ups.delay.start` sono variabili lato driver con i default NUT.
+  - [ ] `ups.mfr` vale la stringa del produttore del dispositivo, e "Legrand" se manca. `ups.model` e `ups.serial` vengono dalle stringhe USB, come upstream. Un seriale fatto solo di spazi viene trattato come gli altri driver trattano un seriale vuoto.
+  - [ ] La fixture di replay del Keor PDU 800 viene dal `usb_diagnostics.json` della #90 (seriale vuoto, niente da anonimizzare). Il replay passa con i valori attesi della Dimostrazione.
+  - [ ] Test nativi per il riconoscimento VID/PID, le conversioni, i valori di scrittura del beeper e del test, e il catalogo dei comandi. Tutte le suite esistenti restano verdi.
+  - [ ] I file derivati da `legrand-hid.c` portano l'intestazione GPL con le righe di copyright del file upstream, come gli altri driver.
+  - [ ] Legrand Keor PDU 800 tra i modelli testati, in entrambi i README.
+
+  **Assunzioni**
+  - **Origine:** issue #90 (Mickel4711, Keor PDU 800VA, v1.7.2, oggi servito da `GenericDriver`). Il dump è https://github.com/user-attachments/files/33630309/usb_diagnostics.json.
+  - **Riferimento:** `nut_repo/drivers/legrand-hid.c` (`legrand_hid2nut`, `legrand_usb_device_table`, `legrand_format_*`) e `usbhid-ups.c` (`instcmd`, comandi derivati).
+  - **Il problema della carica "troppo bassa" segnalato nella #90 non è in ambito.** La carica viene da `UPS.PowerSummary.RemainingCapacity` anche upstream, e si aspetta la risposta dell'utente.
+  - **Il Keor SP non ha una fixture:** è coperto solo dalla tabella di upstream e dai test con descriptor sintetici.
+  - **Deviazioni da upstream** che dovessero restare (per esempio sul formato dei numeri) vanno elencate nel piano, come per gli altri driver.
+  - **Fuori ambito:**
+    - le usage vendor `0xff01xxxx` del descriptor e `UPS.PowerSummary.0x8400fd`, ignorate anche da upstream;
+    - `UPS.Output.Good`, `UPS.Output.InternalFailure` e `UPS.Output.CommunicationLost`, che `legrand-hid.c` non mappa.
+history:
+  - status: TODO
+    at: "2026-10-18T16:49:46Z"
+  - status: PLANNED
+    at: "2026-10-18T16:57:18Z"
+  - status: IN PROGRESS
+    at: "2026-10-18T17:00:53Z"
+  - status: REVIEW
+    at: "2026-10-18T17:29:08Z"
+  - status: DONE
+    at: "2026-10-18T17:47:41Z"

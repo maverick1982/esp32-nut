@@ -1,0 +1,247 @@
+schema: archetipo/plan/v2
+spec_code: US-087
+body: |
+  ---
+  type: plan
+  title: "US-087: Driver Legrand (Keor PDU, Keor SP) allineato al subdriver legrand-hid di NUT — Piano di implementazione"
+  description: "Piano di implementazione per US-087"
+  tags: [plan, implementation, US-087]
+  ---
+  # US-087: Driver Legrand (Keor PDU, Keor SP) allineato al subdriver legrand-hid di NUT — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-18
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  Driver dedicato per i Legrand Keor (VID `0x1CB0`, PID `0x0038` Keor PDU e `0x0032` Keor SP) derivato da `nut_repo/drivers/legrand-hid.c`, con fixture di replay dal dump della issue #90 (Keor PDU 800).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Stesso schema di `EcoFlowDriver` (ADR 0003 e 0004): `LegrandDriver` estende `GenericDriver`, che decodifica le usage standard HID PDC, e aggiunge solo ciò che è specifico di `legrand-hid.c`. La tabella completa in sola lettura arriverà con la migrazione EP-001 (US-073..079), come per gli altri driver.
+
+  - **Riconoscimento:** `DriverRegistry` mappa `0x1CB0/0x0038` e `0x1CB0/0x0032` su `LegrandDriver`. Gli altri PID Legrand restano a `GenericDriver` (upstream li rifiuta salvo l'opzione `productid`, che qui non esiste).
+  - **Beeper:** `encodeBeeperValue()` scrive 2 per abilitare e 3 per disabilitare (campo a più bit; un campo a 1 bit resta on/off). Le mappature di `AudibleAlarmControl` decodificano 2 = `enabled`, 3 = `disabled` (e 1 = `disabled`). Nuovo hook `IUPSDriver::beeperMuteSupported()` (default `true`, Legrand `false`), propagato da `IUSBHostUPS`/`USBHostUPS` come `shutdownCommandsSupported()`, e passato a `CommandCatalog::build()`: su Legrand `beeper.mute` non viene offerto, perché scriverebbe 3 = disabilitato.
+  - **Comandi:** test della batteria su `UPS.Output.Test` (già nel gruppo `kTest`, valori 1/2/3), comandi `load.*`/`shutdown.*` dal catalogo esistente su `UPS.Output.DelayBefore*`.
+  - **Variabili scrivibili:** `NutTable::legrandDelayPaths()` con, in ordine upstream, `UPS.OutletSystem.Outlet.DelayBefore*` e `UPS.Output.DelayBefore*`; `legrandHid2Nut()` senza righe RW (in `legrand_hid2nut` le uniche RW sono `ups.delay.*`, gestite da `applyDefaultDelays()`), così `LIST RW` mostra solo `ups.delay.shutdown` e `ups.delay.start`.
+  - **Stringhe:** `ups.mfr` dalla stringa del dispositivo, "Legrand" se l'UPS non ne espone una (come `EcoFlowDriver::onLoop`). Il seriale fatto di spazi del Keor PDU va trattato come negli altri driver (verifica in TASK-06).
+  - **Licenza:** `LegrandDriver.{h,cpp}` e le righe aggiunte in `NutTable.h` portano l'intestazione GPL con le righe di copyright di `legrand-hid.c` (Arnaud Quette, Peter Selinger, Arjen de Korte, Charles Lepple, Gabriele Taormina for Legrand), come gli altri file derivati.
+
+  ### Deviazioni da upstream (decise il 2026-10-18)
+
+  1. **Nessuna conversione `legrand_times10/100k/1M/10M` né `divide_by_10`.** Sul Keor PDU 800 danno valori sbagliati anche con NUT: il report DDL (networkupstools.org/ddl/Legrand/Keor_PDU_800.html) mostra `battery.voltage` 1.4, `battery.voltage.nominal` 1.2, `output.voltage` 6 con il driver stock, e l'autore annota "Voltages seemed to be off by a factor of 10". Le tensioni restano quelle ricavate dall'esponente HID (12 V, 13,7 V, 230 V), come oggi con il driver generico. Decisione dell'utente.
+  2. **`ups.beeper.status` pubblicato con la semantica Legrand** (2 = enabled, 3 = disabled), mentre `legrand-hid.c` non lo pubblica. Decisione dell'utente.
+  3. **`beeper.toggle` offerto**, come per tutti i driver del progetto (non esiste in `usbhid-ups`).
+  4. **Variabili del driver generico oltre la tabella upstream** (per esempio `input.frequency`, `ups.realpower`, `battery.runtime.low`) restano, come negli altri driver, fino alla migrazione EP-001.
+  5. **Comandi `load.*`/`shutdown.*`** dai percorsi del catalogo comune (`PowerSummary`/`Output`); `UPS.OutletSystem.Outlet.DelayBefore*` vale solo per `ups.delay.*`. Nessun Legrand noto espone il percorso Outlet.
+  6. **PID Legrand non in tabella** al driver generico, invece del rifiuto di upstream.
+
+  ---
+
+  ## Strategia di test
+
+  Tutto in nativo: nuova suite `test_legrand_driver` per la logica del driver e del catalogo, replay della fixture del Keor PDU 800 in `test_record_replay`. Nessuna interfaccia nuova: niente e2e nuovi, solo regressione.
+
+  - Unit: registro VID/PID, codifica e decodifica del beeper, assenza di `beeper.mute` (e presenza di `beeper.enable/disable/toggle`) con un campo beeper a 8 bit che arriva a 3, valori 1/2/3 dei test su `UPS.Output.Test`, fallback di `ups.mfr`, nessuna conversione sulle tensioni. Mutazione: rimettere `divide_by_10` o il valore 1 per `beeper.disable` deve far fallire almeno un test.
+  - Replay: fixture `test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json` con `LIST CMD` e `LIST RW` attesi.
+  - Regressione: suite nativa completa, build `esp32-s3-standard`, `npm run e2e`.
+
+  _Piano generato con ARchetipo Planning — 2026-10-18_
+tasks:
+  - id: TASK-01
+    title: Hook beeperMuteSupported() e catalogo dei comandi
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** permettere a un driver di non offrire `beeper.mute`.
+
+      **Leggere:** `lib/USBHostUPS/src/IUPSDriver.h` (hook `beeperControllable`, `shutdownCommandsSupported`), `lib/USBHostUPS/src/IUSBHostUPS.h` (`shutdownCommandsSupported`, `getSupportedCommands`), `lib/USBHostUPS/src/USBHostUPS.{h,cpp}` (`shutdownCommandsSupported()` ~887, stesso lock), `lib/USBHostUPS/src/CommandCatalog.h` (`build()` ~228, `muteField`).
+
+      **Modifiche:**
+      1. `IUPSDriver`: `virtual bool beeperMuteSupported() const { return true; }` con commento (Legrand usa 3 per disabilitare, legrand-hid.c non ha beeper.mute).
+      2. `IUSBHostUPS`: `virtual bool beeperMuteSupported() const { return true; }`; `USBHostUPS` lo implementa delegando al driver sotto `_mutex`, come `shutdownCommandsSupported()`.
+      3. `CommandCatalog::build()`: nuovo parametro `bool mute_allowed = true`; `beeper.mute` disponibile solo se `mute_allowed && beeper_available && muteField(usages)`.
+      4. `IUSBHostUPS::getSupportedCommands()` passa `beeperMuteSupported()`.
+      5. Aggiornare i mock dei test che implementano `IUSBHostUPS` solo se la compilazione lo richiede (il default evita modifiche).
+
+      **Vincoli:** nessun cambiamento per i driver esistenti (default `true`).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUPSDriver.h`
+      - `lib/USBHostUPS/src/IUSBHostUPS.h`
+      - `lib/USBHostUPS/src/USBHostUPS.h`, `lib/USBHostUPS/src/USBHostUPS.cpp`
+      - `lib/USBHostUPS/src/CommandCatalog.h`
+
+      ## Criteri di Completamento
+      - [ ] Con `mute_allowed = false` `build()` non restituisce `beeper.mute`
+      - [ ] Suite `test_command_catalog` e `test_nut_server` invariate e verdi
+    ref: TASK-01
+  - id: TASK-02
+    title: Tabelle Legrand in NutTable.h e voci del registro
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** percorsi dei ritardi e tabella RW del subdriver Legrand, e riconoscimento VID/PID.
+
+      **Leggere:** `lib/USBHostUPS/src/NutTable.h` (`apcDelayPaths`, `ecoflowHid2Nut`, intestazione GPL in cima al file), `lib/USBHostUPS/src/DriverRegistry.cpp`, `lib/USBHostUPS/src/GenericDriver.cpp` (`writableVariables` ~651, per capire cosa produce una tabella vuota), `nut_repo/drivers/legrand-hid.c` (righe dei ritardi e device table).
+
+      **Modifiche:**
+      1. `NutTable::legrandDelayPaths()`: `sd` = `UPS.OutletSystem.Outlet.DelayBeforeShutdown`, `UPS.Output.DelayBeforeShutdown`; `st` = `UPS.OutletSystem.Outlet.DelayBeforeStartup`, `UPS.Output.DelayBeforeStartup` (ordine di legrand-hid.c), con commento che cita le righe upstream.
+      2. `NutTable::legrandHid2Nut(size_t& n)`: nessuna riga RW oltre a `ups.delay.*` (gestite da `applyDefaultDelays`). Se una tabella vuota non è rappresentabile con l'array statico, restituire `n = 0` e un puntatore valido; verificare con `writableVariables` che il risultato sia `LIST RW` = solo `ups.delay.*`.
+      3. Aggiungere `drivers/legrand-hid.c` con le sue righe di copyright all'intestazione GPL di `NutTable.h`.
+      4. `DriverRegistry.cpp`: `{ 0x1CB0, 0x0038, make<LegrandDriver> }` e `{ 0x1CB0, 0x0032, make<LegrandDriver> }` con commenti Keor PDU / Keor SP; include di `LegrandDriver.h` (creato in TASK-03).
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/NutTable.h`
+      - `lib/USBHostUPS/src/DriverRegistry.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Percorsi dei ritardi nell'ordine di upstream
+      - [ ] Intestazione di NutTable.h estesa con legrand-hid.c
+      - [ ] Registro con i due PID
+    ref: TASK-02
+  - id: TASK-03
+    title: 'LegrandDriver: beeper, produttore, ritardi, nessuna conversione'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver Legrand con le scelte del piano (deviazioni 1-6).
+
+      **Leggere:** `lib/USBHostUPS/src/EcoFlowDriver.{h,cpp}` (schema da seguire: GenericDriver + mappature, `onLoop` per il fallback del produttore, `hid2nut`), `lib/USBHostUPS/src/GenericDriver.{h,cpp}` (mappature `AudibleAlarmControl` ~473-492, `_active_beeper`, `UsageMapIndex`), `nut_repo/drivers/legrand-hid.c`.
+
+      **Modifiche (nuovi file `lib/USBHostUPS/src/LegrandDriver.h` e `.cpp`):**
+      1. Intestazione GPL come gli altri driver: SPDX GPL-3.0-or-later, "derived from Network UPS Tools drivers/legrand-hid.c" con le sue righe di copyright (2003-2012 Arnaud Quette, 2005-2006 Peter Selinger, 2008-2009 Arjen de Korte, 2013 Charles Lepple, 2018 Gabriele Taormina for Legrand). Commento "ADR 0003 COMPLIANCE" che elenca le deviazioni 1-6 del piano.
+      2. `class LegrandDriver : public GenericDriver` con `getDriverName()` = "LegrandDriver", `hid2nut()` = `NutTable::legrandHid2Nut`, `delayPaths()` = `NutTable::legrandDelayPaths()`, `beeperMuteSupported()` = false.
+      3. `encodeBeeperValue(enable, bit_size)`: con `bit_size == 1` come la base; altrimenti `enable ? 2 : 3`.
+      4. `decodeReport`: dopo la base, mappature dei tre percorsi `AudibleAlarmControl` (stesso filtro `_active_beeper` della base) che impostano `ups.beeper.status` = "enabled" per 2 e "disabled" per 1 e 3 (campo a 1 bit: come la base).
+      5. `onLoop`: se il dispositivo non ha stringa del produttore e `ups.mfr` manca, impostare "Legrand" (come EcoFlow).
+      6. Nessuna conversione delle tensioni.
+
+      **Blocchi:** se la base imposta `ups.beeper.status` dopo la mappatura del driver (ordine di decodifica), usare lo stesso meccanismo di EcoFlow per far prevalere il valore del driver e annotarlo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/LegrandDriver.h` (nuovo)
+      - `lib/USBHostUPS/src/LegrandDriver.cpp` (nuovo)
+
+      ## Criteri di Completamento
+      - [ ] Compila in nativo e per `esp32-s3-standard`
+      - [ ] Intestazione GPL e commento delle deviazioni presenti
+      - [ ] Nessuna conversione `legrand_times*`/`divide_by_10`
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi del driver Legrand
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire la logica del driver con una suite dedicata, sul modello di `test/test_ecoflow_driver`.
+
+      **Passi:**
+      1. Nuova cartella `test/test_legrand_driver` con `test_main.cpp` (copiare lo schema di includes, mock e runner `main`/`setup` da `test_ecoflow_driver`).
+      2. Test:
+         - `DriverRegistry::create(0x1CB0, 0x0038)` e `(0x1CB0, 0x0032)` danno `LegrandDriver`; `(0x1CB0, 0x0001)` dà `GenericDriver`;
+         - `encodeBeeperValue(true, 8)` = 2, `(false, 8)` = 3, `(true, 1)` = 1, `(false, 1)` = 0;
+         - decodifica di `AudibleAlarmControl`: 2 → enabled, 3 → disabled, 1 → disabled;
+         - catalogo con un campo beeper FEATURE a 8 bit (logical max 3): `beeper.enable`, `beeper.disable`, `beeper.toggle` presenti, `beeper.mute` assente; con un driver che restituisce `beeperMuteSupported() == true` `beeper.mute` presente (non regressione);
+         - `CommandCatalog::resolveWrite` su `UPS.Output.Test`: 1/2/3 per quick/deep/stop;
+         - nessuna conversione: un report con `UPS.PowerSummary.Voltage` grezzo 137 ed esponente HID del Keor PDU dà `battery.voltage` 13.7.
+      3. Mutazione manuale: rimettere `divide_by_10` o `enable ? 2 : 1` deve far fallire almeno un test; annotarlo nella review.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_legrand_driver`.
+
+      ## File Coinvolti
+      - `test/test_legrand_driver/test_main.cpp` (nuovo)
+
+      ## Criteri di Completamento
+      - [ ] Nuova suite verde
+      - [ ] Mutazioni rilevate
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Fixture di replay del Keor PDU 800 (issue #90)'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il replay del dump reale, con comandi e variabili scrivibili attesi.
+
+      **Leggere:** `test/test_record_replay/test_main.cpp` (es. `test_replay_powercom_spd750u`, `test_replay_cyberpower_br700elcd`, macro `RW_DELAYS`), `test/test_record_replay/FixtureReplayRunner.h`, una fixture esistente con `driver` e `scenarios` (es. `test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json`).
+
+      **Passi:**
+      1. Scaricare https://github.com/user-attachments/files/33630309/usb_diagnostics.json e creare `test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json` con lo stesso formato delle altre fixture: `driver` "Legrand"/"LegrandDriver" come le altre, `notes` con origine (#90, firmware v1.7.2), descriptor e report invariati.
+      2. Verificare come gli altri driver trattano un seriale fatto solo di spazi (GenericDriver e `usbhid-ups.c`) e allineare `ups.serial` nella fixture a quel comportamento, senza cambiarlo per gli altri driver.
+      3. `expected_ups_data`: valori del replay con il nuovo driver (`ups.type` LegrandDriver, `ups.beeper.status` enabled, `ups.delay.shutdown` 20, `ups.delay.start` 30, tensioni senza conversioni).
+      4. `test_replay_legrand_keor_pdu800` in `test_record_replay`: comandi attesi `beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep test.battery.stop` più i `load.*`/`shutdown.*` che il catalogo deriva da `UPS.Output.DelayBefore*` (senza `shutdown.reboot`, assente nel descriptor), nessuna riga della tabella NUT oltre ai ritardi, `LIST RW` = `ups.delay.shutdown` e `ups.delay.start`. Registrarlo nei runner.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      ## File Coinvolti
+      - `test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json` (nuovo)
+      - `test/test_record_replay/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Replay verde con i valori attesi della Dimostrazione della spec
+      - [ ] Comportamento del seriale documentato nelle `notes` della fixture
+    ref: TASK-05
+  - id: TASK-06
+    title: 'README: Legrand Keor PDU 800 tra i modelli testati'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare il nuovo supporto.
+
+      **Passi:**
+      1. In `README.md` e `README.it.md`, sezione dei modelli supportati, aggiungere un blocco `<details>` **Legrand** con "Legrand Keor PDU 800", nello stesso stile degli altri marchi (dopo Powercom).
+      2. Nessuna menzione del Keor SP tra i testati (non c'è un dispositivo provato).
+
+      ## File Coinvolti
+      - `README.md`
+      - `README.it.md`
+
+      ## Criteri di Completamento
+      - [ ] Blocco Legrand in entrambi i README, stesse righe
+    ref: TASK-06
+  - id: TASK-07
+    title: Regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla cambia per gli altri driver.
+
+      **Passi:**
+      1. `pio test -e native` completo (rilanciare da sole le suite ERRORED transitorie su Windows).
+      2. `pio run -e esp32-s3-standard`: annotare RAM e flash.
+      3. `npm run e2e`.
+
+      ## File Coinvolti
+      - nessun file modificato
+
+      ## Criteri di Completamento
+      - [ ] Tutte le suite native verdi, nessun test esistente modificato
+      - [ ] Build ok
+      - [ ] e2e verdi
+    ref: TASK-07

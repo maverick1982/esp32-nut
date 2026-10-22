@@ -44,6 +44,13 @@
  *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
  *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
  *                 2020 - 2024 Jim Klimov <jimklimov+nut@gmail.com>
+ *
+ * drivers/legrand-hid.c:
+ *   Copyright (C) 2003 - 2012 Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2013 Charles Lepple <clepple+nut@gmail.com>
+ *                 2018 Gabriele Taormina <gabriele.taormina@legrand.com>, for Legrand
  */
 
 #ifndef NUT_TABLE_H
@@ -728,6 +735,14 @@ inline const DelayPaths* powercomDelayPaths() {
     static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown", "UPS.PowerSummary.0x00FF0057" };
     static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
     static const DelayPaths p = { sd, 2, st, 1 };
+    return &p;
+}
+
+// legrand-hid.c:165-168: OutletSystem.Outlet first, then Output (US-087)
+inline const DelayPaths* legrandDelayPaths() {
+    static const char* const sd[] = { "UPS.OutletSystem.Outlet.DelayBeforeShutdown", "UPS.Output.DelayBeforeShutdown" };
+    static const char* const st[] = { "UPS.OutletSystem.Outlet.DelayBeforeStartup", "UPS.Output.DelayBeforeStartup" };
+    static const DelayPaths p = { sd, 2, st, 2 };
     return &p;
 }
 
