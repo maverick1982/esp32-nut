@@ -86,7 +86,11 @@ protected:
     virtual void buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
     // String descriptors fetched at the start of a full poll (only the missing ones)
     virtual void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const;
-    virtual const char* upsTypeName() const { return getDriverName(); }
+    // True when the device measures ups.realpower in a report this driver reads
+    bool readsActivePower(IUSBHostUPS* host) const;
+    // Text of a string descriptor (bLength, bDescriptorType 0x03, UTF-16LE), with the
+    // inverted strings of some CyberPower firmwares turned back
+    static String decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *data, size_t length);
     // Called by every loop() with the host lock held: values that need no request
     virtual void onLoop(IUSBHostUPS* host, UPSData& data) {}
 
@@ -116,6 +120,7 @@ private:
 
     UsageMapIndex<GenericDriver> _generic_map;
     bool _lists_built;
+    bool _active_power_checked;           // readsActivePower() looked at since setup()
     std::vector<PollItem> _quick;
     std::vector<PollItem> _full;
     std::vector<PollItem> _queue;

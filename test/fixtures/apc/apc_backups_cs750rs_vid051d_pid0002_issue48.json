@@ -1626,7 +1626,7 @@
         "ups.serial": "TEST0000",
         "ups.status.charging": "0",
         "ups.status.discharging": "0",
-        "ups.type": "APCDriver",
+        "driver.name": "APCDriver",
         "battery.charge": "100",
         "battery.runtime": "2400",
         "ups.status.ac_present": "1",

@@ -1494,7 +1494,7 @@
         "ups.firmware": "871.O4 .I",
         "ups.firmware.aux": "O4",
         "ups.serial": "TEST0000",
-        "ups.type": "APCDriver",
+        "driver.name": "APCDriver",
         "battery.charge": "97",
         "battery.runtime": "1860",
         "ups.status.charging": "1",

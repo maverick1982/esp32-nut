@@ -29,7 +29,6 @@ public:
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::powercomDelayPaths(); }
 
 protected:
-    const char* upsTypeName() const override { return "Powercom"; }
     void onLoop(IUSBHostUPS* host, UPSData& data) override;
     // The SPD-750U MCU stalls when control requests come too close (issue #36)
     uint32_t stepSpacingMs() const override { return 800; }

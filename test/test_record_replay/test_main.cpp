@@ -200,14 +200,22 @@ void test_replay_cyberpower_cp1350c(void) {
         // cps-hid.c rows, aux 10: RemainingCapacityLimit FEATURE 0x07 byte 4 [7, 100, 5, 10, ...]
         // = 10; RemainingTimeLimit INPUT 0x08 bytes 4-5 [.., 44, 1] = 300; Input.Low/High
         // VoltageTransfer FEATURE 0x10 [16, 90, 140] (8 bits each)
-        {}, "battery.charge.low:10 battery.runtime.low:10 input.transfer.high:10 input.transfer.low:10 " RW_DELAYS,
+        // cps_battvolt (issue #43): PID 0x0501, 20.8 V on a 12 V battery is above 1.4 x
+        // nominal, so 2/3 of it. Timers as the device reports them (0x0800, 0x0353)
+        { { "battery.voltage", "13.9" }, { "battery.charge.warning", "20" }, { "battery.status", "100%" },
+          { "ups.timer.shutdown", "2048" }, { "ups.timer.start", "851" }, { "ups.realpower", "0" } },
+        "battery.charge.low:10 battery.runtime.low:10 input.transfer.high:10 input.transfer.low:10 " RW_DELAYS,
         "battery.charge.low:10 battery.runtime.low:10 input.transfer.high:10 input.transfer.low:10 " RW_DELAYS);
 }
 
 void test_replay_cyberpower_cp1500epfclcd(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
         CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
-        /* replayed FEATURE 0x1A, CPSInputSensitivity = 2 -> cps_sensitivity_info */ { { "input.sensitivity", "high" } },
+        /* replayed FEATURE 0x1A, CPSInputSensitivity = 2 -> cps_sensitivity_info */ { { "input.sensitivity", "high" },
+          // issue #43: FEATURE 0x07 [7, 100, 5, 10, 20, 10, 100] FullChargeCapacity / WarningCapacityLimit,
+          // FEATURE 0x15/0x16 [.., 255, 255] = -1, battery.voltage "%.1f" as cps_battvolt
+          { "battery.charge.warning", "20" }, { "battery.status", "100%" }, { "battery.voltage", "24.0" },
+          { "ups.timer.shutdown", "-1" }, { "ups.timer.start", "-1" } },
         // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; FEATURE 0x08 bytes 4-5 [.., 44, 1] = 300;
         // FEATURE 0x10 [16, 180, 0, 4, 1] = 180 / 260 (Input.*VoltageTransfer); FEATURE 0x1A
         // [26, 2]. input.sensitivity has info_len 0 upstream (cps-hid.c:416)
@@ -216,7 +224,12 @@ void test_replay_cyberpower_cp1500epfclcd(void) {
 
 void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", nullptr, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
-        /* replayed FEATURE 0x1A, CPSInputSensitivity = 1 -> cps_sensitivity_info */ { { "input.sensitivity", "normal" } },
+        /* replayed FEATURE 0x1A, CPSInputSensitivity = 1 -> cps_sensitivity_info */ { { "input.sensitivity", "normal" },
+          // issue #43: Output.ConfigApparentPower (FEATURE 0x18 [24, 232, 3, 64, 6] = 1600), and
+          // ups.realpower measured by Output.ActivePower (INPUT 0x19 [25, 153, 0], the last
+          // replayed), never replaced by the estimate (16% of 1000 W = 160)
+          { "ups.power.nominal", "1600" }, { "ups.realpower", "153" }, { "battery.voltage", "27.2" },
+          { "battery.charge.warning", "20" }, { "ups.timer.shutdown", "-1" }, { "ups.timer.start", "-1" } },
         // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x08 bytes 4-5 [.., 44, 1] = 300;
         // FEATURE 0x10 [16, 195, 0, 1, 1] = 195 / 257 (Output.*VoltageTransfer, 414-415: no
         // Input.*VoltageTransfer in this descriptor); FEATURE 0x1A [26, 1]

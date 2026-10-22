@@ -53,6 +53,10 @@ public:
         return "";
     }
     uint32_t getQuirks() const override { return _quirks; }
+    uint16_t _vid = 0;
+    uint16_t _pid = 0;
+    uint16_t getVID() const override { return _vid; }
+    uint16_t getPID() const override { return _pid; }
     bool isPollingPaused() const override { return false; }
     bool supportsBeeperToggle() const override {
         if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
@@ -160,6 +164,8 @@ public:
 
         ReplayMockHost& host = s.host;
         UPSData& ups_data = s.ups_data;
+        host._vid = vid;
+        host._pid = pid;
 
         host._iManufacturer = doc["device_desc"]["iManufacturer"] | 0;
         host._iProduct = doc["device_desc"]["iProduct"] | 0;
@@ -255,8 +261,8 @@ public:
                 }
             }
 
-            // Set ups.type directly since loop() isn't called in the replay runner
-            ups_data.set("ups.type", driver->getDriverName());
+            // Set driver.name directly since loop() isn't called in the replay runner
+            ups_data.set("driver.name", driver->getDriverName());
 
             // Assert Expectations
             JsonObject exp = sc["expected_ups_data"].as<JsonObject>();

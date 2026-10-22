@@ -43,6 +43,7 @@
 GenericDriver::GenericDriver() :
     _batteryDateStringIndex(0),
     _lists_built(false),
+    _active_power_checked(false),
     _input_twin{},
     _static_report{},
     _decoded_report{},
@@ -63,6 +64,7 @@ void GenericDriver::setup() {
     _active_beeper = "";
     _generic_map.invalidate();
     _lists_built = false;
+    _active_power_checked = false;
     _quick.clear();
     _full.clear();
     _queue.clear();
@@ -224,6 +226,18 @@ bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, ui
     return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
 }
 
+// The ActivePower usages mapped to ups.realpower, in a report the driver reads: an INPUT
+// report arrives on the interrupt endpoint, a FEATURE report only if it is polled
+bool GenericDriver::readsActivePower(IUSBHostUPS* host) const {
+    for (const auto& u : host->getUsages()) {
+        if (strcmp(u.path, "UPS.Output.ActivePower") != 0 &&
+            strcmp(u.path, "UPS.PowerConverter.Output.ActivePower") != 0) continue;
+        if (u.report_type == 1) return true;
+        if (u.report_type == 3 && acceptPollReport(u.report_type, u.report_id)) return true;
+    }
+    return false;
+}
+
 void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
     if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
@@ -265,8 +279,15 @@ void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     host->lock();
-    if (data.get("ups.type") != upsTypeName()) {
-        data.set("ups.type", upsTypeName());
+    // driver.name, not ups.type: in NUT ups.type is the UPS topology (mge-hid
+    // ConverterType), never the name of the driver
+    if (data.get("driver.name") != getDriverName()) {
+        data.set("driver.name", getDriverName());
+    }
+    // A device that measures ups.realpower gets no estimate, not even before its first read
+    if (!_active_power_checked) {
+        _active_power_checked = true;
+        if (readsActivePower(host)) data.markRealPowerMeasured();
     }
     onLoop(host, data);
     host->unlock();
@@ -375,8 +396,8 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
         { "UPS.PowerConverter.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
         { "UPS.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
         
-        { "UPS.PowerConverter.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
-        { "UPS.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower", String((int)v)); } },
+        { "UPS.PowerConverter.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.markRealPowerMeasured(); d.set("ups.realpower", String((int)v)); } },
+        { "UPS.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.markRealPowerMeasured(); d.set("ups.realpower", String((int)v)); } },
         
         { "UPS.PowerConverter.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
         { "UPS.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
@@ -514,6 +535,14 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
 
 void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
+    String str = decodeStringDescriptor(host, data, length);
+    if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
+    else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
+    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
+    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
+}
+
+String GenericDriver::decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *data, size_t length) {
     uint8_t str_len = data[0];
     String str = "";
     
@@ -538,10 +567,7 @@ void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, cons
             str += c;
         }
     }
-    if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
-    else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
-    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
+    return str;
 }
 
 

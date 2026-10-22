@@ -1183,7 +1183,7 @@
       "expected_ups_data": {
         "ups.mfr": "Legrand",
         "ups.model": "KEOR PDU 800",
-        "ups.type": "LegrandDriver",
+        "driver.name": "LegrandDriver",
         "ups.serial": "                ",
         "battery.charge": "100",
         "battery.runtime": "2160",

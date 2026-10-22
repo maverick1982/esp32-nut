@@ -1122,7 +1122,7 @@
         "ups.mfr": "American Power Conversion",
         "ups.model": "Back-UPS BX750MI",
         "ups.serial": "TEST0000",
-        "ups.type": "APCDriver",
+        "driver.name": "APCDriver",
         "battery.charge": "97",
         "ups.status.charging": "1",
         "ups.status.discharging": "0",

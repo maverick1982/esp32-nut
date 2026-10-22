@@ -12,6 +12,7 @@ struct UPSParameter {
 struct UPSData {
 private:
     std::vector<UPSParameter> _parameters;
+    bool _realPowerMeasured = false;
 
 public:
     UPSData() {
@@ -133,7 +134,15 @@ public:
         return status;
     }
 
+    // The device measures ups.realpower (ActivePower): updateRealPower() never estimates
+    // it, so the estimate does not overwrite the measure between two reports
+    void markRealPowerMeasured() { _realPowerMeasured = true; }
+    bool realPowerMeasured() const { return _realPowerMeasured; }
+
+    // ups.realpower from the load and the nominal power, only for devices that do not
+    // measure it (not an upstream value)
     void updateRealPower() {
+        if (_realPowerMeasured) return;
         if (!hasKey("ups.load")) return;
         uint8_t loadPct = (uint8_t)getFloat("ups.load");
         

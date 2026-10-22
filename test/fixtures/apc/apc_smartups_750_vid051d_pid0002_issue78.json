@@ -1653,7 +1653,7 @@
         "ups.firmware.aux": "7.3",
         "ups.delay.shutdown": "20",
         "ups.delay.start": "30",
-        "ups.type": "APCDriver",
+        "driver.name": "APCDriver",
         "ups.beeper.status": "disabled",
         "battery.mfr.date": "2023/01/31",
         "battery.charge": "100",
