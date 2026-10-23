@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: HIGH
 points: 5
-status: PLANNED
+status: REVIEW
 body: |
   #### US-095: Recupero della memoria heap su ESP-IDF 5.5 (sdkconfig personalizzato ed export della diagnostica a pezzi)
 
@@ -19,22 +19,28 @@ body: |
   in modo che la scheda regga il caso peggiore (8 client NUT, Web UI aperta, export della diagnostica) con un margine simile a prima del cambio di piattaforma.
 
   **Dimostrazione**
-  Con `scripts/load_test.py` nelle stesse condizioni della US-089 (900 s, 8 slot NUT occupati, Web UI ogni 2 s, export ogni 60 s), il `min free` torna sopra i 90 KB (v1.8.0: 99 188; idf55-v1: 53 252) e l'heap a riposo si avvicina alla v1.8.0. I risultati sono annotati nel piano IDF 5.5 accanto a quelli della US-089.
+  Con `scripts/load_test.py` nelle stesse condizioni della US-089 (900 s, 8 slot NUT occupati, Web UI ogni 2 s, export ogni 60 s), il `min free` resta di almeno 75 KB con l'export ogni 60 s e di almeno 100 KB senza export (v1.8.0: 99 188; idf55-v1: 53 252), e l'heap a riposo si avvicina alla v1.8.0. I risultati sono annotati nel piano IDF 5.5 accanto a quelli della US-089.
 
   **Criteri di Accettazione**
-  - [ ] Un `sdkconfig` del progetto (`custom_sdkconfig` di pioarduino) riduce il costo fisso della piattaforma, valutando almeno: stack del task `esp_timer` (8 KB → 4 KB), stack dei task IPC, statistiche di FreeRTOS (`TRACE_FACILITY`, `RUN_TIME_STATS`), controller Bluetooth (non usato), `USB_HOST_CONTROL_TRANSFER_MAX_SIZE`. Per ogni opzione cambiata, il risparmio misurato e il motivo per cui è sicura sono annotati nel piano IDF 5.5.
+  - [ ] Un `sdkconfig` del progetto (`custom_sdkconfig` di pioarduino) è valutato come riduzione del costo fisso della piattaforma, valutando almeno: stack del task `esp_timer` (8 KB → 4 KB), stack dei task IPC, statistiche di FreeRTOS (`TRACE_FACILITY`, `RUN_TIME_STATS`), controller Bluetooth (non usato), `USB_HOST_CONTROL_TRANSFER_MAX_SIZE`. Per ogni opzione cambiata, il risparmio misurato e il motivo per cui è sicura sono annotati nel piano IDF 5.5.
   - [ ] Le opzioni USB che cambiano il comportamento dello stack (bias della FIFO, hub, filtro di enumerazione) restano quelle della US-089, salvo una prova esplicita con l'Eaton 3S.
   - [ ] `/api/usb/dump` invia l'export a pezzi invece di costruire un'unica stringa: stesso contenuto JSON, byte per byte, verificato da un test.
-  - [ ] Il test di carico nelle condizioni della US-089 dà `min free` di almeno 90 KB e nessun errore NUT o web; heap a riposo e dopo 1 h annotati.
+  - [ ] Il test di carico nelle condizioni della US-089 dà `min free` di almeno 75 KB con l'export della diagnostica ogni 60 s e di almeno 100 KB senza export, e nessun errore NUT o web; heap a riposo e dopo 1 h annotati.
   - [ ] Regressione: test nativi, replay ed e2e verdi; `upsc`, `upscmd -l` e `upsrw` sull'Eaton 3S identici alla baseline; core dump e Task WDT ancora funzionanti.
   - [ ] Tempo della prima build e impatto sulla CI annotati: `custom_sdkconfig` ricompila le librerie ESP-IDF.
 
   **Assunzioni**
   - **Origine:** validazione della US-089 (piano IDF 5.5, §10): nessuna regressione funzionale, ma un costo fisso di circa 40-46 KB e una frammentazione maggiore.
   - **Rilascio:** la versione con IDF 5.5 non si pubblica prima di questa spec.
-  - **Fuori ambito:** cambi di funzionalità; reset della porta USB senza riavvio.
+  - **Criterio rivisto (2026-10-23):** la soglia unica di 90 KB è diventata 75 KB con l'export ogni 60 s e 100 KB senza export. Misure sull'Eaton 3S con la configurazione finale: 80 660 con l'export, 105 000 senza. L'export costa da solo circa 25 KB di picco, perché il `JsonDocument` resta intero in memoria; toglierlo è la US-096. Decisione dell'utente.
+  - **Decisione (2026-10-23):** `custom_sdkconfig` funziona e porta il libero a riposo da 150 516 a 167 484 e il `min free` sotto carico con l'export da 74 688 a 80 660, ma non è adottato per ora: il guadagno sotto carico non giustifica la ricompilazione di ESP-IDF in ogni build e release. Il firmware resta sulle librerie precompilate con l'export a pezzi. Opzioni, procedura e misure sono archiviate in `docs/plans/custom-sdkconfig.md` per riattivarlo se servirà; l'obiettivo di margine sotto carico passa alla US-096. I criteri di carico qui sopra sono stati verificati con `custom_sdkconfig` attivo. Decisione dell'utente.
+  - **Fuori ambito:** cambi di funzionalità; reset della porta USB senza riavvio; export senza `JsonDocument` (US-096).
 history:
   - status: TODO
     at: "2026-10-21T20:04:07Z"
   - status: PLANNED
     at: "2026-10-22T15:18:27Z"
+  - status: IN PROGRESS
+    at: "2026-10-22T16:13:25Z"
+  - status: REVIEW
+    at: "2026-10-23T15:00:46Z"

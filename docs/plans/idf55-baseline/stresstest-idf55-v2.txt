@@ -1,0 +1,104 @@
+Running for 900 s: 7 NUT clients, web UI. Ctrl+C stops early.
+[  14 s] NUT ok 49, errors 0 | web ok 18, errors 0, dumps 1 | heap free 145076, min free 92192, largest 102388
+[  24 s] NUT ok 82, errors 0 | web ok 30, errors 0, dumps 1 | heap free 145096, min free 92192, largest 100340
+[  34 s] NUT ok 111, errors 0 | web ok 45, errors 0, dumps 1 | heap free 144308, min free 92192, largest 102388
+[  44 s] NUT ok 146, errors 0 | web ok 60, errors 0, dumps 1 | heap free 146708, min free 92192, largest 104436
+[  54 s] NUT ok 174, errors 0 | web ok 72, errors 0, dumps 1 | heap free 134448, min free 92192, largest 86004
+[  64 s] NUT ok 209, errors 0 | web ok 87, errors 0, dumps 2 | heap free 146516, min free 91884, largest 98292
+[  74 s] NUT ok 237, errors 0 | web ok 99, errors 0, dumps 2 | heap free 135240, min free 91884, largest 86004
+[  84 s] NUT ok 265, errors 0 | web ok 111, errors 0, dumps 2 | heap free 135292, min free 91884, largest 75764
+[  94 s] NUT ok 293, errors 0 | web ok 123, errors 0, dumps 2 | heap free 146544, min free 91884, largest 96244
+[ 104 s] NUT ok 328, errors 0 | web ok 135, errors 0, dumps 2 | heap free 146500, min free 91884, largest 102388
+[ 114 s] NUT ok 356, errors 0 | web ok 147, errors 0, dumps 2 | heap free 134472, min free 91884, largest 83956
+[ 124 s] NUT ok 391, errors 0 | web ok 162, errors 0, dumps 3 | heap free 135256, min free 91884, largest 83956
+[ 134 s] NUT ok 419, errors 0 | web ok 174, errors 0, dumps 3 | heap free 134444, min free 91884, largest 88052
+[ 144 s] NUT ok 454, errors 0 | web ok 189, errors 0, dumps 3 | heap free 135296, min free 91884, largest 92148
+[ 154 s] NUT ok 482, errors 0 | web ok 201, errors 0, dumps 3 | heap free 134448, min free 91884, largest 83956
+[ 164 s] NUT ok 517, errors 0 | web ok 215, errors 0, dumps 3 | heap free 135304, min free 91884, largest 81908
+[ 174 s] NUT ok 545, errors 0 | web ok 228, errors 0, dumps 3 | heap free 133688, min free 91884, largest 86004
+[ 184 s] NUT ok 573, errors 0 | web ok 240, errors 0, dumps 3 | heap free 135284, min free 91884, largest 86004
+[ 194 s] NUT ok 608, errors 0 | web ok 255, errors 0, dumps 4 | heap free 132848, min free 91884, largest 83956
+[ 204 s] NUT ok 636, errors 0 | web ok 267, errors 0, dumps 4 | heap free 134468, min free 91884, largest 79860
+[ 214 s] NUT ok 664, errors 0 | web ok 279, errors 0, dumps 4 | heap free 146532, min free 91884, largest 102388
+[ 224 s] NUT ok 699, errors 0 | web ok 289, errors 0, dumps 4 | heap free 146520, min free 91884, largest 102388
+[ 234 s] NUT ok 727, errors 0 | web ok 300, errors 0, dumps 4 | heap free 146532, min free 91884, largest 102388
+[ 244 s] NUT ok 755, errors 0 | web ok 315, errors 0, dumps 4 | heap free 146536, min free 91884, largest 102388
+[ 254 s] NUT ok 790, errors 0 | web ok 327, errors 0, dumps 5 | heap free 146540, min free 91884, largest 102388
+[ 264 s] NUT ok 818, errors 0 | web ok 339, errors 0, dumps 5 | heap free 146544, min free 91884, largest 102388
+[ 274 s] NUT ok 846, errors 0 | web ok 351, errors 0, dumps 5 | heap free 135280, min free 91884, largest 94196
+[ 284 s] NUT ok 874, errors 0 | web ok 360, errors 0, dumps 5 | heap free 134448, min free 91884, largest 88052
+[ 294 s] NUT ok 909, errors 0 | web ok 369, errors 0, dumps 5 | heap free 146500, min free 91884, largest 104436
+[ 304 s] NUT ok 937, errors 0 | web ok 384, errors 0, dumps 5 | heap free 146496, min free 91884, largest 102388
+[ 314 s] NUT ok 972, errors 0 | web ok 396, errors 0, dumps 6 | heap free 146532, min free 91884, largest 102388
+[ 324 s] NUT ok 1000, errors 0 | web ok 408, errors 0, dumps 6 | heap free 146536, min free 91884, largest 102388
+[ 334 s] NUT ok 1035, errors 0 | web ok 423, errors 0, dumps 6 | heap free 146536, min free 91884, largest 102388
+[ 344 s] NUT ok 1063, errors 0 | web ok 435, errors 0, dumps 6 | heap free 146532, min free 91884, largest 102388
+[ 354 s] NUT ok 1091, errors 0 | web ok 450, errors 0, dumps 6 | heap free 146536, min free 91884, largest 102388
+[ 364 s] NUT ok 1126, errors 0 | web ok 462, errors 0, dumps 6 | heap free 146540, min free 91884, largest 104436
+[ 374 s] NUT ok 1156, errors 0 | web ok 477, errors 0, dumps 7 | heap free 146532, min free 91884, largest 102388
+[ 384 s] NUT ok 1189, errors 0 | web ok 489, errors 0, dumps 7 | heap free 144916, min free 91884, largest 90100
+[ 394 s] NUT ok 1224, errors 0 | web ok 504, errors 0, dumps 7 | heap free 135260, min free 91884, largest 81908
+[ 404 s] NUT ok 1252, errors 0 | web ok 516, errors 0, dumps 7 | heap free 135288, min free 91884, largest 90100
+[ 414 s] NUT ok 1284, errors 0 | web ok 529, errors 0, dumps 7 | heap free 134436, min free 91884, largest 88052
+[ 424 s] NUT ok 1315, errors 0 | web ok 543, errors 0, dumps 7 | heap free 134424, min free 91884, largest 88052
+[ 434 s] NUT ok 1343, errors 0 | web ok 555, errors 0, dumps 8 | heap free 146500, min free 91860, largest 88052
+[ 444 s] NUT ok 1378, errors 0 | web ok 570, errors 0, dumps 8 | heap free 134480, min free 91860, largest 83956
+[ 454 s] NUT ok 1406, errors 0 | web ok 582, errors 0, dumps 8 | heap free 135292, min free 91860, largest 88052
+[ 464 s] NUT ok 1436, errors 0 | web ok 594, errors 0, dumps 8 | heap free 140092, min free 91860, largest 88052
+[ 474 s] NUT ok 1469, errors 0 | web ok 609, errors 0, dumps 8 | heap free 146496, min free 91860, largest 88052
+[ 484 s] NUT ok 1499, errors 0 | web ok 621, errors 0, dumps 8 | heap free 133688, min free 91860, largest 81908
+[ 494 s] NUT ok 1534, errors 0 | web ok 636, errors 0, dumps 9 | heap free 146520, min free 91860, largest 88052
+[ 504 s] NUT ok 1564, errors 0 | web ok 648, errors 0, dumps 9 | heap free 146532, min free 91860, largest 88052
+[ 514 s] NUT ok 1597, errors 0 | web ok 663, errors 0, dumps 9 | heap free 138472, min free 91860, largest 88052
+[ 524 s] NUT ok 1627, errors 0 | web ok 675, errors 0, dumps 9 | heap free 138480, min free 91860, largest 86004
+[ 534 s] NUT ok 1662, errors 0 | web ok 690, errors 0, dumps 9 | heap free 140072, min free 91860, largest 88052
+[ 544 s] NUT ok 1690, errors 0 | web ok 702, errors 0, dumps 9 | heap free 141684, min free 91860, largest 88052
+[ 554 s] NUT ok 1725, errors 0 | web ok 716, errors 0, dumps 10 | heap free 146520, min free 91860, largest 88052
+[ 564 s] NUT ok 1746, errors 0 | web ok 726, errors 0, dumps 10 | heap free 135252, min free 91860, largest 83956
+[ 574 s] NUT ok 1781, errors 0 | web ok 738, errors 0, dumps 10 | heap free 146536, min free 91860, largest 88052
+[ 584 s] NUT ok 1809, errors 0 | web ok 753, errors 0, dumps 10 | heap free 146536, min free 91860, largest 88052
+[ 594 s] NUT ok 1844, errors 0 | web ok 765, errors 0, dumps 10 | heap free 146524, min free 91860, largest 88052
+[ 604 s] NUT ok 1872, errors 0 | web ok 780, errors 0, dumps 10 | heap free 146536, min free 91860, largest 88052
+[ 614 s] NUT ok 1907, errors 0 | web ok 792, errors 0, dumps 11 | heap free 146536, min free 91860, largest 88052
+[ 624 s] NUT ok 1935, errors 0 | web ok 804, errors 0, dumps 11 | heap free 146540, min free 91860, largest 88052
+[ 634 s] NUT ok 1970, errors 0 | web ok 819, errors 0, dumps 11 | heap free 146544, min free 91860, largest 88052
+[ 644 s] NUT ok 1998, errors 0 | web ok 831, errors 0, dumps 11 | heap free 146540, min free 91860, largest 88052
+[ 654 s] NUT ok 2026, errors 0 | web ok 846, errors 0, dumps 11 | heap free 146536, min free 91860, largest 88052
+[ 664 s] NUT ok 2061, errors 0 | web ok 858, errors 0, dumps 11 | heap free 136884, min free 91860, largest 86004
+[ 674 s] NUT ok 2089, errors 0 | web ok 870, errors 0, dumps 11 | heap free 138508, min free 91860, largest 88052
+[ 684 s] NUT ok 2124, errors 0 | web ok 885, errors 0, dumps 12 | heap free 134460, min free 91860, largest 81908
+[ 694 s] NUT ok 2152, errors 0 | web ok 897, errors 0, dumps 12 | heap free 135248, min free 91860, largest 88052
+[ 704 s] NUT ok 2187, errors 0 | web ok 912, errors 0, dumps 12 | heap free 136060, min free 91860, largest 88052
+[ 714 s] NUT ok 2215, errors 0 | web ok 924, errors 0, dumps 12 | heap free 135312, min free 91860, largest 77812
+[ 724 s] NUT ok 2250, errors 0 | web ok 939, errors 0, dumps 12 | heap free 134444, min free 91860, largest 83956
+[ 734 s] NUT ok 2278, errors 0 | web ok 951, errors 0, dumps 12 | heap free 135296, min free 91860, largest 86004
+[ 744 s] NUT ok 2307, errors 0 | web ok 964, errors 0, dumps 13 | heap free 135248, min free 91860, largest 81908
+[ 754 s] NUT ok 2341, errors 0 | web ok 978, errors 0, dumps 13 | heap free 132052, min free 91860, largest 77812
+[ 764 s] NUT ok 2369, errors 0 | web ok 990, errors 0, dumps 13 | heap free 136836, min free 91860, largest 71668
+[ 774 s] NUT ok 2397, errors 0 | web ok 1002, errors 0, dumps 13 | heap free 140892, min free 91860, largest 88052
+[ 784 s] NUT ok 2429, errors 0 | web ok 1011, errors 0, dumps 13 | heap free 146508, min free 91860, largest 88052
+[ 794 s] NUT ok 2459, errors 0 | web ok 1023, errors 0, dumps 13 | heap free 146536, min free 91860, largest 88052
+[ 804 s] NUT ok 2494, errors 0 | web ok 1038, errors 0, dumps 14 | heap free 146532, min free 91860, largest 88052
+[ 814 s] NUT ok 2522, errors 0 | web ok 1050, errors 0, dumps 14 | heap free 135264, min free 91860, largest 81908
+[ 824 s] NUT ok 2550, errors 0 | web ok 1062, errors 0, dumps 14 | heap free 134472, min free 91860, largest 83956
+[ 834 s] NUT ok 2585, errors 0 | web ok 1074, errors 0, dumps 14 | heap free 146516, min free 91860, largest 88052
+[ 844 s] NUT ok 2613, errors 0 | web ok 1089, errors 0, dumps 14 | heap free 146500, min free 91860, largest 88052
+[ 854 s] NUT ok 2647, errors 0 | web ok 1101, errors 0, dumps 14 | heap free 146536, min free 91860, largest 88052
+[ 864 s] NUT ok 2669, errors 0 | web ok 1113, errors 0, dumps 15 | heap free 135264, min free 80660, largest 81908
+[ 874 s] NUT ok 2704, errors 0 | web ok 1128, errors 0, dumps 15 | heap free 135264, min free 80660, largest 81908
+[ 884 s] NUT ok 2732, errors 0 | web ok 1140, errors 0, dumps 15 | heap free 127976, min free 80660, largest 83956
+[ 894 s] NUT ok 2767, errors 0 | web ok 1155, errors 0, dumps 15 | heap free 134456, min free 80660, largest 88052
+[ 904 s] NUT ok 2795, errors 0 | web ok 1167, errors 0, dumps 15 | heap free 132876, min free 80660, largest 83956
+
+=== Summary ===
+nut1: 399 polls ok, 0 errors
+nut2: 400 polls ok, 0 errors
+nut3: 399 polls ok, 0 errors
+nut4: 400 polls ok, 0 errors
+nut5: 399 polls ok, 0 errors
+nut6: 400 polls ok, 0 errors
+nut7: 398 polls ok, 0 errors
+Client beyond the 7 slots: ERR FAILED - Max clients reached
+Web: 1167 requests ok, 0 errors, 15 USB dumps
+Heap: lowest free 124040, min free 80660, smallest largest block 71668
+FAIL: heap_min_free 80660 vs threshold 90000

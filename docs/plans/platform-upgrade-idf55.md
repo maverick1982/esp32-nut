@@ -18,7 +18,7 @@ assert failed: root_port_handle_events hub.c:837 (p_hub_driver_obj->single_threa
 
 L'assert è nello stack USB host di ESP-IDF, precompilato nel core Arduino (`libusb.a`). Il nostro codice non può correggerlo né aggirarlo. L'unica strada è un IDF più recente, quindi una nuova piattaforma.
 
-**Stato:** in corso (US-089, branch `feature/pdr-0002-multi-board`).
+**Stato:** in corso (US-089 e US-095, branch `feature/pdr-0002-multi-board`).
 
 ## 2. Versioni
 
@@ -75,7 +75,7 @@ Oggi, quando un URB di EP0 non torna (ADR 0008) o il device non risponde più, l
 
 Altre API nuove nella 5.5, oggi non necessarie: `usb_host_get_config_desc()` / `usb_host_free_config_desc()` (multi-configurazione).
 
-### 3.3 `custom_sdkconfig` di pioarduino (da verificare)
+### 3.3 `custom_sdkconfig` di pioarduino (verificato nella US-095, §11)
 
 Le release recenti di pioarduino permettono di impostare opzioni sdkconfig anche con `framework = arduino`, ricompilando le librerie. Va verificato sulla versione scelta. Potrebbe:
 - sostituire il trucco `-Wl,--wrap=esp_core_dump_write` (ADR 0008) con una configurazione reale del core dump;
@@ -84,11 +84,13 @@ Le release recenti di pioarduino permettono di impostare opzioni sdkconfig anche
 
 Costo: la prima build è molto più lunga, e va verificato l'impatto sulla CI (`release.yml`).
 
+Verificato nella US-095: funziona con la 55.03.312-1 e recupera memoria (§11), ma per ora non è adottato (§11.8). Procedura per riattivarlo in `custom-sdkconfig.md`. L'intercettazione del core dump resta com'è.
+
 ### 3.4 Guadagni minori dal core Arduino (3.0.4 → 3.3.12)
 
 Voci delle note di rilascio che toccano componenti che usiamo; nessuna è legata a problemi osservati nei nostri log:
 - **WebServer:** "Harden security and fix hangs" (3.3.12, arduino-esp32#12794). Il WebServer gira nel loopTask sotto Task WDT, e un blocco lì causa un panic.
-- **WebServer:** risposte chunked (3.3.2, #11894). `/api/usb/dump` e `/api/logs` si potrebbero mandare a pezzi invece di costruire un'unica `String`, con meno picchi di heap (utile per S6 e i soak test).
+- **WebServer:** risposte chunked (3.3.2, #11894). `/api/usb/dump` e `/api/logs` si potrebbero mandare a pezzi invece di costruire un'unica `String`, con meno picchi di heap (utile per S6 e i soak test). Fatto per `/api/usb/dump` nella US-095 (§11.4); `/api/logs` resta com'è.
 - **WebServer:** reset di `_contentLength` dopo lo streaming (3.3.8, #12385).
 - **Update / OTA:** controllo della partizione OTA libera (3.3.6, #12264); checksum SHA-256 opzionale del firmware (3.3.12, #12824).
 - **WiFi:** correzione dei crash nei cicli init/deinit (3.3.9, #12592). Rilevante solo se passiamo tra AP e STA a runtime.
@@ -192,3 +194,148 @@ Prove del 2026-10-21 sulla scheda dell'utente con un Eaton 3S 700, firmware `idf
   - loopTask occupato per 60 s senza `esp_task_wdt_reset()`: il Task WDT va in panic dopo 30 s, riavvio con `Reset reason: TASK_WDT` e riepilogo del core dump del `loopTask`.
 
   L'intercettazione `-Wl,--wrap=esp_core_dump_write` (ADR 0008) funziona anche sulla 5.5. In entrambi i casi la scheda riparte e serve i dati in meno di 2 s.
+
+## 11. Recupero della memoria (US-095)
+
+Misure del 2026-10-22 e 2026-10-23 sulla scheda dell'utente con l'Eaton 3S (flash via seriale, log dalla UART, stessa sessione di prova per i confronti).
+
+### 11.0 Opzioni della v1.8.0 e della 5.5 a confronto
+
+Dai `sdkconfig` precompilati delle due piattaforme (copie in `idf55-baseline/sdkconfig-precompiled-51.03.04.txt` e `sdkconfig-precompiled-55.03.312-1.txt`), sulle opzioni valutate dalla US-095:
+
+| Opzione | v1.8.0 (51.03.04, IDF 5.1) | 55.03.312-1 (IDF 5.5.5) |
+|---|---|---|
+| `ESP_TIMER_TASK_STACK_SIZE` | 4096 | 8192 |
+| `ESP_IPC_TASK_STACK_SIZE` (per core) | 1024 | 2048 |
+| `FREERTOS_USE_TRACE_FACILITY` | n | y |
+| `FREERTOS_GENERATE_RUN_TIME_STATS` | n | y |
+| `FREERTOS_USE_STATS_FORMATTING_FUNCTIONS` | n | y |
+| `USB_HOST_CONTROL_TRANSFER_MAX_SIZE` | 256 | 3000 |
+| `BT_ENABLED` | y | y |
+| `SPIRAM` | y | y |
+
+Buffer Wi-Fi, lwIP (socket, finestre TCP, stack di `tiT`), stack di `sys_evt`, del timer di FreeRTOS e del main task sono uguali. Le opzioni che la US-095 riporta ai valori della v1.8.0 sono quindi già state usate in produzione su questa scheda. Bluetooth e PSRAM erano attivi anche nella v1.8.0.
+
+### 11.1 Bilancio sulla scheda (TASK-01, 2026-10-23)
+
+Due build temporanee con la stessa patch di misura (righe `[MEM]` all'avvio e stack minimo libero dei task ogni 5 minuti), sulla scheda dell'utente con l'Eaton 3S, flash via seriale e log dalla UART: `mem-idf55` (codice del branch, librerie 5.5 precompilate, come idf55-v1) e `mem-v180` (tag v1.8.0). Stesse condizioni per le due: 10 minuti a riposo, poi `load_test.py` per 900 s con 7 client dello script e il client esterno sull'ottavo slot. Report in `idf55-baseline/stresstest-mem-idf55.txt` e `stresstest-mem-v180.txt`.
+
+**Heap durante l'avvio** (byte):
+
+| | v1.8.0 | 5.5 | Differenza |
+|---|---|---|---|
+| Heap interno totale | 356 852 | 346 344 | −10 508 |
+| Libero a inizio `setup()` | 314 240 | 294 848 | −19 392 |
+| Costo di `network_mgr.begin()` (Wi-Fi) | 50 168 | 62 032 | +11 864 |
+| Costo di server web, auth e attesa di 3 s | 8 348 | 8 436 | +88 |
+| Costo di `usb_ups.begin()` e server NUT | 28 132 | 32 320 | +4 188 |
+| Libero a fine `setup()` | 227 592 | 192 060 | −35 532 |
+
+**A riposo e sotto carico** (byte):
+
+| | v1.8.0 | 5.5 | Differenza |
+|---|---|---|---|
+| Libero dopo 10 minuti | 188 736 | 150 516 | −38 220 |
+| Blocco più grande dopo 10 minuti | 176 116 | 102 388 | −73 728 |
+| Libero più basso sotto carico | 154 224 | 113 464 | −40 760 |
+| `min free` sotto carico | 112 884 | 74 688 | −38 196 |
+| Blocco più grande, minimo sotto carico | 114 676 | 61 428 | −53 248 |
+
+Il carico costa lo stesso sulle due piattaforme (circa 76 KB dal riposo al `min free`). Il costo fisso della 5.5 si divide così: circa 10,5 KB di heap totale in meno (memoria statica e riservata delle librerie), circa 9 KB allocati prima di `setup()` (stack più grandi dei task di sistema, vedi sotto), circa 12 KB in più all'avvio del Wi-Fi e circa 4 KB in più per lo stack USB e il server NUT. Questo `min free` della 5.5 (74 688) è più alto di quello della US-089 (53 252, §10) nelle stesse condizioni: fra due sessioni di prova la variabilità è di circa 20 KB, quindi i confronti valgono solo nella stessa sessione.
+
+Durante il test della v1.8.0 il Wi-Fi è caduto una volta per 15 s (`[NETWORK] Wi-Fi connection lost!`, riconnessione automatica, tutti gli 8 client ricollegati subito): un errore NUT per client e un errore web nel report, non legati alla memoria.
+
+**Stack dei task di sistema** (minimo libero dall'avvio, dopo il carico; byte):
+
+| Task | Stack 5.5 | Usato 5.5 | Stack v1.8.0 | Usato v1.8.0 |
+|---|---|---|---|---|
+| `esp_timer` | 8192 | 488 | 4096 | 504 |
+| `ipc0` | 2048 | 768 | 1024 | 836 |
+| `ipc1` | 2048 | 760 | 1024 | 776 |
+
+Gli altri task (`tiT`, `sys_evt`, `wifi`, `Tmr Svc`, `usb_host_events`, `USB HID Host`, `ups_poll`, `loopTask`) hanno stack uguali sulle due piattaforme e margini ampi. Applicando la regola del piano (massimo tra il minimo e uso + 1024, arrotondato a 512):
+- `esp_timer`: max(4096, 1512) = **4096**, il valore della v1.8.0 (risparmio atteso 4 KB);
+- IPC: arrotondato(768 + 1024) = **2048**, cioè nessuna modifica. La v1.8.0 usava 1024 con meno di 250 byte di margine: la regola lo esclude.
+
+### 11.2 `custom_sdkconfig` (TASK-05, 2026-10-22)
+
+- **Meccanismo.** `custom_sdkconfig = file://sdkconfig.esp32-nut` in `[env:esp32-s3-standard]`. Il file contiene solo le opzioni cambiate, con un commento per ciascuna. La piattaforma ricompila le librerie ESP-IDF del core Arduino (HybridCompile) e genera nella radice del progetto `sdkconfig.defaults`, `sdkconfig.esp32-s3-standard`, `.dummy/` e `managed_components/`, da mettere nel `.gitignore` quando lo si attiva (`custom-sdkconfig.md` §3). Copia del `sdkconfig` precompilato della 55.03.312-1 in `idf55-baseline/sdkconfig-precompiled-55.03.312-1.txt`.
+- **Tempi su Windows** (portatile dell'utente, PowerShell, `PLATFORMIO_CACHE_DIR` corto): prima build dopo `clean` 16,2 minuti (ricompilazione di ESP-IDF, circa 13 minuti, più la build Arduino); build incrementale senza modifiche 152 s. Ogni modifica di `sdkconfig.esp32-nut` ripete la ricompilazione di ESP-IDF. La piattaforma avvisa che senza `LongPathsEnabled` la build è più lenta, ma funziona.
+- **`sdkconfig` generato contro precompilato.** Oltre all'opzione del file (`CONFIG_ESP_TIMER_TASK_STACK_SIZE` 8192 → 4096, confermato dal bilancio del §11.1), la piattaforma cambia da sola:
+  - PSRAM disattivata (`CONFIG_SPIRAM`, `CONFIG_ESP32S3_SPIRAM_SUPPORT`): la scheda `esp32-s3-devkitc-1` N8 non ha PSRAM;
+  - flash allineata alla scheda: DIO e 8 MB invece di QIO e 16 MB del precompilato generico.
+
+  Le librerie non usate (camera, Matter, TinyUSB in modalità device, riconoscimento vocale) non sono più compilate. Invariati: `USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT=y`, `USB_HOST_HUBS_SUPPORTED=y`, `USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y`, `USB_HOST_CONTROL_TRANSFER_MAX_SIZE=3000`, core dump in flash in formato ELF (stack del core dump 1792), `ESP_TASK_WDT_PANIC=y`, buffer Wi-Fi (8 RX statici, 32 RX dinamici, 8 TX statici). `__wrap_esp_core_dump_write` resta collegato (`firmware.map`).
+- **Dimensioni.** RAM statica 54 304 byte (16,6%, prima 54 384), flash 1 963 465 byte (47,6%, prima 1 967 621).
+
+### 11.3 Opzioni una per volta (TASK-06, 2026-10-23)
+
+Una build per variante, flash via seriale sulla scheda dell'utente con l'Eaton 3S, heap dalle righe `[DIAG] Heap` nei primi 10 minuti dopo il reset (media dei minuti 3-10, più stabile dell'ultimo valore). Ogni variante aggiunge un'opzione alla precedente. Riferimento: `mem-idf55` del §11.1 (librerie precompilate).
+
+| Variante | Opzioni rispetto al precompilato | Libero a riposo (media) | `min free` | Blocco più grande | Differenza | Esito |
+|---|---|---|---|---|---|---|
+| precompilato | nessuna | 149 175 | 132 912 | 102 388 | — | — |
+| b0 | PSRAM spenta (decisa dalla piattaforma) | 159 426 | 140 792 | 116 724 | +10 251 | inevitabile con `custom_sdkconfig` |
+| b1 | + `ESP_TIMER_TASK_STACK_SIZE=4096` | 163 600 | 145 064 | 118 772 | +4 174 | tenuta |
+| b2 | + statistiche di FreeRTOS spente | 164 864 | 147 488 | 122 868 | +1 264 | tenuta |
+| b3 | + `BT_ENABLED` spento | 164 415 | 144 148 | 118 772 | −449 (rumore) | scartata |
+| b4 | + `USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256` | 167 475 | 151 388 | 124 916 | +3 060 | tenuta |
+
+- **IPC:** non provata: la regola del §11.1 lascia lo stack a 2048.
+- **Bluetooth:** spegnerlo toglie 428 byte di RAM statica e 8 KB di flash, ma non cambia l'heap: il core Arduino rilascia già la memoria del controller quando il Bluetooth non è usato. Scartato per non allontanarsi dalla configurazione del core senza un guadagno.
+- **Statistiche di FreeRTOS:** la build collega senza errori, quindi né il core né le librerie le usano. Erano spente anche nella v1.8.0.
+- **Trasferimenti di controllo USB a 256:** l'Eaton 3S si enumera all'avvio e serve i dati come prima (prima lettura completa in 1,7 s).
+- **PSRAM:** non è un'opzione del file. La piattaforma la spegne da sola quando ricompila per una scheda senza PSRAM, ed è il guadagno più grande.
+- **Totale a riposo:** circa 18 KB rispetto alle librerie precompilate (da 149 a 167 KB circa), metà della differenza con la v1.8.0 (188 736, §11.1).
+
+Note pratiche sulla compilazione ibrida:
+- togliere un'opzione dal file non la riporta al valore precompilato: il `sdkconfig.esp32-s3-standard` generato la conserva, va cancellato;
+- la piattaforma decide se ricompilare ESP-IDF da contenuto e data di modifica del file: copiando un file preparato prima, la data resta quella vecchia e la ricompilazione non parte;
+- dopo la compilazione ibrida `tool-esptoolpy` è la 5.4, che stampa la barra di avanzamento in Unicode: con l'uscita rediretta su file serve `PYTHONIOENCODING=utf-8`.
+
+### 11.4 Export a pezzi e test di carico (TASK-04, TASK-07)
+
+- **Export a pezzi.** `USBHostUPS::buildUSBDiagnostics()` riempie il `JsonDocument` sotto `_mutex`; il web server lo serializza con `ChunkWriter` (`lib/WebApi/src/ChunkWriter.h`, blocchi da 1024 byte) e `sendContent()`, dopo `setContentLength(CONTENT_LENGTH_UNKNOWN)`. Non si usa `chunkWrite()` del core 3.3 perché scrive il framing chunked anche ai client HTTP/1.0. La suite `test/test_chunk_writer` verifica che l'uscita sia identica byte per byte a quella di `serializeJsonPretty` in un'unica stringa. Sulla scheda: HTTP/1.1 con `Transfer-Encoding: chunked`, HTTP/1.0 grezzo, stesso file di 12 180 byte.
+- **Build finale `idf55-v2`:** export a pezzi più `sdkconfig.esp32-nut` (stack di `esp_timer` a 4096, statistiche di FreeRTOS spente, trasferimenti di controllo USB a 256; PSRAM spenta dalla piattaforma).
+
+| | v1.8.0 (`mem-v180`) | 5.5 precompilata (`mem-idf55`) | `idf55-v2` | `idf55-v2` senza export |
+|---|---|---|---|---|
+| Libero a riposo dopo 10 minuti | 188 736 | 150 516 | 167 484 | — |
+| Blocco più grande a riposo | 176 116 | 102 388 | 122 868 | — |
+| Libero più basso sotto carico | 154 224 | 113 464 | 124 040 | 122 460 |
+| `min free` sotto carico | 112 884 | 74 688 | **80 660** | **105 000** |
+| Blocco più grande, minimo sotto carico | 114 676 | 61 428 | 71 668 | 71 668 |
+| Errori NUT / web | 7 / 1 (Wi-Fi caduto) | 0 / 0 | 0 / 0 | 7 / 2 (Wi-Fi caduto) |
+
+Report in `idf55-baseline/stresstest-idf55-v2.txt` e `stresstest-idf55-v2-nodump.txt`. In entrambi i test il nono client è rifiutato.
+
+- **L'export costa circa 25 KB di picco** anche a pezzi: il `JsonDocument` resta intero in memoria durante la serializzazione. Senza export, 8 client NUT e la Web UI lasciano più di 100 KB liberi.
+- **Criterio rivisto (2026-10-23, decisione dell'utente):** al posto dei 90 KB, almeno 75 KB con l'export ogni 60 s e almeno 100 KB senza export. Togliere il `JsonDocument` dall'export è la US-096, a bassa priorità finché non arrivano segnalazioni di export troncati o riavvii durante l'export.
+- **Dopo 1 h** (con in mezzo il test di carico senza export): libero 164 976, blocco più grande 100 340, stabile dal minuto 30 (165 016). Nessuna perdita.
+- **Cadute del Wi-Fi.** In due prove su quattro (`mem-v180` e `idf55-v2` senza export) il Wi-Fi è caduto una volta, circa 110 s dopo l'inizio del test, con riconnessione automatica in 15 s e un errore per client. Succede su entrambe le piattaforme, non è legato alla memoria; la coincidenza dei tempi fa pensare al router.
+
+### 11.5 Regressione (TASK-08)
+
+- **NUT:** `upsc`, `upscmd -l` e `upsrw` letti con un client Python equivalente e confrontati con `idf55-baseline/*-v1.8.0.txt`: `upscmd -l` e `upsrw` identici; in `upsc` cambia solo `ups.type: EatonDriver` in `driver.name: EatonDriver` (merge di #43, main `906acd7`).
+- **Automatici:** suite nativa 585/585; e2e 101/101 (un test di `ups-settings.spec.ts` fallito una volta in parallelo e passato rilanciato da solo, insieme a tutto il file).
+- **USB:** con i trasferimenti di controllo a 256 l'Eaton 3S si enumera all'avvio e dopo uno stacca e riattacca del cavo (dati di nuovo serviti in 1,7 s).
+- **Rete di sicurezza:** due build temporanee, non committate. `abort()` nel loopTask dopo 90 s: `Reset reason: PANIC`, riepilogo del core dump (task `loopTask`, PC, backtrace di 6 indirizzi). LoopTask occupato senza `esp_task_wdt_reset()`: panic del Task WDT dopo 43 s (il controllo avviene una volta per periodo di 30 s), `Reset reason: TASK_WDT` e riepilogo. L'intercettazione `-Wl,--wrap=esp_core_dump_write` funziona anche con le librerie ricompilate.
+- **Stack del loopTask:** 13 192 byte liberi dopo 1 h: `-DARDUINO_LOOP_STACK_SIZE=16384` vale anche con la compilazione ibrida.
+
+### 11.6 Tempi di build e CI
+
+- **Sul portatile dell'utente** (Windows, PowerShell): prima build con ricompilazione di ESP-IDF 16-21 minuti (21 quando la piattaforma reinstalla anche il framework); build incrementale 2,5 minuti; ogni modifica di `sdkconfig.esp32-nut` 16-19 minuti. Il passaggio a un branch senza `custom_sdkconfig` (per esempio `main` prima del merge) reinstalla il framework precompilato, e il ritorno ricompila tutto.
+- **CI (`release.yml`, Ubuntu):** la compilazione ibrida avviene a ogni esecuzione, perché il runner parte senza cache. Stima: almeno 10-15 minuti in più per release, più il download di `framework-espidf`. Non misurata: **non** si lancia `release.yml` con `workflow_dispatch` per provarla, perché pubblica una release e aggiorna il web installer su GitHub Pages. La prima release con la 5.5 darà il tempo reale; una cache di `~/.platformio` è un possibile seguito.
+
+### 11.7 Conclusione
+
+Il costo fisso della 5.5 a riposo scende da circa 38 KB a circa 21 KB rispetto alla v1.8.0 (167 484 contro 188 736 libero dopo 10 minuti), con un blocco libero più grande di 20 KB. Sotto carico il margine sale da 74 688 a 80 660 con l'export ogni 60 s e arriva a 105 000 senza export. Il resto della differenza viene dal Wi-Fi della 5.5 (circa 12 KB all'avvio) e dalla memoria statica delle librerie (circa 10 KB), che non dipendono dalle opzioni valutate.
+
+### 11.8 Decisione: `custom_sdkconfig` non adottato (2026-10-23)
+
+Dopo le misure, l'utente ha scelto di non adottare `custom_sdkconfig` per ora: il guadagno sotto carico (+6 KB) non giustifica la ricompilazione di ESP-IDF alla prima build, a ogni modifica delle opzioni e in ogni release. Il guadagno a riposo (+17 KB) e sul blocco libero più grande (+20 KB) resta disponibile se servirà.
+
+- `platformio.ini` torna alle librerie ESP-IDF precompilate; l'export della diagnostica a pezzi (§11.4) resta.
+- Il file delle opzioni è archiviato in `docs/plans/custom-sdkconfig/sdkconfig.esp32-nut`; procedura, verifiche, trappole e tempi in `docs/plans/custom-sdkconfig.md`. Gli strumenti di misura sono in `scripts/` (`serial_log.py`, `mem_probe_patch.py`, `nut_snapshot.py`, oltre a `load_test.py`).
+- Il punto debole sotto carico, l'export della diagnostica (circa 25 KB di picco), passa alla US-096 (priorità MEDIUM), che non ha costi di build.
+- Le misure con le librerie precompilate restano quelle di `mem-idf55` (§11.1): a riposo 150 516 libero e 102 388 di blocco più grande; sotto carico `min free` 74 688 con il vecchio export in un'unica `String`.

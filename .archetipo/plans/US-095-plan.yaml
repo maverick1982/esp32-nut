@@ -80,7 +80,7 @@ tasks:
   - id: TASK-01
     title: Bilancio della memoria su idf55-v1 e v1.8.0 (build temporanea, non committata)
     type: Test
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Objective:** Sapere dove vanno i circa 37 KB di heap in meno della 5.5 e quanto stack usano i task di sistema, per scegliere le opzioni dell'`sdkconfig` e le nuove dimensioni degli stack.
@@ -120,10 +120,11 @@ tasks:
       - [ ] Heap totale, libero e blocco più grande per fase dell'avvio, su idf55-v1 e v1.8.0
       - [ ] Stack massimo usato da ciascun task di sistema dopo il test di carico, su entrambe
       - [ ] Patch di misura eliminata, nessuna modifica committata in `src/`
+    ref: TASK-01
   - id: TASK-02
     title: 'ChunkWriter: writer a blocchi compatibile con ArduinoJson'
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Objective:** Un writer che ArduinoJson può usare come destinazione di `serializeJsonPretty()` e che passa l'uscita a un sink a blocchi di dimensione fissa, senza allocazioni dinamiche.
@@ -161,10 +162,11 @@ tasks:
       - [ ] Interfaccia `write(uint8_t)` / `write(const uint8_t*, size_t)` accettata da `serializeJsonPretty()`
       - [ ] Nessuna allocazione dinamica nel writer
       - [ ] Il sink non riceve mai un blocco di 0 byte
+    ref: TASK-02
   - id: TASK-03
     title: 'Test nativi del ChunkWriter: stesso JSON byte per byte'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
     body: |-
@@ -206,10 +208,11 @@ tasks:
       - [ ] Uscita identica byte per byte per fixture reale e documento sintetico, con 5 dimensioni di buffer
       - [ ] Nessun blocco vuoto e `flush()` idempotente verificati
       - [ ] Le due mutazioni fanno fallire la suite
+    ref: TASK-03
   - id: TASK-04
     title: 'Export della diagnostica a pezzi: buildUSBDiagnostics e /api/usb/dump'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-03
@@ -250,10 +253,11 @@ tasks:
       - [ ] `dumpUSBDiagnostics()` rimosso, `buildUSBDiagnostics()` con lo stesso contenuto
       - [ ] Handler con `setContentLength(CONTENT_LENGTH_UNKNOWN)`, `sendContent()` a blocchi e chiusura con `sendContent("")`
       - [ ] Build e suite nativa verdi
+    ref: TASK-04
   - id: TASK-05
     title: 'custom_sdkconfig: file del progetto, prima compilazione ibrida e file generati'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -302,10 +306,11 @@ tasks:
       - [ ] Opzioni USB, core dump e Task WDT invariate nel sdkconfig generato
       - [ ] `__wrap_esp_core_dump_write` presente nel map file
       - [ ] File generati ignorati da git; nativi verdi
+    ref: TASK-05
   - id: TASK-06
     title: Opzioni dell'sdkconfig una per volta, con il risparmio misurato sulla scheda
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
     body: |-
@@ -348,10 +353,11 @@ tasks:
       - [ ] Ogni opzione della spec provata, con risparmio misurato a riposo
       - [ ] Opzioni tenute documentate nel file con motivo e risparmio; opzioni scartate annotate nel §11
       - [ ] Enumerazione e dati dell'Eaton 3S corretti con la configurazione finale
+    ref: TASK-06
   - id: TASK-07
     title: Test di carico di 900 s e heap dopo 1 h con la build finale idf55-v2
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
       - TASK-06
@@ -389,10 +395,11 @@ tasks:
       - [ ] `min free` di almeno 90 000 byte nel test di 900 s
       - [ ] Nessun errore NUT o web, nono client rifiutato
       - [ ] Heap a riposo e dopo 1 h annotati
+    ref: TASK-07
   - id: TASK-08
     title: 'Regressione: export a pezzi, NUT, nativi ed e2e, core dump e Task WDT'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |-
@@ -430,10 +437,11 @@ tasks:
       - [ ] `upsc`, `upscmd -l`, `upsrw` uguali alla baseline salvo le differenze ammesse
       - [ ] Nativi ed e2e verdi
       - [ ] Core dump e Task WDT funzionanti, patch eliminate
+    ref: TASK-08
   - id: TASK-09
     title: 'Documentazione: §11 del piano IDF 5.5, tempi di build e impatto sulla CI'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
       - TASK-07
@@ -474,3 +482,4 @@ tasks:
       - [ ] §11 con bilancio, opzioni, carico, heap a riposo e dopo 1 h
       - [ ] Tempi di build e impatto sulla CI annotati, con l'avviso su `workflow_dispatch`
       - [ ] Nessun dato sensibile nei documenti
+    ref: TASK-09
