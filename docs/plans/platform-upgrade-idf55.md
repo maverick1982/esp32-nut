@@ -339,3 +339,22 @@ Dopo le misure, l'utente ha scelto di non adottare `custom_sdkconfig` per ora: i
 - Il file delle opzioni è archiviato in `docs/plans/custom-sdkconfig/sdkconfig.esp32-nut`; procedura, verifiche, trappole e tempi in `docs/plans/custom-sdkconfig.md`. Gli strumenti di misura sono in `scripts/` (`serial_log.py`, `mem_probe_patch.py`, `nut_snapshot.py`, oltre a `load_test.py`).
 - Il punto debole sotto carico, l'export della diagnostica (circa 25 KB di picco), passa alla US-096 (priorità MEDIUM), che non ha costi di build.
 - Le misure con le librerie precompilate restano quelle di `mem-idf55` (§11.1): a riposo 150 516 libero e 102 388 di blocco più grande; sotto carico `min free` 74 688 con il vecchio export in un'unica `String`.
+
+### 11.9 Export senza JsonDocument (US-096, 2026-10-23)
+
+- **Soluzione.** `USBHostUPS::snapshotUSBDiagnostics()` copia sotto `_mutex` i dati dell'export in una `UsbDiagSnapshot` (`lib/USBHostUPS/src/UsbDiagSnapshot.h`, pochi KB per l'Eaton); fuori dal lock `UsbDiagJson::write()` (`lib/WebApi`) scrive il JSON direttamente sul `ChunkWriter`, con le regole di formattazione e di escape di ArduinoJson 7.4.3. Niente `JsonDocument` e niente stringhe della dimensione dell'export. La suite `test/test_usb_diag_json` confronta il writer con `serializeJsonPretty` del documento costruito come in US-095: identico byte per byte su fixture Eaton e casi limite.
+- **Misura nella stessa sessione** (Eaton 3S, librerie ESP-IDF precompilate, 900 s con 7 client dello script più il client esterno, Web UI ogni 2 s, export ogni 60 s; report in `idf55-baseline/stresstest-us096-*.txt`):
+
+| | Prima (`us096-before`, export con `JsonDocument`) | Dopo (`us096-after`) | Differenza |
+|---|---|---|---|
+| Libero a riposo | 151 300 | 151 312 | — |
+| Libero più basso sotto carico | 110 884 | 109 252 | — |
+| `min free` sotto carico | 64 312 | **92 108** | +27 796 |
+| Blocco più grande, minimo sotto carico | 53 236 | 56 308 | +3 072 |
+| Errori NUT / web | 0 / 0 | 0 / 0 | |
+
+- **Esito:** criterio della US-096 rispettato (`min free` di almeno 90 KB con l'export ogni 60 s, librerie precompilate). Il picco dell'export si è ridotto a quello dell'istantanea; il margine sotto carico è tornato vicino a quello della v1.8.0 (99 188 nella US-089, 112 884 nella sessione del §11.1).
+- **Export sulla scheda:** HTTP/1.1 a pezzi (`Transfer-Encoding: chunked`) e HTTP/1.0 identici fra loro; rispetto all'export di `us096-before` stesse chiavi, stesso descriptor, stessi report e stesse variabili, stesso numero di a capo CRLF e LF; cambia solo `firmware_version`.
+- **Regressione:** nativi 593/593, e2e 101/101; `upscmd -l` e `upsrw` identici alla baseline, `upsc` solo `driver.name` (#43).
+- **Misure accorciate** (scelta dell'utente): 5 minuti di riposo e il solo test con export, senza il test senza export previsto dal piano.
+- La `min free` della versione precedente (64 312) è più bassa dei 74 688 di `mem-idf55` (§11.1) nelle stesse condizioni: altra conferma della variabilità fra sessioni.

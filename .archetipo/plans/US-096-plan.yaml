@@ -1,0 +1,402 @@
+schema: archetipo/plan/v2
+spec_code: US-096
+body: |
+  ---
+  type: plan
+  title: "US-096: Export della diagnostica USB senza JsonDocument (scritto a pezzi campo per campo) — Piano di implementazione"
+  description: "Piano di implementazione per US-096"
+  tags: [plan, implementation, US-096]
+  ---
+  # US-096: Export della diagnostica USB senza JsonDocument (scritto a pezzi campo per campo) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-23
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)
+  **Priorità:** MEDIUM | **Punti:** 3 | **Bloccato da:** US-095 (DONE)
+
+  **User Story**
+  Come sviluppatore del firmware, voglio che `/api/usb/dump` scriva l'export direttamente sul `ChunkWriter`, campo per campo, senza costruire prima un `JsonDocument` intero, in modo che un export durante il carico non tolga circa 25 KB di heap di picco sulla piattaforma ESP-IDF 5.5, con le librerie ESP-IDF precompilate.
+
+  **Criteri di Accettazione**
+  - L'export è scritto sul `ChunkWriter` senza `JsonDocument` e senza stringhe intermedie della dimensione dell'export; lock su `_mutex` breve, invio in rete fuori dal lock.
+  - Un test nativo confronta il nuovo writer con `serializeJsonPretty` di un `JsonDocument` costruito con gli stessi dati: uscita identica byte per byte.
+  - Test di carico con l'export ogni 60 s: `min free` di almeno 90 KB sull'Eaton 3S con le librerie precompilate, senza errori NUT o web.
+  - Regressione: nativi, replay ed e2e verdi; export dalla Web UI valido e leggibile dagli strumenti esistenti.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi `USBHostUPS::buildUSBDiagnostics()` riempie un `JsonDocument` sotto `_mutex` e il web server lo serializza a pezzi (US-095). Il documento, con le copie di tutte le stringhe e i pool di ArduinoJson, resta intero in memoria durante l'invio: circa 25 KB di picco con l'Eaton 3S. La soluzione separa la raccolta dei dati dalla scrittura del JSON.
+
+  - **Istantanea dei dati sotto lock.** Nuovo header `lib/USBHostUPS/src/UsbDiagSnapshot.h` (solo dati, nessuna dipendenza da ESP-IDF, compilabile nei test nativi): `struct UsbDiagReport { uint8_t id; uint8_t type; std::vector<uint8_t> data; }` e `struct UsbDiagSnapshot` con gli stessi campi dell'export di oggi e gli stessi tipi: `firmware_version`, `vid`, `pid`, `manufacturer`, `product`, `serial_number`, `descriptor_hex` (la stringa esadecimale grezza di `_cached_report_descriptor_hex`), `quirks`, `driver`, i sette campi di `link` (`failures`, `recoveries`, `stale`, `dropped_input_reports`, `input_period_ms`, `input_recoveries`, `incomplete_input_reports`, `ep_in_mps`), `std::vector<UsbDiagReport> reports` nell'ordine della mappa `_cached_reports` e `std::vector<UPSParameter> ups_data` (da `_ups_data.getAll()`). `USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot&)` sostituisce `buildUSBDiagnostics()`: copia i valori sotto `_mutex` con le stesse espressioni di oggi (per esempio `String(_vid, HEX)`, `_driver ? _driver->getDriverName() : "None"`, `input_period_ms` a 0 se l'input non è periodico) e non conosce il JSON. Per l'Eaton l'istantanea pesa pochi KB (descriptor, 24 report, 36 variabili).
+  - **Writer JSON fuori dal lock.** Nuovi `lib/WebApi/src/UsbDiagJson.h/.cpp`: `void UsbDiagJson::write(const UsbDiagSnapshot&, ChunkWriter&)` scrive lo stesso testo che produce oggi `serializeJsonPretty` del documento. Regole di ArduinoJson 7.4.3 da riprodurre (sorgenti in `.pio/libdeps/esp32-s3-standard/ArduinoJson/src/ArduinoJson/Json/PrettyJsonSerializer.hpp`, `TextFormatter.hpp`, `EscapeSequence.hpp`):
+    - oggetto o array non vuoto: parentesi aperta seguita da CRLF; ogni elemento su una riga rientrata di 2 spazi per livello; separatore virgola più CRLF, CRLF dopo l'ultimo; parentesi chiusa al livello del contenitore. Contenitore vuoto: `{}` o `[]` senza a capo;
+    - chiave tra virgolette seguita da due punti e uno spazio;
+    - stringhe tra virgolette con escape solo di virgolette, backslash, backspace, form feed, a capo, ritorno a capo e tab (tabella in `EscapeSequence.hpp`); gli altri caratteri di controllo e i byte UTF-8 passano invariati;
+    - interi senza segno in decimale, booleani `true`/`false`;
+    - parti grezze invariate rispetto a oggi: `report_descriptor_hex` scritto come ora da `buildUSBDiagnostics()` (apertura con a capo LF, 4 spazi, coppie esadecimali in maiuscolo con prefisso `0x` tra virgolette, separate da virgola e spazio, nuova riga LF più 4 spazi ogni 10 valori, chiusura LF più 2 spazi e parentesi; descriptor vuoto: apertura, LF, LF, 2 spazi, chiusura; un'ultima cifra dispari resta da sola come fa oggi `substring`) e `data` dei report (`[` più valori decimali separati da virgola e spazio più `]`, `[]` se vuoto).
+    Il writer scrive direttamente sul `ChunkWriter`, senza costruire stringhe intere: le uniche stringhe temporanee sono le singole coppie esadecimali e i numeri.
+  - **Handler di `/api/usb/dump`.** Stessa sequenza di US-095 (503 se `usb_ups` è nullo, `Content-Disposition`, `setContentLength(CONTENT_LENGTH_UNKNOWN)`, `send(200, ...)` vuoto, buffer di 1024 byte, `flush()`, `sendContent("")` finale), ma con `UsbDiagSnapshot` più `UsbDiagJson::write()` al posto di `JsonDocument` più `serializeJsonPretty`. L'invio resta fuori dal lock.
+  - **`USBHostUPS.h`:** via l'`#include <ArduinoJson.h>` aggiunto in US-095 se non serve più all'header; `buildUSBDiagnostics()` rimosso (unico chiamante: l'handler).
+  - **Perché non scrivere in rete sotto lock:** il `_mutex` protegge lo stato USB letto dal task di polling; tenerlo durante l'invio di 12 KB su Wi-Fi bloccherebbe il polling per centinaia di millisecondi. L'istantanea costa poca memoria e mantiene il lock breve, come richiede la spec.
+
+  ---
+
+  ## Strategia di test
+
+  La fedeltà byte per byte è il rischio principale: la strategia la prova nei test nativi prima di toccare il firmware, poi misura il guadagno sulla scheda.
+
+  - **Nativi, nuova suite `test/test_usb_diag_json`:** un builder di riferimento nel test ricostruisce il `JsonDocument` da una `UsbDiagSnapshot` con lo stesso codice di `buildUSBDiagnostics()` (copiato dal commit di US-095), poi confronta `serializeJsonPretty` del documento con l'uscita di `UsbDiagJson::write()` su un `ChunkWriter`, con buffer di 1, 7, 64 e 1024 byte. Casi: istantanea ricavata dalla fixture `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json` (descriptor, report, variabili); istantanea vuota (descriptor vuoto, nessun report, nessuna variabile); stringhe con virgolette, backslash, a capo, ritorno a capo, tab, backspace, form feed, un carattere di controllo non escapato e UTF-8; driver `None`; descriptor di lunghezza dispari; report con `data` vuoto; valori numerici massimi dei tipi; `stale` vero e falso. Mutazioni: cambiare l'a capo CRLF in LF, togliere un escape o l'uppercase del descriptor deve far fallire almeno un test.
+  - **Regressione automatica:** suite nativa completa (replay compreso) ed e2e Playwright; `e2e/logs-viewer.spec.ts` simula `/api/usb/dump` e non cambia.
+  - **Eaton 3S, librerie precompilate:** baseline della versione committata (export a pezzi con `JsonDocument`) e misura della nuova versione nella stessa sessione, con `scripts/load_test.py` (900 s, 7 client dello script più il client esterno, Web UI ogni 2 s, export ogni 60 s), con e senza export, riavvio prima di ogni test perché `min free` è il minimo dall'avvio. Download dell'export in HTTP/1.1 e 1.0 e dalla Web UI; confronto con un export della versione precedente (stesse chiavi, stesso descriptor, stessi report). `scripts/nut_snapshot.py` confrontato con `docs/plans/idf55-baseline/`.
+  - Nessun nuovo test e2e e nessun video demo: la spec non ha superfici utente nuove.
+
+  ---
+
+  ## Note operative
+
+  - Scheda collegata al PC su COM5 (porta UART della DevKitC): flash con esptool senza cancellare la flash, log con `scripts/serial_log.py` (procedura in `docs/plans/custom-sdkconfig.md` §7). Build da PowerShell.
+  - Password della Web UI per `load_test.py`: da un file indicato dall'utente, mai stampata; il file si cancella a fine lavoro.
+  - Fuori ambito: contenuto o formato dell'export, `/api/logs`, `custom_sdkconfig`.
+
+  _Piano generato dal team ARchetipo Planning — 2026-10-23_
+tasks:
+  - id: TASK-01
+    title: Baseline sulla scheda della versione committata (librerie precompilate, export a pezzi con JsonDocument)
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Avere i numeri di partenza della versione attuale, mai misurata sotto carico, nella stessa sessione delle misure finali (la variabilità fra sessioni è di circa 20 KB).
+
+      **Read:**
+      - `docs/plans/custom-sdkconfig.md` §7 (flash via seriale, metodo di misura).
+      - `docs/plans/platform-upgrade-idf55.md` §11.4 (condizioni del test di carico).
+      - `scripts/load_test.py`, `scripts/serial_log.py`.
+
+      **Change:**
+      - Nessun file di codice. Nuovi report in `docs/plans/idf55-baseline/`: `stresstest-us096-before.txt` (con export) e `stresstest-us096-before-nodump.txt` (senza export).
+
+      **Steps:**
+      1. Build di `esp32-s3-standard` del commit corrente (nessun `custom_sdkconfig`) con `FIRMWARE_VERSION` `us096-before`, da PowerShell.
+      2. Flash via seriale su COM5 (bootloader, partizioni, `boot_app0`, firmware; senza erase), log con `scripts/serial_log.py --reset`.
+      3. Heap a riposo: media delle righe `[DIAG] Heap` dei minuti 3-10.
+      4. `scripts/load_test.py` per 900 s con `--clients 7` e il client esterno sull'ottavo slot, export ogni 60 s, `--threshold 90000`; salvare il report.
+      5. Riavvio della scheda (reset dalla seriale), 5 minuti a riposo, stesso test senza export (copia temporanea dello script con `last_dump` iniziale uguale all'ora corrente, come in US-095); salvare il report.
+      6. Annotare i numeri (libero a riposo, `min free` con e senza export, blocco più grande) per il TASK-08.
+
+      **Verify:**
+      - Due report salvati, senza credenziali; nessun riavvio inatteso nel log.
+
+      **Done:**
+      - Baseline della stessa sessione disponibile.
+
+      **Blockers:**
+      - Serve la scheda collegata a COM5 con l'Eaton 3S e il client esterno attivo; serve il file con la password della Web UI.
+
+      ## File Coinvolti
+      - docs/plans/idf55-baseline/stresstest-us096-before.txt — report con export
+      - docs/plans/idf55-baseline/stresstest-us096-before-nodump.txt — report senza export
+
+      ## Criteri di Completamento
+      - [ ] Heap a riposo della versione committata annotato
+      - [ ] `min free` con e senza export misurati nella stessa sessione
+      - [ ] Report salvati senza credenziali
+    ref: TASK-01
+  - id: TASK-02
+    title: 'UsbDiagSnapshot: struttura dati dell''export, senza dipendenze da ESP-IDF'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** Una struttura semplice che contenga tutti i dati dell'export, copiabile sotto lock e leggibile dal writer JSON e dai test nativi.
+
+      **Read:**
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, `buildUSBDiagnostics()` (campi, ordine e tipi dell'export).
+      - `lib/USBHostUPS/src/USBHostUPS.h` (`CachedReport`, membri usati dall'export) e `lib/USBHostUPS/src/UPSData.h` (`UPSParameter`).
+
+      **Change:**
+      - Nuovo `lib/USBHostUPS/src/UsbDiagSnapshot.h`, header-only, include solo `Arduino.h`, `<vector>`, `<cstdint>` e `UPSData.h`:
+        - `struct UsbDiagReport { uint8_t id = 0; uint8_t type = 0; std::vector<uint8_t> data; };`
+        - `struct UsbDiagSnapshot` con, nell'ordine dell'export: `String firmware_version, vid, pid, manufacturer, product, serial_number, descriptor_hex; uint32_t quirks = 0; String driver; uint8_t link_failures = 0, link_recoveries = 0; bool stale = false; uint32_t dropped_input_reports = 0, input_period_ms = 0; uint8_t input_recoveries = 0; uint32_t incomplete_input_reports = 0; uint16_t ep_in_mps = 0; std::vector<UsbDiagReport> reports; std::vector<UPSParameter> ups_data;`
+        - Verificare i tipi reali dei getter (`_link.failures()`, `_in_wd.recoveries()`, `_in_reasm.dropped()`, `_ep_in_mps`, `_dropped_events`) e usare gli stessi, così i numeri escono uguali.
+      - Commento in inglese (come il resto di `lib/USBHostUPS`): a cosa serve e che il JSON lo scrive `UsbDiagJson` (US-096).
+
+      **Steps:**
+      1. Scrivere l'header.
+      2. Compilarlo includendolo dal test del TASK-04.
+
+      **Verify:**
+      - Compila nell'ambiente `native` (TASK-04) e nel firmware (TASK-05).
+
+      **Done:**
+      - Struttura pronta, senza dipendenze da ESP-IDF.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — nuova struttura dati dell'export
+
+      ## Criteri di Completamento
+      - [ ] Tutti i campi dell'export attuale presenti, con gli stessi tipi
+      - [ ] Nessun include di ESP-IDF o di `USBHostUPS.h`
+    ref: TASK-02
+  - id: TASK-03
+    title: 'UsbDiagJson::write: JSON dell''export scritto sul ChunkWriter con le regole di ArduinoJson'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** Scrivere sul `ChunkWriter` lo stesso testo che `serializeJsonPretty` produce oggi per l'export, senza `JsonDocument` e senza stringhe della dimensione dell'export.
+
+      **Read:**
+      - Sezione "Writer JSON fuori dal lock" del piano (regole di formattazione ed escape).
+      - `.pio/libdeps/esp32-s3-standard/ArduinoJson/src/ArduinoJson/Json/PrettyJsonSerializer.hpp`, `TextFormatter.hpp`, `EscapeSequence.hpp`.
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, `buildUSBDiagnostics()` (parti grezze: descriptor e `data` dei report).
+      - `lib/WebApi/src/ChunkWriter.h`, `lib/WebApi/src/WebApiJson.h` (stile, commenti in italiano).
+
+      **Change:**
+      - Nuovi `lib/WebApi/src/UsbDiagJson.h` e `UsbDiagJson.cpp`: `class UsbDiagJson { public: static void write(const UsbDiagSnapshot& s, ChunkWriter& w); };`.
+      - Helper privati (funzioni statiche nel `.cpp`): `raw(w, const char*)`, `str(w, const String&)` con l'escape della tabella di ArduinoJson, `uint(w, uint32_t)` in decimale, `boolean(w, bool)`, `newline(w, livello)` che scrive CRLF più 2 spazi per livello.
+      - Ordine e annidamento identici all'export attuale: oggetto radice (livello 1) con le chiavi da `firmware_version` a `driver`, oggetto `link` (livello 2), array `scenarios` con un oggetto (`description` = `Live ESP32 dump`, array `reports` di oggetti `id`/`type`/`data`, oggetto `expected_ups_data`). Contenitori vuoti come `[]` e `{}`.
+      - Descriptor e `data` scritti come oggi (vedi piano), coppie esadecimali in maiuscolo carattere per carattere.
+
+      **Steps:**
+      1. Scrivere il writer seguendo la struttura di `buildUSBDiagnostics()` campo per campo.
+      2. Compilarlo con il test del TASK-04.
+
+      **Verify:**
+      - `pio test -e native -f test_usb_diag_json` (TASK-04).
+
+      **Done:**
+      - Writer pronto e senza allocazioni proporzionali alla dimensione dell'export.
+
+      **Blockers:**
+      - Se una regola di ArduinoJson non si riesce a riprodurre esattamente, fermarsi e riferire: la spec richiede l'identità byte per byte.
+
+      ## File Coinvolti
+      - lib/WebApi/src/UsbDiagJson.h — dichiarazione del writer
+      - lib/WebApi/src/UsbDiagJson.cpp — writer dell'export
+
+      ## Criteri di Completamento
+      - [ ] Nessun `JsonDocument` e nessuna stringa della dimensione dell'export
+      - [ ] Regole di formattazione ed escape di ArduinoJson 7.4.3 riprodotte
+      - [ ] Parti grezze identiche a quelle di `buildUSBDiagnostics()`
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test nativi: UsbDiagJson identico byte per byte al JsonDocument di riferimento'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** Provare con un test automatico che il nuovo export è identico byte per byte a quello attuale (criterio della spec).
+
+      **Read:**
+      - `test/test_chunk_writer/test_main.cpp` (struttura della suite e confronto a blocchi).
+      - `test/test_web_api/test_main.cpp` (uso di `Arduino.h` e `String` nei test nativi).
+      - `test/test_record_replay/FixtureReplayRunner.h` (lettura di una fixture dal disco).
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`, `buildUSBDiagnostics()` (da copiare nel builder di riferimento).
+
+      **Change:**
+      - Nuova suite `test/test_usb_diag_json/test_main.cpp`:
+        - `buildReferenceDoc(const UsbDiagSnapshot&, JsonDocument&)`: copia fedele del corpo di `buildUSBDiagnostics()` che legge dall'istantanea invece che dai membri di `USBHostUPS` (stesso descriptor con `substring` e `toUpperCase`, stessi `serialized()`).
+        - confronto: `serializeJsonPretty(doc, std::string)` contro `UsbDiagJson::write()` su `ChunkWriter` con buffer di 1, 7, 64 e 1024 byte.
+        - casi: istantanea dalla fixture Eaton 3S (descriptor, report, `expected_ups_data`); istantanea vuota; stringhe con virgolette, backslash, a capo, ritorno a capo, tab, backspace, form feed, un carattere di controllo come 0x01 e UTF-8; `driver` `None`; descriptor di lunghezza dispari; report con `data` vuoto; valori massimi di ogni tipo numerico; `stale` vero e falso.
+
+      **Steps:**
+      1. Scrivere la suite e lanciarla (`pio test -e native -f test_usb_diag_json`, PATH con `toolchain-gccmingw32/bin`).
+      2. Mutazioni a mano, poi annullate: a capo LF invece di CRLF; escape del tab tolto; descriptor non in maiuscolo. Ognuna deve far fallire almeno un test.
+
+      **Verify:**
+      - Suite verde; mutazioni rilevate.
+
+      **Done:**
+      - Identità byte per byte coperta dai test.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - test/test_usb_diag_json/test_main.cpp — nuova suite nativa
+
+      ## Criteri di Completamento
+      - [ ] Uscita identica byte per byte in tutti i casi e con tutte le dimensioni di buffer
+      - [ ] Le tre mutazioni fanno fallire la suite
+    ref: TASK-04
+  - id: TASK-05
+    title: snapshotUSBDiagnostics in USBHostUPS e handler di /api/usb/dump senza JsonDocument
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Objective:** Usare l'istantanea e il nuovo writer nel firmware, togliendo il `JsonDocument` dall'export.
+
+      **Read:**
+      - `lib/USBHostUPS/src/USBHostUPS.h/.cpp` (`buildUSBDiagnostics()`).
+      - `src/network/web_config_server.cpp`, handler di `/api/usb/dump`.
+
+      **Change:**
+      - `USBHostUPS.h/.cpp`: `void buildUSBDiagnostics(JsonDocument&)` diventa `void snapshotUSBDiagnostics(UsbDiagSnapshot& s)`: sotto `_mutex` copia i valori con le stesse espressioni di oggi (`FIRMWARE_VERSION`, `String(_vid, HEX)`, `String(_pid, HEX)`, `ups.mfr`, prodotto o `ups.model`, `ups.serial`, `_cached_report_descriptor_hex`, `_quirks`, nome del driver o `None`, i campi di `link`, i report di `_cached_reports` nell'ordine della mappa, `_ups_data.getAll()`). Togliere l'`#include <ArduinoJson.h>` dall'header se non serve più; includere `UsbDiagSnapshot.h`.
+      - `web_config_server.cpp`: nell'handler, `UsbDiagSnapshot snap; usb_ups->snapshotUSBDiagnostics(snap);`, poi la stessa sequenza di invio di oggi con `UsbDiagJson::write(snap, writer)` al posto di `serializeJsonPretty(doc, writer)`. Aggiornare il commento (US-096: niente `JsonDocument`). Include di `UsbDiagJson.h`.
+
+      **Steps:**
+      1. Modificare `USBHostUPS` e l'handler.
+      2. Build di `esp32-s3-standard` da PowerShell.
+      3. Suite nativa completa.
+
+      **Verify:**
+      - Build senza nuovi avvisi nei file toccati; nativi verdi; `git grep JsonDocument -- lib/USBHostUPS src/network/web_config_server.cpp` non trova più l'export.
+
+      **Done:**
+      - Firmware con l'export senza `JsonDocument`.
+
+      **Blockers:**
+      - Nessuno (non serve la scheda).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — `snapshotUSBDiagnostics()`, include
+      - lib/USBHostUPS/src/USBHostUPS.cpp — raccolta dei dati sotto `_mutex`
+      - src/network/web_config_server.cpp — handler con `UsbDiagJson::write()`
+
+      ## Criteri di Completamento
+      - [ ] `buildUSBDiagnostics()` e il `JsonDocument` dell'export rimossi
+      - [ ] Lock su `_mutex` solo durante la copia dei dati
+      - [ ] Build e suite nativa verdi
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Sulla scheda: export in HTTP/1.1 e 1.0 e test di carico con e senza export'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Objective:** Verificare il criterio principale (`min free` di almeno 90 KB con l'export ogni 60 s, librerie precompilate) e che l'export sulla scheda sia corretto.
+
+      **Read:**
+      - `docs/plans/custom-sdkconfig.md` §7.
+      - Numeri del TASK-01.
+
+      **Change:**
+      - Nuovi report `docs/plans/idf55-baseline/stresstest-us096-after.txt` e `stresstest-us096-after-nodump.txt`.
+
+      **Steps:**
+      1. Build con `FIRMWARE_VERSION` `us096-after`, flash via seriale, log con `scripts/serial_log.py --reset`.
+      2. Export: login con cookie, download di `/api/usb/dump` con `curl` in HTTP/1.1 (`Transfer-Encoding: chunked`) e con `--http1.0`; entrambi JSON validi, stessi byte fra loro; stesse chiavi, stesso descriptor e stessi id e tipi dei report di un export di `us096-before` scaricato nel TASK-01 o subito prima del flash. Download anche dal pulsante della Web UI.
+      3. Heap a riposo (media dei minuti 3-10).
+      4. Test di carico di 900 s con export ogni 60 s e `--threshold 90000`; riavvio; stesso test senza export.
+      5. Se il `min free` con l'export è sotto 90 000: fermarsi e riferire all'utente con i numeri delle due versioni.
+
+      **Verify:**
+      - `PASS` con soglia 90 000 e 0 errori NUT e web nel test con export (errori dovuti a una caduta del Wi-Fi registrata nel log si annotano a parte e si ripete il test).
+
+      **Done:**
+      - Criterio di carico verificato e confrontato con la baseline della stessa sessione.
+
+      **Blockers:**
+      - Serve la scheda collegata a COM5 con l'Eaton 3S, il client esterno e il file con la password.
+
+      ## File Coinvolti
+      - docs/plans/idf55-baseline/stresstest-us096-after.txt — report con export
+      - docs/plans/idf55-baseline/stresstest-us096-after-nodump.txt — report senza export
+
+      ## Criteri di Completamento
+      - [ ] Export valido in HTTP/1.1, HTTP/1.0 e dalla Web UI, coerente con quello della versione precedente
+      - [ ] `min free` di almeno 90 000 con l'export ogni 60 s, senza errori
+      - [ ] Numeri con e senza export confrontati con il TASK-01
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Regressione: nativi, e2e e dati NUT'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Objective:** Confermare che il resto del firmware non cambia.
+
+      **Read:**
+      - `docs/plans/idf55-baseline/` (`upsc-v1.8.0.txt`, `upscmd-v1.8.0.txt`, `upsrw-v1.8.0.txt`).
+      - `scripts/nut_snapshot.py`.
+
+      **Change:**
+      - Nessun file del repository.
+
+      **Steps:**
+      1. `pio test -e native` completo (replay compreso).
+      2. `npx playwright test`; un test che fallisce in parallelo si rilancia da solo una volta.
+      3. `python scripts/nut_snapshot.py <ip> <ups> <prefisso>` sulla scheda con `us096-after` e confronto con `diff --strip-trailing-cr` con la baseline: differenza ammessa solo `ups.type` diventato `driver.name` (#43) e i valori che cambiano da soli (carico, autonomia, potenza).
+
+      **Verify:**
+      - Suite verdi; differenze NUT solo quelle ammesse.
+
+      **Done:**
+      - Regressione completa.
+
+      **Blockers:**
+      - Il passo 3 richiede la scheda.
+
+      ## File Coinvolti
+      - Nessun file del repository (verifiche)
+
+      ## Criteri di Completamento
+      - [ ] Nativi ed e2e verdi
+      - [ ] `upsc`, `upscmd -l`, `upsrw` uguali alla baseline salvo le differenze ammesse
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Documentazione: risultati nel piano IDF 5.5 e nella guida custom_sdkconfig'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Objective:** Lasciare i risultati della US-096 accanto a quelli della US-095.
+
+      **Read:**
+      - `docs/plans/platform-upgrade-idf55.md` §11.4, §11.7, §11.8.
+      - `docs/plans/custom-sdkconfig.md` §1-§2.
+
+      **Change:**
+      - `docs/plans/platform-upgrade-idf55.md`: nuovo §11.9 "Export senza JsonDocument (US-096)": soluzione in due righe (istantanea sotto lock, writer fuori), tabella prima e dopo nella stessa sessione (libero a riposo, `min free` con e senza export, blocco più grande), esito del criterio.
+      - `docs/plans/custom-sdkconfig.md` §1: aggiornare la frase sulla US-096 con il risultato ottenuto (se il margine sotto carico è stato recuperato, il motivo principale per riattivare `custom_sdkconfig` resta il margine a riposo).
+
+      **Steps:**
+      1. Scrivere il §11.9 con i dati dei TASK-01 e TASK-06.
+      2. Aggiornare la guida.
+      3. Rileggere: nessun IP, SSID o credenziale.
+
+      **Verify:**
+      - Ogni criterio della spec ha il suo dato nei documenti.
+
+      **Done:**
+      - Documentazione coerente.
+
+      **Blockers:**
+      - Nessuno.
+
+      ## File Coinvolti
+      - docs/plans/platform-upgrade-idf55.md — nuovo §11.9
+      - docs/plans/custom-sdkconfig.md — stato aggiornato
+
+      ## Criteri di Completamento
+      - [ ] §11.9 con prima e dopo nella stessa sessione
+      - [ ] Guida `custom_sdkconfig` aggiornata
+      - [ ] Nessun dato sensibile
+    ref: TASK-08

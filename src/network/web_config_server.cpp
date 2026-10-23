@@ -1,5 +1,6 @@
 #include "WebApiJson.h"
 #include "ChunkWriter.h"
+#include "UsbDiagJson.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
 #include "CommandCatalog.h"
@@ -102,10 +103,11 @@ void WebConfigServer::begin(bool isAPMode) {
             server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
             return;
         }
-        JsonDocument doc;
-        usb_ups->buildUSBDiagnostics(doc);
-        // A pezzi, senza il JSON intero in una String: abbassa il picco di heap (US-095).
+        // Istantanea dei dati sotto il lock dell'host, poi JSON scritto a pezzi fuori dal lock,
+        // senza JsonDocument né String dell'export intero: picco di heap minimo (US-095, US-096).
         // API classica e non chunkWrite(): sendContent() usa il chunked solo con HTTP/1.1
+        UsbDiagSnapshot snap;
+        usb_ups->snapshotUSBDiagnostics(snap);
         server.sendHeader("Content-Disposition", "attachment; filename=\"usb_diagnostics.json\"");
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
@@ -113,7 +115,7 @@ void WebConfigServer::begin(bool isAPMode) {
         ChunkWriter writer(buf, sizeof(buf), [this](const char* data, size_t len) {
             server.sendContent(data, len);
         });
-        serializeJsonPretty(doc, writer);
+        UsbDiagJson::write(snap, writer);
         writer.flush();
         server.sendContent("");
     }));

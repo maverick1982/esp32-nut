@@ -10,7 +10,7 @@ tags: [plan, platform, esp-idf, sdkconfig, memory, US-095]
 
 Nella US-095 (2026-10-22/23) `custom_sdkconfig` di pioarduino è stato provato e misurato sull'Eaton 3S con la piattaforma 55.03.312-1 (ESP-IDF 5.5.5). Funziona e recupera circa 17 KB di heap a riposo, ma costringe a ricompilare ESP-IDF ("compilazione ibrida") alla prima build, a ogni modifica delle opzioni e in ogni release.
 
-**Decisione del 2026-10-23:** non adottarlo per ora e tenere le librerie ESP-IDF precompilate del core Arduino. Il punto debole sotto carico (l'export della diagnostica) si risolve con la US-096, senza costi di build. Questa pagina e `custom-sdkconfig/sdkconfig.esp32-nut` contengono tutto quello che serve per riattivarlo.
+**Decisione del 2026-10-23:** non adottarlo per ora e tenere le librerie ESP-IDF precompilate del core Arduino. Il punto debole sotto carico (l'export della diagnostica) è stato risolto dalla US-096 senza costi di build: con le librerie precompilate il `min free` sotto carico con l'export ogni 60 s è passato da 64 312 a 92 108 (`platform-upgrade-idf55.md` §11.9). Il motivo per riattivare `custom_sdkconfig` resta quindi il margine a riposo (circa +17 KB) e il blocco libero più grande (circa +20 KB). Questa pagina e `custom-sdkconfig/sdkconfig.esp32-nut` contengono tutto quello che serve per riattivarlo.
 
 **Quando riattivarlo:**
 - segnalazioni di memoria insufficiente o di frammentazione sul campo (richieste fallite, export troncati, riavvii dopo giorni di funzionamento);
