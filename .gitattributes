@@ -1,0 +1,7 @@
+# Fine riga LF per tutti i file di testo, anche nelle copie di lavoro su Windows: è il formato
+# salvato in Git e quello che scrivono gli strumenti del progetto (CLI di archetipo, script).
+* text=auto eol=lf
+
+# Script di Windows: cmd.exe vuole CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
