@@ -1,0 +1,157 @@
+schema: archetipo/plan/v2
+spec_code: US-098
+body: |-
+  ---
+  type: plan
+  title: "US-098: Campi HID ripetuti da un Report Count non azzerato letti dalla prima occorrenza, come NUT (APC BGM2200, issue #98) — Piano di implementazione"
+  description: "Piano di implementazione per US-098"
+  tags: [plan, implementation, US-098]
+  ---
+  # US-098: Campi HID ripetuti da un Report Count non azzerato letti dalla prima occorrenza, come NUT (APC BGM2200, issue #98) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-24
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3
+
+  Il descriptor dell'APC BGM2200 (#98) lascia `Report Count = 23` dopo il padding del report 0x16: i campi successivi diventano array di 23 elementi con la stessa usage. Oggi ogni copia diventa una `HIDUsageDef` e l'ultima, letta oltre il payload, azzera il valore. NUT legge la prima occorrenza (`FindObject_with_Path()`).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Correzione alla fonte in `HIDParser::parseReportDescriptor()`, così ogni consumatore vede ciò che vede NUT.
+
+  - **Una sola definizione per l'usage ripetuta:** nel ciclo `for (c < report_count)` dei Main item Input/Output/Feature, un campo con `c >= local_usages.size()` (che ripete `local_usages.back()`) non crea una nuova `HIDUsageDef` quando quella usage è già stata emessa per questo item. Il campo occupa comunque i suoi bit: `offsets_map` avanza per ogni campo, quindi gli offset dei campi successivi e le lunghezze dei report (`getExpectedLength`, `getInputLength`) restano identici a oggi.
+  - **Cosa non cambia:** le usage distinte di un item (lista esplicita o Usage Minimum/Maximum) restano una definizione per campo; un item con Report Count pari al numero di usage è identico a oggi; Input e Feature con lo stesso ID restano due definizioni distinte.
+  - **Equivalenza con NUT:** `FindObject_with_Path()` restituisce il primo elemento con quel percorso e tipo, che è proprio il primo campo dell'array; le copie non sono mai lette. Dopo la correzione `UsageMapIndex::apply()`, `NutTable::bind()`, `CommandCatalog` e le liste di poll vedono la sola prima occorrenza senza modifiche al loro codice.
+  - **Richieste USB invariate:** GET_REPORT e SET_REPORT continuano a usare la lunghezza dichiarata (47 byte per i report del BGM2200), come `report_size` in NUT.
+  - **Commento nel codice:** citare `hidparser.c` `FindObject_with_Path()` e la #98.
+
+  ### Criterio rinviato al gate di review
+
+  Il BGM2200 entra nei README solo dopo la conferma dell'utente sul firmware di test: il criterio si chiude in `archetipo-review`, non con un task di questo piano.
+
+  ### Fuori ambito
+
+  `input.voltage` e `battery.voltage` (l'UPS invia 0), lo stato "OB DISCHRG" contro "OL DISCHRG" di NUT (la fixture non verifica `ups.status`), `apc_fix_report_desc`.
+
+  ---
+
+  ## Strategia di test
+
+  Tutto in nativo, nessuna interfaccia toccata: niente e2e nuovi, solo regressione.
+
+  - **Parser (`test_hid_parser`):** descriptor sintetico con un campo da 16 bit e Report Count 23 seguito da un altro campo nello stesso report: una sola `HIDUsageDef` all'offset 0, il campo successivo all'offset 368, `getExpectedLength` invariata (47 byte), `extractUsage` su un report di 3 byte restituisce il valore dei primi due byte. Secondo caso: due usage esplicite con Report Count 4, le definizioni sono 2. Il test esistente di Usage Minimum/Maximum resta invariato.
+  - **Replay (`test_record_replay`):** fixture `test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json` con i valori della Dimostrazione.
+  - **Regressione:** suite nativa completa senza cambiare nessun valore atteso delle fixture esistenti; build `esp32-s3-standard`; `npm run e2e`. Mutazione: tornare a emettere le copie deve far fallire il test del parser e il replay della #98.
+
+  _Piano generato con ARchetipo Planning — 2026-10-24_
+tasks:
+  - id: TASK-01
+    title: 'HIDParser: una sola definizione per l''usage ripetuta da Report Count'
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il parser non crea più una `HIDUsageDef` per ogni copia dell'ultima usage di un Main item, ma continua a riservare i bit di tutti i campi.
+
+      **Leggere:** `lib/USBHostUPS/src/HIDParser.cpp` (ciclo dei Main item ~75-120, espansione di Usage Minimum/Maximum ~174-190), `lib/USBHostUPS/src/HIDParser.h`, `nut_repo/drivers/hidparser.c` (`FindObject_with_Path` ~485).
+
+      **Modifiche:**
+      1. Nel ciclo `for (uint16_t c = 0; c < report_count; c++)`: quando `c >= local_usages.size()` e `c > 0` (il campo ripete `local_usages.back()`, già emessa per questo item), non fare `_usages.push_back(def)`. L'avanzamento di `(*offsets_map)[current_report_id] += size_bits` resta per ogni campo.
+      2. Commento sopra la condizione: NUT `FindObject_with_Path()` legge solo la prima occorrenza di un percorso; le copie create da un Report Count non azzerato (APC BGM2200, issue #98) venivano lette oltre il payload e azzeravano il valore.
+      3. Nessuna modifica a `extractUsage`, a `UsageMapIndex` né ai consumatori.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_parser -f test_record_replay`.
+
+      **Blocchi:** se una fixture esistente cambia un valore atteso, fermarsi: significa che oggi il valore arriva da una copia successiva; confrontare con il comportamento di NUT prima di procedere.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/HIDParser.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Una sola definizione per l'usage ripetuta, offset e lunghezze invariati
+      - [ ] `test_hid_parser` e `test_record_replay` verdi senza valori attesi cambiati
+  - id: TASK-02
+    title: Test del parser con Report Count maggiore delle usage
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il comportamento con descriptor sintetici.
+
+      **Leggere:** `test/test_hid_parser/test_hid_parser.cpp` (`test_usage_minimum_maximum_expanded` ~403, `test_extract_short_report_tolerance` ~163, runner in fondo).
+
+      **Passi:**
+      1. `test_repeated_usage_kept_once`: Report ID 0x26, `UPS.Battery.Voltage` (pagina 0x84, usage 0x30) con Report Size 16 e Report Count 23, poi `UPS.Battery.ConfigVoltage` (0x40) Report Size 16 Report Count 1, Feature. Verificare: una sola definizione per Voltage con `bit_offset` 0; ConfigVoltage con `bit_offset` 368; `getExpectedLength(0x26, 3)` uguale a quella di prima della correzione (1 + (23 + 1) × 2 = 49 byte); `extractUsage` di Voltage su `{0x26, 0x60, 0x09}` = 2400.
+      2. `test_repeated_last_of_explicit_usages`: due usage esplicite (es. Charging, Discharging) da 1 bit con Report Count 4: due definizioni, offset 0 e 1.
+      3. Registrare i test nei runner.
+      4. Mutazione manuale: togliere la condizione di TASK-01 deve far fallire `test_repeated_usage_kept_once`; annotarlo nella review.
+
+      **Verifica:** `pio test -e native -f test_hid_parser`.
+
+      ## File Coinvolti
+      - `test/test_hid_parser/test_hid_parser.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Nuovi test verdi
+      - [ ] Mutazione rilevata
+  - id: TASK-03
+    title: 'Fixture di replay dell''APC BGM2200 (issue #98)'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il replay del dump reale con i valori che oggi escono a zero.
+
+      **Leggere:** `test/test_record_replay/test_main.cpp` (test APC, es. `test_replay_apc_es700g_issue71`, `test_replay_apc_bx750mi_issue60`), una fixture APC nel formato del dispositivo (descriptor 10 byte per riga, `data` su una riga).
+
+      **Passi:**
+      1. Scaricare https://github.com/user-attachments/files/33905972/usb_diagnostics.json e creare `test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json` nello stesso formato: `serial_number` "TEST0000" (anonimizzato, anche in `expected_ups_data`), `notes` con origine (#98, v1.8.0, Report Count 23 lasciato dopo il padding del report 0x16; `input.voltage` e `battery.voltage` inviati a 0 dall'UPS).
+      2. `expected_ups_data`: valori del replay dopo TASK-01, che devono comprendere `ups.load` 28, `battery.voltage.nominal` 24.0, `input.voltage.nominal` 230, `ups.realpower.nominal` 1320, `ups.realpower` 369, `battery.runtime` 810, `input.transfer.low` 176, `input.transfer.high` 298. Non inserire `ups.status` (fuori ambito).
+      3. `test_replay_apc_bgm2200_issue98` con comandi e righe NUT ricavati dal replay e confrontati con `apc-hid.c`; `LIST RW` come gli altri APC. Registrarlo nei runner.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      ## File Coinvolti
+      - `test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json` (nuovo)
+      - `test/test_record_replay/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Replay verde con i valori della Dimostrazione
+      - [ ] Seriale anonimizzato
+  - id: TASK-04
+    title: Regressione completa
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nessun altro dispositivo cambia valori.
+
+      **Passi:**
+      1. `pio test -e native` completo (rilanciare da sole le suite ERRORED transitorie su Windows).
+      2. `git diff --stat -- test/fixtures` deve mostrare solo la nuova fixture: nessun valore atteso esistente modificato.
+      3. `pio run -e esp32-s3-standard` (da PowerShell): annotare RAM e flash.
+      4. `npm run e2e`.
+
+      ## File Coinvolti
+      - nessun file modificato
+
+      ## Criteri di Completamento
+      - [ ] Tutte le suite native verdi
+      - [ ] Nessuna fixture esistente modificata
+      - [ ] Build ok
+      - [ ] e2e verdi
