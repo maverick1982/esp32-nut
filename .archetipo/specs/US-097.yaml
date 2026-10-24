@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 5
-status: PLANNED
+status: REVIEW
 body: |-
   #### US-097: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT
 
@@ -67,3 +67,7 @@ history:
     at: "2026-10-24T13:05:57Z"
   - status: PLANNED
     at: "2026-10-24T13:14:13Z"
+  - status: IN PROGRESS
+    at: "2026-10-24T13:17:35Z"
+  - status: REVIEW
+    at: "2026-10-24T13:37:38Z"

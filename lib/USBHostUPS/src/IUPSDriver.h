@@ -156,6 +156,16 @@ public:
     virtual bool beeperMuteSupported() const { return true; }
 
     /**
+     * @brief NUT commands of the upstream subdriver, nullptr-terminated (US-097).
+     *
+     * nullptr offers the whole catalog, as before. A list limits LIST CMD and INSTCMD to the
+     * commands it names, among those the device supports: liebert-hid.c has test.battery.start
+     * and beeper.toggle only, where the catalog would also offer quick/deep/stop and
+     * enable/disable/mute. test.battery.start is offered only through such a list.
+     */
+    virtual const char* const* commandAllowList() const { return nullptr; }
+
+    /**
      * @brief True when the load.* and shutdown.* commands are offered (US-058).
      *
      * False for subdrivers whose NUT counterpart has no such commands or uses its own

@@ -71,6 +71,7 @@ inline const UPSCommandInfo* table(size_t& count) {
         { "beeper.disable",           "Disable the UPS beeper",                            false },
         { "beeper.toggle",            "Toggle the UPS beeper",                             false },
         { "beeper.mute",              "Temporarily mute the UPS beeper",                   false },
+        { "test.battery.start",       "Start a battery test",                              false },
         { "test.battery.start.quick", "Start a quick battery test",                        false },
         { "test.battery.start.deep",  "Start a deep battery test",                         false },
         { "test.battery.stop",        "Stop the battery test",                             false },
@@ -225,10 +226,21 @@ inline const HIDUsageDef* muteField(const std::vector<HIDUsageDef>& usages) {
  * ups.beeper.status). shutdown_cmds is IUPSDriver::shutdownCommandsSupported():
  * false hides every load.* and shutdown.* command (US-058). mute_allowed is
  * IUPSDriver::beeperMuteSupported(): false hides beeper.mute (US-087). shutdown.default is
- * listed when at least one of the commands upsdrv_shutdown() tries is available.
+ * listed when at least one of the commands upsdrv_shutdown() tries is available. allow is
+ * IUPSDriver::commandAllowList() (US-097): when given, only the commands it names are
+ * listed, and test.battery.start exists only through it.
  */
+inline bool allowed(const char* const* allow, const char* name) {
+    if (!allow) return true;
+    for (const char* const* a = allow; *a; a++) {
+        if (strcmp(*a, name) == 0) return true;
+    }
+    return false;
+}
+
 inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available,
-                                                bool shutdown_cmds = true, bool mute_allowed = true) {
+                                                bool shutdown_cmds = true, bool mute_allowed = true,
+                                                const char* const* allow = nullptr) {
     const bool test = hasFeature(usages, kTest);
     const bool panel = hasFeature(usages, kPanel);
     const bool shutdown = shutdown_cmds && hasFeature(usages, kShutdown);
@@ -243,6 +255,8 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
         bool available = false;
         if (strcmp(n, "beeper.mute") == 0) available = mute_allowed && beeper_available && muteField(usages);
         else if (strncmp(n, "beeper.", 7) == 0) available = beeper_available;
+        // The catalog offers quick/deep/stop; the plain command only for a subdriver naming it
+        else if (strcmp(n, "test.battery.start") == 0) available = test && allow != nullptr;
         else if (strncmp(n, "test.battery.", 13) == 0) available = test;
         else if (strncmp(n, "test.panel.", 11) == 0) available = panel;
         else if (strcmp(n, "load.off") == 0 || strcmp(n, "load.off.delay") == 0 ||
@@ -254,7 +268,7 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
         // At least one of shutdown.return, shutdown.reboot, load.off.delay, shutdown.stayoff:
         // load.off.delay needs only Shutdown, which return and stayoff need as well
         else if (strcmp(n, "shutdown.default") == 0) available = reboot || shutdown;
-        if (available) result.push_back(&commands[i]);
+        if (available && allowed(allow, n)) result.push_back(&commands[i]);
     }
     return result;
 }
@@ -276,7 +290,9 @@ inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usage
         return true;
     }
     const UsageGroup* group = nullptr;
-    if (strcmp(name, "test.battery.start.quick") == 0) { group = &kTest; value = 1; }
+    // liebert-hid.c: { "test.battery.start", ..., "UPS.BatterySystem.Battery.Test", NULL, "1", HU_TYPE_CMD }
+    if (strcmp(name, "test.battery.start") == 0) { group = &kTest; value = 1; }
+    else if (strcmp(name, "test.battery.start.quick") == 0) { group = &kTest; value = 1; }
     else if (strcmp(name, "test.battery.start.deep") == 0) { group = &kTest; value = 2; }
     else if (strcmp(name, "test.battery.stop") == 0) { group = &kTest; value = 3; }
     else if (strcmp(name, "test.panel.start") == 0) { group = &kPanel; value = 1; }

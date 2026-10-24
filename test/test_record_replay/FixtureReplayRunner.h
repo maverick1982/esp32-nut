@@ -198,7 +198,8 @@ public:
         TEST_ASSERT_GREATER_THAN_MESSAGE(0, host._parser.getUsages().size(), "Parser found 0 usages from descriptor");
 
         // 3. Dispatch Driver
-        s.driver = DriverRegistry::create(vid, pid);
+        // The strings tell apart the subdrivers of a shared VID/PID, as on the device (US-097)
+        s.driver = DriverRegistry::create(vid, pid, doc["manufacturer"] | "", doc["product"] | "");
         IUPSDriver* driver = s.driver;
 
         // Match quirks
@@ -320,7 +321,7 @@ public:
             bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
             std::string actual;
             for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported(),
-                                                               driver->beeperMuteSupported())) {
+                                                               driver->beeperMuteSupported(), driver->commandAllowList())) {
                 if (!actual.empty()) actual += " ";
                 actual += c->name;
             }

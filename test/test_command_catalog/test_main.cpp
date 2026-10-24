@@ -476,6 +476,41 @@ void test_build_without_shutdown_commands() {
         names(CommandCatalog::build(usages, true, false)).c_str());
 }
 
+// US-097: commandAllowList() of the driver limits the catalog to its upstream subdriver
+void test_plain_battery_test_needs_allow_list() {
+    std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
+    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
+                             names(CommandCatalog::build(usages, false)).c_str());
+    const UPSCommandInfo* c = CommandCatalog::find("test.battery.start");
+    TEST_ASSERT_NOT_NULL(c);
+    TEST_ASSERT_EQUAL_STRING("Start a battery test", c->description);
+    TEST_ASSERT_FALSE(c->destructive);
+}
+
+void test_allow_list_keeps_only_named_commands() {
+    std::vector<HIDUsageDef> usages = allDelays();
+    usages.push_back(mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03));
+    static const char* const allow[] = { "load.off", "test.battery.start", "beeper.toggle", nullptr };
+    TEST_ASSERT_EQUAL_STRING("beeper.toggle test.battery.start load.off",
+                             names(CommandCatalog::build(usages, true, true, true, allow)).c_str());
+}
+
+void test_allow_list_does_not_add_unsupported_commands() {
+    // Named but without a Test usage, a beeper or a shutdown delay in the descriptor
+    std::vector<HIDUsageDef> usages;
+    static const char* const allow[] = { "test.battery.start", "beeper.toggle", "load.off", nullptr };
+    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false, true, true, allow).size());
+}
+
+void test_resolve_plain_battery_test_writes_1() {
+    std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
+    HIDUsageDef def;
+    uint32_t value = 99;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start", usages, def, value));
+    TEST_ASSERT_EQUAL_UINT32(1, value);
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", def.path);
+}
+
 void test_apply_default_delays() {
     UPSData d;
     CommandCatalog::applyDefaultDelays(d, allDelays(), 20, 30, true);
@@ -778,6 +813,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_steps_without_configured_delays);
     RUN_TEST(test_shutdown_default_availability);
     RUN_TEST(test_build_without_shutdown_commands);
+    RUN_TEST(test_plain_battery_test_needs_allow_list);
+    RUN_TEST(test_allow_list_keeps_only_named_commands);
+    RUN_TEST(test_allow_list_does_not_add_unsupported_commands);
+    RUN_TEST(test_resolve_plain_battery_test_writes_1);
     RUN_TEST(test_apply_default_delays);
     RUN_TEST(test_driver_var_store_json_round_trip);
     RUN_TEST(test_driver_var_store_corrupt_json);

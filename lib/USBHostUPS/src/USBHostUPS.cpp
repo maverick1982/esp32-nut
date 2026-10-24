@@ -408,15 +408,24 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _vid = dev_info.VID;
         _pid = dev_info.PID;
 
-        if (_driver) { delete _driver; _driver = nullptr; }
-        _driver = DriverRegistry::create(_vid, _pid);
-
+        // Quirks first: the strings the registry looks at need QUIRK_INVERT_STRINGS
         _quirks = 0;
         for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
             if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
                 _quirks |= UPS_QUIRKS[q].flags;
             }
         }
+
+        // Some VID/PID are shared by subdrivers that tell the devices apart by their
+        // strings, as usbhid-ups does (US-097, Phoenixtec 06da:ffff)
+        const bool invert = (_quirks & QUIRK_INVERT_STRINGS) != 0;
+        char mfr[HID_STR_DESC_MAX_LENGTH + 1];
+        char product[HID_STR_DESC_MAX_LENGTH + 1];
+        DeviceStrings::toAscii(dev_info.iManufacturer, HID_STR_DESC_MAX_LENGTH, invert, mfr, sizeof(mfr));
+        DeviceStrings::toAscii(dev_info.iProduct, HID_STR_DESC_MAX_LENGTH, invert, product, sizeof(product));
+
+        if (_driver) { delete _driver; _driver = nullptr; }
+        _driver = DriverRegistry::create(_vid, _pid, mfr, product);
         _driver->setup();
         applySavedDriverValues();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
@@ -934,6 +943,12 @@ bool USBHostUPS::beeperMuteSupported() const {
     // Same lock as supportsBeeperToggle(): _driver is deleted under _mutex
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _driver ? _driver->beeperMuteSupported() : true;
+}
+
+const char* const* USBHostUPS::commandAllowList() const {
+    // The list is static data of the driver class: it outlives the lock
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver ? _driver->commandAllowList() : nullptr;
 }
 
 void USBHostUPS::applyDefaultDelays() {

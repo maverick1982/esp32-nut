@@ -51,6 +51,13 @@
  *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
  *                 2013 Charles Lepple <clepple+nut@gmail.com>
  *                 2018 Gabriele Taormina <gabriele.taormina@legrand.com>, for Legrand
+ *
+ * drivers/liebert-hid.c:
+ *   Copyright (C) 2003 - 2008 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2007 Charles Lepple <clepple@gmail.com>
+ *                 2018 Markus "Links2004" <help.markus+gitk@gmail.com>
+ *                 2023 Blaž Zakrajšek <zakrajsek.blaz@gmail.com>
  */
 
 #ifndef NUT_TABLE_H
@@ -735,6 +742,14 @@ inline const DelayPaths* powercomDelayPaths() {
     static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown", "UPS.PowerSummary.0x00FF0057" };
     static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
     static const DelayPaths p = { sd, 2, st, 1 };
+    return &p;
+}
+
+// liebert-hid.c:133-134: PowerSummary only (US-097)
+inline const DelayPaths* liebertDelayPaths() {
+    static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown" };
+    static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
+    static const DelayPaths p = { sd, 1, st, 1 };
     return &p;
 }
 

@@ -66,6 +66,7 @@ public:
     bool supportsBeeperToggle() const override;
     bool shutdownCommandsSupported() const override;
     bool beeperMuteSupported() const override;
+    const char* const* commandAllowList() const override;
 
     void setLogCallback(LogCallback cb);
     void logDebug(const String& msg) const override;

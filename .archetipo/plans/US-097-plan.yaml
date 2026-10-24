@@ -65,7 +65,7 @@ tasks:
   - id: TASK-01
     title: Hook commandAllowList() e voce test.battery.start nel catalogo
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** permettere a un driver di limitare i comandi NUT a quelli del suo subdriver upstream, e offrire `test.battery.start`.
@@ -93,10 +93,11 @@ tasks:
       - [ ] Con `allow = nullptr` nessuna fixture di replay cambia `LIST CMD`
       - [ ] `test.battery.start` compare solo con una lista che lo contiene
       - [ ] `resolveWrite("test.battery.start")` restituisce la usage `Test` e valore 1
+    ref: TASK-01
   - id: TASK-02
     title: Test del catalogo con lista dei comandi
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -118,10 +119,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Nuovi casi verdi
       - [ ] Casi esistenti invariati e verdi
+    ref: TASK-02
   - id: TASK-03
     title: 'LiebertDriver: mappature, battery.type, produttore, comandi'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -151,10 +153,11 @@ tasks:
       - [ ] Compila in nativo e per `esp32-s3-standard`
       - [ ] Intestazioni GPL e commento delle deviazioni presenti
       - [ ] Nessuna modifica a `computeUPSStatusString`
+    ref: TASK-03
   - id: TASK-04
     title: Riconoscimento 06DA:FFFF con le stringhe del dispositivo
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -179,10 +182,11 @@ tasks:
       - [ ] `create(0x06DA, 0xFFFF)` dà `LiebertDriver`
       - [ ] Quirk calcolati prima di `create()` in `claimInterface`
       - [ ] Tutte le fixture esistenti ottengono lo stesso driver di prima
+    ref: TASK-04
   - id: TASK-05
     title: Test nativi del driver Liebert
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -207,10 +211,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Nuova suite verde
       - [ ] Mutazioni rilevate
+    ref: TASK-05
   - id: TASK-06
     title: 'Fixture di replay del Powerwalker VI 2200 SHL (issue #96)'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -233,10 +238,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Replay verde con i valori della Dimostrazione
       - [ ] Ordine dei report documentato nelle `notes`
+    ref: TASK-06
   - id: TASK-07
     title: 'README: Powerwalker VI 2200 SHL tra i modelli testati'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
     body: |-
@@ -253,10 +259,11 @@ tasks:
 
       ## Criteri di Completamento
       - [ ] Stessa riga in entrambi i README
+    ref: TASK-07
   - id: TASK-08
     title: Regressione completa
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-05
@@ -278,3 +285,4 @@ tasks:
       - [ ] Tutte le suite native verdi, nessun test esistente modificato
       - [ ] Build ok
       - [ ] e2e verdi
+    ref: TASK-08

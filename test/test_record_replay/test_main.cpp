@@ -249,6 +249,19 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
         "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS);
 }
 
+// US-097: liebert-hid.c commands only (test.battery.start, beeper.toggle, load.*.delay,
+// shutdown.stop and what usbhid-ups derives), shutdown.default (US-058). liebert_hid2nut
+// has no RW row besides ups.delay.* (PowerSummary.DelayBefore*, aux 10)
+void test_replay_phoenixtec_powerwalker_vi2200shl_issue96(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json",
+        "beeper.toggle test.battery.start load.off load.on load.off.delay load.on.delay "
+        "shutdown.return shutdown.stayoff shutdown.stop shutdown.default",
+        nullptr, /* no hid2nut() table: ups.delay.* only */ "",
+        // FEATURE 0x72 [114, 230] UPS.Flow.[4].ConfigVoltage, FEATURE 0x36 [54, 50] ConfigFrequency
+        { { "output.voltage.nominal", "230" }, { "output.frequency.nominal", "50" } },
+        RW_DELAYS, RW_DELAYS);
+}
+
 // The W150 reports PresentStatus.BatteryPresent = 0 in its normal state, but
 // OpenUPSDriver ignores the unreliable flag, so ups.status stays OL; see the
 // fixture "notes" (US-055).
@@ -322,6 +335,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
+    RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);
@@ -352,6 +366,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
+    RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);
