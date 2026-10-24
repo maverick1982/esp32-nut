@@ -15,6 +15,7 @@
 #include "IUSBHostUPS.h"
 #include "LinkMonitor.h"
 #include "InputReassembler.h"
+#include "DescriptorRetry.h"
 #include "DriverVarStore.h"
 #include <map>
 #include <vector>
@@ -159,6 +160,8 @@ private:
     void service();
     void processEvents();
     void claimInterface(hid_host_device_handle_t handle);
+    bool deferClaim(hid_host_device_handle_t handle, uint32_t now);
+    void clearDeferredClaim(hid_host_device_handle_t handle);
     void processInputReport(const HidEvent& ev);
     void handleDisconnected(hid_host_device_handle_t handle);
     void closeInterface(hid_host_device_handle_t handle);
@@ -178,6 +181,9 @@ private:
     uint32_t _reported_dropped_events;
 
     hid_host_device_handle_t _hid_dev_handle;
+    // Interface opened but without a report descriptor yet: claimInterface() runs again (issue #97)
+    hid_host_device_handle_t _desc_retry_handle;
+    DescriptorRetry _desc_retry;
 
     String _cached_report_descriptor_hex;
     // Product string as the device sent it, before formatDeviceStrings() splits it

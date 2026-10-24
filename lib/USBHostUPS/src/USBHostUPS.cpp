@@ -15,7 +15,7 @@ USBHostUPS::USBHostUPS() :
     _usb_task_handle(NULL), _usb_task_run(false),
     _poll_task_handle(NULL), _poll_task_run(false), _op_mutex(NULL),
     _event_queue(NULL), _self_close_handle(NULL), _dropped_events(0), _reported_dropped_events(0),
-    _hid_dev_handle(NULL),
+    _hid_dev_handle(NULL), _desc_retry_handle(NULL),
     _vid(0), _pid(0),
     _initialized(false), _is_ready_to_poll(false),
     _first_data_ready(false), _claimed_at(0), _get_ok_since_claim(0),
@@ -141,6 +141,10 @@ void USBHostUPS::end() {
         closeInterface(_hid_dev_handle);
         _hid_dev_handle = NULL;
     }
+    if (_desc_retry_handle) {
+        closeInterface(_desc_retry_handle);
+        clearDeferredClaim(_desc_retry_handle);
+    }
 
     hid_host_uninstall();
 
@@ -237,9 +241,14 @@ void USBHostUPS::postEvent(const HidEvent& ev, bool reserved_slot) {
 void USBHostUPS::service() {
     processEvents();
 
+    uint32_t now = millis();
+    if (_desc_retry.due(now)) {
+        claimInterface(_desc_retry_handle);
+        now = millis(); // the read can block up to its 5 s timeout
+    }
+
     if (_restart_requested) return;
 
-    uint32_t now = millis();
     if (_in_restart_pending) {
         retryInterfaceStart(now);
         return;
@@ -346,15 +355,26 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     size_t desc_len = 0;
     uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
 
+    if (!desc) {
+        // Not "non-UPS": the interface never answered (issue #97)
+        if (deferClaim(handle, millis())) return;
+        log("ERROR", "[USB] Report descriptor not available: interface dropped");
+        // A timed-out read keeps EP0 busy until the URB comes back, and that takes a
+        // restart (ADR 0008). Not while another interface is serving the UPS.
+        bool ctrl_stuck = hid_host_device_ctrl_stuck(handle);
+        closeInterface(handle);
+        if (ctrl_stuck && _hid_dev_handle == NULL) requestRestart("report descriptor not available");
+        return;
+    }
+    clearDeferredClaim(handle);
+
     bool is_ups = false;
     HIDParser temp_parser;
-    if (desc) {
-        temp_parser.parseReportDescriptor(desc, desc_len);
-        for (const auto& u : temp_parser.getUsages()) {
-            if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
-                is_ups = true;
-                break;
-            }
+    temp_parser.parseReportDescriptor(desc, desc_len);
+    for (const auto& u : temp_parser.getUsages()) {
+        if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
+            is_ups = true;
+            break;
         }
     }
 
@@ -443,6 +463,25 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     log("INFO", "UPS interface claimed and ready (IN endpoint MPS %u).", (unsigned)_ep_in_mps);
 }
 
+bool USBHostUPS::deferClaim(hid_host_device_handle_t handle, uint32_t now) {
+    if (_desc_retry_handle != NULL && _desc_retry_handle != handle) return false; // one at a time
+    _desc_retry_handle = handle;
+    if (!_desc_retry.onFailure(now)) {
+        _desc_retry_handle = NULL;
+        return false;
+    }
+    log("WARN", "[USB] Report descriptor not available (attempt %u of %u), retry in %u ms",
+        (unsigned)_desc_retry.attempts(), (unsigned)DescriptorRetry::MAX_ATTEMPTS,
+        (unsigned)DescriptorRetry::RETRY_DELAY_MS);
+    return true;
+}
+
+void USBHostUPS::clearDeferredClaim(hid_host_device_handle_t handle) {
+    if (handle != _desc_retry_handle) return;
+    _desc_retry_handle = NULL;
+    _desc_retry.clear();
+}
+
 void USBHostUPS::processInputReport(const HidEvent& ev) {
     if (ev.handle != _hid_dev_handle || !_driver) return;
 
@@ -486,6 +525,7 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     // The first hid_host_device_close() (ours, or the HID driver's on physical removal)
     // raised this event; this second one releases the interface.
     hid_host_device_close(handle);
+    clearDeferredClaim(handle);
     if (_hid_dev_handle != handle) return;
 
     log("INFO", "HID Device Disconnected");
