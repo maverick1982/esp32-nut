@@ -77,6 +77,12 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 </details>
 
 <details>
+<summary><b>Powerwalker</b> (Click to expand tested models)</summary>
+
+- Powerwalker VI 2200 SHL
+</details>
+
+<details>
 <summary><b>EcoFlow</b> (Click to expand untested / community-contributed models)</summary>
 
 - EcoFlow River 3 Plus

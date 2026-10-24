@@ -567,6 +567,13 @@ String GenericDriver::decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *d
             str += c;
         }
     }
+    // libhid.c HIDGetIndexString() ends with str_rtrim(buf, '\n'). The trailing '\r' goes
+    // too (deviation): the Phoenixtec iDeviceChemistry string is "PbAc\r\n" (issue #96), and
+    // a line break inside a value would split the NUT protocol line. Spaces stay: some
+    // serial numbers are only spaces.
+    while (str.length() > 0 && (str.endsWith("\n") || str.endsWith("\r"))) {
+        str = str.substring(0, str.length() - 1);
+    }
     return str;
 }
 

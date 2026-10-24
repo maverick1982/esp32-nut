@@ -77,6 +77,12 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 </details>
 
 <details>
+<summary><b>Powerwalker</b> (Clicca per espandere i modelli testati)</summary>
+
+- Powerwalker VI 2200 SHL
+</details>
+
+<details>
 <summary><b>EcoFlow</b> (Clicca per espandere i modelli non testati / forniti dalla community)</summary>
 
 - EcoFlow River 3 Plus

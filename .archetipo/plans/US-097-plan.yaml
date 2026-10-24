@@ -1,0 +1,288 @@
+schema: archetipo/plan/v2
+spec_code: US-097
+body: |-
+  ---
+  type: plan
+  title: "US-097: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT — Piano di implementazione"
+  description: "Piano di implementazione per US-097"
+  tags: [plan, implementation, US-097]
+  ---
+  # US-097: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-24
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  Driver dedicato per i dispositivi Phoenixtec `06DA:FFFF` (Powerwalker VI 2200 SHL della #96, Salicru SPS SOHO+ della #97, stesso report descriptor) derivato da `nut_repo/drivers/liebert-hid.c`, con fixture di replay dal dump della #96.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Stesso schema di `LegrandDriver` (ADR 0003 e 0004): `LiebertDriver` estende `GenericDriver`, che decodifica le usage standard HID PDC, e aggiunge in `decodeReport` solo le righe di `liebert_hid2nut` che il generico non ha o pubblica con un altro nome o formato.
+
+  - **Riconoscimento con le stringhe:** `DriverRegistry::create(vid, pid, mfr, product)` con `mfr` e `product` opzionali (default stringa vuota). Per `0x06DA/0xFFFF` replica l'ordine dei subdriver di `usbhid-ups.c`: "AEG" nel produttore o nel prodotto → `EatonDriver` (claim di `mge-hid.c`), "BMS" nel produttore o "Smart-Battery" nel prodotto → `GenericDriver` (`idowell-hid.c`, non portato), altrimenti `LiebertDriver`. Gli altri PID di `0x06DA` non hanno righe e restano al generico. `USBHostUPS::claimInterface()` calcola i quirk prima di `create()` e converte le stringhe di `hid_host_dev_info_t` con `DeviceStrings::toAscii` (stessa inversione di `populateStringsFromDeviceInfo`). Il replay passa `manufacturer` e `product` della fixture.
+  - **Comandi:** nuovo hook `IUPSDriver::commandAllowList()` (default `nullptr` = catalogo intero, nessun cambiamento per i driver esistenti), propagato da `IUSBHostUPS`/`USBHostUPS` come `beeperMuteSupported()` e passato a `CommandCatalog::build()`. Nuova voce del catalogo `test.battery.start` ("Start a battery test", `cmdvartab`), disponibile solo se un driver la elenca e c'è una usage `Test`; `resolveWrite()` la scrive con valore 1 sul gruppo `kTest`. `LiebertDriver` elenca: `beeper.toggle`, `test.battery.start`, `load.off`, `load.on`, `load.off.delay`, `load.on.delay`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `shutdown.default`.
+  - **Mappature aggiunte** (`UsageMapIndex<LiebertDriver>`, applicate dopo la base):
+    - `UPS.Flow.ConfigVoltage` (il `[4]` del descriptor) → `output.voltage.nominal` `%.0f`, e rimozione di `input.voltage.nominal` che la base ha appena scritto dallo stesso valore;
+    - `UPS.Flow.ConfigFrequency` → `output.frequency.nominal` `%.0f`;
+    - `UPS.PowerSummary.FullChargeCapacity` → `experimental.battery.capacity`, `UPS.PowerSummary.DesignCapacity` → `experimental.battery.capacity.nominal` (`%.0f`);
+    - formati di upstream: `battery.voltage` `%.2f`, `output.voltage` e `input.voltage` `%.1f`, `output.frequency` e `input.frequency` `%.2f`;
+    - `UPS.PowerConverter.Output.HighVoltageTransfer`/`LowVoltageTransfer` → `output.transfer.high/low` `%.1f`; vendor `0xFFFF0057`/`0xFFFF0058` → `input.transfer.low/high`, `0xFFFF00F9`/`0xFFFF00F8` → `input.frequency.transfer.low/high` (`%.0f`), sotto `UPS.PowerConverter.Output`; assenti nel descriptor della #96 ma nella tabella upstream;
+    - flag: `PresentStatus.Good` → `ups.status.good`, `PresentStatus.InternalFailure` → `ups.status.internal_failure`, `Input.PresentStatus.Buck` → `ups.status.trim`, `Input.PresentStatus.Boost` → `ups.status.boost`. `computeUPSStatusString` non cambia.
+  - **`battery.type`:** come `CyberPowerDriver`, l'indice di `UPS.PowerSummary.iDeviceChemistry` va in `_chemStrIdx`, `collectStringRequests()` lo chiede, `parseStringDescriptor()` pubblica la stringa.
+  - **`ups.mfr`:** come Legrand, "Liebert" quando il dispositivo non ha stringa del produttore o la decodifica è vuota (`liebert_format_mfr`).
+  - **Ritardi:** `NutTable::liebertDelayPaths()` con `UPS.PowerSummary.DelayBeforeShutdown/Startup`; nessun `hid2nut()` perché le uniche righe RW di `liebert_hid2nut` sono `ups.delay.*` (gestite da `applyDefaultDelays()`).
+  - **Licenza:** `LiebertDriver.{h,cpp}` e la riga aggiunta all'intestazione di `NutTable.h` portano le righe di copyright di `liebert-hid.c` (2003-2008 Arnaud Quette, 2005-2006 Peter Selinger, 2007 Charles Lepple, 2018 Markus "Links2004", 2023 Blaž Zakrajšek).
+
+  ### Deviazioni da upstream (decise il 2026-10-24)
+
+  1. **`beeper.toggle` con il comportamento del progetto** (legge `ups.beeper.status` e scrive l'opposto), come la deviazione 3 di Legrand: `liebert-hid.c` scrive sempre 1, che nella codifica HID standard significa disabilitato. Decisione dell'utente.
+  2. **Variabili del generico oltre la tabella upstream** restano, come negli altri driver, tranne `input.voltage.nominal` da `UPS.Flow.[4].ConfigVoltage` (nome sbagliato rispetto a upstream).
+  3. **Nessun token OFF, TRIM, BOOST né `ups.alarm`:** i flag sono salvati come chiavi interne; il calcolo di `ups.status` resta quello comune (spec separata).
+  4. **`shutdown.default`** offerto come per tutti i driver (US-058).
+  5. **Dispositivi GoldenMate (`idowell-hid`) e altri PID di `0x06DA`** al driver generico invece del rifiuto o del subdriver dedicato di upstream.
+
+  ---
+
+  ## Strategia di test
+
+  Tutto in nativo, sul modello di US-087. Nessuna interfaccia nuova: niente e2e nuovi, solo regressione.
+
+  - **Catalogo (`test_command_catalog`):** con `allow = nullptr` il risultato è identico a oggi e non contiene `test.battery.start`; con una lista restano solo i comandi elencati e disponibili; `resolveWrite("test.battery.start")` scrive 1 sulla usage `Test`.
+  - **Driver (`test_liebert_driver`, nuova):** registro (Liebert, AEG → Eaton, BMS e Smart-Battery → generico, altro PID → generico, produttore vuoto → Liebert); mappature su report sintetici (nominali di uscita, assenza di `input.voltage.nominal`, capacità sperimentali, formati, flag); `battery.type` da string descriptor sintetico; fallback `ups.mfr` "Liebert"; lista dei comandi. Mutazione: togliere la rimozione di `input.voltage.nominal` o rimettere `test.battery.start.quick` nella lista deve far fallire almeno un test.
+  - **Replay (`test_record_replay`):** fixture `test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json` con i valori della Dimostrazione, `LIST CMD` e `LIST RW` attesi.
+  - **Regressione:** suite nativa completa, build `esp32-s3-standard`, `npm run e2e`.
+
+  _Piano generato con ARchetipo Planning — 2026-10-24_
+tasks:
+  - id: TASK-01
+    title: Hook commandAllowList() e voce test.battery.start nel catalogo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** permettere a un driver di limitare i comandi NUT a quelli del suo subdriver upstream, e offrire `test.battery.start`.
+
+      **Leggere:** `lib/USBHostUPS/src/IUPSDriver.h` (hook `beeperMuteSupported` ~156), `lib/USBHostUPS/src/IUSBHostUPS.h` (`getSupportedCommands` ~57, `executeCommand`), `lib/USBHostUPS/src/USBHostUPS.{h,cpp}` (implementazione di `beeperMuteSupported()` sotto `_mutex`), `lib/USBHostUPS/src/CommandCatalog.h` (`table()` ~68, `build()` ~230, `resolveWrite()` ~269), `nut_repo/data/cmdvartab` (testo di `test.battery.start`), `test/test_record_replay/FixtureReplayRunner.h` (chiamata a `CommandCatalog::build` ~322).
+
+      **Modifiche:**
+      1. `IUPSDriver`: `virtual const char* const* commandAllowList() const { return nullptr; }` con commento: lista terminata da `nullptr` dei comandi del subdriver upstream; `nullptr` = catalogo intero.
+      2. `IUSBHostUPS`: stesso metodo virtuale con default `nullptr`; `USBHostUPS` lo implementa delegando al driver sotto `_mutex`, come `beeperMuteSupported()`. `getSupportedCommands()` lo passa a `build()`.
+      3. `CommandCatalog::table()`: voce `{ "test.battery.start", "Start a battery test", false }` subito prima di `test.battery.start.quick`.
+      4. `CommandCatalog::build()`: nuovo parametro `const char* const* allow = nullptr`. `test.battery.start` è disponibile solo se `allow` la contiene e c'è la usage `Test` (va valutato prima della regola sul prefisso `test.battery.`). Con `allow != nullptr` un comando disponibile entra nel risultato solo se è nella lista.
+      5. `resolveWrite()`: `test.battery.start` → gruppo `kTest`, valore 1 (riga `liebert_hid2nut`, `test_write_info` 1 = quick).
+      6. `FixtureReplayRunner.h`: passare `driver->commandAllowList()` a `build()`.
+
+      **Vincoli:** con `allow = nullptr` l'output di `build()` è identico a oggi per tutti i driver.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/IUPSDriver.h`
+      - `lib/USBHostUPS/src/IUSBHostUPS.h`
+      - `lib/USBHostUPS/src/USBHostUPS.h`, `lib/USBHostUPS/src/USBHostUPS.cpp`
+      - `lib/USBHostUPS/src/CommandCatalog.h`
+      - `test/test_record_replay/FixtureReplayRunner.h`
+
+      ## Criteri di Completamento
+      - [ ] Con `allow = nullptr` nessuna fixture di replay cambia `LIST CMD`
+      - [ ] `test.battery.start` compare solo con una lista che lo contiene
+      - [ ] `resolveWrite("test.battery.start")` restituisce la usage `Test` e valore 1
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del catalogo con lista dei comandi
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il filtro e la nuova voce del catalogo.
+
+      **Passi:** in `test/test_command_catalog/test_main.cpp`, con le stesse usage sintetiche dei test esistenti (Test, DelayBefore*, beeper a 8 bit):
+      1. `build(usages, true)` non contiene `test.battery.start` (non regressione).
+      2. `build(usages, true, true, true, allow)` con `allow = { "beeper.toggle", "test.battery.start", "load.off", nullptr }` restituisce esattamente quei tre comandi, nell'ordine del catalogo.
+      3. Lista che nomina `test.battery.start` senza usage `Test` nel descriptor: il comando non compare.
+      4. `resolveWrite("test.battery.start")` → usage `UPS.BatterySystem.Battery.Test`, valore 1.
+      5. Registrare i test nei runner `main`/`setup`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog`.
+
+      ## File Coinvolti
+      - `test/test_command_catalog/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Nuovi casi verdi
+      - [ ] Casi esistenti invariati e verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: 'LiebertDriver: mappature, battery.type, produttore, comandi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver con le scelte del piano (deviazioni 1-5).
+
+      **Leggere:** `lib/USBHostUPS/src/LegrandDriver.{h,cpp}` (schema da seguire), `lib/USBHostUPS/src/CyberPowerDriver.{h,cpp}` (`_chemStrIdx`, `collectStringRequests` ~84, `parseStringDescriptor` ~188), `lib/USBHostUPS/src/GenericDriver.cpp` (mappatura `UPS.Flow.ConfigVoltage` ~485 e formati delle tensioni e frequenze), `lib/USBHostUPS/src/UPSData.h` (`remove`), `lib/USBHostUPS/src/NutTable.h` (`legrandDelayPaths` ~742 e intestazione GPL), `nut_repo/drivers/liebert-hid.c`.
+
+      **Modifiche:**
+      1. `NutTable.h`: `liebertDelayPaths()` con `UPS.PowerSummary.DelayBeforeShutdown` e `UPS.PowerSummary.DelayBeforeStartup`, commento con le righe 133-134 di `liebert-hid.c`; aggiungere `drivers/liebert-hid.c` e le sue righe di copyright all'intestazione GPL del file.
+      2. Nuovi `lib/USBHostUPS/src/LiebertDriver.h` e `.cpp` con intestazione GPL (SPDX GPL-3.0-or-later, "derived from drivers/liebert-hid.c", copyright 2003-2008 Arnaud Quette, 2005-2006 Peter Selinger, 2007 Charles Lepple, 2018 Markus "Links2004", 2023 Blaž Zakrajšek) e commento "ADR 0003 COMPLIANCE" con le deviazioni 1-5.
+      3. `class LiebertDriver : public GenericDriver`: `getDriverName()` = "LiebertDriver", `delayPaths()` = `NutTable::liebertDelayPaths()`, `commandAllowList()` con i 10 comandi del piano, `setup()` che azzera `_chemStrIdx` e invalida la mappa.
+      4. `decodeReport`: base, poi `UsageMapIndex<LiebertDriver>` con le mappature della Soluzione tecnica (nominali di uscita con rimozione di `input.voltage.nominal`, capacità sperimentali, formati, transfer, flag `ups.status.good/internal_failure/trim/boost`, indice di `iDeviceChemistry`).
+      5. `collectStringRequests`: base più `_chemStrIdx` se `battery.type` manca; `parseStringDescriptor`: base, poi `battery.type` per `_chemStrIdx` e fallback `ups.mfr` "Liebert" se la stringa del produttore è vuota.
+      6. `onLoop`: "Liebert" se `host->_iManufacturer == 0` e `ups.mfr` manca (come Legrand).
+      7. `platformio.ini`, ambiente `native`: aggiungere `+<../lib/USBHostUPS/src/LiebertDriver.cpp>` a `build_src_filter`.
+
+      **Blocchi:** se un percorso con indice (`UPS.Flow.[4]`, `Input.[1]`) non corrisponde con la stringa senza indice in `UsageMapIndex`, verificare come la base mappa `UPS.Flow.ConfigVoltage` e usare la stessa forma; annotarlo.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/NutTable.h`
+      - `lib/USBHostUPS/src/LiebertDriver.h` (nuovo)
+      - `lib/USBHostUPS/src/LiebertDriver.cpp` (nuovo)
+      - `platformio.ini`
+
+      ## Criteri di Completamento
+      - [ ] Compila in nativo e per `esp32-s3-standard`
+      - [ ] Intestazioni GPL e commento delle deviazioni presenti
+      - [ ] Nessuna modifica a `computeUPSStatusString`
+    ref: TASK-03
+  - id: TASK-04
+    title: Riconoscimento 06DA:FFFF con le stringhe del dispositivo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** scegliere Liebert, Eaton o generico per `06DA:FFFF` come l'ordine dei subdriver di `usbhid-ups.c`.
+
+      **Leggere:** `lib/USBHostUPS/src/DriverRegistry.{h,cpp}`, `lib/USBHostUPS/src/USBHostUPS.cpp` (`claimInterface` ~395-410, `populateStringsFromDeviceInfo` ~1218), `lib/USBHostUPS/src/DeviceStrings.h` (`toAscii`), `test/test_record_replay/FixtureReplayRunner.h` (~201), `nut_repo/drivers/mge-hid.c` (~2514-2526), `nut_repo/drivers/idowell-hid.c` (`idowell_is_goldenmate`).
+
+      **Modifiche:**
+      1. `DriverRegistry::create(uint16_t vid, uint16_t pid, const char* mfr = "", const char* product = "")`. Prima della tabella, per `0x06DA/0xFFFF`: `strstr(mfr, "AEG") || strstr(product, "AEG")` → `EatonDriver`; `strstr(mfr, "BMS") || strstr(product, "Smart-Battery")` → `GenericDriver`; altrimenti `LiebertDriver`. Commenti con i riferimenti upstream. `nullptr` trattato come stringa vuota.
+      2. `claimInterface`: spostare il calcolo di `_quirks` prima di `create()`; convertire `dev_info.iManufacturer` e `dev_info.iProduct` con `DeviceStrings::toAscii` (inversione da `QUIRK_INVERT_STRINGS`) in due buffer e passarli a `create()`.
+      3. `FixtureReplayRunner.h`: passare `manufacturer` e `product` della fixture a `create()`.
+
+      **Vincoli:** per tutti gli altri VID/PID il risultato non cambia.
+
+      ## File Coinvolti
+      - `lib/USBHostUPS/src/DriverRegistry.h`, `lib/USBHostUPS/src/DriverRegistry.cpp`
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`
+      - `test/test_record_replay/FixtureReplayRunner.h`
+
+      ## Criteri di Completamento
+      - [ ] `create(0x06DA, 0xFFFF)` dà `LiebertDriver`
+      - [ ] Quirk calcolati prima di `create()` in `claimInterface`
+      - [ ] Tutte le fixture esistenti ottengono lo stesso driver di prima
+    ref: TASK-04
+  - id: TASK-05
+    title: Test nativi del driver Liebert
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire registro e logica del driver con una suite dedicata, sul modello di `test/test_legrand_driver`.
+
+      **Passi:**
+      1. Nuova cartella `test/test_liebert_driver` con `test_main.cpp` (schema di include, mock e runner da `test_legrand_driver`).
+      2. Test:
+         - registro: `create(0x06DA, 0xFFFF, "PPC", "Offline UPS")` → `LiebertDriver`; `""`/`""` → `LiebertDriver`; `"AEG"` nel produttore o nel prodotto → `EatonDriver`; `"-BMS-"` o `"Smart-Battery"` → `GenericDriver`; `(0x06DA, 0x0001)` → `GenericDriver`;
+         - con un descriptor sintetico che riproduce `UPS.Flow` di tipo 0x84 e `UPS.PowerConverter.Input` di tipo 0x81: `output.voltage.nominal` 230 e nessun `input.voltage.nominal`, `output.frequency.nominal` 50, `experimental.battery.capacity(.nominal)`, formati `battery.voltage` 27.60 e `output.frequency` 0.00, flag `ups.status.good/internal_failure/trim/boost`;
+         - `battery.type` da uno string descriptor sintetico ("PbAc") all'indice di `iDeviceChemistry`;
+         - `ups.mfr` "Liebert" senza stringa del produttore e con stringa vuota; stringa "PPC" conservata;
+         - catalogo con `commandAllowList()` del driver: i 10 comandi attesi, niente `test.battery.start.quick/deep`, `test.battery.stop`, `beeper.enable/disable/mute`.
+      3. Mutazione manuale: togliere la rimozione di `input.voltage.nominal` o aggiungere `test.battery.start.quick` alla lista deve far fallire almeno un test; annotarlo nella review.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_liebert_driver`.
+
+      ## File Coinvolti
+      - `test/test_liebert_driver/test_main.cpp` (nuovo)
+
+      ## Criteri di Completamento
+      - [ ] Nuova suite verde
+      - [ ] Mutazioni rilevate
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Fixture di replay del Powerwalker VI 2200 SHL (issue #96)'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il replay del dump reale, con comandi e variabili scrivibili attesi.
+
+      **Leggere:** `test/test_record_replay/test_main.cpp` (`test_replay_cyberpower_ut850eg_discussion95`, `test_replay_legrand_keor_pdu800_issue90`, macro `RW_DELAYS`), una fixture nel formato del dispositivo (es. `test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json`).
+
+      **Passi:**
+      1. Scaricare https://github.com/user-attachments/files/33862842/usb_diagnostics.json e creare `test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json` nel formato delle altre fixture (descriptor 10 byte per riga, `data` su una riga): `notes` con origine (#96, v1.8.0, alimentatore al posto della batteria, descriptor identico alla #97); report Feature prima e Input dopo, come per l'UT850EG.
+      2. `expected_ups_data`: valori del replay con il nuovo driver (`driver.name` LiebertDriver, valori della Dimostrazione della spec, nessun `input.voltage.nominal`, `ups.status` "OL CHRG").
+      3. `test_replay_phoenixtec_powerwalker_vi2200shl_issue96`: comandi attesi `beeper.toggle test.battery.start load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default` (ordine del catalogo), `LIST RW` = `RW_DELAYS` dopo il replay e dopo il primo full poll. Registrarlo nei runner.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      ## File Coinvolti
+      - `test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json` (nuovo)
+      - `test/test_record_replay/test_main.cpp`
+
+      ## Criteri di Completamento
+      - [ ] Replay verde con i valori della Dimostrazione
+      - [ ] Ordine dei report documentato nelle `notes`
+    ref: TASK-06
+  - id: TASK-07
+    title: 'README: Powerwalker VI 2200 SHL tra i modelli testati'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare il nuovo supporto.
+
+      **Passi:**
+      1. In `README.md` e `README.it.md`, sezione dei modelli supportati, aggiungere un blocco `<details>` **Powerwalker** (o Phoenixtec, nello stesso stile degli altri marchi) con "Powerwalker VI 2200 SHL".
+      2. Nessuna menzione del Salicru SPS SOHO+ tra i testati finché la #97 è aperta.
+
+      ## File Coinvolti
+      - `README.md`
+      - `README.it.md`
+
+      ## Criteri di Completamento
+      - [ ] Stessa riga in entrambi i README
+    ref: TASK-07
+  - id: TASK-08
+    title: Regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla cambia per gli altri driver.
+
+      **Passi:**
+      1. `pio test -e native` completo (rilanciare da sole le suite ERRORED transitorie su Windows).
+      2. `pio run -e esp32-s3-standard` (da PowerShell): annotare RAM e flash.
+      3. `npm run e2e`.
+
+      ## File Coinvolti
+      - nessun file modificato
+
+      ## Criteri di Completamento
+      - [ ] Tutte le suite native verdi, nessun test esistente modificato
+      - [ ] Build ok
+      - [ ] e2e verdi
+    ref: TASK-08
