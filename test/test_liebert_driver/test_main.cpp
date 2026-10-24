@@ -175,6 +175,17 @@ void test_battery_type_from_chemistry_string(void) {
     TEST_ASSERT_EQUAL_STRING("PbAc", ups_data.get("battery.type").c_str());
 }
 
+// Powerwalker VI 2200 SHL (issue #96, second dump): the chemistry string is "PbAc\r\n".
+// libhid.c trims the '\n'; the '\r' goes too, or the value would break the NUT line
+void test_string_line_break_trimmed(void) {
+    addUsage("UPS.PowerSummary.iDeviceChemistry", 0x10, 3, 0, 8);
+    const uint8_t report[] = { 0x10, 5 };
+    decode(3, report);
+    const uint8_t str[] = { 14, 0x03, 'P', 0, 'b', 0, 'A', 0, 'c', 0, '\r', 0, '\n', 0 };
+    driver.parseStringDescriptor(&mockHost, 5, str, sizeof(str), ups_data);
+    TEST_ASSERT_EQUAL_STRING("PbAc", ups_data.get("battery.type").c_str());
+}
+
 // liebert_format_mfr(): the Vendor string, or "Liebert" when there is none or it is empty
 void test_mfr_fallback(void) {
     driver.loop(&mockHost, ups_data, 0);
@@ -229,6 +240,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_voltage_transfer_rows);
     RUN_TEST(test_status_flags_are_internal_keys);
     RUN_TEST(test_battery_type_from_chemistry_string);
+    RUN_TEST(test_string_line_break_trimmed);
     RUN_TEST(test_mfr_fallback);
     RUN_TEST(test_commands_follow_liebert_table);
     RUN_TEST(test_delay_paths_follow_liebert_table);
@@ -244,6 +256,7 @@ void setup() {
     RUN_TEST(test_voltage_transfer_rows);
     RUN_TEST(test_status_flags_are_internal_keys);
     RUN_TEST(test_battery_type_from_chemistry_string);
+    RUN_TEST(test_string_line_break_trimmed);
     RUN_TEST(test_mfr_fallback);
     RUN_TEST(test_commands_follow_liebert_table);
     RUN_TEST(test_delay_paths_follow_liebert_table);

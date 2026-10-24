@@ -5,7 +5,7 @@
   "manufacturer": "PPC",
   "product": "Offline UPS",
   "serial_number": "000000000",
-  "notes": "Powerwalker VI 2200 SHL (Phoenixtec electronics, strings PPC / Offline UPS), live dump of v1.8.0 attached to issue #96 (0 failed requests). A bench power supply stood in for the dead battery: battery values are not those of a real battery. The report descriptor is byte for byte the one of the Salicru SPS SOHO+ of issue #97. Reports 0x01, 0x06 and 0x2D are both Input and Feature: the dump lists the Input reports first, so they are moved after the Feature ones (older GET_REPORT reads). PresentStatus.Good is 0 with the UPS on mains; upstream would add OFF to ups.status, kept out of scope in US-097.",
+  "notes": "Powerwalker VI 2200 SHL (Phoenixtec electronics, strings PPC / Offline UPS), live dump of v1.8.0 attached to issue #96 (0 failed requests). A bench power supply stood in for the dead battery: battery values are not those of a real battery. The report descriptor is byte for byte the one of the Salicru SPS SOHO+ of issue #97. Reports 0x01, 0x06 and 0x2D are both Input and Feature: the dump lists the Input reports first, so they are moved after the Feature ones (older GET_REPORT reads). PresentStatus.Good is 0 with the UPS on mains; upstream would add OFF to ups.status, kept out of scope in US-097. Second scenario: dump of the liebert-v1 test build, UPS on mains with PresentStatus.Good = 1 and output voltage/frequency reported; its iDeviceChemistry string is \"PbAc\r\n\" (not replayed: the runner injects strings before the reports).",
   "report_descriptor_hex": [
     "0x05", "0x84", "0x09", "0x04", "0xA1", "0x01", "0x09", "0x10", "0xA1", "0x00",
     "0x09", "0x12", "0xA1", "0x00", "0x05", "0x84", "0x09", "0x58", "0x85", "0x24",
@@ -198,6 +198,145 @@
         "ups.test.result": "No test initiated",
         "ups.beeper.status": "disabled",
         "ups.status.good": "0"
+      }
+    },
+    {
+      "description": "Live ESP32 dump, liebert-v1 (issue #96, second report)",
+      "reports": [
+        {
+          "id": 1,
+          "type": 3,
+          "data": [1, 1, 0, 1, 0, 1, 0, 0]
+        },
+        {
+          "id": 6,
+          "type": 3,
+          "data": [6, 30, 239, 3]
+        },
+        {
+          "id": 7,
+          "type": 3,
+          "data": [7, 0, 20, 1]
+        },
+        {
+          "id": 9,
+          "type": 3,
+          "data": [9, 255, 255, 255, 255]
+        },
+        {
+          "id": 10,
+          "type": 3,
+          "data": [10, 255, 255, 255, 255]
+        },
+        {
+          "id": 11,
+          "type": 3,
+          "data": [11, 100, 1, 100, 2]
+        },
+        {
+          "id": 16,
+          "type": 3,
+          "data": [16, 5, 1, 3, 2, 4]
+        },
+        {
+          "id": 19,
+          "type": 3,
+          "data": [19, 1]
+        },
+        {
+          "id": 36,
+          "type": 3,
+          "data": [36, 6]
+        },
+        {
+          "id": 45,
+          "type": 3,
+          "data": [45, 0, 0]
+        },
+        {
+          "id": 49,
+          "type": 3,
+          "data": [49, 230, 0]
+        },
+        {
+          "id": 54,
+          "type": 3,
+          "data": [54, 50]
+        },
+        {
+          "id": 66,
+          "type": 3,
+          "data": [66, 240, 1, 230, 0]
+        },
+        {
+          "id": 74,
+          "type": 3,
+          "data": [74, 1]
+        },
+        {
+          "id": 114,
+          "type": 3,
+          "data": [114, 230]
+        },
+        {
+          "id": 116,
+          "type": 3,
+          "data": [116, 9, 0]
+        },
+        {
+          "id": 226,
+          "type": 3,
+          "data": [226, 4]
+        },
+        {
+          "id": 1,
+          "type": 1,
+          "data": [1, 1, 0, 1, 0, 1, 0, 0]
+        },
+        {
+          "id": 6,
+          "type": 1,
+          "data": [6, 30, 239, 3]
+        },
+        {
+          "id": 45,
+          "type": 1,
+          "data": [45, 0, 0]
+        }
+      ],
+      "expected_ups_data": {
+        "ups.mfr": "PPC",
+        "ups.model": "Offline UPS",
+        "ups.serial": "000000000",
+        "ups.delay.shutdown": "20",
+        "ups.delay.start": "30",
+        "ups.status.ac_present": "1",
+        "ups.status.battery_low": "0",
+        "ups.status.charging": "1",
+        "ups.status.discharging": "0",
+        "ups.status.overload": "0",
+        "ups.status.good": "1",
+        "ups.status.internal_failure": "0",
+        "battery.charge": "30",
+        "battery.runtime": "1007",
+        "ups.load": "0",
+        "battery.voltage": "27.60",
+        "ups.timer.shutdown": "-1",
+        "experimental.battery.capacity.nominal": "100",
+        "experimental.battery.capacity": "100",
+        "ups.beeper.status": "disabled",
+        "ups.test.result": "No test initiated",
+        "ups.status.boost": "0",
+        "ups.status.trim": "0",
+        "input.voltage": "230.0",
+        "output.frequency.nominal": "50",
+        "output.frequency": "49.60",
+        "output.voltage": "230.0",
+        "output.voltage.nominal": "230",
+        "ups.power.nominal": "9",
+        "ups.realpower": "0",
+        "driver.name": "LiebertDriver",
+        "ups.status": "OL CHRG"
       }
     }
   ]
