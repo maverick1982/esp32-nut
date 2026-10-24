@@ -652,6 +652,56 @@ void test_encode_then_to_logical_truncates_first(void) {
     TEST_ASSERT_EQUAL_INT32(1200, raw);
 }
 
+// Issue #98: a Report Count left at 23 makes a one-usage field a 23-element array. Only the
+// first field is defined, as hidparser.c FindObject_with_Path() only finds the first; the
+// bits of the others stay reserved, so offsets and lengths are those of the descriptor.
+void test_repeated_usage_kept_once(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01, // UPS
+        0x85, 0x26,                         //   Report ID 0x26
+        0x09, 0x30,                         //   Usage (Voltage)
+        0x75, 0x10, 0x95, 0x17,             //   Report Size 16, Report Count 23
+        0xB1, 0x02,                         //   Feature
+        0x09, 0x40,                         //   Usage (ConfigVoltage)
+        0x95, 0x01,                         //   Report Count 1
+        0xB1, 0x02,                         //   Feature
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_EQUAL(2, parser.getUsages().size());
+    const HIDUsageDef* voltage = parser.getUsageDef(0x00840030);
+    const HIDUsageDef* config = parser.getUsageDef(0x00840040);
+    TEST_ASSERT_NOT_NULL(voltage);
+    TEST_ASSERT_NOT_NULL(config);
+    TEST_ASSERT_EQUAL_UINT16(0, voltage->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(368, config->bit_offset); // after the 23 x 16 bits
+    TEST_ASSERT_EQUAL_UINT16(49, parser.getExpectedLength(0x26, 3)); // 1 + (23 + 1) x 2
+
+    // The UPS sends one value: [0x26, 2400]
+    const uint8_t report[] = { 0x26, 0x60, 0x09 };
+    TEST_ASSERT_EQUAL_FLOAT(2400.0, HIDParser::extractUsage(voltage, 0x26, report, sizeof(report)));
+}
+
+// Explicit usages keep one field each; only the fields past the list are repeats
+void test_repeated_last_of_explicit_usages(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x85, 0x16,                         // Report ID 0x16
+        0x05, 0x85,                         // Usage Page (Battery System)
+        0x09, 0x44, 0x09, 0x45,             // Usage (Charging), Usage (Discharging)
+        0x75, 0x01, 0x95, 0x04,             // 1 bit x 4
+        0x81, 0x02,                         // Input
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    TEST_ASSERT_EQUAL(2, parser.getUsages().size());
+    TEST_ASSERT_EQUAL_UINT16(0, parser.getUsageDef(0x00850044)->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(1, parser.getUsageDef(0x00850045)->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(2, parser.getInputLength(0x16)); // report ID + 4 bits
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -687,6 +737,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_to_logical_signed_field);
     RUN_TEST(test_to_logical_rejects_nan_and_huge);
     RUN_TEST(test_encode_then_to_logical_truncates_first);
+    RUN_TEST(test_repeated_usage_kept_once);
+    RUN_TEST(test_repeated_last_of_explicit_usages);
     return UNITY_END();
 }
 #else
@@ -723,6 +775,8 @@ void setup() {
     RUN_TEST(test_to_logical_signed_field);
     RUN_TEST(test_to_logical_rejects_nan_and_huge);
     RUN_TEST(test_encode_then_to_logical_truncates_first);
+    RUN_TEST(test_repeated_usage_kept_once);
+    RUN_TEST(test_repeated_last_of_explicit_usages);
     UNITY_END();
 }
 void loop() {}

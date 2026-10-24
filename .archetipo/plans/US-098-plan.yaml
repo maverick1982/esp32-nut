@@ -56,7 +56,7 @@ tasks:
   - id: TASK-01
     title: 'HIDParser: una sola definizione per l''usage ripetuta da Report Count'
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** il parser non crea più una `HIDUsageDef` per ogni copia dell'ultima usage di un Main item, ma continua a riservare i bit di tutti i campi.
@@ -78,10 +78,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Una sola definizione per l'usage ripetuta, offset e lunghezze invariati
       - [ ] `test_hid_parser` e `test_record_replay` verdi senza valori attesi cambiati
+    ref: TASK-01
   - id: TASK-02
     title: Test del parser con Report Count maggiore delle usage
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -104,10 +105,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Nuovi test verdi
       - [ ] Mutazione rilevata
+    ref: TASK-02
   - id: TASK-03
     title: 'Fixture di replay dell''APC BGM2200 (issue #98)'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -130,10 +132,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Replay verde con i valori della Dimostrazione
       - [ ] Seriale anonimizzato
+    ref: TASK-03
   - id: TASK-04
     title: Regressione completa
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-03
@@ -155,3 +158,4 @@ tasks:
       - [ ] Nessuna fixture esistente modificata
       - [ ] Build ok
       - [ ] e2e verdi
+    ref: TASK-04
