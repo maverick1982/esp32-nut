@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 5
-status: TODO
+status: PLANNED
 body: |-
   #### US-097: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT
 
@@ -41,7 +41,7 @@ body: |-
   - [ ] I flag `PresentStatus.Good`, `PresentStatus.InternalFailure` e `Input.[1].PresentStatus.Buck/Boost` vengono decodificati e salvati come chiavi interne `ups.status.*`, ma `ups.status` non cambia (vedi Assunzioni).
   - [ ] Comandi allineati in modo stretto alla tabella upstream, come per Legrand:
     - `test.battery.start` scrive 1 su `UPS.BatterySystem.Battery.Test`;
-    - `beeper.toggle` scrive 1 su `UPS.PowerSummary.AudibleAlarmControl`;
+    - `beeper.toggle` mantiene il comportamento del progetto (legge `ups.beeper.status` e scrive l'opposto), come per Legrand: `liebert-hid.c` scrive sempre 1, che nella codifica HID standard significa "disabilitato" (deviazione decisa il 2026-10-24);
     - `load.off.delay`, `load.on.delay` e `shutdown.stop` usano `UPS.PowerSummary.DelayBefore*`, e da questi derivano `load.*` e `shutdown.*` con la semantica di `usbhid-ups`;
     - `ups.delay.shutdown` (20) e `ups.delay.start` (30) sono variabili lato driver con i default NUT.
   - [ ] `ups.mfr` vale la stringa del produttore del dispositivo, e "Liebert" se manca, come `liebert_format_mfr`. `ups.model` e `ups.serial` vengono dalle stringhe USB.
@@ -65,3 +65,5 @@ body: |-
 history:
   - status: TODO
     at: "2026-10-24T13:05:57Z"
+  - status: PLANNED
+    at: "2026-10-24T13:14:13Z"
