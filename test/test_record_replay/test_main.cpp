@@ -236,6 +236,19 @@ void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
         RW_CPS_5 " " RW_DELAYS, RW_CPS_5 " " RW_DELAYS);
 }
 
+void test_replay_cyberpower_ut850eg_discussion95(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low",
+        // issue #43: FEATURE 0x2A [42, 245, 1] Input.Frequency = 501, ten times 50 Hz ->
+        // cps_adjust_frequency_scale 0.1 (v1.8.0 served 501.0); battery.voltage "%.1f" as
+        // cps_battvolt. No UPS.Battery collection, so no battery.mfr.date row (discussion #95)
+        { { "input.frequency", "50.1" }, { "battery.voltage", "13.2" }, { "battery.charge.warning", "20" } },
+        // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x82 [130, 44, 1] = 300.
+        // Input.*VoltageTransfer (FEATURE 0x83/0x84) is bound but not in the dump: not listed
+        "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS,
+        "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS);
+}
+
 // The W150 reports PresentStatus.BatteryPresent = 0 in its normal state, but
 // OpenUPSDriver ignores the unreliable flag, so ups.status stays OL; see the
 // fixture "notes" (US-055).
@@ -308,6 +321,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
+    RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);
@@ -337,6 +351,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
+    RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);

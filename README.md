@@ -54,7 +54,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 <details>
 <summary><b>CyberPower</b> (Click to expand tested models)</summary>
 
-- CyberPower UT650EG
+- CyberPower UT650EG, UT850EG
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
 - CyberPower CP1500EPFCLCD, CP1600EPFCLCD
