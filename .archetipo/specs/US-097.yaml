@@ -1,0 +1,67 @@
+schema: archetipo/spec/v2
+code: US-097
+title: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-097: Driver Liebert/Phoenixtec (06DA:FFFF) allineato al subdriver liebert-hid di NUT
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di un UPS con elettronica Phoenixtec (VID:PID `06DA:FFFF`, venduto per esempio come Powerwalker o Salicru) collegato a esp32-nut,
+  voglio che la scheda lo riconosca con un driver dedicato che si comporta come `usbhid-ups` di NUT con il subdriver `liebert-hid`,
+  in modo che variabili, nomi e comandi siano quelli che NUT mostrerebbe per lo stesso UPS.
+
+  **Dimostrazione**
+  Con la fixture del Powerwalker VI 2200 SHL (issue #96), il replay nativo mostra:
+  - il driver Liebert al posto del generico;
+  - `ups.mfr` "PPC" e `ups.model` "Offline UPS";
+  - `output.voltage.nominal` 230 e `output.frequency.nominal` 50, da `UPS.Flow.[4].ConfigVoltage` e `UPS.Flow.[4].ConfigFrequency`;
+  - nessun `input.voltage.nominal`: oggi il driver generico pubblica con questo nome lo stesso valore di `UPS.Flow.[4].ConfigVoltage`;
+  - `experimental.battery.capacity` 100 ed `experimental.battery.capacity.nominal` 100;
+  - con i formati di upstream: `battery.voltage` 27.60, `battery.charge` 22, `battery.runtime` 739, `input.voltage` 233.0, `output.voltage` 0.0, `output.frequency` 0.00, `ups.load` 0, `ups.power.nominal` 9, `ups.test.result` "No test initiated", `ups.beeper.status` "disabled";
+  - `ups.status` "OL CHRG", come oggi;
+  - in `LIST CMD`: `beeper.toggle`, `test.battery.start`, `load.off.delay`, `load.on.delay`, `shutdown.stop` e i comandi che `usbhid-ups` ne deriva (`load.off`, `load.on`, `shutdown.return`, `shutdown.stayoff`), più `shutdown.default` del catalogo comune (US-058). Non compaiono `test.battery.start.quick/deep`, `test.battery.stop`, `beeper.enable`, `beeper.disable` né `beeper.mute`;
+  - in `LIST RW`: `ups.delay.shutdown` e `ups.delay.start`.
+
+  **Criteri di Accettazione**
+  - [ ] Riconoscimento di VID `0x06DA` con PID `0xFFFF`, nell'ordine dei subdriver di `usbhid-ups`:
+    - se la stringa del produttore o del prodotto contiene "AEG" va all'EatonDriver, come il claim di `mge-hid.c`;
+    - se il produttore contiene "BMS" o il prodotto contiene "Smart-Battery" resta al driver generico (`idowell-hid.c`, non portato);
+    - altrimenti usa il driver Liebert;
+    - gli altri PID di `0x06DA` restano al driver generico.
+  - [ ] La tabella HID→NUT segue `liebert_hid2nut` di `liebert-hid.c`, righe e formati compresi (`%.2f` per `battery.voltage`, `output.frequency` e `input.frequency`). Comprende `battery.type` da `UPS.PowerSummary.iDeviceChemistry` letto come string descriptor.
+  - [ ] Il valore di `UPS.Flow.[4].ConfigVoltage` non compare come `input.voltage.nominal`. Le altre variabili che il driver generico decodifica oltre la tabella upstream restano, come per gli altri driver.
+  - [ ] I flag `PresentStatus.Good`, `PresentStatus.InternalFailure` e `Input.[1].PresentStatus.Buck/Boost` vengono decodificati e salvati come chiavi interne `ups.status.*`, ma `ups.status` non cambia (vedi Assunzioni).
+  - [ ] Comandi allineati in modo stretto alla tabella upstream, come per Legrand:
+    - `test.battery.start` scrive 1 su `UPS.BatterySystem.Battery.Test`;
+    - `beeper.toggle` scrive 1 su `UPS.PowerSummary.AudibleAlarmControl`;
+    - `load.off.delay`, `load.on.delay` e `shutdown.stop` usano `UPS.PowerSummary.DelayBefore*`, e da questi derivano `load.*` e `shutdown.*` con la semantica di `usbhid-ups`;
+    - `ups.delay.shutdown` (20) e `ups.delay.start` (30) sono variabili lato driver con i default NUT.
+  - [ ] `ups.mfr` vale la stringa del produttore del dispositivo, e "Liebert" se manca, come `liebert_format_mfr`. `ups.model` e `ups.serial` vengono dalle stringhe USB.
+  - [ ] La fixture di replay del Powerwalker VI 2200 SHL viene dal `usb_diagnostics.json` della #96 (seriale "000000000", niente da anonimizzare). Il replay passa con i valori della Dimostrazione.
+  - [ ] Test nativi per il riconoscimento VID/PID e stringhe (AEG, BMS, Smart-Battery, produttore vuoto), per `battery.type` con uno string descriptor sintetico e per il catalogo dei comandi. Tutte le suite esistenti restano verdi.
+  - [ ] I file derivati da `liebert-hid.c` portano l'intestazione GPL con le righe di copyright del file upstream, come gli altri driver.
+  - [ ] Powerwalker VI 2200 SHL tra i modelli testati, in entrambi i README.
+
+  **Assunzioni**
+  - **Origine:** issue #96 (Mickel4711, Powerwalker VI 2200 SHL, v1.8.0, oggi servito dal driver generico). Il dump è https://github.com/user-attachments/files/33862842/usb_diagnostics.json. Il report descriptor è identico byte per byte a quello del Salicru SPS SOHO+ della issue #97.
+  - **Riferimento:** `nut_repo/drivers/liebert-hid.c` (`liebert_hid2nut`, `liebert_usb_device_table`, `liebert_format_*`), `usbhid-ups.c` (ordine dei subdriver, comandi derivati), i claim di `mge-hid.c` e `idowell-hid.c` sul VID `0x06DA`.
+  - **La #97 non è risolta da questa spec:** il Salicru si scollega dal bus e servono i log dell'utente. Il driver Liebert darà al Salicru `ups.mfr` "Liebert", perché la sua stringa del produttore è vuota.
+  - **`ups.power.nominal` resta 9,** come lo legge upstream da `UPS.Flow.[4].ConfigApparentPower`: `liebert-hid.c` non lo corregge e non ha correzioni del report descriptor (`fix_report_desc` è quello vuoto di default).
+  - **`battery.type` non è nella fixture:** il dump della #96 non contiene le stringhe, quindi si verifica con un test sintetico.
+  - **Il catalogo perde comandi per questi UPS:** `test.battery.start.quick` diventa `test.battery.start`, che scrive lo stesso valore 1. Spariscono `test.battery.start.deep`, `test.battery.stop` e `beeper.enable/disable/mute`, che upstream non espone per questa famiglia.
+  - **Deviazioni da upstream** che dovessero restare vanno elencate nel piano, come per gli altri driver.
+  - **Fuori ambito:**
+    - i token OFF, TRIM, BOOST e la variabile `ups.alarm` (per InternalFailure) in `ups.status`. Oggi `computeUPSStatusString` non li produce per nessun driver, e nella fixture della #96 `PresentStatus.Good` vale 0 con l'UPS acceso sulla rete: con OFF lo stato diventerebbe "OL CHRG OFF". Va valutato in una spec separata, trasversale a tutti i driver;
+    - il porting di `idowell-hid.c` (batterie GoldenMate);
+    - le usage vendor `0xFFFF0041`, `0xFFFF00F0` e `0xFFFF00E2` del descriptor, ignorate anche da upstream.
+history:
+  - status: TODO
+    at: "2026-10-24T13:05:57Z"
