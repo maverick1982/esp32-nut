@@ -85,7 +85,7 @@ Not every row must become a separate library on day one: a module may start as a
 
 Variation between targets is handled at three levels. The rule that decides between the last two: **a parameter may be a user setting only if a wrong value cannot lock the user out of the board.**
 
-**Separate images (build time, forced by the hardware).** One image per chip family, plus one per incompatible silicon revision: ESP32-S3; ESP32-P4 v3.1+; ESP32-P4 before v3. The pre-v3 image is the implementation contributed in #94 and is published with a note in the README that it has not been tested on hardware. The image header carries the chip and the revision range (`scripts/chip_rev.py` from the fork), so OTA refuses a wrong image. The web installer manifest lists one build per `chipFamily`, so the user picks no image by hand.
+**Separate images (build time, forced by the hardware).** One image per chip family, plus one per incompatible silicon revision: ESP32-S3; ESP32-P4 v3.1+; ESP32-P4 before v3. Both P4 images come from the implementation contributed in #94: its author tested the pre-v3 image on a v1.3 dev board, while the v3.1+ image has not been tested on hardware and is published with a note in the README that says so (corrected on 2026-10-25: the first version of this ADR had the two images the other way round). The image header carries the chip and the revision range (`scripts/chip_rev.py` from the fork), so OTA refuses a wrong image. The web installer manifest lists one build per `chipFamily`, so the user picks no image by hand.
 
 **Board profile (compiled into the image).** A small data file per supported board, selected by the PlatformIO environment:
 
@@ -150,7 +150,7 @@ Out of scope: micro-modules for their own sake, an event bus, dynamic plugin loa
 
 Decided on 2026-10-21 by @maverick1982:
 * **Recovery on boards without Wi-Fi:** new web credentials can be created only during a time-limited window after the double reset (section 5, ADR 0009 bullet).
-* **ESP32-P4 before v3:** the image contributed in #94 is published, marked in the README as not tested on hardware (section 3).
+* **ESP32-P4 images:** both images from #94 are published; the v3.1+ one is marked in the README as not tested on hardware, the pre-v3 one is tested by the author on a v1.3 board (section 3, corrected on 2026-10-25).
 * **Wi-Fi and Ethernet at the same time:** one active link at a time (section 3).
 
 ## Impact on Agent Implementation

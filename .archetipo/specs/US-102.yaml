@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-102
+title: 'Distribuzione multi-scheda: CI a tre immagini, release, web installer e README'
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-102: Distribuzione multi-scheda: CI a tre immagini, release, web installer e README
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-092
+
+  **User Story**
+  Come utente con una scheda ESP32-S3 o ESP32-P4,
+  voglio scaricare dalla release o installare dal web installer l'immagine giusta per la mia scheda senza sceglierla a mano,
+  in modo da non rischiare di flashare un firmware per un altro chip o un'altra revisione.
+
+  **Dimostrazione**
+  Una pull request fa partire la CI con tre build: S3, P4 v3.1+ e P4 pre-v3. Un tag di prova produce una release con tre zip, e quello dell'S3 ha il nome di sempre. Aprendo il web installer con un ESP32-S3 collegato, l'unico pulsante installa l'immagine S3; il manifest elenca una build per ogni `chipFamily`.
+
+  **Criteri di Accettazione**
+  - [ ] CI: matrice delle tre immagini (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`) su `main`, sui tag e sulle pull request, non su ogni push di ogni branch.
+  - [ ] Release: tre zip, ognuno con `firmware.bin`, immagine completa e README di installazione. Lo zip dell'S3 mantiene il nome attuale (`esp32-nut-vX.Y.Z.zip`), così link e abitudini degli utenti non cambiano.
+  - [ ] Web installer: un pulsante che sceglie l'immagine in base al chip collegato (una build per `chipFamily` nel manifest). Se la revisione del P4 non si può distinguere, due pulsanti P4 (v3.1+ e pre-v3) con le istruzioni per riconoscerla (`esptool.py chip_id` o log di avvio).
+  - [ ] Su GitHub Pages le immagini stanno in una cartella per scheda, con lo stesso schema delle cartelle per versione di US-099 e US-100 (`vX.Y.Z/<board>/`), qualunque delle due spec arrivi per prima.
+  - [ ] README (EN e IT): sezione ESP32-P4 con schede supportate, come riconoscere la revisione, l'immagine v3.1+ segnalata come non testata su hardware (rtadams89 ha una v1.3, pre-v3) e l'immagine pre-v3 provata da lui.
+  - [ ] Le note della prima release con il P4 citano rtadams89 e indicano su quali schede e revisioni è stata provata ciascuna immagine (PDR 0002, D6).
+  - [ ] Regressione: per chi ha un S3, web installer, zip della release e OTA si comportano come oggi.
+
+  **Assunzioni**
+  - **Divisione del lavoro:** questa parte la facciamo noi. rtadams89 non può provare CI e web installer, e queste modifiche si intrecciano con US-099 e US-100. La sua PR (US-092) porta il firmware del P4 e gli ambienti PlatformIO, senza toccare `.github/workflows/`, `web-installer/` e README.
+  - **Fuori ambito:** codice del firmware P4 (US-092); Wi-Fi tramite il coprocessore C6 (US-093); scelta della versione nel web installer e nell'OTA (US-099, US-100).
+history:
+  - status: TODO
+    at: "2026-10-25T16:17:54Z"

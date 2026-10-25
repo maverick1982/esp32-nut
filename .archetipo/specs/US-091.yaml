@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-091
+title: Finestra di recupero delle credenziali web dopo il doppio reset sulle schede senza Wi-Fi
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: HIGH
+points: 3
+status: TODO
+body: |
+  #### US-091: Finestra di recupero delle credenziali web dopo il doppio reset sulle schede senza Wi-Fi
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-090
+
+  **User Story**
+  Come proprietario di una scheda senza Wi-Fi (per esempio un ESP32-P4 con la sola Ethernet),
+  voglio poter creare nuove credenziali della Web UI per qualche minuto dopo un doppio reset,
+  in modo da recuperare l'accesso se dimentico la password, senza lasciare la scheda esposta alla rete locale.
+
+  **Dimostrazione**
+  Nei test nativi, con un profilo senza Wi-Fi, il doppio reset apre la finestra, che si chiude alla scadenza o dopo l'uso. Nei test e2e, durante la finestra la Web UI mostra "Crea credenziali" senza chiedere la password attuale. Sull'S3 non cambia nulla.
+
+  **Criteri di Accettazione**
+  - [ ] Su una scheda senza Wi-Fi, il doppio reset entro 3 s apre una finestra di recupero di 10 minuti, lo stesso valore del timeout dell'AP manuale.
+  - [ ] Durante la finestra, il form "Crea credenziali" non chiede la password attuale. Le nuove credenziali sostituiscono le vecchie, chiudono tutte le sessioni e chiudono la finestra.
+  - [ ] Il doppio reset non cancella le credenziali: se nessuno ne crea di nuove, alla scadenza restano valide. Il login normale funziona anche durante la finestra.
+  - [ ] La finestra non sopravvive a un riavvio, e durante la finestra il server NUT resta attivo.
+  - [ ] Il System Log registra apertura, chiusura (per scadenza o per uso) e sostituzione delle credenziali.
+  - [ ] Regressione: sulle schede con Wi-Fi il recupero tramite AP (PDR 0001) è invariato. Test nativi della logica ed e2e della pagina.
+
+  **Assunzioni**
+  - **Riferimento:** PDR 0002 D5, che modifica PDR 0001 D6/D7; ADR 0010 §5. Il PDR dice "pochi minuti": 10 minuti è il valore scelto per questa spec.
+history:
+  - status: TODO
+    at: "2026-10-21T16:16:13Z"

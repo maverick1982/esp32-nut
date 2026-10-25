@@ -11,6 +11,8 @@ epics:
     title: Server NUT
   - code: EP-004
     title: CI/CD e Automazione
+  - code: EP-005
+    title: Supporto multi-scheda (ESP32-P4, Ethernet)
 order:
   - US-000
   - US-001
@@ -99,6 +101,12 @@ order:
   - US-087
   - US-088
   - US-081
+  - US-089
+  - US-090
+  - US-091
+  - US-092
+  - US-093
+  - US-094
   - US-097
   - US-098
   - US-101

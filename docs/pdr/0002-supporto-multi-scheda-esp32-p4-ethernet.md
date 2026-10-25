@@ -47,8 +47,8 @@ Servono regole di prodotto valide per qualsiasi scheda futura, non solo per il P
 | Scheda | Rete | Immagine | Livello di supporto |
 |---|---|---|---|
 | ESP32-S3 DevKit (e cloni) | Wi-Fi | ESP32-S3 | Supportata e testata, come oggi |
-| ESP32-P4 rev. v3.1+ con design di riferimento Espressif (es. Waveshare ESP32-P4-ETH) | Ethernet; Wi-Fi se la scheda ha il coprocessore ESP32-C6 | ESP32-P4 | Supportata, testata dalla community (non abbiamo hardware P4) |
-| ESP32-P4 prima della v3 (v1.x, prime schede) | come sopra | ESP32-P4 pre-v3 | Pubblicata **senza test su hardware**: il README lo dice chiaramente |
+| ESP32-P4 rev. v3.1+ con design di riferimento Espressif (es. Waveshare ESP32-P4-ETH) | Ethernet; Wi-Fi se la scheda ha il coprocessore ESP32-C6 | ESP32-P4 | Pubblicata **senza test su hardware** finché la community non la prova: il README lo dice chiaramente |
+| ESP32-P4 prima della v3 (v1.x, prime schede) | come sopra | ESP32-P4 pre-v3 | Supportata, provata da rtadams89 sulla sua scheda v1.3 (non abbiamo hardware P4) |
 
 Le immagini sono separate solo dove l'hardware lo impone: architettura del chip diversa (S3 / P4) e revisioni di silicio del P4 non compatibili tra loro (ADR 0010).
 
@@ -96,12 +96,14 @@ Sulle schede senza Wi-Fi non c'è la modalità AP del PDR 0001. Al suo posto il 
 
 - Il supporto P4 entra **dopo** l'aggiornamento della piattaforma a ESP-IDF 5.5 e il refactoring di schede e rete (ADR 0010, passi 1 e 2).
 - Chiediamo a rtadams89 di adattare la sua PR alla nuova struttura. Il suo lavoro resta riconosciuto come contributo: è l'autore dei commit ed è citato nelle note di rilascio.
+- La PR porta il firmware del P4 (profilo, link Ethernet, Web UI senza Wi-Fi, diagnostica dei crash su RISC-V, ambienti PlatformIO). CI, zip della release, web installer e README li facciamo noi, perché rtadams89 non può provarli e si intrecciano con la scelta della versione del firmware (US-099, US-100).
 - Le release del P4 dipendono dai test della community: le note di rilascio indicano su quali schede e revisioni è stata provata ciascuna versione.
 
 ## Limiti accettati
 
 - **Finestra di recupero sulla LAN.** Durante la finestra di D5, chiunque sulla rete locale può sostituire le credenziali web. Il rischio è limitato a pochi minuti e richiede che qualcuno abbia appena fatto il doppio reset sulla scheda. È lo stesso modello di fiducia del PDR 0001 (D3 e "Accesso fisico").
-- **Immagine P4 pre-v3 non testata.** Può non funzionare. L'OTA rifiuta comunque un'immagine per la revisione sbagliata, quindi non può rendere inutilizzabile una scheda P4 v3.
+- **Immagine P4 v3.1+ non testata.** rtadams89 ha una scheda v1.3 (pre-v3), quindi l'immagine v3.1+ può non funzionare finché qualcuno non la prova. L'OTA rifiuta comunque un'immagine per la revisione sbagliata, quindi non può rendere inutilizzabile una scheda di un'altra revisione.
+- **Correzione del 2026-10-25.** La prima versione di questo PDR invertiva le due immagini: diceva non testata la pre-v3. Da #94 risulta che rtadams89 ha una v1.3 e nessuna scheda v3+.
 - **Nessun hardware P4 nel progetto.** I problemi specifici del P4 si analizzano con i log e le diagnostiche inviate dagli utenti.
 - **Schede P4 con cablaggio diverso.** Non funzionano con l'immagine pubblicata finché non viene aggiunto il loro profilo.
 
@@ -112,4 +114,5 @@ Sulle schede senza Wi-Fi non c'è la modalità AP del PDR 0001. Al suo posto il 
 | A | Aggiornamento della piattaforma a ESP-IDF 5.5 (`docs/plans/platform-upgrade-idf55.md`), senza cambi di comportamento | - |
 | B | Profili delle schede e link di rete: profilo ESP32-S3, link Wi-Fi ed Ethernet dietro un'interfaccia, modalità di rete nella Web UI (D3, D4) | A |
 | C | Finestra di recupero dopo il doppio reset sulle schede senza Wi-Fi (D5) | B |
-| D | Supporto ESP32-P4: profilo della scheda, immagini v3.1+ e pre-v3, CI, web installer con riconoscimento del chip, README (D1, D2, D6). PR di rtadams89 adattata | B, C |
+| D | Supporto ESP32-P4: profilo della scheda, link Ethernet, immagini v3.1+ e pre-v3 (D1, D2, D6). PR di rtadams89 adattata | B, C |
+| E | Distribuzione: CI a tre immagini, zip della release, web installer con riconoscimento del chip, README (D1, D6). Fatta da noi | D |
