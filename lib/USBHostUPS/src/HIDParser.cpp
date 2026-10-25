@@ -82,13 +82,21 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                 
                 for (uint16_t c = 0; c < report_count; c++) {
                     uint32_t usage = 0;
+                    // A field past the usage list repeats the last usage, already defined
+                    // by its first field: only that one is kept, as hidparser.c
+                    // FindObject_with_Path() only ever finds the first. The APC BGM2200
+                    // leaves Report Count at 23 after a padding, and the copies, read past
+                    // the one value the UPS sends, set it to 0 (issue #98). The bits are
+                    // still reserved below, so offsets and report lengths do not change.
+                    bool repeated = false;
                     if (c < local_usages.size()) {
                         usage = local_usages[c];
                     } else if (!local_usages.empty()) {
                         usage = local_usages.back();
+                        repeated = c > 0;
                     }
-                    
-                    if (offsets_map && usage != 0) {
+
+                    if (offsets_map && usage != 0 && !repeated) {
                         HIDUsageDef def;
                         def.usage = usage;
                         def.report_id = current_report_id;

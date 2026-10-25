@@ -1,0 +1,61 @@
+schema: archetipo/spec/v2
+code: US-098
+title: 'Campi HID ripetuti da un Report Count non azzerato letti dalla prima occorrenza, come NUT (APC BGM2200, issue #98)'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-098: Campi HID ripetuti da un Report Count non azzerato letti dalla prima occorrenza, come NUT (APC BGM2200, issue #98)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di un UPS il cui report descriptor lascia un Report Count maggiore di 1 su campi con una sola usage (per esempio l'APC Back-UPS Pro BGM2200),
+  voglio che esp32-nut legga ognuno di questi campi dalla prima occorrenza, come fa NUT,
+  in modo che carico, autonomia, tensioni nominali e potenza arrivino ai client NUT con i valori che l'UPS invia e non a zero.
+
+  **Dimostrazione**
+  Con la fixture dell'APC BGM2200 (issue #98), il replay nativo mostra i valori che oggi escono a zero:
+  - `ups.load` 28 (report 0x50, `UPS.PowerConverter.PercentLoad`);
+  - `battery.voltage.nominal` 24.0 (report 0x25, `UPS.Battery.ConfigVoltage`);
+  - `input.voltage.nominal` 230 (report 0x30, `UPS.Input.ConfigVoltage`);
+  - `ups.realpower.nominal` 1320 (report 0x52, `UPS.PowerConverter.ConfigActivePower`) e `ups.realpower` 369, cioè il 28 % di 1320;
+  - `battery.runtime` 810 (report 0x23, `UPS.Battery.RunTimeToEmpty`, e report 0x0F);
+  - `input.transfer.low` 176 e `input.transfer.high` 298, come oggi.
+
+  Tutte le fixture di replay esistenti danno gli stessi valori di prima.
+
+  **Criteri di Accettazione**
+  - [ ] Quando un Main item dichiara più campi di quante usage ha, e i campi in più ripetono quindi l'ultima usage con lo stesso percorso, la decodifica di un report usa solo la prima occorrenza di quel percorso per tipo di report, come `FindObject_with_Path()` di `hidparser.c`. Vale per i report FEATURE letti con GET_REPORT e per i report INPUT ricevuti sull'endpoint interrupt.
+  - [ ] Le occorrenze successive non sovrascrivono più il valore con lo 0 letto oltre la fine del payload. Gli offset dei campi dichiarati dopo nello stesso report non cambiano.
+  - [ ] Le usage distinte dichiarate con Usage Minimum/Maximum o con più Usage nello stesso item (per esempio i flag di PresentStatus) restano tutte decodificate come oggi.
+  - [ ] La fixture di replay dell'APC BGM2200 viene dal `usb_diagnostics.json` della #98, con il seriale anonimizzato. Il replay passa con i valori della Dimostrazione.
+  - [ ] Test nativi del parser o della decodifica con un descriptor sintetico: un campo da 16 bit con Report Count 23 e un report di 3 byte restituisce il valore dei primi due byte, non 0.
+  - [ ] Tutte le suite native e tutte le fixture di replay esistenti restano verdi senza cambiare i valori attesi.
+  - [ ] APC Back-UPS Pro BGM2200 tra i modelli APC testati, in entrambi i README, solo dopo la conferma dell'utente sul firmware di test (vedi Assunzioni).
+
+  **Assunzioni**
+  - **Origine:** issue #98 (Lloyd-Sai, APC BGM2200-CH, internamente "Back-UPS BGM2200-MSX", VID/PID `051D:0002`, v1.8.0, `APCDriver`). Il dump è https://github.com/user-attachments/files/33905972/usb_diagnostics.json.
+  - **Causa:** all'offset 323 il descriptor imposta `Report Count = 23` per il padding del report 0x16 (PresentStatus) e non lo riporta più a 1. I campi dei report da 0x20 a 0x52 risultano array di 23 elementi, mentre l'UPS ne manda uno. `HIDParser` crea 23 `HIDUsageDef` con lo stesso percorso e `UsageMapIndex::apply()` le applica tutte: vince l'ultima, oltre il payload, che vale 0. Le soglie di trasferimento escono giuste solo perché il loro Logical Minimum (169) scarta lo 0.
+  - **Riferimento:** `nut_repo/drivers/hidparser.c` (`FindObject_with_Path`, ciclo dei Main item), `nut_repo/drivers/libhid.c`.
+  - **Richieste USB invariate:** le lunghezze di GET_REPORT e SET_REPORT restano quelle del descriptor (47 byte per questi report), come fa NUT con `report_size`.
+  - **README:** il modello va tra i testati solo quando l'utente conferma il firmware di test; fino ad allora il criterio resta aperto.
+  - **Fuori ambito:**
+    - `input.voltage` e `battery.voltage`, che l'UPS invia davvero a 0 (report 0x31 `[49,0,0]` e 0x26 `[38,0,0]`), da chiarire con l'utente;
+    - lo stato con ACPresent e Discharging insieme: NUT mostra "OL DISCHRG", `computeUPSStatusString` oggi "OB DISCHRG". È una divergenza da valutare in una spec separata, dopo la risposta dell'utente;
+    - il porting di `apc_fix_report_desc` (limiti logici di `UPS.Input.Voltage` sui Back-UPS `051D:0002`).
+history:
+  - status: TODO
+    at: "2026-10-24T14:30:05Z"
+  - status: PLANNED
+    at: "2026-10-24T14:32:22Z"
+  - status: IN PROGRESS
+    at: "2026-10-24T14:33:41Z"
+  - status: REVIEW
+    at: "2026-10-24T14:47:55Z"
+  - status: DONE
+    at: "2026-10-25T13:39:30Z"

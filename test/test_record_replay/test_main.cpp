@@ -154,6 +154,29 @@ void test_replay_apc_es700g_issue71(void) {
         RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
 }
 
+void test_replay_apc_bgm2200_issue98(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        // US-098: fields of reports 0x20..0x52 declared with Report Count 23, read from the
+        // first one as NUT: FEATURE 0x50 [80, 28] PercentLoad, 0x25 [37, 96, 9] ConfigVoltage
+        // = 24.0 V, 0x30 [48, 230], 0x52 [82, 40, 5] ConfigActivePower = 1320, 0x23 [35, 42, 3]
+        { { "ups.load", "28" }, { "battery.voltage.nominal", "24.0" }, { "input.voltage.nominal", "230" },
+          { "ups.realpower.nominal", "1320" }, { "ups.realpower", "369" }, { "battery.runtime", "810" } },
+        RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
+}
+
+// US-101: second dump of #98, UPS on mains with ACPresent and Discharging both set at
+// 100 %: the fixture expects ups.status OL DISCHRG, as usbhid-ups with its defaults
+void test_replay_apc_bgm2200_issue98_online(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json");
+}
+
+// US-101: power loss test of #98 (issue98-v2), mains removed: ACPresent clear and
+// Discharging set, ups.status OB DISCHRG as usbhid-ups
+void test_replay_apc_bgm2200_issue98_onbattery(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_onbattery.json");
+}
+
 void test_replay_apc_smartups750_issue78(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
         CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_FULL " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.mfr.date battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
@@ -327,6 +350,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_es700g_issue71);
+    RUN_TEST(test_replay_apc_bgm2200_issue98);
+    RUN_TEST(test_replay_apc_bgm2200_issue98_online);
+    RUN_TEST(test_replay_apc_bgm2200_issue98_onbattery);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_legrand_keor_pdu800_issue90);
@@ -358,6 +384,9 @@ void setup() {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_es700g_issue71);
+    RUN_TEST(test_replay_apc_bgm2200_issue98);
+    RUN_TEST(test_replay_apc_bgm2200_issue98_online);
+    RUN_TEST(test_replay_apc_bgm2200_issue98_onbattery);
     RUN_TEST(test_replay_apc_smartups750_issue78);
     RUN_TEST(test_replay_powercom_spd750u);
     RUN_TEST(test_replay_legrand_keor_pdu800_issue90);

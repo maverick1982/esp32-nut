@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-101
+title: Stato OL DISCHRG quando l'UPS segnala insieme rete presente e scarica, come usbhid-ups
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 2
+status: DONE
+body: |-
+  #### US-101: Stato OL DISCHRG quando l'UPS segnala insieme rete presente e scarica, come usbhid-ups
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di un UPS che, collegato alla rete, segnala insieme ACPresent e Discharging (per esempio l'APC Back-UPS BGM2200 della issue #98),
+  voglio che esp32-nut riporti `OL DISCHRG` come `usbhid-ups` di NUT con la configurazione predefinita,
+  in modo che Home Assistant, upsmon e WinNUT non vedano l'UPS a batteria quando è in rete.
+
+  **Dimostrazione**
+  Il replay nativo della fixture del BGM2200 (dump della issue #98 preso con `issue98-v1`) riporta `ups.status` "OL DISCHRG" invece di "OB DISCHRG", e la suite `test_ups_status` passa con il nuovo comportamento.
+
+  **Criteri di Accettazione**
+  - [ ] Con ACPresent = 1 e Discharging = 1, `ups.status` è `OL DISCHRG`, come il ramo predefinito di `ups_status_set()` in `usbhid-ups.c` (senza `onlinedischarge_onbattery` né `onlinedischarge_calibration`).
+  - [ ] Con ACPresent = 0 e Discharging = 1 resta `OB DISCHRG`; con ACPresent = 0 o assente e Discharging = 0 il comportamento resta quello attuale.
+  - [ ] Senza ACPresent, un UPS che segnala Discharging = 1 resta `OB DISCHRG`, come upstream ("does not report a power state, but it is discharging").
+  - [ ] Il caso Eaton già coperto (Good = 1 a batteria con ACPresent = 0) resta `OB DISCHRG`.
+  - [ ] Mentre l'UPS è in OL+DISCHRG il System Log riporta un warning con frequenza limitata, corrispondente a quello di upstream.
+  - [ ] Il test `test_status_discharging_wins_over_stale_ac_present` cambia semantica e si aspetta `OL DISCHRG`.
+  - [ ] Una fixture del BGM2200 dal secondo dump della #98, con seriale anonimizzato, è coperta da un replay che verifica `OL DISCHRG`.
+  - [ ] Fuori ambito: un'opzione per trattare OL+DISCHRG come a batteria (`onlinedischarge_onbattery`) o come calibrazione (`onlinedischarge_calibration`), utile per esempio per le CyberPower UT.
+history:
+  - status: TODO
+    at: "2026-10-25T07:48:57Z"
+  - status: PLANNED
+    at: "2026-10-25T07:52:33Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T07:55:19Z"
+  - status: REVIEW
+    at: "2026-10-25T08:10:09Z"
+  - status: DONE
+    at: "2026-10-25T13:40:48Z"

@@ -16,6 +16,7 @@
 #include "LinkMonitor.h"
 #include "InputReassembler.h"
 #include "DescriptorRetry.h"
+#include "OnlineDischargeLog.h"
 #include "DriverVarStore.h"
 #include <map>
 #include <vector>
@@ -165,6 +166,7 @@ private:
     void clearDeferredClaim(hid_host_device_handle_t handle);
     void processInputReport(const HidEvent& ev);
     void handleDisconnected(hid_host_device_handle_t handle);
+    void logOnlineDischarge(uint32_t now);
     void closeInterface(hid_host_device_handle_t handle);
     void noteControlResult(esp_err_t err, uint32_t now);
     void recoverInterface(const char* why, uint32_t now, bool clear_in_halt = false);
@@ -185,6 +187,9 @@ private:
     // Interface opened but without a report descriptor yet: claimInterface() runs again (issue #97)
     hid_host_device_handle_t _desc_retry_handle;
     DescriptorRetry _desc_retry;
+    // Throttle of the OL+DISCHRG warning, as usbhid-ups (issue #98)
+    OnlineDischargeLog _ol_dischrg_log;
+    uint32_t _ol_dischrg_checked_at = 0;
 
     String _cached_report_descriptor_hex;
     // Product string as the device sent it, before formatDeviceStrings() splits it

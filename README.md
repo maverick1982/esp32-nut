@@ -43,7 +43,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - APC Back-UPS CS 500
 - APC BackUPS Pro 900
-- APC Back-UPS Pro BN1050M
+- APC Back-UPS Pro BN1050M, BGM2200
 - APC Back-UPS XS 700U, XS 1500M
 - APC Back-UPS BX750MI, BX1200MI
 - APC Back-UPS ES 600M1, ES 700G

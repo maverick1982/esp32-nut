@@ -1,0 +1,250 @@
+schema: archetipo/plan/v2
+spec_code: US-101
+body: |
+  # US-101: Stato OL DISCHRG quando l'UPS segnala insieme rete presente e scarica, come usbhid-ups — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 2
+
+  **User Story**
+  Come proprietario di un UPS che, collegato alla rete, segnala insieme ACPresent e Discharging (per esempio l'APC Back-UPS BGM2200 della issue #98), voglio che esp32-nut riporti `OL DISCHRG` come `usbhid-ups` di NUT con la configurazione predefinita, in modo che Home Assistant, upsmon e WinNUT non vedano l'UPS a batteria quando è in rete.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Oggi `UPSData::computeUPSStatusString()` (`lib/USBHostUPS/src/UPSData.h`) considera l'UPS a batteria ogni volta che `ups.status.discharging` è 1, anche con `ups.status.ac_present` a 1 (test `test_status_discharging_wins_over_stale_ac_present`). Upstream, `ups_status_set()` in `nut_repo/drivers/usbhid-ups.c` (righe ~2725-2910) decide OL/OB da ONLINE (ACPresent, `online_info`) e aggiunge DISCHRG a parte: con ONLINE e DISCHRG insieme, senza `onlinedischarge_onbattery` né `onlinedischarge_calibration`, pubblica `OL` più `DISCHRG` e scrive un warning limitato nel log.
+
+  - **Regola OL/OB, allineata a upstream.** Con `ups.status.ac_present` presente: `OL` se vale 1, `OB` se vale 0; Discharging non cambia più OL/OB. Senza ACPresent resta la logica attuale: `ups.status.good` fa da sostituto di ACPresent solo se l'UPS non è in scarica (`OL`), e Discharging = 1 dà `OB` (upstream: "does not report a power state, but it is discharging - assuming it is on battery"). `DISCHRG` resta Discharging && !Depleted, in tutti i casi. LB, CHRG, RB, OVER invariati.
+  - **Ordine dei token** invariato: `OL`/`OB`, poi `DISCHRG`, poi `LB`, `CHRG`, `RB`, `OVER`. Il caso BGM2200 diventa `OL DISCHRG`.
+  - **Warning nel System Log, con il throttle di upstream.** Logica pura in un nuovo header `lib/USBHostUPS/src/OnlineDischargeLog.h` (stile `DescriptorRetry.h`, testabile in nativo). Con i default di upstream (`onlinedischarge_log_throttle_sec` = -2, `onlinedischarge_log_throttle_hovercharge` = 100): il messaggio esce solo quando `battery.charge` è servito, è > 0, è < 100 ed è diverso dalla carica dell'ultimo messaggio; lo stato si azzera quando Discharging torna a 0. Senza `battery.charge` upstream non logga mai (il throttle a tempo parte solo dopo un primo messaggio, che senza carica non arriva): lo replichiamo. A carica 100% (il BGM2200 nel dump) non esce nessun warning, come upstream.
+  - **Dove si logga.** `USBHostUPS::service()` dopo `_driver->loop(...)`, con `_mutex` preso, legge `ups.status.ac_present`, `ups.status.discharging` e `battery.charge` da `_ups_data`, chiama `OnlineDischargeLog::update()` e, se ritorna true, `log("WARN", ...)`. `computeUPSStatusString()` resta una funzione pura senza effetti collaterali (è chiamata da web UI, NUT server e replay).
+  - **Testo del messaggio**, ricalcato su upstream senza i suggerimenti sulle opzioni che esp32-nut non ha: `[USB] UPS reports OL+DISCHRG (AC present while discharging). Battery charge is currently N.` oppure `... Battery charge changed from A to B since last such report (charging|draining).` seguito da `Is it calibrating? Some UPS models emit OL+DISCHRG when in fact on battery.`
+  - **Fuori ambito:** opzioni equivalenti a `onlinedischarge_onbattery` / `onlinedischarge_calibration`, stato `CAL`.
+
+  ---
+
+  ## Strategia di Test
+
+  Test nativi PlatformIO (Unity), nessuna superficie UI: niente e2e né demo video.
+
+  - `test/test_ups_status`: il test `test_status_discharging_wins_over_stale_ac_present` cambia semantica (ACPresent 1 + Discharging 1 → `OL DISCHRG`); nuovi casi per ACPresent 1 + Discharging 1 + Depleted 1 → `OL`, per ACPresent 1 + Discharging 1 + LB → `OL DISCHRG LB`. I test esistenti OB (ACPresent 0), Eaton Good, good-only ed EcoFlow devono passare invariati.
+  - `test/test_online_discharge_log` (nuova suite, header-only): primo messaggio con carica < 100, silenzio a carica invariata, nuovo messaggio quando la carica cambia, silenzio a 100% e senza carica, reset quando Discharging torna a 0, nessun messaggio con ACPresent 0.
+  - `test/test_record_replay`: nuova fixture del BGM2200 dal secondo dump della #98 (firmware `issue98-v1`, rete collegata) con `ups.status` atteso `OL DISCHRG`; il replay di US-098 resta invariato.
+  - Verifica finale: suite nativa completa e build `esp32-s3-standard` (USBHostUPS.cpp non è compilato in nativo).
+tasks:
+  - id: TASK-01
+    title: OL/OB da ACPresent come usbhid-ups in computeUPSStatusString
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** con ACPresent presente, OL/OB dipende solo da ACPresent; Discharging aggiunge solo DISCHRG.
+
+      **Leggi:** `lib/USBHostUPS/src/UPSData.h` (funzione `computeUPSStatusString`, righe ~76-130); `nut_repo/drivers/usbhid-ups.c` righe ~2725-2910 (`ups_status_set`).
+
+      **Modifica:**
+      1. Calcola `hasAc`, `acPresent`, `onBattery` come oggi.
+      2. `online = hasAc ? acPresent : (d.hasKey("ups.status.good") && good && !onBattery);`
+      3. OB: `if (hasAc ? !acPresent : onBattery) status += "OB ";` (senza ACPresent e senza scarica nessun token, come oggi).
+      4. DISCHRG invariato: `if (onBattery && !depleted)`.
+      5. Aggiorna il commento sopra il calcolo: OL/OB da ACPresent (`online_info`), OL+DISCHRG pubblicato come `OL DISCHRG` come il ramo predefinito di `ups_status_set()` (issue #98); Good sostituisce ACPresent solo sui dispositivi che non ce l'hanno e mai in scarica; senza ACPresent Discharging implica OB come upstream.
+
+      **Non cambiare:** LB, CHRG, RB, OVER, ordine dei token, ritorno "Unknown"/stringa vuota.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — regola OL/OB e commento
+
+      ## Criteri di Completamento
+      - [ ] ACPresent 1 + Discharging 1 → `OL DISCHRG`
+      - [ ] ACPresent 0 + Discharging 1 → `OB DISCHRG`; ACPresent 0 + Discharging 0 → `OB`
+      - [ ] Senza ACPresent: Good 1 → `OL`; Discharging 1 → `OB DISCHRG`
+      - [ ] Compila in nativo (`pio test -e native -f test_ups_status`)
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test di stato: OL DISCHRG e regressioni OB'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il nuovo comportamento e i casi che non devono cambiare.
+
+      **Leggi:** `test/test_ups_status/test_main.cpp`.
+
+      **Modifica:**
+      1. Rinomina `test_status_discharging_wins_over_stale_ac_present` in `test_status_ac_present_while_discharging_is_ol_dischrg` e attenditi `"OL DISCHRG"`; commento: ramo predefinito di `ups_status_set()` (OL+DISCHRG), APC BGM2200 issue #98.
+      2. Aggiungi `test_status_ol_dischrg_depleted`: ACPresent 1, Discharging 1, Depleted 1 → `"OL"`.
+      3. Aggiungi `test_status_ol_dischrg_low_battery`: ACPresent 1, Discharging 1, battery_low 1 → `"OL DISCHRG LB"`.
+      4. Registra i nuovi test in `RUN_TEST` (stesso ordine dei vicini).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ups_status -f test_ecoflow_driver -f test_eaton_driver`.
+
+      ## File Coinvolti
+      - test/test_ups_status/test_main.cpp — test aggiornato e nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Il test rinominato si aspetta `OL DISCHRG` e passa
+      - [ ] I nuovi casi Depleted e LB passano
+      - [ ] Le suite test_ups_status, test_ecoflow_driver e test_eaton_driver passano senza altre modifiche
+
+      **Blocchi:** se un altro test esistente richiede un cambio di semantica oltre a quello indicato, fermati e segnalalo.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'OnlineDischargeLog: throttle del warning OL+DISCHRG come upstream'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** logica pura che decide quando loggare OL+DISCHRG, con i default di upstream.
+
+      **Leggi:** `lib/USBHostUPS/src/DescriptorRetry.h` (stile); `nut_repo/drivers/usbhid-ups.c` righe ~186-225 (variabili onlinedischarge_*) e ~2713-2900 (reset e throttle).
+
+      **Modifica:** crea `lib/USBHostUPS/src/OnlineDischargeLog.h`, header-only, con doc comment che cita `usbhid-ups.c` e la issue #98:
+      - `static const int HOVER_CHARGE = 100;`
+      - stato `int _lastCharge = -1;`
+      - `bool update(bool acPresent, bool discharging, int charge)` dove `charge` è -1 se `battery.charge` non è servito:
+        - se `!discharging`: `_lastCharge = -1; return false;` (reset come upstream quando DISCHRG cade);
+        - se `!acPresent`: `return false;` (OB DISCHRG, nessun warning);
+        - se `charge > 0 && charge != _lastCharge && charge < HOVER_CHARGE`: salva `_prevCharge = _lastCharge; _lastCharge = charge; return true;`
+        - altrimenti `return false` (senza carica upstream non logga mai: il throttle a tempo parte solo dopo un primo messaggio).
+      - `int charge() const` e `int previousCharge() const` (-1 al primo messaggio) per comporre il testo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/OnlineDischargeLog.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Header autosufficiente (`#include <stdint.h>` al massimo), nessuna dipendenza da Arduino
+      - [ ] Semantica come descritta, con commenti che rimandano alle righe di upstream
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di OnlineDischargeLog
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare il throttle del warning.
+
+      **Leggi:** `test/test_descriptor_retry/test_main.cpp` (struttura della suite header-only).
+
+      **Modifica:** crea `test/test_online_discharge_log/test_main.cpp` con:
+      1. primo messaggio: (ac 1, dis 1, carica 95) → true, `previousCharge()` -1, `charge()` 95;
+      2. stessa carica → false;
+      3. carica 94 → true, `previousCharge()` 95;
+      4. carica 100 → false (hovercharge);
+      5. carica -1 (non servita) → false sempre;
+      6. ac 0, dis 1, carica 50 → false;
+      7. dis 0 resetta: poi (ac 1, dis 1, 94) → true di nuovo con `previousCharge()` -1.
+
+      **Verifica:** `pio test -e native -f test_online_discharge_log` (con il PATH del toolchain mingw).
+
+      ## File Coinvolti
+      - test/test_online_discharge_log/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La cartella inizia con `test_` ed è raccolta da PlatformIO
+      - [ ] Tutti i casi passano
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-04
+  - id: TASK-05
+    title: Warning OL+DISCHRG nel System Log da USBHostUPS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** scrivere il warning nel System Log mentre l'UPS è in OL+DISCHRG.
+
+      **Leggi:** `lib/USBHostUPS/src/USBHostUPS.h` (membri, es. `_desc_retry`); `lib/USBHostUPS/src/USBHostUPS.cpp` `service()` intorno a `_driver->loop(this, _ups_data, now);` (riga ~288) e `log()` (riga ~161).
+
+      **Modifica:**
+      1. In `USBHostUPS.h`: `#include "OnlineDischargeLog.h"` e membro `OnlineDischargeLog _ol_dischrg_log;`.
+      2. In `service()`, subito dopo `_driver->loop(...)`, con `std::lock_guard<std::recursive_mutex> lock(_mutex);` in un blocco proprio: se `_ups_data.hasKey("ups.status.ac_present")`, leggi ac/discharging con `getBool`, carica con `_ups_data.hasKey("battery.charge") ? (int)lroundf(_ups_data.getFloat("battery.charge", -1)) : -1`, chiama `update()`; se true, componi il testo ("Battery charge is currently N." se `previousCharge() < 0`, altrimenti "Battery charge changed from A to B since last such report (charging|draining).") e chiama `log("WARN", "[USB] UPS reports OL+DISCHRG (AC present while discharging). %s Is it calibrating? Some UPS models emit OL+DISCHRG when in fact on battery.", ...)`. Logga fuori dal lock se `log()` può bloccare (prepara il buffer dentro, logga fuori).
+      3. Al disconnect (`handleDisconnected`) azzera lo stato: `_ol_dischrg_log = OnlineDischargeLog();`.
+
+      **Verifica:** build ESP32 da PowerShell: `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — include e membro
+      - lib/USBHostUPS/src/USBHostUPS.cpp — chiamata in service() e reset al disconnect
+
+      ## Criteri di Completamento
+      - [ ] Build `esp32-s3-standard` OK
+      - [ ] Nessun log a carica 100% o senza `battery.charge`
+      - [ ] Lo stato si azzera al disconnect
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Fixture BGM2200 in rete (secondo dump #98) e replay OL DISCHRG'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il caso reale con un replay.
+
+      **Leggi:** `test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json` (formato: descriptor 10 byte per riga, `data` inline, campo `notes`); `test/test_record_replay/test_main.cpp` (`test_replay_apc_bgm2200_issue98`, due blocchi `RUN_TEST`). Sorgente: secondo `usb_diagnostics.json` della issue #98 (https://github.com/user-attachments/files/33917327/usb_diagnostics.json, firmware `issue98-v1`), stesso descriptor della fixture esistente.
+
+      **Modifica:**
+      1. Crea `test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json` dal dump, con lo stesso layout della fixture esistente: `serial_number` "TEST0000" (anche `ups.serial` negli expected), `notes` che spiega ACPresent+Discharging a rete collegata e carica 100%, scenario `"Live ESP32 dump, issue98-v1, mains connected (issue #98)"`, `expected_ups_data` del dump più `"ups.status": "OL DISCHRG"`.
+      2. In `test_main.cpp` aggiungi `test_replay_apc_bgm2200_issue98_online()` che chiama `FixtureReplayRunner::runFixtureTest("...issue98_online.json")` (gli expected della fixture bastano) e registralo in entrambi i blocchi `RUN_TEST` accanto a quello di US-098.
+      3. Non modificare la fixture e il test di US-098.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      ## File Coinvolti
+      - test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json — nuova
+      - test/test_record_replay/test_main.cpp — nuovo test
+
+      ## Criteri di Completamento
+      - [ ] Il replay verifica `ups.status` = `OL DISCHRG`
+      - [ ] Nessun seriale reale nella fixture
+      - [ ] test_record_replay passa
+
+      **Blocchi:** se qualche valore atteso del dump non si riproduce nel replay, segnalalo invece di toglierlo.
+    ref: TASK-06
+  - id: TASK-07
+    title: Suite nativa completa e build ESP32
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessuna regressione.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`.
+      2. `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard`.
+      3. Controllo di aderenza: confronta il diff con i criteri di US-101.
+
+      ## File Coinvolti
+      - nessun file nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test nativi passano
+      - [ ] Build esp32-s3-standard OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-07

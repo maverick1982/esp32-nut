@@ -83,14 +83,18 @@ public:
         bool charging = d.getBool("ups.status.charging");
         float batteryCharge = d.getFloat("battery.charge", -1);
         
-        // OL comes from ACPresent (NUT online_info) and OB is "not online", as in usbhid-ups.
+        // OL/OB comes from ACPresent (NUT online_info), as in usbhid-ups ups_status_set():
+        // Discharging only adds DISCHRG, so AC present while discharging is "OL DISCHRG",
+        // the upstream default without onlinedischarge_onbattery (APC BGM2200, issue #98).
         // PresentStatus.Good says the UPS works, not that it is on mains: Eaton keeps it at 1
         // on battery (NUT mge-hid maps it to off_info), which gave "OL OB". It only stands in
-        // for ACPresent on devices without it, and never while discharging.
+        // for ACPresent on devices without it, and never while discharging. Without ACPresent
+        // Discharging means OB, as upstream ("does not report a power state, but it is
+        // discharging - assuming it is on battery").
         bool hasAc = d.hasKey("ups.status.ac_present");
-        bool onBattery = d.hasKey("ups.status.discharging") && discharging;
-        bool online = hasAc ? (acPresent && !onBattery)
-                            : (d.hasKey("ups.status.good") && good && !onBattery);
+        bool dischrg = d.hasKey("ups.status.discharging") && discharging;
+        bool online = hasAc ? acPresent
+                            : (d.hasKey("ups.status.good") && good && !dischrg);
         // Extended PresentStatus flags are internal bits in usbhid-ups, exactly
         // like lowbatt/dischrg/chrg: ups_status_set() derives standard NUT tokens
         // from them and never publishes the raw flags. We mirror that here.
@@ -99,9 +103,9 @@ public:
         bool noBattery = d.getBool("ups.status.no_battery");
 
         if (online) status += "OL ";
-        if (onBattery || (hasAc && !acPresent)) status += "OB ";
+        if (hasAc ? !acPresent : dischrg) status += "OB ";
         // DEPLETED suppresses DISCHRG, as upstream: DISCHRG && !DEPLETED.
-        if (onBattery && !depleted) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
+        if (dischrg && !depleted) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
         // LB covers lowbatt, timelimitexp and shutdownimm, as upstream
         // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent never gives FSD:
         // only the upsmon primary sets it, and upsmon shuts down on FSD even on
