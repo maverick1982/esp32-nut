@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include <mutex>
+#include <ArduinoJson.h>
 #include "usb/usb_host.h"
 #include "usb/hid_host.h"
 #include "Quirks.h"
@@ -59,7 +60,9 @@ public:
 
     UPSDataLock getUPSData() const override;
     String getUPSStatusString() const override;
-    String dumpUSBDiagnostics();
+    // Fills doc with the USB diagnostics export (/api/usb/dump), under _mutex. The web
+    // server serializes it in chunks (US-095)
+    void buildUSBDiagnostics(JsonDocument& doc);
 
     bool setBeeper(bool enable) override;
     bool isConnected() const override;

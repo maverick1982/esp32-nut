@@ -1,0 +1,37 @@
+# Opzioni ESP-IDF provate e misurate nella US-095 per esp32-s3-standard (pioarduino 55.03.312-1).
+# NON IN USO: il progetto usa le librerie ESP-IDF precompilate del core Arduino (decisione del
+# 2026-10-23). Per riattivarlo: copiare questo file nella radice del progetto e aggiungere
+#   custom_sdkconfig = file://sdkconfig.esp32-nut
+# in [env:esp32-s3-standard] di platformio.ini. Procedura, verifiche e trappole in
+# docs/plans/custom-sdkconfig.md.
+#
+# Con questo file pioarduino ricompila le librerie ESP-IDF del core Arduino ("compilazione
+# ibrida"): la prima build è molto più lunga, e ogni modifica del file ricompila.
+#
+# Il nome non è sdkconfig.defaults né sdkconfig.<env>: la piattaforma genera e sovrascrive
+# quei file nella radice del progetto.
+#
+# Solo le opzioni cambiate rispetto al sdkconfig precompilato della 55.03.312-1
+# (copia in docs/plans/idf55-baseline/sdkconfig-precompiled-55.03.312-1.txt), ciascuna con
+# il motivo e il risparmio misurato a riposo sull'Eaton 3S. Oltre a queste, la piattaforma
+# spegne da sola la PSRAM (la scheda N8 non ne ha): circa 10 KB in più.
+#
+# Togliere un'opzione da questo file non la riporta al valore precompilato: il sdkconfig
+# generato la conserva. Dopo averne tolta una, cancellare sdkconfig.esp32-s3-standard.
+
+# Stack del task esp_timer: 8192 nel precompilato, 4096 nella v1.8.0 (IDF 5.1). Il task usa
+# meno di 512 byte sotto carico su entrambe le piattaforme; regola max(4096, uso + 1024).
+# Risparmio misurato: 4,2 KB.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096
+
+# Statistiche di FreeRTOS, spente come nella v1.8.0. Il firmware usa solo
+# uxTaskGetStackHighWaterMark(), che non ne dipende; la build collega senza errori.
+# Risparmio misurato: 1,9 KB.
+# CONFIG_FREERTOS_USE_TRACE_FACILITY is not set
+# CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS is not set
+# CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is not set
+
+# Buffer dei trasferimenti di controllo dello stack USB host, 256 come nella v1.8.0.
+# hid_host.c alloca i propri trasferimenti della dimensione necessaria; questo valore
+# dimensiona i buffer di enumerazione. Risparmio misurato: 3 KB.
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
