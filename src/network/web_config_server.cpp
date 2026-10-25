@@ -5,7 +5,6 @@
 #include "AuthService.h"
 #include "CommandCatalog.h"
 #include "network/web_config_server.h"
-#include <WiFi.h>
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
 #include "core/crash_diag.h"
@@ -58,10 +57,16 @@ void WebConfigServer::begin(bool isAPMode) {
         AppLogger::log("INFO", "[AUTH] Persistent sessions restored: %u", (unsigned)sessions.persistentCount());
     }
     
-    if (is_ap_mode) {
+    if (!network) {
+        // setNetwork() missing: no captive portal, and the status APIs report no link
+        AppLogger::log("ERROR", "[WEB] No network service set: captive portal disabled");
+    }
+    if (is_ap_mode && network) {
         // Start DNS Server for Captive Portal
         dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-        dnsServer.start(53, "*", WiFi.softAPIP());
+        IPAddress ap_ip;
+        ap_ip.fromString(network->localIP());
+        dnsServer.start(53, "*", ap_ip);
     }
 
     static bool _handlers_registered = false;
@@ -156,8 +161,8 @@ void WebConfigServer::begin(bool isAPMode) {
     // In AP il guard restituisce sempre ALLOW: il redirect captive resta invariato
     server.onNotFound([this]() {
         if (!authorize()) return;
-        if (is_ap_mode && server.hostHeader() != WiFi.softAPIP().toString()) {
-            server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+        if (is_ap_mode && network && server.hostHeader() != network->localIP()) {
+            server.sendHeader("Location", String("http://") + network->localIP() + "/", true);
             server.send(302, "text/plain", "");
         } else {
             server.send(404, "text/plain", "Not found");
@@ -189,6 +194,10 @@ void WebConfigServer::loop() {
 
 void WebConfigServer::setUPS(USBHostUPS* ups) {
     usb_ups = ups;
+}
+
+void WebConfigServer::setNetwork(AppNetworkManager* net) {
+    network = net;
 }
 
 void WebConfigServer::handleConnect() {
@@ -305,25 +314,18 @@ void WebConfigServer::handleSystemStatus() {
     JsonDocument doc;
     
     doc["version"] = FIRMWARE_VERSION;
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
+    uint8_t mac[6] = {0};
+    if (network) network->macAddress(mac);
     char dev_id[32];
     // Lo standard convenzionale per i dispositivi ESP è usare la seconda metà del MAC (gli ultimi 3 byte)
     // poiché i primi 3 byte rappresentano l'OUI di Espressif.
     snprintf(dev_id, sizeof(dev_id), "%s-%02X%02X%02X", ESP.getChipModel(), mac[3], mac[4], mac[5]);
     doc["device_id"] = String(dev_id);
     
-    // Wi-Fi status
-    wl_status_t wifi_status = WiFi.status();
-    String wifi_status_str = "Disconnected";
-    if (is_ap_mode) {
-        wifi_status_str = "AP Mode Active";
-    } else if (wifi_status == WL_CONNECTED) {
-        wifi_status_str = WiFi.SSID();
-    } else {
-        wifi_status_str = "Connecting";
-    }
-    doc["wifi"]["status"] = wifi_status_str;
+    // Status of the active link: "AP Mode Active", the SSID or "Connecting" on Wi-Fi
+    doc["wifi"]["status"] = network ? network->statusText() : String("Disconnected");
+    // Type of the active link, new in US-090 (the existing fields are unchanged)
+    doc["network"]["type"] = network ? network->typeName() : "none";
     
     // UPS status
     String ups_status_str = "Disconnected";

@@ -10,34 +10,40 @@
 
 // Costruttore — inizializza i membri a valori predefiniti
 DiagnosticLED::DiagnosticLED()
-    : _pin(LED_BUILTIN_PIN),
+    : _pin(-1),
+      _enabled(false),
       _state(CONNECTING),
       _ledOn(false),
       _previousMillis(0),
       _currentColor(0),
-      _pixels(1, LED_BUILTIN_PIN, NEO_GRB + NEO_KHZ800) {}
+      _pixels(1, -1, NEO_GRB + NEO_KHZ800) {}
 
 void DiagnosticLED::setPixelColorAndShow(uint32_t color) {
     _currentColor = color;
+    if (!_enabled) return;
     _pixels.setPixelColor(0, color);
     _pixels.show();
 }
 
-void DiagnosticLED::begin(uint8_t pin) {
+void DiagnosticLED::begin(int8_t pin, int8_t power_pin) {
     _pin = pin;
+    _enabled = pin >= 0;
+    _ledOn = false;
+    _state = CONNECTING;
+    _previousMillis = millis();
+    if (!_enabled) return;
 
     // Assicurati che l'alimentazione del NeoPixel sia attiva
-    pinMode(NEOPIXEL_POWER_PIN, OUTPUT);
-    digitalWrite(NEOPIXEL_POWER_PIN, HIGH);
+    if (power_pin >= 0) {
+        pinMode(power_pin, OUTPUT);
+        digitalWrite(power_pin, HIGH);
+    }
 
+    _pixels.setPin(pin);
     _pixels.begin();
     _pixels.setBrightness(10);
     _pixels.setPixelColor(0, 0, 0, 0); // Spento inizialmente
     _pixels.show();
-    
-    _ledOn = false;
-    _state = CONNECTING;
-    _previousMillis = millis();
 }
 
 // Cambia lo stato corrente e resetta il timer del pattern

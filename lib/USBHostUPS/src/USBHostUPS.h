@@ -73,6 +73,9 @@ public:
     const char* const* commandAllowList() const override;
 
     void setLogCallback(LogCallback cb);
+    // USB peripheral the UPS is attached to, from the board profile (US-090); call before
+    // begin(). 0 is the ESP-IDF default, the only one on the ESP32-S3
+    void setPeripheralMap(uint32_t map) { _peripheral_map = map; }
     void logDebug(const String& msg) const override;
 
     // Set when in-place recovery failed: the owner must restart the system (never from an ISR)
@@ -240,6 +243,7 @@ private:
     std::map<uint16_t, CachedReport> _cached_reports;
 
     uint32_t _quirks;
+    uint32_t _peripheral_map = 0;
     uint8_t _request_buffer[256];
 };
 

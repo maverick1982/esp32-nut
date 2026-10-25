@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: HIGH
 points: 5
-status: TODO
+status: DONE
 body: |
   #### US-090: Profili delle schede e livello di rete per capacità (ESP32-S3, comportamento invariato)
 
@@ -35,3 +35,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-21T16:16:13Z"
+  - status: PLANNED
+    at: "2026-10-25T09:08:04Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T09:11:48Z"
+  - status: REVIEW
+    at: "2026-10-25T10:08:33Z"
+  - status: DONE
+    at: "2026-10-25T10:19:50Z"
