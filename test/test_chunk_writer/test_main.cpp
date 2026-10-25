@@ -51,7 +51,8 @@ static void assertSameOutput(const JsonDocument& doc) {
     }
 }
 
-// Documento con la forma dell'export di USBHostUPS::buildUSBDiagnostics(): parti grezze
+// Documento con la forma dell'export di /api/usb/dump (fino alla US-095 costruito come
+// JsonDocument da USBHostUPS::buildUSBDiagnostics()): parti grezze
 // serialized() per il descriptor e i dati dei report, oggetti annidati, stringhe da escapare
 static void buildDumpLikeDoc(JsonDocument& doc) {
     doc["firmware_version"] = "idf55-v2";

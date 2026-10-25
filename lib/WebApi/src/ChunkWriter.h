@@ -8,9 +8,9 @@
 #include <functional>
 #include <utility>
 
-// Destinazione di serializeJson()/serializeJsonPretty() di ArduinoJson che passa l'uscita
-// a un sink a blocchi di dimensione fissa, senza costruire tutto il JSON in una String.
-// Usata per l'export a pezzi di /api/usb/dump (US-095): abbassa il picco di heap.
+// Writer che passa l'uscita a un sink a blocchi di dimensione fissa, senza costruire tutto
+// il testo in una String; compatibile anche con serializeJson()/serializeJsonPretty() di
+// ArduinoJson. Usato da UsbDiagJson per l'export a pezzi di /api/usb/dump (US-095, US-096).
 // Il buffer lo fornisce il chiamante (cap >= 1) e il writer non alloca memoria.
 // Il sink non riceve mai un blocco di 0 byte: in HTTP/1.1 chunked un blocco vuoto
 // chiuderebbe la risposta.
