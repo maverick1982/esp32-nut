@@ -54,6 +54,7 @@ bool USBHostUPS::begin() {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
+    host_config.peripheral_map = _peripheral_map;
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
     // Arduino core 3.3.11+ (ESP-IDF 5.5.5) enables the enumeration filter, and the
     // stack then needs a callback: with NULL no device enumerates ("Root port reset

@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <unity.h>
 #include "DiagnosticLED.h"
+#include "board/board.h"
 
 // Rimuoviamo le macro problematiche da DiagnosticLED.h
 #undef COLOR_CONNECTING
@@ -26,12 +27,9 @@
 // Istanza globale del LED diagnostico usata in tutti i test
 DiagnosticLED led;
 
-// Pin utilizzato per i test (LED integrato della ESP32-S3-DevKitC-1)
-static const uint8_t TEST_PIN = LED_BUILTIN_PIN;
-
 void setUp(void) {
-    // Reinizializza il LED prima di ogni test per garantire isolamento
-    led.begin(TEST_PIN);
+    // Reinizializza il LED prima di ogni test per garantire isolamento (pin dal profilo, US-090)
+    led.begin(board().led.pin, board().led.power_pin);
 }
 
 void tearDown(void) {

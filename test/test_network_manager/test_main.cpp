@@ -19,7 +19,8 @@ void test_initial_state(void) {
 
 void test_initialization_and_states(void) {
     // Avvia la connessione con credenziali fittizie
-    net_manager.begin("TEST_SSID", "TEST_PASS");
+    // Station with a valid configuration, as a normal boot (US-090)
+    net_manager.begin(board(), planNetwork({ true, false }, true, false), "TEST_SSID", "TEST_PASS");
     // All'avvio immediato (essendo asincrono e non bloccante) isConnected() deve essere ancora false
     TEST_ASSERT_FALSE(net_manager.isConnected());
 }

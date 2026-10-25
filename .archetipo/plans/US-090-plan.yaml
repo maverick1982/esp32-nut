@@ -1,0 +1,310 @@
+schema: archetipo/plan/v2
+spec_code: US-090
+body: |
+  # US-090: Profili delle schede e livello di rete per capacità (ESP32-S3, comportamento invariato) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5
+
+  Passo 2 della migrazione dell'ADR 0010 (spec B della PDR 0002): pin e capacità della scheda in un profilo, rete dietro un'interfaccia di link, decisioni di avvio in un'unità pura. Refactoring senza cambi di comportamento sull'ESP32-S3.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Oggi pin e capacità sono letterali sparsi: `LED_BUILTIN_PIN 48` e `NEOPIXEL_POWER_PIN 38` in `DiagnosticLED.h`, SSID/password dell'AP in `main.cpp`, la decisione AP/STA in `setup()`, `WiFi.*` chiamato direttamente da `web_config_server.cpp` (captive portal, stato, MAC per l'ID del dispositivo). Non ci sono `#if` di scheda: il lavoro è spostare i dati nel profilo e far passare la rete da un'interfaccia, senza cambiare cosa fa la scheda.
+
+  - **Profilo di scheda (`board`).** `include/board/board.h`: `struct BoardConfig` di soli dati, senza include di Arduino (compila in nativo): `name`; `has_wifi`; `has_ethernet`; `EthConfig eth` (tipo `NONE`/`RMII`/`SPI`, tipo e indirizzo del PHY, pin MDC/MDIO/clock/reset o SPI CS/INT/SCK/MISO/MOSI, tutti `int8_t` con -1 = assente); `LedConfig led` (`pin`, `power_pin`, -1 = assente); `UsbConfig usb` (`peripheral_map`, 0 = periferica predefinita di ESP-IDF 5.5); `BoardDefaults defaults` (`ap_ssid` "NUT_ESP32_Config", `ap_password` "12345678", `led_enabled` true, `network_mode` WIFI). Dichiara `const BoardConfig& board();`. `src/board/esp32s3_devkit.cpp` definisce il profilo `esp32s3_devkit` (Wi-Fi sì, Ethernet no, LED 48 con alimentazione 38, `peripheral_map` 0). La scelta del profilo è fatta dall'ambiente PlatformIO con `build_src_filter` (`+<*> -<board/> +<board/esp32s3_devkit.cpp>`), senza `#if`.
+  - **Unità pure del modulo `net`** in una nuova libreria header-only `lib/NetCore/src/` (testabile in nativo, nessuna dipendenza da Arduino tranne `String` già disponibile nei mock):
+    - `INetLink.h`: interfaccia del link — `kind()` (`NetLinkKind::WIFI_STA`, `WIFI_AP`, `ETHERNET`), `typeName()` ("wifi" per STA e AP, "ethernet"), `begin()`, `end()`, `loop(uint32_t now)`, `isConnected()`, `statusText()` (oggi "AP Mode Active", SSID, "Connecting"), `localIP()` come `String`, `macAddress(uint8_t[6])`.
+    - `NetLinkSelector.h`: tiene il link attivo; `activate(INetLink*)` chiama `end()` sul precedente e `begin()` sul nuovo, così c'è sempre un solo link attivo; `loop()`, `active()`, `isConnected()` inoltrano al link attivo, con `nullptr` sicuro.
+    - `NetBootPlan.h`: funzione pura `NetBootPlan planNetwork(const BoardCaps&, bool config_valid, bool manual_trigger)` con `BoardCaps {has_wifi, has_ethernet}` estratto dal profilo. Con Wi-Fi: config non valida o doppio reset → `WIFI_AP`, captive portal attivo, timeout dell'AP solo se doppio reset con config valida (come oggi); altrimenti `WIFI_STA`. Senza Wi-Fi: mai AP; `ETHERNET` se presente (il link reale arriva con US-092), altrimenti `NONE`; `recovery_window` = doppio reset (solo segnalato, la finestra è US-091).
+  - **Adattatori Wi-Fi** (`src/network/wifi_links.h/.cpp`, unici a chiamare `WiFi.*`): `WifiStaLink` con la logica attuale di `AppNetworkManager` (log dei cambi di stato, riconnessione ogni 15 s, `setAutoReconnect`) e `WifiApLink` (`WiFi.mode(WIFI_AP)`, `softAP` con SSID/password dal profilo). Il testo di stato e l'IP sono quelli che oggi calcola `web_config_server.cpp`.
+  - **`AppNetworkManager`** diventa il servizio di rete: riceve profilo e piano, crea il link giusto, lo attiva tramite `NetLinkSelector`, espone `isConnected()`, `isApMode()`, `statusText()`, `typeName()`, `localIP()`, `macAddress()`. L'API attuale `begin(ssid, pw)` / `beginAP(...)` sparisce: `main.cpp` chiama `network_mgr.begin(board(), plan, wifi_config)`.
+  - **`main.cpp`**: `planNetwork()` sostituisce l'`if` di `setup()`; `is_ap_mode` viene dal piano; `ApIdleTimeout` abilitato da `plan.ap_idle_timeout`; LED con `diagnostic_led.begin(board().led.pin, board().led.power_pin)`; `usb_ups.setPeripheralMap(board().usb.peripheral_map)` prima di `usb_ups.begin()`. Il resto di `main.cpp` (double reset, RestartPolicy, computeSystemState) resta dov'è: lo sposta il passo 3 dell'ADR.
+  - **`DiagnosticLED`**: `begin(int8_t pin, int8_t power_pin)`, senza le `#define` dei pin; con `pin < 0` tutte le chiamate sono no-op; il NeoPixel viene configurato con `setPin()` in `begin()`.
+  - **`USBHostUPS`**: `setPeripheralMap(uint32_t)` salvato in un membro (default 0) e copiato in `host_config.peripheral_map` (campo presente su ESP-IDF 5.5.5, 0 = periferica predefinita: nessun cambio sull'S3). Il `#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` resta: è un `#if` di versione di ESP-IDF, ammesso dall'ADR.
+  - **`WebConfigServer`**: riceve `AppNetworkManager&` (setter come `setUPS`), niente più `WiFi.*` nel file: captive portal con `network.localIP()` e solo se `network.isApMode()`; `wifi.status` da `network.statusText()`; `device_id` = `ESP.getChipModel()` + ultimi 3 byte di `network.macAddress()` (stesso valore di oggi sull'S3, dove il MAC è quello del Wi-Fi); `/api/system/status` aggiunge `"network": {"type": "wifi"}` senza toccare i campi esistenti. `bundle.js` non cambia.
+  - **Interpretazioni da confermare in review:** (1) l'"ID del dispositivo dal profilo" è realizzato prendendo il MAC dal link attivo e il prefisso dal chip, così il valore sull'S3 resta identico; (2) SSID e password dell'AP sono valori iniziali del profilo; (3) senza Wi-Fi il gate del server NUT (`config_valid`) non cambia: per le schede Ethernet va rivisto in US-092.
+  - **Fuori ambito:** link Ethernet reale, profilo P4 (US-092); finestra di recupero (US-091); impostazioni LED/porta USB e modalità di rete nella Web UI (US-094 e spec successiva); spostamento di double reset, RestartPolicy e stato LED fuori da `main.cpp` (passo 3 dell'ADR).
+
+  ---
+
+  ## Strategia di Test
+
+  Refactoring: la prova principale è che nulla cambi, più test nativi nuovi per le decisioni.
+
+  - **Nativi nuovi:** `test/test_net_boot_plan` (profilo con Wi-Fi e senza: config valida/non valida × doppio reset; timeout dell'AP; nessun AP senza Wi-Fi; `recovery_window`), `test/test_net_link_selector` (link finti: un solo link attivo, `end()` sul precedente, inoltro di `loop`/`isConnected`, nessun crash senza link), `test/test_board_profile` (valori del profilo `esp32s3_devkit`: pin 48/38, Wi-Fi sì, Ethernet no, `peripheral_map` 0, SSID/password dell'AP).
+  - **Regressione automatica:** suite nativa completa, replay, `e2e` Playwright completa (la Web UI dell'S3 non cambia; i mock di `/api/system/status` possono restare senza `network`).
+  - **Controllo dei `#if`:** `grep` dei `#if` fuori da `src/board/` e dagli adattatori, con l'elenco dei restanti ammessi (versione di ESP-IDF in `USBHostUPS.cpp`, core dump in `crash_diag.cpp`, `UNIT_TEST`, `FIRMWARE_VERSION`).
+  - **Hardware (Eaton 3S, scheda dell'utente su COM5):** primo avvio in AP con config cancellata, doppio reset → AP con timeout di 10 minuti, connessione STA e riconnessione, colori del LED, `device_id` e `/api/system/status` identici più `network.type`, `upsc` identico alla baseline di `docs/plans/idf55-baseline/`.
+  - **Nessun e2e nuovo né demo video:** la spec non ha superficie visibile nuova.
+tasks:
+  - id: TASK-01
+    title: 'Profilo di scheda: BoardConfig e profilo esp32s3_devkit scelto da PlatformIO'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** pin, capacità e valori iniziali della scheda in un profilo di soli dati.
+
+      **Leggi:** `docs/adr/0010-modular-architecture-and-board-profiles.md` §3; `lib/DiagnosticLED/src/DiagnosticLED.h` (pin 48/38); `src/core/main.cpp` (SSID/password dell'AP); `platformio.ini`.
+
+      **Modifica:**
+      1. Crea `include/board/board.h`: `enum class EthType : uint8_t { NONE, RMII, SPI };`, `enum class NetworkMode : uint8_t { WIFI, ETHERNET, AUTO };`, `struct EthConfig { EthType type; uint8_t phy_type; int8_t phy_addr; int8_t mdc, mdio, clk, power, cs, irq, sck, miso, mosi; }`, `struct LedConfig { int8_t pin; int8_t power_pin; }`, `struct UsbConfig { uint32_t peripheral_map; }`, `struct BoardDefaults { const char* ap_ssid; const char* ap_password; bool led_enabled; NetworkMode network_mode; }`, `struct BoardConfig { const char* name; bool has_wifi; bool has_ethernet; EthConfig eth; LedConfig led; UsbConfig usb; BoardDefaults defaults; }`, `const BoardConfig& board();`. Solo `<stdint.h>`, nessun include Arduino. Commento in testa che rimanda all'ADR 0010 §3.
+      2. Crea `src/board/esp32s3_devkit.cpp` con il profilo `esp32s3_devkit`: Wi-Fi sì, Ethernet no (`EthType::NONE`, pin -1), LED 48 con alimentazione 38, `peripheral_map` 0, AP "NUT_ESP32_Config" / "12345678", LED acceso, modalità WIFI; `board()` ritorna il profilo.
+      3. In `platformio.ini`, env `esp32-s3-standard`: `build_src_filter = +<*> -<board/> +<board/esp32s3_devkit.cpp>` con un commento (un profilo per ambiente, ADR 0010).
+
+      **Verifica:** build `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` (da PowerShell).
+
+      ## File Coinvolti
+      - include/board/board.h — nuovo
+      - src/board/esp32s3_devkit.cpp — nuovo
+      - platformio.ini — build_src_filter dell'env S3
+
+      ## Criteri di Completamento
+      - [ ] `board.h` compila senza Arduino
+      - [ ] Il profilo contiene tutti i campi del criterio 1 della spec
+      - [ ] Build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi del profilo esp32s3_devkit
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare i valori del profilo, che oggi sono letterali nel codice.
+
+      **Modifica:**
+      1. In `platformio.ini`, env `native`: aggiungi `+<board/esp32s3_devkit.cpp>` a `build_src_filter`.
+      2. Crea `test/test_board_profile/test_main.cpp` (Unity, `main` come `test/test_descriptor_retry`): nome "esp32s3_devkit", `has_wifi` true, `has_ethernet` false, `eth.type` NONE, LED 48/38, `usb.peripheral_map` 0, AP "NUT_ESP32_Config"/"12345678", `led_enabled` true, `network_mode` WIFI.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_board_profile`.
+
+      ## File Coinvolti
+      - platformio.ini — build_src_filter dell'env native
+      - test/test_board_profile/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La suite passa in nativo
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'NetCore: INetLink, NetLinkSelector e NetBootPlan (logica pura)'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** interfaccia del link, selettore con un solo link attivo e decisione di avvio pura.
+
+      **Leggi:** `src/core/main.cpp` `setup()` righe ~89-132 (decisione AP/STA, `ApIdleTimeout(manual_ap_triggered && config_ok)`); `lib/ApIdleTimeout/src/ApIdleTimeout.h` (stile header-only con doc comment).
+
+      **Modifica:** crea la libreria header-only `lib/NetCore/src/`:
+      1. `INetLink.h`: `enum class NetLinkKind : uint8_t { WIFI_STA, WIFI_AP, ETHERNET };` e classe astratta con `kind()`, `typeName()` ("wifi" per STA/AP, "ethernet"), `begin()`, `end()`, `loop(uint32_t now)`, `isConnected() const`, `statusText() const` (`String`), `localIP() const` (`String`), `macAddress(uint8_t mac[6]) const`. Include `<Arduino.h>` solo per `String` (i mock nativi lo forniscono in `test/mocks`).
+      2. `NetLinkSelector.h`: `activate(INetLink* link)` → `end()` sul precedente se diverso, `begin()` sul nuovo; `active()`, `loop(now)`, `isConnected()` con `nullptr` gestito (false/no-op).
+      3. `NetBootPlan.h`: `struct BoardCaps { bool has_wifi; bool has_ethernet; };` `enum class BootLink : uint8_t { WIFI_STA, WIFI_AP, ETHERNET, NONE };` `struct NetBootPlan { BootLink link; bool captive_portal; bool ap_idle_timeout; bool recovery_window; };` e `inline NetBootPlan planNetwork(BoardCaps caps, bool config_valid, bool manual_trigger)` con le regole del piano (con Wi-Fi: AP se config non valida o doppio reset, timeout solo con doppio reset e config valida; senza Wi-Fi: mai AP, ETHERNET se presente altrimenti NONE, `recovery_window` = doppio reset). Più `inline BoardCaps capsOf(const BoardConfig&)` se `board.h` è includibile, altrimenti nel chiamante.
+      4. Doc comment su ciascun file con rimando ad ADR 0010 §2-§3 e PDR 0002 D3/D5.
+
+      ## File Coinvolti
+      - lib/NetCore/src/INetLink.h — nuovo
+      - lib/NetCore/src/NetLinkSelector.h — nuovo
+      - lib/NetCore/src/NetBootPlan.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Header-only, compilabili in nativo
+      - [ ] Le regole di `planNetwork` per il profilo con Wi-Fi riproducono esattamente l'`if` attuale di `setup()`
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di NetBootPlan e NetLinkSelector
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** decisioni di avvio coperte per profili con e senza Wi-Fi; un solo link attivo.
+
+      **Modifica:**
+      1. `test/test_net_boot_plan/test_main.cpp`: con Wi-Fi — config valida senza doppio reset → WIFI_STA, niente captive, niente timeout; config valida con doppio reset → WIFI_AP, captive, timeout; config non valida (con e senza doppio reset) → WIFI_AP, captive, niente timeout. Senza Wi-Fi con Ethernet → ETHERNET in tutti i casi, mai captive né timeout, `recovery_window` solo con doppio reset. Senza Wi-Fi né Ethernet → NONE.
+      2. `test/test_net_link_selector/test_main.cpp`: classe `FakeLink : INetLink` che conta `begin`/`end`/`loop`; attivare A poi B chiama `end` su A e `begin` su B; riattivare lo stesso link non lo riavvia; `loop`/`isConnected` vanno solo al link attivo; selettore vuoto: `isConnected()` false, `loop` senza crash.
+      3. Se servono, aggiungi `-I lib/NetCore/src` ai `build_flags` dell'env `native`.
+
+      **Verifica:** `pio test -e native -f test_net_boot_plan -f test_net_link_selector` (PATH del toolchain mingw).
+
+      ## File Coinvolti
+      - test/test_net_boot_plan/test_main.cpp — nuovo
+      - test/test_net_link_selector/test_main.cpp — nuovo
+      - platformio.ini — eventuale include path
+
+      ## Criteri di Completamento
+      - [ ] Entrambe le suite passano
+      - [ ] Una mutazione della regola del timeout (es. `manual_trigger` al posto di `manual_trigger && config_valid`) fa fallire un test
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-04
+  - id: TASK-05
+    title: Adattatori Wi-Fi e AppNetworkManager sul selettore
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** tutta la rete passa dai link; il comportamento del Wi-Fi resta identico.
+
+      **Leggi:** `src/network/network_manager.cpp` e `include/network/network_manager.h` (logica STA attuale); `src/network/web_config_server.cpp` `handleSystemStatus()` righe ~305-326 (testi di stato).
+
+      **Modifica:**
+      1. Crea `src/network/wifi_links.h/.cpp`: `WifiStaLink(ssid, password)` con esattamente la logica attuale di `AppNetworkManager::begin()`/`loop()` (stessi log `[NETWORK]`, `setAutoReconnect(true)`, riconnessione ogni 15 s), `statusText()` = SSID se connesso altrimenti "Connecting", `localIP()` = `WiFi.localIP()`, MAC = `WiFi.macAddress`; `end()` = `WiFi.disconnect()`. `WifiApLink(ssid, password)` con la logica di `beginAP()` (stessi log), `isConnected()` false come oggi (il LED in AP usa `is_ap_mode`), `statusText()` "AP Mode Active", `localIP()` = `WiFi.softAPIP()`, `end()` = `WiFi.softAPdisconnect(true)`.
+      2. Riscrivi `AppNetworkManager`: `begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid, const String& password)` crea il link del piano (WIFI_STA → `WifiStaLink`, WIFI_AP → `WifiApLink` con SSID/password da `board.defaults`; ETHERNET/NONE → nessun link, log WARN "[NETWORK] No network link available on this board") e lo attiva con `NetLinkSelector`. Metodi: `loop()`, `isConnected()`, `isApMode()`, `statusText()` ("Disconnected" senza link), `typeName()` ("none" senza link), `localIP()`, `macAddress(uint8_t[6])`. Rimuovi `beginAP()`.
+      3. Aggiorna `test/test_network_manager/test_main.cpp` (gira solo su hardware, ignorato in nativo) alla nuova API, senza cambiare cosa verifica.
+
+      ## File Coinvolti
+      - src/network/wifi_links.h — nuovo
+      - src/network/wifi_links.cpp — nuovo
+      - include/network/network_manager.h — nuova API
+      - src/network/network_manager.cpp — selettore e creazione dei link
+      - test/test_network_manager/test_main.cpp — nuova API
+
+      ## Criteri di Completamento
+      - [ ] `WiFi.` compare solo in `wifi_links.cpp` (e nel captive DNS finché TASK-07 non lo sposta)
+      - [ ] Stessi messaggi `[NETWORK]` di oggi
+
+      **Blocchi:** se un comportamento attuale non si può riprodurre identico dietro l'interfaccia, fermati e segnalalo.
+    ref: TASK-05
+  - id: TASK-06
+    title: LED e porta USB dal profilo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessun pin del LED né valore della porta USB scritto nel codice che li usa.
+
+      **Leggi:** `lib/DiagnosticLED/src/DiagnosticLED.h/.cpp`; `lib/USBHostUPS/src/USBHostUPS.cpp` `begin()` righe ~50-66 (`usb_host_config_t`).
+
+      **Modifica:**
+      1. `DiagnosticLED`: rimuovi `#define LED_BUILTIN_PIN` e `NEOPIXEL_POWER_PIN`; `begin(int8_t pin, int8_t power_pin)`; costruttore con `_pixels(1, -1, NEO_GRB + NEO_KHZ800)` e `_pixels.setPin(pin)` in `begin()`; alimentazione accesa solo se `power_pin >= 0`; con `pin < 0` `begin`/`setState`/`update` non fanno nulla (flag `_enabled`). Aggiorna i commenti (oggi dicono "GPIO 47").
+      2. `USBHostUPS`: `void setPeripheralMap(uint32_t map)` e membro `_peripheral_map = 0`; in `begin()` `host_config.peripheral_map = _peripheral_map;` con un commento (ESP-IDF 5.5, 0 = periferica predefinita, il P4 ne ha due).
+      3. Aggiorna `test/test_diagnostic_led` (solo hardware) alla nuova firma se lo usa.
+
+      **Verifica:** build S3.
+
+      ## File Coinvolti
+      - lib/DiagnosticLED/src/DiagnosticLED.h
+      - lib/DiagnosticLED/src/DiagnosticLED.cpp
+      - lib/USBHostUPS/src/USBHostUPS.h
+      - lib/USBHostUPS/src/USBHostUPS.cpp
+      - test/test_diagnostic_led/test_diagnostic_led.cpp — se necessario
+
+      ## Criteri di Completamento
+      - [ ] Nessun numero di pin in `DiagnosticLED`
+      - [ ] `peripheral_map` passato dal chiamante, default 0
+      - [ ] Build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-06
+  - id: TASK-07
+    title: main.cpp e WebConfigServer sul profilo e sul servizio di rete; tipo di rete nelle API
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** cablare profilo, piano e servizio di rete; togliere `WiFi.*` dal web server; aggiungere il tipo di rete.
+
+      **Leggi:** `src/core/main.cpp` `setup()`; `src/network/web_config_server.cpp` (`begin`, `loop`, catch-all captive righe ~155-165, `handleGetConfig`, `handleSystemStatus`); `include/network/web_config_server.h`.
+
+      **Modifica:**
+      1. `main.cpp`: `#include "board/board.h"` e `NetBootPlan.h`; dopo `config_mgr.begin()` calcola `NetBootPlan plan = planNetwork({board().has_wifi, board().has_ethernet}, config_ok, manual_ap_triggered);`; `is_ap_mode = plan.link == BootLink::WIFI_AP`; `ap_timeout = ApIdleTimeout(plan.ap_idle_timeout)`; `network_mgr.begin(board(), plan, wifi.ssid, wifi.password)` (credenziali vuote in AP); stessi log `[MAIN]` di oggi nei due rami; `diagnostic_led.begin(board().led.pin, board().led.power_pin)`; `usb_ups.setPeripheralMap(board().usb.peripheral_map)` prima di `usb_ups.begin()`; `web_server.setNetwork(&network_mgr)`. Il conteggio delle stazioni (`WiFi.softAPgetStationNum()`) passa da un metodo `AppNetworkManager::apStationCount()` (implementato in `WifiApLink`).
+      2. `WebConfigServer`: `setNetwork(AppNetworkManager*)`; DNS del captive portal avviato con `network->localIP()` solo se `isAPMode`; redirect captive con `network->localIP()`; `handleSystemStatus`: `wifi.status` = `network->statusText()` (stessi testi), `device_id` con `network->macAddress()`, nuovo `doc["network"]["type"] = network->typeName();`. `handleGetConfig` invariato. Rimuovi `#include <WiFi.h>` se non serve più.
+      3. Controlla con `grep -rn "WiFi\." src include lib` che `WiFi.` resti solo negli adattatori (`wifi_links.cpp`) e in `handleConnect` se salva solo la config (verificare).
+
+      **Verifica:** build S3; `python scripts/embed_web.py` non serve (nessun file web toccato).
+
+      ## File Coinvolti
+      - src/core/main.cpp
+      - include/network/web_config_server.h
+      - src/network/web_config_server.cpp
+      - include/network/network_manager.h / src/network/network_manager.cpp — `apStationCount()`
+      - src/network/wifi_links.h/.cpp — `stationCount()`
+
+      ## Criteri di Completamento
+      - [ ] `/api/system/status` ha gli stessi campi di prima più `network.type` = "wifi"
+      - [ ] Nessun `WiFi.` in `main.cpp` e `web_config_server.cpp`
+      - [ ] Build S3 OK
+
+      **Blocchi:** se `handleConnect` o altre rotte usano `WiFi.` in modo non spostabile senza cambiare comportamento, segnalalo.
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Controllo dei #if, suite nativa ed e2e'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio dei `#if` e regressione automatica.
+
+      **Passi:**
+      1. `grep -rn -E "^\s*#\s*(if|ifdef|ifndef|elif)" src include lib --include=*.cpp --include=*.h` escludendo le include guard e `lib/usb_host_hid`: devono restare solo `UNIT_TEST`, `FIRMWARE_VERSION`, `CONFIG_ESP_COREDUMP_*` (crash_diag) e `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` (USBHostUPS); nessun `#if` di scheda o chip. Annota l'elenco nel riepilogo di completamento.
+      2. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`.
+      3. e2e completa (`npm run e2e` o il comando del progetto, vedi `e2e/README.md`); i mock di `/api/system/status` non richiedono `network`.
+      4. Build S3 da PowerShell.
+
+      ## File Coinvolti
+      - nessun file nuovo (eventuali correzioni ai file dei task precedenti)
+
+      ## Criteri di Completamento
+      - [ ] Solo i `#if` ammessi fuori da `src/board/`
+      - [ ] Suite nativa ed e2e verdi
+      - [ ] Build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Prove sull''ESP32-S3 con l''Eaton 3S: AP, doppio reset, timeout, STA, LED, API'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio di regressione su hardware (comportamento invariato).
+
+      **Passi** (scheda dell'utente su COM5, flash senza erase per conservare l'NVS; build con `FIRMWARE_VERSION` di test):
+      1. STA: avvio normale, connessione al Wi-Fi, LED verde con UPS collegato; `upsc` confrontato con `docs/plans/idf55-baseline/upsc-v1.8.0.txt` (solo la versione diversa).
+      2. `/api/system/status`: stessi campi e `device_id` di prima, più `network.type` "wifi".
+      3. Riconnessione: spegnere il router o cambiare la password per un minuto → log `[NETWORK]` e riconnessione come prima.
+      4. Doppio reset → AP "NUT_ESP32_Config", captive portal, LED AP; senza client per 10 minuti → riavvio in STA con il log del timeout.
+      5. Primo avvio con config cancellata (o NVS di prova) → AP senza timeout.
+      6. Annotare l'esito di ogni punto nel riepilogo di completamento. Le prove che l'utente non riesce a fare vanno segnalate, non saltate in silenzio.
+
+      ## File Coinvolti
+      - nessuno
+
+      ## Criteri di Completamento
+      - [ ] Punti 1-5 verificati o segnalati come non eseguiti
+
+      **Blocchi:** serve l'utente con la scheda collegata.
+    ref: TASK-09

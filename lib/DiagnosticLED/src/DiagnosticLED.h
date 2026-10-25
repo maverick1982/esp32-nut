@@ -4,10 +4,6 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-// Pin predefinito per il LED integrato della ESP32-S3-DevKitC-1
-#define LED_BUILTIN_PIN 48
-#define NEOPIXEL_POWER_PIN 38
-
 // Costanti per i periodi di lampeggio (millisecondi)
 static const unsigned long LED_BLINK_SLOW_MS = 1000;  // Lampeggio lento (CONNECTING)
 static const unsigned long LED_BLINK_FAST_MS = 125;   // Lampeggio veloce (ERROR)
@@ -31,8 +27,8 @@ class DiagnosticLED {
 public:
     DiagnosticLED();
 
-    // Inizializza il pin del LED; default = LED_BUILTIN_PIN (GPIO 47)
-    void begin(uint8_t pin = LED_BUILTIN_PIN);
+    // Pins from the board profile (US-090); a pin of -1 means no LED: every call is a no-op
+    void begin(int8_t pin, int8_t power_pin);
 
     // Imposta lo stato corrente del LED
     void setState(LedState state);
@@ -47,7 +43,8 @@ public:
     uint32_t getCurrentColor() const;
 
 private:
-    uint8_t _pin;
+    int8_t _pin;
+    bool _enabled;
     LedState _state;
     bool _ledOn;
     unsigned long _previousMillis;

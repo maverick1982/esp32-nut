@@ -9,6 +9,8 @@
 #include "esp_heap_caps.h"
 #include "RestartPolicy.h"
 #include "ApIdleTimeout.h"
+#include "board/board.h"
+#include "NetBootPlan.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -80,8 +82,8 @@ void setup() {
     CrashDiag::logBootInfo();
     restart_policy = RestartPolicy(CrashDiag::consecutiveRestarts());
 
-    // Inizializzazione del LED diagnostico
-    diagnostic_led.begin(LED_BUILTIN_PIN);
+    // Inizializzazione del LED diagnostico (pin dal profilo della scheda, US-090)
+    diagnostic_led.begin(board().led.pin, board().led.power_pin);
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -101,14 +103,17 @@ void setup() {
 
     // Inizializzazione di ConfigManager
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
-    
-    if (!config_ok || manual_ap_triggered) {
+    // Which link to start, from the board capabilities (US-090, ADR 0010 §3)
+    NetBootPlan net_plan = planNetwork({ board().has_wifi, board().has_ethernet }, config_ok, manual_ap_triggered);
+    web_server.setNetwork(&network_mgr);
+
+    if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
-        network_mgr.beginAP("NUT_ESP32_Config", "12345678");
+        network_mgr.begin(board(), net_plan, "", "");
         // Only the double reset with a valid config has a normal mode to go back to;
         // manual_ap is already cleared, so the restart boots in STA (PDR 0001 D7)
-        ap_timeout = ApIdleTimeout(manual_ap_triggered && config_ok);
+        ap_timeout = ApIdleTimeout(net_plan.ap_idle_timeout);
         ap_timeout.begin(millis());
         if (ap_timeout.isEnabled()) {
             AppLogger::log("INFO", "[MAIN] Manual AP: restart in STA mode after %u min without clients",
@@ -126,7 +131,7 @@ void setup() {
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
         // Inizializzazione di AppNetworkManager
-        network_mgr.begin(wifi.ssid, wifi.password);
+        network_mgr.begin(board(), net_plan, wifi.ssid, wifi.password);
         web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }
@@ -146,6 +151,7 @@ void setup() {
         delay(10);
     }
 
+    usb_ups.setPeripheralMap(board().usb.peripheral_map);
     if (!usb_ups.begin()) {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
     } else {
@@ -191,7 +197,7 @@ void loop() {
         static uint32_t stations = 0;
         if (now - last_station_check >= 1000) {
             last_station_check = now;
-            stations = WiFi.softAPgetStationNum();
+            stations = network_mgr.apStationCount();
         }
         if (stations != last_stations) {
             if (stations > 0) {

@@ -12,6 +12,7 @@
 #include "LoginThrottle.h"
 #include "SessionTable.h"
 #include "network/auth_platform.h"
+#include "network/network_manager.h"
 
 class WebConfigServer {
 public:
@@ -19,11 +20,14 @@ public:
     void begin(bool isAPMode);
     void loop();
     void setUPS(USBHostUPS* ups);
+    // Active network link: captive portal address, status text, MAC (US-090)
+    void setNetwork(AppNetworkManager* network);
 
 private:
     WebServer server;
     DNSServer dnsServer;
     ConfigManager& config_mgr;
+    AppNetworkManager* network = nullptr;
     bool is_ap_mode;
 
     // Autenticazione della Web UI (ADR 0009); l'ordine di dichiarazione è quello di costruzione
