@@ -3,46 +3,18 @@
 
 #include <Arduino.h>
 #include <vector>
+#include "IUpsSource.h"
 #include "UPSData.h"
 #include "HIDUsages.h"
 #include "HIDParser.h"
 #include "CommandCatalog.h"
 #include "NutTable.h"
 
-class IUSBHostUPS {
+// The USB HID host as the drivers see it, on top of the consumer-facing IUpsSource
+// (US-103). The driver-facing part moves to a transport interface with US-104.
+class IUSBHostUPS : public IUpsSource {
 public:
-    virtual ~IUSBHostUPS() = default;
-    virtual void end() {}
-    virtual void lock() const = 0;
-    virtual void unlock() const = 0;
-    
-    class UPSDataLock {
-    private:
-        const UPSData& _data;
-        const IUSBHostUPS* _host;
-    public:
-        UPSDataLock(const UPSData& data, const IUSBHostUPS* host) : _data(data), _host(host) {
-            if (_host) _host->lock();
-        }
-        ~UPSDataLock() {
-            if (_host) _host->unlock();
-        }
-        UPSDataLock(const UPSDataLock&) = delete;
-        UPSDataLock& operator=(const UPSDataLock&) = delete;
-        UPSDataLock(UPSDataLock&& other) noexcept : _data(other._data), _host(other._host) {
-            other._host = nullptr;
-        }
-        const UPSData* operator->() const { return &_data; }
-        const UPSData& get() const { return _data; }
-    };
-
-    virtual UPSDataLock getUPSData() const = 0;
-    virtual String getUPSStatusString() const = 0;
     virtual bool setBeeper(bool enable) = 0;
-    virtual bool isConnected() const = 0;
-    // True when the values can no longer be refreshed: control pipe not answering, or
-    // no device attached (after the boot grace). Consumers must not serve them as current.
-    virtual bool isDataStale() const { return false; }
     virtual bool supportsBeeperToggle() const { return true; }
     // False when the driver offers no load.* or shutdown.* command (US-058)
     virtual bool shutdownCommandsSupported() const { return true; }
@@ -56,15 +28,13 @@ public:
     virtual const HIDParser* getHIDParser() const = 0;
     virtual String getActiveBeeperPath() const = 0;
     // NUT instant commands the attached device supports, empty when no UPS is connected
-    virtual std::vector<const UPSCommandInfo*> getSupportedCommands() const {
+    std::vector<const UPSCommandInfo*> getSupportedCommands() const override {
         if (!isConnected()) return {};
         // Data lock released before build(), as the NUT server does around setBeeper()
         bool beeper = supportsBeeperToggle() && getUPSData()->hasKey("ups.beeper.status");
         return CommandCatalog::build(getUsages(), beeper, shutdownCommandsSupported(), beeperMuteSupported(),
                                      commandAllowList());
     }
-    // Variables a NUT client may write (LIST RW), sorted as upsd; empty without a UPS (US-066)
-    virtual std::vector<NutTable::RWVariable> getWritableVariables() const { return {}; }
     // Writes value into the FEATURE field of def (read-modify-write of its report)
     virtual bool writeUsage(const HIDUsageDef& def, uint32_t value) { return false; }
     /**
@@ -73,7 +43,7 @@ public:
      * while setBeeper() or writeUsage() talk to the device: lock order is _op_mutex,
      * then _mutex (ADR 0008).
      */
-    virtual CommandResult executeCommand(const char* name, const char* param = nullptr) {
+    CommandResult executeCommand(const char* name, const char* param = nullptr) override {
         if (!name) return CommandResult::NOT_SUPPORTED;
         if (!isConnected()) return CommandResult::NOT_CONNECTED;
         bool supported = false;
@@ -142,21 +112,6 @@ public:
         }
         return writeUsage(def, value) ? CommandResult::OK : CommandResult::FAILED;
     }
-    /**
-     * Runs a NUT SET VAR (US-067) with the plan of the driver (IUPSDriver::planSet): a HID
-     * write followed by a read back of the report, or a driver-side value saved first. Name
-     * and value are already checked by the NUT server. No lock is held while the device
-     * is written: lock order is _op_mutex, then _mutex (ADR 0008), as executeCommand().
-     */
-    virtual NutTable::SetStatus setVariable(const char* name, const char* value) { return NutTable::SetStatus::NOT_CONNECTED; }
-    /**
-     * Drops the saved value of a driver-side variable (US-068): ups.delay.* and outlet.*.desc
-     * go back to the default of the attached driver, now and at the next connection. Only the
-     * variables of getWritableVariables() with driver_side; UNKNOWN for the others. The store
-     * is written before anything changes and with no lock held: lock order is _op_mutex, then
-     * _mutex (ADR 0008), as setVariable().
-     */
-    virtual NutTable::SetStatus resetVariable(const char* name) { return NutTable::SetStatus::NOT_CONNECTED; }
     // Command shutdown.default ran with its last success, empty if none (US-058)
     const String& lastDefaultShutdown() const { return _last_default_shutdown; }
     virtual uint32_t getQuirks() const = 0;

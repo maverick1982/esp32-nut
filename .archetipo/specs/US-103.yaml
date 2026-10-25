@@ -6,7 +6,7 @@ epic:
   title: 'Architettura modulare: sorgente UPS e trasporto'
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |-
   #### US-103: Interfaccia IUpsSource per chi usa i dati dell'UPS
 
@@ -22,7 +22,7 @@ body: |-
   I test di `test_nut_server` e `test_web_api` girano con una sorgente finta che implementa solo `IUpsSource`, senza HID. Un `grep` mostra che `lib/NUTServer` e `lib/WebApi` non includono più `IUSBHostUPS.h`, `HIDParser.h`, `HIDUsages.h` e `NutTable.h`.
 
   **Criteri di Accettazione**
-  - [ ] `IUpsSource` offre ciò che serve a chi usa i dati: dati con il lock, stato, connessione, dati vecchi, comandi supportati ed esecuzione, variabili scrivibili, `SET VAR` e reset, beeper.
+  - [ ] `IUpsSource` offre ciò che serve a chi usa i dati: dati con il lock, stato, connessione, dati vecchi, comandi supportati ed esecuzione (beeper compreso, con i comandi `beeper.*`), variabili scrivibili, `SET VAR` e reset.
   - [ ] I tipi che l'interfaccia espone (comando, variabile scrivibile, esito) stanno in un header neutro, senza dipendenze HID.
   - [ ] `NUTServer`, `WebApiJson` e `WebConfigServer` (per dati e comandi) usano `IUpsSource`. L'export della diagnostica USB può restare legato a `USBHostUPS`.
   - [ ] `USBHostUPS` implementa `IUpsSource`, e l'interfaccia per i driver resta com'è (US-104).
@@ -36,3 +36,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-10-25T17:05:58Z"
+  - status: PLANNED
+    at: "2026-10-25T17:11:25Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T17:14:17Z"
+  - status: REVIEW
+    at: "2026-10-25T17:56:29Z"
+  - status: DONE
+    at: "2026-10-25T18:38:36Z"

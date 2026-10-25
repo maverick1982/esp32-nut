@@ -1,0 +1,244 @@
+schema: archetipo/plan/v2
+spec_code: US-103
+body: |
+  # US-103: Interfaccia IUpsSource per chi usa i dati dell'UPS — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Architettura modulare: sorgente UPS e trasporto
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come sviluppatore che mantiene server NUT e Web API, voglio che usino un'interfaccia della sorgente UPS senza tipi HID, in modo che una sorgente diversa dall'USB HID (per esempio un driver Q*) si possa collegare senza toccarli.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Oggi `IUSBHostUPS` (`lib/USBHostUPS/src/IUSBHostUPS.h`) include `HIDUsages.h`, `HIDParser.h`, `CommandCatalog.h` e `NutTable.h`, e `NUTServer`, `NutTracking`, `WebApiJson` e `WebConfigServer` lo usano (o usano `USBHostUPS`) per arrivare ai dati. Però di quell'interfaccia usano solo la parte "da consumatore": dati con il lock, stato, connessione, dati vecchi, comandi supportati ed esecuzione, variabili scrivibili, `SET VAR` e reset, più alcuni helper a livello di protocollo NUT che oggi stanno in header HID. Il piano separa quella parte senza cambiare comportamento: ADR 0010, passo 4, primo pezzo.
+
+  - **Due header neutri estratti, con gli stessi namespace.** `UpsCommands.h` riceve da `CommandCatalog.h` `UPSCommandInfo`, `CommandResult`, `CommandCatalog::table()` e `CommandCatalog::find()` (solo nomi e descrizioni dei comandi NUT, nessun usage HID). `UpsVariables.h` riceve da `NutTable.h` `equalsIgnoreCase`, `compareIgnoreCase`, `RWVariable`, `SetStatus`, `SetCheck`, `checkSetValue` e `describe` (tabella VARDESC di cmdvartab). I namespace `CommandCatalog` e `NutTable` restano gli stessi (riaperti nel nuovo header), quindi nessun chiamante cambia sintassi; `CommandCatalog.h` e `NutTable.h` includono i nuovi header e tutto il codice HID compila come prima. I due header non includono nulla di HID (`HIDUsages.h`, `HIDParser.h`, `NutTable.h`, `CommandCatalog.h`).
+  - **`IUpsSource.h` (nuovo, in `lib/USBHostUPS/src`).** Contiene `UPSDataLock` (spostato da `IUSBHostUPS`, ora costruito con `const IUpsSource*`) e i metodi usati dai consumatori: `end()`, `lock()`, `unlock()`, `getUPSData()`, `getUPSStatusString()`, `isConnected()`, `isDataStale()`, `isWaitingFirstData()`, `getSupportedCommands()`, `executeCommand()`, `getWritableVariables()`, `setVariable()`, `resetVariable()`. I default restano quelli di oggi (`isDataStale` false, `getWritableVariables` vuoto, `setVariable`/`resetVariable` `NOT_CONNECTED`, `end` vuoto); `isWaitingFirstData` è nuovo nell'interfaccia con default false. `getSupportedCommands()` ed `executeCommand()` sono virtuali puri in `IUpsSource`: le implementazioni HID di oggi restano in `IUSBHostUPS` come `override` e si spostano solo con US-105.
+  - **`IUSBHostUPS : public IUpsSource`.** Tiene la parte per i driver (usage, parser, report, quirks, `writeUsage`, `setBeeper`, `lastDefaultShutdown`, indici delle stringhe) invariata: la divisione di quella parte è US-104. `IUSBHostUPS::UPSDataLock` resta valido per ereditarietà, quindi driver, mock e test esistenti compilano senza modifiche. `USBHostUPS::isWaitingFirstData()` diventa `override`.
+  - **Consumatori.** `NUTServer::begin()` e il membro diventano `IUpsSource*`; `NUTServer.h` include `IUpsSource.h` e `NutTracking.h` include `UpsVariables.h` al posto di `NutTable.h`. Le funzioni di `WebApiJson` prendono `IUpsSource*`. `WebConfigServer` aggiunge `IUpsSource* ups_source`, impostato da `setUPS(USBHostUPS*)` insieme a `usb_ups`: dati, stato, comandi e `end()` passano da `ups_source`, mentre `usb_ups` resta solo per l'export della diagnostica USB (`snapshotUSBDiagnostics`), che è legata all'USB per natura. `web_config_server.cpp` include `UpsCommands.h` al posto di `CommandCatalog.h`. `main.cpp` non cambia: `&usb_ups` si converte implicitamente.
+  - **Nessun cambio nello strato USB:** `USBHostUPS.cpp`, i driver, i task e i lock (ADR 0008) non vengono toccati, tranne la parola `override`.
+  - **Nomi.** I namespace `NutTable`/`CommandCatalog` restano anche per gli helper neutri per non toccare decine di chiamate; un eventuale rinomina è fuori ambito.
+
+  ---
+
+  ## Strategia di Test
+
+  Refactoring senza comportamento nuovo: la prova è la regressione invariata più un controllo strutturale. Nessuna superficie UI nuova: niente demo video; gli e2e esistenti girano come regressione.
+
+  - **Regressione:** suite nativa completa (667 test), Playwright (110 test) e build `esp32-s3-standard`, senza cambiare asserzioni. I mock esistenti di `test_nut_server` e `test_web_api` derivano ancora da `IUSBHostUPS`: restano così, perché verificano anche la logica HID dei comandi, che si sposta con US-105.
+  - **Nuova suite `test/test_ups_source`:** (1) controllo strutturale a compilazione: include `NUTServer.h`, `WebApiJson.h` e `UpsCommands.h`/`UpsVariables.h` e fallisce con `#error` se risultano definite le guardie `HID_PARSER_H`, `HID_USAGES_H`, `NUT_TABLE_H`, `COMMAND_CATALOG_H` o `I_USB_HOST_UPS_H`; (2) una sorgente finta che implementa solo `IUpsSource` (nessun tipo HID) collegata a un `NUTServer` (`LIST VAR`, `GET VAR`, `LIST CMD`, `INSTCMD`, `LIST RW`, `SET VAR` via `processCommand`) e alle funzioni di `WebApiJson` (`generateUpsVars`, `generateUpsCommands`, `runUpsCommand`, `generateUpsVariables`).
+  - **Controllo `grep`:** `lib/NUTServer` e `lib/WebApi` non includono più `IUSBHostUPS.h`, `HIDParser.h`, `HIDUsages.h`, `NutTable.h`, `CommandCatalog.h`.
+tasks:
+  - id: TASK-01
+    title: Estrarre UpsCommands.h da CommandCatalog.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nomi e descrizioni dei comandi NUT in un header senza dipendenze HID.
+
+      **Leggi:** `lib/USBHostUPS/src/CommandCatalog.h` (intestazione di licenza, righe ~44-106: include, `UPSCommandInfo`, `CommandResult`, `CommandCatalog::table()`, `CommandCatalog::find()`).
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/UpsCommands.h` con guardia `UPS_COMMANDS_H`, intestazione SPDX GPL-3.0-or-later e la nota di derivazione da NUT (`data/cmdvartab`, descrizioni dei comandi), include solo `<stdint.h>`, `<stddef.h>`, `<string.h>`.
+      2. Sposta lì, senza cambiarli, `struct UPSCommandInfo`, `enum class CommandResult` e, dentro `namespace CommandCatalog { ... }`, `table(size_t&)` e `find(const char*)`.
+      3. In `CommandCatalog.h` togli le definizioni spostate e aggiungi `#include "UpsCommands.h"`; il resto del namespace (gruppi di usage, `build`, `resolveWrite`, passi di spegnimento) resta dov'è.
+      4. Commento di una riga in testa al nuovo header: parte del catalogo comandi senza HID, usata da server NUT e Web API (US-103).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UpsCommands.h — nuovo
+      - lib/USBHostUPS/src/CommandCatalog.h — include il nuovo header, definizioni spostate
+
+      ## Criteri di Completamento
+      - [ ] `UpsCommands.h` non include header HID né `UPSData.h`/`NutTable.h`
+      - [ ] Nessuna definizione duplicata
+      - [ ] Compila: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog -f test_nut_server`
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-01
+  - id: TASK-02
+    title: Estrarre UpsVariables.h da NutTable.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** gli helper NUT per le variabili scrivibili e le descrizioni in un header senza HID.
+
+      **Leggi:** `lib/USBHostUPS/src/NutTable.h`: `equalsIgnoreCase` e `compareIgnoreCase` (~righe 464-486), `RWVariable`, `SetStatus`, `SetCheck`, `checkSetValue` (~640-680), `describe` con la tabella `descs` (~956 fino alla fine del namespace). Controlla che nessuno di questi usi tipi HID.
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/UpsVariables.h` con guardia `UPS_VARIABLES_H`, intestazione SPDX GPL-3.0-or-later e nota di derivazione da NUT (`server/netset.c` per `checkSetValue`, `data/cmdvartab` per `describe`); include solo `<stdint.h>`, `<string.h>`, `<vector>`.
+      2. Sposta lì, senza cambiarli e nello stesso ordine, dentro `namespace NutTable { ... }`: `equalsIgnoreCase`, `compareIgnoreCase`, `RWVariable`, `SetStatus`, `SetCheck`, `checkSetValue`, `describe`. Mantieni i commenti originali.
+      3. In `NutTable.h` togli le definizioni spostate e aggiungi `#include "UpsVariables.h"` prima di `namespace NutTable`.
+      4. Se un helper spostato dipende da qualcosa rimasto in `NutTable.h`, fermati e segnalalo invece di spostare altro.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UpsVariables.h — nuovo
+      - lib/USBHostUPS/src/NutTable.h — include il nuovo header, definizioni spostate
+
+      ## Criteri di Completamento
+      - [ ] `UpsVariables.h` non include `HIDUsages.h`, `UPSData.h`, `NutTable.h`
+      - [ ] Compila: `pio test -e native -f test_rw_catalog -f test_nut_server -f test_generic_driver` (con il PATH del toolchain mingw come in TASK-01)
+
+      **Blocchi:** dipendenza imprevista da un tipo HID in uno degli helper.
+    ref: TASK-02
+  - id: TASK-03
+    title: Interfaccia IUpsSource e IUSBHostUPS che la estende
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** interfaccia della sorgente UPS per i consumatori, con `IUSBHostUPS` che la estende senza cambiare comportamento.
+
+      **Leggi:** `lib/USBHostUPS/src/IUSBHostUPS.h` (intero), `lib/USBHostUPS/src/USBHostUPS.h` (dichiarazioni `override`, `isWaitingFirstData` riga ~87).
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/IUpsSource.h` (guardia `I_UPS_SOURCE_H`), include `<Arduino.h>`, `<vector>`, `UPSData.h`, `UpsCommands.h`, `UpsVariables.h`. Commento di classe: sorgente dei dati UPS vista da server NUT e Web API, senza tipi HID (ADR 0010 passo 4, US-103).
+      2. `class IUpsSource` con: distruttore virtuale; `virtual void end() {}`; `lock()`/`unlock()` virtuali puri; la classe annidata `UPSDataLock` copiata da `IUSBHostUPS` con `const IUpsSource* _host`; `getUPSData()`, `getUPSStatusString()`, `isConnected()` virtuali puri; `isDataStale()` default false (con il commento di oggi); `virtual bool isWaitingFirstData() const { return false; }`; `getSupportedCommands()` ed `executeCommand(const char*, const char* = nullptr)` virtuali puri; `getWritableVariables()` default `{}`; `setVariable()`/`resetVariable()` default `NutTable::SetStatus::NOT_CONNECTED`, con i commenti di oggi.
+      3. In `IUSBHostUPS.h`: `#include "IUpsSource.h"`, `class IUSBHostUPS : public IUpsSource`; togli da lì `UPSDataLock` e le dichiarazioni ora in `IUpsSource` che non hanno corpo; aggiungi `override` a `getSupportedCommands()` ed `executeCommand()`, che tengono il corpo attuale. `lock`, `unlock`, `getUPSData`, `getUPSStatusString`, `isConnected`, `end`, `isDataStale`, `getWritableVariables`, `setVariable`, `resetVariable` restano dichiarati solo in `IUpsSource`. Il resto (usage, parser, beeper, report, quirks, indici stringhe, `lastDefaultShutdown`, `configuredDelay`) resta invariato.
+      4. In `USBHostUPS.h` aggiungi `override` a `isWaitingFirstData()`; nient'altro in `USBHostUPS.*`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUpsSource.h — nuovo
+      - lib/USBHostUPS/src/IUSBHostUPS.h — estende IUpsSource
+      - lib/USBHostUPS/src/USBHostUPS.h — `override` su isWaitingFirstData
+
+      ## Criteri di Completamento
+      - [ ] `IUpsSource.h` non include header HID, `CommandCatalog.h` o `NutTable.h`
+      - [ ] Tutti i mock esistenti (`MockUSBHost`, `APIMockUSBHost`, mock dei driver) compilano senza modifiche
+      - [ ] `pio test -e native` completo verde
+      - [ ] Build `esp32-s3-standard` OK (`& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` da PowerShell)
+
+      **Blocchi:** un mock o un driver che chiama `UPSDataLock` con un tipo diverso da `IUpsSource*`; correggere solo la firma, non la logica.
+    ref: TASK-03
+  - id: TASK-04
+    title: Server NUT su IUpsSource
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `NUTServer` e `NutTracking` non vedono più tipi HID.
+
+      **Leggi:** `lib/NUTServer/src/NUTServer.h` (include e `begin`, membro `_usb_ups`), `lib/NUTServer/src/NutTracking.h` (include), `lib/NUTServer/src/NUTServer.cpp` (definizione di `begin`, riga ~220).
+
+      **Modifica:**
+      1. `NUTServer.h`: `#include "IUpsSource.h"` al posto di `IUSBHostUPS.h`; `begin(const NUTServerConfig&, IUpsSource* ups, uint16_t port = NUT_DEFAULT_PORT)`; membro `IUpsSource* _usb_ups` (nome invariato per non toccare tutte le righe del .cpp).
+      2. `NUTServer.cpp`: firma di `begin` allineata; nessun altro cambio.
+      3. `NutTracking.h`: `#include "UpsVariables.h"` al posto di `NutTable.h`.
+      4. `src/core/main.cpp` non cambia (`&usb_ups` si converte); verifica che compili.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — IUpsSource
+      - lib/NUTServer/src/NUTServer.cpp — firma di begin
+      - lib/NUTServer/src/NutTracking.h — include neutro
+
+      ## Criteri di Completamento
+      - [ ] Nessun file di `lib/NUTServer` include `IUSBHostUPS.h`, `HIDParser.h`, `HIDUsages.h`, `NutTable.h`, `CommandCatalog.h`
+      - [ ] `pio test -e native -f test_nut_server` verde senza modifiche al test
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-04
+  - id: TASK-05
+    title: Web API e WebConfigServer su IUpsSource
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** Web API e server web usano `IUpsSource` per dati e comandi; `USBHostUPS` resta solo per la diagnostica USB.
+
+      **Leggi:** `lib/WebApi/src/WebApiJson.h` e `.cpp` (tutte le funzioni con `IUSBHostUPS*`, `IUSBHostUPS::UPSDataLock` alla riga ~234), `include/network/web_config_server.h` (`setUPS`, membro `usb_ups`), `src/network/web_config_server.cpp` (righe con `usb_ups->`, `setUPS` riga ~202, include di `CommandCatalog.h`).
+
+      **Modifica:**
+      1. `WebApiJson.h`: `#include "IUpsSource.h"` al posto di `IUSBHostUPS.h`; tutte le firme `IUSBHostUPS*` → `IUpsSource*` (anche le funzioni locali `sendValue`, `checkHost` nel .cpp); `IUSBHostUPS::UPSDataLock` → `IUpsSource::UPSDataLock`.
+      2. `web_config_server.h`: aggiungi `IUpsSource* ups_source = nullptr;` accanto a `usb_ups`, con commento: dati e comandi; `usb_ups` solo per la diagnostica USB.
+      3. `web_config_server.cpp`: `setUPS(USBHostUPS* ups)` imposta `usb_ups = ups; ups_source = ups;`; tutte le chiamate di dati, stato, comandi, variabili, `isWaitingFirstData()` ed `end()` e gli argomenti passati a `WebApiJson` usano `ups_source`; restano su `usb_ups` solo `snapshotUSBDiagnostics()` e i controlli di nullità che la proteggono. `#include "CommandCatalog.h"` → `#include "UpsCommands.h"`.
+      4. Nessun cambio di logica o di messaggi.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — IUpsSource
+      - lib/WebApi/src/WebApiJson.cpp — firme e UPSDataLock
+      - include/network/web_config_server.h — membro ups_source
+      - src/network/web_config_server.cpp — chiamate su ups_source, include neutro
+
+      ## Criteri di Completamento
+      - [ ] Nessun file di `lib/WebApi` include `IUSBHostUPS.h`, `HIDParser.h`, `HIDUsages.h`, `NutTable.h`, `CommandCatalog.h`
+      - [ ] In `web_config_server.cpp` `usb_ups->` compare solo per la diagnostica USB
+      - [ ] `pio test -e native -f test_web_api -f test_usb_diag_json` verde senza modifiche ai test
+      - [ ] Build `esp32-s3-standard` OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Suite test_ups_source: sorgente senza HID e controllo delle include'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che server NUT e Web API funzionano con una sorgente che implementa solo `IUpsSource`, e bloccare il ritorno dei tipi HID nei loro header.
+
+      **Leggi:** `test/test_nut_server/test_main.cpp` (MemoryPrinter, setup del server con config, `processCommand`, autenticazione con `setAuthenticated`/`setClientUsername`), `test/test_web_api/test_main.cpp` (uso di `WebApiJson`), `lib/USBHostUPS/src/IUpsSource.h`.
+
+      **Modifica:** crea `test/test_ups_source/test_main.cpp`:
+      1. In testa: `#include "NUTServer.h"`, `#include "WebApiJson.h"`, poi per ciascuna guardia `HID_PARSER_H`, `HID_USAGES_H`, `NUT_TABLE_H`, `COMMAND_CATALOG_H`, `I_USB_HOST_UPS_H`: `#ifdef ... #error "... included by the consumer headers (US-103)" #endif`.
+      2. `class FakeSource : public IUpsSource` con un `UPSData` interno (`ups.status`, `battery.charge`, `ups.beeper.status`), elenco comandi fisso preso da `CommandCatalog::find("beeper.enable")` e `find("shutdown.stop")`, `executeCommand` che registra il nome e ritorna `OK`, una variabile scrivibile `battery.charge.low` (aux 10) con `setVariable` che registra nome e valore.
+      3. Test NUT: `LIST VAR` e `GET VAR` mostrano i valori della sorgente; `LIST CMD` elenca i due comandi; `INSTCMD` (sessione autenticata) arriva a `executeCommand`; `LIST RW` e `SET VAR` arrivano a `setVariable`.
+      4. Test Web API: `generateUpsVars`, `generateUpsCommands`, `runUpsCommand` e `generateUpsVariables` con `FakeSource`.
+      5. Asserzioni sul formato esistente (come nei test vicini), senza nuove regole.
+
+      ## File Coinvolti
+      - test/test_ups_source/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] La suite compila solo con `IUpsSource` (nessun override di metodi HID in `FakeSource`)
+      - [ ] Togliendo per prova `IUpsSource.h` e rimettendo `IUSBHostUPS.h` in `NUTServer.h` la suite non compila (verifica manuale, poi ripristino)
+      - [ ] `pio test -e native -f test_ups_source` verde
+
+      **Blocchi:** se `NUTServer.h` richiede `WiFi.h` non disponibile in nativo, usa gli stessi mock di `test_nut_server`.
+    ref: TASK-06
+  - id: TASK-07
+    title: Regressione completa e controllo delle dipendenze
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il refactoring non cambia comportamento.
+
+      **Passi:**
+      1. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (attesi 667 test esistenti più quelli di `test_ups_source`).
+      2. `npx playwright test` (110 test).
+      3. Build `esp32-s3-standard` da PowerShell.
+      4. `grep -rnE '#include "(IUSBHostUPS|HIDParser|HIDUsages|NutTable|CommandCatalog)\.h"' lib/NUTServer lib/WebApi` senza risultati.
+      5. `git diff --stat` limitato ai file del piano; nessuna asserzione dei test esistenti modificata (`git diff test/` mostra solo la nuova suite).
+
+      ## File Coinvolti
+      - nessun file nuovo: solo verifica
+
+      ## Criteri di Completamento
+      - [ ] Nativi, e2e e build verdi
+      - [ ] grep senza risultati
+      - [ ] Nessun test esistente modificato
+
+      **Blocchi:** un test esistente che fallisce: va analizzato, non adattato.
+    ref: TASK-07

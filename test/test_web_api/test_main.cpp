@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 #include "WebApiJson.h"
+#include "IUSBHostUPS.h"
 
 // A simple mock for testing API JSON generation natively
 class APIMockUSBHost : public IUSBHostUPS {

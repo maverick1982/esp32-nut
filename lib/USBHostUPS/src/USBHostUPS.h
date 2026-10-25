@@ -84,7 +84,7 @@ public:
     // control pipe healthy: a controlled restart before it worked (RestartPolicy, issue #60)
     bool isControlPipeProven() const;
     // Claimed, first full poll still running: stale for NUT, but not a link problem
-    bool isWaitingFirstData() const { return _is_ready_to_poll && !_first_data_ready; }
+    bool isWaitingFirstData() const override { return _is_ready_to_poll && !_first_data_ready; }
     const char* getRestartReason() const { return _restart_reason; }
 
     // Free stack of the poll task in bytes (diagnostics)

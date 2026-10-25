@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <vector>
-#include "IUSBHostUPS.h"
+#include "IUpsSource.h"
 #include "NutTracking.h"
 
 #ifndef PIO_UNIT_TESTING
@@ -37,7 +37,7 @@ public:
     ~NUTServer();
 
     // Inizializza il server TCP e memorizza la configurazione e le dipendenze
-    bool begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint16_t port = NUT_DEFAULT_PORT);
+    bool begin(const NUTServerConfig& config, IUpsSource* usb_ups, uint16_t port = NUT_DEFAULT_PORT);
     
     // Esegue la gestione non bloccante delle connessioni e dei comandi
     void loop();
@@ -116,7 +116,7 @@ private:
     void log(const char* level, const char* fmt, ...) const;
 
     NUTServerConfig _config;
-    IUSBHostUPS* _usb_ups;
+    IUpsSource* _usb_ups;
     uint16_t _port;
     bool _initialized;
 

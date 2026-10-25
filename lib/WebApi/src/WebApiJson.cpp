@@ -2,7 +2,7 @@
 #include "NUTServer.h"
 #include <string.h>
 
-String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
+String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
     if (!usb_ups) {
         return "{\"error\": \"UPS non inizializzato\"}";
     }
@@ -58,7 +58,7 @@ String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     return String(out_std.c_str());
 }
 
-String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups) {
+String WebApiJson::generateUpsCommands(IUpsSource* usb_ups) {
     JsonDocument doc;
     bool connected = usb_ups && usb_ups->isConnected();
     doc["connected"] = connected;
@@ -78,7 +78,7 @@ String WebApiJson::generateUpsCommands(IUSBHostUPS* usb_ups) {
     return String(out_std.c_str());
 }
 
-int WebApiJson::runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response) {
+int WebApiJson::runUpsCommand(IUpsSource* usb_ups, const String& body, String& response) {
     // Serve solo "name": body lunghi rifiutati subito e filtro sul resto,
     // così un JSON grande non consuma heap
     if (body.length() > MAX_COMMAND_BODY_LENGTH) {
@@ -140,7 +140,7 @@ int sendError(String& response, int status, const String& message) {
 // {"success":true,"value":"..."}: il valore viene dall'UPS e va serializzato con escape
 // 200 con il valore in UPSData dopo la scrittura o il reset. UPS scollegato nel frattempo:
 // value null, il valore vale dalla connessione successiva
-int sendValue(String& response, IUSBHostUPS* usb_ups, const String& name) {
+int sendValue(String& response, IUpsSource* usb_ups, const String& name) {
     JsonDocument doc;
     doc["success"] = true;
     if (usb_ups->isConnected()) doc["value"] = usb_ups->getUPSData()->get(name).c_str();
@@ -192,7 +192,7 @@ bool isPrintableAscii(const char* s) {
 }
 
 // Host assente o scollegato, poi dati stale (DATA-STALE di upsd): 0 se l'host può scrivere
-int checkHost(IUSBHostUPS* usb_ups, String& response) {
+int checkHost(IUpsSource* usb_ups, String& response) {
     if (!usb_ups || !usb_ups->isConnected()) return sendError(response, 503, "UPS not connected");
     if (usb_ups->isDataStale()) return sendError(response, 503, "UPS data stale");
     return 0;
@@ -222,7 +222,7 @@ bool WebApiJson::needsConfirmation(const char* name) {
     return false;
 }
 
-String WebApiJson::generateUpsVariables(IUSBHostUPS* usb_ups) {
+String WebApiJson::generateUpsVariables(IUpsSource* usb_ups) {
     JsonDocument doc;
     bool connected = usb_ups && usb_ups->isConnected();
     doc["connected"] = connected;
@@ -231,7 +231,7 @@ String WebApiJson::generateUpsVariables(IUSBHostUPS* usb_ups) {
     if (connected) {
         // Catalogo letto prima del lock dei dati: getWritableVariables() prende i suoi lock
         std::vector<NutTable::RWVariable> rw = usb_ups->getWritableVariables();
-        IUSBHostUPS::UPSDataLock data = usb_ups->getUPSData();
+        IUpsSource::UPSDataLock data = usb_ups->getUPSData();
         for (const auto& v : rw) {
             JsonObject obj = variables.add<JsonObject>();
             obj["name"] = v.name;
@@ -252,7 +252,7 @@ String WebApiJson::generateUpsVariables(IUSBHostUPS* usb_ups) {
     return String(out_std.c_str());
 }
 
-int WebApiJson::runUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response, bool* host_called) {
+int WebApiJson::runUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called) {
     if (host_called) *host_called = false;
     // L'ordine dei controlli fa parte del contratto (piano US-068, sezione 3): forma del
     // body, host, validazione di SET VAR, scrittura
@@ -299,7 +299,7 @@ int WebApiJson::runUpsVariable(IUSBHostUPS* usb_ups, const String& body, String&
     }
 }
 
-int WebApiJson::resetUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response, bool* host_called) {
+int WebApiJson::resetUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called) {
     if (host_called) *host_called = false;
     JsonDocument req;
     const char* name;
