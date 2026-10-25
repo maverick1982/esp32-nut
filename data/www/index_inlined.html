@@ -2276,6 +2276,324 @@ body.auth-page {
 @media (max-width: 768px) {
     .cred-panel { padding: 1.25rem; }
 }
+
+/* =====================================================================
+   US-094: Board page (status LED, UPS USB port). Reuses .panel, .switch,
+   .cred-section, .auth-lead, .auth-alert, .auth-fineprint, .cmd-result, .cmd-spinner
+   ===================================================================== */
+/* --- Panel header: read-only board profile chip --- */
+.board-profile {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+.board-profile svg { width: 13px; height: 13px; opacity: 0.7; }
+.board-profile span { color: var(--text-primary); }
+
+.board-lead { margin-top: -0.75rem; }
+
+/* Content column: rows label | control would drift apart on wide screens */
+.board-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    max-width: 820px;
+}
+.board-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+.board-section[hidden] { display: none; }
+
+/* --- Setting row: label + hint on the left, control on the right --- */
+.board-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 21rem;
+    gap: 1.5rem;
+    align-items: center;
+    padding: 1rem 1.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.2);
+    transition: opacity 0.3s;
+}
+.board-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+.board-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.board-hint {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+.board-control { min-width: 0; }
+
+/* LED on/off: switch + state text, right aligned */
+.led-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+.led-state {
+    width: 2.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+}
+.led-state.on {
+    color: var(--success);
+    text-shadow: 0 0 8px rgba(0, 255, 157, 0.5);
+}
+
+/* Live preview of the board LED: glow follows the level (--glow 0..1), dark when off */
+.led-preview {
+    --glow: 0.5;
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 240, 255, 0.6);
+    background: rgba(0, 240, 255, calc(0.25 + var(--glow) * 0.75));
+    box-shadow:
+        0 0 calc(2px + var(--glow) * 10px) rgba(0, 240, 255, calc(0.2 + var(--glow) * 0.6)),
+        0 0 calc(var(--glow) * 22px) rgba(0, 240, 255, calc(var(--glow) * 0.45));
+    transition: background 0.35s, box-shadow 0.35s, border-color 0.35s;
+}
+.led-preview.off {
+    background: #1a2230;
+    border-color: var(--bg-panel-border);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* --- Brightness: 5-step segmented control with an ascending staircase --- */
+.level-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+.level-picker {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+}
+.level {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    height: 64px;
+    padding: 0.5rem 0 0.4rem;
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--bg-panel-border);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.level:first-child { border-left: none; }
+.level:hover:not(:disabled) { background: rgba(0, 240, 255, 0.06); color: var(--text-primary); }
+.level:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+
+/* Bar heights follow the doubling scale (3, 5, 10, 20, 40 / 255) on a perceptual axis */
+.level-bar {
+    width: 8px;
+    height: var(--h);
+    border-radius: 1px;
+    background: rgba(138, 155, 179, 0.22);
+    transition: background 0.3s, box-shadow 0.3s;
+}
+.level:nth-child(1) .level-bar { --h: 6px; }
+.level:nth-child(2) .level-bar { --h: 12px; }
+.level:nth-child(3) .level-bar { --h: 19px; }
+.level:nth-child(4) .level-bar { --h: 26px; }
+.level:nth-child(5) .level-bar { --h: 33px; }
+
+/* Levels up to the selected one are lit */
+.level.lit .level-bar { background: rgba(0, 240, 255, 0.55); }
+.level.lit { color: var(--text-primary); }
+.level[aria-checked="true"] {
+    color: var(--accent);
+    background: rgba(0, 240, 255, 0.1);
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
+.level[aria-checked="true"] .level-bar {
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+.level .cmd-spinner { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; }
+
+.level-scale {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    color: rgba(138, 155, 179, 0.7);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.level-readout {
+    color: var(--text-primary);
+    text-transform: none;
+    letter-spacing: 0.5px;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* LED off: brightness kept (shown) but not editable */
+.board-row.is-disabled { opacity: 0.45; }
+.board-row.is-disabled .level { cursor: not-allowed; }
+.board-row.is-disabled .level[aria-checked="true"] { box-shadow: inset 0 -2px 0 var(--text-secondary); color: var(--text-secondary); background: transparent; }
+.board-row.is-disabled .level .level-bar,
+.board-row.is-disabled .level[aria-checked="true"] .level-bar { background: rgba(138, 155, 179, 0.3); box-shadow: none; }
+
+/* Outcome line under the LED rows (reuses .cmd-result colours and fade) */
+.board-outcome { margin-top: -0.3rem; }
+.board-outcome:has(.cmd-result:empty) { display: none; }
+.board-outcome .cmd-result { min-width: 0; justify-content: flex-start; white-space: normal; }
+.board-outcome .cmd-result .arrow { color: var(--text-secondary); }
+.level-picker.invalid { border-color: var(--danger); box-shadow: 0 0 8px rgba(255, 51, 102, 0.25); }
+
+/* --- USB port: radio cards --- */
+.board-usb-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+.port-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+.port-options.invalid .port-card:has(input:checked) { border-color: var(--danger); box-shadow: 0 0 8px rgba(255, 51, 102, 0.25); }
+.port-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.port-card:hover { border-color: rgba(0, 240, 255, 0.45); }
+.port-card input { position: absolute; opacity: 0; pointer-events: none; }
+.port-radio {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    border: 1px solid var(--text-secondary);
+    border-radius: 50%;
+    transition: var(--transition);
+}
+.port-card:has(input:checked) {
+    border-color: var(--accent);
+    background: rgba(0, 240, 255, 0.07);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.12);
+}
+.port-card:has(input:checked) .port-radio {
+    border-color: var(--accent);
+    background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+.port-card:has(input:focus-visible) { outline: 1px solid var(--accent); outline-offset: 2px; }
+.port-card:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
+.port-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+}
+.port-title {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.port-meta {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+/* "In use": the port saved on the device (the selection may differ before saving) */
+.port-current {
+    margin-left: auto;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid rgba(0, 255, 157, 0.4);
+    border-radius: 2px;
+    color: var(--success);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+.port-current[hidden] { display: none; }
+
+.board-usb-form .btn-primary .spinner,
+.board-usb-form .btn-primary .cmd-spinner {
+    border-color: rgba(0, 0, 0, 0.25);
+    border-top-color: #000;
+}
+.board-section .auth-fineprint { margin-top: 0.25rem; }
+.board-panel > #board-error { margin-bottom: 1.25rem; }
+
+
+/* Board page: responsive */
+@media (max-width: 1000px) {
+    .board-row { grid-template-columns: minmax(0, 1fr) 18rem; }
+}
+
+@media (max-width: 768px) {
+    .board-panel { padding: 1.1rem; }
+    .board-panel .panel-header { flex-wrap: wrap; gap: 0.5rem; }
+    .board-lead { font-size: 0.8rem; margin-bottom: 1.25rem; }
+    .board-body { gap: 1.6rem; }
+
+    /* LED switch row stays on one line; brightness stacks under its label */
+    .board-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; padding: 0.9rem; }
+    #row-brightness { grid-template-columns: minmax(0, 1fr); }
+    .board-hint { font-size: 0.76rem; }
+    .level { height: 58px; }
+
+    .port-options { grid-template-columns: 1fr; }
+    .board-usb-form .form-actions .btn-primary { width: 100%; justify-content: center; }
+}
 </style>
 </head>
 
@@ -2332,6 +2650,15 @@ body.auth-page {
                         <path d="M8 21h8M12 17v4" />
                     </svg>
                     NUT Server
+                </button>
+                <!-- US-094: board hardware options (status LED, UPS USB port) -->
+                <button class="tab" data-target="board">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
                 </button>
                 <!-- US-063: Web UI credentials (change in STA, reset in AP) -->
                 <button class="tab" data-target="weblogin">
@@ -2478,6 +2805,144 @@ body.auth-page {
                             </button>
                         </div>
                     </form>
+                </div>
+            </div>
+
+            <!-- US-094: Board tab. Sections rendered from GET /api/board (profile capabilities + saved values) -->
+            <div class="tab-content" id="content-board">
+                <div class="panel config-panel board-panel">
+                    <div class="panel-header">
+                        <h2>Hardware options</h2>
+                        <!-- Read-only: board profile compiled into the firmware -->
+                        <span class="board-profile" id="board-profile" title="Board profile">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="4" y="4" width="16" height="16" rx="2" />
+                                <rect x="9" y="9" width="6" height="6" />
+                                <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                            </svg>
+                            Board: <span id="board-name">--</span>
+                        </span>
+                    </div>
+
+                    <p class="auth-lead board-lead">Hardware options of this board. They are saved on the device
+                        and kept after a restart.</p>
+
+                    <!-- GET /api/board failed -->
+                    <div class="auth-alert" id="board-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span id="board-error-text"></span>
+                    </div>
+
+                    <div class="board-body">
+
+                        <!-- Status LED (only if the profile has a LED) -->
+                        <section class="board-section" id="led-section" hidden>
+                            <div class="cred-section">Status LED</div>
+
+                            <div class="board-row">
+                                <div class="board-label">
+                                    <span class="board-name">
+                                        <span class="led-preview" id="led-preview" aria-hidden="true"></span>
+                                        LED
+                                    </span>
+                                    <span class="board-hint">When off, the LED stays dark in every state, also after a
+                                        restart.</span>
+                                </div>
+                                <div class="board-control led-toggle">
+                                    <label class="switch">
+                                        <input type="checkbox" id="led-on" aria-label="Status LED on">
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span class="led-state" id="led-state">Off</span>
+                                </div>
+                            </div>
+
+                            <div class="board-row" id="row-brightness">
+                                <div class="board-label">
+                                    <span class="board-name">Brightness</span>
+                                    <span class="board-hint">Applied immediately, no restart.</span>
+                                </div>
+                                <div class="board-control level-control">
+                                    <div class="level-picker" id="level-picker" role="radiogroup"
+                                        aria-label="LED brightness level">
+                                        <button type="button" class="level" role="radio" data-level="1" aria-checked="false"><span class="level-bar"></span><span class="level-num">1</span></button>
+                                        <button type="button" class="level" role="radio" data-level="2" aria-checked="false"><span class="level-bar"></span><span class="level-num">2</span></button>
+                                        <button type="button" class="level" role="radio" data-level="3" aria-checked="false"><span class="level-bar"></span><span class="level-num">3</span></button>
+                                        <button type="button" class="level" role="radio" data-level="4" aria-checked="false"><span class="level-bar"></span><span class="level-num">4</span></button>
+                                        <button type="button" class="level" role="radio" data-level="5" aria-checked="false"><span class="level-bar"></span><span class="level-num">5</span></button>
+                                    </div>
+                                    <div class="level-scale">
+                                        <span>Min</span>
+                                        <span class="level-readout" id="level-readout"></span>
+                                        <span>Max</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Outcome of the last LED change (applied immediately) -->
+                            <div class="board-outcome">
+                                <span class="cmd-result" id="led-result" aria-live="polite"></span>
+                            </div>
+                            <div class="auth-alert" id="led-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="led-error-text"></span>
+                            </div>
+                        </section>
+
+                        <!-- UPS USB port (only if the profile has 2+ USB host ports) -->
+                        <section class="board-section" id="usb-section" hidden>
+                            <div class="cred-section">UPS USB port</div>
+
+                            <form id="usb-form" class="board-usb-form" novalidate>
+                                <div class="auth-alert info" id="usb-note" role="note">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 16v-4M12 8h.01" />
+                                    </svg>
+                                    <span>Changing the port restarts the board. Plug the UPS cable into the selected
+                                        port.</span>
+                                </div>
+
+                                <!-- One .port-card per port of the profile, built by bundle.js -->
+                                <div class="port-options" id="usb-port" role="radiogroup"
+                                    aria-label="USB port of the UPS"></div>
+
+                                <div class="auth-alert" id="usb-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="usb-error-text"></span>
+                                </div>
+
+                                <div class="auth-alert success" id="board-success" role="status" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                        <polyline points="22 4 12 14.01 9 11.01" />
+                                    </svg>
+                                    <span>Saved. The board is restarting, this page reloads in
+                                        <span class="countdown" id="usb-countdown">15</span> s.</span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-usb" disabled>
+                                        <span class="glow"></span>
+                                        <span class="btn-label">Save &amp; restart</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            <p class="auth-fineprint">A wrong port does not lock you out: the Web UI stays
+                                reachable, the UPS is just not seen until you pick the right port here.</p>
+                        </section>
+
+                    </div>
                 </div>
             </div>
 
@@ -4579,6 +5044,343 @@ document.addEventListener('DOMContentLoaded', () => {
                 paintCredRules(false);
             }
         });
+    }
+
+    // US-094: Board page. GET /api/board when the tab opens (no polling). The status
+    // LED (switch and 5 brightness levels) is applied immediately with POST /api/board;
+    // the UPS USB port is saved with "Save & restart" and the board restarts.
+    const boardContent = document.getElementById('content-board');
+    if (boardContent) {
+        const B = (id) => document.getElementById(id);
+        const BOARD_RESULT_MS = 4000;
+        const BOARD_RESTART_S = 15;
+        const BOARD_ERRORS = { 400: 'Invalid request', 500: 'Failed to save settings' };
+        const BOARD_SPINNER = '<span class="cmd-spinner"></span>';
+        const levelPicker = B('level-picker');
+        const levelBtns = Array.from(levelPicker.querySelectorAll('.level'));
+        const ledSwitch = B('led-on');
+        const ledResult = B('led-result');
+        const btnSaveUsb = B('btn-save-usb');
+        const usbPortBox = B('usb-port');
+
+        let board = null;           // last GET /api/board, with the values saved since
+        let ledBusy = false;
+        let boardRestarting = false;
+        let boardLoadSeq = 0;
+        let ledResultTimers = [];
+
+        function boardLevel(led) {
+            const max = Number.isInteger(led.levels) && led.levels > 0 ? led.levels : levelBtns.length;
+            const n = Number(led.level);
+            return Number.isInteger(n) ? Math.min(max, Math.max(1, n)) : 1;
+        }
+
+        async function postBoard(payload) {
+            try {
+                const res = await apiFetch('/api/board', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                let json = null;
+                try { json = await res.json(); } catch (e) { json = null; }
+                if (res.status === 200 && (!json || json.success !== false)) {
+                    return { ok: true, restart: !!(json && json.restart === true) };
+                }
+                const error = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+                return { ok: false, message: error || BOARD_ERRORS[res.status] || `Failed (HTTP ${res.status})` };
+            } catch (err) {
+                console.error('Board settings error:', err);
+                return { ok: false, message: 'Network error' };
+            }
+        }
+
+        // ---------- Status LED: applied immediately ----------
+        function setLedBusy(busy) {
+            ledBusy = busy;
+            ledSwitch.disabled = busy;
+            const on = board && board.led && board.led.on === true;
+            levelBtns.forEach(b => { b.disabled = busy || !on; });
+        }
+
+        function renderLed() {
+            const led = board.led;
+            const on = led.on === true;
+            const level = boardLevel(led);
+            ledSwitch.checked = on;
+            B('led-state').textContent = on ? 'On' : 'Off';
+            B('led-state').classList.toggle('on', on);
+            B('row-brightness').classList.toggle('is-disabled', !on);
+            levelBtns.forEach(b => {
+                const n = Number(b.dataset.level);
+                b.setAttribute('aria-checked', String(n === level));
+                b.classList.toggle('lit', n <= level);
+            });
+            setLedBusy(ledBusy);
+            // Only the level number, never the 0-255 PWM value
+            B('level-readout').textContent = on ? `Level ${level}` : `LED off · level ${level} kept`;
+            const preview = B('led-preview');
+            preview.classList.toggle('off', !on);
+            preview.style.setProperty('--glow', (0.2 + (level - 1) * 0.2).toFixed(2));
+        }
+
+        function clearLedResult() {
+            ledResultTimers.forEach(t => clearTimeout(t));
+            ledResultTimers = [];
+            ledResult.className = 'cmd-result';
+            ledResult.textContent = '';
+        }
+
+        // "✓ Applied level 3 → 5": old value dimmed, fades like the command results
+        function showLedResult(text, from, to) {
+            clearLedResult();
+            ledResult.className = 'cmd-result success';
+            ledResult.textContent = `✓ ${text}`;
+            if (from !== undefined) {
+                const arrow = document.createElement('span');
+                arrow.className = 'arrow';
+                arrow.textContent = ` level ${from} →`;
+                ledResult.append(arrow, document.createTextNode(` ${to}`));
+            }
+            ledResultTimers.push(setTimeout(() => ledResult.classList.add('fade'), BOARD_RESULT_MS));
+            ledResultTimers.push(setTimeout(clearLedResult, BOARD_RESULT_MS + 600));
+        }
+
+        function clearLedError() {
+            B('led-error').hidden = true;
+            levelPicker.classList.remove('invalid');
+        }
+
+        function showLedError(text) {
+            clearLedResult();
+            B('led-error-text').textContent = text;
+            B('led-error').hidden = false;
+            levelPicker.classList.add('invalid');
+        }
+
+        ledSwitch.addEventListener('change', async () => {
+            if (!board || !board.led || ledBusy) return;
+            const on = ledSwitch.checked;
+            const prev = board.led.on === true;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            const r = await postBoard({ led_on: on });
+            ledBusy = false;
+            // On error the switch goes back to the saved value
+            if (r.ok) board.led.on = on;
+            else board.led.on = prev;
+            renderLed();
+            if (r.ok) showLedResult(on ? 'LED on · saved' : 'LED off · saved, stays dark in every state');
+            else showLedError(r.message);
+        });
+
+        levelPicker.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.level');
+            if (!btn || btn.disabled || ledBusy || !board || !board.led || board.led.on !== true) return;
+            const level = Number(btn.dataset.level);
+            const from = boardLevel(board.led);
+            if (level === from) return;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            btn.insertAdjacentHTML('beforeend', BOARD_SPINNER);
+            const r = await postBoard({ led_level: level });
+            const spin = btn.querySelector('.cmd-spinner');
+            if (spin) spin.remove();
+            ledBusy = false;
+            // On error the previous level stays selected
+            if (r.ok) board.led.level = level;
+            renderLed();
+            if (r.ok) showLedResult('Applied', from, level);
+            else showLedError(r.message);
+        });
+
+        // Arrow keys move along the radiogroup
+        levelPicker.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+            if (!board || !board.led || board.led.on !== true || ledBusy) return;
+            e.preventDefault();
+            const cur = boardLevel(board.led);
+            const next = Math.min(levelBtns.length, Math.max(1, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+            const b = levelBtns[next - 1];
+            b.focus();
+            b.click();
+        });
+
+        // ---------- UPS USB port: saved, then the board restarts ----------
+        function setUsbButton(label, spinner) {
+            btnSaveUsb.innerHTML = '<span class="glow"></span>' + (spinner ? BOARD_SPINNER : '');
+            const span = document.createElement('span');
+            span.className = 'btn-label';
+            span.textContent = label;
+            btnSaveUsb.appendChild(span);
+        }
+
+        function usbRadios() {
+            return Array.from(usbPortBox.querySelectorAll('input[name="usb-port"]'));
+        }
+
+        function selectedPort() {
+            const r = usbRadios().find(i => i.checked);
+            return r ? r.value : null;
+        }
+
+        function clearUsbError() {
+            B('usb-error').hidden = true;
+            usbPortBox.classList.remove('invalid');
+        }
+
+        function showUsbError(text) {
+            B('usb-error-text').textContent = text;
+            B('usb-error').hidden = false;
+            usbPortBox.classList.add('invalid');
+        }
+
+        function refreshUsbButton() {
+            const port = selectedPort();
+            btnSaveUsb.disabled = boardRestarting || !port || port === board.usb.port;
+        }
+
+        function renderUsb(ports) {
+            usbPortBox.textContent = '';
+            ports.forEach(p => {
+                const card = document.createElement('label');
+                card.className = 'port-card';
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = 'usb-port';
+                input.value = p.id;
+                input.checked = p.id === board.usb.port;
+                const radio = document.createElement('span');
+                radio.className = 'port-radio';
+                radio.setAttribute('aria-hidden', 'true');
+                const body = document.createElement('span');
+                body.className = 'port-body';
+                const title = document.createElement('span');
+                title.className = 'port-title';
+                title.textContent = typeof p.label === 'string' && p.label !== '' ? p.label : p.id;
+                body.appendChild(title);
+                // "In use": the port saved on the device (the selection may differ before saving)
+                const current = document.createElement('span');
+                current.className = 'port-current';
+                current.textContent = 'In use';
+                current.hidden = p.id !== board.usb.port;
+                card.append(input, radio, body, current);
+                usbPortBox.appendChild(card);
+            });
+            clearUsbError();
+            B('board-success').hidden = true;
+            setUsbButton('Save & restart');
+            refreshUsbButton();
+        }
+
+        usbPortBox.addEventListener('change', () => {
+            clearUsbError();
+            refreshUsbButton();
+        });
+
+        function startBoardRestart() {
+            boardRestarting = true;
+            usbRadios().forEach(r => { r.disabled = true; });
+            btnSaveUsb.disabled = true;
+            setUsbButton('Restarting…', true);
+            B('board-success').hidden = false;
+            const indUps = B('ind-ups');
+            const lblUps = B('lbl-ups');
+            if (indUps) indUps.className = 'status-indicator warning';
+            if (lblUps) lblUps.textContent = 'Restarting...';
+            let left = BOARD_RESTART_S;
+            B('usb-countdown').textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                B('usb-countdown').textContent = Math.max(0, left);
+                if (left <= 0) {
+                    clearInterval(timer);
+                    window.location.reload();
+                }
+            }, 1000);
+        }
+
+        B('usb-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const port = selectedPort();
+            if (btnSaveUsb.disabled || boardRestarting || !board || !port || port === board.usb.port) return;
+            clearUsbError();
+            btnSaveUsb.disabled = true;
+            usbRadios().forEach(r => { r.disabled = true; });
+            setUsbButton('Saving…', true);
+            const r = await postBoard({ usb_port: port });
+            if (!r.ok) {
+                usbRadios().forEach(i => { i.disabled = false; });
+                setUsbButton('Save & restart');
+                showUsbError(r.message);
+                refreshUsbButton();
+                return;
+            }
+            board.usb.port = port;
+            if (r.restart) {
+                usbPortBox.querySelectorAll('.port-current').forEach(t => {
+                    t.hidden = t.parentElement.querySelector('input').value !== port;
+                });
+                startBoardRestart();
+            } else {
+                renderUsb(board.usb.ports);
+            }
+        });
+
+        // ---------- Load ----------
+        function renderBoard() {
+            const id = typeof board.id === 'string' ? board.id : '';
+            const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
+            B('board-name').textContent = label;
+            B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
+            B('led-section').hidden = !hasLed;
+            if (hasLed) {
+                clearLedError();
+                renderLed();
+            }
+
+            const ports = board.usb && Array.isArray(board.usb.ports)
+                ? board.usb.ports.filter(p => p && typeof p.id === 'string' && p.id !== '')
+                : [];
+            const hasUsb = ports.length > 1;
+            B('usb-section').hidden = !hasUsb;
+            if (hasUsb) renderUsb(ports);
+        }
+
+        async function loadBoard() {
+            if (sessionExpired || boardRestarting) return;
+            const seq = ++boardLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/board', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch board settings:', err);
+            }
+            // A newer request started meanwhile, or the board is restarting
+            if (seq !== boardLoadSeq || boardRestarting) return;
+            if (!data || typeof data !== 'object') {
+                B('board-error-text').textContent = 'Could not read the board settings. Open the tab again to retry.';
+                B('board-error').hidden = false;
+                return;
+            }
+            B('board-error').hidden = true;
+            board = data;
+            renderBoard();
+        }
+
+        // One read per opening, no periodic requests
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'board') loadBoard();
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
     }
 
     // US-061 Log out (this session) and US-062 Log out of all devices: same

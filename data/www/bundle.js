@@ -1774,6 +1774,343 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // US-094: Board page. GET /api/board when the tab opens (no polling). The status
+    // LED (switch and 5 brightness levels) is applied immediately with POST /api/board;
+    // the UPS USB port is saved with "Save & restart" and the board restarts.
+    const boardContent = document.getElementById('content-board');
+    if (boardContent) {
+        const B = (id) => document.getElementById(id);
+        const BOARD_RESULT_MS = 4000;
+        const BOARD_RESTART_S = 15;
+        const BOARD_ERRORS = { 400: 'Invalid request', 500: 'Failed to save settings' };
+        const BOARD_SPINNER = '<span class="cmd-spinner"></span>';
+        const levelPicker = B('level-picker');
+        const levelBtns = Array.from(levelPicker.querySelectorAll('.level'));
+        const ledSwitch = B('led-on');
+        const ledResult = B('led-result');
+        const btnSaveUsb = B('btn-save-usb');
+        const usbPortBox = B('usb-port');
+
+        let board = null;           // last GET /api/board, with the values saved since
+        let ledBusy = false;
+        let boardRestarting = false;
+        let boardLoadSeq = 0;
+        let ledResultTimers = [];
+
+        function boardLevel(led) {
+            const max = Number.isInteger(led.levels) && led.levels > 0 ? led.levels : levelBtns.length;
+            const n = Number(led.level);
+            return Number.isInteger(n) ? Math.min(max, Math.max(1, n)) : 1;
+        }
+
+        async function postBoard(payload) {
+            try {
+                const res = await apiFetch('/api/board', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                let json = null;
+                try { json = await res.json(); } catch (e) { json = null; }
+                if (res.status === 200 && (!json || json.success !== false)) {
+                    return { ok: true, restart: !!(json && json.restart === true) };
+                }
+                const error = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+                return { ok: false, message: error || BOARD_ERRORS[res.status] || `Failed (HTTP ${res.status})` };
+            } catch (err) {
+                console.error('Board settings error:', err);
+                return { ok: false, message: 'Network error' };
+            }
+        }
+
+        // ---------- Status LED: applied immediately ----------
+        function setLedBusy(busy) {
+            ledBusy = busy;
+            ledSwitch.disabled = busy;
+            const on = board && board.led && board.led.on === true;
+            levelBtns.forEach(b => { b.disabled = busy || !on; });
+        }
+
+        function renderLed() {
+            const led = board.led;
+            const on = led.on === true;
+            const level = boardLevel(led);
+            ledSwitch.checked = on;
+            B('led-state').textContent = on ? 'On' : 'Off';
+            B('led-state').classList.toggle('on', on);
+            B('row-brightness').classList.toggle('is-disabled', !on);
+            levelBtns.forEach(b => {
+                const n = Number(b.dataset.level);
+                b.setAttribute('aria-checked', String(n === level));
+                b.classList.toggle('lit', n <= level);
+            });
+            setLedBusy(ledBusy);
+            // Only the level number, never the 0-255 PWM value
+            B('level-readout').textContent = on ? `Level ${level}` : `LED off · level ${level} kept`;
+            const preview = B('led-preview');
+            preview.classList.toggle('off', !on);
+            preview.style.setProperty('--glow', (0.2 + (level - 1) * 0.2).toFixed(2));
+        }
+
+        function clearLedResult() {
+            ledResultTimers.forEach(t => clearTimeout(t));
+            ledResultTimers = [];
+            ledResult.className = 'cmd-result';
+            ledResult.textContent = '';
+        }
+
+        // "✓ Applied level 3 → 5": old value dimmed, fades like the command results
+        function showLedResult(text, from, to) {
+            clearLedResult();
+            ledResult.className = 'cmd-result success';
+            ledResult.textContent = `✓ ${text}`;
+            if (from !== undefined) {
+                const arrow = document.createElement('span');
+                arrow.className = 'arrow';
+                arrow.textContent = ` level ${from} →`;
+                ledResult.append(arrow, document.createTextNode(` ${to}`));
+            }
+            ledResultTimers.push(setTimeout(() => ledResult.classList.add('fade'), BOARD_RESULT_MS));
+            ledResultTimers.push(setTimeout(clearLedResult, BOARD_RESULT_MS + 600));
+        }
+
+        function clearLedError() {
+            B('led-error').hidden = true;
+            levelPicker.classList.remove('invalid');
+        }
+
+        function showLedError(text) {
+            clearLedResult();
+            B('led-error-text').textContent = text;
+            B('led-error').hidden = false;
+            levelPicker.classList.add('invalid');
+        }
+
+        ledSwitch.addEventListener('change', async () => {
+            if (!board || !board.led || ledBusy) return;
+            const on = ledSwitch.checked;
+            const prev = board.led.on === true;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            const r = await postBoard({ led_on: on });
+            ledBusy = false;
+            // On error the switch goes back to the saved value
+            if (r.ok) board.led.on = on;
+            else board.led.on = prev;
+            renderLed();
+            if (r.ok) showLedResult(on ? 'LED on · saved' : 'LED off · saved, stays dark in every state');
+            else showLedError(r.message);
+        });
+
+        levelPicker.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.level');
+            if (!btn || btn.disabled || ledBusy || !board || !board.led || board.led.on !== true) return;
+            const level = Number(btn.dataset.level);
+            const from = boardLevel(board.led);
+            if (level === from) return;
+            clearLedError();
+            clearLedResult();
+            setLedBusy(true);
+            btn.insertAdjacentHTML('beforeend', BOARD_SPINNER);
+            const r = await postBoard({ led_level: level });
+            const spin = btn.querySelector('.cmd-spinner');
+            if (spin) spin.remove();
+            ledBusy = false;
+            // On error the previous level stays selected
+            if (r.ok) board.led.level = level;
+            renderLed();
+            if (r.ok) showLedResult('Applied', from, level);
+            else showLedError(r.message);
+        });
+
+        // Arrow keys move along the radiogroup
+        levelPicker.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+            if (!board || !board.led || board.led.on !== true || ledBusy) return;
+            e.preventDefault();
+            const cur = boardLevel(board.led);
+            const next = Math.min(levelBtns.length, Math.max(1, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+            const b = levelBtns[next - 1];
+            b.focus();
+            b.click();
+        });
+
+        // ---------- UPS USB port: saved, then the board restarts ----------
+        function setUsbButton(label, spinner) {
+            btnSaveUsb.innerHTML = '<span class="glow"></span>' + (spinner ? BOARD_SPINNER : '');
+            const span = document.createElement('span');
+            span.className = 'btn-label';
+            span.textContent = label;
+            btnSaveUsb.appendChild(span);
+        }
+
+        function usbRadios() {
+            return Array.from(usbPortBox.querySelectorAll('input[name="usb-port"]'));
+        }
+
+        function selectedPort() {
+            const r = usbRadios().find(i => i.checked);
+            return r ? r.value : null;
+        }
+
+        function clearUsbError() {
+            B('usb-error').hidden = true;
+            usbPortBox.classList.remove('invalid');
+        }
+
+        function showUsbError(text) {
+            B('usb-error-text').textContent = text;
+            B('usb-error').hidden = false;
+            usbPortBox.classList.add('invalid');
+        }
+
+        function refreshUsbButton() {
+            const port = selectedPort();
+            btnSaveUsb.disabled = boardRestarting || !port || port === board.usb.port;
+        }
+
+        function renderUsb(ports) {
+            usbPortBox.textContent = '';
+            ports.forEach(p => {
+                const card = document.createElement('label');
+                card.className = 'port-card';
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = 'usb-port';
+                input.value = p.id;
+                input.checked = p.id === board.usb.port;
+                const radio = document.createElement('span');
+                radio.className = 'port-radio';
+                radio.setAttribute('aria-hidden', 'true');
+                const body = document.createElement('span');
+                body.className = 'port-body';
+                const title = document.createElement('span');
+                title.className = 'port-title';
+                title.textContent = typeof p.label === 'string' && p.label !== '' ? p.label : p.id;
+                body.appendChild(title);
+                // "In use": the port saved on the device (the selection may differ before saving)
+                const current = document.createElement('span');
+                current.className = 'port-current';
+                current.textContent = 'In use';
+                current.hidden = p.id !== board.usb.port;
+                card.append(input, radio, body, current);
+                usbPortBox.appendChild(card);
+            });
+            clearUsbError();
+            B('board-success').hidden = true;
+            setUsbButton('Save & restart');
+            refreshUsbButton();
+        }
+
+        usbPortBox.addEventListener('change', () => {
+            clearUsbError();
+            refreshUsbButton();
+        });
+
+        function startBoardRestart() {
+            boardRestarting = true;
+            usbRadios().forEach(r => { r.disabled = true; });
+            btnSaveUsb.disabled = true;
+            setUsbButton('Restarting…', true);
+            B('board-success').hidden = false;
+            const indUps = B('ind-ups');
+            const lblUps = B('lbl-ups');
+            if (indUps) indUps.className = 'status-indicator warning';
+            if (lblUps) lblUps.textContent = 'Restarting...';
+            let left = BOARD_RESTART_S;
+            B('usb-countdown').textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                B('usb-countdown').textContent = Math.max(0, left);
+                if (left <= 0) {
+                    clearInterval(timer);
+                    window.location.reload();
+                }
+            }, 1000);
+        }
+
+        B('usb-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const port = selectedPort();
+            if (btnSaveUsb.disabled || boardRestarting || !board || !port || port === board.usb.port) return;
+            clearUsbError();
+            btnSaveUsb.disabled = true;
+            usbRadios().forEach(r => { r.disabled = true; });
+            setUsbButton('Saving…', true);
+            const r = await postBoard({ usb_port: port });
+            if (!r.ok) {
+                usbRadios().forEach(i => { i.disabled = false; });
+                setUsbButton('Save & restart');
+                showUsbError(r.message);
+                refreshUsbButton();
+                return;
+            }
+            board.usb.port = port;
+            if (r.restart) {
+                usbPortBox.querySelectorAll('.port-current').forEach(t => {
+                    t.hidden = t.parentElement.querySelector('input').value !== port;
+                });
+                startBoardRestart();
+            } else {
+                renderUsb(board.usb.ports);
+            }
+        });
+
+        // ---------- Load ----------
+        function renderBoard() {
+            const id = typeof board.id === 'string' ? board.id : '';
+            const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
+            B('board-name').textContent = label;
+            B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
+            B('led-section').hidden = !hasLed;
+            if (hasLed) {
+                clearLedError();
+                renderLed();
+            }
+
+            const ports = board.usb && Array.isArray(board.usb.ports)
+                ? board.usb.ports.filter(p => p && typeof p.id === 'string' && p.id !== '')
+                : [];
+            const hasUsb = ports.length > 1;
+            B('usb-section').hidden = !hasUsb;
+            if (hasUsb) renderUsb(ports);
+        }
+
+        async function loadBoard() {
+            if (sessionExpired || boardRestarting) return;
+            const seq = ++boardLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/board', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch board settings:', err);
+            }
+            // A newer request started meanwhile, or the board is restarting
+            if (seq !== boardLoadSeq || boardRestarting) return;
+            if (!data || typeof data !== 'object') {
+                B('board-error-text').textContent = 'Could not read the board settings. Open the tab again to retry.';
+                B('board-error').hidden = false;
+                return;
+            }
+            B('board-error').hidden = true;
+            board = data;
+            renderBoard();
+        }
+
+        // One read per opening, no periodic requests
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'board') loadBoard();
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
+    }
+
     // US-061 Log out (this session) and US-062 Log out of all devices: same
     // flow, different endpoint. Both buttons live in the session row, so they
     // share its visibility (hidden in AP mode and without a session).

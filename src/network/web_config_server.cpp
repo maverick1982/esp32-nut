@@ -94,6 +94,9 @@ void WebConfigServer::begin(bool isAPMode) {
     // REST endpoints
     server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
     server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
+    // Board page (US-094): not public in AuthPolicy, so protected by the login
+    server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
+    server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
     server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
@@ -202,6 +205,56 @@ void WebConfigServer::setUPS(USBHostUPS* ups) {
 
 void WebConfigServer::setNetwork(AppNetworkManager* net) {
     network = net;
+}
+
+void WebConfigServer::setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings) {
+    board_store = store;
+    board_settings = settings;
+}
+
+void WebConfigServer::setStatusLed(DiagnosticLED* led) {
+    status_led = led;
+}
+
+void WebConfigServer::handleGetBoard() {
+    server.send(200, "application/json", WebApiJson::boardSettingsJson(board(), board_settings));
+}
+
+void WebConfigServer::handleSetBoard() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    BoardSettings next;
+    bool restart = false;
+    String rejected;
+    if (int status = WebApiJson::checkBoardSettingsBody(doc, board(), board_settings, next, restart, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!board_store || !board_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    bool led_changed = next.led_on != board_settings.led_on || next.led_level != board_settings.led_level;
+    board_settings = next;
+    if (led_changed) {
+        if (status_led) {
+            status_led->setBrightness(ledBrightness(next.led_level));
+            status_led->setUserEnabled(next.led_on);
+        }
+        AppLogger::log("INFO", "[BOARD] Status LED %s, brightness level %u", next.led_on ? "on" : "off",
+                       (unsigned)next.led_level);
+    }
+    server.send(200, "application/json", restart ? "{\"success\":true,\"restart\":true}"
+                                                 : "{\"success\":true,\"restart\":false}");
+    if (restart) {
+        AppLogger::log("WARN", "[BOARD] UPS USB port set to %s: restarting", board().usb.ports[next.usb_port].label);
+        should_restart = true;
+        restart_request_time = millis();
+    }
 }
 
 void WebConfigServer::openRecoveryWindow(uint32_t now) {

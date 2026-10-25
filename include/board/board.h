@@ -40,19 +40,31 @@ struct LedConfig {
     int8_t power_pin;  // driven high before the LED is used
 };
 
-struct UsbConfig {
+// One USB host port the UPS can be attached to
+struct UsbPort {
+    const char* id;           // stable id for the settings and the API ("otg", "hs", "fs")
+    const char* label;        // shown in the web UI
     uint32_t peripheral_map;  // usb_host_config_t::peripheral_map, 0 = ESP-IDF default
+};
+
+// Two entries are enough for the S3 (one port) and the P4 (High-Speed, Full-Speed)
+struct UsbConfig {
+    uint8_t port_count;
+    UsbPort ports[2];
 };
 
 struct BoardDefaults {
     const char* ap_ssid;
     const char* ap_password;
     bool led_enabled;
+    uint8_t led_level;   // 1-5, see board_settings.h (US-094)
+    uint8_t usb_port;    // index in usb.ports
     NetworkMode network_mode;
 };
 
 struct BoardConfig {
-    const char* name;
+    const char* name;   // stable profile id: profile file, PlatformIO environment, logs
+    const char* label;  // readable board name for the web UI (US-094)
     bool has_wifi;
     bool has_ethernet;
     EthConfig eth;

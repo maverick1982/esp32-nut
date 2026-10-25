@@ -12,6 +12,8 @@
 #include "LoginThrottle.h"
 #include "SessionTable.h"
 #include "RecoveryWindow.h"
+#include "DiagnosticLED.h"
+#include "core/board_settings_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
 
@@ -26,6 +28,9 @@ public:
     // Double reset on a board without Wi-Fi: new web credentials without the current
     // password for 10 minutes (US-091, PDR 0002 D5)
     void openRecoveryWindow(uint32_t now);
+    // Board page (US-094): settings loaded at boot, and the LED to apply changes at once
+    void setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings);
+    void setStatusLed(DiagnosticLED* led);
 
 private:
     WebServer server;
@@ -44,10 +49,15 @@ private:
     SessionTable sessions;
     AuthService auth;
     RecoveryWindow recovery;
+    BoardSettingsStore* board_store = nullptr;
+    BoardSettings board_settings = {};
+    DiagnosticLED* status_led = nullptr;
 
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
+    void handleGetBoard();
+    void handleSetBoard();
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();

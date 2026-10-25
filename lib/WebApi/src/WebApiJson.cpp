@@ -1,5 +1,6 @@
 #include "WebApiJson.h"
 #include "NUTServer.h"
+#include <string.h>
 
 String WebApiJson::generateUpsVars(IUSBHostUPS* usb_ups) {
     if (!usb_ups) {
@@ -344,6 +345,70 @@ int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
     if (name.isNull()) return 0;
     if (!name.is<const char*>() || !NUTServer::isValidUpsName(String(name.as<const char*>()))) {
         return sendError(response, 400, "Invalid UPS name");
+    }
+    return 0;
+}
+
+String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings) {
+    JsonDocument doc;
+    doc["id"] = board.name;
+    doc["label"] = board.label;
+    if (hasLed(board)) {
+        JsonObject led = doc["led"].to<JsonObject>();
+        led["present"] = true;
+        led["on"] = settings.led_on;
+        led["level"] = settings.led_level;
+        led["levels"] = LED_LEVELS;
+    }
+    JsonObject usb = doc["usb"].to<JsonObject>();
+    JsonArray ports = usb["ports"].to<JsonArray>();
+    for (uint8_t i = 0; i < board.usb.port_count; i++) {
+        JsonObject p = ports.add<JsonObject>();
+        p["id"] = board.usb.ports[i].id;
+        p["label"] = board.usb.ports[i].label;
+    }
+    usb["port"] = board.usb.ports[settings.usb_port].id;
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
+                                       const BoardSettings& current, BoardSettings& next,
+                                       bool& restart, String& response) {
+    next = current;
+    restart = false;
+    if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonObjectConst obj = body.as<JsonObjectConst>();
+
+    JsonVariantConst led_on = obj["led_on"];
+    JsonVariantConst led_level = obj["led_level"];
+    if ((!led_on.isUnbound() || !led_level.isUnbound()) && !hasLed(board)) {
+        return sendError(response, 400, "No status LED on this board");
+    }
+    if (!led_on.isUnbound()) {
+        if (!led_on.is<bool>()) return sendError(response, 400, "Invalid request");
+        next.led_on = led_on.as<bool>();
+    }
+    if (!led_level.isUnbound()) {
+        // An integer only: true, 2.5 or "3" are rejected
+        if (!led_level.is<int>()) return sendError(response, 400, "Invalid LED level");
+        int level = led_level.as<int>();
+        if (level < 1 || level > LED_LEVELS) return sendError(response, 400, "Invalid LED level");
+        next.led_level = (uint8_t)level;
+    }
+
+    JsonVariantConst port = obj["usb_port"];
+    if (!port.isUnbound()) {
+        if (!port.is<const char*>()) return sendError(response, 400, "Invalid USB port");
+        const char* id = port.as<const char*>();
+        uint8_t found = board.usb.port_count;
+        for (uint8_t i = 0; i < board.usb.port_count; i++) {
+            if (strcmp(board.usb.ports[i].id, id) == 0) found = i;
+        }
+        if (found == board.usb.port_count) return sendError(response, 400, "Invalid USB port");
+        next.usb_port = found;
+        restart = found != current.usb_port;
     }
     return 0;
 }

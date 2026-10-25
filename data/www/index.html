@@ -67,6 +67,15 @@
                     </svg>
                     NUT Server
                 </button>
+                <!-- US-094: board hardware options (status LED, UPS USB port) -->
+                <button class="tab" data-target="board">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
+                </button>
                 <!-- US-063: Web UI credentials (change in STA, reset in AP) -->
                 <button class="tab" data-target="weblogin">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -212,6 +221,144 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            </div>
+
+            <!-- US-094: Board tab. Sections rendered from GET /api/board (profile capabilities + saved values) -->
+            <div class="tab-content" id="content-board">
+                <div class="panel config-panel board-panel">
+                    <div class="panel-header">
+                        <h2>Hardware options</h2>
+                        <!-- Read-only: board profile compiled into the firmware -->
+                        <span class="board-profile" id="board-profile" title="Board profile">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="4" y="4" width="16" height="16" rx="2" />
+                                <rect x="9" y="9" width="6" height="6" />
+                                <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                            </svg>
+                            Board: <span id="board-name">--</span>
+                        </span>
+                    </div>
+
+                    <p class="auth-lead board-lead">Hardware options of this board. They are saved on the device
+                        and kept after a restart.</p>
+
+                    <!-- GET /api/board failed -->
+                    <div class="auth-alert" id="board-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span id="board-error-text"></span>
+                    </div>
+
+                    <div class="board-body">
+
+                        <!-- Status LED (only if the profile has a LED) -->
+                        <section class="board-section" id="led-section" hidden>
+                            <div class="cred-section">Status LED</div>
+
+                            <div class="board-row">
+                                <div class="board-label">
+                                    <span class="board-name">
+                                        <span class="led-preview" id="led-preview" aria-hidden="true"></span>
+                                        LED
+                                    </span>
+                                    <span class="board-hint">When off, the LED stays dark in every state, also after a
+                                        restart.</span>
+                                </div>
+                                <div class="board-control led-toggle">
+                                    <label class="switch">
+                                        <input type="checkbox" id="led-on" aria-label="Status LED on">
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span class="led-state" id="led-state">Off</span>
+                                </div>
+                            </div>
+
+                            <div class="board-row" id="row-brightness">
+                                <div class="board-label">
+                                    <span class="board-name">Brightness</span>
+                                    <span class="board-hint">Applied immediately, no restart.</span>
+                                </div>
+                                <div class="board-control level-control">
+                                    <div class="level-picker" id="level-picker" role="radiogroup"
+                                        aria-label="LED brightness level">
+                                        <button type="button" class="level" role="radio" data-level="1" aria-checked="false"><span class="level-bar"></span><span class="level-num">1</span></button>
+                                        <button type="button" class="level" role="radio" data-level="2" aria-checked="false"><span class="level-bar"></span><span class="level-num">2</span></button>
+                                        <button type="button" class="level" role="radio" data-level="3" aria-checked="false"><span class="level-bar"></span><span class="level-num">3</span></button>
+                                        <button type="button" class="level" role="radio" data-level="4" aria-checked="false"><span class="level-bar"></span><span class="level-num">4</span></button>
+                                        <button type="button" class="level" role="radio" data-level="5" aria-checked="false"><span class="level-bar"></span><span class="level-num">5</span></button>
+                                    </div>
+                                    <div class="level-scale">
+                                        <span>Min</span>
+                                        <span class="level-readout" id="level-readout"></span>
+                                        <span>Max</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Outcome of the last LED change (applied immediately) -->
+                            <div class="board-outcome">
+                                <span class="cmd-result" id="led-result" aria-live="polite"></span>
+                            </div>
+                            <div class="auth-alert" id="led-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="led-error-text"></span>
+                            </div>
+                        </section>
+
+                        <!-- UPS USB port (only if the profile has 2+ USB host ports) -->
+                        <section class="board-section" id="usb-section" hidden>
+                            <div class="cred-section">UPS USB port</div>
+
+                            <form id="usb-form" class="board-usb-form" novalidate>
+                                <div class="auth-alert info" id="usb-note" role="note">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 16v-4M12 8h.01" />
+                                    </svg>
+                                    <span>Changing the port restarts the board. Plug the UPS cable into the selected
+                                        port.</span>
+                                </div>
+
+                                <!-- One .port-card per port of the profile, built by bundle.js -->
+                                <div class="port-options" id="usb-port" role="radiogroup"
+                                    aria-label="USB port of the UPS"></div>
+
+                                <div class="auth-alert" id="usb-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="usb-error-text"></span>
+                                </div>
+
+                                <div class="auth-alert success" id="board-success" role="status" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                        <polyline points="22 4 12 14.01 9 11.01" />
+                                    </svg>
+                                    <span>Saved. The board is restarting, this page reloads in
+                                        <span class="countdown" id="usb-countdown">15</span> s.</span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-usb" disabled>
+                                        <span class="glow"></span>
+                                        <span class="btn-label">Save &amp; restart</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            <p class="auth-fineprint">A wrong port does not lock you out: the Web UI stays
+                                reachable, the UPS is just not seen until you pick the right port here.</p>
+                        </section>
+
+                    </div>
                 </div>
             </div>
 

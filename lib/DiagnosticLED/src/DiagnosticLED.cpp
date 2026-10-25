@@ -12,6 +12,7 @@
 DiagnosticLED::DiagnosticLED()
     : _pin(-1),
       _enabled(false),
+      _userOn(true),
       _state(CONNECTING),
       _ledOn(false),
       _previousMillis(0),
@@ -20,7 +21,7 @@ DiagnosticLED::DiagnosticLED()
 
 void DiagnosticLED::setPixelColorAndShow(uint32_t color) {
     _currentColor = color;
-    if (!_enabled) return;
+    if (!_enabled || !_userOn) return;
     _pixels.setPixelColor(0, color);
     _pixels.show();
 }
@@ -43,6 +44,23 @@ void DiagnosticLED::begin(int8_t pin, int8_t power_pin) {
     _pixels.begin();
     _pixels.setBrightness(10);
     _pixels.setPixelColor(0, 0, 0, 0); // Spento inizialmente
+    _pixels.show();
+}
+
+void DiagnosticLED::setUserEnabled(bool on) {
+    if (on == _userOn) return;
+    _userOn = on;
+    if (!_enabled) return;
+    // Off: dark now; on: show the current colour of the pattern again
+    _pixels.setPixelColor(0, on ? _currentColor : 0);
+    _pixels.show();
+}
+
+void DiagnosticLED::setBrightness(uint8_t value) {
+    if (!_enabled) return;
+    _pixels.setBrightness(value);
+    // setBrightness() rescales the stored colour: set it again from the original one
+    _pixels.setPixelColor(0, _userOn ? _currentColor : 0);
     _pixels.show();
 }
 

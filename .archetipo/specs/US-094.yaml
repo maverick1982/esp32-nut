@@ -5,33 +5,45 @@ epic:
   code: EP-005
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: MEDIUM
-points: 3
-status: TODO
+points: 5
+status: DONE
 body: |
   #### US-094: Impostazioni della scheda nella Web UI: LED di stato e porta USB dell'UPS
 
-  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
   **Bloccato da:** US-090
 
   **User Story**
   Come utente della scheda,
-  voglio poter spegnere il LED di stato e, sulle schede con più porte USB, scegliere quella a cui è collegato l'UPS,
+  voglio poter spegnere il LED di stato o regolarne la luminosità e, sulle schede con più porte USB, scegliere quella a cui è collegato l'UPS,
   in modo da adattare la scheda al mio montaggio senza dover compilare un firmware dedicato.
 
   **Dimostrazione**
-  Nella Web UI c'è una sezione "Scheda". Sull'S3 compare il LED acceso/spento: spegnendolo, il LED resta spento in ogni stato, anche dopo un riavvio. Con un profilo finto a due porte (test e2e e nativi) compare anche la scelta della porta USB. Sulle schede senza LED la voce del LED non compare.
+  Nella Web UI c'è una sezione "Scheda" che mostra il nome leggibile della scheda (sull'S3 "ESP32-S3 DevKitC-1"). Sull'S3 compaiono il LED acceso/spento e la luminosità su 5 livelli: spegnendolo, il LED resta spento in ogni stato, anche dopo un riavvio; cambiando livello, la luminosità cambia subito e resta dopo un riavvio. Con un profilo finto a due porte (test e2e e nativi) compare anche la scelta della porta USB. Sulle schede senza LED le voci del LED non compaiono.
 
   **Criteri di Accettazione**
   - [ ] LED di stato acceso/spento, salvato in NVS, con valore iniziale dal profilo (acceso sull'S3). Spento, il LED non si accende in nessuno stato. La voce compare solo se il profilo ha un LED.
+  - [ ] Luminosità del LED su 5 livelli con scala logaritmica (ogni livello raddoppia il precedente): valori `setBrightness` 3, 5, 10, 20, 40 su 255. Il valore iniziale è il livello 3 (10, la luminosità attuale), dal profilo. Salvata in NVS, applicata subito senza riavvio. La voce compare solo se il profilo ha un LED.
+  - [ ] La sezione mostra il nome leggibile della scheda (`label` del profilo, per esempio "ESP32-S3 DevKitC-1"). L'identificativo tecnico del profilo (`name`, per esempio `esp32s3_devkit`) resta invariato per log, diagnostiche e build, e l'API li restituisce entrambi.
   - [ ] Porta USB dell'UPS (sul P4: High-Speed o Full-Speed), salvata in NVS e applicata con un riavvio, con valore iniziale dal profilo. La voce compare solo se il profilo ha più di una porta USB host.
-  - [ ] Le impostazioni passano dalle API protette dal login, come le altre (ADR 0009), e vengono rifiutate con un errore se il valore non è tra quelli ammessi dal profilo.
-  - [ ] Le due impostazioni rispettano la regola del PDR 0002 D4: un valore sbagliato non toglie l'accesso alla Web UI (al massimo l'UPS non viene visto, e si corregge dalla stessa pagina).
-  - [ ] Regressione: senza modifiche dell'utente, comportamento invariato su S3 e P4; test nativi, replay ed e2e verdi.
+  - [ ] Le impostazioni passano dalle API protette dal login, come le altre (ADR 0009), e vengono rifiutate con un errore se il valore non è tra quelli ammessi dal profilo (livello di luminosità fuori da 1-5 compreso).
+  - [ ] Le impostazioni rispettano la regola del PDR 0002 D4: un valore sbagliato non toglie l'accesso alla Web UI (al massimo l'UPS non viene visto, e si corregge dalla stessa pagina).
+  - [ ] Regressione: senza modifiche dell'utente, comportamento invariato su S3 e P4 (luminosità 10 come oggi); test nativi, replay ed e2e verdi.
 
   **Assunzioni**
   - **Riferimento:** PDR 0002 D4; ADR 0010 §3.
-  - **Utilità immediata:** il LED acceso/spento serve già agli utenti S3, quindi la spec non dipende dal P4. La porta USB si potrà provare su hardware solo con US-092.
-  - **Fuori ambito:** scelta del pin del LED dalla Web UI; impostazioni dei pin Ethernet o SDIO, che restano fisse nel profilo.
+  - **Utilità immediata:** LED acceso/spento e luminosità servono già agli utenti S3, quindi la spec non dipende dal P4. La porta USB si potrà provare su hardware solo con US-092.
+  - **Scala della luminosità:** logaritmica perché la luminosità percepita segue circa il logaritmo dell'intensità; con passi lineari i livelli alti sembrerebbero quasi uguali e mancherebbero i valori bassi.
+  - **Nome della scheda:** `label` è solo per l'utente; `name` resta l'identificativo stabile del profilo.
+  - **Fuori ambito:** scelta del pin del LED dalla Web UI; colori e schemi di lampeggio; impostazioni dei pin Ethernet o SDIO, che restano fisse nel profilo.
 history:
   - status: TODO
     at: "2026-10-21T16:25:57Z"
+  - status: PLANNED
+    at: "2026-10-25T11:08:56Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T11:22:46Z"
+  - status: REVIEW
+    at: "2026-10-25T12:51:08Z"
+  - status: DONE
+    at: "2026-10-25T13:05:25Z"
