@@ -55,6 +55,12 @@ bool USBHostUPS::begin() {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
+#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
+    // Arduino core 3.3.11+ (ESP-IDF 5.5.5) enables the enumeration filter, and the
+    // stack then needs a callback: with NULL no device enumerates ("Root port reset
+    // failed", arduino-esp32 issue #12783). Accept every device, keep its configuration
+    host_config.enum_filter_cb = [](const usb_device_desc_t*, uint8_t*) { return true; };
+#endif
     esp_err_t err = usb_host_install(&host_config);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         log("ERROR", "usb_host_install failed");

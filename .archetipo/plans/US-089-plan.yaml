@@ -53,7 +53,7 @@ tasks:
   - id: TASK-01
     title: Istantanea di riferimento della v1.8.0 sull'Eaton 3S (upsc, comandi, variabili, heap)
     type: Test
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Objective:** Salvare il comportamento della v1.8.0 prima del cambio di piattaforma, per poterlo confrontare dopo (criterio di regressione della spec).
@@ -85,10 +85,11 @@ tasks:
       - [ ] `upsc`, `upscmd -l` e `upsrw` della v1.8.0 salvati
       - [ ] Heap della v1.8.0 annotato dopo almeno 10 minuti
       - [ ] Nessuna credenziale nei file salvati
+    ref: TASK-01
   - id: TASK-02
     title: platformio.ini su pioarduino 55.03.312-1 e compilazione dell'ESP32-S3 senza errori
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Objective:** Compilare `esp32-s3-standard` sulla piattaforma `55.03.312-1` (IDF 5.5.5, Arduino 3.3.12) senza cambiare il comportamento.
@@ -124,10 +125,11 @@ tasks:
       - [ ] `esp32-s3-standard` usa `55.03.312-1`
       - [ ] La build compila; RAM e flash annotate
       - [ ] `partitions.csv` e le altre opzioni dell'ambiente invariate
+    ref: TASK-02
   - id: TASK-03
     title: Callback del filtro di enumerazione USB in USBHostUPS::begin() (dal fork
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
     body: |-
@@ -163,10 +165,11 @@ tasks:
       - [ ] `enum_filter_cb` assegnato quando `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` è attivo
       - [ ] Stato della macro nel `sdkconfig` esp32s3 annotato nel piano IDF 5.5
       - [ ] Commit con `Co-authored-by` di rtadams89
+    ref: TASK-03
   - id: TASK-04
     title: Suite nativa, replay ed e2e invariati sulla nuova piattaforma
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -200,10 +203,11 @@ tasks:
       - [ ] Suite nativa completa verde, con lo stesso numero di test
       - [ ] e2e Playwright verdi
       - [ ] Nessun test modificato
+    ref: TASK-04
   - id: TASK-05
     title: Verifica dei vincoli dell'ADR 0008 sui sorgenti USB di ESP-IDF 5.5.5 e annotazione nel piano
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Objective:** Confermare che le protezioni di `hid_host.c` (ADR 0008 e review del layer USB) siano ancora necessarie e corrette sulla 5.5.5, e lasciarne traccia scritta.
@@ -244,10 +248,11 @@ tasks:
       - [ ] Sei vincoli verificati con riferimento file:riga della 5.5.5
       - [ ] Stato del piano aggiornato
       - [ ] `hid_host.c` invariato, oppure differenze segnalate all'utente
+    ref: TASK-05
   - id: TASK-06
     title: Verifica di CI e release con la nuova piattaforma (boot_app0.bin, zip, manifest)
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
     body: |-
@@ -279,10 +284,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] `boot_app0.bin` trovato e corretto con la nuova piattaforma
       - [ ] Zip ricostruito con gli stessi file e gli stessi offset del manifest
+    ref: TASK-06
   - id: TASK-07
     title: Prove sull'Eaton 3S - OTA da v1.8.0, flash completo, NVS, Web UI, AP, confronto con la baseline
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-04
@@ -326,10 +332,11 @@ tasks:
       - [ ] `upsc`/`upscmd -l`/`upsrw` uguali alla baseline, versione a parte
       - [ ] Web UI, riconnessione USB e AP con doppio reset funzionanti
       - [ ] Heap confrontato con la baseline
+    ref: TASK-07
   - id: TASK-08
     title: Prova di core dump e Task WDT con una build temporanea non committata
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |-
@@ -364,10 +371,11 @@ tasks:
       - [ ] Panic: core dump salvato e riepilogo visibile dopo il riavvio
       - [ ] Blocco del loopTask: panic del Task WDT e riavvio
       - [ ] Nessuna modifica temporanea rimasta nei sorgenti
+    ref: TASK-08
   - id: TASK-09
     title: Build di test idf55-v1 per i tester e bozze dei messaggi (#36 Powercom, CyberPower, APC)
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
       - TASK-08
@@ -403,3 +411,4 @@ tasks:
       - [ ] Zip con firmware, bootloader, partitions, boot_app0 e README.txt
       - [ ] `idf55-v1` presente nel firmware
       - [ ] Bozze dei messaggi per Powercom, CyberPower e APC pronte per l'approvazione
+    ref: TASK-09
