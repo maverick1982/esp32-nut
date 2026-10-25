@@ -1498,6 +1498,73 @@ void test_update_ap_reset(void) {
     TEST_ASSERT_TRUE(f.store.verify("admin", "password2"));
 }
 
+// --- Recovery window on boards without Wi-Fi (US-091) ---
+
+void test_status_recovery_fields(void) {
+    AuthFixture f;
+    TEST_ASSERT_EQUAL(200, f.service.createInitialCredentials(kCreds, 1000).status);
+    f.sessions.clear();
+
+    AuthResponse r = f.service.status("", false, 1000, true, 540);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"configured\":true,\"authenticated\":false,\"ap_mode\":false,\"recovery\":true,\"recovery_remaining_s\":540}",
+        r.body.c_str());
+    // Window closed: no new field, as before
+    r = f.service.status("", false, 1000);
+    TEST_ASSERT_FALSE(contains(r.body, "recovery"));
+}
+
+void test_update_recovery_replaces_without_session(void) {
+    AuthFixture f;
+    String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
+    String per = cookieToken(f.service.login(kRemember, 1000).set_cookie);
+
+    // No session and no current password: accepted only while the window is open
+    AuthResponse r = f.service.updateCredentials(kNewLogin, "", false, 2000, true);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"username\":\"root\",\"sessions_closed\":true}", r.body.c_str());
+    TEST_ASSERT_FALSE(contains(r.body, "newpass12"));
+    // Every previous session is closed, the creator gets a new one
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(vol, 2000));
+    TEST_ASSERT_FALSE(f.service.isAuthenticated(per, 2000));
+    TEST_ASSERT_EQUAL(0, storage.sessions.size());
+    String fresh = cookieToken(r.set_cookie);
+    TEST_ASSERT_TRUE(fresh.length() > 0);
+    TEST_ASSERT_TRUE(f.service.isAuthenticated(fresh, 2000));
+    TEST_ASSERT_EQUAL(1, f.sessions.activeCount(2000));
+    // Old credentials replaced
+    TEST_ASSERT_EQUAL(401, f.service.login(kCreds, 2000).status);
+    TEST_ASSERT_EQUAL(200, f.service.login(kNewLogin, 2000).status);
+}
+
+void test_update_recovery_ignores_wrong_current_password(void) {
+    AuthFixture f;
+    TEST_ASSERT_EQUAL(200, f.service.createInitialCredentials(kCreds, 1000).status);
+    uint32_t failures = f.throttle.failures();
+    AuthResponse r = f.service.updateCredentials(
+        "{\"current_password\":\"wrong\",\"username\":\"root\",\"password\":\"newpass12\"}", "", false, 2000, true);
+    TEST_ASSERT_EQUAL(200, r.status);
+    TEST_ASSERT_EQUAL(failures, f.throttle.failures());
+}
+
+void test_credentials_unchanged_without_recovery_use(void) {
+    // The double reset erases nothing: login works during the window and after it
+    AuthFixture f;
+    TEST_ASSERT_EQUAL(200, f.service.createInitialCredentials(kCreds, 1000).status);
+    TEST_ASSERT_EQUAL(200, f.service.login(kCreds, 2000).status);
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+}
+
+void test_update_without_recovery_still_needs_session(void) {
+    // Regression: outside the window and outside AP nothing changes (US-063)
+    AuthFixture f;
+    TEST_ASSERT_EQUAL(200, f.service.createInitialCredentials(kCreds, 1000).status);
+    AuthResponse r = f.service.updateCredentials(kNewLogin, "", false, 2000);
+    TEST_ASSERT_EQUAL(401, r.status);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"unauthorized\"}", r.body.c_str());
+    TEST_ASSERT_TRUE(f.store.verify("admin", "password1"));
+}
+
 void test_update_ap_errors(void) {
     AuthFixture f;
     String vol = cookieToken(f.service.createInitialCredentials(kCreds, 1000).set_cookie);
@@ -1856,6 +1923,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_update_tofu_same_as_create);
     RUN_TEST(test_update_ap_reset);
     RUN_TEST(test_update_ap_errors);
+    RUN_TEST(test_status_recovery_fields);
+    RUN_TEST(test_update_recovery_replaces_without_session);
+    RUN_TEST(test_update_recovery_ignores_wrong_current_password);
+    RUN_TEST(test_credentials_unchanged_without_recovery_use);
+    RUN_TEST(test_update_without_recovery_still_needs_session);
     RUN_TEST(test_update_sta_requires_session);
     RUN_TEST(test_update_sta_wrong_current_password);
     RUN_TEST(test_update_sta_throttled);

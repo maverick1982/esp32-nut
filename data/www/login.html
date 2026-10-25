@@ -75,13 +75,14 @@
             </form>
         </section>
 
-        <!-- Create credentials: first use, no credentials stored -->
+        <!-- Create credentials: first use, no credentials stored; also the recovery window
+             after a double reset on boards without Wi-Fi (US-091) -->
         <section class="auth-view panel auth-card" id="view-create" hidden>
             <div class="panel-header">
-                <h2>Create credentials</h2>
-                <span class="auth-badge">First use</span>
+                <h2 id="create-title">Create credentials</h2>
+                <span class="auth-badge" id="create-badge">First use</span>
             </div>
-            <p class="auth-lead">No web credentials are set on this device yet. The first account created
+            <p class="auth-lead" id="create-lead">No web credentials are set on this device yet. The first account created
                 becomes the administrator.</p>
 
             <form class="auth-form" id="create-form" novalidate>
@@ -146,6 +147,8 @@
                 </button>
             </form>
 
+            <p class="auth-fineprint" id="recovery-signin" hidden>Remember the current password?
+                <button type="button" class="inline-link" id="link-signin">Sign in with the current credentials</button></p>
             <p class="auth-fineprint">The web UI runs over plain HTTP on your local network. Do not reuse a
                 password you use elsewhere. These credentials are separate from the NUT server credentials.</p>
         </section>

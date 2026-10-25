@@ -43,12 +43,19 @@ public:
     //    invalid_current_password; replace (400/500); rotazione della sessione del
     //    chiamante (nuovo token dello stesso tipo nel cookie, Max-Age se persistente)
     //    e chiusura di tutte le altre, vecchio token compreso
+    //  - recovery (finestra di recupero aperta, schede senza Wi-Fi, US-091): come in AP
+    //    current_password ignorata e nessuna sessione richiesta, replace e chiusura di
+    //    tutte le sessioni; poi una sessione nuova per chi ha creato le credenziali
+    //    (cookie nel 200, come nella creazione iniziale)
     // Il 200 è {"success":true,"username":...,"sessions_closed":bool}: false se le
     // credenziali sono cambiate ma le sessioni non si sono potute chiudere (in STA
     // niente cookie nuovo e il vecchio token resta valido)
-    AuthResponse updateCredentials(const String& body, const String& token, bool ap_mode, uint32_t now);
-    // GET /api/auth/status: {configured, authenticated, ap_mode[, username]}
-    AuthResponse status(const String& token, bool ap_mode, uint32_t now);
+    AuthResponse updateCredentials(const String& body, const String& token, bool ap_mode, uint32_t now,
+                                   bool recovery = false);
+    // GET /api/auth/status: {configured, authenticated, ap_mode[, username]}, più
+    // recovery e recovery_remaining_s solo con la finestra di recupero aperta (US-091)
+    AuthResponse status(const String& token, bool ap_mode, uint32_t now, bool recovery = false,
+                        uint32_t recovery_remaining_s = 0);
     // POST /api/auth/logout: idempotente, cancella sempre il cookie
     AuthResponse logout(const String& token);
     // POST /api/auth/logout-all: chiude tutte le sessioni, volatili e persistenti;

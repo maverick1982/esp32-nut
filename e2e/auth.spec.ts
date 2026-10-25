@@ -33,6 +33,9 @@ interface AuthMock {
   logoutAllFails: boolean;
   /** when set, the credentials POST finds them created meanwhile by another browser and answers this */
   createRace: { status: number; json: Record<string, unknown> } | null;
+  /** US-091: recovery window open (board without Wi-Fi after a double reset) */
+  recovery: boolean;
+  recoveryRemainingS: number;
 }
 
 function defaultMock(): AuthMock {
@@ -51,6 +54,8 @@ function defaultMock(): AuthMock {
     throttle: null,
     logoutAllFails: false,
     createRace: null,
+    recovery: false,
+    recoveryRemainingS: 0,
   };
 }
 
@@ -67,6 +72,10 @@ async function mockApi(page: Page) {
       ap_mode: mock.apMode,
     };
     if (mock.authenticated) body.username = USER;
+    if (mock.recovery) {
+      body.recovery = true;
+      body.recovery_remaining_s = mock.recoveryRemainingS;
+    }
     return route.fulfill({ json: body });
   });
 
@@ -95,6 +104,12 @@ async function mockApi(page: Page) {
     if (mock.createRace) {
       mock.configured = true;
       return route.fulfill({ status: mock.createRace.status, json: mock.createRace.json });
+    }
+    if (mock.recovery) {
+      // US-091: the firmware replaces the credentials, closes every session and signs the creator in
+      mock.recovery = false;
+      mock.authenticated = true;
+      return route.fulfill({ json: { success: true, username: USER, sessions_closed: true } });
     }
     if (mock.configured) {
       return route.fulfill({ status: 409, json: { error: 'already_configured' } });
@@ -459,5 +474,65 @@ test.describe('OTA upload without a session (US-061)', () => {
     await expect(page).toHaveURL(LOGIN);
     expect(uploads).toBe(1);
     await expect(page.locator('#view-signin')).toBeVisible();
+  });
+});
+
+test.describe('Recovery window on boards without Wi-Fi (US-091)', () => {
+  test.beforeEach(async ({ page }) => {
+    mock = defaultMock();
+    await serveIndex(page);
+    await serveLogin(page);
+    await mockApi(page);
+  });
+
+  test('replaces the credentials without the current password and signs in', async ({ page }) => {
+    mock.recovery = true;
+    mock.recoveryRemainingS = 540;
+    await page.goto(LOGIN);
+
+    await expect(page.locator('#view-create')).toBeVisible();
+    await expect(page.locator('#view-signin')).toBeHidden();
+    await expect(page.locator('#create-title')).toHaveText('Reset credentials');
+    await expect(page.locator('#create-badge')).toHaveText('Recovery');
+    await expect(page.locator('#create-lead')).toContainText('closes in 9 min');
+    await expect(page.locator('#btn-create .btn-label')).toHaveText('Replace and sign in');
+    await expect(page.locator('#recovery-signin')).toBeVisible();
+
+    await page.locator('#new-username').fill(USER);
+    await page.locator('#new-password').fill(GOOD_PASSWORD);
+    await page.locator('#new-password2').fill(GOOD_PASSWORD);
+    await page.locator('#btn-create').click();
+
+    await expect(page).toHaveURL(HOME);
+    expect(mock.credentialPosts).toHaveLength(1);
+    const body = mock.credentialPosts[0].body as Record<string, unknown>;
+    expect(body).toEqual({ username: USER, password: GOOD_PASSWORD });
+    expect(body).not.toHaveProperty('current_password');
+  });
+
+  test('the current credentials still sign in during the window', async ({ page }) => {
+    mock.recovery = true;
+    mock.recoveryRemainingS = 600;
+    await page.goto(LOGIN);
+
+    await expect(page.locator('#view-create')).toBeVisible();
+    await page.locator('#link-signin').click();
+    await expect(page.locator('#view-signin')).toBeVisible();
+    await expect(page.locator('#view-create')).toBeHidden();
+
+    await page.locator('#login-username').fill(USER);
+    await page.locator('#login-password').fill(GOOD_PASSWORD);
+    await page.locator('#btn-signin').click();
+    await expect(page).toHaveURL(HOME);
+    expect(mock.credentialPosts).toHaveLength(0);
+  });
+
+  test('without the window the login page is unchanged', async ({ page }) => {
+    await page.goto(LOGIN);
+    await expect(page.locator('#view-signin')).toBeVisible();
+    await expect(page.locator('#view-create')).toBeHidden();
+    await expect(page.locator('#create-title')).toHaveText('Create credentials');
+    await expect(page.locator('#create-badge')).toHaveText('First use');
+    await expect(page.locator('#recovery-signin')).toBeHidden();
   });
 });
