@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-096
+title: Export della diagnostica USB senza JsonDocument (scritto a pezzi campo per campo)
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-096: Export della diagnostica USB senza JsonDocument (scritto a pezzi campo per campo)
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-095
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio che `/api/usb/dump` scriva l'export direttamente sul `ChunkWriter`, campo per campo, senza costruire prima un `JsonDocument` intero,
+  in modo che un export durante il carico non tolga circa 25 KB di heap di picco sulla piattaforma ESP-IDF 5.5, con le librerie ESP-IDF precompilate (senza `custom_sdkconfig`).
+
+  **Dimostrazione**
+  Con `scripts/load_test.py` nelle condizioni della US-095 (900 s, 8 slot NUT occupati, Web UI ogni 2 s, export ogni 60 s) sull'Eaton 3S, il `min free` con l'export si avvicina a quello senza export (US-095, misurato con `custom_sdkconfig`: 80 660 con l'export, 105 000 senza; con le librerie precompilate e il vecchio export: 74 688). Un test nativo mostra che il nuovo export è identico byte per byte a quello attuale.
+
+  **Criteri di Accettazione**
+  - [ ] L'export di `/api/usb/dump` è scritto sul `ChunkWriter` senza `JsonDocument` e senza stringhe intermedie della dimensione dell'export; il lock su `_mutex` resta breve e l'invio in rete avviene fuori dal lock, come oggi.
+  - [ ] Un test nativo confronta il nuovo writer con `serializeJsonPretty` di un `JsonDocument` costruito con gli stessi dati (stringhe con caratteri da escapare, descriptor, report, `link`, `expected_ups_data`): uscita identica byte per byte.
+  - [ ] Il test di carico con l'export ogni 60 s dà `min free` di almeno 90 KB sull'Eaton 3S con le librerie ESP-IDF precompilate, senza errori NUT o web.
+  - [ ] Regressione: test nativi, replay ed e2e verdi; l'export scaricato dalla Web UI resta valido e leggibile dagli strumenti esistenti (fixture di replay).
+
+  **Assunzioni**
+  - **Origine:** US-095, criterio rivisto il 2026-10-23: l'export a pezzi ha tolto la `String` finale ma non il `JsonDocument`, che da solo costa circa 25 KB di picco.
+  - **Priorità:** MEDIUM dal 2026-10-23: con `custom_sdkconfig` non adottato (US-095) è la via per riportare il margine sotto carico vicino alla v1.8.0, senza costi di build.
+  - **Fuori ambito:** cambi al contenuto o al formato dell'export; invio a pezzi di `/api/logs`.
+history:
+  - status: TODO
+    at: "2026-10-23T14:18:49Z"

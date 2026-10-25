@@ -1,4 +1,5 @@
 #include "WebApiJson.h"
+#include "ChunkWriter.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
 #include "CommandCatalog.h"
@@ -101,8 +102,20 @@ void WebConfigServer::begin(bool isAPMode) {
             server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
             return;
         }
+        JsonDocument doc;
+        usb_ups->buildUSBDiagnostics(doc);
+        // A pezzi, senza il JSON intero in una String: abbassa il picco di heap (US-095).
+        // API classica e non chunkWrite(): sendContent() usa il chunked solo con HTTP/1.1
         server.sendHeader("Content-Disposition", "attachment; filename=\"usb_diagnostics.json\"");
-        server.send(200, "application/json", usb_ups->dumpUSBDiagnostics());
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        char buf[1024];
+        ChunkWriter writer(buf, sizeof(buf), [this](const char* data, size_t len) {
+            server.sendContent(data, len);
+        });
+        serializeJsonPretty(doc, writer);
+        writer.flush();
+        server.sendContent("");
     }));
 
     // Rotte pubbliche dell'autenticazione (elencate in AuthPolicy)

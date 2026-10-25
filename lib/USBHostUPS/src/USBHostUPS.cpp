@@ -1168,75 +1168,67 @@ std::vector<NutTable::RWVariable> USBHostUPS::getWritableVariables() const {
     return out;
 }
 
-String USBHostUPS::dumpUSBDiagnostics() {
-    JsonDocument doc;
+void USBHostUPS::buildUSBDiagnostics(JsonDocument& doc) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    doc["vid"] = String(_vid, HEX);
+    doc["pid"] = String(_pid, HEX);
+    doc["manufacturer"] = _ups_data.get("ups.mfr");
+    doc["product"] = _device_product.length() > 0 ? _device_product : _ups_data.get("ups.model");
+    doc["serial_number"] = _ups_data.get("ups.serial");
 
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        doc["firmware_version"] = FIRMWARE_VERSION;
-        doc["vid"] = String(_vid, HEX);
-        doc["pid"] = String(_pid, HEX);
-        doc["manufacturer"] = _ups_data.get("ups.mfr");
-        doc["product"] = _device_product.length() > 0 ? _device_product : _ups_data.get("ups.model");
-        doc["serial_number"] = _ups_data.get("ups.serial");
+    // Format hex string as a custom 10-items-per-line JSON Array
+    String arrStr = "[\n";
+    if (_cached_report_descriptor_hex.length() > 0) {
+        for (size_t i = 0; i < _cached_report_descriptor_hex.length(); i += 2) {
+            if (i > 0 && (i / 2) % 10 == 0) arrStr += ",\n    ";
+            else if (i > 0) arrStr += ", ";
+            else arrStr += "    ";
 
-        // Format hex string as a custom 10-items-per-line JSON Array
-        String arrStr = "[\n";
-        if (_cached_report_descriptor_hex.length() > 0) {
-            for (size_t i = 0; i < _cached_report_descriptor_hex.length(); i += 2) {
-                if (i > 0 && (i / 2) % 10 == 0) arrStr += ",\n    ";
-                else if (i > 0) arrStr += ", ";
-                else arrStr += "    ";
-
-                String byteStr = _cached_report_descriptor_hex.substring(i, i+2);
-                byteStr.toUpperCase();
-                arrStr += "\"0x" + byteStr + "\"";
-            }
-        }
-        arrStr += "\n  ]";
-        doc["report_descriptor_hex"] = serialized(arrStr);
-
-        doc["quirks"] = _quirks;
-        doc["driver"] = _driver ? _driver->getDriverName() : "None";
-
-        JsonObject link = doc["link"].to<JsonObject>();
-        link["failures"] = _link.failures();
-        link["recoveries"] = _link.recoveries();
-        link["stale"] = isDataStale();
-        link["dropped_input_reports"] = (uint32_t)_dropped_events;
-        link["input_period_ms"] = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
-        link["input_recoveries"] = _in_wd.recoveries();
-        link["incomplete_input_reports"] = _in_reasm.dropped();
-        link["ep_in_mps"] = _ep_in_mps;
-
-        JsonArray scenarios = doc["scenarios"].to<JsonArray>();
-        JsonObject scenario = scenarios.add<JsonObject>();
-        scenario["description"] = "Live ESP32 dump";
-
-        JsonArray reports = scenario["reports"].to<JsonArray>();
-        for (const auto& kv : _cached_reports) {
-            JsonObject report = reports.add<JsonObject>();
-            report["id"] = kv.second.report_id;
-            report["type"] = kv.second.report_type;
-
-            String dataStr = "[";
-            for (size_t i = 0; i < kv.second.data.size(); ++i) {
-                if (i > 0) dataStr += ", ";
-                dataStr += String(kv.second.data[i]);
-            }
-            dataStr += "]";
-            report["data"] = serialized(dataStr);
-        }
-
-        JsonObject expectedData = scenario["expected_ups_data"].to<JsonObject>();
-        for (const auto& param : _ups_data.getAll()) {
-            expectedData[param.key] = param.value;
+            String byteStr = _cached_report_descriptor_hex.substring(i, i+2);
+            byteStr.toUpperCase();
+            arrStr += "\"0x" + byteStr + "\"";
         }
     }
+    arrStr += "\n  ]";
+    doc["report_descriptor_hex"] = serialized(arrStr);
 
-    String output;
-    serializeJsonPretty(doc, output);
-    return output;
+    doc["quirks"] = _quirks;
+    doc["driver"] = _driver ? _driver->getDriverName() : "None";
+
+    JsonObject link = doc["link"].to<JsonObject>();
+    link["failures"] = _link.failures();
+    link["recoveries"] = _link.recoveries();
+    link["stale"] = isDataStale();
+    link["dropped_input_reports"] = (uint32_t)_dropped_events;
+    link["input_period_ms"] = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
+    link["input_recoveries"] = _in_wd.recoveries();
+    link["incomplete_input_reports"] = _in_reasm.dropped();
+    link["ep_in_mps"] = _ep_in_mps;
+
+    JsonArray scenarios = doc["scenarios"].to<JsonArray>();
+    JsonObject scenario = scenarios.add<JsonObject>();
+    scenario["description"] = "Live ESP32 dump";
+
+    JsonArray reports = scenario["reports"].to<JsonArray>();
+    for (const auto& kv : _cached_reports) {
+        JsonObject report = reports.add<JsonObject>();
+        report["id"] = kv.second.report_id;
+        report["type"] = kv.second.report_type;
+
+        String dataStr = "[";
+        for (size_t i = 0; i < kv.second.data.size(); ++i) {
+            if (i > 0) dataStr += ", ";
+            dataStr += String(kv.second.data[i]);
+        }
+        dataStr += "]";
+        report["data"] = serialized(dataStr);
+    }
+
+    JsonObject expectedData = scenario["expected_ups_data"].to<JsonObject>();
+    for (const auto& param : _ups_data.getAll()) {
+        expectedData[param.key] = param.value;
+    }
 }
 
 void USBHostUPS::usb_host_lib_task(void *arg) {
