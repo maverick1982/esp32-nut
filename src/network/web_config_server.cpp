@@ -183,6 +183,10 @@ void WebConfigServer::loop() {
     }
     server.handleClient();
 
+    if (recovery.update(millis()) == RecoveryWindow::Event::EXPIRED) {
+        AppLogger::log("INFO", "[AUTH] Recovery window closed: expired, the current credentials stay valid");
+    }
+
     if (should_restart && (millis() - restart_request_time >= 1000)) {
         if (usb_ups) {
             usb_ups->end();
@@ -198,6 +202,13 @@ void WebConfigServer::setUPS(USBHostUPS* ups) {
 
 void WebConfigServer::setNetwork(AppNetworkManager* net) {
     network = net;
+}
+
+void WebConfigServer::openRecoveryWindow(uint32_t now) {
+    recovery.open(now);
+    AppLogger::log("INFO", "[AUTH] Recovery window open for %u min: new web credentials can be created "
+                           "without the current password",
+                   (unsigned)(recovery.durationMs() / 60000));
 }
 
 void WebConfigServer::handleConnect() {
@@ -605,22 +616,36 @@ void WebConfigServer::handleAuthLogin() {
 }
 
 void WebConfigServer::handleAuthStatus() {
-    sendAuth(auth.status(sessionToken(), is_ap_mode, millis()));
+    uint32_t now = millis();
+    bool open = recovery.isOpen(now);
+    sendAuth(auth.status(sessionToken(), is_ap_mode, now, open, open ? (recovery.remainingMs(now) + 999) / 1000 : 0));
 }
 
 void WebConfigServer::handleAuthCredentials() {
     if (!requireJson()) return;
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     // Prima creazione (TOFU), reset in AP o cambio in STA (US-063): AP/STA solo da is_ap_mode
-    const char* action = !credentials.hasCredentials() ? "created" : (is_ap_mode ? "reset" : "changed");
+    uint32_t now = millis();
+    bool in_recovery = recovery.isOpen(now);
+    const char* action = !credentials.hasCredentials() ? "created" : (is_ap_mode || in_recovery ? "reset" : "changed");
     // Durata del PBKDF2 nel log solo alla creazione (verifica dell'obiettivo dell'ADR)
     bool creating = !credentials.hasCredentials();
     auth_crypto.setLogTiming(creating);
-    AuthResponse res = auth.updateCredentials(body, sessionToken(), is_ap_mode, millis());
+    AuthResponse res = auth.updateCredentials(body, sessionToken(), is_ap_mode, now, in_recovery);
     auth_crypto.setLogTiming(false);
     if (res.status == 200) {
         AppLogger::log("INFO", String("[AUTH] Web UI credentials ") + action + " for user '" + credentials.username() + "'");
-        if (res.body.indexOf("\"sessions_closed\":false") >= 0) {
+        bool sessions_not_closed = res.body.indexOf("\"sessions_closed\":false") >= 0;
+        if (in_recovery) {
+            recovery.markUsed();
+            if (sessions_not_closed) {
+                AppLogger::log("ERROR", "[AUTH] Web credentials replaced from the recovery window, "
+                                        "but the sessions could not be closed");
+            } else {
+                AppLogger::log("WARN", "[AUTH] Web credentials replaced from the recovery window, all sessions closed");
+            }
+            AppLogger::log("INFO", "[AUTH] Recovery window closed: used");
+        } else if (sessions_not_closed) {
             AppLogger::log("ERROR", "[AUTH] Credentials changed but other sessions could not be closed");
         }
     } else if (res.status != 429 || throttle.failures() != throttle_logged_failures) {

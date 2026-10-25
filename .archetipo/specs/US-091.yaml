@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: HIGH
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-091: Finestra di recupero delle credenziali web dopo il doppio reset sulle schede senza Wi-Fi
 
@@ -34,3 +34,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-21T16:16:13Z"
+  - status: PLANNED
+    at: "2026-10-25T10:23:51Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T10:26:32Z"
+  - status: REVIEW
+    at: "2026-10-25T10:40:41Z"
+  - status: DONE
+    at: "2026-10-25T10:54:29Z"

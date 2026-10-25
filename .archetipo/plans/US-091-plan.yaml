@@ -1,0 +1,275 @@
+schema: archetipo/plan/v2
+spec_code: US-091
+body: |
+  # US-091: Finestra di recupero delle credenziali web dopo il doppio reset sulle schede senza Wi-Fi — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 3 | **Bloccato da:** US-090 (DONE)
+
+  Sulle schede senza Wi-Fi non c'è l'AP del PDR 0001: il doppio reset apre una finestra di 10 minuti in cui la pagina di login offre "Crea credenziali" senza la password attuale (PDR 0002 D5, ADR 0010 §5).
+
+  ---
+
+  ## Soluzione Tecnica
+
+  La decisione c'è già: da US-090 `planNetwork()` restituisce `recovery_window = true` sulle schede senza Wi-Fi dopo il doppio reset, e `false` sempre sulle schede con Wi-Fi. Questa spec aggiunge la finestra, la usa nelle API di autenticazione e nella pagina di login.
+
+  - **`RecoveryWindow` (logica pura, `lib/WebAuth/src/RecoveryWindow.h`, header-only, stile `ApIdleTimeout`).** `DEFAULT_DURATION_MS = ApIdleTimeout::DEFAULT_TIMEOUT_MS` come valore (600000, 10 minuti; costante propria per non legare WebAuth a ApIdleTimeout). Metodi: `open(now)`, `isOpen(now)` (aritmetica senza segno, corretta oltre il wrap di millis()), `remainingMs(now)`, `markUsed()` (chiude), `update(now)` → `RecoveryWindow::Event { NONE, EXPIRED }` riportato una sola volta alla scadenza. Solo RAM: non sopravvive a un riavvio.
+  - **`AuthService`** riceve un parametro `bool recovery = false` (default: nessun cambio per i chiamanti e i test esistenti):
+    - `status(token, ap_mode, now, recovery, recovery_remaining_s)` aggiunge `"recovery": true` e `"recovery_remaining_s"` solo quando la finestra è aperta; i campi attuali non cambiano.
+    - `updateCredentials(body, token, ap_mode, now, recovery)`: con `recovery` vero e non in AP, come il reset da AP la password attuale è ignorata e non serve una sessione; `replace()`, `sessions_.clear()`, poi una sessione nuova per chi ha creato le credenziali (stesso comportamento di `createInitialCredentials`: "Chi crea le credenziali resta autenticato"). Risposta `updatedBody` con `sessions_closed`. Senza credenziali resta il TOFU invariato. Il throttle non si applica (non c'è una password da indovinare).
+    - `login()` invariato: il login normale funziona durante la finestra.
+  - **`WebConfigServer`**: membro `RecoveryWindow recovery`; `openRecoveryWindow(now)` (log `[AUTH] Recovery window open for 10 min: new web credentials can be created without the current password`); `loop()` chiama `recovery.update(millis())` e su `EXPIRED` logga `[AUTH] Recovery window closed: expired, the current credentials stay valid`. `handleAuthStatus` passa finestra e secondi rimanenti; `handleAuthCredentials` passa `recovery.isOpen()`: su 200 chiama `markUsed()` e logga `[AUTH] Web credentials replaced from the recovery window, all sessions closed` e `[AUTH] Recovery window closed: used`.
+  - **`main.cpp`**: dopo `web_server.begin(...)`, `if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());`. Nessun'altra modifica: il server NUT resta avviato come oggi (gate `config_ok` invariato), quindi è attivo durante la finestra.
+  - **Pagina di login (`data/www/login.html`, `login.js`).** Con `status.recovery === true` la pagina apre la vista `view-create` in modalità recupero: badge "Recovery" al posto di "First use", testo "A double reset opened a recovery window. New credentials replace the current ones and sign out every device. The window closes in N min.", pulsante "Replace and sign in", e un link "Sign in with the current credentials" che porta alla vista di login. Il POST resta `/api/auth/credentials` con `{username, password}` (nessuna `current_password`). Senza `recovery` il comportamento è identico a oggi. Dopo la modifica: `python scripts/embed_web.py`.
+  - **Nessun mockup:** è una variante di testo e di un link nella vista "Create credentials" già esistente.
+  - **Sull'S3 non cambia nulla:** `recovery_window` è sempre falso con il Wi-Fi, la finestra non si apre mai e `status` non aggiunge campi.
+
+  ---
+
+  ## Strategia di Test
+
+  - **Nativi:** `test/test_recovery_window` (chiusa all'inizio; aperta per 10 minuti; `EXPIRED` una volta sola; `markUsed` chiude senza `EXPIRED`; wrap di millis; `remainingMs`). In `test/test_web_auth`: `status` con e senza `recovery`; `updateCredentials` in recupero senza sessione e senza password attuale → 200, credenziali sostituite, sessioni precedenti invalidate, cookie nuovo valido; vecchie credenziali ancora valide se nessuno le sostituisce; senza `recovery` in STA resta 401 senza sessione (regressione); AP invariato.
+  - **E2E (Playwright, framework esistente, `e2e/auth.spec.ts` con le route mockate):**
+    1. Utente con la scheda in recupero apre `/login`: vede la vista "Create credentials" con il badge "Recovery" e il tempo rimanente, compila username e password, invia → il POST a `/api/auth/credentials` non contiene `current_password` → reindirizzato alla home.
+    2. Durante la finestra l'utente sceglie "Sign in with the current credentials" ed entra con il login normale.
+    3. Senza `recovery` (`configured: true`) la pagina mostra il login come oggi.
+  - **Demo:** la `Dimostrazione` descrive una schermata visibile ("Crea credenziali" senza password attuale): è filmabile, la decisione resta alla review (oggi la registrazione è disattivata nella configurazione).
+  - **Regressione:** suite nativa completa, e2e completa, build S3. Sull'S3 il doppio reset continua ad aprire l'AP (già coperto da `test_net_boot_plan`; prova su hardware facoltativa).
+tasks:
+  - id: TASK-01
+    title: 'RecoveryWindow: finestra di recupero di 10 minuti (logica pura)'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** finestra temporizzata, solo in RAM, che si chiude per scadenza o per uso.
+
+      **Leggi:** `lib/ApIdleTimeout/src/ApIdleTimeout.h` (stile, aritmetica senza segno, evento una volta sola).
+
+      **Modifica:** crea `lib/WebAuth/src/RecoveryWindow.h` header-only con doc comment (PDR 0002 D5, ADR 0010 §5, solo RAM):
+      - `static const uint32_t DEFAULT_DURATION_MS = 600000;` (stesso valore del timeout dell'AP manuale)
+      - `enum class Event { NONE, EXPIRED };`
+      - `explicit RecoveryWindow(uint32_t duration_ms = DEFAULT_DURATION_MS)`
+      - `void open(uint32_t now)`; `bool isOpen(uint32_t now) const` (`_open && now - _openedAt < _durationMs`); `uint32_t remainingMs(uint32_t now) const` (0 se chiusa); `void markUsed()` (chiude, nessun EXPIRED dopo); `Event update(uint32_t now)` (EXPIRED una volta quando scade, poi NONE); `uint32_t durationMs() const`.
+
+      ## File Coinvolti
+      - lib/WebAuth/src/RecoveryWindow.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Header-only, solo `<stdint.h>`
+      - [ ] Corretto oltre il wrap di millis()
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di RecoveryWindow
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire apertura, scadenza, uso e wrap.
+
+      **Leggi:** `test/test_ap_idle_timeout/test_main.cpp` (struttura).
+
+      **Modifica:** crea `test/test_recovery_window/test_main.cpp`:
+      1. chiusa di default (`isOpen` false, `update` NONE, `remainingMs` 0);
+      2. `open(t)` → aperta fino a `t + 600000 - 1`, chiusa a `t + 600000`;
+      3. `update` restituisce EXPIRED una sola volta alla scadenza, poi NONE;
+      4. `markUsed()` chiude subito e `update` non restituisce mai EXPIRED;
+      5. `open` vicino a `UINT32_MAX` (wrap) resta aperta per 10 minuti;
+      6. `remainingMs` decresce.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_recovery_window`.
+
+      ## File Coinvolti
+      - test/test_recovery_window/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La suite passa
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'AuthService: status e sostituzione delle credenziali durante la finestra'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le API di autenticazione conoscono la finestra di recupero.
+
+      **Leggi:** `lib/WebAuth/src/AuthService.h/.cpp` (`status`, `updateCredentials`, `createInitialCredentials`).
+
+      **Modifica:**
+      1. `status(const String& token, bool ap_mode, uint32_t now, bool recovery = false, uint32_t recovery_remaining_s = 0)`: se `recovery` aggiunge `doc["recovery"] = true` e `doc["recovery_remaining_s"]`; altrimenti nessun campo nuovo.
+      2. `updateCredentials(..., uint32_t now, bool recovery = false)`: dopo il TOFU, se `ap_mode || recovery` segue il ramo del reset (password attuale ignorata, `replace`, `sessions_.clear()`). Solo nel ramo `recovery && !ap_mode`, dopo il clear, `fresh_cookie = sessionCookie(sessions_.create(now))` (chi crea resta autenticato, come nel TOFU). In AP la risposta resta senza cookie come oggi.
+      3. Aggiorna i commenti dell'header (contratto del ramo recovery, ADR 0010 §5).
+
+      ## File Coinvolti
+      - lib/WebAuth/src/AuthService.h
+      - lib/WebAuth/src/AuthService.cpp
+
+      ## Criteri di Completamento
+      - [ ] Con i parametri di default il comportamento è identico (test esistenti invariati)
+      - [ ] Ramo recovery senza sessione e senza `current_password` → 200 con cookie
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di AuthService in recupero
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criteri 2 e 3 della spec in nativo.
+
+      **Leggi:** `test/test_web_auth/test_main.cpp` (fixture `service`, helper, `test_service_status`, test di `updateCredentials` in AP e STA).
+
+      **Modifica:** aggiungi in `test/test_web_auth/test_main.cpp`:
+      1. `status` con `recovery` vero → `"recovery":true` e i secondi; con il default nessun campo `recovery`.
+      2. In recupero, senza token e senza `current_password`: 200, `sessions_closed` true, cookie `sid=` nuovo valido, le vecchie credenziali non funzionano più, le nuove sì, la sessione precedente (creata prima) non è più valida.
+      3. Nessuna sostituzione: le vecchie credenziali restano valide dopo che la finestra è passata (login 200).
+      4. Regressione: senza `recovery`, in STA e senza sessione → 401 `unauthorized`.
+      5. Registra i test nel `main`.
+
+      **Verifica:** `pio test -e native -f test_web_auth`.
+
+      ## File Coinvolti
+      - test/test_web_auth/test_main.cpp
+
+      ## Criteri di Completamento
+      - [ ] Nuovi test verdi, esistenti invariati
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-04
+  - id: TASK-05
+    title: 'WebConfigServer e main: apertura, scadenza, uso e log della finestra'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** cablare la finestra sulle schede senza Wi-Fi e scrivere gli eventi nel System Log.
+
+      **Leggi:** `src/network/web_config_server.cpp` (`loop`, `handleAuthStatus` ~riga 608, `handleAuthCredentials` ~riga 619), `include/network/web_config_server.h`; `src/core/main.cpp` (dopo `web_server.begin`).
+
+      **Modifica:**
+      1. `web_config_server.h`: `#include "RecoveryWindow.h"`, membro `RecoveryWindow recovery;`, metodo pubblico `void openRecoveryWindow(uint32_t now);`.
+      2. `openRecoveryWindow`: `recovery.open(now)` e log INFO `[AUTH] Recovery window open for %u min: new web credentials can be created without the current password` (minuti da `durationMs()`).
+      3. `loop()`: `if (recovery.update(millis()) == RecoveryWindow::Event::EXPIRED)` → log INFO `[AUTH] Recovery window closed: expired, the current credentials stay valid`.
+      4. `handleAuthStatus`: `bool open = recovery.isOpen(now)` e `auth.status(token, is_ap_mode, now, open, open ? (recovery.remainingMs(now) + 999) / 1000 : 0)`.
+      5. `handleAuthCredentials`: `bool open = recovery.isOpen(now)`; chiama `auth.updateCredentials(..., open)`; se `open && res.status == 200` → `recovery.markUsed()`, log WARN `[AUTH] Web credentials replaced from the recovery window, all sessions closed` e INFO `[AUTH] Recovery window closed: used`.
+      6. `main.cpp`: dopo il blocco che chiama `web_server.begin(...)`, `if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());`.
+
+      **Verifica:** build S3 da PowerShell.
+
+      ## File Coinvolti
+      - include/network/web_config_server.h
+      - src/network/web_config_server.cpp
+      - src/core/main.cpp
+
+      ## Criteri di Completamento
+      - [ ] Apertura, scadenza, uso e sostituzione loggati
+      - [ ] Sull'S3 la finestra non si apre mai (`recovery_window` falso con Wi-Fi)
+      - [ ] Build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-05
+  - id: TASK-06
+    title: Pagina di login in modalità recupero
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** durante la finestra la pagina di login offre "Create credentials" senza la password attuale, con la possibilità di entrare normalmente.
+
+      **Leggi:** `data/www/login.html` (sezione `view-create`, badge `auth-badge`, `auth-lead`, `btn-create`), `data/www/login.js` (`showView`, decisione su `status.configured` ~riga 62, submit della creazione ~riga 238, gestione di `already_configured`).
+
+      **Modifica:**
+      1. `login.html`: id per badge e testo della vista di creazione (`create-badge`, `create-lead`), e un link nascosto `<button type="button" class="inline-link" id="link-signin" hidden>Sign in with the current credentials</button>` sotto il form.
+      2. `login.js`: dopo `status.authenticated`, se `status.recovery === true` → `showView('create')` in modalità recupero: badge "Recovery", lead "A double reset opened a recovery window. New credentials replace the current ones and sign out every device. The window closes in N min." (N = `Math.ceil(status.recovery_remaining_s / 60)`), etichetta del pulsante "Replace and sign in", `link-signin` visibile (porta a `showView('signin')`). Altrimenti la logica attuale invariata. Il POST resta `/api/auth/credentials` con `{username, password}`; su 200 `goHome()` come oggi.
+      3. Rigenera gli asset: `python scripts/embed_web.py`; aggiorna il `?v=` di `login.js` se il progetto lo richiede per la cache.
+
+      ## File Coinvolti
+      - data/www/login.html
+      - data/www/login.js
+      - data/www/login_inlined.html e include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Con `recovery` la vista di creazione mostra badge, testo e link
+      - [ ] Senza `recovery` la pagina è identica a oggi
+      - [ ] Asset rigenerati
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-06
+  - id: TASK-07
+    title: E2E della pagina di login in recupero
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire i flussi utente della finestra con Playwright.
+
+      **Leggi:** `e2e/auth.spec.ts` (route mockate di `/api/auth/status`, `/api/auth/credentials`, `/api/auth/login`; helper in `e2e/support/webui.ts`).
+
+      **Modifica:** aggiungi in `e2e/auth.spec.ts` un `describe('Recovery window (US-091)')`:
+      1. status `{configured:true, authenticated:false, ap_mode:false, recovery:true, recovery_remaining_s:540}` → su `/login` è visibile la vista di creazione con badge "Recovery", testo con "9 min" e pulsante "Replace and sign in"; compilando e inviando, la richiesta a `/api/auth/credentials` non contiene `current_password`; con risposta 200 la pagina va alla home.
+      2. Stesso status: clic su "Sign in with the current credentials" → vista di login; login con risposta 200 → home.
+      3. status senza `recovery` → vista di login come oggi (nessun badge "Recovery").
+
+      **Verifica:** `npx playwright test e2e/auth.spec.ts`, poi la suite completa.
+
+      ## File Coinvolti
+      - e2e/auth.spec.ts
+
+      ## Criteri di Completamento
+      - [ ] I tre scenari passano
+      - [ ] Suite e2e completa verde
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-07
+  - id: TASK-08
+    title: Regressione completa e build
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio di regressione.
+
+      **Passi:**
+      1. Suite nativa completa (`pio test -e native` con il PATH del toolchain mingw).
+      2. e2e completa (`npx playwright test`).
+      3. Build S3 da PowerShell.
+      4. Controllo: `grep` che `openRecoveryWindow` sia chiamato solo con `net_plan.recovery_window`, e che su una scheda con Wi-Fi `planNetwork` non lo imposti mai (già in `test_net_boot_plan`).
+      5. Facoltativo su hardware (S3): doppio reset → AP come prima, nessuna riga `[AUTH] Recovery window` nel log.
+
+      ## File Coinvolti
+      - nessuno
+
+      ## Criteri di Completamento
+      - [ ] Nativi ed e2e verdi, build OK
+      - [ ] Esito della prova facoltativa riportato nel riepilogo
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-08

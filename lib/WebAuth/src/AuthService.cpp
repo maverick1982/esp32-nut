@@ -169,7 +169,8 @@ AuthResponse AuthService::createInitialCredentials(const String& body, uint32_t 
     return res;
 }
 
-AuthResponse AuthService::updateCredentials(const String& body, const String& token, bool ap_mode, uint32_t now) {
+AuthResponse AuthService::updateCredentials(const String& body, const String& token, bool ap_mode, uint32_t now,
+                                            bool recovery) {
     String current_password, username, password;
     bool has_current = false;
     if (!parseUpdate(body, current_password, has_current, username, password)) {
@@ -181,11 +182,14 @@ AuthResponse AuthService::updateCredentials(const String& body, const String& to
 
     bool sessions_closed;
     String fresh_cookie;
-    if (ap_mode) {
-        // Reset dalla modalità AP: password attuale ignorata, tutte le sessioni chiuse
+    if (ap_mode || recovery) {
+        // Reset dalla modalità AP o dalla finestra di recupero: password attuale
+        // ignorata, tutte le sessioni chiuse
         CredentialStore::ReplaceResult result = credentials_.replace(username, password);
         if (result != CredentialStore::ReplaceResult::OK) return replaceError(result);
         sessions_closed = sessions_.clear();
+        // Fuori dall'AP chi crea le credenziali resta autenticato, come nel TOFU (US-091)
+        if (!ap_mode) fresh_cookie = sessionCookie(sessions_.create(now));
     } else {
         // /api/auth/credentials è pubblica in AuthPolicy (TOFU): la sessione si
         // controlla qui
@@ -218,13 +222,18 @@ AuthResponse AuthService::updateCredentials(const String& body, const String& to
     return res;
 }
 
-AuthResponse AuthService::status(const String& token, bool ap_mode, uint32_t now) {
+AuthResponse AuthService::status(const String& token, bool ap_mode, uint32_t now, bool recovery,
+                                 uint32_t recovery_remaining_s) {
     bool authenticated = isAuthenticated(token, now);
     JsonDocument doc;
     doc["configured"] = credentials_.hasCredentials();
     doc["authenticated"] = authenticated;
     doc["ap_mode"] = ap_mode;
     if (authenticated) doc["username"] = credentials_.username().c_str();
+    if (recovery) {
+        doc["recovery"] = true;
+        doc["recovery_remaining_s"] = recovery_remaining_s;
+    }
     std::string out;
     serializeJson(doc, out);
 

@@ -135,6 +135,8 @@ void setup() {
         web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }
+    // Boards without Wi-Fi have no AP: the double reset opens the recovery window (US-091)
+    if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
     // "%s": messages can carry values sent by NUT clients (SET VAR, US-067)

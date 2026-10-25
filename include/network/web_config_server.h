@@ -11,6 +11,7 @@
 #include "CredentialStore.h"
 #include "LoginThrottle.h"
 #include "SessionTable.h"
+#include "RecoveryWindow.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
 
@@ -22,6 +23,9 @@ public:
     void setUPS(USBHostUPS* ups);
     // Active network link: captive portal address, status text, MAC (US-090)
     void setNetwork(AppNetworkManager* network);
+    // Double reset on a board without Wi-Fi: new web credentials without the current
+    // password for 10 minutes (US-091, PDR 0002 D5)
+    void openRecoveryWindow(uint32_t now);
 
 private:
     WebServer server;
@@ -39,6 +43,7 @@ private:
     uint32_t throttle_logged_failures = 0;
     SessionTable sessions;
     AuthService auth;
+    RecoveryWindow recovery;
 
     void handleConnect();
     void handleLogs();

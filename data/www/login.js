@@ -6,6 +6,26 @@
     const JSON_HEADERS = { 'Content-Type': 'application/json' };
     const DEFAULT_SIGNIN_ERROR = 'Invalid username or password';
     const DEFAULT_CREATE_ERROR = 'Please fix the highlighted fields.';
+    const FIRST_USE_LEAD = $('create-lead').textContent;
+    // US-091: double reset on a board without Wi-Fi, new credentials replace the current ones
+    let recoveryMode = false;
+    const createLabel = () => (recoveryMode ? 'Replace and sign in' : 'Create and sign in');
+    const createBusyLabel = () => (recoveryMode ? 'Replacing' : 'Creating');
+
+    function applyCreateMode(recovery, remainingS) {
+        recoveryMode = recovery;
+        $('create-title').textContent = recovery ? 'Reset credentials' : 'Create credentials';
+        $('create-badge').textContent = recovery ? 'Recovery' : 'First use';
+        if (recovery) {
+            const min = Math.max(1, Math.ceil((Number(remainingS) || 0) / 60));
+            $('create-lead').textContent = 'A double reset opened a recovery window. New credentials replace ' +
+                'the current ones and sign out every device. The window closes in ' + min + '\u00a0min.';
+        } else {
+            $('create-lead').textContent = FIRST_USE_LEAD;
+        }
+        $('recovery-signin').hidden = !recovery;
+        $('btn-create').querySelector('.btn-label').textContent = createLabel();
+    }
 
     function goHome() {
         window.location.replace('/');
@@ -57,6 +77,11 @@
         }
         if (status.authenticated === true) {
             goHome();
+            return;
+        }
+        applyCreateMode(status.recovery === true, status.recovery_remaining_s);
+        if (recoveryMode) {
+            showView('create');
             return;
         }
         // Only an explicit "configured: false" opens the first-use form; when in
@@ -214,7 +239,7 @@
         setFieldError('new-password2', 'err-password2', false);
         $('create-error').hidden = true;
         paintRules(false);
-        setBusy($('btn-create'), false, 'Create and sign in');
+        setBusy($('btn-create'), false, createLabel());
     }
 
     ['new-username', 'new-password', 'new-password2'].forEach((id) => {
@@ -232,7 +257,7 @@
         e.preventDefault();
         if (!validateCreate()) return;
         const btn = $('btn-create');
-        setBusy(btn, true, 'Creating');
+        setBusy(btn, true, createBusyLabel());
         let result;
         try {
             result = await postJson('/api/auth/credentials', {
@@ -241,7 +266,7 @@
             });
         } catch (err) {
             console.error('Create credentials request failed:', err);
-            setBusy(btn, false, 'Create and sign in');
+            setBusy(btn, false, createLabel());
             showCreateError('Network error, please try again');
             return;
         }
@@ -249,16 +274,18 @@
             goHome();
             return;
         }
-        setBusy(btn, false, 'Create and sign in');
+        setBusy(btn, false, createLabel());
         // Credentials created meanwhile: in STA the request becomes a change, so
         // without a session the firmware answers 401 unauthorized (US-063); 409
         // already_configured is still handled for the internal creation path
         if (result.status === 409 || result.status === 401) {
-            // Back to the real state (Sign in)
+            // Back to the real state (Sign in); in recovery the window closed meanwhile
+            const wasRecovery = recoveryMode;
             resetCreate();
             await loadStatus();
             if (!$('view-signin').hidden) {
-                showSigninError('Credentials have already been created. Please sign in.');
+                showSigninError(wasRecovery ? 'The recovery window has closed. Please sign in.'
+                    : 'Credentials have already been created. Please sign in.');
             }
             return;
         }
@@ -272,6 +299,9 @@
             showCreateError(`Could not create the credentials (HTTP ${result.status})`);
         }
     });
+
+    // US-091: during the recovery window the current credentials still work
+    $('link-signin').addEventListener('click', () => showView('signin'));
 
     // ---------- Show / hide password ----------
     document.querySelectorAll('[data-toggle]').forEach((b) => {

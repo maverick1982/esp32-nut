@@ -2341,13 +2341,14 @@ body.auth-page {
             </form>
         </section>
 
-        <!-- Create credentials: first use, no credentials stored -->
+        <!-- Create credentials: first use, no credentials stored; also the recovery window
+             after a double reset on boards without Wi-Fi (US-091) -->
         <section class="auth-view panel auth-card" id="view-create" hidden>
             <div class="panel-header">
-                <h2>Create credentials</h2>
-                <span class="auth-badge">First use</span>
+                <h2 id="create-title">Create credentials</h2>
+                <span class="auth-badge" id="create-badge">First use</span>
             </div>
-            <p class="auth-lead">No web credentials are set on this device yet. The first account created
+            <p class="auth-lead" id="create-lead">No web credentials are set on this device yet. The first account created
                 becomes the administrator.</p>
 
             <form class="auth-form" id="create-form" novalidate>
@@ -2412,6 +2413,8 @@ body.auth-page {
                 </button>
             </form>
 
+            <p class="auth-fineprint" id="recovery-signin" hidden>Remember the current password?
+                <button type="button" class="inline-link" id="link-signin">Sign in with the current credentials</button></p>
             <p class="auth-fineprint">The web UI runs over plain HTTP on your local network. Do not reuse a
                 password you use elsewhere. These credentials are separate from the NUT server credentials.</p>
         </section>
@@ -2425,6 +2428,26 @@ body.auth-page {
     const JSON_HEADERS = { 'Content-Type': 'application/json' };
     const DEFAULT_SIGNIN_ERROR = 'Invalid username or password';
     const DEFAULT_CREATE_ERROR = 'Please fix the highlighted fields.';
+    const FIRST_USE_LEAD = $('create-lead').textContent;
+    // US-091: double reset on a board without Wi-Fi, new credentials replace the current ones
+    let recoveryMode = false;
+    const createLabel = () => (recoveryMode ? 'Replace and sign in' : 'Create and sign in');
+    const createBusyLabel = () => (recoveryMode ? 'Replacing' : 'Creating');
+
+    function applyCreateMode(recovery, remainingS) {
+        recoveryMode = recovery;
+        $('create-title').textContent = recovery ? 'Reset credentials' : 'Create credentials';
+        $('create-badge').textContent = recovery ? 'Recovery' : 'First use';
+        if (recovery) {
+            const min = Math.max(1, Math.ceil((Number(remainingS) || 0) / 60));
+            $('create-lead').textContent = 'A double reset opened a recovery window. New credentials replace ' +
+                'the current ones and sign out every device. The window closes in ' + min + '\u00a0min.';
+        } else {
+            $('create-lead').textContent = FIRST_USE_LEAD;
+        }
+        $('recovery-signin').hidden = !recovery;
+        $('btn-create').querySelector('.btn-label').textContent = createLabel();
+    }
 
     function goHome() {
         window.location.replace('/');
@@ -2476,6 +2499,11 @@ body.auth-page {
         }
         if (status.authenticated === true) {
             goHome();
+            return;
+        }
+        applyCreateMode(status.recovery === true, status.recovery_remaining_s);
+        if (recoveryMode) {
+            showView('create');
             return;
         }
         // Only an explicit "configured: false" opens the first-use form; when in
@@ -2633,7 +2661,7 @@ body.auth-page {
         setFieldError('new-password2', 'err-password2', false);
         $('create-error').hidden = true;
         paintRules(false);
-        setBusy($('btn-create'), false, 'Create and sign in');
+        setBusy($('btn-create'), false, createLabel());
     }
 
     ['new-username', 'new-password', 'new-password2'].forEach((id) => {
@@ -2651,7 +2679,7 @@ body.auth-page {
         e.preventDefault();
         if (!validateCreate()) return;
         const btn = $('btn-create');
-        setBusy(btn, true, 'Creating');
+        setBusy(btn, true, createBusyLabel());
         let result;
         try {
             result = await postJson('/api/auth/credentials', {
@@ -2660,7 +2688,7 @@ body.auth-page {
             });
         } catch (err) {
             console.error('Create credentials request failed:', err);
-            setBusy(btn, false, 'Create and sign in');
+            setBusy(btn, false, createLabel());
             showCreateError('Network error, please try again');
             return;
         }
@@ -2668,16 +2696,18 @@ body.auth-page {
             goHome();
             return;
         }
-        setBusy(btn, false, 'Create and sign in');
+        setBusy(btn, false, createLabel());
         // Credentials created meanwhile: in STA the request becomes a change, so
         // without a session the firmware answers 401 unauthorized (US-063); 409
         // already_configured is still handled for the internal creation path
         if (result.status === 409 || result.status === 401) {
-            // Back to the real state (Sign in)
+            // Back to the real state (Sign in); in recovery the window closed meanwhile
+            const wasRecovery = recoveryMode;
             resetCreate();
             await loadStatus();
             if (!$('view-signin').hidden) {
-                showSigninError('Credentials have already been created. Please sign in.');
+                showSigninError(wasRecovery ? 'The recovery window has closed. Please sign in.'
+                    : 'Credentials have already been created. Please sign in.');
             }
             return;
         }
@@ -2691,6 +2721,9 @@ body.auth-page {
             showCreateError(`Could not create the credentials (HTTP ${result.status})`);
         }
     });
+
+    // US-091: during the recovery window the current credentials still work
+    $('link-signin').addEventListener('click', () => showView('signin'));
 
     // ---------- Show / hide password ----------
     document.querySelectorAll('[data-toggle]').forEach((b) => {
