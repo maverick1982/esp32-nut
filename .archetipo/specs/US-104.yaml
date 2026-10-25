@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-104
+title: Interfaccia di trasporto per i driver UPS
+epic:
+  code: EP-006
+  title: 'Architettura modulare: sorgente UPS e trasporto'
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-104: Interfaccia di trasporto per i driver UPS
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-103
+
+  **User Story**
+  Come sviluppatore che aggiunge driver UPS,
+  voglio che i driver dipendano da un'interfaccia di trasporto e non dall'host USB,
+  in modo da poter aggiungere driver e trasporti nuovi (base per `nutdrv_qx`, `docs/plans/nutdrv-qx-support.md`) senza toccare `USBHostUPS`.
+
+  **Dimostrazione**
+  I test dei driver (`test_generic_driver`, `test_apc_driver`, …, `test_poll_cycle`) e il replay girano con un trasporto finto al posto dell'host finto. Nessun file dei driver include `IUSBHostUPS.h` o `USBHostUPS.h`.
+
+  **Criteri di Accettazione**
+  - [ ] `IUPSDriver::loop()`, `decodeReport()` e `postDecode()` ricevono l'interfaccia di trasporto. Questa offre ciò che i driver usano oggi: richiesta di report e string descriptor, scrittura di un usage, quirks, usage e parser del dispositivo, polling in pausa, età dei report, VID/PID, log di debug.
+  - [ ] `GenericDriver` e i 9 driver derivati non dipendono più da `IUSBHostUPS`/`USBHostUPS`, e `USBHostUPS` implementa il trasporto.
+  - [ ] Le fixture di replay danno gli stessi valori di prima.
+  - [ ] Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni; build `esp32-s3-standard` OK.
+
+  **Assunzioni**
+  - **Ordine:** dopo US-103, perché entrambe toccano `IUSBHostUPS.h`.
+  - **Invariati:** tempi, task e lock dello strato USB (ADR 0008).
+  - **Fuori ambito:** le primitive nuove per i Q* (SET_REPORT grezzo, string descriptor con langid), che arriveranno con `nutdrv_qx`.
+history:
+  - status: TODO
+    at: "2026-10-25T17:05:58Z"

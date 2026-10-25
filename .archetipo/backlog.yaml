@@ -13,6 +13,8 @@ epics:
     title: CI/CD e Automazione
   - code: EP-005
     title: Supporto multi-scheda (ESP32-P4, Ethernet)
+  - code: EP-006
+    title: 'Architettura modulare: sorgente UPS e trasporto'
 order:
   - US-000
   - US-001
@@ -113,3 +115,6 @@ order:
   - US-102
   - US-098
   - US-101
+  - US-103
+  - US-104
+  - US-105
