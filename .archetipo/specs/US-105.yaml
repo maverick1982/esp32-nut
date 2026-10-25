@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-105
+title: Comandi e variabili scrivibili dietro il modello UPS
+epic:
+  code: EP-006
+  title: 'Architettura modulare: sorgente UPS e trasporto'
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-105: Comandi e variabili scrivibili dietro il modello UPS
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-103, US-104
+
+  **User Story**
+  Come sviluppatore che aggiunge un protocollo UPS non HID,
+  voglio che comandi e variabili scrivibili passino per il driver invece di essere costruiti sugli usage HID dentro l'interfaccia,
+  in modo che un driver Q* possa offrire i suoi comandi (beeper, test, spegnimento) senza riscrivere la logica HID.
+
+  **Dimostrazione**
+  Gli stessi comandi e le stesse variabili di prima compaiono in `upscmd -l`, `LIST RW` e nella Web UI. I test nativi di comandi e `SET VAR` passano invariati. La build di test, provata da noi e dai tester su UPS reali, esegue `beeper.toggle`, `shutdown.stop` e un `SET VAR`.
+
+  **Criteri di Accettazione**
+  - [ ] La logica HID dei comandi esce da `IUSBHostUPS.h` e diventa una parte del lato HID usata dai driver HID: catalogo, passi di spegnimento con la pausa di 125 ms, sequenza di `shutdown.default`, beeper e scritture.
+  - [ ] `IUpsSource` esegue comandi, `SET VAR` e reset tramite il driver: un driver non HID può fornire i propri con lo stesso aggancio.
+  - [ ] Nessun cambio di comportamento: stessi elenchi di comandi e variabili, stessi valori scritti nello stesso ordine, stesso ordine dei lock (`_op_mutex` poi `_mutex`, ADR 0008), stessi messaggi nel System Log.
+  - [ ] Una build di test viene distribuita ai tester prima della release (ADR 0010).
+  - [ ] Regressione: test nativi, replay ed e2e verdi; build `esp32-s3-standard` OK.
+
+  **Assunzioni**
+  - **Rischio:** è il passo che tocca la parte USB sensibile ai tempi, per questo serve la build di test.
+  - **Fuori ambito:** `nutdrv_qx` stesso e MQTT.
+history:
+  - status: TODO
+    at: "2026-10-25T17:05:58Z"

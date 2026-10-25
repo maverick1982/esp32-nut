@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-103
+title: Interfaccia IUpsSource per chi usa i dati dell'UPS
+epic:
+  code: EP-006
+  title: 'Architettura modulare: sorgente UPS e trasporto'
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-103: Interfaccia IUpsSource per chi usa i dati dell'UPS
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore che mantiene server NUT e Web API,
+  voglio che usino un'interfaccia della sorgente UPS senza tipi HID,
+  in modo che una sorgente diversa dall'USB HID (per esempio un driver Q*) si possa collegare senza toccarli.
+
+  **Dimostrazione**
+  I test di `test_nut_server` e `test_web_api` girano con una sorgente finta che implementa solo `IUpsSource`, senza HID. Un `grep` mostra che `lib/NUTServer` e `lib/WebApi` non includono più `IUSBHostUPS.h`, `HIDParser.h`, `HIDUsages.h` e `NutTable.h`.
+
+  **Criteri di Accettazione**
+  - [ ] `IUpsSource` offre ciò che serve a chi usa i dati: dati con il lock, stato, connessione, dati vecchi, comandi supportati ed esecuzione, variabili scrivibili, `SET VAR` e reset, beeper.
+  - [ ] I tipi che l'interfaccia espone (comando, variabile scrivibile, esito) stanno in un header neutro, senza dipendenze HID.
+  - [ ] `NUTServer`, `WebApiJson` e `WebConfigServer` (per dati e comandi) usano `IUpsSource`. L'export della diagnostica USB può restare legato a `USBHostUPS`.
+  - [ ] `USBHostUPS` implementa `IUpsSource`, e l'interfaccia per i driver resta com'è (US-104).
+  - [ ] Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni; build `esp32-s3-standard` OK.
+
+  **Assunzioni**
+  - **Origine:** ADR 0010, passo 4 (divisione di `IUSBHostUPS`).
+  - **Rischio:** cambio meccanico, lo strato USB non viene toccato.
+  - **Branch:** lavoro su `feature/ep-006-ups-source-transport`; il merge su `main` avviene dopo la release con ESP-IDF 5.5, così una regressione si attribuisce o alla piattaforma o al refactoring.
+  - **Fuori ambito:** passo 3 dell'ADR (`app` come composition root) e divisioni interne di `web` e `nut-server` (passo 5).
+history:
+  - status: TODO
+    at: "2026-10-25T17:05:58Z"
