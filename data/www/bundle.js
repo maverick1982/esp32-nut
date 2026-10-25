@@ -516,6 +516,11 @@ document.addEventListener('DOMContentLoaded', () => {
     apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
+            // Boards without Wi-Fi: no Wi-Fi settings to show (US-092)
+            if (data.network && data.network.type === 'ethernet') {
+                const wifiTab = document.querySelector('.tab[data-target="wifi"]');
+                if (wifiTab) wifiTab.style.display = 'none';
+            }
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -1339,6 +1344,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let statusInFlight = false;
+    // "Ethernet" on boards without Wi-Fi, from /api/system-status (US-092)
+    let networkLabel = 'Wi-Fi';
 
     async function fetchSystemStatus() {
         if (sessionExpired) return;
@@ -1355,8 +1362,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
 
+            if (data.network && data.network.type === 'ethernet') networkLabel = 'Ethernet';
             if (lblWifi && data.wifi) {
-                lblWifi.textContent = 'Wi-Fi: ' + data.wifi.status;
+                lblWifi.textContent = networkLabel + ': ' + data.wifi.status;
                 if (data.wifi.status === 'AP Mode Active') {
                     indWifi.className = 'status-indicator info';
                 } else if (data.wifi.status === 'Connecting') {
@@ -1399,7 +1407,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
             
-            if (lblWifi) lblWifi.textContent = 'Wi-Fi: Offline';
+            if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
             if (indWifi) indWifi.className = 'status-indicator danger';
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';

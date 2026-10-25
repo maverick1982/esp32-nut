@@ -13,7 +13,9 @@
  *   timeout runs only after the double reset with a valid configuration: there is a
  *   normal mode to go back to.
  * - Without Wi-Fi there is no access point: Ethernet when the board has it. The double
- *   reset asks for the recovery window of the web credentials instead (US-091).
+ *   reset asks for the recovery window of the web credentials instead (US-091). A missing
+ *   or invalid configuration has no setup page to fill in either: the board saves the
+ *   default NUT settings and joins the network with DHCP (US-092).
  */
 struct BoardCaps {
     bool has_wifi;
@@ -27,10 +29,12 @@ struct NetBootPlan {
     bool captive_portal;
     bool ap_idle_timeout;
     bool recovery_window;
+    // Save the default configuration before starting (boards without Wi-Fi, US-092)
+    bool default_config;
 };
 
 inline NetBootPlan planNetwork(BoardCaps caps, bool config_valid, bool manual_trigger) {
-    NetBootPlan plan = { BootLink::NONE, false, false, false };
+    NetBootPlan plan = { BootLink::NONE, false, false, false, false };
     if (caps.has_wifi) {
         if (!config_valid || manual_trigger) {
             plan.link = BootLink::WIFI_ACCESS_POINT;
@@ -43,6 +47,7 @@ inline NetBootPlan planNetwork(BoardCaps caps, bool config_valid, bool manual_tr
     }
     if (caps.has_ethernet) plan.link = BootLink::ETHERNET;
     plan.recovery_window = manual_trigger;
+    plan.default_config = !config_valid;
     return plan;
 }
 

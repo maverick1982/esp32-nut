@@ -1,13 +1,15 @@
 #include "network/network_manager.h"
 #include "network/wifi_links.h"
+#include "network/eth_link.h"
 #include "core/app_logger.h"
 
-AppNetworkManager::AppNetworkManager() : m_sta(nullptr), m_ap(nullptr) {}
+AppNetworkManager::AppNetworkManager() : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr) {}
 
 AppNetworkManager::~AppNetworkManager() {
     m_selector.activate(nullptr);
     delete m_sta;
     delete m_ap;
+    delete m_eth;
 }
 
 void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid,
@@ -21,7 +23,13 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         if (!m_ap) m_ap = new WifiApLink(board.defaults.ap_ssid, board.defaults.ap_password);
         m_selector.activate(m_ap);
         break;
-    case BootLink::ETHERNET: // the Ethernet link comes with the P4 profile (US-092)
+    case BootLink::ETHERNET:
+        if (board.eth.type != EthType::NONE) {
+            if (!m_eth) m_eth = new EthLink(board.eth);
+            m_selector.activate(m_eth);
+            break;
+        }
+        // fall through: a profile with has_ethernet but no Ethernet port data
     case BootLink::NONE:
         AppLogger::log("WARN", "[NETWORK] No network link available on this board (%s)", board.name);
         m_selector.activate(nullptr);

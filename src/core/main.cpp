@@ -34,6 +34,10 @@ uint32_t boot_time_ms = 0;
 // Controlled restarts with growing delays, then degraded mode (review A7)
 RestartPolicy restart_policy;
 
+#if NUT_USB_DIAG
+void usbDiagBegin();  // src/core/usb_diag.cpp
+#endif
+
 // Manual AP mode: back to STA after 10 minutes without stations (US-064)
 ApIdleTimeout ap_timeout;
 
@@ -112,6 +116,13 @@ void setup() {
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
     // Which link to start, from the board capabilities (US-090, ADR 0010 §3)
     NetBootPlan net_plan = planNetwork({ board().has_wifi, board().has_ethernet }, config_ok, manual_ap_triggered);
+    if (net_plan.default_config) {
+        // No Wi-Fi setup page on this board: default NUT settings (no credentials, UPS
+        // name "ups"), the state an S3 reaches after the Wi-Fi setup (US-092)
+        AppLogger::log("WARN", "[MAIN] No saved configuration: using the default NUT settings");
+        config_mgr.setNutConfig(NutConfig());
+        config_ok = config_mgr.save() && config_mgr.begin() && config_mgr.isValid();
+    }
     web_server.setNetwork(&network_mgr);
     web_server.setBoardSettings(&board_settings_store, board_settings);
     web_server.setStatusLed(&diagnostic_led);
@@ -167,6 +178,10 @@ void setup() {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
     } else {
         AppLogger::log("INFO", "[MAIN] USBHostUPS initialized correctly.");
+#if NUT_USB_DIAG
+        // Optional build: log every device the USB host enumerates (src/core/usb_diag.cpp)
+        usbDiagBegin();
+#endif
     }
 
     // Inizializzazione NUTServer (solo se la configurazione è valida)

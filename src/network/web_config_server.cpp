@@ -92,7 +92,10 @@ void WebConfigServer::begin(bool isAPMode) {
 
 
     // REST endpoints
-    server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
+    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092)
+    if (board().has_wifi) {
+        server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
+    }
     server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
     // Board page (US-094): not public in AuthPolicy, so protected by the login
     server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
@@ -355,6 +358,8 @@ void WebConfigServer::handleGetConfig() {
     JsonObject wifiObj = doc["wifi"].to<JsonObject>();
     wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
+    // "ethernet" on boards without Wi-Fi: the UI hides the Wi-Fi tab (US-092)
+    doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
     
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
