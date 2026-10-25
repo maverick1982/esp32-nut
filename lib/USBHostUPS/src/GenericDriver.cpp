@@ -21,7 +21,8 @@
  */
 
 #include "GenericDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "CommandCatalog.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
@@ -126,7 +127,7 @@ bool GenericDriver::isDynamicUsage(const HIDUsageDef& u) {
            strstr(u.path, "LineFailCause") != nullptr;
 }
 
-void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick.clear();
     full.clear();
     const auto& usages = host->getUsages();
@@ -167,7 +168,7 @@ void GenericDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qui
 // A FEATURE report is an INPUT twin when every one of its usages is also in the INPUT
 // report with the same ID: the INPUT report then already refreshes all its values.
 // libhid.c keeps one buffer per report ID for both (issue #60, APC Back-UPS BX).
-void GenericDriver::findInputTwins(IUSBHostUPS* host) {
+void GenericDriver::findInputTwins(IHidTransport* host) {
     memset(_input_twin, 0, sizeof(_input_twin));
     uint32_t mismatch[8] = {};
     const auto& usages = host->getUsages();
@@ -188,7 +189,7 @@ void GenericDriver::findInputTwins(IUSBHostUPS* host) {
 }
 
 // A report is static when none of its usages is dynamic
-void GenericDriver::findStaticReports(IUSBHostUPS* host) {
+void GenericDriver::findStaticReports(IHidTransport* host) {
     memset(_static_report, 0, sizeof(_static_report));
     uint32_t dynamic[2][8] = {};
     for (const auto& u : host->getUsages()) {
@@ -217,7 +218,7 @@ void GenericDriver::invalidateReport(uint8_t report_type, uint8_t report_id) {
     }
 }
 
-bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const {
+bool GenericDriver::isFreshFromInput(IHidTransport* host, const PollItem& item, uint32_t now) const {
     if (item.report_type == 3) {
         if (!(_input_twin[item.id / 32] & (1u << (item.id % 32)))) return false;
     } else if (item.report_type != 1) {
@@ -228,7 +229,7 @@ bool GenericDriver::isFreshFromInput(IUSBHostUPS* host, const PollItem& item, ui
 
 // The ActivePower usages mapped to ups.realpower, in a report the driver reads: an INPUT
 // report arrives on the interrupt endpoint, a FEATURE report only if it is polled
-bool GenericDriver::readsActivePower(IUSBHostUPS* host) const {
+bool GenericDriver::readsActivePower(IHidTransport* host) const {
     for (const auto& u : host->getUsages()) {
         if (strcmp(u.path, "UPS.Output.ActivePower") != 0 &&
             strcmp(u.path, "UPS.PowerConverter.Output.ActivePower") != 0) continue;
@@ -238,7 +239,7 @@ bool GenericDriver::readsActivePower(IUSBHostUPS* host) const {
     return false;
 }
 
-void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
@@ -246,7 +247,7 @@ void GenericDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data
 }
 
 // Queues the missing strings not requested yet in this cycle
-void GenericDriver::appendNewStrings(IUSBHostUPS* host, const UPSData& data) {
+void GenericDriver::appendNewStrings(IHidTransport* host, const UPSData& data) {
     std::vector<uint8_t> strings;
     collectStringRequests(host, data, strings);
     for (uint8_t idx : strings) {
@@ -256,7 +257,7 @@ void GenericDriver::appendNewStrings(IUSBHostUPS* host, const UPSData& data) {
     }
 }
 
-void GenericDriver::startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now) {
+void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool full, uint32_t now) {
     _queue.clear();
     _queue_pos = 0;
     _cycle_full = full;
@@ -275,7 +276,7 @@ void GenericDriver::startCycle(IUSBHostUPS* host, const UPSData& data, bool full
     _step_now = true; // first request right away
 }
 
-void GenericDriver::loop(IUSBHostUPS* host, UPSData& data, uint32_t now) {
+void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
     host->lock();
@@ -351,7 +352,7 @@ static const char* testResultText(int v) {
     }
 }
 
-void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
     if (report_type == 1 || report_type == 3) {
         _decoded_report[typeSlot(report_type)][report_id / 32] |= 1u << (report_id % 32);
@@ -533,7 +534,7 @@ void GenericDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
-void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     String str = decodeStringDescriptor(host, data, length);
     if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
@@ -542,7 +543,7 @@ void GenericDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, cons
     else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
 }
 
-String GenericDriver::decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *data, size_t length) {
+String GenericDriver::decodeStringDescriptor(IHidTransport* host, const uint8_t *data, size_t length) {
     uint8_t str_len = data[0];
     String str = "";
     
@@ -581,7 +582,7 @@ String GenericDriver::decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *d
 // Binds the driver's NUT table to the usages of the attached device (US-066). The usages
 // only change with a new device, which also calls setup(); the count guards a list
 // replaced in place.
-void GenericDriver::bindNutTable(IUSBHostUPS* host) {
+void GenericDriver::bindNutTable(IHidTransport* host) {
     const auto& usages = host->getUsages();
     if (_nut_bound && _nut_usage_count == usages.size()) return;
     size_t n = 0;
@@ -646,7 +647,7 @@ void GenericDriver::completeInitialPoll() {
     }
 }
 
-void GenericDriver::postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (!host) return;
     bindNutTable(host);
     if (_nut_rows.empty()) return;

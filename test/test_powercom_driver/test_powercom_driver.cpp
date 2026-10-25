@@ -1,8 +1,10 @@
 #include <unity.h>
 #include "PowercomDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "CommandCatalog.h"
+#include "UPSData.h"
 
-class MockPowercomHost : public IUSBHostUPS {
+class MockPowercomHost : public IHidTransport {
 public:
     UPSData _data;
     std::vector<HIDUsageDef> _usages;
@@ -12,15 +14,10 @@ public:
 
     void lock() const override {}
     void unlock() const override {}
-    UPSDataLock getUPSData() const override { return UPSDataLock(_data, this); }
-    String getUPSStatusString() const override { return "OL"; }
-    bool setBeeper(bool) override { return true; }
-    bool isConnected() const override { return true; }
 
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
-    const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String _beeper_path = "UPS.PowerSummary.AudibleAlarmControl";
     String getActiveBeeperPath() const override { return _beeper_path; }
     uint32_t getQuirks() const override { return 0; }

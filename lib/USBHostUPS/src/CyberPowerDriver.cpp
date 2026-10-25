@@ -13,7 +13,7 @@
  */
 
 #include "CyberPowerDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
@@ -69,14 +69,14 @@ bool CyberPowerDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) 
     return !(report_id >= FIRST_VENDOR_REPORT || report_id == 4 || report_id == 6);
 }
 
-bool CyberPowerDriver::hasVendorReports(IUSBHostUPS* host) {
+bool CyberPowerDriver::hasVendorReports(IHidTransport* host) {
     for (const auto& u : host->getUsages()) {
         if (u.report_id >= FIRST_VENDOR_REPORT) return true;
     }
     return false;
 }
 
-void CyberPowerDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+void CyberPowerDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
     if (hasVendorReports(host)) return;
     if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
@@ -126,7 +126,7 @@ void CyberPowerDriver::scaleFrequency(UPSData& d, double v, bool input) {
     d.set(String(prefix) + ".frequency", String(scale * v, 1));
 }
 
-void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void CyberPowerDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
@@ -177,7 +177,7 @@ void CyberPowerDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_
     _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
-void CyberPowerDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void CyberPowerDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
     if (length < 2 || data[1] != 0x03) return;
 

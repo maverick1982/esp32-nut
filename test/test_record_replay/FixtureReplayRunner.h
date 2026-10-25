@@ -10,7 +10,8 @@
 #include <algorithm>
 #include <ArduinoJson.h>
 
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "UPSData.h"
 #include "HIDParser.h"
 #include "Quirks.h"
 #include "APCDriver.h"
@@ -23,7 +24,7 @@
 #include "CommandCatalog.h"
 #include "BeeperLogic.h"
 
-class ReplayMockHost : public IUSBHostUPS {
+class ReplayMockHost : public IHidTransport {
 public:
     UPSData _data;
     HIDParser _parser;
@@ -33,15 +34,10 @@ public:
 
     void lock() const override {}
     void unlock() const override {}
-    UPSDataLock getUPSData() const override { return UPSDataLock(_data, this); }
-    String getUPSStatusString() const override { return UPSData::computeUPSStatusString(_data); }
-    bool setBeeper(bool) override { return true; }
-    bool isConnected() const override { return true; }
 
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _parser.getUsages(); }
-    const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _parser.getUsageDef(usage); }
     String getActiveBeeperPath() const override {
         for (const auto& u : _parser.getUsages()) {
             if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 ||
@@ -58,7 +54,7 @@ public:
     uint16_t getVID() const override { return _vid; }
     uint16_t getPID() const override { return _pid; }
     bool isPollingPaused() const override { return false; }
-    bool supportsBeeperToggle() const override {
+    bool supportsBeeperToggle() const {
         if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
         return _parser.hasFeatureBeeperControl();
     }

@@ -14,7 +14,7 @@
  */
 
 #include "LegrandDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 
 /**
@@ -47,7 +47,7 @@ void LegrandDriver::setup() {
     _map.invalidate();
 }
 
-void LegrandDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void LegrandDriver::onLoop(IHidTransport* host, UPSData& data) {
     GenericDriver::onLoop(host, data);
     // legrand_format_mfr(): hd->Vendor, or "Legrand" when the device has no Vendor string
     if (host && host->_iManufacturer == 0 && !data.hasKey("ups.mfr")) {
@@ -55,7 +55,7 @@ void LegrandDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     }
 }
 
-void LegrandDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void LegrandDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
     // A Vendor string that decodes to empty counts as a missing one for legrand_format_mfr()
     if (host && host->_iManufacturer > 0 && index == host->_iManufacturer &&
@@ -73,7 +73,7 @@ static void legrandBeeperStatus(UPSData& d, double v, const HIDUsageDef* def, co
     else if (v == 1 || v == 3) d.set("ups.beeper.status", "disabled");
 }
 
-void LegrandDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void LegrandDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);

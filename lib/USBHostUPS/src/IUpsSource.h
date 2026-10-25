@@ -11,7 +11,7 @@
  * @brief Source of the UPS data as the NUT server and the web API see it, without HID
  * types (ADR 0010 step 4, US-103).
  *
- * IUSBHostUPS extends it with the part the drivers use (usages, reports, writes).
+ * IUSBHostUPS joins it with IHidTransport, the part the drivers use (US-104).
  */
 class IUpsSource {
 public:

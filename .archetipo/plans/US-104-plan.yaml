@@ -1,0 +1,182 @@
+schema: archetipo/plan/v2
+spec_code: US-104
+body: |
+  # US-104: Interfaccia di trasporto per i driver UPS — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Architettura modulare: sorgente UPS e trasporto
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che aggiunge driver UPS, voglio che i driver dipendano da un'interfaccia di trasporto e non dall'host USB, in modo da poter aggiungere driver e trasporti nuovi (base per `nutdrv_qx`) senza toccare `USBHostUPS`.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Oggi `IUPSDriver` (`loop`, `decodeReport`, `postDecode`, `parseStringDescriptor`) e `GenericDriver` con i 9 driver derivati ricevono `IUSBHostUPS* host` (92 occorrenze, sempre con il nome `host`) e includono `IUSBHostUPS.h`. Dal host usano solo: `lock`/`unlock` (il lock dei dati in `GenericDriver::loop`), `getUsages`, `getHIDParser`, `getActiveBeeperPath`, `getQuirks`, `isPollingPaused`, `requestReport`, `requestStringDescriptor`, `inputReportAgeMs`, `getPID` (e `getVID`), `logDebug` e i campi `_iManufacturer`, `_iProduct`, `_iSerialNumber`. Nessun driver usa la parte da consumatore (`IUpsSource`, US-103). Il piano porta quella parte in un'interfaccia di trasporto, senza cambiare comportamento: ADR 0010 passo 4, secondo pezzo.
+
+  - **`IHidTransport` (nuovo, `lib/USBHostUPS/src/IHidTransport.h`).** Nome scelto perché le primitive sono a livello di report HID (report ID e tipo, string descriptor, usage del report descriptor): un driver Q* sui bridge di classe HID (fabula, hunnox) userà le stesse primitive di report, mentre le primitive nuove per i Q* (SET_REPORT grezzo, string descriptor con langid) sono fuori ambito. Contiene i metodi elencati sopra con gli stessi default di oggi (`inputReportAgeMs` → `UINT32_MAX`, `getVID`/`getPID` → 0, `logDebug` vuoto), più `writeUsage(def, value)` (default false, come oggi) perché è la scrittura di un usage che US-105 porterà dal lato driver, e i tre campi degli indici delle stringhe, spostati tali e quali (i test li impostano direttamente). Include solo `<Arduino.h>`, `<vector>`, `HIDUsages.h`, `HIDParser.h`: niente `UPSData.h`, `IUpsSource.h`, `NutTable.h`, `CommandCatalog.h`.
+  - **`IUSBHostUPS : public IUpsSource, public IHidTransport`.** I membri passati a `IHidTransport` escono da `IUSBHostUPS`. `lock()` e `unlock()` esistono in entrambe le basi con la stessa firma: `IUSBHostUPS` li ridichiara virtuali puri (`void lock() const override = 0;`), così un solo override di `USBHostUPS` (e dei mock) li implementa entrambi e le chiamate su `IUSBHostUPS*` non sono ambigue. Restano in `IUSBHostUPS`: beeper, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`, `getUsageDef`, l'implementazione HID di `getSupportedCommands`/`executeCommand` (spostata con US-105), `lastDefaultShutdown`, `configuredDelay`.
+  - **Driver.** In `IUPSDriver.h`, `GenericDriver.*` e nei 9 driver (`APC`, `CyberPower`, `Eaton`, `EcoFlow`, `Legrand`, `Liebert`, `OpenUPS`, `Powercom`, più `GenericDriver`) `IUSBHostUPS* host` diventa `IHidTransport* host` (il nome del parametro resta `host` per non toccare i corpi) e `#include "IUSBHostUPS.h"` diventa `#include "IHidTransport.h"`; la forward declaration in `IUPSDriver.h` diventa `class IHidTransport;`. `USBHostUPS.cpp` passa ancora `this` (conversione implicita a `IHidTransport*`): nessun cambio nello strato USB, nei task o nei lock (ADR 0008).
+  - **Ordine dei lock invariato:** `GenericDriver::loop` prende e rilascia lo stesso `_mutex` di oggi tramite `host->lock()`/`unlock()`, che in `USBHostUPS` sono la stessa funzione.
+  - **Fuori ambito:** spostare la logica dei comandi (US-105), le primitive Q*, rinominare `host` in `transport` nei corpi dei driver.
+
+  ---
+
+  ## Strategia di Test
+
+  Refactoring senza comportamento nuovo: la prova è che i test dei driver e il replay passano con un trasporto finto e con le stesse asserzioni. Nessuna superficie UI: niente demo video; gli e2e girano come regressione.
+
+  - **Mock dei driver:** i mock di `test_apc_driver`, `test_cyberpower_driver`, `test_eaton_driver`, `test_ecoflow_driver`, `test_generic_driver`, `test_legrand_driver`, `test_liebert_driver`, `test_powercom_driver`, `test_poll_cycle` e `ReplayMockHost` di `test_record_replay` passano da `IUSBHostUPS` a `IHidTransport`; si tolgono solo gli override dei metodi che non sono più nella base (`getUPSData`, `getUPSStatusString`, `setBeeper`, `isConnected`, `end`, `getUsageDef`, …). Nessuna di queste suite li chiama (verificato con grep). Le asserzioni non cambiano.
+  - **Restano su `IUSBHostUPS`** i mock che verificano anche la parte da consumatore o i comandi: `test_nut_server`, `test_web_api`, `test_rw_catalog`, `test_usb_host_interface`.
+  - **Nuova suite `test/test_hid_transport`:** controllo a compilazione (include tutti gli header dei driver e `#error` se risultano definite le guardie `I_USB_HOST_UPS_H`, `USB_HOST_UPS_H`, `I_UPS_SOURCE_H`) e controllo dei sorgenti dei driver (`IUPSDriver.h`, `GenericDriver.*` e i 9 driver, `.h` e `.cpp`) che non devono contenere `#include "IUSBHostUPS.h"` né `#include "USBHostUPS.h"`, con lo stesso schema di lettura dei file di `test_ups_source`.
+  - **Regressione:** suite nativa completa (675 test più i nuovi), Playwright (110) e build `esp32-s3-standard`.
+tasks:
+  - id: TASK-01
+    title: Interfaccia IHidTransport e IUSBHostUPS che la estende
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** interfaccia di trasporto per i driver, con `IUSBHostUPS` che estende sia `IUpsSource` sia `IHidTransport` senza cambiare comportamento.
+
+      **Leggi:** `lib/USBHostUPS/src/IUSBHostUPS.h` (intero), `lib/USBHostUPS/src/IUpsSource.h` (stile del commento di classe), `lib/USBHostUPS/src/USBHostUPS.h` (override di `lock`, `unlock`, `getUsages`, `getHIDParser`, `getActiveBeeperPath`, `getQuirks`, `isPollingPaused`, `requestReport`, `requestStringDescriptor`, `inputReportAgeMs`, `getVID`, `getPID`, `logDebug`, `writeUsage`).
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/IHidTransport.h` (guardia `I_HID_TRANSPORT_H`), include `<Arduino.h>`, `<vector>`, `HIDUsages.h`, `HIDParser.h`. Commento di classe: il dispositivo HID come lo vedono i driver (richieste di report e string descriptor, usage e parser del report descriptor, lock dei dati), ADR 0010 passo 4, US-104.
+      2. `class IHidTransport` con distruttore virtuale e, spostati da `IUSBHostUPS` con i commenti attuali e gli stessi default: `lock()`/`unlock()` const puri (commento: lock dei dati condivisi con il host, ADR 0008); `getUsages()`, `getHIDParser()`, `getActiveBeeperPath()` puri; `writeUsage(const HIDUsageDef&, uint32_t)` default false; `getQuirks()`, `isPollingPaused()`, `requestReport(...)`, `requestStringDescriptor(...)` puri; `inputReportAgeMs` default `UINT32_MAX`; `getVID`/`getPID` default 0; `logDebug` vuoto; i campi `_iManufacturer`, `_iProduct`, `_iSerialNumber` (= 0).
+      3. In `IUSBHostUPS.h`: `#include "IHidTransport.h"`; `class IUSBHostUPS : public IUpsSource, public IHidTransport`; togli i membri spostati; aggiungi in testa alla sezione pubblica `void lock() const override = 0;` e `void unlock() const override = 0;` con il commento: un solo override implementa il lock di entrambe le basi. Aggiorna il commento di classe (parte per i driver in `IHidTransport`, US-104).
+      4. Non toccare `USBHostUPS.h/.cpp`: gli override esistenti valgono per le nuove basi. Se il compilatore segnala un'ambiguità, risolvila in `IUSBHostUPS` ridichiarando il metodo, non nei chiamanti.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IHidTransport.h — nuovo
+      - lib/USBHostUPS/src/IUSBHostUPS.h — doppia base, membri spostati
+
+      ## Criteri di Completamento
+      - [ ] `IHidTransport.h` non include `UPSData.h`, `IUpsSource.h`, `NutTable.h`, `CommandCatalog.h`
+      - [ ] Tutti i mock esistenti compilano senza modifiche
+      - [ ] `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_usb_host_interface -f test_nut_server -f test_generic_driver` verde
+
+      **Blocchi:** un'ambiguità che non si risolve ridichiarando il metodo in `IUSBHostUPS`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Driver su IHidTransport
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `IUPSDriver`, `GenericDriver` e i driver derivati dipendono da `IHidTransport` e non da `IUSBHostUPS`.
+
+      **Leggi:** `lib/USBHostUPS/src/IUPSDriver.h` (forward declaration riga ~10, firme di `loop`, `decodeReport`, `postDecode`, `parseStringDescriptor`), `GenericDriver.h` (firme con `IUSBHostUPS* host`), le righe `#include "IUSBHostUPS.h"` dei `.cpp` dei driver.
+
+      **Modifica:**
+      1. In `IUPSDriver.h`: `class IUSBHostUPS;` → `class IHidTransport;`; tutte le firme `IUSBHostUPS* host` → `IHidTransport* host`; aggiorna i commenti `@param host` ("transport of the attached device").
+      2. In `GenericDriver.h/.cpp` e in `APCDriver`, `CyberPowerDriver`, `EatonDriver`, `EcoFlowDriver`, `LegrandDriver`, `LiebertDriver`, `OpenUPSDriver`, `PowercomDriver` (`.h` e `.cpp`): sostituisci `IUSBHostUPS* host` con `IHidTransport* host` e `#include "IUSBHostUPS.h"` con `#include "IHidTransport.h"`. Nessun altro cambio nei corpi.
+      3. `USBHostUPS.cpp` non cambia (passa `this`). Se qualche file non driver passa un `IUSBHostUPS*` a un driver, la conversione è implicita.
+      4. Controlla con `grep -n IUSBHostUPS lib/USBHostUPS/src/*Driver.* lib/USBHostUPS/src/IUPSDriver.h`: nessun risultato.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — firme e forward declaration
+      - lib/USBHostUPS/src/GenericDriver.h, GenericDriver.cpp — firme e include
+      - lib/USBHostUPS/src/APCDriver.*, CyberPowerDriver.*, EatonDriver.*, EcoFlowDriver.*, LegrandDriver.*, LiebertDriver.*, OpenUPSDriver.*, PowercomDriver.* — firme e include
+
+      ## Criteri di Completamento
+      - [ ] grep di `IUSBHostUPS` nei file dei driver senza risultati
+      - [ ] Suite nativa completa verde con i mock ancora su `IUSBHostUPS`
+      - [ ] Build `esp32-s3-standard` OK (`& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` da PowerShell)
+
+      **Blocchi:** un driver che usa un metodo di `IUSBHostUPS` non presente in `IHidTransport` (dal censimento non ce ne sono): fermati e segnalalo.
+    ref: TASK-02
+  - id: TASK-03
+    title: Mock dei test dei driver e del replay su IHidTransport
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i test dei driver e il replay girano con un trasporto finto al posto dell'host finto, senza cambiare asserzioni.
+
+      **Leggi:** i mock in `test/test_apc_driver/test_main.cpp` (`MockAPCHost`), `test/test_cyberpower_driver/test_main.cpp`, `test/test_eaton_driver/test_main.cpp`, `test/test_ecoflow_driver/test_main.cpp`, `test/test_generic_driver/test_main.cpp`, `test/test_legrand_driver/test_main.cpp`, `test/test_liebert_driver/test_main.cpp`, `test/test_powercom_driver/test_powercom_driver.cpp`, `test/test_poll_cycle/test_main.cpp` (`MockPollHost`), `test/test_record_replay/FixtureReplayRunner.h` (`ReplayMockHost`).
+
+      **Modifica:** per ogni mock elencato:
+      1. Base `IUSBHostUPS` → `IHidTransport`; include `IUSBHostUPS.h` → `IHidTransport.h` (aggiungi `UPSData.h` o altri header solo se il file li usava per via transitiva).
+      2. Togli gli override dei metodi che `IHidTransport` non ha (`end`, `getUPSData`, `getUPSStatusString`, `setBeeper`, `isConnected`, `isDataStale`, `getUsageDef`, `supportsBeeperToggle`, `getWritableVariables`, `setVariable`, …) e i membri che servivano solo a loro, se nessun test li usa. Mantieni invariati i membri usati dai test.
+      3. Nessuna modifica alle funzioni di test e alle asserzioni. Se un test chiama un metodo tolto, fermati e segnalalo invece di cambiarlo.
+      4. Non toccare i mock di `test_nut_server`, `test_web_api`, `test_rw_catalog`, `test_usb_host_interface`.
+
+      ## File Coinvolti
+      - test/test_apc_driver/test_main.cpp, test/test_cyberpower_driver/test_main.cpp, test/test_eaton_driver/test_main.cpp, test/test_ecoflow_driver/test_main.cpp, test/test_generic_driver/test_main.cpp, test/test_legrand_driver/test_main.cpp, test/test_liebert_driver/test_main.cpp, test/test_powercom_driver/test_powercom_driver.cpp — mock su IHidTransport
+      - test/test_poll_cycle/test_main.cpp — mock su IHidTransport
+      - test/test_record_replay/FixtureReplayRunner.h — ReplayMockHost su IHidTransport
+
+      ## Criteri di Completamento
+      - [ ] Nessun mock elencato deriva più da `IUSBHostUPS`
+      - [ ] `git diff test/` non mostra asserzioni cambiate
+      - [ ] `pio test -e native -f test_*_driver -f test_powercom_driver -f test_poll_cycle -f test_record_replay` verde (con il PATH del toolchain mingw)
+
+      **Blocchi:** un test che usa un metodo tolto dal mock.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Suite test_hid_transport: i driver non dipendono dall''host USB'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** bloccare il ritorno di `IUSBHostUPS`/`USBHostUPS` nei driver.
+
+      **Leggi:** `test/test_ups_source/test_main.cpp` (controllo `#error` sulle guardie e funzione `projectPath()` con lettura dei sorgenti), `lib/USBHostUPS/src/DriverRegistry.*` se esiste un header che include tutti i driver.
+
+      **Modifica:** crea `test/test_hid_transport/test_main.cpp`:
+      1. Include `IHidTransport.h`, `IUPSDriver.h`, `GenericDriver.h` e gli header dei 9 driver (`APCDriver.h`, `CyberPowerDriver.h`, `EatonDriver.h`, `EcoFlowDriver.h`, `LegrandDriver.h`, `LiebertDriver.h`, `OpenUPSDriver.h`, `PowercomDriver.h`), poi `#ifdef I_USB_HOST_UPS_H` / `USB_HOST_UPS_H` / `I_UPS_SOURCE_H` → `#error "... included by the driver headers (US-104)"`.
+      2. Test `test_driver_sources_include_no_usb_host`: per `IUPSDriver.h` e per `.h`/`.cpp` di `GenericDriver` e dei 9 driver, il testo non contiene `#include "IUSBHostUPS.h"` né `#include "USBHostUPS.h"` (stessa `projectPath()` di `test_ups_source`, copiata).
+      3. Test `test_transport_alone_drives_a_driver`: un `MinimalTransport : public IHidTransport` (usage vuoti, `requestReport` che conta le chiamate) e un `GenericDriver` su cui si chiamano `setup()` e `loop(&transport, data, now)` per qualche ciclo: nessun crash e `driver.name` impostato in `data` (comportamento esistente di `GenericDriver::loop`).
+
+      ## File Coinvolti
+      - test/test_hid_transport/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_hid_transport` verde
+      - [ ] Prova in negativo: aggiungendo per prova `#include "IUSBHostUPS.h"` in `GenericDriver.cpp` il test dei sorgenti fallisce; ripristinare il file
+
+      **Blocchi:** se `GenericDriver` richiede dipendenze native non disponibili, limita il test 3 a `setup()` e a un solo `loop()`.
+    ref: TASK-04
+  - id: TASK-05
+    title: Regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il refactoring non cambia comportamento.
+
+      **Passi:**
+      1. Suite nativa completa, da sola (nessun'altra build nella stessa cartella `.pio`): `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`.
+      2. `npx playwright test` (110 test).
+      3. Build `esp32-s3-standard` da PowerShell.
+      4. `grep -nE 'IUSBHostUPS|USBHostUPS\.h' lib/USBHostUPS/src/*Driver.* lib/USBHostUPS/src/IUPSDriver.h` senza risultati.
+      5. `git diff --stat` limitato ai file del piano.
+
+      ## File Coinvolti
+      - nessun file nuovo: solo verifica
+
+      ## Criteri di Completamento
+      - [ ] Nativi, e2e e build verdi
+      - [ ] grep senza risultati
+      - [ ] Replay invariato (stesse fixture e asserzioni)
+
+      **Blocchi:** un test esistente che fallisce: va analizzato, non adattato.
+    ref: TASK-05

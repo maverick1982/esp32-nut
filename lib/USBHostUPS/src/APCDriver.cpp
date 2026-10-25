@@ -13,7 +13,7 @@
  */
 
 #include "APCDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include <string.h>
@@ -63,12 +63,12 @@ void APCDriver::formatDeviceStrings(UPSData& data) {
     if (aux.length() > 0) data.set("ups.firmware.aux", aux);
 }
 
-void APCDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void APCDriver::onLoop(IHidTransport* host, UPSData& data) {
     // ups.model comes from the product string, read at claim time
     _back_ups_bx = isBackUpsBX(data.get("ups.model"));
 }
 
-void APCDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void APCDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     // Delegate standard mappings to the base GenericDriver

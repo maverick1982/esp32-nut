@@ -28,11 +28,11 @@ public:
     virtual ~GenericDriver() = default;
 
     void setup() override;
-    void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) override;
-    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void loop(IHidTransport* host, UPSData& data, uint32_t now) override;
+    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
     bool initialPollDone() const override { return _first_full_done; }
-    void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
     void writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const override;
     NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
                                 const char* name, const char* value, NutTable::SetPlan& plan) const override;
@@ -83,16 +83,16 @@ protected:
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too
     virtual bool pollInputReports() const { return true; }
-    virtual void buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
+    virtual void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
     // String descriptors fetched at the start of a full poll (only the missing ones)
-    virtual void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const;
+    virtual void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const;
     // True when the device measures ups.realpower in a report this driver reads
-    bool readsActivePower(IUSBHostUPS* host) const;
+    bool readsActivePower(IHidTransport* host) const;
     // Text of a string descriptor (bLength, bDescriptorType 0x03, UTF-16LE), with the
     // inverted strings of some CyberPower firmwares turned back
-    static String decodeStringDescriptor(IUSBHostUPS* host, const uint8_t *data, size_t length);
+    static String decodeStringDescriptor(IHidTransport* host, const uint8_t *data, size_t length);
     // Called by every loop() with the host lock held: values that need no request
-    virtual void onLoop(IUSBHostUPS* host, UPSData& data) {}
+    virtual void onLoop(IHidTransport* host, UPSData& data) {}
 
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
@@ -101,7 +101,7 @@ protected:
     mutable NutTable::Context _nut_ctx;
 
 private:
-    void bindNutTable(IUSBHostUPS* host);
+    void bindNutTable(IHidTransport* host);
 
     std::vector<NutTable::Bound> _nut_rows;
     bool _nut_bound;
@@ -110,11 +110,11 @@ private:
     // Values set for the HU_FLAG_ABSENT rows (name, value): applied again at every bind
     std::vector<std::pair<String, String>> _absent_overrides;
     void applyAbsentOverride(const String& name, const String& value);
-    void startCycle(IUSBHostUPS* host, const UPSData& data, bool full, uint32_t now);
-    void appendNewStrings(IUSBHostUPS* host, const UPSData& data);
-    void findInputTwins(IUSBHostUPS* host);
-    void findStaticReports(IUSBHostUPS* host);
-    bool isFreshFromInput(IUSBHostUPS* host, const PollItem& item, uint32_t now) const;
+    void startCycle(IHidTransport* host, const UPSData& data, bool full, uint32_t now);
+    void appendNewStrings(IHidTransport* host, const UPSData& data);
+    void findInputTwins(IHidTransport* host);
+    void findStaticReports(IHidTransport* host);
+    bool isFreshFromInput(IHidTransport* host, const PollItem& item, uint32_t now) const;
     bool isStaticAndKnown(const PollItem& item) const;
     static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 

@@ -8,12 +8,13 @@
 #include <fstream>
 #include <sstream>
 #include <ArduinoJson.h>
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "UPSData.h"
 #include "Quirks.h"
 
 // Review S3 / A6 / M4: one poll state machine in GenericDriver, policies in the drivers
 
-class MockPollHost : public IUSBHostUPS {
+class MockPollHost : public IHidTransport {
 public:
     std::vector<HIDUsageDef> _usages;
     std::vector<std::pair<uint8_t, uint8_t>> _reports; // (id, type)
@@ -31,13 +32,8 @@ public:
 
     void lock() const override {}
     void unlock() const override {}
-    UPSDataLock getUPSData() const override { static UPSData d; return UPSDataLock(d, this); }
-    String getUPSStatusString() const override { return "OL"; }
-    bool setBeeper(bool) override { return true; }
-    bool isConnected() const override { return true; }
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
-    const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return ""; }
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override { return _paused; }

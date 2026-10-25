@@ -24,12 +24,12 @@ public:
     virtual ~EcoFlowDriver() = default;
 
     void setup() override;
-    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
 protected:
-    void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const override;
-    void onLoop(IUSBHostUPS* host, UPSData& data) override;
+    void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const override;
+    void onLoop(IHidTransport* host, UPSData& data) override;
 
 private:
     UsageMapIndex<EcoFlowDriver> _map;
