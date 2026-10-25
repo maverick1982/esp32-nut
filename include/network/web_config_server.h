@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "core/config_manager.h"
+#include "IUpsSource.h"
 #include "USBHostUPS.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
@@ -103,6 +104,8 @@ private:
     bool ota_upload_started = false;
     // millis() a UPLOAD_FILE_START: durata dell'upload nel log di successo (US-085)
     uint32_t ota_start_ms = 0;
+    // Dati, stato e comandi dell'UPS; usb_ups resta solo per l'export della diagnostica USB
+    IUpsSource* ups_source = nullptr;
     USBHostUPS* usb_ups = nullptr;
 };
 

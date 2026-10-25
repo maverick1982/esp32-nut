@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include "NutTable.h"
+#include "UpsVariables.h"
 
 /**
  * Results of the SET VAR and INSTCMD requests sent with TRACKING ON (US-067, US-069), as

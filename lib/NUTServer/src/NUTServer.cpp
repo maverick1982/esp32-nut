@@ -217,7 +217,7 @@ bool NUTServer::isValidUpsName(const String& name) {
     return true;
 }
 
-bool NUTServer::begin(const NUTServerConfig& config, IUSBHostUPS* usb_ups, uint16_t port) {
+bool NUTServer::begin(const NUTServerConfig& config, IUpsSource* usb_ups, uint16_t port) {
     _config = config;
     _config.ups_name = normalizeUpsName(config.ups_name);
     _usb_ups = usb_ups;

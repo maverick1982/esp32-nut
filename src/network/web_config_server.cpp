@@ -3,7 +3,7 @@
 #include "UsbDiagJson.h"
 #include "AuthPolicy.h"
 #include "AuthService.h"
-#include "CommandCatalog.h"
+#include "UpsCommands.h"
 #include "network/web_config_server.h"
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
@@ -191,8 +191,8 @@ void WebConfigServer::loop() {
     }
 
     if (should_restart && (millis() - restart_request_time >= 1000)) {
-        if (usb_ups) {
-            usb_ups->end();
+        if (ups_source) {
+            ups_source->end();
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         ESP.restart();
@@ -201,6 +201,7 @@ void WebConfigServer::loop() {
 
 void WebConfigServer::setUPS(USBHostUPS* ups) {
     usb_ups = ups;
+    ups_source = ups;
 }
 
 void WebConfigServer::setNetwork(AppNetworkManager* net) {
@@ -366,11 +367,11 @@ void WebConfigServer::handleGetConfig() {
 }
 
 void WebConfigServer::handleUpsVars() {
-    if (!usb_ups) {
+    if (!ups_source) {
         server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
         return;
     }
-    String response = WebApiJson::generateUpsVars(usb_ups);
+    String response = WebApiJson::generateUpsVars(ups_source);
     server.send(200, "application/json", response);
 }
 
@@ -393,8 +394,8 @@ void WebConfigServer::handleSystemStatus() {
     
     // UPS status
     String ups_status_str = "Disconnected";
-    if (usb_ups && usb_ups->isConnected()) {
-        auto data = usb_ups->getUPSData();
+    if (ups_source && ups_source->isConnected()) {
+        auto data = ups_source->getUPSData();
         String model = data->hasKey("ups.model") ? data->get("ups.model") : "Unknown Model";
         ups_status_str = model;
     } else {
@@ -403,7 +404,7 @@ void WebConfigServer::handleSystemStatus() {
     doc["ups"]["status"] = ups_status_str;
     // A missing UPS is already "Disconnected": the stale banner is for an attached one,
     // and not for the first seconds after the claim, while the first full poll runs
-    if (usb_ups && usb_ups->isConnected() && usb_ups->isDataStale() && !usb_ups->isWaitingFirstData()) {
+    if (ups_source && ups_source->isConnected() && ups_source->isDataStale() && !ups_source->isWaitingFirstData()) {
         doc["ups"]["stale"] = true;
     }
 
@@ -416,7 +417,7 @@ void WebConfigServer::handleSystemStatus() {
 
 // Catalogo dei comandi supportati dall'UPS (US-059), uguale in STA e in AP (US-068)
 void WebConfigServer::handleUpsCommands() {
-    server.send(200, "application/json", WebApiJson::generateUpsCommands(usb_ups));
+    server.send(200, "application/json", WebApiJson::generateUpsCommands(ups_source));
 }
 
 // Esegue un comando: la logica e gli status sono in WebApiJson::runUpsCommand. Nessun
@@ -425,7 +426,7 @@ void WebConfigServer::handleUpsCommand() {
     if (!requireJson()) return;
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
-    int status = WebApiJson::runUpsCommand(usb_ups, body, response);
+    int status = WebApiJson::runUpsCommand(ups_source, body, response);
     if (status == 200) {
         // Il nome è quello del catalogo (stringa costante), non quello del client
         JsonDocument filter;
@@ -444,7 +445,7 @@ void WebConfigServer::handleUpsCommand() {
 
 // Variabili scrivibili dell'UPS (US-068), uguale in STA e in AP
 void WebConfigServer::handleUpsVariables() {
-    server.send(200, "application/json", WebApiJson::generateUpsVariables(usb_ups));
+    server.send(200, "application/json", WebApiJson::generateUpsVariables(ups_source));
 }
 
 // Scrive una variabile: la logica e gli status sono in WebApiJson::runUpsVariable
@@ -453,7 +454,7 @@ void WebConfigServer::handleUpsVariable() {
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
     bool host_called = false;
-    int status = WebApiJson::runUpsVariable(usb_ups, body, response, &host_called);
+    int status = WebApiJson::runUpsVariable(ups_source, body, response, &host_called);
     // L'esito di setVariable() lo registra già l'host: una sola riga per richiesta
     if (status != 200 && !host_called) logVariableRejected(body, true, response);
     server.send(status, "application/json", response);
@@ -465,7 +466,7 @@ void WebConfigServer::handleUpsVariableReset() {
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
     bool host_called = false;
-    int status = WebApiJson::resetUpsVariable(usb_ups, body, response, &host_called);
+    int status = WebApiJson::resetUpsVariable(ups_source, body, response, &host_called);
     // L'esito di resetVariable() lo registra già l'host
     if (status != 200 && !host_called) logVariableRejected(body, false, response);
     server.send(status, "application/json", response);

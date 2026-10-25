@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include "IUSBHostUPS.h"
+#include "IUpsSource.h"
 #include "board/board_settings.h"
 
 class WebApiJson {
@@ -12,14 +12,14 @@ public:
     // /api/ups/variable/reset
     static constexpr size_t MAX_COMMAND_BODY_LENGTH = 256;
 
-    static String generateUpsVars(IUSBHostUPS* usb_ups);
+    static String generateUpsVars(IUpsSource* usb_ups);
     // Catalogo dei comandi supportati dall'UPS (US-059, US-062):
     // {"connected", "commands": [{name, description, destructive}]}
     // Nessun blocco in Access Point (US-068): la conferma dei distruttivi la chiede la pagina
-    static String generateUpsCommands(IUSBHostUPS* usb_ups);
+    static String generateUpsCommands(IUpsSource* usb_ups);
     // Esegue un comando da body {"name": "..."}, distruttivi compresi, in STA come in AP
     // (US-068). Restituisce lo status HTTP e scrive il JSON in response
-    static int runUpsCommand(IUSBHostUPS* usb_ups, const String& body, String& response);
+    static int runUpsCommand(IUpsSource* usb_ups, const String& body, String& response);
 
     // --- Pagina "UPS Settings" (US-068) ---
 
@@ -30,7 +30,7 @@ public:
     // Catalogo delle variabili scrivibili, nell'ordine di getWritableVariables():
     // {"connected", "variables": [{name, description, value, max_length, enum: [...],
     // driver_side, confirm}]}. Senza host o con UPS scollegato: connected false e lista vuota
-    static String generateUpsVariables(IUSBHostUPS* usb_ups);
+    static String generateUpsVariables(IUpsSource* usb_ups);
     // Scrive una variabile da body {"name": "...", "value": "..."} con la logica di SET VAR
     // (NutTable::checkSetValue, poi setVariable() col nome canonico). Il valore ammette
     // solo byte 0x20-0x7E, come il lettore di riga del server NUT. 200 {"success":true,
@@ -39,13 +39,13 @@ public:
     // Restituisce lo status HTTP e scrive il JSON in response. Se host_called non è nullptr
     // vi scrive true quando la richiesta è arrivata a setVariable() (l'esito lo registra
     // già l'host), false per i rifiuti precedenti (400 di forma o di validazione, 503)
-    static int runUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response,
+    static int runUpsVariable(IUpsSource* usb_ups, const String& body, String& response,
                               bool* host_called = nullptr);
     // Riporta al default del driver una variabile lato driver da body {"name": "..."}:
     // 200 {"success":true, "value": <default, null come sopra>}, altrimenti 400/500/503 con
     // {"error"}. host_called
     // come in runUpsVariable, riferito a resetVariable()
-    static int resetUpsVariable(IUSBHostUPS* usb_ups, const String& body, String& response,
+    static int resetUpsVariable(IUpsSource* usb_ups, const String& body, String& response,
                                 bool* host_called = nullptr);
 
     // Nome dell'UPS della configurazione salvata (US-082): la stringa se non vuota,
