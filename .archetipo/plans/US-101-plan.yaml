@@ -43,7 +43,7 @@ tasks:
   - id: TASK-01
     title: OL/OB da ACPresent come usbhid-ups in computeUPSStatusString
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** con ACPresent presente, OL/OB dipende solo da ACPresent; Discharging aggiunge solo DISCHRG.
@@ -69,10 +69,11 @@ tasks:
       - [ ] Compila in nativo (`pio test -e native -f test_ups_status`)
 
       **Blocchi:** nessuno previsto.
+    ref: TASK-01
   - id: TASK-02
     title: 'Test di stato: OL DISCHRG e regressioni OB'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -98,10 +99,11 @@ tasks:
       - [ ] Le suite test_ups_status, test_ecoflow_driver e test_eaton_driver passano senza altre modifiche
 
       **Blocchi:** se un altro test esistente richiede un cambio di semantica oltre a quello indicato, fermati e segnalalo.
+    ref: TASK-02
   - id: TASK-03
     title: 'OnlineDischargeLog: throttle del warning OL+DISCHRG come upstream'
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** logica pura che decide quando loggare OL+DISCHRG, con i default di upstream.
@@ -126,10 +128,11 @@ tasks:
       - [ ] Semantica come descritta, con commenti che rimandano alle righe di upstream
 
       **Blocchi:** nessuno previsto.
+    ref: TASK-03
   - id: TASK-04
     title: Test nativi di OnlineDischargeLog
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -157,10 +160,11 @@ tasks:
       - [ ] Tutti i casi passano
 
       **Blocchi:** nessuno previsto.
+    ref: TASK-04
   - id: TASK-05
     title: Warning OL+DISCHRG nel System Log da USBHostUPS
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -186,10 +190,11 @@ tasks:
       - [ ] Lo stato si azzera al disconnect
 
       **Blocchi:** nessuno previsto.
+    ref: TASK-05
   - id: TASK-06
     title: 'Fixture BGM2200 in rete (secondo dump #98) e replay OL DISCHRG'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -215,10 +220,11 @@ tasks:
       - [ ] test_record_replay passa
 
       **Blocchi:** se qualche valore atteso del dump non si riproduce nel replay, segnalalo invece di toglierlo.
+    ref: TASK-06
   - id: TASK-07
     title: Suite nativa completa e build ESP32
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-04
@@ -241,3 +247,4 @@ tasks:
       - [ ] Build esp32-s3-standard OK
 
       **Blocchi:** nessuno previsto.
+    ref: TASK-07

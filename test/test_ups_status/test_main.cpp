@@ -114,11 +114,29 @@ void test_status_ac_lost_before_discharging_flag(void) {
     TEST_ASSERT_EQUAL_STRING("OB", UPSData::computeUPSStatusString(data).c_str());
 }
 
-void test_status_discharging_wins_over_stale_ac_present(void) {
+// ACPresent and Discharging together: the default branch of usbhid-ups ups_status_set()
+// gives OL plus DISCHRG (APC BGM2200 on mains at 100 %, issue #98)
+void test_status_ac_present_while_discharging_is_ol_dischrg(void) {
     UPSData data;
     data.set("ups.status.ac_present", "1");
     data.set("ups.status.discharging", "1");
-    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(data).c_str());
+    TEST_ASSERT_EQUAL_STRING("OL DISCHRG", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_ol_dischrg_depleted(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.discharging", "1");
+    data.set("ups.status.depleted", "1");
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_ol_dischrg_low_battery(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.discharging", "1");
+    data.set("ups.status.battery_low", "1");
+    TEST_ASSERT_EQUAL_STRING("OL DISCHRG LB", UPSData::computeUPSStatusString(data).c_str());
 }
 
 void test_status_good_only_device(void) {
@@ -230,7 +248,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_eaton_on_battery_with_good);
     RUN_TEST(test_status_eaton_online_with_good);
     RUN_TEST(test_status_ac_lost_before_discharging_flag);
-    RUN_TEST(test_status_discharging_wins_over_stale_ac_present);
+    RUN_TEST(test_status_ac_present_while_discharging_is_ol_dischrg);
+    RUN_TEST(test_status_ol_dischrg_depleted);
+    RUN_TEST(test_status_ol_dischrg_low_battery);
     RUN_TEST(test_status_good_only_device);
     RUN_TEST(test_status_timelimit_expired_triggers_lb);
     RUN_TEST(test_status_low_battery_and_timelimit_together);
@@ -255,7 +275,9 @@ void setup() {
     RUN_TEST(test_status_eaton_on_battery_with_good);
     RUN_TEST(test_status_eaton_online_with_good);
     RUN_TEST(test_status_ac_lost_before_discharging_flag);
-    RUN_TEST(test_status_discharging_wins_over_stale_ac_present);
+    RUN_TEST(test_status_ac_present_while_discharging_is_ol_dischrg);
+    RUN_TEST(test_status_ol_dischrg_depleted);
+    RUN_TEST(test_status_ol_dischrg_low_battery);
     RUN_TEST(test_status_good_only_device);
     RUN_TEST(test_status_timelimit_expired_triggers_lb);
     RUN_TEST(test_status_low_battery_and_timelimit_together);

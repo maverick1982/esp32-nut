@@ -5,6 +5,7 @@
 #include "DriverRegistry.h"
 #include <ArduinoJson.h>
 #include <stdarg.h>
+#include <math.h>
 #include "esp_task_wdt.h"
 
 #ifndef FIRMWARE_VERSION
@@ -287,6 +288,7 @@ void USBHostUPS::service() {
 
     // Drivers skip their poll steps while isPollingPaused() reports a backoff
     _driver->loop(this, _ups_data, now);
+    logOnlineDischarge(now);
 
     if (!_first_data_ready) {
         bool done = false;
@@ -547,6 +549,35 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
     _cached_reports.clear();
+    _ol_dischrg_log = OnlineDischargeLog();
+}
+
+void USBHostUPS::logOnlineDischarge(uint32_t now) {
+    // usbhid-ups warns when the UPS reports ACPresent and Discharging together: ups.status
+    // is OL DISCHRG then, which may be a calibration or a UPS that is really on battery.
+    // Checked at the quick poll pace, not on every 10 ms iteration
+    if (now - _ol_dischrg_checked_at < 2000) return;
+    _ol_dischrg_checked_at = now;
+    bool due;
+    int charge, previous;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_ups_data.hasKey("ups.status.ac_present")) return;
+        int served = _ups_data.hasKey("battery.charge") ? (int)lroundf(_ups_data.getFloat("battery.charge", -1)) : -1;
+        due = _ol_dischrg_log.update(_ups_data.getBool("ups.status.ac_present"),
+                                     _ups_data.getBool("ups.status.discharging"), served);
+        charge = _ol_dischrg_log.charge();
+        previous = _ol_dischrg_log.previousCharge();
+    }
+    if (!due) return;
+    if (previous < 0) {
+        log("WARN", "[USB] OL+DISCHRG: AC present while discharging, battery charge %d %%. "
+                    "Calibrating? Some UPS models report this on battery", charge);
+    } else {
+        log("WARN", "[USB] OL+DISCHRG: battery charge %d %% -> %d %% (%s). "
+                    "Calibrating? Some UPS models report this on battery",
+            previous, charge, charge > previous ? "charging" : "draining");
+    }
 }
 
 void USBHostUPS::closeInterface(hid_host_device_handle_t handle) {

@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 2
-status: PLANNED
+status: REVIEW
 body: |-
   #### US-101: Stato OL DISCHRG quando l'UPS segnala insieme rete presente e scarica, come usbhid-ups
 
@@ -35,3 +35,7 @@ history:
     at: "2026-10-25T07:48:57Z"
   - status: PLANNED
     at: "2026-10-25T07:52:33Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T07:55:19Z"
+  - status: REVIEW
+    at: "2026-10-25T08:10:09Z"
