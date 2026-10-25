@@ -1,0 +1,52 @@
+[battery.charge.low]
+Remaining battery level when UPS switches to LB (percent)
+Type: STRING
+Maximum length: 5
+Value: 20
+
+[input.transfer.high]
+High voltage transfer point (V)
+Type: STRING
+Maximum length: 5
+Value: 264
+
+[input.transfer.low]
+Low voltage transfer point (V)
+Type: STRING
+Maximum length: 5
+Value: 161
+
+[outlet.1.desc]
+Outlet description
+Type: STRING
+Maximum length: 20
+Value: PowerShare Outlet 1
+
+[outlet.desc]
+Outlet description
+Type: STRING
+Maximum length: 20
+Value: Main Outlet
+
+[output.voltage.nominal]
+Nominal output voltage (V)
+Type: ENUM STRING
+Maximum length: 3
+Option: "200"
+Option: "208"
+Option: "220"
+Option: "230" SELECTED
+Option: "240"
+
+[ups.delay.shutdown]
+Interval to wait after shutdown with delay command (seconds)
+Type: STRING
+Maximum length: 10
+Value: 20
+
+[ups.delay.start]
+Interval to wait before (re)starting the load (seconds)
+Type: STRING
+Maximum length: 10
+Value: 30
+
