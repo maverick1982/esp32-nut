@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-096: Export della diagnostica USB senza JsonDocument (scritto a pezzi campo per campo)
 
@@ -34,3 +34,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-23T14:18:49Z"
+  - status: PLANNED
+    at: "2026-10-23T16:10:40Z"
+  - status: IN PROGRESS
+    at: "2026-10-23T16:13:57Z"
+  - status: REVIEW
+    at: "2026-10-23T17:29:58Z"
+  - status: DONE
+    at: "2026-10-23T20:58:44Z"
