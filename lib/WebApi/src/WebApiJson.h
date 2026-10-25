@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "IUSBHostUPS.h"
+#include "board/board_settings.h"
 
 class WebApiJson {
 public:
@@ -55,6 +56,17 @@ public:
     // il valore attuale; non stringa o non valido per NUTServer::isValidUpsName() → 400
     // {"error":"Invalid UPS name"}. Restituisce 0 se il body va bene
     static int checkNutConfigBody(JsonVariantConst body, String& response);
+
+    // GET /api/board (US-094): {"id","label","led":{present,on,level,levels},
+    // "usb":{"ports":[{id,label}],"port"}}; "led" absent on a board without LED
+    static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings);
+    // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id).
+    // 0 with next filled and restart true when the USB port changes; otherwise 400
+    // {"error"}: "Invalid request", "Invalid LED level", "Invalid USB port",
+    // "No status LED on this board"
+    static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
+                                      const BoardSettings& current, BoardSettings& next,
+                                      bool& restart, String& response);
 };
 
 #endif

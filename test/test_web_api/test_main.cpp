@@ -876,6 +876,110 @@ void test_needs_confirmation_other_names() {
     TEST_ASSERT_FALSE(WebApiJson::needsConfirmation(nullptr));
 }
 
+
+// --- Board page (US-094) ---
+
+static const BoardConfig P4_LIKE = {
+    "p4_like", "P4 test board", false, true,
+    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1 },
+    { -1, -1 },
+    { 2, { { "hs", "High-Speed", 1 }, { "fs", "Full-Speed", 2 } } },
+    { "", "", false, 3, 0, NetworkMode::ETHERNET },
+};
+
+static int checkBoard(const char* json, const BoardConfig& b, const BoardSettings& cur, BoardSettings& next,
+                      bool& restart, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkBoardSettingsBody(doc, b, cur, next, restart, out);
+}
+
+void test_board_json_s3(void) {
+    String json = WebApiJson::boardSettingsJson(board(), defaultsFor(board()));
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"id\":\"esp32s3_devkit\",\"label\":\"ESP32-S3 DevKitC-1\","
+        "\"led\":{\"present\":true,\"on\":true,\"level\":3,\"levels\":5},"
+        "\"usb\":{\"ports\":[{\"id\":\"otg\",\"label\":\"USB OTG\"}],\"port\":\"otg\"}}",
+        json.c_str());
+}
+
+void test_board_json_two_ports_no_led(void) {
+    BoardSettings s = defaultsFor(P4_LIKE);
+    s.usb_port = 1;
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, s);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"id\":\"p4_like\",\"label\":\"P4 test board\","
+        "\"usb\":{\"ports\":[{\"id\":\"hs\",\"label\":\"High-Speed\"},{\"id\":\"fs\",\"label\":\"Full-Speed\"}],"
+        "\"port\":\"fs\"}}",
+        json.c_str());
+}
+
+void test_board_body_led(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":5}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_UINT8(5, next.led_level);
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_FALSE(restart);
+
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_on\":false}", board(), cur, next, restart, out));
+    TEST_ASSERT_FALSE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+
+    // Empty body: nothing changes
+    TEST_ASSERT_EQUAL(0, checkBoard("{}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+    TEST_ASSERT_FALSE(restart);
+}
+
+void test_board_body_invalid_level(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    const char* bad[] = { "{\"led_level\":0}", "{\"led_level\":6}", "{\"led_level\":2.5}",
+                          "{\"led_level\":true}", "{\"led_level\":\"3\"}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid LED level\"}", out.c_str());
+    }
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_on\":1}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("[1]", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
+void test_board_body_usb_port(void) {
+    BoardSettings cur = defaultsFor(P4_LIKE), next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"fs\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_UINT8(1, next.usb_port);
+    TEST_ASSERT_TRUE(restart);
+    // Same port as now: no restart
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"hs\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":\"xx\"}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid USB port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":1}", P4_LIKE, cur, next, restart, out));
+    // The S3 accepts only its single port
+    BoardSettings s3 = defaultsFor(board());
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"usb_port\":\"otg\"}", board(), s3, next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"usb_port\":\"fs\"}", board(), s3, next, restart, out));
+}
+
+void test_board_body_no_led(void) {
+    BoardSettings cur = defaultsFor(P4_LIKE), next;
+    bool restart;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_on\":true}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"led_level\":3}", P4_LIKE, cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_api_null_host);
@@ -938,5 +1042,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_nut_config_body_check);
     RUN_TEST(test_needs_confirmation_spec_names);
     RUN_TEST(test_needs_confirmation_other_names);
+    RUN_TEST(test_board_json_s3);
+    RUN_TEST(test_board_json_two_ports_no_led);
+    RUN_TEST(test_board_body_led);
+    RUN_TEST(test_board_body_invalid_level);
+    RUN_TEST(test_board_body_usb_port);
+    RUN_TEST(test_board_body_no_led);
     return UNITY_END();
 }

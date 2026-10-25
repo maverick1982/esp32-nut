@@ -1,0 +1,305 @@
+schema: archetipo/plan/v2
+spec_code: US-094
+body: |
+  # US-094: Impostazioni della scheda nella Web UI: LED di stato e porta USB dell'UPS — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-25
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Bloccato da:** US-090 (DONE)
+
+  Una nuova scheda "Board" nella Web UI: LED di stato acceso/spento e luminosità su 5 livelli logaritmici (3, 5, 10, 20, 40; default 10), porta USB dell'UPS sulle schede con più porte host. Valori iniziali dal profilo, salvati in NVS, API protette dal login.
+
+  **Nota sulla stima:** con la luminosità aggiunta e la nuova pagina, la spec è stata portata a 5 punti.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  - **Profilo della scheda (`include/board/board.h`).** `UsbConfig` diventa l'elenco delle porte host: `struct UsbPort { const char* id; const char* label; uint32_t peripheral_map; }`, `UsbConfig { uint8_t port_count; UsbPort ports[2]; }`. `BoardDefaults` aggiunge `led_level` (1-5, 3 sull'S3) e `usb_port` (indice, 0). `BoardConfig` aggiunge `label`, il nome leggibile mostrato in alto a destra nella scheda Board ("ESP32-S3 DevKitC-1"); `name` resta l'identificativo stabile (file del profilo, ambiente PlatformIO, log, diagnostiche). Il profilo `esp32s3_devkit` ha una porta `{"otg", "USB OTG", 0}`. `main.cpp` (US-090) passa a `ports[settings.usb_port].peripheral_map`.
+  - **Modello puro delle impostazioni (`include/board/board_settings.h`, header-only, nativo).** `struct BoardSettings { bool led_on; uint8_t led_level; uint8_t usb_port; }`; `BoardSettings defaultsFor(const BoardConfig&)`; `uint8_t ledBrightness(uint8_t level)` con la tabella `{3, 5, 10, 20, 40}` (livello fuori 1-5 → livello 3); `BoardSettings sanitize(const BoardConfig&, BoardSettings)` che riporta al default i valori non ammessi letti dalla NVS (PDR 0002 D4: un valore rovinato non blocca la scheda); `bool hasLed(const BoardConfig&)`, `bool hasUsbChoice(const BoardConfig&)` (`port_count > 1`).
+  - **Persistenza (`src/core/board_settings_store.h/.cpp`).** NVS namespace `board`, chiavi `led_on`, `led_level`, `usb_port`; `load(const BoardConfig&)` restituisce `sanitize(...)` dei valori salvati o i default; `save(const BoardSettings&)`.
+  - **API (`WebApiJson`, puro e testato in nativo; rotte in `WebConfigServer`).**
+    - `GET /api/board` → `{"id":"esp32s3_devkit","label":"ESP32-S3 DevKitC-1","led":{"present":true,"on":true,"level":3,"levels":5},"usb":{"ports":[{"id":"otg","label":"USB OTG"}],"port":"otg"}}`; `led` assente senza LED.
+    - `POST /api/board` con campi opzionali `led_on` (bool), `led_level` (intero 1-5), `usb_port` (id di una porta del profilo): `WebApiJson::checkBoardSettingsBody(body, board, current, next, response)` → 0 oppure 400 `{"error":"Invalid LED level"|"Invalid USB port"|"Invalid request"}`; un campo del LED su una scheda senza LED → 400 `{"error":"No status LED on this board"}`; `usb_port` su una scheda con una sola porta è accettato solo se è quella porta.
+    - Risposta 200 `{"success":true,"restart":bool}`: `restart` vero solo se cambia la porta USB; in quel caso il server si riavvia dopo 1 s come per le configurazioni Wi-Fi/NUT (`should_restart`), con log `[BOARD] UPS USB port set to ... : restarting`. LED e luminosità si applicano subito, log `[BOARD] Status LED on|off, brightness level N`.
+    - Le rotte non sono pubbliche in `AuthPolicy`: protette dal login (in AP aperte come le altre impostazioni, ADR 0009).
+  - **LED (`DiagnosticLED`).** `setEnabled(bool)` (spento: pixel nero, lo stato continua a essere seguito ma non viene mostrato) e `setBrightness(uint8_t)` (chiama `_pixels.setBrightness` e ridisegna). `main.cpp` applica le impostazioni all'avvio; `WebConfigServer` riceve un puntatore al LED (`setStatusLed(DiagnosticLED*)`) per applicare i cambi subito.
+  - **Web UI.** Nuova scheda "Board" nella barra laterale tra "NUT Server" e "Web Login", seguendo i mockup in `docs/mockups/US-094/` (sorgente di verità per layout e controlli): sezione Status LED (interruttore e 5 livelli, livelli disabilitati con LED spento; la pagina mostra solo il numero del livello, non il valore interno su 255), sezione UPS USB port (solo se `usb.ports.length > 1`, con l'avviso del riavvio), riga con il nome del profilo. Sorgenti `data/www/index.html`, `bundle.js`, `bundle.css`; poi `python scripts/embed_web.py`.
+  - **Fuori ambito:** colori e lampeggi, pin del LED, pin Ethernet/SDIO.
+
+  ---
+
+  ## Strategia di Test
+
+  - **Nativi:** `test/test_board_settings` (default dal profilo S3 e da un profilo finto a due porte senza LED; tabella 3/5/10/20/40 e livello fuori range; `sanitize` di livello 0/6/255 e porta inesistente; `hasLed`/`hasUsbChoice`). In `test/test_web_api`: JSON di `GET /api/board` per S3, per il profilo finto a due porte e per uno senza LED; `checkBoardSettingsBody` per campi validi, parziali, tipi sbagliati, livello fuori range, porta sconosciuta, LED assente, `restart` solo al cambio di porta. `test_board_profile` aggiornato ai nuovi campi.
+  - **E2E (Playwright, `e2e/board-settings.spec.ts`, API mockate con gli helper di `e2e/support/webui.ts`):**
+    1. S3: l'utente apre la scheda Board, vede LED acceso al livello 3 e nessuna sezione USB; sceglie il livello 5 → POST `{"led_level":5}` e conferma visibile; spegne il LED → POST `{"led_on":false}` e i livelli diventano disabilitati.
+    2. Profilo finto a due porte: compare la scelta della porta con l'avviso del riavvio; cambiando porta e salvando → POST `{"usb_port":"fs"}` e messaggio di riavvio.
+    3. Scheda senza LED: la sezione Status LED non c'è.
+    4. Errore 400 dall'API mostrato nella pagina.
+    5. La barra laterale resta coerente con le altre schede (`e2e/sidebar-layout.spec.ts` esteso alla nuova scheda).
+  - **Demo:** la Dimostrazione è visibile (sezione Board, cambio di luminosità): filmabile, la decisione è della review.
+  - **Hardware (S3, Eaton 3S):** livelli 1-5 a vista, LED spento in ogni stato (anche AP), valori mantenuti dopo un riavvio; senza modifiche, LED come prima.
+tasks:
+  - id: TASK-01
+    title: 'Profilo: porte USB e valori iniziali di LED e porta'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il profilo descrive le porte USB host e i valori iniziali di luminosità e porta.
+
+      **Leggi:** `include/board/board.h`, `src/board/esp32s3_devkit.cpp`, `src/core/main.cpp` (`setPeripheralMap(board().usb.peripheral_map)`), `test/test_board_profile/test_main.cpp`.
+
+      **Modifica:**
+      1. `board.h`: `struct UsbPort { const char* id; const char* label; uint32_t peripheral_map; };` `struct UsbConfig { uint8_t port_count; UsbPort ports[2]; };` (commento: 2 basta per S3 e P4); `BoardConfig` aggiunge `const char* label;` dopo `name` (nome leggibile per la Web UI, `name` resta l'identificativo); `BoardDefaults` aggiunge `uint8_t led_level;` (1-5) e `uint8_t usb_port;` (indice in `ports`).
+      2. `esp32s3_devkit.cpp`: `label` "ESP32-S3 DevKitC-1", una porta `{ "otg", "USB OTG", 0 }`, `led_level` 3, `usb_port` 0.
+      3. `main.cpp`: provvisoriamente `board().usb.ports[board().defaults.usb_port].peripheral_map` (TASK-04 lo sostituisce con l'impostazione salvata).
+      4. `test_board_profile`: aggiorna `test_usb_default_peripheral` ai nuovi campi (1 porta, id "otg", map 0) e aggiungi `led_level` 3 e `label` "ESP32-S3 DevKitC-1".
+
+      **Verifica:** `pio test -e native -f test_board_profile` (PATH del toolchain mingw) e build S3.
+
+      ## File Coinvolti
+      - include/board/board.h
+      - src/board/esp32s3_devkit.cpp
+      - src/core/main.cpp
+      - test/test_board_profile/test_main.cpp
+
+      ## Criteri di Completamento
+      - [ ] Test del profilo verdi, build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Modello puro BoardSettings: default, tabella della luminosità, sanitize'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** regole delle impostazioni della scheda senza hardware.
+
+      **Modifica:** crea `include/board/board_settings.h` (header-only, solo `<stdint.h>` e `board.h`, doc comment con PDR 0002 D4):
+      - `struct BoardSettings { bool led_on; uint8_t led_level; uint8_t usb_port; };`
+      - `static const uint8_t LED_LEVELS = 5;` e `inline uint8_t ledBrightness(uint8_t level)` con tabella `{3, 5, 10, 20, 40}` (commento: scala logaritmica, ogni livello raddoppia; fuori 1-5 → 10);
+      - `inline bool hasLed(const BoardConfig&)` (`led.pin >= 0`), `inline bool hasUsbChoice(const BoardConfig&)` (`usb.port_count > 1`);
+      - `inline BoardSettings defaultsFor(const BoardConfig& b)` (`led_on = b.defaults.led_enabled`, `led_level = b.defaults.led_level`, `usb_port = b.defaults.usb_port`);
+      - `inline BoardSettings sanitize(const BoardConfig& b, BoardSettings s)`: livello fuori 1-5 → default, porta `>= port_count` → default.
+
+      ## File Coinvolti
+      - include/board/board_settings.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Compila in nativo
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di BoardSettings
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire default, tabella e sanitize con profili veri e finti.
+
+      **Modifica:** crea `test/test_board_settings/test_main.cpp` con un profilo finto `P4_LIKE` (due porte `{"hs","High-Speed",1}`, `{"fs","Full-Speed",2}`, LED assente pin -1, `usb_port` 0) definito nel test:
+      1. `defaultsFor(board())`: LED acceso, livello 3, porta 0; `ledBrightness(3) == 10`.
+      2. tabella: livelli 1..5 → 3, 5, 10, 20, 40; ogni livello almeno il doppio del precedente meno arrotondamento (3→5 è ×1,67: verifica i valori esatti, non il rapporto); livelli 0 e 6 → 10.
+      3. `sanitize`: livello 0/6/255 → 3; porta 1 su S3 → 0; porta 1 su `P4_LIKE` resta 1, porta 2 → 0.
+      4. `hasLed`/`hasUsbChoice`: S3 true/false, `P4_LIKE` false/true.
+
+      **Verifica:** `pio test -e native -f test_board_settings`.
+
+      ## File Coinvolti
+      - test/test_board_settings/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-03
+  - id: TASK-04
+    title: Persistenza NVS e applicazione all'avvio (LED e porta USB)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le impostazioni si salvano in NVS e si applicano all'avvio; il LED si può spegnere e regolare.
+
+      **Leggi:** `src/core/driver_var_store.cpp` (stile Preferences), `lib/DiagnosticLED/src/DiagnosticLED.h/.cpp`, `src/core/main.cpp`.
+
+      **Modifica:**
+      1. `src/core/board_settings_store.h/.cpp`: classe `BoardSettingsStore` con `BoardSettings load(const BoardConfig&)` (namespace NVS `board`, chiavi `led_on` bool, `led_level` u8, `usb_port` u8; assenti → `defaultsFor`; poi `sanitize`) e `bool save(const BoardSettings&)`.
+      2. `DiagnosticLED`: `void setEnabled(bool on)` (spento: pixel nero subito e `setPixelColorAndShow` non accende più; riacceso: ridisegna lo stato corrente) e `void setBrightness(uint8_t value)` (`_pixels.setBrightness(value)` e ridisegno); `begin()` mantiene la luminosità 10 come oggi finché non viene chiamato `setBrightness`.
+      3. `main.cpp`: istanza `static BoardSettingsStore board_settings_store;` e `BoardSettings board_settings = board_settings_store.load(board());` subito dopo il LED; `diagnostic_led.setBrightness(ledBrightness(board_settings.led_level)); diagnostic_led.setEnabled(board_settings.led_on);`; `usb_ups.setPeripheralMap(board().usb.ports[board_settings.usb_port].peripheral_map);`; passa store, impostazioni e LED al web server (`web_server.setBoardSettings(&board_settings_store, board_settings)`, `web_server.setStatusLed(&diagnostic_led)`).
+
+      **Verifica:** build S3.
+
+      ## File Coinvolti
+      - src/core/board_settings_store.h — nuovo
+      - src/core/board_settings_store.cpp — nuovo
+      - lib/DiagnosticLED/src/DiagnosticLED.h
+      - lib/DiagnosticLED/src/DiagnosticLED.cpp
+      - src/core/main.cpp
+
+      ## Criteri di Completamento
+      - [ ] Senza valori salvati: LED acceso a luminosità 10, porta 0 (come oggi)
+      - [ ] Build S3 OK
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-04
+  - id: TASK-05
+    title: 'API /api/board: JSON e controllo del body in WebApiJson, rotte nel web server'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** leggere e scrivere le impostazioni dalla Web UI.
+
+      **Leggi:** `lib/WebApi/src/WebApiJson.h/.cpp` (`checkNutConfigBody`, stile delle risposte), `src/network/web_config_server.cpp` (`handleNutConfig`, `should_restart`, registrazione delle rotte), `lib/WebAuth/src/AuthPolicy.cpp` (rotte pubbliche: non aggiungere le nuove).
+
+      **Modifica:**
+      1. `WebApiJson`: `static String boardSettingsJson(const BoardConfig&, const BoardSettings&)` (formato del piano; `led` assente senza LED) e `static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig&, const BoardSettings& current, BoardSettings& next, bool& restart, String& response)` (0 oppure 400 con i messaggi del piano; body non oggetto o tipi sbagliati → "Invalid request"; `led_level` deve essere un intero, non bool né float).
+      2. `WebConfigServer`: `setBoardSettings(BoardSettingsStore*, const BoardSettings&)`, `setStatusLed(DiagnosticLED*)`; `GET /api/board` → `boardSettingsJson`; `POST /api/board` → `requireJson()`, parse, `checkBoardSettingsBody`; su 0: `save`, applica LED (`setEnabled`, `setBrightness(ledBrightness(level))`), log `[BOARD]`, risposta `{"success":true,"restart":...}`; se `restart` → `should_restart = true` come le altre configurazioni. Errore di salvataggio NVS → 500 `{"error":"Failed to save settings"}`.
+      3. Aggiungi `board_settings.h`/`board.h` agli include path del native se servono a `test_web_api` (`include/` è già nel percorso del progetto).
+
+      **Verifica:** build S3.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h
+      - lib/WebApi/src/WebApiJson.cpp
+      - include/network/web_config_server.h
+      - src/network/web_config_server.cpp
+
+      ## Criteri di Completamento
+      - [ ] Rotte protette dal login (non in AuthPolicy::isPublicRoute)
+      - [ ] Porta USB: riavvio dopo il salvataggio; LED: applicato subito
+      - [ ] Build S3 OK
+
+      **Blocchi:** se `WebApiJson` non può includere `board.h` in nativo senza Arduino, fermati e segnalalo.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test nativi delle API della scheda
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criteri 3-4 della spec in nativo.
+
+      **Leggi:** `test/test_web_api/test_main.cpp` (test di `checkNutConfigBody`).
+
+      **Modifica:** aggiungi in `test/test_web_api/test_main.cpp` (profili finti definiti nel test: S3 reale via `board()` e `P4_LIKE` a due porte senza LED):
+      1. `boardSettingsJson` per S3 (stringa esatta), per `P4_LIKE` (nessun `led`, due porte).
+      2. `checkBoardSettingsBody`: `{"led_level":5}` → 0, `next.led_level` 5, `restart` false; `{"led_on":false}` → 0; `{"led_level":0}`, `{"led_level":6}`, `{"led_level":2.5}`, `{"led_level":true}` → 400 "Invalid LED level"; `{"usb_port":"fs"}` su `P4_LIKE` → 0 e `restart` true; stessa porta attuale → `restart` false; `{"usb_port":"xx"}` → 400 "Invalid USB port"; campi del LED su `P4_LIKE` → 400 "No status LED on this board"; body non oggetto → 400 "Invalid request"; body vuoto `{}` → 0 senza cambi.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp
+
+      ## Criteri di Completamento
+      - [ ] Test nuovi verdi, esistenti invariati
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Web UI: scheda Board secondo i mockup'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la pagina Board con LED e porta USB.
+
+      **Leggi:** i mockup in `docs/mockups/US-094/` (sorgente di verità per layout, controlli, testi e stati), `data/www/index.html` (tab e `tab-content`, form NUT), `data/www/bundle.js` (gestione delle tab, `apiFetch`, form NUT con riavvio), `data/www/bundle.css`.
+
+      **Modifica:**
+      1. `index.html`: pulsante `.tab` `data-target="board"` tra "NUT Server" e "Web Login" con l'icona del mockup; `tab-content` `id="content-board"` con le sezioni del mockup (il chip in alto a destra mostra `Board: <label>` con l'id del profilo nel tooltip `title`; id stabili per i test: `board-name`, `led-section`, `led-on`, `led-level` + i 5 pulsanti/step, `usb-section`, `usb-port`, `btn-save-usb`, `board-error`, `board-success`).
+      2. `bundle.js`: all'apertura della tab `GET /api/board`; LED: cambio dell'interruttore o del livello → `POST /api/board` subito (`{led_on}` / `{led_level}`), livelli disabilitati con LED spento, errore inline; USB: sezione visibile solo con più porte, salvataggio con `{usb_port}` e messaggio di riavvio come il form NUT; sezione LED nascosta senza `led`.
+      3. `bundle.css`: solo gli stili nuovi del mockup (riusa i token esistenti).
+      4. `python scripts/embed_web.py`.
+
+      ## File Coinvolti
+      - data/www/index.html
+      - data/www/bundle.js
+      - data/www/bundle.css
+      - data/www/index_inlined.html, include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Aderente ai mockup su desktop e mobile
+      - [ ] Asset rigenerati
+
+      **Blocchi:** se i mockup mancano o contraddicono la spec, fermati e segnalalo.
+    ref: TASK-07
+  - id: TASK-08
+    title: E2E della scheda Board
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i flussi utente della pagina Board.
+
+      **Leggi:** `e2e/support/webui.ts` (serveIndex, catch-all delle API), `e2e/ups-settings.spec.ts` (stile), `e2e/sidebar-layout.spec.ts`.
+
+      **Modifica:** crea `e2e/board-settings.spec.ts` con `/api/board` mockato:
+      1. S3: LED acceso livello 3, nessuna sezione USB; livello 5 → POST `{"led_level":5}`; spegnimento → POST `{"led_on":false}` e livelli disabilitati.
+      2. Due porte: sezione USB visibile con l'avviso; scelta "Full-Speed" e salvataggio → POST `{"usb_port":"fs"}` e messaggio di riavvio.
+      3. Senza LED: `#led-section` non visibile.
+      4. 400 `{"error":"Invalid LED level"}` → errore mostrato.
+      Estendi `e2e/sidebar-layout.spec.ts` alla nuova voce "Board" se elenca le voci del menu.
+
+      **Verifica:** `npx playwright test e2e/board-settings.spec.ts`, poi la suite completa.
+
+      ## File Coinvolti
+      - e2e/board-settings.spec.ts — nuovo
+      - e2e/sidebar-layout.spec.ts — se necessario
+
+      ## Criteri di Completamento
+      - [ ] Scenari verdi, suite e2e completa verde
+
+      **Blocchi:** nessuno previsto.
+    ref: TASK-08
+  - id: TASK-09
+    title: Regressione completa e prove sull'S3
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** regressione e verifica a vista del LED.
+
+      **Passi:**
+      1. Suite nativa completa, e2e completa, build S3.
+      2. Sulla scheda dell'utente (COM5, flash senza erase): senza modifiche il LED è come prima (luminosità 10); livelli 1-5 a vista; LED spento in ogni stato, anche nell'AP del doppio reset; valori mantenuti dopo un riavvio; la sezione USB non compare.
+      3. Esiti nel riepilogo; le prove non fatte vanno segnalate.
+
+      ## File Coinvolti
+      - nessuno
+
+      ## Criteri di Completamento
+      - [ ] Test automatici verdi, build OK
+      - [ ] Prove su hardware eseguite o segnalate
+
+      **Blocchi:** serve l'utente con la scheda collegata.
+    ref: TASK-09

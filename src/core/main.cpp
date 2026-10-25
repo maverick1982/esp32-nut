@@ -10,6 +10,7 @@
 #include "RestartPolicy.h"
 #include "ApIdleTimeout.h"
 #include "board/board.h"
+#include "core/board_settings_store.h"
 #include "NetBootPlan.h"
 
 USBHostUPS usb_ups;
@@ -21,6 +22,9 @@ WebConfigServer web_server(config_mgr);
 
 // Driver-side variables written with SET VAR (ups.delay.*, outlet.*.desc), NVS "nutrw" (US-067)
 static NvsDriverVarStore driver_var_store;
+
+// Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
+static BoardSettingsStore board_settings_store;
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -84,6 +88,9 @@ void setup() {
 
     // Inizializzazione del LED diagnostico (pin dal profilo della scheda, US-090)
     diagnostic_led.begin(board().led.pin, board().led.power_pin);
+    BoardSettings board_settings = board_settings_store.load(board());
+    diagnostic_led.setBrightness(ledBrightness(board_settings.led_level));
+    diagnostic_led.setUserEnabled(board_settings.led_on);
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -106,6 +113,8 @@ void setup() {
     // Which link to start, from the board capabilities (US-090, ADR 0010 §3)
     NetBootPlan net_plan = planNetwork({ board().has_wifi, board().has_ethernet }, config_ok, manual_ap_triggered);
     web_server.setNetwork(&network_mgr);
+    web_server.setBoardSettings(&board_settings_store, board_settings);
+    web_server.setStatusLed(&diagnostic_led);
 
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
@@ -153,7 +162,7 @@ void setup() {
         delay(10);
     }
 
-    usb_ups.setPeripheralMap(board().usb.peripheral_map);
+    usb_ups.setPeripheralMap(board().usb.ports[board_settings.usb_port].peripheral_map);
     if (!usb_ups.begin()) {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
     } else {

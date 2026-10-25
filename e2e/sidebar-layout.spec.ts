@@ -28,6 +28,13 @@ const VARIABLES = {
   ],
 };
 
+const BOARD = {
+  id: 'esp32p4_dual_usb_test',
+  label: 'ESP32-P4 dual USB (test profile)',
+  led: { present: true, on: true, level: 3, levels: 5 },
+  usb: { ports: [{ id: 'hs', label: 'High-Speed' }, { id: 'fs', label: 'Full-Speed' }], port: 'hs' },
+};
+
 // UPS Telemetry data of an APC Smart-UPS: long parameter names and values
 const TELEMETRY_VARS: Record<string, string> = {
   'battery.charge': '100', 'battery.charge.low': '10', 'battery.charge.warning': '50',
@@ -43,7 +50,7 @@ const TELEMETRY_VARS: Record<string, string> = {
 const ELEMENTS = ['.sidebar', '.brand-icon', '.brand-name', 'nav.tabs button.tab', '#lbl-wifi', '#session-username', '#btn-logout', '#btn-logout-all'];
 
 // Pages compared with UPS Telemetry (the reference); OTA opens /update, which has no sidebar
-const PAGES = ['commands', 'settings', 'wifi', 'nut', 'weblogin', 'logs'];
+const PAGES = ['commands', 'settings', 'wifi', 'nut', 'board', 'weblogin', 'logs'];
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -77,6 +84,7 @@ async function openTab(page: Page, target: string) {
   // The two pages with wide content: wait until their rows are rendered
   if (target === 'commands') await expect(page.locator('#content-commands .cmd-run').first()).toBeVisible();
   if (target === 'settings') await expect(page.locator('#content-settings .set-apply').first()).toBeVisible();
+  if (target === 'board') await expect(page.locator('#usb-port .port-card').first()).toBeVisible();
 }
 
 function expectSameGeometry(actual: Record<string, Box[]>, expected: Record<string, Box[]>, where: string) {
@@ -168,6 +176,8 @@ test.describe('Sidebar layout (US-083)', () => {
     }));
     await page.route('**/api/ups/commands', route => route.fulfill({ json: COMMANDS }));
     await page.route('**/api/ups/variables', route => route.fulfill({ json: VARIABLES }));
+    // US-094: board with status LED and two USB ports, so both sections are shown
+    await page.route('**/api/board', route => route.fulfill({ json: BOARD }));
     // Every command and every setting is rejected: the error messages stay on the page
     await page.route('**/api/ups/command', route => route.fulfill({
       status: 500, json: { error: 'Command rejected by the UPS' },
