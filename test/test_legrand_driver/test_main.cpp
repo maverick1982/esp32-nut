@@ -4,11 +4,12 @@
 #include "LegrandDriver.h"
 #include "DriverRegistry.h"
 #include "CommandCatalog.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
+#include "UPSData.h"
 
 // US-087: Legrand Keor PDU / Keor SP, after nut_repo/drivers/legrand-hid.c
 
-class MockLegrandHost : public IUSBHostUPS {
+class MockLegrandHost : public IHidTransport {
 public:
     UPSData _data;
     std::vector<HIDUsageDef> _usages;
@@ -16,15 +17,10 @@ public:
 
     void lock() const override {}
     void unlock() const override {}
-    UPSDataLock getUPSData() const override { return UPSDataLock(_data, this); }
-    String getUPSStatusString() const override { return "OL"; }
-    bool setBeeper(bool) override { return true; }
-    bool isConnected() const override { return true; }
 
     HIDParser _hid_parser;
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
-    const HIDUsageDef* getUsageDef(uint32_t) const override { return nullptr; }
     String getActiveBeeperPath() const override { return _beeperPath; }
     uint32_t getQuirks() const override { return 0; }
     bool isPollingPaused() const override { return false; }

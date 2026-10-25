@@ -13,7 +13,7 @@
  */
 
 #include "EatonDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 
@@ -58,7 +58,7 @@ static const char* const kIModelPath = "UPS.PowerSummary.0xFFFF00F0";        // 
 static const char* const kCountryPath = "UPS.PowerSummary.0xFFFF0095";       // Country
 static const char* const kApparentPowerPath = "UPS.Flow.[4].ConfigApparentPower";
 
-void EatonDriver::updateNutContext(IUSBHostUPS* host, const UPSData& data) {
+void EatonDriver::updateNutContext(IHidTransport* host, const UPSData& data) {
     if (_nut_ctx.ready) return;
     const auto& usages = host->getUsages();
 
@@ -87,7 +87,7 @@ void EatonDriver::updateNutContext(IUSBHostUPS* host, const UPSData& data) {
     }
 }
 
-void EatonDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void EatonDriver::onLoop(IHidTransport* host, UPSData& data) {
     updateNutContext(host, data);
 }
 
@@ -96,13 +96,13 @@ bool EatonDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const
     return report_id != 254 && report_id != 255;
 }
 
-void EatonDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+void EatonDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
     if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
     if (_iModelIdx > 0 && !_iModelSeen) out.push_back(_iModelIdx);
 }
 
-void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EatonDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
@@ -141,7 +141,7 @@ void EatonDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t rep
     _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
-void EatonDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EatonDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
     
     if (length < 2 || data[1] != 0x03) return;

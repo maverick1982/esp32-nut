@@ -15,7 +15,7 @@
  */
 
 #include "EcoFlowDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 
@@ -43,13 +43,13 @@ void EcoFlowDriver::setup() {
     _outletShutdownTimer = "";
 }
 
-void EcoFlowDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+void EcoFlowDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
     // ecoflow-hid.c: UPS.PowerSummary.iDeviceChemistry via stringid_conversion
     if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
 }
 
-void EcoFlowDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void EcoFlowDriver::onLoop(IHidTransport* host, UPSData& data) {
     GenericDriver::onLoop(host, data);
     // ecoflow-hid.c: ecoflow_format_mfr() returns hd->Vendor, falling back to
     // "EcoFlow" when the device descriptor has no Vendor string. GenericDriver only
@@ -60,7 +60,7 @@ void EcoFlowDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     }
 }
 
-void EcoFlowDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EcoFlowDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
@@ -123,7 +123,7 @@ void EcoFlowDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t r
     _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
 }
 
-void EcoFlowDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void EcoFlowDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
 
     // A Vendor string that decodes to empty is equivalent to a missing one for

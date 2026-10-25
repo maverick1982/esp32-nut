@@ -23,7 +23,7 @@
  */
 
 #include "PowercomDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 #include "Quirks.h"
 #include <cctype>
@@ -35,7 +35,7 @@ void PowercomDriver::setup() {
     GenericDriver::setup();
 }
 
-void PowercomDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void PowercomDriver::onLoop(IHidTransport* host, UPSData& data) {
     if (!data.hasKey("ups.mfr")) {
         data.set("ups.mfr", "POWERCOM Co.,LTD");
     }
@@ -55,7 +55,7 @@ void PowercomDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
 }
 
 // FEATURE report that carries the usage (by path, or by code when path is null), 0 if none
-static uint8_t featureReportFor(IUSBHostUPS* host, const char* path, uint32_t usage) {
+static uint8_t featureReportFor(IHidTransport* host, const char* path, uint32_t usage) {
     for (const auto& u : host->getUsages()) {
         if (u.report_type != 3 || u.report_id == 0) continue;
         if (path ? strcmp(u.path, path) == 0 : u.usage == usage) return u.report_id;
@@ -67,7 +67,7 @@ static uint8_t featureReportFor(IUSBHostUPS* host, const char* path, uint32_t us
 // Full poll: every 30 s also voltages and load (reports 0x1D, 0x21, 0x1F), as powercom-hid,
 // then battery temperature, beeper and the legacy 0xA4 battery voltage (issue #36).
 // Temperature and beeper report IDs change between models: they come from the descriptor.
-void PowercomDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+void PowercomDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick = { PollItem{3, 0x0A, 8} };
     full = { PollItem{3, 0x0A, 8}, PollItem{3, 0x1D, 8}, PollItem{3, 0x21, 8}, PollItem{3, 0x1F, 8} };
 
@@ -83,7 +83,7 @@ void PowercomDriver::buildPollLists(IUSBHostUPS* host, std::vector<PollItem>& qu
     full.push_back(PollItem{3, 0xA4, 8});
 }
 
-void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void PowercomDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
 #ifdef USBUPS_DEBUG_LOG
@@ -221,7 +221,7 @@ void PowercomDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t 
     }
 }
 
-void PowercomDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void PowercomDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length < 2 || data[1] != 0x03) return;
     uint8_t str_len = data[0];
     String str = "";

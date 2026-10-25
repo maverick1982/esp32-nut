@@ -12,8 +12,8 @@ public:
     virtual ~CyberPowerDriver() = default;
 
     void setup() override;
-    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
     // DEFAULT_OFFDELAY_CPS / DEFAULT_ONDELAY_CPS of usbhid-ups.h: the CPS firmware rounds
     // the delays down to multiples of 60 s, so 20 s would shut down at once
@@ -35,14 +35,14 @@ protected:
     bool acceptPollReport(uint8_t report_type, uint8_t report_id) const override;
     // INPUT reports arrive on the interrupt endpoint: never request them on EP0
     bool pollInputReports() const override { return false; }
-    void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const override;
+    void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const override;
 
 private:
     // Vendor-defined reports (>= 130) and reports 4 and 6 hang some firmwares (issue #40)
     static const uint8_t FIRST_VENDOR_REPORT = 130;
     // The BR700ELCD layout (issue #40) has vendor reports: no control request beyond the
     // ones of the device strings is added for it
-    static bool hasVendorReports(IUSBHostUPS* host);
+    static bool hasVendorReports(IHidTransport* host);
     void scaleFrequency(UPSData& d, double v, bool input);
 
     UsageMapIndex<CyberPowerDriver> _map;

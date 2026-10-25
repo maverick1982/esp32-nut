@@ -6,7 +6,7 @@ epic:
   title: 'Architettura modulare: sorgente UPS e trasporto'
 priority: MEDIUM
 points: 5
-status: TODO
+status: DONE
 body: |-
   #### US-104: Interfaccia di trasporto per i driver UPS
 
@@ -34,3 +34,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-10-25T17:05:58Z"
+  - status: PLANNED
+    at: "2026-10-25T18:41:23Z"
+  - status: IN PROGRESS
+    at: "2026-10-25T18:44:49Z"
+  - status: REVIEW
+    at: "2026-10-25T19:08:29Z"
+  - status: DONE
+    at: "2026-10-25T20:52:14Z"

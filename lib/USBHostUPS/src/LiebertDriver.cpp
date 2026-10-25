@@ -14,7 +14,7 @@
  */
 
 #include "LiebertDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 
 /**
@@ -64,7 +64,7 @@ void LiebertDriver::setup() {
     _vendorTransfer = false;
 }
 
-void LiebertDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
+void LiebertDriver::onLoop(IHidTransport* host, UPSData& data) {
     GenericDriver::onLoop(host, data);
     // liebert_format_mfr(): hd->Vendor, or "Liebert" when the device has no Vendor string
     if (host && host->_iManufacturer == 0 && !data.hasKey("ups.mfr")) {
@@ -72,12 +72,12 @@ void LiebertDriver::onLoop(IUSBHostUPS* host, UPSData& data) {
     }
 }
 
-void LiebertDriver::collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const {
+void LiebertDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
     if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
 }
 
-void LiebertDriver::parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
+void LiebertDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
     GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
     // A Vendor string that decodes to empty counts as a missing one for liebert_format_mfr()
     if (host && host->_iManufacturer > 0 && index == host->_iManufacturer &&
@@ -93,7 +93,7 @@ static void setFlag(UPSData& d, const char* key, double v) {
     d.set(key, v != 0 ? "1" : "0");
 }
 
-void LiebertDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void LiebertDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);

@@ -12,8 +12,8 @@ public:
     virtual ~EatonDriver() = default;
 
     void setup() override;
-    void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
+    void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
     // Rows of mge_hid2nut (mge-hid.c), NutTable.h (US-066)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::mgeHid2Nut(n); }
@@ -23,8 +23,8 @@ public:
 
 protected:
     bool acceptPollReport(uint8_t report_type, uint8_t report_id) const override;
-    void collectStringRequests(IUSBHostUPS* host, const UPSData& data, std::vector<uint8_t>& out) const override;
-    void onLoop(IUSBHostUPS* host, UPSData& data) override;
+    void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const override;
+    void onLoop(IHidTransport* host, UPSData& data) override;
 
 private:
     UsageMapIndex<EatonDriver> _map;
@@ -32,7 +32,7 @@ private:
 
     // Inputs of mge_type (mge_format_model): the UPS.PowerSummary.iModel string, or
     // UPS.Flow.[4].ConfigApparentPower when it is empty, and UPS.PowerSummary.Country
-    void updateNutContext(IUSBHostUPS* host, const UPSData& data);
+    void updateNutContext(IHidTransport* host, const UPSData& data);
     uint8_t _iModelIdx;
     bool _iModelIdxSeen;
     bool _iModelSeen;

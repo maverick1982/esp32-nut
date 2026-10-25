@@ -4,16 +4,21 @@
 #include <Arduino.h>
 #include <vector>
 #include "IUpsSource.h"
+#include "IHidTransport.h"
 #include "UPSData.h"
 #include "HIDUsages.h"
 #include "HIDParser.h"
 #include "CommandCatalog.h"
 #include "NutTable.h"
 
-// The USB HID host as the drivers see it, on top of the consumer-facing IUpsSource
-// (US-103). The driver-facing part moves to a transport interface with US-104.
-class IUSBHostUPS : public IUpsSource {
+// The USB HID host: the consumer-facing IUpsSource (US-103) and the driver-facing
+// IHidTransport (US-104), plus the HID side of commands and beeper (US-105 moves it).
+class IUSBHostUPS : public IUpsSource, public IHidTransport {
 public:
+    // Both bases declare the data lock: one override implements it for both
+    void lock() const override = 0;
+    void unlock() const override = 0;
+
     virtual bool setBeeper(bool enable) = 0;
     virtual bool supportsBeeperToggle() const { return true; }
     // False when the driver offers no load.* or shutdown.* command (US-058)
@@ -23,10 +28,7 @@ public:
     // Commands of the driver's upstream subdriver, nullptr for the whole catalog (US-097)
     virtual const char* const* commandAllowList() const { return nullptr; }
 
-    virtual const std::vector<HIDUsageDef>& getUsages() const = 0;
     virtual const HIDUsageDef* getUsageDef(uint32_t usage) const = 0;
-    virtual const HIDParser* getHIDParser() const = 0;
-    virtual String getActiveBeeperPath() const = 0;
     // NUT instant commands the attached device supports, empty when no UPS is connected
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override {
         if (!isConnected()) return {};
@@ -35,8 +37,6 @@ public:
         return CommandCatalog::build(getUsages(), beeper, shutdownCommandsSupported(), beeperMuteSupported(),
                                      commandAllowList());
     }
-    // Writes value into the FEATURE field of def (read-modify-write of its report)
-    virtual bool writeUsage(const HIDUsageDef& def, uint32_t value) { return false; }
     /**
      * Runs a NUT instant command (US-057, US-058). param is the optional INSTCMD value,
      * used only by load.off.delay, load.on.delay and shutdown.reboot. No lock is held
@@ -114,22 +114,6 @@ public:
     }
     // Command shutdown.default ran with its last success, empty if none (US-058)
     const String& lastDefaultShutdown() const { return _last_default_shutdown; }
-    virtual uint32_t getQuirks() const = 0;
-    // True while polling backs off after a link failure: drivers skip their poll steps
-    virtual bool isPollingPaused() const = 0;
-    virtual bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t expected_length = 8) = 0;
-    // Fetches a string descriptor and hands it to the driver's parseStringDescriptor()
-    virtual bool requestStringDescriptor(uint8_t string_index) = 0;
-    // ms since the last complete INPUT report with this ID, UINT32_MAX if none yet (issue #60)
-    virtual uint32_t inputReportAgeMs(uint8_t report_id, uint32_t now) const { return UINT32_MAX; }
-    virtual uint16_t getVID() const { return 0; }
-    virtual uint16_t getPID() const { return 0; }
-    virtual void logDebug(const String& msg) const {}
-
-    // String indices of the device descriptor, set when the interface is claimed
-    uint8_t _iManufacturer = 0;
-    uint8_t _iProduct = 0;
-    uint8_t _iSerialNumber = 0;
 
 protected:
     String _last_default_shutdown;

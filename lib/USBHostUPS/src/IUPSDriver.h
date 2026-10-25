@@ -5,9 +5,9 @@
 #include <stddef.h>
 #include <vector>
 #include "NutTable.h"
+#include "UPSData.h"
 
-struct UPSData;
-class IUSBHostUPS;
+class IHidTransport;
 
 class IUPSDriver {
 public:
@@ -22,11 +22,11 @@ public:
     /**
      * @brief Called periodically to perform polling
      * 
-     * @param host Pointer to the main USB host controller (to request reports)
+     * @param host Transport of the attached device (to request reports)
      * @param data Reference to the UPS data structure to update
      * @param now Current time in milliseconds
      */
-    virtual void loop(IUSBHostUPS* host, UPSData& data, uint32_t now) = 0;
+    virtual void loop(IHidTransport* host, UPSData& data, uint32_t now) = 0;
 
     /**
      * @brief True once the first full poll after setup() has run (issue #60).
@@ -44,7 +44,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 
     /**
      * @brief Called by the host right after every decodeReport(), with the same arguments.
@@ -53,7 +53,7 @@ public:
      * writes the values of the rows that own their variable last, so a hand-written
      * mapping of the same key never overrides them (US-066).
      */
-    virtual void postDecode(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {}
+    virtual void postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {}
 
     /**
      * @brief Variables a NUT client may write (LIST RW), sorted as upsd lists them.
@@ -114,7 +114,7 @@ public:
      * @param length Length of the payload
      * @param ups_data Reference to the UPS data structure to update
      */
-    virtual void parseStringDescriptor(IUSBHostUPS* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
+    virtual void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) = 0;
 
     /**
      * @brief Rewrites the device strings once they are known (issue #76).

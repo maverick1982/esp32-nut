@@ -13,7 +13,7 @@
  */
 
 #include "OpenUPSDriver.h"
-#include "IUSBHostUPS.h"
+#include "IHidTransport.h"
 #include "HIDParser.h"
 
 /**
@@ -67,7 +67,7 @@ void OpenUPSDriver::setup() {
     _map.invalidate();
 }
 
-void OpenUPSDriver::decodeReport(IUSBHostUPS* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
+void OpenUPSDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
 
     typedef UsageMapIndex<OpenUPSDriver>::Mapping Mapping;
