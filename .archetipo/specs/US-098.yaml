@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: REVIEW
+status: DONE
 body: |-
   #### US-098: Campi HID ripetuti da un Report Count non azzerato letti dalla prima occorrenza, come NUT (APC BGM2200, issue #98)
 
@@ -57,3 +57,5 @@ history:
     at: "2026-10-24T14:33:41Z"
   - status: REVIEW
     at: "2026-10-24T14:47:55Z"
+  - status: DONE
+    at: "2026-10-25T13:39:30Z"
