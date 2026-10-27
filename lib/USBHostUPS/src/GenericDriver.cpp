@@ -23,6 +23,7 @@
 #include "GenericDriver.h"
 #include "IHidTransport.h"
 #include "CommandCatalog.h"
+#include "HidControl.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
 #include "Quirks.h"
@@ -59,6 +60,10 @@ GenericDriver::GenericDriver() :
     _nut_bound(false),
     _nut_init_done(false),
     _nut_usage_count(0) {
+}
+
+const IUpsControl& GenericDriver::control() const {
+    return HidControl::instance();
 }
 
 void GenericDriver::setup() {

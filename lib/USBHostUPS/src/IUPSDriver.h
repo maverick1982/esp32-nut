@@ -8,6 +8,7 @@
 #include "UPSData.h"
 
 class IHidTransport;
+class IUpsControl;
 
 class IUPSDriver {
 public:
@@ -200,6 +201,15 @@ public:
      * without an upstream subdriver: the paths of every subdriver then apply (US-058).
      */
     virtual const NutTable::DelayPaths* delayPaths() const { return nullptr; }
+
+    /**
+     * @brief Commands and SET VAR of the driver's protocol (US-105).
+     *
+     * A static, stateless object: the host uses it after releasing the data lock, when the
+     * poll task may already have deleted the driver. The HID drivers return HidControl, a
+     * driver of another protocol (Q*) its own.
+     */
+    virtual const IUpsControl& control() const = 0;
 };
 
 #endif // I_UPS_DRIVER_H

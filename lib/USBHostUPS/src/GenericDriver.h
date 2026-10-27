@@ -23,6 +23,8 @@
 class GenericDriver : public IUPSDriver {
 public:
     const char* getDriverName() const override { return "GenericDriver"; }
+    // HidControl: commands and SET VAR built on the HID usages (US-105)
+    const IUpsControl& control() const override;
 
     GenericDriver();
     virtual ~GenericDriver() = default;
