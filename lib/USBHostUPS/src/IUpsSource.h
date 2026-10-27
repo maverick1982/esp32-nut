@@ -49,6 +49,7 @@ public:
     // True while a device is attached but its first full poll has not completed yet
     virtual bool isWaitingFirstData() const { return false; }
 
+    // Commands, SET VAR and reset go through the control of the attached driver (US-105).
     // NUT instant commands the attached device supports, empty when no UPS is connected
     virtual std::vector<const UPSCommandInfo*> getSupportedCommands() const = 0;
     // Runs a NUT instant command (US-057, US-058). param is the optional INSTCMD value.

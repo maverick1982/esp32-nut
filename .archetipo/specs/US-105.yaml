@@ -6,8 +6,8 @@ epic:
   title: 'Architettura modulare: sorgente UPS e trasporto'
 priority: MEDIUM
 points: 5
-status: TODO
-body: |-
+status: DONE
+body: |
   #### US-105: Comandi e variabili scrivibili dietro il modello UPS
 
   **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
@@ -31,6 +31,29 @@ body: |-
   **Assunzioni**
   - **Rischio:** è il passo che tocca la parte USB sensibile ai tempi, per questo serve la build di test.
   - **Fuori ambito:** `nutdrv_qx` stesso e MQTT.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **lib/USBHostUPS/src/IHidControlPort.h:19** — La porta passata a IUpsControl non deve essere legata a HID. Oggi IHidControlPort eredita IHidTransport, quindi un driver di un altro protocollo (Q*) che fornisce il proprio IUpsControl riceverebbe comunque il trasporto HID e un'interfaccia con un nome HID: l'aggancio del criterio 2 esiste, ma non è neutro. Separare una porta neutrale rispetto al protocollo (es. IUpsControlPort: isConnected, upsData, lock, flag del driver, executeCommand, noteDefaultShutdown, passi di SET VAR e reset) dalla parte HID (IHidTransport), che deve restare raggiungibile solo da HidControl senza dynamic_cast (ad esempio un accessor che restituisce il trasporto HID, nullptr per una sorgente non HID, oppure IHidControlPort che estende la porta neutrale). Vincoli: nessun cambio di comportamento (stessi comandi, valori, ordine delle scritture, pausa di 125 ms, ordine dei lock _op_mutex poi _mutex come da ADR 0008, stesse righe di System Log); la porta neutrale non include IHidTransport.h né header HID; test esistenti invariati salvo i nomi dei tipi.
+  - **lib/USBHostUPS/src/IUpsControl.h:6** — IUpsControl deve dipendere solo dalla porta neutrale: includere quella al posto di IHidControlPort.h e usarla nelle firme di supportedCommands, executeCommand, setVariable e resetVariable. Aggiungere un controllo strutturale (come quelli di TASK-06) che fallisce se IUpsControl.h o la porta neutrale includono IHidTransport.h, HidControl.h o IHidControlPort.h.
 history:
   - status: TODO
     at: "2026-10-25T17:05:58Z"
+  - status: PLANNED
+    at: "2026-10-26T17:11:00Z"
+  - status: IN PROGRESS
+    at: "2026-10-26T17:17:07Z"
+  - status: REVIEW
+    at: "2026-10-26T18:01:02Z"
+  - status: TODO
+    at: "2026-10-26T21:02:10Z"
+  - status: PLANNED
+    at: "2026-10-26T21:07:12Z"
+  - status: IN PROGRESS
+    at: "2026-10-27T15:07:50Z"
+  - status: REVIEW
+    at: "2026-10-27T17:25:13Z"
+  - status: DONE
+    at: "2026-10-27T17:28:16Z"

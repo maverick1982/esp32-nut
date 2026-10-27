@@ -184,6 +184,11 @@ inline uint32_t millis() {
     return 0;
 }
 
-inline void delay(uint32_t ms) {}
+// Sum of the delay() calls, for the tests of the pauses between writes (US-105)
+inline uint32_t& mock_delay_total_ms() {
+    static uint32_t total = 0;
+    return total;
+}
+inline void delay(uint32_t ms) { mock_delay_total_ms() += ms; }
 
 #endif // MOCK_ARDUINO_H

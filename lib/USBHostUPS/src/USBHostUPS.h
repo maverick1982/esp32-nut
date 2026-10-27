@@ -94,9 +94,11 @@ public:
     const HIDUsageDef* getUsageDef(uint32_t usage) const override { return _hid_parser.getUsageDef(usage); }
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     String getActiveBeeperPath() const override;
-    std::vector<const UPSCommandInfo*> getSupportedCommands() const override;
     std::vector<NutTable::RWVariable> getWritableVariables() const override;
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override;
+    // Control of the attached driver (US-105), HidControl when there is none
+    const IUpsControl& activeControl() const override;
+    const UPSData& upsData() const override { return _ups_data; }
     CommandResult executeCommand(const char* name, const char* param = nullptr) override;
     NutTable::SetStatus setVariable(const char* name, const char* value) override;
     NutTable::SetStatus resetVariable(const char* name) override;
@@ -112,14 +114,17 @@ public:
 
     static void populateStringsFromDeviceInfo(const hid_host_dev_info_t& dev_info, uint32_t quirks, UPSData& ups_data);
 private:
+    // Steps of a SET VAR run by the driver's control (IUpsControlPort/IHidControlPort, US-105).
+    // Private: reachable only through the port, after the checks of setVariable/resetVariable
+    NutTable::SetStatus planSet(const char* name, const char* value, NutTable::SetPlan& plan) const override;
+    NutTable::SetStatus saveDriverSideValue(const NutTable::SetPlan& plan) override;
+    NutTable::SetStatus writePlannedValue(const NutTable::SetPlan& plan) override;
+    NutTable::SetStatus resetDriverSideValue(const char* name, String& value) override;
+
     // ups.delay.* defaults of the driver (CommandCatalog::applyDefaultDelays, US-058)
     void applyDefaultDelays();
     // Saved driver-side values other than ups.delay.* (outlet.*.desc), after each _driver->setup()
     void applySavedDriverValues();
-    // setVariable() without the log line
-    NutTable::SetStatus runSetVariable(const char* name, const char* value);
-    // resetVariable() without the log line; value is the default now in force
-    NutTable::SetStatus runResetVariable(const char* name, String& value);
 
     struct HidEvent {
         enum Type : uint8_t { CONNECTED, OPEN_FAILED, INPUT_REPORT, DISCONNECTED, TRANSFER_ERROR };

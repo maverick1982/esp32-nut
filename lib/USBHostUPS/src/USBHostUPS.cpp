@@ -950,6 +950,13 @@ bool USBHostUPS::isConnected() const {
     return _is_ready_to_poll;
 }
 
+const IUpsControl& USBHostUPS::activeControl() const {
+    // A static object, still valid once the lock is released and the poll task deletes
+    // _driver (handleDisconnected()): the control reads everything else through the port
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver ? _driver->control() : HidControl::instance();
+}
+
 String USBHostUPS::getActiveBeeperPath() const {
     for (const auto& u : _hid_parser.getUsages()) {
         if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 ||
@@ -1020,7 +1027,7 @@ void USBHostUPS::setDriverVarStore(IDriverVarStore* store) {
 }
 
 NutTable::SetStatus USBHostUPS::setVariable(const char* name, const char* value) {
-    NutTable::SetStatus st = runSetVariable(name, value);
+    NutTable::SetStatus st = IUSBHostUPS::setVariable(name, value);
     const char* var = name ? name : "(null)";
     const char* val = value ? value : "";
     switch (st) {
@@ -1033,36 +1040,30 @@ NutTable::SetStatus USBHostUPS::setVariable(const char* name, const char* value)
     return st;
 }
 
-NutTable::SetStatus USBHostUPS::runSetVariable(const char* name, const char* value) {
-    if (!isConnected()) return NutTable::SetStatus::NOT_CONNECTED;
-    if (!name) return NutTable::SetStatus::UNKNOWN;
-    if (!value) return NutTable::SetStatus::CONVERSION_FAILED;
-
+NutTable::SetStatus USBHostUPS::planSet(const char* name, const char* value, NutTable::SetPlan& plan) const {
     // The driver decides what to write, without I/O (setvar() of usbhid-ups)
-    NutTable::SetPlan plan;
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (!_driver) return NutTable::SetStatus::NOT_CONNECTED;
-        NutTable::SetStatus st = _driver->planSet(_ups_data, _hid_parser.getUsages(), name, value, plan);
-        if (st != NutTable::SetStatus::OK) return st;
-    }
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_driver) return NutTable::SetStatus::NOT_CONNECTED;
+    return _driver->planSet(_ups_data, _hid_parser.getUsages(), name, value, plan);
+}
 
-    if (plan.kind == NutTable::SetPlan::Kind::DRIVER_SIDE) {
-        // Saved first, outside _mutex (flash write): a value that is not saved changes nothing
-        if (!_var_store || !_var_store->save(plan.name, plan.value.c_str())) return NutTable::SetStatus::FAILED;
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        DriverVarStore::upsert(_saved_vars, plan.name, plan.value.c_str());
-        // Device gone meanwhile: the saved value applies at the next connection
-        if (!_driver || !isConnected()) return NutTable::SetStatus::OK;
-        if (strncmp(plan.name, "ups.delay.", 10) != 0) {
-            // Kept by the table across binds; set in UPSData too, so LIST VAR shows it now
-            _driver->setDriverSideValue(plan.name, plan.value.c_str());
-        }
-        // ups.delay.*: the commands read it at each run (configuredDelay)
-        _ups_data.set(plan.name, plan.value);
-        return NutTable::SetStatus::OK;
+NutTable::SetStatus USBHostUPS::saveDriverSideValue(const NutTable::SetPlan& plan) {
+    // Saved first, outside _mutex (flash write): a value that is not saved changes nothing
+    if (!_var_store || !_var_store->save(plan.name, plan.value.c_str())) return NutTable::SetStatus::FAILED;
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    DriverVarStore::upsert(_saved_vars, plan.name, plan.value.c_str());
+    // Device gone meanwhile: the saved value applies at the next connection
+    if (!_driver || !isConnected()) return NutTable::SetStatus::OK;
+    if (strncmp(plan.name, "ups.delay.", 10) != 0) {
+        // Kept by the table across binds; set in UPSData too, so LIST VAR shows it now
+        _driver->setDriverSideValue(plan.name, plan.value.c_str());
     }
+    // ups.delay.*: the commands read it at each run (configuredDelay)
+    _ups_data.set(plan.name, plan.value);
+    return NutTable::SetStatus::OK;
+}
 
+NutTable::SetStatus USBHostUPS::writePlannedValue(const NutTable::SetPlan& plan) {
     // HID: same serialisation as writeUsage(), no _mutex held during the transfers (ADR 0008)
     if (!_op_mutex || xSemaphoreTake(_op_mutex, pdMS_TO_TICKS(OP_WAIT_MS)) != pdTRUE) {
         return NutTable::SetStatus::FAILED;
@@ -1094,7 +1095,7 @@ NutTable::SetStatus USBHostUPS::runSetVariable(const char* name, const char* val
 
 NutTable::SetStatus USBHostUPS::resetVariable(const char* name) {
     String value;
-    NutTable::SetStatus st = runResetVariable(name, value);
+    NutTable::SetStatus st = activeControl().resetVariable(*this, name, value);
     const char* var = name ? name : "(null)";
     switch (st) {
     case NutTable::SetStatus::OK:
@@ -1109,11 +1110,7 @@ NutTable::SetStatus USBHostUPS::resetVariable(const char* name) {
     return st;
 }
 
-NutTable::SetStatus USBHostUPS::runResetVariable(const char* name, String& value) {
-    value = "";
-    if (!isConnected()) return NutTable::SetStatus::NOT_CONNECTED;
-    if (!name) return NutTable::SetStatus::UNKNOWN;
-
+NutTable::SetStatus USBHostUPS::resetDriverSideValue(const char* name, String& value) {
     // Only a driver-side variable of the catalog; canonical name, as the store keeps it.
     // Copied: the catalog points into the driver, deleted under _mutex
     String canonical;
@@ -1150,12 +1147,6 @@ NutTable::SetStatus USBHostUPS::runResetVariable(const char* name, String& value
     }
     _ups_data.set(canonical, value);
     return NutTable::SetStatus::OK;
-}
-
-std::vector<const UPSCommandInfo*> USBHostUPS::getSupportedCommands() const {
-    // _hid_parser is replaced under _mutex when a device (re)connects
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    return IUSBHostUPS::getSupportedCommands();
 }
 
 std::vector<NutTable::RWVariable> USBHostUPS::getWritableVariables() const {

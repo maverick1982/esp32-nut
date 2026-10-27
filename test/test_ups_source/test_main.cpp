@@ -223,6 +223,8 @@ void test_consumer_sources_include_no_hid_header(void) {
     const char* forbidden[] = {
         "#include \"IUSBHostUPS.h\"", "#include \"HIDParser.h\"", "#include \"HIDUsages.h\"",
         "#include \"NutTable.h\"", "#include \"CommandCatalog.h\"",
+        // The HID side of commands and SET VAR (US-105)
+        "#include \"HidControl.h\"", "#include \"IHidControlPort.h\"",
     };
     for (const char* f : files) {
         std::ifstream in(projectPath(f));

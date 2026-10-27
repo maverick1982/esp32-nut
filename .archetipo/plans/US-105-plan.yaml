@@ -1,0 +1,488 @@
+schema: archetipo/plan/v2
+spec_code: US-105
+body: |-
+  # US-105: Comandi e variabili scrivibili dietro il modello UPS — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-26
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Architettura modulare: sorgente UPS e trasporto
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che aggiunge un protocollo UPS non HID, voglio che comandi e variabili scrivibili passino per il driver invece di essere costruiti sugli usage HID dentro l'interfaccia, in modo che un driver Q* possa offrire i suoi comandi (beeper, test, spegnimento) senza riscrivere la logica HID.
+
+  **Criteri di Accettazione**
+  - [ ] La logica HID dei comandi esce da `IUSBHostUPS.h` e diventa una parte del lato HID usata dai driver HID: catalogo, passi di spegnimento con la pausa di 125 ms, sequenza di `shutdown.default`, beeper e scritture.
+  - [ ] `IUpsSource` esegue comandi, `SET VAR` e reset tramite il driver: un driver non HID può fornire i propri con lo stesso aggancio.
+  - [ ] Nessun cambio di comportamento: stessi elenchi di comandi e variabili, stessi valori scritti nello stesso ordine, stesso ordine dei lock (`_op_mutex` poi `_mutex`, ADR 0008), stessi messaggi nel System Log.
+  - [ ] Una build di test viene distribuita ai tester prima della release (ADR 0010).
+  - [ ] Regressione: test nativi, replay ed e2e verdi; build `esp32-s3-standard` OK.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  Oggi `IUSBHostUPS.h` contiene l'implementazione HID di `getSupportedCommands()` e `executeCommand()` (catalogo, comandi beeper, `shutdown.default`, passi load/shutdown con la pausa di 125 ms, scritture dei test e di `beeper.mute`, `configuredDelay`), mentre `USBHostUPS::runSetVariable()` e `runResetVariable()` eseguono SET VAR e reset. Il piano sposta questa logica in un controllo HID senza stato che il driver espone, e lascia all'host solo le primitive (trasferimenti USB, archivio delle variabili lato driver, righe di log). Nessun cambio di comportamento: è il terzo pezzo del passo 4 dell'ADR 0010.
+
+  - **`IUpsControl` (nuovo, `lib/USBHostUPS/src/IUpsControl.h`): l'aggancio.** Metodi const: `supportedCommands(port)`, `executeCommand(port, name, param)`, `setVariable(port, name, value)` puri; `resetVariable(port, name, value)` con un default neutro (stessi controlli di `runResetVariable`, poi `port.resetDriverSideValue`). Le implementazioni sono **senza stato e a vita statica**: l'host chiama il controllo senza tenere `_mutex`, mentre il poll task può cancellare `_driver` (`handleDisconnected()`). Il driver quindi restituisce un riferimento a un'istanza statica, mai a sé stesso.
+  - **`IUPSDriver::control()`** (puro; in `IUPSDriver.h` solo la forward declaration di `IUpsControl`). `GenericDriver`, e con lui tutti i driver HID, restituisce `HidControl::instance()` nel `.cpp`. Un driver Q* che implementa `IUPSDriver` direttamente (ADR 0004, emendato dall'ADR 0010) fornisce il proprio controllo con lo stesso aggancio.
+  - **`IHidControlPort` (nuovo, `IHidControlPort.h`, estende `IHidTransport`): l'host come lo vede il controllo.** Spostati da `IUSBHostUPS` con gli stessi default: `setBeeper`, `supportsBeeperToggle`, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`. Nuovi: `isConnected()`; `upsData()`, da leggere con `lock()` tenuto; `executeCommand(name, param)`, cioè il comando con la sua riga di System Log, usato per i tentativi di `shutdown.default`; `noteDefaultShutdown(via)`. Poi le primitive di SET VAR, estratte tali e quali da `USBHostUPS`: `planSet` (`_driver->planSet` sotto `_mutex`), `saveDriverSideValue` (ramo DRIVER_SIDE), `writePlannedValue` (`_op_mutex`, `writeUsageLocked`, rilettura, `invalidateReport`, WARN) e `resetDriverSideValue` (corpo di `runResetVariable` dopo i controlli). Non include `IUpsSource.h`, `IUSBHostUPS.h` né `USBHostUPS.h`.
+  - **`HidControl` (nuovo, `HidControl.h`, header-only come `CommandCatalog.h` e con la stessa intestazione GPL).** Contiene il corpo attuale di `IUSBHostUPS::getSupportedCommands/executeCommand/configuredDelay`, spostato senza cambiare l'ordine delle operazioni, più `setVariable` (controlli di `runSetVariable`, `planSet`, poi `saveDriverSideValue` oppure `writePlannedValue`). Dove oggi si chiama `getUPSData()` si usa un guard su `port.lock()`/`unlock()` con `port.upsData()`: è lo stesso `_mutex` ricorsivo, rilasciato prima di `setBeeper()` e `writeUsage()`. `shutdown.default` richiama `port.executeCommand(sub)`, quindi ogni tentativo resta loggato come un INSTCMD diretto.
+  - **`IUSBHostUPS : public IUpsSource, public IHidControlPort`.** Ridichiara puri `lock`, `unlock` e `isConnected`, presenti in entrambe le basi. Aggiunge `activeControl()` virtuale, con default `HidControl::instance()`. `getSupportedCommands`, `executeCommand`, `setVariable` e `resetVariable` diventano rinvii di una riga a `activeControl()`. `upsData()` ha come default `getUPSData().get()`, il riferimento al dato dell'host. `noteDefaultShutdown` scrive `_last_default_shutdown` e `lastDefaultShutdown()` resta. Così i mock di `test_nut_server`, `test_web_api`, `test_rw_catalog` e `test_usb_host_interface` compilano e passano senza modifiche.
+  - **`USBHostUPS`.** `activeControl()` legge `_driver->control()` sotto `_mutex` e usa `HidControl` quando non c'è un driver. `upsData()` restituisce `_ups_data`. Le quattro primitive di SET VAR sono i blocchi di `runSetVariable`/`runResetVariable` spostati senza modifiche. `setVariable`, `resetVariable` ed `executeCommand` restano i wrapper che scrivono le stesse righe di System Log. Scompaiono `runSetVariable`, `runResetVariable` e l'override di `getSupportedCommands` (ora il lock lo prende `HidControl`). `setBeeperLocked` e `writeUsageLocked` restano primitive del trasporto: task, timeout e ordine dei lock (`_op_mutex` poi `_mutex`, ADR 0008) non cambiano.
+  - **Fuori ambito:** `nutdrv_qx`, MQTT, le primitive Q* (SET_REPORT grezzo) e lo spostamento di `applyDefaultDelays` e `writableVariables` (già sul driver).
+
+  ---
+
+  ## Strategia di Test
+
+  È un refactoring senza comportamento nuovo. Le suite che oggi provano comandi e SET VAR attraverso i default di `IUSBHostUPS` restano identiche e da ora passano per `HidControl`. Una suite nuova prova il controllo su una porta finta, compreso il fatto che nessun lock sia tenuto durante le scritture. Non c'è superficie UI: niente mockup né demo video, e Playwright gira solo come regressione.
+
+  - **Suite invariate:** `test_nut_server` (LIST CMD, INSTCMD, `shutdown.default`, beeper, SET VAR), `test_web_api` (comandi e variabili), `test_rw_catalog` e `test_usb_host_interface`, senza modifiche a mock o asserzioni.
+  - **Nuova `test/test_hid_control`.** Usa una porta finta `IHidControlPort` che registra la profondità del lock e, per ogni scrittura e chiamata al beeper, la profondità al momento della chiamata. Casi: elenco uguale a `CommandCatalog::build`; elenco vuoto da scollegato; `beeper.toggle` da `disabled`, `muted` ed `enabled`; beeper che fallisce → FAILED; passi di `shutdown.return` nell'ordine giusto, con 125 ms tra un passo e l'altro (contatore di `delay()` nel mock Arduino); `shutdown.default` che passa per `port.executeCommand` e annota il comando riuscito; `INVALID_ARGUMENT` e `NOT_SUPPORTED`; `setVariable` che smista tra DRIVER_SIDE e HID e propaga gli stati di `planSet`; `resetVariable` di default; `GenericDriver` e gli 8 driver derivati che restituiscono `HidControl::instance()`; lock a profondità 0 durante `setBeeper` e `writeUsage`.
+  - **`test_hid_transport` e `test_ups_source` estesi.** Gli header dei driver insieme a `HidControl.h`, `IUpsControl.h` e `IHidControlPort.h` non devono definire le guardie di `IUSBHostUPS.h`, `USBHostUPS.h` e `IUpsSource.h`. `IUSBHostUPS.h` non deve più contenere `resolveShutdownSteps`, `resolveWrite`, `kFallback` e `delay(125)`. I consumatori (NUT server e Web API) non devono includere `HidControl.h` né `IHidControlPort.h`.
+  - **Prova delle mutazioni:** se si toglie la pausa, si inverte l'ordine dei tentativi di `shutdown.default` o si tiene il lock attorno a `writeUsage`, deve fallire almeno un test per ciascuna modifica.
+  - **Regressione:** suite nativa completa (replay compreso), `npm run e2e` completo e build `esp32-s3-standard`, con RAM e flash annotate.
+  - **Hardware (ADR 0010):** build di test sull'Eaton 3S. `upscmd -l` e `upsrw` devono risultare uguali alla baseline; vanno provati `beeper.toggle`, `shutdown.stop`, un SET VAR e il reset dalla Web UI, con le stesse righe di System Log. Poi la build va ai tester, dopo la conferma dell'utente.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-26_
+
+  ---
+
+  ## Rework (review del 2026-10-26)
+
+  La review ha accettato il comportamento (verificato sull'Eaton 3S con la build `ups-control-v1`, identico a `v1.10.0`) ma non la forma dell'aggancio del criterio 2: `IUpsControl` riceve `IHidControlPort`, che eredita `IHidTransport`, quindi un driver Q* che fornisce il proprio controllo riceverebbe comunque il trasporto HID e un tipo con un nome HID.
+
+  **Correzione.**
+  - **`IUpsControlPort` (nuovo, `lib/USBHostUPS/src/IUpsControlPort.h`): la porta neutrale.** Contiene la parte della porta che non dipende dal protocollo, spostata da `IHidControlPort` con gli stessi default: `lock`/`unlock`, `isConnected`, `upsData`, `setBeeper`, i flag del driver (`supportsBeeperToggle`, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`), `executeCommand(name, param)`, `noteDefaultShutdown` e `resetDriverSideValue`. In più `hidPort()` (const e non const), che restituisce `nullptr`. Include solo `Arduino.h`, `UPSData.h`, `UpsCommands.h` e `UpsVariables.h`, cioè gli stessi header di `IUpsSource.h`; `IHidControlPort` è solo una forward declaration.
+  - **`IHidControlPort : public IUpsControlPort, public IHidTransport`.** Restano qui soltanto le primitive di SET VAR legate al piano HID (`planSet`, `saveDriverSideValue`, `writePlannedValue`, che usano `NutTable::SetPlan` con il suo `HIDUsageDef`). Ridichiara puri `lock` e `unlock`, presenti in entrambe le basi, e sovrascrive `hidPort()` restituendo `this`. Niente `dynamic_cast`: il trasporto HID si raggiunge solo da `hidPort()`.
+  - **`IUpsControl`** include solo `IUpsControlPort.h` e usa `IUpsControlPort&` nelle quattro firme. Il default di `resetVariable` resta identico, perché `resetDriverSideValue` è sulla porta neutrale.
+  - **`HidControl`** include `IHidControlPort.h` e riceve `IUpsControlPort&`. Dopo i controlli che esistono già (nome, `isConnected`), prende `port.hidPort()`. Se è `nullptr` (una porta non HID abbinata per errore al controllo HID) restituisce: elenco vuoto, `NOT_SUPPORTED` per i comandi, `UNKNOWN` per SET VAR. Con `USBHostUPS` la porta è sempre HID, quindi il percorso reale non cambia: stesso ordine delle operazioni, pausa di 125 ms, nessun lock tenuto durante `setBeeper` e `writeUsage`, `_op_mutex` poi `_mutex` (ADR 0008), stesse righe di System Log.
+  - **`IUSBHostUPS`/`USBHostUPS`** non cambiano struttura: derivano già da `IHidControlPort`, quindi `hidPort()` restituisce l'host stesso. Si aggiornano solo i commenti che nominano la porta.
+
+  **Test del rework.** Una suite nuova, `test_ups_control_port`, compila un controllo e una porta "alla Q*" includendo solo `IUpsControl.h`, con `#error` se entra un header HID. Si aggiunge un controllo strutturale sugli include di `IUpsControl.h` e `IUpsControlPort.h`, e in `test_hid_control` vanno i casi con `hidPort()` nullo. I test esistenti cambiano solo nei nomi dei tipi (`IHidControlPort&` diventa `IUpsControlPort&` nelle firme di `IUpsControl`). Poi la regressione completa e una nuova build di test, `ups-control-v2`, sull'Eaton 3S prima della distribuzione ai tester.
+tasks:
+  - id: TASK-01
+    title: Interfacce IHidControlPort e IUpsControl
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare l'aggancio di comandi e variabili e la porta che il controllo usa verso l'host, senza ancora cambiare comportamento.
+
+      **Leggi:** `lib/USBHostUPS/src/IUSBHostUPS.h` (membri beeper e flag, righe 22-29), `lib/USBHostUPS/src/IHidTransport.h` (stile dei commenti), `lib/USBHostUPS/src/NutTable.h` (`SetPlan`, `SetStatus`), `lib/USBHostUPS/src/USBHostUPS.cpp` righe 1036-1153 (`runSetVariable`, `runResetVariable`).
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/IHidControlPort.h` (guardia `I_HID_CONTROL_PORT_H`) con gli include `IHidTransport.h`, `UPSData.h`, `UpsCommands.h`, `NutTable.h`. Dichiara `class IHidControlPort : public IHidTransport`, con il commento: l'host USB come lo vede il controllo dei comandi dei driver HID (US-105).
+      2. Membri di `IHidControlPort`:
+         - `bool isConnected() const`, puro.
+         - `const UPSData& upsData() const`, puro. Commento: dati dell'host, da leggere solo con `lock()` tenuto.
+         - Spostati da `IUSBHostUPS`, copiati con commenti e default: `setBeeper` (puro), `supportsBeeperToggle`, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`. In questo task restano anche in `IUSBHostUPS`: li toglie TASK-04.
+         - `CommandResult executeCommand(const char* name, const char* param = nullptr)`, puro. Commento: esegue il comando come un INSTCMD, con la sua riga di System Log.
+         - `void noteDefaultShutdown(const char* via)`, vuoto.
+         - Primitive di SET VAR con i loro default: `planSet(const char* name, const char* value, NutTable::SetPlan& plan) const` → `NOT_CONNECTED`; `saveDriverSideValue(const NutTable::SetPlan&)` → `FAILED`; `writePlannedValue(const NutTable::SetPlan&)` → `FAILED`; `resetDriverSideValue(const char* name, String& value)` → `NOT_CONNECTED`. Ognuna con un commento che rimanda al blocco di `USBHostUPS` da cui viene.
+      3. Crea `lib/USBHostUPS/src/IUpsControl.h` (guardia `I_UPS_CONTROL_H`) con gli include `IHidControlPort.h` e `<vector>`. `class IUpsControl` ha un distruttore virtuale e questi metodi const:
+         - Puri: `supportedCommands(const IHidControlPort&)`, `executeCommand(IHidControlPort&, const char* name, const char* param)`, `setVariable(IHidControlPort&, const char* name, const char* value)`.
+         - Virtuale con default inline: `resetVariable(IHidControlPort& port, const char* name, String& value)`. Ordine dei passi: `value = String()`; da scollegato `NOT_CONNECTED`; con `name` nullo `UNKNOWN`; altrimenti `port.resetDriverSideValue(name, value)`. Sono gli stessi passi, nello stesso ordine, dell'inizio di `runResetVariable`.
+         - Commento di classe: aggancio di comandi e variabili scrivibili del driver (ADR 0010 passo 4, US-105). Le implementazioni sono senza stato e a vita statica, perché l'host le chiama senza `_mutex` mentre il poll task può cancellare il driver.
+      4. Nessuno dei due header include `IUpsSource.h`, `IUSBHostUPS.h` o `USBHostUPS.h`.
+
+      **Verifica:** i due header compilano quando vengono inclusi da `test_hid_transport` (aggiungili in testa al file di test e lancia la suite).
+
+      **Fatto:** header creati e compilati, nessun file esistente modificato oltre all'include di prova.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IHidControlPort.h — nuovo
+      - lib/USBHostUPS/src/IUpsControl.h — nuovo
+      - test/test_hid_transport/test_main.cpp — include dei nuovi header prima dei controlli `#error`
+
+      ## Criteri di Completamento
+      - [ ] `IHidControlPort.h` e `IUpsControl.h` non includono `IUpsSource.h`, `IUSBHostUPS.h`, `USBHostUPS.h`
+      - [ ] `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_transport` verde (nessuna guardia `#error` scatta)
+    ref: TASK-01
+  - id: TASK-02
+    title: HidControl con la logica HID e IUPSDriver::control()
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il lato HID dei comandi e di SET VAR diventa `HidControl`, che i driver HID espongono con `control()`.
+
+      **Leggi:** `lib/USBHostUPS/src/IUSBHostUPS.h` righe 31-128 (`getSupportedCommands`, `executeCommand`, `configuredDelay`); `lib/USBHostUPS/src/CommandCatalog.h` (intestazione SPDX e copyright in testa, `build`, `resolveWrite`, `resolveShutdownSteps`, `parseDelayParam`, `kNoDelay`); `lib/USBHostUPS/src/USBHostUPS.cpp` righe 1036-1064 (controlli e commenti di `runSetVariable`); `lib/USBHostUPS/src/IUPSDriver.h` (forward declaration in testa); `lib/USBHostUPS/src/GenericDriver.h/.cpp`.
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/HidControl.h` (guardia `HID_CONTROL_H`) con l'intestazione SPDX e copyright copiata da `CommandCatalog.h` e gli include `<Arduino.h>`, `IUpsControl.h`, `CommandCatalog.h`. Dichiara `class HidControl : public IUpsControl` con `static const HidControl& instance()`, che usa uno statico locale.
+      2. Aggiungi un guard RAII privato (per esempio `struct PortLock`) che chiama `port.lock()` nel costruttore e `port.unlock()` nel distruttore.
+      3. `supportedCommands(port)`: da scollegato restituisce un elenco vuoto. Altrimenti, sotto il guard: `beeper = port.supportsBeeperToggle() && port.upsData().hasKey(...)` con la chiave `ups.beeper.status`, poi `CommandCatalog::build(port.getUsages(), beeper, port.shutdownCommandsSupported(), port.beeperMuteSupported(), port.commandAllowList())`.
+      4. `executeCommand(port, name, param)`: sposta il corpo di `IUSBHostUPS::executeCommand` nello stesso ordine, con i commenti, applicando queste sostituzioni:
+         - `isConnected()` → `port.isConnected()`; `getSupportedCommands()` → `supportedCommands(port)`.
+         - `setBeeper` → `port.setBeeper`. La lettura di `ups.beeper.status` per `beeper.toggle` va in un blocco con il guard e `port.upsData()`, chiuso prima di `port.setBeeper`.
+         - `_last_default_shutdown = ...` → `port.noteDefaultShutdown(...)`: stringa vuota all'inizio, il comando riuscito alla fine. I tentativi diventano `port.executeCommand(sub)`.
+         - I blocchi con `UPSDataLock lk = getUPSData()` diventano guard + `port.upsData()` + `port.getUsages()`; `writeUsage` → `port.writeUsage`.
+         - `delay(125)` e il suo commento restano identici.
+      5. `configuredDelay` diventa una funzione `static` privata di `HidControl`, identica all'originale.
+      6. `setVariable(port, name, value)`, nell'ordine:
+         - da scollegato `NOT_CONNECTED`; con `name` nullo `UNKNOWN`; con `value` nullo `CONVERSION_FAILED`;
+         - `NutTable::SetPlan plan; st = port.planSet(name, value, plan)`; se `st` non è OK lo restituisce;
+         - con `plan.kind == NutTable::SetPlan::Kind::DRIVER_SIDE` → `port.saveDriverSideValue(plan)`, altrimenti `port.writePlannedValue(plan)`.
+         Porta qui i commenti di `runSetVariable` che descrivono la decisione.
+      7. In `IUPSDriver.h` aggiungi `class IUpsControl;` accanto a `class IHidTransport;` e `virtual const IUpsControl& control() const = 0;`. Commento: controllo statico del protocollo; i driver HID restituiscono `HidControl`, un driver Q* il proprio (US-105).
+      8. In `GenericDriver.h` dichiara `const IUpsControl& control() const override;`. In `GenericDriver.cpp` includi `HidControl.h` e scrivi `return HidControl::instance();`. Nessun header dei driver deve includere `HidControl.h`.
+      9. Non toccare ancora `IUSBHostUPS.h`: fino a TASK-04 la logica resta duplicata.
+
+      **Verifica:** con `git diff`, confronta riga per riga il corpo di `HidControl::executeCommand` con l'originale: devono cambiare solo le sostituzioni elencate.
+
+      **Fatto:** `HidControl` compila ed è restituito da tutti i driver.
+
+      **Blocchi:** se un test definisce una classe che implementa `IUPSDriver` direttamente e smette di compilare, segnalalo prima di modificarlo (oggi `grep` non ne trova).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/HidControl.h — nuovo
+      - lib/USBHostUPS/src/IUPSDriver.h — forward declaration e `control()`
+      - lib/USBHostUPS/src/GenericDriver.h — dichiarazione di `control()`
+      - lib/USBHostUPS/src/GenericDriver.cpp — `control()` restituisce `HidControl::instance()`
+
+      ## Criteri di Completamento
+      - [ ] `HidControl.h` non include `IUpsSource.h`, `IUSBHostUPS.h`, `USBHostUPS.h`
+      - [ ] Ordine delle operazioni di `executeCommand` identico all'originale, a parte le sostituzioni previste
+      - [ ] `pio test -e native -f test_hid_transport -f test_generic_driver -f test_nut_server` verde
+    ref: TASK-02
+  - id: TASK-03
+    title: Suite test_hid_control su una porta finta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare `HidControl` in isolamento, compreso il fatto che nessun lock sia tenuto durante le scritture (ADR 0008).
+
+      **Leggi:** `test/test_nut_server/test_main.cpp` (usages finti dei comandi, casi di `shutdown.default` intorno alle righe 760-810, beeper intorno alla riga 840), `test/test_hid_transport/test_main.cpp` (`MinimalTransport`), `test/mocks/Arduino.h` (`delay`, riga 187).
+
+      **Modifica:**
+      1. In `test/mocks/Arduino.h`, `delay()` somma i ms in `inline uint32_t mock_delay_total_ms = 0;` (gnu++17). Le altre suite non cambiano comportamento.
+      2. Crea `test/test_hid_control/test_main.cpp` con `FakePort : public IHidControlPort`, che offre:
+         - profondità e conteggio del lock;
+         - `data`, `usages` e flag configurabili;
+         - `setBeeper` e `writeUsage` che registrano {enable oppure path, valore, profondità del lock}, con esito configurabile;
+         - `executeCommand` che registra il nome e chiama `HidControl::instance().executeCommand(*this, name, param)`;
+         - `noteDefaultShutdown` che memorizza `via`;
+         - primitive di SET VAR che registrano la chiamata e restituiscono un esito configurabile.
+      3. Costruisci gli usages come in `test_nut_server`: Feature `UPS.PowerSummary.DelayBeforeShutdown`, `DelayBeforeStartup`, `Test` e il beeper.
+      4. Casi:
+         - elenco uguale a `CommandCatalog::build` con gli stessi flag; elenco vuoto da scollegato;
+         - `beeper.toggle` con stato `disabled` → `setBeeper(true)`, con `muted` o `enabled` → `setBeeper(false)`; `setBeeper` che fallisce → FAILED;
+         - `shutdown.return`: scritture nell'ordine di `resolveShutdownSteps` e `mock_delay_total_ms` = 125 × (passi − 1);
+         - `shutdown.default`: passa per `port.executeCommand` nell'ordine dei tentativi, si ferma al primo OK, annota il comando con `noteDefaultShutdown` e restituisce FAILED se tutti falliscono;
+         - `load.off.delay` con un parametro non valido → `INVALID_ARGUMENT`; comando non offerto → `NOT_SUPPORTED`; `name` nullo → `NOT_SUPPORTED`;
+         - `setVariable`: piano DRIVER_SIDE → `saveDriverSideValue`, piano HID → `writePlannedValue`; uno stato di `planSet` diverso da OK viene restituito senza scritture; `value` nullo → `CONVERSION_FAILED`;
+         - `resetVariable` di default: scollegato, `name` nullo, rinvio a `resetDriverSideValue`;
+         - `GenericDriver` e gli 8 derivati (APC, CyberPower, Eaton, EcoFlow, Legrand, Liebert, OpenUPS, Powercom) restituiscono `&HidControl::instance()`;
+         - in ogni scrittura e chiamata al beeper registrata, la profondità del lock è 0.
+      5. Prova delle mutazioni, ognuna ripristinata subito dopo: togliere `delay(125)`; invertire l'ordine dei tentativi; tenere il guard attorno a `port.writeUsage`. Per ciascuna deve fallire almeno un test. Riporta l'esito nel resoconto del task.
+
+      **Verifica:** `pio test -e native -f test_hid_control`.
+
+      **Fatto:** suite verde e le tre mutazioni rilevate.
+
+      **Blocchi:** se `test_build_src` non compila `GenericDriver.cpp` per la suite nuova, controlla `build_src_filter` dell'ambiente native in `platformio.ini` (oggi `GenericDriver.cpp` è già incluso).
+
+      ## File Coinvolti
+      - test/mocks/Arduino.h — contatore di `delay()`
+      - test/test_hid_control/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_hid_control` verde
+      - [ ] Ognuna delle tre mutazioni fa fallire almeno un test
+      - [ ] Nessun test esistente modificato
+    ref: TASK-03
+  - id: TASK-04
+    title: 'IUSBHostUPS come porta: la logica HID esce, restano i rinvii'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere la logica HID da `IUSBHostUPS.h` lasciando rinvii di una riga a `activeControl()`, così i mock dei test restano invariati.
+
+      **Leggi:** `lib/USBHostUPS/src/IUSBHostUPS.h` (intero), `lib/USBHostUPS/src/IUpsSource.h` (commenti di `setVariable` e `resetVariable`), i mock `MockUSBHost` (`test/test_nut_server/test_main.cpp` righe 34-108), `APIMockUSBHost` (`test/test_web_api/test_main.cpp` righe 11-90), `PlanHost` (`test/test_rw_catalog/test_main.cpp` riga 531) e `test/test_usb_host_interface/test_main.cpp`.
+
+      **Modifica:**
+      1. Includi `HidControl.h`; togli gli include che non servono più (`CommandCatalog.h` arriva da `HidControl.h`).
+      2. Scrivi `class IUSBHostUPS : public IUpsSource, public IHidControlPort` e togli i membri ora in `IHidControlPort`: `setBeeper`, `supportsBeeperToggle`, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`.
+      3. Ridichiara puri `lock`, `unlock` e `isConnected` con `override = 0` e il commento: dichiarati da entrambe le basi, un solo override li implementa.
+      4. Aggiungi `virtual const IUpsControl& activeControl() const { return HidControl::instance(); }`, con il commento: controllo del driver collegato; l'host USB lo legge dal driver.
+      5. Aggiungi `const UPSData& upsData() const override { return getUPSData().get(); }`, con il commento: riferimento ai dati dell'host, valido dopo il rilascio del lock temporaneo; leggerlo con `lock()` tenuto.
+      6. Rinvii:
+         - `getSupportedCommands() const override` → `activeControl().supportedCommands(*this)`;
+         - `executeCommand(const char* name, const char* param = nullptr) override` → `activeControl().executeCommand(*this, name, param)` (sostituisce la versione di entrambe le basi);
+         - `setVariable` → `activeControl().setVariable(*this, name, value)`;
+         - `resetVariable(name)` → `String value; return activeControl().resetVariable(*this, name, value);`.
+      7. `noteDefaultShutdown(const char* via) override { _last_default_shutdown = via ? via : ""; }`. Restano `lastDefaultShutdown()` e `_last_default_shutdown`; `configuredDelay` va tolto (ora è in `HidControl`).
+      8. Aggiorna il commento di classe (comandi e variabili passano per il controllo del driver, US-105) e, in `IUpsSource.h`, i commenti di `setVariable` e `resetVariable`, senza cambiare le firme.
+
+      **Verifica:** compilano e passano, senza modifiche, `test_nut_server`, `test_web_api`, `test_rw_catalog`, `test_usb_host_interface`, `test_ups_source` e `test_hid_control`.
+
+      **Fatto:** `IUSBHostUPS.h` senza `resolveShutdownSteps`, `resolveWrite`, `kFallback` e `delay(125)`.
+
+      **Blocchi:** se un mock non compila per un nome ambiguo, risolvi ridichiarando il metodo in `IUSBHostUPS`, non nel mock. Se serve davvero modificare un mock, fermati e segnalalo: il criterio è che i test restino invariati.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUSBHostUPS.h — doppia base con la porta, rinvii, logica tolta
+      - lib/USBHostUPS/src/IUpsSource.h — solo commenti
+
+      ## Criteri di Completamento
+      - [ ] `IUSBHostUPS.h` non contiene `resolveShutdownSteps`, `resolveWrite`, `kFallback`, `delay(125)`
+      - [ ] `git diff test/` vuoto per le quattro suite con i mock
+      - [ ] `pio test -e native -f test_nut_server -f test_web_api -f test_rw_catalog -f test_usb_host_interface -f test_ups_source -f test_hid_control` verde
+    ref: TASK-04
+  - id: TASK-05
+    title: 'USBHostUPS: controllo del driver e primitive di SET VAR'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'host USB prende il controllo dal driver e offre a `HidControl` le primitive di SET VAR, spostando i blocchi di codice esistenti senza modificarli.
+
+      **Leggi:** `lib/USBHostUPS/src/USBHostUPS.h` (dichiarazioni pubbliche e private), `lib/USBHostUPS/src/USBHostUPS.cpp` righe 922-947 (`executeCommand`), 1022-1169 (`setVariable`, `runSetVariable`, `resetVariable`, `runResetVariable`, `getSupportedCommands`, `getWritableVariables`).
+
+      **Modifica:**
+      1. In `USBHostUPS.h` dichiara gli override `activeControl() const`, `upsData() const`, `planSet`, `saveDriverSideValue`, `writePlannedValue` e `resetDriverSideValue`. Togli `runSetVariable`, `runResetVariable` e l'override di `getSupportedCommands`.
+      2. `activeControl()`: `std::lock_guard` su `_mutex`, poi `return _driver ? _driver->control() : HidControl::instance();`. Commento: istanza statica, valida dopo il rilascio del lock anche se il poll task cancella `_driver`.
+      3. `upsData()`: `return _ups_data;`.
+      4. `planSet(name, value, plan)`: il blocco delle righe 1043-1048 (lock, `!_driver` → `NOT_CONNECTED`, `_driver->planSet(_ups_data, _hid_parser.getUsages(), name, value, plan)`).
+      5. `saveDriverSideValue(plan)`: il corpo del ramo DRIVER_SIDE, righe 1051-1063, identico.
+      6. `writePlannedValue(plan)`: le righe 1066-1092, identiche (`_op_mutex` con `OP_WAIT_MS`, `writeUsageLocked`, rilettura con `requestLength`, `invalidateReport`, WARN `Variable %s written, read back failed`).
+      7. `resetDriverSideValue(name, value)`: le righe 1117-1152 (da `String canonical` in poi), identiche.
+      8. `setVariable`: `NutTable::SetStatus st = IUSBHostUPS::setVariable(name, value);` seguito dallo stesso switch di log. `resetVariable`: `String value; st = activeControl().resetVariable(*this, name, value);` seguito dallo stesso switch.
+      9. `executeCommand` (wrapper con log) resta invariato. Togli la definizione di `getSupportedCommands`, ora coperta dal rinvio di `IUSBHostUPS`, dove il lock lo prende `HidControl`.
+      10. Non toccare `setBeeper`, `setBeeperLocked`, `writeUsage`, `writeUsageLocked`, i task, i timeout e `getWritableVariables`.
+
+      **Verifica:**
+      - `git diff --color-moved=zebra lib/USBHostUPS/src/USBHostUPS.cpp`: i blocchi delle primitive risultano spostati, non modificati.
+      - Build da PowerShell: `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto:** build OK, RAM e flash annotate e confrontate con il commit di partenza.
+
+      **Blocchi:** un errore di build legato ai nomi ereditati da due basi si risolve in `IUSBHostUPS`, non qui.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — override nuovi, metodi privati tolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — primitive estratte, wrapper di log, `activeControl()`
+
+      ## Criteri di Completamento
+      - [ ] Build `esp32-s3-standard` OK
+      - [ ] Nessun `_mutex` tenuto quando si prende `_op_mutex` nelle nuove primitive (stessa struttura di prima)
+      - [ ] Testi del System Log invariati (`git diff` non mostra cambi nelle stringhe di `log(...)`)
+    ref: TASK-05
+  - id: TASK-06
+    title: Controlli strutturali e regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** bloccare nel tempo la separazione appena fatta e provare che non cambia nulla.
+
+      **Leggi:** `test/test_hid_transport/test_main.cpp` (controllo dei sorgenti dei driver, intorno alla riga 103), `test/test_ups_source/test_main.cpp` (righe 219-240, file dei consumatori e include vietati).
+
+      **Modifica:**
+      1. `test_hid_transport` includa `IUpsControl.h`, `IHidControlPort.h` e `HidControl.h` prima dei controlli `#error` (se TASK-01 non l'ha già fatto). Aggiungi un test che legge `lib/USBHostUPS/src/IUSBHostUPS.h` e verifica che non contenga `resolveShutdownSteps`, `resolveWrite`, `kFallback`, `delay(125)`. Aggiungine un altro che verifica che `HidControl.h`, `IHidControlPort.h` e `IUpsControl.h` non includano `IUSBHostUPS.h`, `USBHostUPS.h` né `IUpsSource.h`, con lo stesso schema di lettura dei file.
+      2. In `test_ups_source` aggiungi `HidControl.h` e `IHidControlPort.h` agli include vietati ai consumatori.
+      3. Regressione completa:
+         - suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (replay compreso);
+         - `npm run e2e`;
+         - build `esp32-s3-standard` da PowerShell.
+
+      **Verifica:** annota i numeri (test nativi, e2e, RAM/flash) nel resoconto del task.
+
+      **Fatto:** tutto verde.
+
+      **Blocchi:** se un e2e fallisce, verifica prima che fallisca anche sul commit di partenza (32dae20) prima di attribuirlo a questa spec.
+
+      ## File Coinvolti
+      - test/test_hid_transport/test_main.cpp — controlli strutturali nuovi
+      - test/test_ups_source/test_main.cpp — include vietati estesi
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] `npm run e2e` verde
+      - [ ] Build `esp32-s3-standard` OK
+    ref: TASK-06
+  - id: TASK-08
+    title: Porta neutrale IUpsControlPort sotto IHidControlPort
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere neutrale rispetto al protocollo l'aggancio di comandi e variabili (feedback di review su `lib/USBHostUPS/src/IHidControlPort.h:19` e `lib/USBHostUPS/src/IUpsControl.h:6`). Oggi `IUpsControl` riceve `IHidControlPort`, che eredita `IHidTransport`: un driver Q* che fornisce il proprio controllo riceverebbe il trasporto HID. Nessun cambio di comportamento.
+
+      **Leggi:** `lib/USBHostUPS/src/IHidControlPort.h`, `IUpsControl.h`, `HidControl.h`, `IUSBHostUPS.h`, `IHidTransport.h`, `IUpsSource.h` (gli include da copiare), `UpsVariables.h` (dove sta `NutTable::SetStatus`), la sezione Rework del piano.
+
+      **Modifica:**
+      1. Crea `lib/USBHostUPS/src/IUpsControlPort.h` (guardia `I_UPS_CONTROL_PORT_H`) con `#include <Arduino.h>`, `"UPSData.h"`, `"UpsCommands.h"`, `"UpsVariables.h"` e la forward declaration `class IHidControlPort;`. Sposta qui da `IHidControlPort`, con gli stessi default e commenti: `lock`/`unlock` (puri, const), `isConnected`, `upsData`, `setBeeper`, `supportsBeeperToggle`, `shutdownCommandsSupported`, `beeperMuteSupported`, `commandAllowList`, `executeCommand(name, param)`, `noteDefaultShutdown`, `resetDriverSideValue`. Aggiungi `virtual IHidControlPort* hidPort() { return nullptr; }` e la versione const. Commento di classe: l'host come lo vede il controllo di un driver, qualunque sia il protocollo (US-105); la parte HID si raggiunge solo da `hidPort()`.
+      2. `IHidControlPort.h`: `class IHidControlPort : public IUpsControlPort, public IHidTransport`; include `IUpsControlPort.h`, `IHidTransport.h`, `NutTable.h`. Restano `planSet`, `saveDriverSideValue`, `writePlannedValue` con i loro commenti. Ridichiara `void lock() const override = 0;` e `void unlock() const override = 0;` (stesso schema di `IUSBHostUPS.h`) e sovrascrivi `hidPort()` (le due versioni) con `return this;`.
+      3. `IUpsControl.h`: includi `"IUpsControlPort.h"` al posto di `"IHidControlPort.h"` e usa `IUpsControlPort&` (`const` per `supportedCommands`) nelle quattro firme. Il corpo del default di `resetVariable` non cambia. Aggiorna il commento: le implementazioni ricevono la porta neutrale; `HidControl` ne prende la parte HID con `hidPort()`.
+      4. `HidControl.h`: aggiungi `#include "IHidControlPort.h"` e usa `IUpsControlPort&` nelle firme. `PortLock` resta sulla porta neutrale. Subito dopo i controlli esistenti, nello stesso ordine di oggi, ricava `hid = port.hidPort()`: se è nullo, `supportedCommands` restituisce `{}`, `executeCommand` restituisce `NOT_SUPPORTED` e `setVariable` restituisce `UNKNOWN`. Le chiamate HID (`getUsages`, `writeUsage`, `planSet`, `saveDriverSideValue`, `writePlannedValue`) passano per `hid->`. Tutto il resto (`isConnected`, `upsData`, flag, `setBeeper`, `executeCommand` dei tentativi, `noteDefaultShutdown`, `lock`) resta su `port`. `executeCommand` chiama già `supportedCommands(port)`, quindi il controllo su `hid` del ramo comandi arriva dopo `isConnected` e prima di `supportedCommands`.
+      5. `IUSBHostUPS.h` e `USBHostUPS.h`: nessun cambio di struttura, aggiorna solo i commenti che descrivono la porta ("la porta del controllo, `IUpsControlPort`, con la sua parte HID `IHidControlPort`").
+      6. `test/test_hid_control/test_main.cpp`: solo i nomi dei tipi. Le firme di `RecordingControl` passano da `IHidControlPort&` a `IUpsControlPort&`. `FakePort` resta `IHidControlPort`.
+
+      **Non fare:** niente `dynamic_cast` o RTTI; non cambiare l'ordine dei controlli, delle scritture, dei lock o i testi di log; non spostare `planSet`/`writePlannedValue`/`saveDriverSideValue` nella porta neutrale (usano `SetPlan`, che contiene `HIDUsageDef`).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_control -f test_hid_transport -f test_ups_source -f test_nut_server -f test_web_api -f test_rw_catalog -f test_usb_host_interface`, poi `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto:** suite indicate verdi, build OK, `git diff` delle asserzioni dei test esistenti vuoto (cambiano solo i tipi nelle firme).
+
+      **Blocchi:** se l'ereditarietà da due basi con `lock`/`unlock` provoca ambiguità che la ridichiarazione non risolve, fermati e riporta l'errore del compilatore invece di introdurre `dynamic_cast` o ereditarietà virtuale.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUpsControlPort.h — nuovo: porta neutrale
+      - lib/USBHostUPS/src/IHidControlPort.h — estende la porta neutrale e IHidTransport, solo primitive HID di SET VAR e hidPort()
+      - lib/USBHostUPS/src/IUpsControl.h — dipende solo dalla porta neutrale
+      - lib/USBHostUPS/src/HidControl.h — firme neutrali, parte HID da hidPort()
+      - lib/USBHostUPS/src/IUSBHostUPS.h — solo commenti
+      - lib/USBHostUPS/src/USBHostUPS.h — solo commenti
+      - test/test_hid_control/test_main.cpp — solo nomi dei tipi nelle firme di RecordingControl
+
+      ## Criteri di Completamento
+      - [ ] `IUpsControl.h` e `IUpsControlPort.h` non includono `IHidTransport.h`, `IHidControlPort.h`, `HidControl.h`, `HIDUsages.h`, `HIDParser.h`, `NutTable.h`, `CommandCatalog.h`
+      - [ ] Nessun `dynamic_cast` in `lib/USBHostUPS/src`
+      - [ ] Suite native indicate in Verifica verdi e build `esp32-s3-standard` OK
+      - [ ] Ordine delle operazioni di `HidControl::executeCommand` e `setVariable` identico a prima, salvo il controllo su `hidPort()`
+    ref: TASK-08
+  - id: TASK-09
+    title: Test della porta neutrale e controlli strutturali
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che un driver di un altro protocollo può fornire il proprio controllo senza vedere nulla di HID, e bloccare il ritorno di dipendenze HID nell'aggancio.
+
+      **Leggi:** `test/test_hid_control/test_main.cpp` (porta finta, `RecordingControl`), `test/test_hid_transport/test_main.cpp` (`readSource`, `projectPath`, controlli sugli include), `platformio.ini` (ambiente `native`).
+
+      **Modifica:**
+      1. Nuova suite `test/test_ups_control_port/test_main.cpp`. Include `<unity.h>` e, dagli header del progetto, solo `"IUpsControl.h"`. Subito dopo gli include, un `#error` se è definita una delle guardie `I_HID_TRANSPORT_H`, `I_HID_CONTROL_PORT_H`, `HID_CONTROL_H`, `HID_USAGES_H`, `HID_PARSER_H`, `NUT_TABLE_H`, `COMMAND_CATALOG_H` (stesso schema delle guardie di `test_hid_transport`). Definisci `NeutralPort : public IUpsControlPort`, con stato registrato (connesso, chiamate a `resetDriverSideValue`, comandi ricevuti), e `QxLikeControl : public IUpsControl`, con un proprio elenco di comandi (per esempio `beeper.toggle` e `test.battery.start.quick` presi dal catalogo di `UpsCommands.h`). Casi:
+         - `hidPort()` di una porta neutrale è `nullptr` (const e non const);
+         - `QxLikeControl` elenca ed esegue i propri comandi attraverso la porta neutrale;
+         - il `resetVariable` di default di `IUpsControl` restituisce `NOT_CONNECTED` con la porta scollegata, `UNKNOWN` con nome nullo, e altrimenti delega a `resetDriverSideValue` propagando valore e stato.
+      2. `test/test_hid_control/test_main.cpp`: aggiungi una porta solo neutrale (`NeutralOnlyPort : public IUpsControlPort`) e i casi per `HidControl::instance()`:
+         - scollegata: elenco vuoto, `NOT_CONNECTED`, `NOT_CONNECTED`;
+         - collegata senza parte HID: elenco vuoto, `executeCommand` `NOT_SUPPORTED`, `setVariable` `UNKNOWN`, nessuna chiamata a `setBeeper`;
+         - `FakePort.hidPort()` restituisce la porta stessa.
+         Non modificare i test esistenti.
+      3. `test/test_hid_transport/test_main.cpp`: nuovo test `test_control_hook_is_protocol_neutral`. `IUpsControl.h` e `IUpsControlPort.h` non devono contenere `#include` di `IHidTransport.h`, `IHidControlPort.h`, `HidControl.h`, `HIDUsages.h`, `HIDParser.h`, `NutTable.h`, `CommandCatalog.h`, `IUSBHostUPS.h`, `USBHostUPS.h`, `IUpsSource.h`. Nessun file in `lib/USBHostUPS/src` deve contenere `dynamic_cast`. Registralo in `main` dopo i test esistenti.
+      4. **Prova delle mutazioni** (da annullare dopo): (a) aggiungere `#include "IHidTransport.h"` a `IUpsControlPort.h`; (b) togliere il controllo su `hidPort()` nullo in `HidControl::executeCommand` (crash o test rosso); (c) far restituire `this` al `hidPort()` di `IUpsControlPort`. Ognuna deve far fallire almeno un test o la compilazione della nuova suite.
+         **Nota (implementazione):** la mutazione (b) così com'è non è osservabile, perché senza parte HID `supportedCommands()` restituisce già un elenco vuoto ed `executeCommand` risponde `NOT_SUPPORTED` prima di usare `hid`; il controllo in `executeCommand` resta come difesa. È stata eseguita invece sul controllo in `supportedCommands` (dereferenziazione di null, `test_hid_control` va in crash). Per (c) `this` non compila senza cast: è stato usato `reinterpret_cast`, intercettato da `test_neutral_port_has_no_hid_part`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ups_control_port -f test_hid_control -f test_hid_transport`.
+
+      **Fatto:** le tre suite sono verdi e ogni mutazione è stata intercettata e poi annullata.
+
+      **Blocchi:** se `UpsCommands.h` non espone un elenco di comandi da cui `QxLikeControl` possa prendere dei `UPSCommandInfo` senza `CommandCatalog.h`, definisci nel test due `UPSCommandInfo` statici invece di includere il catalogo HID.
+
+      ## File Coinvolti
+      - test/test_ups_control_port/test_main.cpp — nuova suite: controllo e porta senza HID
+      - test/test_hid_control/test_main.cpp — casi con porta solo neutrale (aggiunti, nessun test esistente modificato)
+      - test/test_hid_transport/test_main.cpp — nuovo controllo strutturale sugli include e su dynamic_cast
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_ups_control_port -f test_hid_control -f test_hid_transport` verde
+      - [ ] La nuova suite non compila se un header HID entra in `IUpsControl.h` o `IUpsControlPort.h`
+      - [ ] Ognuna delle tre mutazioni fa fallire almeno un test o la compilazione
+      - [ ] Nessuna asserzione dei test esistenti modificata
+    ref: TASK-09
+  - id: TASK-10
+    title: Regressione completa dopo il rework
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il rework non cambia nulla per l'utente prima della nuova build di test.
+
+      **Leggi:** TASK-06 di questo piano (comandi e criteri).
+
+      **Passi:**
+      1. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (oggi 690 casi più quelli di TASK-09).
+      2. `npm run e2e` completo (oggi 110).
+      3. Build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, annotando RAM e flash e confrontandole con la build di `ups-control-v1` (flash +2 KB rispetto a `v1.10.0`).
+      4. `git diff` delle stringhe di `log(` in `lib/USBHostUPS/src` rispetto a `v1.10.0`: nessuna differenza.
+
+      **Verifica:** esiti riportati con i numeri.
+
+      **Fatto:** tutto verde e scostamento di RAM/flash rispetto alla v1 trascurabile (sotto 1 KB).
+
+      **Blocchi:** se un e2e fallisce, verifica prima che fallisca anche senza il rework (stato di TASK-06) prima di attribuirlo a questa correzione.
+
+      ## File Coinvolti
+      - nessuno (solo verifica)
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] `npm run e2e` verde
+      - [ ] Build `esp32-s3-standard` OK con RAM e flash annotate
+      - [ ] Stringhe di log invariate rispetto a `v1.10.0`
+    ref: TASK-10
+  - id: TASK-07
+    title: 'Build di test: verifica sull''Eaton 3S e distribuzione ai tester'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      > **Rework (2026-10-26):** la build `ups-control-v1` è stata verificata sull'Eaton 3S (baseline da `v1.10.0`, tutto identico, sia dalla Web UI sia via NUT) ma non è stata distribuita. Dopo TASK-08..10 ripeti questo task con `FIRMWARE_VERSION` = `ups-control-v2` e lo zip `test_ups_control_v2.zip`; la baseline di `v1.10.0` resta valida. Ai tester va solo la v2.
+
+      ## Descrizione
+      **Obiettivo:** provare su un UPS reale che comandi e SET VAR si comportano come prima, poi preparare la build per i tester (ADR 0010).
+
+      **Leggi:** il task di validazione hardware del piano US-089 (`.archetipo/plans/US-089-plan.yaml`) per il formato della build di test e del resoconto.
+
+      **Passi:**
+      1. Baseline sul firmware ora sulla scheda, prima del flash: salva `upscmd -l <ups>`, `upsrw <ups>`, l'elenco dei comandi della pagina UPS Commands e le variabili di UPS Settings.
+      2. Build con `FIRMWARE_VERSION` = `ups-control-v1` passato in `PLATFORMIO_BUILD_FLAGS` (come in US-089, da PowerShell). Crea lo zip `test_ups_control_v1.zip` nella root del repo con firmware, bootloader, partitions, boot_app0 e un README.txt (commit, istruzioni di flash e OTA), come gli zip di test precedenti.
+      3. OTA sull'Eaton 3S dell'utente, poi:
+         - `upscmd -l` e `upsrw` uguali alla baseline;
+         - `beeper.toggle` due volte, con lo stato che torna quello iniziale;
+         - `shutdown.stop`;
+         - `upsrw -s ups.delay.shutdown=30`, poi reset dalla Web UI;
+         - un SET VAR HID, se l'Eaton ne offre uno (per esempio `battery.charge.low`), con il valore riletto in `upsc`;
+         - nel System Log le stesse righe di prima (`Command ...: OK`, `Variable ... = ...: OK`, `Variable ... reset to default ...`);
+         - Web UI: comandi e impostazioni come nella baseline.
+      4. Lascia la scheda accesa almeno 10 minuti: nessun errore USB nuovo nel log.
+      5. Prepara il testo del commento per i tester: distinguere la versione di ESP32-NUT dal firmware dell'UPS e indicare cosa provare (`upscmd -l`, `beeper.toggle`, `shutdown.stop`, un SET VAR, il file da allegare). Mostralo all'utente e pubblicalo solo dopo la sua conferma esplicita.
+
+      **Verifica:** esito di ogni punto riportato all'utente.
+
+      **Fatto:** tutti i punti verdi sull'Eaton 3S e commento per i tester approvato dall'utente.
+
+      **Blocchi:** servono la scheda e l'Eaton 3S dell'utente. Con qualsiasi differenza rispetto alla baseline fermati e consegna i log.
+
+      ## File Coinvolti
+      - test_ups_control_v1.zip — build di test nella root (non va committata)
+
+      ## Criteri di Completamento
+      - [ ] `upscmd -l` e `upsrw` uguali alla baseline
+      - [ ] `beeper.toggle`, `shutdown.stop` e SET VAR con reset riusciti, con le stesse righe di System Log
+      - [ ] Build di test pronta e testo per i tester approvato dall'utente
+    ref: TASK-07
