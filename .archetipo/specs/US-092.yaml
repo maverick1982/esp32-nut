@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-092: Supporto ESP32-P4 con Ethernet: profilo, link Ethernet e immagini
 
@@ -36,3 +36,5 @@ body: |
 history:
   - status: TODO
     at: "2026-10-21T16:16:13Z"
+  - status: DONE
+    at: "2026-10-28T16:56:49Z"
