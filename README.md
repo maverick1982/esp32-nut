@@ -101,6 +101,9 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - **Generic / Other Brands**: If a UPS brand is not recognized, the system falls back to a generic driver that reads the standard USB HID values (battery charge and runtime, load, voltages, status). Brand-specific values may be missing. In that case, or to report a bug on an existing driver, use the **Export USB Diagnostics** button in the Web UI (System Logs tab) to download a diagnostic file (`usb_diagnostics.json`) and attach it when opening an issue on GitHub.
 
+> [!TIP]
+> **Is your UPS working but not in the list?** Let us know with the [UPS Compatibility Report](https://github.com/maverick1982/esp32-nut/issues/new?template=ups_report.yml) form: we'll add it to the tested models. Attaching the `usb_diagnostics.json` file helps us check future releases against your model.
+
 > [!NOTE]
 > **USB HID Protocol Requirement:** This firmware currently supports only UPS models using the standard **USB HID Power Device Class** (`usbhid-ups`). UPS units communicating via USB-to-Serial protocols (such as Megatec/Q1, USB CDC/serial bridges, or proprietary serial protocols) are not currently supported.
 

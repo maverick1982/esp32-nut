@@ -101,6 +101,9 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 - **Generici / Altre Marche**: Se la marca dell'UPS non è riconosciuta, il sistema usa un driver generico che legge i valori standard USB HID (carica e autonomia della batteria, carico, tensioni, stato). I valori specifici della marca possono mancare. In questo caso, o per segnalare un problema su un driver esistente, usa il pulsante **Export USB Diagnostics** nella Web UI (tab System Logs) per scaricare un file diagnostico (`usb_diagnostics.json`) e allegalo quando apri una Issue su GitHub.
 
+> [!TIP]
+> **Il tuo UPS funziona ma non è nell'elenco?** Segnalacelo con il modulo [UPS Compatibility Report](https://github.com/maverick1982/esp32-nut/issues/new?template=ups_report.yml): lo aggiungeremo ai modelli testati. Allegare il file `usb_diagnostics.json` ci aiuta a verificare le release future sul tuo modello.
+
 > [!NOTE]
 > **Requisito Protocollo USB HID:** Questo firmware supporta attualmente solo UPS conformi allo standard **USB HID Power Device Class** (`usbhid-ups`). I gruppi di continuità che comunicano tramite convertitori USB-Seriale o protocolli seriali proprietari (es. Megatec/Q1, serial over USB CDC) non sono attualmente supportati.
 

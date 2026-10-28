@@ -1,0 +1,119 @@
+name: "✅ UPS Compatibility Report"
+description: Tell us that your UPS works with ESP32-NUT, so we can add it to the list of tested models
+title: "[Compatibility]: "
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a tested UPS! Your report helps other users choose a UPS and tells us which models to check before each release.
+
+        This form is for a UPS that **works**, even with small issues. If your UPS is not recognized or most values are missing, use **🔌 New UPS Support Request** instead. For a regression or a crash, use the bug report.
+
+  - type: input
+    id: ups_brand_model
+    attributes:
+      label: UPS Brand & Model
+      description: The exact brand and model, as printed on the label of the UPS.
+      placeholder: "e.g., APC Back-UPS Pro BN1050M, CyberPower CP1500PFCLCD"
+    validations:
+      required: true
+
+  - type: input
+    id: esp32_nut_version
+    attributes:
+      label: ESP32-NUT Firmware Version
+      description: |
+        The version of **this project's firmware**, shown next to "ESP32-NUT" at the top of the Web UI menu.
+        Not the UPS firmware: that one goes in the next field.
+      placeholder: "e.g., v1.10.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ups_firmware
+    attributes:
+      label: UPS Firmware (ups.firmware)
+      description: The `ups.firmware` value in the **UPS Telemetry** tab of the Web UI, if your UPS reports one.
+      placeholder: "e.g., 947.d10 .D"
+    validations:
+      required: false
+
+  - type: input
+    id: driver
+    attributes:
+      label: Driver (driver.name)
+      description: The `driver.name` value in the **UPS Telemetry** tab of the Web UI.
+      placeholder: "e.g., APCDriver, GenericDriver"
+    validations:
+      required: false
+
+  - type: input
+    id: vid_pid
+    attributes:
+      label: USB VID:PID
+      description: |
+        Optional. The `vid` and `pid` fields of the USB diagnostics file (see the last field), or the ID shown by `lsusb` on Linux.
+      placeholder: "e.g., 051d:0002"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: board
+    attributes:
+      label: ESP32 Board
+      options:
+        - ESP32-S3 DevKitC-1 (or compatible)
+        - Other (please describe below)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: what_works
+    attributes:
+      label: What works
+      description: Tick what you have checked. Leave unticked what you have not tried.
+      options:
+        - label: Readings look correct (battery charge, runtime, load, voltages)
+        - label: The status changes on a power cut (OL → OB) and back
+        - label: Low battery (LB) is reported
+        - label: Battery test commands (test.battery.*)
+        - label: Beeper commands (beeper.*)
+        - label: Load / shutdown commands (load.off, shutdown.*)
+        - label: UPS Settings page (writable variables)
+        - label: Stable for at least 24 hours without disconnections
+
+  - type: checkboxes
+    id: clients
+    attributes:
+      label: NUT Clients
+      description: Which clients are connected to ESP32-NUT?
+      options:
+        - label: Home Assistant
+        - label: Synology DSM
+        - label: TrueNAS
+        - label: Unraid
+        - label: OpenMediaVault
+        - label: Proxmox / Linux upsmon
+        - label: PeaNUT
+        - label: Other (please describe below)
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes, Missing Values or Issues
+      description: Anything that does not work as expected, values that are missing or wrong, the board model if you chose "Other", or other clients.
+    validations:
+      required: false
+
+  - type: textarea
+    id: usb_diagnostics
+    attributes:
+      label: USB Diagnostics File (Optional, but very useful)
+      description: |
+        With this file we build a test fixture for your model, so future releases are checked against its real data before they ship.
+        Open the Web UI, go to the **System Logs** tab and click **"Export USB Diagnostics"**, then drag and drop the downloaded `.json` file here.
+        It contains only the UPS data (model, report descriptor, current readings). You can blank out the `serial_number` field first: we anonymize it anyway.
+      placeholder: "Drag and drop the exported JSON file here..."
+    validations:
+      required: false
