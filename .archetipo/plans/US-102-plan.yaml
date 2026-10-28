@@ -1,0 +1,286 @@
+schema: archetipo/plan/v2
+spec_code: US-102
+body: "# US-102: Distribuzione multi-scheda: CI a tre immagini, release, web installer e README — Piano di Implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-10-28\n\n---\n\n## Spec\n\n**Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)\n**Priorità:** MEDIUM | **Punti:** 3\n\n**User Story**\nCome utente con una scheda ESP32-S3 o ESP32-P4, voglio scaricare dalla release o installare dal web installer l'immagine giusta per la mia scheda senza sceglierla a mano, in modo da non rischiare di flashare un firmware per un altro chip o un'altra revisione.\n\n**Criteri di Accettazione**\n- CI: matrice delle tre immagini (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`) su `main`, sui tag e sulle pull request, non su ogni push di ogni branch.\n- Release: tre zip, ognuno con `firmware.bin`, immagine completa e README di installazione. Lo zip dell'S3 mantiene il nome attuale (`esp32-nut-vX.Y.Z.zip`).\n- Web installer: un pulsante che sceglie l'immagine in base al chip collegato (una build per `chipFamily` nel manifest); se la revisione del P4 non si può distinguere, due pulsanti P4 (v3.1+ e pre-v3) con le istruzioni per riconoscerla.\n- Su GitHub Pages le immagini stanno in una cartella per scheda, `vX.Y.Z/<board>/`, lo stesso schema di US-099 e US-100.\n- README (EN e IT): sezione ESP32-P4 (schede, revisione, v3.1+ non testata, pre-v3 provata da rtadams89).\n- Le note della prima release con il P4 citano rtadams89 e indicano su quali schede e revisioni è stata provata ciascuna immagine (PDR 0002, D6).\n- Regressione: per chi ha un S3, web installer, zip della release e OTA si comportano come oggi.\n\n---\n\n## Soluzione Tecnica\n\nUna sola fonte di verità per le schede di release, uno script Python che produce pacchetti e manifest, e due workflow: CI di sola build e release a matrice. Il firmware P4 è già su `main` (US-092, `cc7232f`): questa spec non tocca il codice del firmware.\n\n- **Tabella delle schede in `scripts/release_package.py`** (nuovo). Una voce per ambiente PlatformIO, che è anche l'id della scheda nelle cartelle: `esp32-s3-standard` (chipFamily `ESP32-S3`, bootloader a `0x0`, zip `esp32-nut-<tag>.zip`, il nome di oggi), `esp32-p4-eth` (`ESP32-P4`, bootloader a `0x2000`, zip `esp32-nut-<tag>-esp32-p4-eth.zip`, etichetta \"ESP32-P4 v3.1+\", non testata su hardware), `esp32-p4-eth-v1` (`ESP32-P4`, `0x2000`, zip `esp32-nut-<tag>-esp32-p4-eth-v1.zip`, \"ESP32-P4 pre-v3 (v1.x)\", provata su una v1.3). Gli altri offset sono uguali per tutte: partizioni `0x8000`, `boot_app0.bin` `0xe000`, app `0x10000` (verificati in `framework-arduinoespressif32/tools/pioarduino-build.py`: bootloader a 0x2000 per `esp32p4`).\n- **Comando `package`**: da `.pio/build/<env>/` copia `firmware.bin`, `bootloader.bin`, `partitions.bin`, `firmware.factory.bin` (immagine completa da scrivere a `0x0`, creata dalla piattaforma) e `boot_app0.bin` (cercato in `~/.platformio/packages/**/tools/partitions/boot_app0.bin` come oggi), scrive `manifest.json` con percorsi relativi e `README.txt` di installazione per quella scheda, poi crea lo zip. Il `manifest.json` dell'S3 è identico a quello di oggi (name \"ESP32 NUT Server\", `new_install_prompt_erase: true`, quattro parti con gli stessi offset).\n- **Comando `manifests`**: scrive i manifest della radice del web installer. `manifest.json` resta **solo ESP32-S3** con i binari in radice, come oggi (link e comportamento per l'S3 invariati). `manifest-esp32-p4-eth.json` e `manifest-esp32-p4-eth-v1.json` puntano a `<tag>/<env>/...`. esp-web-tools risolve i percorsi delle parti rispetto all'URL del manifest. Le copie in `web-installer/` (versione `latest`) sono generate dallo stesso comando e controllate dai test e2e.\n- **Web installer a tre pulsanti.** esp-web-tools sceglie la build solo per `chipFamily` e non legge la revisione del silicio: per PDR 0002 D2 il pulsante principale resta per l'S3 e una nuova sezione \"ESP32-P4 (Ethernet)\" ha due pulsanti, v3.1+ e pre-v3, con l'aiuto per riconoscere la revisione (`esptool chip-id`: `Chip is ESP32-P4 (revision v1.3)`, o il log di avvio `chip revision: v1.3`). Un P4 collegato al pulsante principale riceve l'errore \"non supportato\" di esp-web-tools; un'immagine P4 della revisione sbagliata viene rifiutata dal bootloader (range scritto da `chip_rev.py`) e si rimedia rifacendo l'installazione con l'altro pulsante. `esp-web-tools` passa da `@10` a `@10.4.0` (verificato: supporta `ESP32-P4`).\n- **GitHub Pages.** Il sito pubblicato è: i file statici di `web-installer/`, i binari S3 e `manifest.json` in radice (come oggi), i manifest P4 in radice e una cartella `<tag>/<env>/` per ogni scheda con binari e `manifest.json`. Il deploy usa `keep_files: true`, così le cartelle delle versioni precedenti restano (schema di US-099). Le pre-release (tag con `-`) non toccano GitHub Pages.\n- **CI (`.github/workflows/ci.yml`, nuovo).** Build delle tre immagini a matrice su push di `main`, pull request verso `main` e avvio manuale; nessun push su altri branch. Cache di `~/.platformio` per chiave su `platformio.ini`.\n- **Release (`.github/workflows/release.yml`).** Job `build` a matrice (tre ambienti, `FIRMWARE_VERSION` dal tag come oggi, `package` dello script, artifact per scheda) e job `publish` che scarica gli artifact, prepara le note come oggi, pubblica la release con i tre zip, assembla il sito e fa il deploy. Avvio manuale con input `dry_run` (default `true`): fa build e pacchetti e li carica come artifact, senza release né deploy, così la pipeline si prova su un branch senza toccare la produzione.\n- **README e note di rilascio.** Sezione ESP32-P4 in `README.md` e `README.it.md` (schede supportate, cablaggio UPS sulla porta USB High-Speed, revisione, livello di test delle due immagini, pulsanti dell'installer). Le note della prima release con il P4 vanno in `docs/releases/<versione>.md`: la versione la decide l'utente.\n- **Fuori ambito:** codice del firmware P4 (US-092), Wi-Fi via coprocessore C6 (US-093), menu delle versioni nel web installer e nell'OTA (US-099, US-100), popolamento delle cartelle delle release passate.\n\n---\n\n## Strategia di Test\n\nNessun codice firmware cambia: test nativi e build servono solo come regressione. Il rischio è nella pipeline, che non si può eseguire in locale: lo script di packaging si prova in locale sulle tre build, il workflow si prova con il `dry_run` su un branch prima del merge.\n\n- **Script di packaging:** build locale dei tre ambienti, `package` per ciascuno, controllo del contenuto degli zip, degli offset e del range di revisione negli header (`1..199`, `301..399`, `0..65535`). Confronto del pacchetto S3 con lo zip della release v1.10.0: stessi nomi di file più `firmware.factory.bin` e `README.txt`, `manifest.json` uguale a parte la versione.\n- **OTA da zip:** la pagina OTA estrae `firmware.bin` per nome (`data/www/update.html`), quindi i file in più nello zip non la cambiano; `e2e/ota_zip.spec.ts` resta verde.\n- **Workflow:** `ci.yml` parte sulla PR della spec; `release.yml` con `workflow_dispatch` e `dry_run: true` sul branch produce i tre artifact attesi. Nessun tag di prova (pubblicherebbe su GitHub Pages).\n- **Regressione completa:** test nativi, e2e, build delle tre immagini.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`playwright.config.ts`, `e2e/`)\n**Demo video:** non previsto: il web installer richiede una scheda reale collegata via Web Serial, che la demo non può simulare.\n\n| Scenario | Descrizione del flusso utente |\n|---|---|\n| Utente S3 | Apre il web installer: il pulsante principale c'è ed è legato a `manifest.json`, che contiene solo `ESP32-S3` con gli offset di oggi (0, 32768, 57344, 65536). |\n| Utente P4 v3.1+ | Apre la sezione ESP32-P4: il pulsante v3.1+ è legato a `manifest-esp32-p4-eth.json`, chipFamily `ESP32-P4`, bootloader a 8192, con l'avviso \"not yet tested on hardware\". |\n| Utente P4 pre-v3 | Il pulsante pre-v3 è legato a `manifest-esp32-p4-eth-v1.json`, chipFamily `ESP32-P4`, bootloader a 8192. |\n| Utente che non conosce la revisione | Apre l'aiuto sulla revisione e trova il comando `esptool chip-id` e la riga del log di avvio. |\n| Coerenza dei manifest | I manifest in `web-installer/` coincidono con quelli che `scripts/release_package.py manifests --version latest` genera. |\n| Pagina su mobile | A 375 px la pagina non scorre in orizzontale. |\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono in `docs/mockups/US-102/`\n\n_Piano generato con ARchetipo Planning — 2026-10-28_"
+tasks:
+  - id: TASK-01
+    title: Script di packaging della release con la tabella delle schede
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Obiettivo:** una sola fonte di verità per le schede di release e un comando che produce, per ogni ambiente, la cartella del pacchetto, il manifest, il README di installazione e lo zip.
+
+      **Leggi:** `.github/workflows/release.yml` (step Prepare Artifacts: file copiati, manifest scritto a mano, ricerca di `boot_app0.bin`); `web-installer/manifest.json`; `platformio.ini` (ambienti `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`); `scripts/release_notes.py` per lo stile degli script (argparse, niente dipendenze esterne).
+
+      **Modifica:** crea `scripts/release_package.py` (solo libreria standard).
+      1. `BOARDS`: dizionario ordinato per env con `chip_family`, `bootloader_offset` (0 per S3, 0x2000 per i P4), `label`, `zip_suffix` (vuoto per S3, `-esp32-p4-eth` e `-esp32-p4-eth-v1`), `tested` (testo breve: "tested", "not yet tested on hardware", "tested on a v1.3 board"). Costanti comuni: partizioni 0x8000, boot_app0 0xe000, app 0x10000.
+      2. `manifest(env, version, prefix='')`: dict con `name: "ESP32 NUT Server"`, `version`, `new_install_prompt_erase: true`, una build `{chipFamily, parts}` con bootloader, partitions, boot_app0, firmware (in quest'ordine, percorsi `prefix + nome`). Per l'S3 deve risultare identico al manifest scritto oggi da `release.yml`.
+      3. Sottocomando `package --env E --version V --build-dir D --out O --zip-dir Z`: copia `firmware.bin`, `bootloader.bin`, `partitions.bin`, `firmware.factory.bin` da D e `boot_app0.bin` (argomento `--boot-app0`, oppure ricerca in `~/.platformio/packages/**/tools/partitions/boot_app0.bin`; errore e uscita 1 se manca); scrive `manifest.json` e `README.txt` in O; crea `Z/esp32-nut-V<zip_suffix>.zip` con i file in radice. Uscita 1 se manca un file della build.
+      4. `README.txt` per scheda (inglese): scheda e revisione, livello di test, installazione dal web installer (URL `https://maverick1982.github.io/esp32-nut/` e quale pulsante), installazione con esptool (`esptool --chip esp32s3|esp32p4 write-flash 0x0 firmware.factory.bin`), aggiornamento OTA (carica lo zip o `firmware.bin` dalla pagina Firmware OTA; un'immagine di un altro chip o revisione viene rifiutata).
+      5. Sottocomando `manifests --version V --out O`: scrive `O/manifest.json` (S3, prefisso vuoto: binari in radice come oggi) e `O/manifest-<env>.json` per i due P4 con prefisso `V/<env>/`. Con `--version latest` il prefisso dei P4 resta `latest/<env>/`.
+      6. Output JSON con `indent=2` e newline finale, LF.
+
+      **Non cambiare:** workflow, web installer, firmware.
+
+      ## File Coinvolti
+      - scripts/release_package.py — nuovo
+
+      ## Criteri di Completamento
+      - [ ] `python scripts/release_package.py --help` elenca `package` e `manifests`
+      - [ ] Il manifest S3 generato ha gli stessi campi e offset (0, 32768, 57344, 65536) del manifest scritto oggi da `release.yml`
+      - [ ] I manifest P4 hanno chipFamily `ESP32-P4` e bootloader a 8192
+      - [ ] File mancante nella build o `boot_app0.bin` non trovato: messaggio chiaro e uscita 1
+
+      **Blocchi:** nessuno.
+  - id: TASK-02
+    title: Prova locale dei pacchetti delle tre schede e confronto con lo zip v1.10.0
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che lo script produce pacchetti corretti per le tre immagini e che il pacchetto S3 è compatibile con quello di oggi.
+
+      **Passi:**
+      1. Build dei tre ambienti da PowerShell: `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, poi `-e esp32-p4-eth`, poi `-e esp32-p4-eth-v1`.
+      2. Per ogni env: `python scripts/release_package.py package --env <env> --version v0.0.0-local --build-dir .pio/build/<env> --out <scratch>/pkg/<env> --zip-dir <scratch>/zips` (cartella nello scratchpad, non nel repo).
+      3. Elenca il contenuto dei tre zip: `firmware.bin`, `bootloader.bin`, `partitions.bin`, `boot_app0.bin`, `firmware.factory.bin`, `manifest.json`, `README.txt`.
+      4. Leggi l'header di ogni `firmware.bin` (byte 12-18: chip_id, min/max rev full) e verifica `1..199` (p4-eth-v1), `301..399` (p4-eth), `0..65535` (S3).
+      5. Scarica lo zip della release v1.10.0 (`https://github.com/maverick1982/esp32-nut/releases/download/v1.10.0/esp32-nut-v1.10.0.zip`) nello scratchpad e confronta: stessi file più `firmware.factory.bin` e `README.txt`; `manifest.json` uguale a parte `version`.
+      6. Controlla che `firmware.factory.bin` del P4 abbia il bootloader a 0x2000 (byte 0x2000 = 0xE9, magic dell'immagine ESP).
+      7. Esegui `python scripts/release_package.py manifests --version latest --out <scratch>/site` e verifica i tre manifest.
+
+      **Non cambiare:** nessun file del repo (se emerge un difetto, correggi `scripts/release_package.py` e ripeti).
+
+      ## File Coinvolti
+      - scripts/release_package.py — solo eventuali correzioni
+
+      ## Criteri di Completamento
+      - [ ] I tre zip hanno i 7 file attesi
+      - [ ] Range di revisione corretti negli header
+      - [ ] Pacchetto S3 compatibile con lo zip v1.10.0 (stessi file più due, manifest uguale a parte la versione)
+      - [ ] `firmware.factory.bin` del P4 con magic 0xE9 a 0x2000
+
+      **Blocchi:** scaricare lo zip v1.10.0 richiede accesso a internet; se non c'è, confronta con il manifest scritto oggi in `release.yml`.
+  - id: TASK-03
+    title: Workflow CI con la build delle tre immagini
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ogni PR verso `main` e ogni push su `main` compila le tre immagini.
+
+      **Leggi:** `.github/workflows/release.yml` (setup Python 3.11, `pip install platformio`, versioni delle action `actions/checkout@v7`, `actions/setup-python@v7`).
+
+      **Modifica:** crea `.github/workflows/ci.yml`.
+      1. `on`: `push` con `branches: [main]`, `pull_request` con `branches: [main]`, `workflow_dispatch`. Nessun altro trigger.
+      2. `concurrency`: gruppo `ci-${{ github.ref }}`, `cancel-in-progress: true`.
+      3. Job `build`, `runs-on: ubuntu-latest`, `strategy.fail-fast: false`, `matrix.env: [esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1]`.
+      4. Step: checkout, setup-python 3.11, cache `~/.platformio` e `~/.cache/pip` (actions/cache, chiave `pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}`), `pip install platformio`, `pio run -e ${{ matrix.env }}`.
+      5. `permissions: contents: read`.
+
+      **Non cambiare:** `release.yml`, `release-notes.yml`.
+
+      ## File Coinvolti
+      - .github/workflows/ci.yml — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Trigger solo su push di `main`, PR verso `main` e avvio manuale
+      - [ ] Matrice con i tre ambienti, `fail-fast: false`
+      - [ ] YAML valido (controllo con un parser, per esempio `python -c "import yaml"` se disponibile, altrimenti revisione a mano e verifica sulla PR)
+
+      **Blocchi:** la verifica reale avviene solo su GitHub, alla prima PR (TASK-09).
+  - id: TASK-04
+    title: Workflow di release a matrice con tre zip, sito per scheda e dry run
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il tag `vX.Y.Z` produce tre zip nella release e pubblica su GitHub Pages radice S3 invariata, manifest P4 e cartelle `vX.Y.Z/<env>/`; l'avvio manuale con `dry_run` prova tutto senza pubblicare.
+
+      **Leggi:** `.github/workflows/release.yml` (intero); `scripts/release_package.py` (TASK-01).
+
+      **Modifica:** riscrivi `.github/workflows/release.yml` mantenendo nome, trigger esistenti e le parti sulle note.
+      1. Trigger invariati (`push` tag `v*`, `workflow_dispatch`, `release: published`) più input di `workflow_dispatch`: `dry_run` boolean, default `true`.
+      2. Variabile `VERSION`: `github.ref_name`.
+      3. Job `build`: matrice dei tre env come in `ci.yml`; checkout, Python 3.11, cache come in `ci.yml`, `pip install platformio`; `pio run -e ${{ matrix.env }}` con `PLATFORMIO_BUILD_FLAGS: '-DFIRMWARE_VERSION=\"${{ github.ref_name }}\"'` come oggi; `python scripts/release_package.py package --env ${{ matrix.env }} --version ${{ github.ref_name }} --build-dir .pio/build/${{ matrix.env }} --out pkg/${{ matrix.env }} --zip-dir dist`; `actions/upload-artifact` (versione attuale) con nome `board-${{ matrix.env }}` e contenuto `pkg/` e `dist/`.
+      4. Job `publish`, `needs: build`, `if: !(github.event_name == 'workflow_dispatch' && inputs.dry_run)`: checkout, `actions/download-artifact` con `merge-multiple: true`; step "Prepare release notes" identico a oggi; "Publish GitHub Release" con `files: dist/*.zip`.
+      5. Assemblaggio del sito, solo se il tag non contiene `-` (pre-release): `mkdir site`, copia `web-installer/index.html` e `web-installer/shared.css`; copia in radice i binari S3 da `pkg/esp32-s3-standard/` (`bootloader.bin`, `partitions.bin`, `boot_app0.bin`, `firmware.bin`); copia ogni `pkg/<env>/` in `site/${VERSION}/<env>/`; `python scripts/release_package.py manifests --version ${VERSION} --out site`.
+      6. Deploy con `peaceiris/actions-gh-pages@v4`, `publish_dir: ./site`, `keep_files: true` (le cartelle delle versioni precedenti restano, schema US-099).
+      7. `permissions: contents: write` a livello di workflow come oggi.
+
+      **Non cambiare:** `release-notes.yml`, `scripts/release_notes.py`.
+
+      ## File Coinvolti
+      - .github/workflows/release.yml — riscrittura con job build a matrice e job publish
+
+      ## Criteri di Completamento
+      - [ ] Lo zip S3 si chiama ancora `esp32-nut-<tag>.zip`
+      - [ ] Radice del sito: `index.html`, `shared.css`, binari S3 e `manifest.json` come oggi, più i due manifest P4
+      - [ ] Cartelle `<tag>/<env>/` per i tre env, `keep_files: true`
+      - [ ] Con `workflow_dispatch` e `dry_run: true` non c'è né release né deploy, solo artifact
+      - [ ] Le pre-release non aggiornano GitHub Pages
+
+      **Blocchi:** verificabile solo su GitHub (TASK-09).
+  - id: TASK-05
+    title: Web installer con la sezione ESP32-P4 e i manifest generati
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il pulsante principale resta per l'S3; una sezione ESP32-P4 offre i due pulsanti v3.1+ e pre-v3 con l'aiuto per riconoscere la revisione, come nel mockup.
+
+      **Leggi:** `docs/mockups/US-102/` (layout, testi, stati); `web-installer/index.html`; `web-installer/shared.css`; `web-installer/manifest.json`.
+
+      **Modifica:**
+      1. `web-installer/index.html`: segui il mockup. Il pulsante principale resta `<esp-web-install-button manifest="manifest.json">` (ESP32-S3). Nuova sezione "ESP32-P4 (Ethernet)": due `<esp-web-install-button>` con `manifest="manifest-esp32-p4-eth.json"` ("ESP32-P4 v3.1 or later", nota "not yet tested on hardware") e `manifest="manifest-esp32-p4-eth-v1.json"` ("ESP32-P4 before v3 (v1.x)", nota "tested on a v1.3 board"); schede supportate (Waveshare ESP32-P4-ETH, anche PoE, e design di riferimento Espressif con PHY IP101); aiuto `<details>` sulla revisione (`esptool chip-id` → `Chip is ESP32-P4 (revision v1.3)`, log di avvio `chip revision: v1.3`; v1.x → pre-v3, v3.1+ → v3.1+, v2.x e v3.0 non supportate); nota che un'immagine della revisione sbagliata viene rifiutata dal bootloader e basta rifare l'installazione con l'altro pulsante.
+      2. Script esp-web-tools fissato a `https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module`.
+      3. `web-installer/shared.css`: solo le classi nuove che servono alla sezione (stile esistente: tema scuro, font già caricati).
+      4. Genera i manifest: `python scripts/release_package.py manifests --version latest --out web-installer` (sovrascrive `manifest.json` e crea i due manifest P4).
+      5. Pagina leggibile a 375 px senza scroll orizzontale: porta in `shared.css` le regole mobile del mockup (`docs/mockups/US-102/installer-p4.css`, sotto 480 px). Riducono anche il titolo "ESP32-NUT INSTALLER", che oggi a 2rem esce dai 375 px: è l'unico cambio visibile per l'S3, ed è voluto.
+
+      **Non cambiare:** il testo dei passi di installazione per l'S3, salvo quanto previsto dal mockup.
+
+      ## File Coinvolti
+      - web-installer/index.html — sezione ESP32-P4, esp-web-tools 10.4.0
+      - web-installer/shared.css — classi della nuova sezione
+      - web-installer/manifest.json — rigenerato (solo ESP32-S3, invariato nel contenuto salvo la formattazione)
+      - web-installer/manifest-esp32-p4-eth.json — nuovo, generato
+      - web-installer/manifest-esp32-p4-eth-v1.json — nuovo, generato
+
+      ## Criteri di Completamento
+      - [ ] Tre pulsanti con i manifest giusti; il principale è il primo ed è per l'S3
+      - [ ] Aiuto sulla revisione presente e chiuso di default
+      - [ ] esp-web-tools fissato a 10.4.0
+      - [ ] Manifest in `web-installer/` uguali all'output del comando `manifests --version latest`
+
+      **Blocchi:** nessuno.
+  - id: TASK-06
+    title: 'Test e2e del web installer: pulsanti, manifest e coerenza con lo script'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della strategia di test.
+
+      **Leggi:** `e2e/installer.spec.ts` (carica la pagina da `file:///`, controlla `manifest.json`); `playwright.config.ts`.
+
+      **Modifica:** estendi `e2e/installer.spec.ts`.
+      1. Pulsante principale: primo `esp-web-install-button` con `manifest="manifest.json"`.
+      2. Sezione P4: due pulsanti con `manifest-esp32-p4-eth.json` e `manifest-esp32-p4-eth-v1.json`, testo "not yet tested on hardware" vicino al primo.
+      3. Aiuto revisione: `<details>` chiuso; aperto mostra `esptool chip-id` e `chip revision`.
+      4. Manifest: `manifest.json` ha una sola build `ESP32-S3` con offset 0, 32768, 57344, 65536; i due manifest P4 hanno `ESP32-P4` e bootloader a 8192, partizioni 32768, boot_app0 57344, firmware 65536.
+      5. Coerenza: esegui `python scripts/release_package.py manifests --version latest --out <tmp>` (`child_process.execFileSync`, cartella temporanea di `os.tmpdir()`) e confronta i tre file con quelli di `web-installer/`.
+      6. Script esp-web-tools: `src` contiene `esp-web-tools@10.4.0`.
+      7. Mobile 375x812: `document.documentElement.scrollWidth <= 375`.
+
+      **Verifica:** `npx playwright test e2e/installer.spec.ts`, poi la suite completa `npx playwright test`.
+
+      ## File Coinvolti
+      - e2e/installer.spec.ts — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] I nuovi casi passano
+      - [ ] Una mutazione (bootloader P4 a 0 in `release_package.py`) fa fallire il test di coerenza o degli offset
+      - [ ] Suite e2e completa verde
+
+      **Blocchi:** il test di coerenza richiede `python` nel PATH (come per `embed_web.py`).
+  - id: TASK-07
+    title: Sezione ESP32-P4 nei README inglese e italiano
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chi ha un ESP32-P4 trova nei README schede supportate, collegamento dell'UPS, come riconoscere la revisione, quale pulsante usare e il livello di test delle immagini.
+
+      **Leggi:** `README.md` e `README.it.md` (sezioni Hardware Requirements & Wiring / Requisiti Hardware & Cablaggio, Getting Started / Guida all'uso, punto 1 e 2); `docs/pdr/0002-supporto-multi-scheda-esp32-p4-ethernet.md` (D1, D3, D5); `src/board/esp32p4_eth.cpp` (porta USB High-Speed, header J3 sulla Waveshare); `docs/mockups/US-102/` per i nomi dei pulsanti.
+
+      **Modifica:** in entrambi i README, con gli stessi contenuti.
+      1. In Hardware: sottosezione ESP32-P4 (Ethernet): Waveshare ESP32-P4-ETH (anche PoE) e schede con il design di riferimento Espressif (PHY IP101); UPS sulla porta USB 2.0 High-Speed; rete solo cavo con DHCP, nome host `esp32-nut-xxxxxx`; tabella delle due immagini (v3.1+: non ancora provata su hardware; pre-v3 v1.x: provata da rtadams89 su una v1.3); come leggere la revisione (`esptool chip-id`, log di avvio).
+      2. In Flashing: il web installer ha un pulsante per l'S3 e due per il P4; gli zip delle release hanno il suffisso della scheda per il P4 e contengono `firmware.factory.bin` da scrivere a `0x0`.
+      3. In Primo avvio: sul P4 non c'è access point; la scheda entra in rete via cavo con i valori NUT predefiniti, e il doppio reset apre la finestra di recupero delle credenziali web (US-091).
+      4. Riga introduttiva/Features: menziona l'ESP32-P4 Ethernet senza cambiare il resto.
+
+      **Non cambiare:** sezioni UPS supportati, screenshot, donazioni, licenza.
+
+      ## File Coinvolti
+      - README.md — sezione ESP32-P4
+      - README.it.md — sezione ESP32-P4
+
+      ## Criteri di Completamento
+      - [ ] Contenuti allineati tra le due lingue
+      - [ ] L'immagine v3.1+ è indicata come non provata su hardware
+      - [ ] rtadams89 citato per la prova della pre-v3
+
+      **Blocchi:** nessuno.
+  - id: TASK-08
+    title: Note della prima release con il P4
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le note della prima release con il P4 ringraziano rtadams89 e indicano su quali schede e revisioni è stata provata ciascuna immagine (PDR 0002, D6).
+
+      **Leggi:** `docs/releases/v1.10.0.md` e `docs/releases/index.md` (formato); `scripts/release_notes.py` (cosa trasforma).
+
+      **Modifica:**
+      1. Chiedi all'utente la versione della prossima release (probabilmente v1.11.0) e se il file esiste già.
+      2. Crea o aggiorna `docs/releases/<versione>.md` con una sezione ESP32-P4: ringraziamento a rtadams89 (#94, #103); immagini e livello di test (v3.1+ non provata su hardware; pre-v3 provata su una v1.3 con un UPS); come installare (pulsanti del web installer, zip con suffisso); OTA che rifiuta l'immagine sbagliata; supporto da considerare sperimentale finché la community non prova la v3.1+.
+      3. Aggiungi la riga in `docs/releases/index.md` solo se il file della versione è nuovo, nel formato esistente.
+
+      **Non cambiare:** note delle release già pubblicate.
+
+      ## File Coinvolti
+      - docs/releases/<versione>.md — sezione ESP32-P4
+      - docs/releases/index.md — riga della versione, se nuova
+
+      ## Criteri di Completamento
+      - [ ] rtadams89 citato
+      - [ ] Per ciascuna immagine: scheda e revisione provate, o "non provata"
+
+      **Blocchi:** la versione la decide l'utente: non inventarla.
+  - id: TASK-09
+    title: Regressione completa e prova dei workflow su GitHub
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che nulla cambia per l'S3 e che la pipeline funziona su GitHub prima del merge.
+
+      **Passi:**
+      1. Test nativi: da PowerShell con `PATH` che include `~/.platformio/packages/toolchain-gccmingw32/bin`, `~/.platformio/penv/Scripts/pio.exe test -e native` a blocchi di circa 8 suite (limite di 600 s per comando).
+      2. e2e: `npx playwright test` (attesi i test esistenti più quelli di TASK-06).
+      3. Build dei tre ambienti (già fatta in TASK-02, ripetila se il codice è cambiato).
+      4. Con l'ok esplicito dell'utente: push del branch della spec e apertura della PR verso `main`; verifica che `ci.yml` parta con tre job verdi.
+      5. Con l'ok esplicito dell'utente: avvio manuale di `release.yml` sul branch con `dry_run: true` (dalla UI di GitHub o via API); verifica che i tre artifact contengano gli zip con i nomi attesi e che il job `publish` sia saltato.
+      6. Riporta nella review: esiti, link alle esecuzioni dei workflow, eventuali differenze.
+
+      **Non fare:** nessun tag di prova, nessun deploy su GitHub Pages.
+
+      ## File Coinvolti
+      - nessun file nuovo (eventuali correzioni ai file dei task precedenti)
+
+      ## Criteri di Completamento
+      - [ ] Test nativi ed e2e verdi
+      - [ ] `ci.yml` verde sulla PR con tre job
+      - [ ] `release.yml` in dry run produce i tre zip e non pubblica
+
+      **Blocchi:** push, PR e avvio dei workflow richiedono l'ok esplicito dell'utente.

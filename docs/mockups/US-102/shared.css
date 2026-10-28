@@ -1,0 +1,183 @@
+:root {
+    /* Color Palette - Hi-Tech / Cyberpunk minimal */
+    --bg-base: #06090e;
+    --bg-panel: rgba(14, 20, 31, 0.7);
+    --bg-panel-border: rgba(45, 60, 90, 0.5);
+    --accent: #00f0ff;
+    --accent-hover: #00c3d0;
+    --accent-glow: rgba(0, 240, 255, 0.3);
+    --text-primary: #e0e6ed;
+    --text-secondary: #8a9bb3;
+
+    /* Typography */
+    --font-ui: 'Inter', sans-serif;
+    --font-heading: 'Orbitron', sans-serif;
+    --font-mono: 'Share Tech Mono', monospace;
+    
+    /* Layout */
+    --border-radius: 4px;
+    --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-image: 
+        radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.05), transparent 25%),
+        radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.03), transparent 25%),
+        linear-gradient(rgba(0, 240, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.02) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 30px 30px, 30px 30px;
+    background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+}
+
+.installer-container {
+    width: 100%;
+    max-width: 500px;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    animation: fadeIn 0.8s ease-out forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); filter: blur(4px); }
+    to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+
+.brand-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.brand-icon {
+    width: 48px;
+    height: 48px;
+    color: var(--accent);
+    filter: drop-shadow(0 0 12px var(--accent-glow));
+}
+
+.brand-name {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+.brand-name span {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--accent);
+    vertical-align: super;
+}
+
+.panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    padding: 2.5rem 2rem;
+    backdrop-filter: blur(10px);
+    position: relative;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+}
+
+.panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+}
+
+.panel-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.panel-header h2 {
+    font-size: 1.2rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+}
+
+.instructions {
+    margin-bottom: 2.5rem;
+}
+
+.instructions ol {
+    list-style: none;
+    counter-reset: steps;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.instructions li {
+    position: relative;
+    padding-left: 2.5rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.instructions li::before {
+    counter-increment: steps;
+    content: "0" counter(steps);
+    position: absolute;
+    left: 0;
+    top: -2px;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    font-size: 0.85rem;
+    border: 1px solid rgba(0, 240, 255, 0.3);
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 240, 255, 0.05);
+}
+
+.install-action {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 2rem;
+    position: relative;
+}
+
+.install-action::after {
+    content: '';
+    position: absolute;
+    width: 120%;
+    height: 100%;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 60%);
+    z-index: -1;
+    opacity: 0.5;
+}
+
+.support-text {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    border-top: 1px dashed var(--bg-panel-border);
+    padding-top: 1.5rem;
+}
+
+.mono {
+    font-family: var(--font-mono);
+}
+
+.support-text p {
+    margin-bottom: 0.25rem;
+}

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-NUT Installer (US-102 mockup)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <!-- Local copy of web-installer/shared.css (unchanged) -->
+    <link rel="stylesheet" href="shared.css">
+    <!-- New classes introduced by US-102 (P4 section, badges, help, mobile tweaks) -->
+    <link rel="stylesheet" href="installer-p4.css">
+</head>
+<body>
+    <div class="installer-container">
+        <div class="brand-header">
+            <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+            </svg>
+            <div class="brand-name">ESP32-NUT <span>INSTALLER</span></div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Firmware Installation</h2>
+            </div>
+
+            <div class="instructions">
+                <ol>
+                    <li>Connect your ESP32 board to the computer via USB cable.</li>
+                    <li>Make sure to use a data cable (not just for charging).</li>
+                    <li>Click the button below and select the serial port corresponding to your device.</li>
+                </ol>
+            </div>
+
+            <!-- UNCHANGED: real page keeps <esp-web-install-button manifest="manifest.json"> (ESP32-S3 only) -->
+            <div class="install-action">
+                <button type="button" class="mock-esp-button">Connect</button>
+            </div>
+
+            <!-- ===================== NEW (US-102): ESP32-P4 section ===================== -->
+            <section class="p4-section" aria-labelledby="p4-title">
+                <div class="p4-header">
+                    <h3 id="p4-title">ESP32-P4 <span>(Ethernet)</span></h3>
+                    <p class="p4-lead">The button above is for ESP32-S3 boards. For an ESP32-P4 board, pick the image that matches your chip revision.</p>
+                </div>
+
+                <div class="p4-options">
+                    <!-- Real: <esp-web-install-button manifest="manifest-esp32-p4-eth.json"><button slot="activate">…</button></esp-web-install-button> -->
+                    <div class="p4-option">
+                        <button type="button" class="p4-button">
+                            <span class="p4-button-label">ESP32-P4 v3.1 or later</span>
+                            <span class="p4-button-sub mono">manifest-esp32-p4-eth.json</span>
+                        </button>
+                        <span class="p4-badge p4-badge--warn mono">Not yet tested on hardware</span>
+                    </div>
+
+                    <!-- Real: <esp-web-install-button manifest="manifest-esp32-p4-eth-v1.json"><button slot="activate">…</button></esp-web-install-button> -->
+                    <div class="p4-option">
+                        <button type="button" class="p4-button">
+                            <span class="p4-button-label">ESP32-P4 before v3 (v1.x)</span>
+                            <span class="p4-button-sub mono">manifest-esp32-p4-eth-v1.json</span>
+                        </button>
+                        <span class="p4-badge p4-badge--ok mono">Tested on a v1.3 board</span>
+                    </div>
+                </div>
+
+                <details class="p4-help">
+                    <summary>How do I know my P4 revision?</summary>
+                    <div class="p4-help-body">
+                        <p>Use one of these:</p>
+                        <ul>
+                            <li>Run <code>esptool chip-id</code> (or <code>esptool.py chip_id</code>) and look for:
+                                <pre class="mono">Chip is ESP32-P4 (revision v1.3)</pre></li>
+                            <li>Open the serial monitor, reset the board and look in the boot log for:
+                                <pre class="mono">chip revision: v1.3</pre></li>
+                        </ul>
+                        <table class="p4-rev-table">
+                            <tr><th class="mono">v1.x</th><td>&rarr; <strong>ESP32-P4 before v3</strong></td></tr>
+                            <tr><th class="mono">v3.1+</th><td>&rarr; <strong>ESP32-P4 v3.1 or later</strong></td></tr>
+                            <tr class="p4-rev-none"><th class="mono">v2.x, v3.0</th><td>Not supported by either image</td></tr>
+                        </table>
+                        <p class="p4-safe">Picked the wrong one? No harm done: the bootloader refuses the image. Just flash again with the other button.</p>
+                    </div>
+                </details>
+
+                <p class="p4-boards">
+                    <span class="mono">Supported boards:</span> Waveshare ESP32-P4-ETH (also PoE) and boards following the Espressif reference design (IP101 PHY).
+                </p>
+            </section>
+            <!-- ===================== /NEW ===================== -->
+
+            <div class="support-text">
+                <p class="mono">Supported browsers: Chrome, Edge, Opera.</p>
+                <p class="mono">Requirements: Web Serial API enabled.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
