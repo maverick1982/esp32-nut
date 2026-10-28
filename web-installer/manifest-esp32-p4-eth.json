@@ -1,0 +1,28 @@
+{
+  "name": "ESP32 NUT Server",
+  "version": "latest",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "latest/esp32-p4-eth/bootloader.bin",
+          "offset": 8192
+        },
+        {
+          "path": "latest/esp32-p4-eth/partitions.bin",
+          "offset": 32768
+        },
+        {
+          "path": "latest/esp32-p4-eth/boot_app0.bin",
+          "offset": 57344
+        },
+        {
+          "path": "latest/esp32-p4-eth/firmware.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}

@@ -5,15 +5,34 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and package the three images as artifacts, without release and deploy'
+        type: boolean
+        default: true
   release:
     types: [published]
 
+# Write access only where the release and the site are published: the build job
+# runs third-party code (PlatformIO, platform packages, extra scripts)
 permissions:
-  contents: write
+  contents: read
+
+# Publishing a release from the GitHub UI with a new tag fires both the tag push
+# and "release: published": one run at a time per ref, the second one waits
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-release:
+  # One image per board (US-102): scripts/release_package.py lists the boards and
+  # writes each package (binaries, full image, manifest, README) and its zip
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        env: [esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1]
 
     steps:
       - name: Checkout code
@@ -24,50 +43,71 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache PlatformIO
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          # One cache per image: the ESP32-S3 and ESP32-P4 toolchains differ
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
           pip install platformio
 
       - name: Build firmware
-        run: pio run -e esp32-s3-standard
+        run: pio run -e ${{ matrix.env }}
         env:
           PLATFORMIO_BUILD_FLAGS: '-DFIRMWARE_VERSION=\"${{ github.ref_name }}\"'
 
-      - name: Prepare Artifacts
+      # boot_app0.bin (empty otadata at 0xe000) goes into every package: after an
+      # odd number of OTA updates the board boots from app1, and a full flash that
+      # skips it keeps starting the old firmware
+      # A manual run from a branch has the branch name as ref_name
+      # (feature/...): the "/" would end up in the zip file name
+      - name: Package
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          mkdir release-pkg
-          cp .pio/build/esp32-s3-standard/firmware.bin release-pkg/
-          cp .pio/build/esp32-s3-standard/bootloader.bin release-pkg/
-          cp .pio/build/esp32-s3-standard/partitions.bin release-pkg/
-          # Empty otadata at 0xe000: after an odd number of OTA updates the board boots
-          # from app1, and a full flash that skips it keeps starting the old firmware
-          BOOT_APP0=$(find ~/.platformio/packages -path "*/tools/partitions/boot_app0.bin" | head -n 1)
-          if [ -z "$BOOT_APP0" ]; then echo "boot_app0.bin not found" >&2; exit 1; fi
-          cp "$BOOT_APP0" release-pkg/
+          VERSION="${REF_NAME//\//-}"
+          python scripts/release_package.py package --env ${{ matrix.env }} \
+            --version "$VERSION" \
+            --build-dir .pio/build/${{ matrix.env }} \
+            --out pkg/${{ matrix.env }} --zip-dir dist
 
-          # Creazione manifest.json
-          cat <<EOF > release-pkg/manifest.json
-          {
-            "name": "ESP32 NUT Server",
-            "version": "${{ github.ref_name }}",
-            "new_install_prompt_erase": true,
-            "builds": [
-              {
-                "chipFamily": "ESP32-S3",
-                "parts": [
-                  { "path": "bootloader.bin", "offset": 0 },
-                  { "path": "partitions.bin", "offset": 32768 },
-                  { "path": "boot_app0.bin", "offset": 57344 },
-                  { "path": "firmware.bin", "offset": 65536 }
-                ]
-              }
-            ]
-          }
-          EOF
-          
-          cd release-pkg
-          zip -r ../esp32-nut-${{ github.ref_name }}.zip *
+      - name: Upload package
+        uses: actions/upload-artifact@v6
+        with:
+          name: board-${{ matrix.env }}
+          path: |
+            pkg/
+            dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # A manual run is a dry run unless dry_run is unticked: the packages stay as
+    # workflow artifacts, nothing is released or deployed
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Tag and branch names reach the scripts through the environment, never
+    # pasted into the script text
+    env:
+      VERSION: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download packages
+        uses: actions/download-artifact@v7
+        with:
+          pattern: board-*
+          merge-multiple: true
 
       # docs/releases/<tag>.md is optional: when the tagged commit has it, it is
       # the release body; otherwise GitHub generates the notes from the merged PRs.
@@ -75,7 +115,7 @@ jobs:
       - name: Prepare release notes
         id: notes
         run: |
-          NOTES="docs/releases/${{ github.ref_name }}.md"
+          NOTES="docs/releases/$VERSION.md"
           if [ -f "$NOTES" ]; then
             python scripts/release_notes.py "$NOTES" > release-body.md
             echo "body_path=release-body.md" >> "$GITHUB_OUTPUT"
@@ -91,15 +131,40 @@ jobs:
         with:
           body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: ${{ steps.notes.outputs.generate }}
-          files: esp32-nut-${{ github.ref_name }}.zip
+          files: dist/*.zip
 
+      # Web installer site: the root keeps the ESP32-S3 binaries and manifest.json
+      # as before the P4, so existing links and installs do not change; every board
+      # gets a vX.Y.Z/<env>/ folder and the P4 buttons use manifest-<env>.json.
+      # Pre-releases (tags with a "-") do not touch GitHub Pages.
       - name: Prepare Web Installer
+        id: site
         run: |
-          cp release-pkg/*.bin web-installer/
-          cp release-pkg/manifest.json web-installer/
+          if [[ "$VERSION" == *-* ]]; then
+            echo "Pre-release $VERSION: GitHub Pages left unchanged"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir site
+          # The whole folder, as before: the manifests command below replaces the
+          # committed "latest" manifests with the ones of this version
+          cp -r web-installer/. site/
+          for f in bootloader.bin partitions.bin boot_app0.bin firmware.bin; do
+            cp "pkg/esp32-s3-standard/$f" site/
+          done
+          for dir in pkg/*/; do
+            env=$(basename "$dir")
+            mkdir -p "site/$VERSION/$env"
+            cp "$dir"* "site/$VERSION/$env/"
+          done
+          python scripts/release_package.py manifests --version "$VERSION" --out site
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
 
+      # keep_files: the vX.Y.Z/ folders of the previous releases stay published
       - name: Deploy to GitHub Pages
+        if: steps.site.outputs.deploy == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./web-installer
+          publish_dir: ./site
+          keep_files: true

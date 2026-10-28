@@ -13,7 +13,7 @@ Questa directory contiene il [template](template.md) delle release notes e, una 
 
 Il tag e le note sono indipendenti: si può taggare qualunque commit in qualunque momento, e le note si possono scrivere prima, dopo o mai.
 
-1. Il push di un tag `vX.Y.Z` avvia `.github/workflows/release.yml`: build, zip del firmware, release su GitHub e aggiornamento del web installer. Il nome del tag diventa `FIRMWARE_VERSION`.
+1. Il push di un tag `vX.Y.Z` avvia `.github/workflows/release.yml`: build delle tre immagini (ESP32-S3, ESP32-P4 v3.1+, ESP32-P4 pre-v3), uno zip per scheda preparato da `scripts/release_package.py`, release su GitHub e aggiornamento del web installer. Il nome del tag diventa `FIRMWARE_VERSION`. Per provare la pipeline senza pubblicare: *Actions → Release → Run workflow* con `dry_run` (attivo di default) produce solo gli artifact.
 2. Testo della release:
    - se il commit taggato contiene `docs/releases/vX.Y.Z.md`, il testo della release è quel file;
    - altrimenti GitHub genera le note dalle PR unite dal tag precedente ("What's Changed" + "Full Changelog"), come prima.
@@ -56,6 +56,7 @@ Il file sostituisce **tutto** il testo della release: niente "What's Changed" au
 ## Release
 
 <!-- Una riga per ogni vX.Y.Z.md, dalla più recente. -->
+- [v1.11.0](v1.11.0.md) - Supporto ESP32-P4 con Ethernet (#94, #103), tre immagini nella release e nel web installer, modulo per segnalare gli UPS provati (#83), driver separati dal trasporto USB.
 - [v1.10.0](v1.10.0.md) - Piattaforma ESP-IDF 5.5, pagina Board Settings (LED di stato e luminosità), export della diagnostica USB a pezzi, profili delle schede e rete come base per ESP32-P4 ed Ethernet (#94).
 - [v1.9.0](v1.9.0.md) - Driver Legrand Keor (#90) e Powerwalker/Phoenixtec (#96), variabili CyberPower come cps-hid (#43), APC BGM2200 senza valori a zero e OL DISCHRG (#98), retry del descriptor USB (#97), licenza GPL-3.0-or-later.
 - [v1.8.0](v1.8.0.md) - Comandi UPS (upscmd, pagina UPS Commands; #23, #78), parametri UPS (upsrw, pagina UPS Settings; #73), login della Web UI, fino a 8 client NUT (#84), OTA lenta senza riavvii, server NUT allineato a upsd.
