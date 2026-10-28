@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: MEDIUM
 points: 3
-status: PLANNED
+status: IN PROGRESS
 body: |-
   #### US-102: Distribuzione multi-scheda: CI a tre immagini, release, web installer e README
 
@@ -38,3 +38,5 @@ history:
     at: "2026-10-25T16:17:54Z"
   - status: PLANNED
     at: "2026-10-28T17:05:28Z"
+  - status: IN PROGRESS
+    at: "2026-10-28T17:13:10Z"

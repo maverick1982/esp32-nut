@@ -13,7 +13,7 @@
 >
 > Dopo questa installazione, una tantum, gli aggiornamenti successivi si possono di nuovo fare via OTA.
 
-Un firmware open-source per ESP32-S3 che funge da **Server NUT (Network UPS Tools) bridge** standalone via Wi-Fi. Si connette a un gruppo di continuità (UPS) USB (Eaton, APC, CyberPower, Powercom e altri) tramite USB Host e ne espone i dati sulla rete locale utilizzando il protocollo standard NUT (porta 3493) e un'interfaccia web integrata.
+Un firmware open-source per schede ESP32-S3 (Wi-Fi) ed ESP32-P4 (Ethernet) che funge da **Server NUT (Network UPS Tools) bridge** standalone. Si connette a un gruppo di continuità (UPS) USB (Eaton, APC, CyberPower, Powercom e altri) tramite USB Host e ne espone i dati sulla rete locale utilizzando il protocollo standard NUT (porta 3493) e un'interfaccia web integrata.
 
 Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone solo della porta USB) in sistemi come Home Assistant, TrueNAS, Synology o qualsiasi altro client NUT senza la necessità di tenere acceso un Raspberry Pi o un PC 24 ore su 24.
 
@@ -26,6 +26,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva, protetta da login.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
+- **ESP32-P4 con Ethernet**: Rete via cavo, e PoE sulle schede che lo prevedono, con schede ESP32-P4 come la Waveshare ESP32-P4-ETH (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
 ## 🔌 UPS Supportati
 
@@ -127,7 +128,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 ## 🛠 Requisiti Hardware & Cablaggio
 
-- **Scheda ESP32-S3**: È **obbligatorio** utilizzare una scheda di sviluppo basata su ESP32-S3 poiché supporta l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.
+- **Scheda ESP32-S3 o ESP32-P4**: È **obbligatorio** utilizzare una scheda di sviluppo ESP32-S3, oppure una scheda ESP32-P4 con Ethernet tra quelle supportate (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), perché questi chip supportano l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.
 - **Cavo USB OTG**: Un adattatore per collegare il cavo USB dell'UPS all'ESP32.
 
 ### Configurazione su Board generiche con doppia USB-C (es. Generic ESP32-S3 DevKit)
@@ -136,6 +137,23 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 2. **Saldare le piazzole "RGB" (Facoltativo)**: Unisci le piazzole `RGB` se desideri abilitare il LED di stato integrato.
 3. **Alimentazione**: Collega un alimentatore da muro alla porta etichettata `COM` (o `UART`).
 4. **Dati**: Collega un adattatore USB-C OTG alla porta etichettata `USB` e collegalo all'UPS.
+
+### ESP32-P4 (Ethernet)
+
+Al posto dell'ESP32-S3 si può usare una scheda ESP32-P4 con porta Ethernet:
+- **Schede supportate**: Waveshare ESP32-P4-ETH (anche la versione PoE) e le schede che seguono il design di riferimento Espressif (PHY IP101). Una scheda cablata in modo diverso richiede un suo profilo: apri una issue.
+- **UPS**: sulla porta USB 2.0 High-Speed (l'header a 4 pin J3 sulla Waveshare ESP32-P4-ETH).
+- **Rete**: solo via cavo. L'indirizzo arriva via DHCP e il nome host è `esp32-nut-xxxxxx` (ultimi 3 byte del MAC). Non ci sono Wi-Fi né access point.
+- **Due immagini, una per revisione del chip**:
+
+| Immagine | Revisione del chip | Test su hardware |
+| :--- | :--- | :--- |
+| ESP32-P4 v3.1 or later | v3.1 e successive (produzione attuale) | **Non ancora provata su hardware** |
+| ESP32-P4 before v3 | v1.x (prime schede) | Provata da [rtadams89](https://github.com/rtadams89) su una scheda v1.3, con un UPS |
+
+Per conoscere la revisione, esegui `esptool chip-id` (`esptool.py chip_id` con esptool v4; l'output riporta `Chip is ESP32-P4 (revision v1.3)`) oppure cerca `chip revision: v1.3` nel log di avvio sulla seriale. Le revisioni v2.x e v3.0 non sono supportate da nessuna delle due immagini. Un'immagine per la revisione sbagliata viene rifiutata, dal bootloader in un'installazione completa e dalla scheda in un aggiornamento OTA, quindi basta installare l'altra.
+
+Grazie a [rtadams89](https://github.com/rtadams89) per il supporto ESP32-P4 ed Ethernet.
 
 ### Case in Stampa 3D (Opzionale)
 
@@ -157,13 +175,24 @@ I file sorgente `.3mf`, il progetto CAD originale `.f3d` e altre foto sono dispo
 Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun programma!
 👉 <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Installa via Browser**</a>
 
+L'installer ha un pulsante per le schede ESP32-S3 e due per le schede ESP32-P4, uno per revisione del chip (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
+
 **Opzione B: Compilazione Manuale tramite PlatformIO**
 1. Clona questo repository.
 2. Apri la cartella del progetto in VSCode con l'estensione PlatformIO installata.
 3. Collega il tuo ESP32-S3 al PC (utilizzando la porta USB UART/Prog).
 4. Clicca su **Build** e poi su **Upload**.
 
+Gli ambienti PlatformIO sono `esp32-s3-standard`, `esp32-p4-eth` (ESP32-P4 v3.1 o successive) ed `esp32-p4-eth-v1` (ESP32-P4 prima della v3).
+
+**Pacchetti delle release**
+Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip per scheda: `esp32-nut-vX.Y.Z.zip` (ESP32-S3), `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` (ESP32-P4 v3.1 o successive) ed `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` (ESP32-P4 prima della v3). Dentro, `firmware.factory.bin` è l'immagine completa da scrivere a `0x0` (per esempio `esptool write-flash 0x0 firmware.factory.bin`, oppure `esptool.py write_flash 0x0 firmware.factory.bin` con esptool v4) e `README.txt` spiega gli altri file. Per un aggiornamento OTA carica lo zip o il suo `firmware.bin`.
+
 ### 2. Primo Avvio e Configurazione
+
+> [!NOTE]
+> **ESP32-P4 (Ethernet):** non ci sono access point né configurazione del Wi-Fi. Collega il cavo di rete: la scheda prende l'indirizzo via DHCP e parte con le impostazioni NUT predefinite (nessuna credenziale NUT, nome UPS `ups`). Trovala nel router come `esp32-nut-xxxxxx`, apri il suo indirizzo nel browser e prosegui con il login alla Web UI qui sotto. Se perdi le credenziali web, un doppio reset (spegni e riaccendi la scheda entro 3 secondi) apre una finestra di 10 minuti in cui la Web UI permette di crearne di nuove senza la password attuale.
+
 1. Al primo avvio (o in assenza di una configurazione Wi-Fi salvata), l'ESP32 creerà un Access Point chiamato **`NUT_ESP32_Config`** (Password: `12345678`).
    > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale). Se la configurazione salvata è valida e nessun dispositivo resta collegato all'access point per 10 minuti, la scheda riparte da sola in modalità normale; finché un dispositivo è collegato resta in modalità Access Point.
 2. Connetti il tuo telefono o PC a questa rete Wi-Fi.

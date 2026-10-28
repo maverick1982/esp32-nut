@@ -181,3 +181,207 @@ body {
 .support-text p {
     margin-bottom: 0.25rem;
 }
+
+/* ESP32-P4 section (US-102): one button per silicon revision, revision help */
+:root {
+    --warn: #ffb547;
+    --warn-bg: rgba(255, 181, 71, 0.08);
+    --ok: #3ddc97;
+    --ok-bg: rgba(61, 220, 151, 0.08);
+}
+
+.p4-section {
+    border-top: 1px dashed var(--bg-panel-border);
+    padding-top: 1.75rem;
+    margin-bottom: 2rem;
+}
+
+.p4-header { text-align: center; margin-bottom: 1.25rem; }
+
+.p4-header h3 {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+}
+
+.p4-header h3 span { color: var(--text-secondary); }
+
+.p4-lead {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.p4-options {
+    display: grid;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.p4-option {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+}
+
+/* The custom element wraps the slotted button: full width like the button */
+.p4-option esp-web-install-button { display: block; }
+
+.p4-button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    width: 100%;
+    padding: 0.8rem 1rem;
+    background: rgba(0, 240, 255, 0.04);
+    color: var(--text-primary);
+    border: 1px solid rgba(0, 240, 255, 0.35);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: var(--font-ui);
+}
+
+.p4-button:hover,
+.p4-button:focus-visible {
+    background: rgba(0, 240, 255, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 16px var(--accent-glow);
+    outline: none;
+}
+
+.p4-button-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.p4-button-sub {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.p4-badge {
+    align-self: center;
+    font-size: 0.72rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid;
+}
+
+.p4-badge::before { margin-right: 0.35rem; }
+
+.p4-badge--warn { color: var(--warn); background: var(--warn-bg); border-color: rgba(255, 181, 71, 0.4); }
+.p4-badge--warn::before { content: "\26A0"; }
+
+.p4-badge--ok { color: var(--ok); background: var(--ok-bg); border-color: rgba(61, 220, 151, 0.4); }
+.p4-badge--ok::before { content: "\2713"; }
+
+.p4-help {
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(6, 9, 14, 0.5);
+    margin-bottom: 1rem;
+}
+
+.p4-help summary {
+    cursor: pointer;
+    padding: 0.7rem 1rem;
+    font-size: 0.85rem;
+    color: var(--accent);
+    list-style: none;
+}
+
+.p4-help summary::-webkit-details-marker { display: none; }
+
+.p4-help summary::before {
+    content: "+";
+    display: inline-block;
+    width: 1rem;
+    font-family: var(--font-mono);
+}
+
+.p4-help[open] summary::before { content: "\2212"; }
+
+.p4-help-body {
+    padding: 0 1rem 1rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.p4-help-body ul {
+    padding-left: 1.1rem;
+    margin: 0.4rem 0 0.9rem;
+    display: grid;
+    gap: 0.6rem;
+}
+
+.p4-help-body code {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    background: rgba(0, 240, 255, 0.06);
+    padding: 0 0.25rem;
+    border-radius: 2px;
+}
+
+.p4-help-body pre {
+    margin-top: 0.3rem;
+    padding: 0.4rem 0.6rem;
+    background: #020407;
+    border-left: 2px solid var(--accent);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.p4-rev-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 0.9rem;
+}
+
+.p4-rev-table th,
+.p4-rev-table td {
+    text-align: left;
+    padding: 0.35rem 0.4rem;
+    border-bottom: 1px dashed var(--bg-panel-border);
+    vertical-align: top;
+}
+
+.p4-rev-table th { color: var(--accent); font-weight: 400; white-space: nowrap; width: 1%; }
+.p4-rev-table strong { color: var(--text-primary); font-weight: 500; }
+.p4-rev-none th, .p4-rev-none td { color: var(--text-secondary); opacity: 0.75; }
+
+.p4-safe {
+    padding: 0.5rem 0.7rem;
+    background: var(--ok-bg);
+    border-left: 2px solid var(--ok);
+    color: var(--text-primary);
+}
+
+.p4-boards {
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.p4-boards .mono { color: var(--accent); }
+
+/* Phones: at 2rem the title alone is wider than a 375 px screen */
+@media (max-width: 480px) {
+    .installer-container { padding: 1.5rem 1rem; gap: 1.5rem; }
+    .panel { padding: 1.75rem 1.1rem; }
+    .brand-icon { width: 36px; height: 36px; }
+    .brand-name { font-size: 1.4rem; letter-spacing: 1px; }
+    .brand-name span { font-size: 0.7rem; }
+    .instructions li { padding-left: 2.2rem; font-size: 0.9rem; }
+}

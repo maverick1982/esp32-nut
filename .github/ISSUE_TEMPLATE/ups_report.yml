@@ -62,8 +62,12 @@ body:
     id: board
     attributes:
       label: ESP32 Board
+      description: |
+        For an ESP32-P4, pick the image you installed. `esptool chip-id` shows the chip revision (`Chip is ESP32-P4 (revision v1.3)`), and so does the `chip revision:` line of the boot log.
       options:
         - ESP32-S3 DevKitC-1 (or compatible)
+        - ESP32-P4 v3.1 or later (Ethernet)
+        - ESP32-P4 before v3 (v1.x, Ethernet)
         - Other (please describe below)
     validations:
       required: true
@@ -102,7 +106,7 @@ body:
     id: notes
     attributes:
       label: Notes, Missing Values or Issues
-      description: Anything that does not work as expected, values that are missing or wrong, the board model if you chose "Other", or other clients.
+      description: Anything that does not work as expected, values that are missing or wrong, the board model (e.g. Waveshare ESP32-P4-ETH, with or without PoE, or the board you chose "Other" for), or other clients.
     validations:
       required: false
 

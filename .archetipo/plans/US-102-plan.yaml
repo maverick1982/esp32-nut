@@ -5,7 +5,7 @@ tasks:
   - id: TASK-01
     title: Script di packaging della release con la tabella delle schede
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** una sola fonte di verità per le schede di release e un comando che produce, per ogni ambiente, la cartella del pacchetto, il manifest, il README di installazione e lo zip.
@@ -32,10 +32,11 @@ tasks:
       - [ ] File mancante nella build o `boot_app0.bin` non trovato: messaggio chiaro e uscita 1
 
       **Blocchi:** nessuno.
+    ref: TASK-01
   - id: TASK-02
     title: Prova locale dei pacchetti delle tre schede e confronto con lo zip v1.10.0
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -63,10 +64,11 @@ tasks:
       - [ ] `firmware.factory.bin` del P4 con magic 0xE9 a 0x2000
 
       **Blocchi:** scaricare lo zip v1.10.0 richiede accesso a internet; se non c'è, confronta con il manifest scritto oggi in `release.yml`.
+    ref: TASK-02
   - id: TASK-03
     title: Workflow CI con la build delle tre immagini
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** ogni PR verso `main` e ogni push su `main` compila le tre immagini.
@@ -91,10 +93,11 @@ tasks:
       - [ ] YAML valido (controllo con un parser, per esempio `python -c "import yaml"` se disponibile, altrimenti revisione a mano e verifica sulla PR)
 
       **Blocchi:** la verifica reale avviene solo su GitHub, alla prima PR (TASK-09).
+    ref: TASK-03
   - id: TASK-04
     title: Workflow di release a matrice con tre zip, sito per scheda e dry run
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -125,10 +128,11 @@ tasks:
       - [ ] Le pre-release non aggiornano GitHub Pages
 
       **Blocchi:** verificabile solo su GitHub (TASK-09).
+    ref: TASK-04
   - id: TASK-05
     title: Web installer con la sezione ESP32-P4 e i manifest generati
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -160,10 +164,11 @@ tasks:
       - [ ] Manifest in `web-installer/` uguali all'output del comando `manifests --version latest`
 
       **Blocchi:** nessuno.
+    ref: TASK-05
   - id: TASK-06
     title: 'Test e2e del web installer: pulsanti, manifest e coerenza con lo script'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
     body: |-
@@ -192,10 +197,11 @@ tasks:
       - [ ] Suite e2e completa verde
 
       **Blocchi:** il test di coerenza richiede `python` nel PATH (come per `embed_web.py`).
+    ref: TASK-06
   - id: TASK-07
     title: Sezione ESP32-P4 nei README inglese e italiano
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
     body: |-
@@ -222,10 +228,11 @@ tasks:
       - [ ] rtadams89 citato per la prova della pre-v3
 
       **Blocchi:** nessuno.
+    ref: TASK-07
   - id: TASK-08
     title: Note della prima release con il P4
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |-
@@ -250,6 +257,7 @@ tasks:
       - [ ] Per ciascuna immagine: scheda e revisione provate, o "non provata"
 
       **Blocchi:** la versione la decide l'utente: non inventarla.
+    ref: TASK-08
   - id: TASK-09
     title: Regressione completa e prova dei workflow su GitHub
     type: Test
@@ -284,3 +292,4 @@ tasks:
       - [ ] `release.yml` in dry run produce i tre zip e non pubblica
 
       **Blocchi:** push, PR e avvio dei workflow richiedono l'ok esplicito dell'utente.
+    ref: TASK-09

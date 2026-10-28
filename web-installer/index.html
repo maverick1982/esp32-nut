@@ -32,10 +32,64 @@
             </div>
 
             <div class="install-action">
-                <!-- Standard ESP Web Install Button -->
+                <!-- Standard ESP Web Install Button: ESP32-S3 only, as before the P4 -->
                 <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
             </div>
-            
+
+            <!-- ESP32-P4 (US-102): ESP Web Tools picks the image by chip family only and
+                 cannot read the P4 silicon revision, so each revision has its own button -->
+            <section class="p4-section" aria-labelledby="p4-title">
+                <div class="p4-header">
+                    <h3 id="p4-title">ESP32-P4 <span>(Ethernet)</span></h3>
+                    <p class="p4-lead">The button above is for ESP32-S3 boards. For an ESP32-P4 board, pick the image that matches your chip revision.</p>
+                </div>
+
+                <div class="p4-options">
+                    <div class="p4-option">
+                        <esp-web-install-button manifest="manifest-esp32-p4-eth.json">
+                            <button slot="activate" type="button" class="p4-button">
+                                <span class="p4-button-label">ESP32-P4 v3.1 or later</span>
+                                <span class="p4-button-sub mono">manifest-esp32-p4-eth.json</span>
+                            </button>
+                        </esp-web-install-button>
+                        <span class="p4-badge p4-badge--warn mono">Not yet tested on hardware</span>
+                    </div>
+
+                    <div class="p4-option">
+                        <esp-web-install-button manifest="manifest-esp32-p4-eth-v1.json">
+                            <button slot="activate" type="button" class="p4-button">
+                                <span class="p4-button-label">ESP32-P4 before v3 (v1.x)</span>
+                                <span class="p4-button-sub mono">manifest-esp32-p4-eth-v1.json</span>
+                            </button>
+                        </esp-web-install-button>
+                        <span class="p4-badge p4-badge--ok mono">Tested on a v1.3 board</span>
+                    </div>
+                </div>
+
+                <details class="p4-help">
+                    <summary>How do I know my P4 revision?</summary>
+                    <div class="p4-help-body">
+                        <p>Use one of these:</p>
+                        <ul>
+                            <li>Run <code>esptool chip-id</code> (or <code>esptool.py chip_id</code>) and look for:
+                                <pre class="mono">Chip is ESP32-P4 (revision v1.3)</pre></li>
+                            <li>Open the serial monitor, reset the board and look in the boot log for:
+                                <pre class="mono">chip revision: v1.3</pre></li>
+                        </ul>
+                        <table class="p4-rev-table">
+                            <tr><th class="mono">v1.x</th><td>&rarr; <strong>ESP32-P4 before v3</strong></td></tr>
+                            <tr><th class="mono">v3.1+</th><td>&rarr; <strong>ESP32-P4 v3.1 or later</strong></td></tr>
+                            <tr class="p4-rev-none"><th class="mono">v2.x, v3.0</th><td>Not supported by either image</td></tr>
+                        </table>
+                        <p class="p4-safe">Picked the wrong one? No harm done: the bootloader refuses the image. Just flash again with the other button.</p>
+                    </div>
+                </details>
+
+                <p class="p4-boards">
+                    <span class="mono">Supported boards:</span> Waveshare ESP32-P4-ETH (also PoE) and boards following the Espressif reference design (IP101 PHY).
+                </p>
+            </section>
+
             <div class="support-text">
                 <p class="mono">Supported browsers: Chrome, Edge, Opera.</p>
                 <p class="mono">Requirements: Web Serial API enabled.</p>
@@ -43,6 +97,6 @@
         </div>
     </div>
     
-    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
 </body>
 </html>
