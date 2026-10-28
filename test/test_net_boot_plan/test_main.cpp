@@ -62,6 +62,20 @@ void test_board_without_links(void) {
     TEST_ASSERT_FALSE(p.captive_portal);
 }
 
+void test_default_config_only_without_wifi(void) {
+    // US-092: no setup page without Wi-Fi, so the defaults are saved and the board joins
+    // the network; with Wi-Fi the access point asks for the configuration as before
+    TEST_ASSERT_TRUE(planNetwork(ETHERNET_ONLY, false, false).default_config);
+    TEST_ASSERT_TRUE(planNetwork(ETHERNET_ONLY, false, true).default_config);
+    TEST_ASSERT_FALSE(planNetwork(ETHERNET_ONLY, true, false).default_config);
+    TEST_ASSERT_FALSE(planNetwork(ETHERNET_ONLY, true, true).default_config);
+    for (int valid = 0; valid < 2; valid++) {
+        for (int manual = 0; manual < 2; manual++) {
+            TEST_ASSERT_FALSE(planNetwork(WIFI_ONLY, valid, manual).default_config);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_wifi_valid_config_starts_station);
@@ -70,5 +84,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_no_wifi_never_starts_ap);
     RUN_TEST(test_no_wifi_double_reset_asks_recovery_window);
     RUN_TEST(test_board_without_links);
+    RUN_TEST(test_default_config_only_without_wifi);
     return UNITY_END();
 }

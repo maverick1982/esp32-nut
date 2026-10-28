@@ -8,6 +8,7 @@
 
 class WifiStaLink;
 class WifiApLink;
+class EthLink;
 
 // Network service of the net module (ADR 0010): creates the link chosen by the boot plan
 // from the board profile and keeps it as the only active link (US-090)
@@ -38,6 +39,7 @@ private:
     NetLinkSelector m_selector;
     WifiStaLink* m_sta;
     WifiApLink* m_ap;
+    EthLink* m_eth;
 };
 
 #endif // NETWORK_MANAGER_H

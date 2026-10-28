@@ -15,12 +15,19 @@
 
 enum class EthType : uint8_t { NONE, RMII, SPI };
 
+// PHY chip of the Ethernet port (EthConfig::phy_type). Board data only: the Ethernet
+// adapter of the net module maps it to the platform driver (US-092)
+namespace EthPhy {
+static const uint8_t NONE = 0;
+static const uint8_t IP101 = 1;
+}
+
 // Network mode offered when a board has both links (PDR 0002 D3)
 enum class NetworkMode : uint8_t { WIFI, ETHERNET, AUTO };
 
 struct EthConfig {
     EthType type;
-    uint8_t phy_type;   // ESP-IDF eth_phy type of the adapter, meaningful only with RMII/SPI
+    uint8_t phy_type;   // EthPhy::*, meaningful only with RMII/SPI
     int8_t phy_addr;
     // RMII management and clock
     int8_t mdc;
