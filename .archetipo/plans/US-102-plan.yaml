@@ -261,7 +261,7 @@ tasks:
   - id: TASK-09
     title: Regressione completa e prova dei workflow su GitHub
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-03
