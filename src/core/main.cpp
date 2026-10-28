@@ -119,7 +119,7 @@ void setup() {
     if (net_plan.default_config) {
         // No Wi-Fi setup page on this board: default NUT settings (no credentials, UPS
         // name "ups"), the state an S3 reaches after the Wi-Fi setup (US-092)
-        AppLogger::log("WARN", "[MAIN] No saved configuration: using the default NUT settings");
+        AppLogger::log("WARN", "[MAIN] No valid configuration: using the default NUT settings");
         config_mgr.setNutConfig(NutConfig());
         config_ok = config_mgr.save() && config_mgr.begin() && config_mgr.isValid();
     }
@@ -147,7 +147,7 @@ void setup() {
         // Stampa parametri per verifica
         WifiConfig wifi = config_mgr.getWifiConfig();
         NutConfig nut = config_mgr.getNutConfig();
-        AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
+        if (board().has_wifi) AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
         // Inizializzazione di AppNetworkManager

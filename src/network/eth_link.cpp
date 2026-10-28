@@ -19,12 +19,10 @@ void EthLink::begin() {
     m_lastLinkUp = false;
     AppLogger::log("INFO", "[NETWORK] Initializing Ethernet...");
 
-    // Hostname before ETH.begin(): DHCP sends it with the first request
     uint8_t mac[6];
     macAddress(mac);
     char hostname[24];
     snprintf(hostname, sizeof(hostname), "esp32-nut-%02x%02x%02x", mac[3], mac[4], mac[5]);
-    ETH.setHostname(hostname);
 
     if (m_cfg.type != EthType::RMII) {
         AppLogger::log("ERROR", "[NETWORK] Ethernet type of this board profile not supported yet");
@@ -34,21 +32,34 @@ void EthLink::begin() {
     eth_phy_type_t phy;
     switch (m_cfg.phy_type) {
     case EthPhy::IP101:
-        phy = ETH_PHY_TLK110;  // the Arduino core drives the IP101 with this type
+        phy = ETH_PHY_IP101;
         break;
     default:
         AppLogger::log("ERROR", "[NETWORK] Ethernet PHY %u of this board profile not supported",
                        (unsigned)m_cfg.phy_type);
         return;
     }
-    // RMII data pins and the clock GPIO are fixed by the EMAC: the profile documents the
-    // clock pin, the core takes it from the variant (GPIO 50 on the P4)
+#ifdef ETH_RMII_CLK
+    // The core takes the RMII clock GPIO from the variant (ETH_RMII_CLK), not from the
+    // profile: a profile with another clock pin would be ignored without this warning
+    if (m_cfg.clk >= 0 && m_cfg.clk != ETH_RMII_CLK) {
+        AppLogger::log("WARN", "[NETWORK] Board profile RMII clock GPIO %d ignored: the core uses GPIO %d",
+                       (int)m_cfg.clk, (int)ETH_RMII_CLK);
+    }
+#endif
     m_started = ETH.begin(phy, m_cfg.phy_addr, m_cfg.mdc, m_cfg.mdio, m_cfg.power, EMAC_CLK_EXT_IN);
     if (!m_started) {
         AppLogger::log("ERROR", "[NETWORK] Ethernet initialization failed: check the PHY pins of the board profile");
         return;
     }
-    AppLogger::log("INFO", "[NETWORK] Ethernet started, hostname %s, waiting for link and DHCP", hostname);
+    // The netif exists only after ETH.begin(): before it setHostname() fails. DHCP starts
+    // when the link comes up, so the first request already carries the name
+    if (ETH.setHostname(hostname)) {
+        AppLogger::log("INFO", "[NETWORK] Ethernet started, hostname %s, waiting for link and DHCP", hostname);
+    } else {
+        AppLogger::log("WARN", "[NETWORK] Could not set the Ethernet hostname %s", hostname);
+        AppLogger::log("INFO", "[NETWORK] Ethernet started, waiting for link and DHCP");
+    }
 #else
     AppLogger::log("ERROR", "[NETWORK] RMII Ethernet not available on this chip");
 #endif
