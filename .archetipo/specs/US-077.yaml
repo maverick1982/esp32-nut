@@ -5,12 +5,12 @@ epic:
   code: EP-001
   title: Gestione USB Host
 priority: LOW
-points: 5
+points: 3
 status: TODO
 body: |
   #### US-077: Tabella unica Powercom (powercom-hid): voci RO, stati e comandi
 
-  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 3 | **Stato:** TODO
   **Bloccato da:** US-073
 
   **User Story**

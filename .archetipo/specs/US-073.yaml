@@ -5,12 +5,12 @@ epic:
   code: EP-001
   title: Gestione USB Host
 priority: MEDIUM
-points: 5
+points: 8
 status: TODO
 body: |
   #### US-073: Tabella unica Eaton (mge-hid), parte 1: motore per voci RO e stati BOOL, PowerSummary e BatterySystem
 
-  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 8 | **Stato:** TODO
   **Bloccato da:** -
 
   **User Story**
@@ -26,20 +26,26 @@ body: |
     - le voci in sola lettura con i formati `%.0f`/`%.1f`/`%s` e le funzioni di conversione `info_lkp` usate da queste righe;
     - le voci `BOOL`, che impostano le chiavi interne `ups.status.*` da cui `computeUPSStatusString` ricava `ups.status`.
   - [ ] `mgeHid2Nut()` contiene, nell'ordine upstream, tutte le righe di `mge_hid2nut` dei gruppi PowerSummary, BatterySystem/Battery e status. Le conversioni non portabili sono escluse con un commento motivato.
-  - [ ] Per le variabili coperte, le mappature Eaton e generiche non le scrivono più per i dispositivi Eaton.
+  - [ ] Per le variabili coperte, le mappature Eaton e generiche (tabelle `Mapping` di `UsageMapIndex`) non le scrivono più per i dispositivi Eaton.
   - [ ] Per ogni fixture Eaton, l'elenco atteso delle variabili coperte, ricavato in modo indipendente dal descriptor e dal file upstream, coincide con quello pubblicato. Le differenze rispetto a prima (aggiunte, rimosse, formati) sono elencate nel test e nelle note di rilascio.
   - [ ] `ups.status` e `LIST CMD` non cambiano sulle fixture Eaton, salvo differenze motivate dalla tabella upstream.
-  - [ ] Prima di pianificare si decidono con l'utente, e si registrano in un ADR valido per tutte le migrazioni:
-    - se le chiavi che pubblichiamo solo noi (per esempio `outlet.1.switch`, `battery.capacity.full`) vanno rimosse o tenute come estensioni documentate;
-    - se pubblicare le voci `unmapped.*` di upstream.
+  - [ ] Prima di pianificare si decidono con l'utente, e si registrano in un ADR valido per tutte le migrazioni (US-073…079, US-106). Fatto il 2026-10-29 in `docs/adr/0011-single-hid-to-nut-table-per-subdriver.md` (regole 2, 3 e 4):
+    - le chiavi che pubblichiamo solo noi: **deciso il 2026-10-29, regola mista (opzione C)**, da scrivere nell'ADR:
+      - una chiave con significato diverso da upstream si sostituisce con la riga upstream. Caso noto: `outlet.1.switch`/`outlet.2.switch` (`EatonDriver`, stesso valore `1`/`0` da una sola usage su entrambe) diventano `outlet.N.status` di `mge_hid2nut`, una per presa, `on`/`off`. È un cambio visibile da citare nelle note di rilascio, e la descrizione in `data/www/bundle.js` va aggiornata;
+      - un nome NUT standard con il significato giusto che il subdriver upstream non legge si tiene come estensione documentata. Casi noti: `battery.mfr.date`, `ups.mfr.date`;
+      - un nome non standard si toglie. Caso noto: `battery.capacity.full` (non è in `nut-names.txt`; upstream lo usa solo `idowell-hid`);
+      - l'elenco completo per ogni fixture si ricava in pianificazione dal confronto del replay con le righe upstream;
+    - le voci `unmapped.*` di upstream: **deciso il 2026-10-29 (opzione C)**, da scrivere nell'ADR: le righe si copiano così come sono, dentro lo stesso `#if WITH_UNMAPPED_DATA_POINTS` di upstream, che nelle build del firmware non è mai definito. Nessuna voce `unmapped.*` è esposta, come nelle build di produzione di NUT ("Production driver builds must not include any non-standard names", `docs/hid-subdrivers.txt`), e la tabella resta confrontabile riga per riga con il file upstream. Riguarda cps-hid (5 righe), powercom-hid (11), liebert-hid (11) ed ecoflow-hid (19); mge-hid, apc-hid, legrand-hid e openups-hid non ne hanno. Il bisogno degli sviluppatori è già coperto dall'export della diagnostica USB;
+    - la regola per i driver nuovi: **decisa il 2026-10-29**, da scrivere nell'ADR: un driver nuovo nasce con la tabella del suo subdriver upstream (`xxxHid2Nut()` in `NutTable.h`, letta dal motore), senza mappature scritte a mano. Gli hook restano solo per ciò che non è tabellare (quirk, poll, stringhe, beeper). La regola vale da quando il motore gestisce le righe RO e BOOL, cioè dalla chiusura di questa spec: un driver chiesto prima si pianifica dopo US-073, oppure, se è urgente, nasce a mano con una spec di migrazione già nel backlog. Legrand e Liebert sono nati prima della regola: li migra US-106.
   - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale.
-  - [ ] `postDecode()` scrive in UPSData solo le variabili il cui valore è cambiato o che una mappatura scritta a mano può aver sovrascritto. Oggi riscrive tutte le righe attive a ogni report: con le righe in sola lettura nella tabella diventerebbero decine di allocazioni di String per ogni report sull'ESP32 (miglioramento aperto dalla code review di US-066). Un test verifica che un report senza righe legate non tocchi UPSData.
+  - [ ] `postDecode()` scrive in UPSData solo le variabili il cui valore è cambiato o che una mappatura scritta a mano può aver sovrascritto. Oggi riscrive tutte le righe attive a ogni report (verificato il 2026-10-29): con le righe in sola lettura nella tabella diventerebbero decine di allocazioni di String per ogni report sull'ESP32-S3 (miglioramento aperto dalla code review di US-066). Un test verifica che un report senza righe legate non tocchi UPSData.
 
   **Assunzioni**
   - Da fare dopo US-066 (EP-003), che introduce la tabella e il motore di binding. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
   - Approccio C deciso il 2026-10-15: convergenza graduale verso le tabelle `hid_info_t` di upstream, un subdriver alla volta.
   - Il controllo modello e paese (Pegasus/3S) di US-066 si riusa.
   - La riduzione delle scritture di `postDecode()` viene dalla code review di US-066 (2026-10-15): va fatta qui perché è questa spec a portare le righe in sola lettura nel motore.
+  - Architettura dopo EP-006 (US-103…105, ADR 0010): i driver ricevono `IHidTransport`, comandi e SET VAR stanno in `HidControl`. `NutTable.h` resta nel modulo `ups-protocol`: server NUT, Web API e Web UI continuano a vedere solo `IUpsSource`, e i loro test non cambiano.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
