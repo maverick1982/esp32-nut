@@ -33,11 +33,15 @@ public:
         _entries.clear();
     }
 
+    // skip: mapping paths left out of the index (US-073: mappings superseded by the NUT
+    // table of the driver). The list is fixed for a driver class, so it is read only when
+    // the index is built.
     template <size_t N>
     void apply(Drv* drv, const Mapping (&table)[N], const std::vector<HIDUsageDef>& usages,
-               uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length, UPSData& ups_data) {
+               uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length, UPSData& ups_data,
+               const char* const* skip = nullptr, size_t n_skip = 0) {
         uint32_t fp = fingerprint(usages);
-        if (usages.size() != _count || fp != _fingerprint) build(table, N, usages, fp);
+        if (usages.size() != _count || fp != _fingerprint) build(table, N, usages, fp, skip, n_skip);
 
         const uint16_t key = (uint16_t)((report_type << 8) | report_id);
         auto it = std::lower_bound(_entries.begin(), _entries.end(), key,
@@ -69,13 +73,23 @@ private:
         return h;
     }
 
-    void build(const Mapping* table, size_t n, const std::vector<HIDUsageDef>& usages, uint32_t fp) {
+    static bool skipped(const char* path, const char* const* skip, size_t n_skip) {
+        for (size_t k = 0; k < n_skip; k++) {
+            if (strcmp(path, skip[k]) == 0) return true;
+        }
+        return false;
+    }
+
+    void build(const Mapping* table, size_t n, const std::vector<HIDUsageDef>& usages, uint32_t fp,
+               const char* const* skip, size_t n_skip) {
         _entries.clear();
         for (size_t i = 0; i < usages.size() && i <= 0xFFFF; i++) {
             const HIDUsageDef& u = usages[i];
             for (size_t m = 0; m < n; m++) {
                 if (strcmp(u.path, table[m].path) == 0) {
-                    _entries.push_back(Entry{(uint16_t)((u.report_type << 8) | u.report_id), (uint16_t)i, (uint16_t)m});
+                    if (!skipped(table[m].path, skip, n_skip)) {
+                        _entries.push_back(Entry{(uint16_t)((u.report_type << 8) | u.report_id), (uint16_t)i, (uint16_t)m});
+                    }
                     break;
                 }
             }

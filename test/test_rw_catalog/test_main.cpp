@@ -112,9 +112,18 @@ void test_mge_first_row_wins_battery_charge_low() {
         mk("UPS.PowerSummary.0xFFFF004D", 0xffff004d, 3, 3),
     };
     std::vector<Bound> b = bind(t, n, usages);
-    TEST_ASSERT_EQUAL(1, b.size()); // the read-only row is not in the table yet
+    // Both rows are in the table since US-073: the RW one (2013) first, then the read-only one
+    TEST_ASSERT_EQUAL(2, b.size());
     TEST_ASSERT_EQUAL_STRING("battery.charge.low", b[0].info->info_type);
     TEST_ASSERT_EQUAL(1, b[0].idx);
+    TEST_ASSERT_TRUE(b[0].info->info_flags & ST_FLAG_RW);
+    TEST_ASSERT_EQUAL_STRING("battery.charge.low", b[1].info->info_type);
+    TEST_ASSERT_EQUAL(0, b[1].idx);
+    Context ctx;
+    onValue(b, 1, 20, ctx);
+    onValue(b, 0, 20, ctx);
+    TEST_ASSERT_TRUE(b[0].role == Bound::Role::ACTIVE);
+    TEST_ASSERT_TRUE(b[1].role == Bound::Role::DEAD);
 }
 
 static const HidInfo kTwoCandidates[] = {
@@ -313,7 +322,8 @@ void test_pegasus_check() {
 void test_model_type_lookup() {
     TEST_ASSERT_EQUAL_HEX(MGE_DEFAULT_OFFLINE, mgeModelType("ELLIPSE", "650"));
     TEST_ASSERT_EQUAL_HEX(MGE_PEGASUS, mgeModelType("Ellipse ECO", "1600"));
-    TEST_ASSERT_EQUAL_HEX(MGE_DEFAULT, mgeModelType("Eaton 5P", "650")); // EATON_5P >= MGE_DEFAULT
+    // Every row of mge_model_names since US-073 (mge_battery_voltage needs the 5P type)
+    TEST_ASSERT_EQUAL_HEX(EATON_5P, mgeModelType("Eaton 5P", "650"));
     TEST_ASSERT_EQUAL_HEX(MGE_DEFAULT, mgeModelType("ELLIPSE", ""));     // no iModel: no lookup
 }
 
@@ -1092,15 +1102,20 @@ void test_ecoflow_table() {
 
 void test_tables_hold_only_rw_rows_without_ups_delay() {
     // US-066 scope: the RW rows of each subdriver, minus ups.delay.* (applyDefaultDelays)
-    // and the three stateful mge rows left to US-070
+    // and the three stateful mge rows left to US-070. Since US-073 mgeHid2Nut() has its
+    // read-only and BOOL rows too: only its RW rows are counted.
     const HidInfo* (*tables[])(size_t&) = { mgeHid2Nut, apcHid2Nut, cpsHid2Nut, ecoflowHid2Nut };
     const size_t expected[] = { 55, 9, 8, 1 };
     for (size_t t = 0; t < 4; t++) {
         size_t n;
         const HidInfo* rows = tables[t](n);
-        TEST_ASSERT_EQUAL(expected[t], n);
+        size_t rw = 0;
         for (size_t i = 0; i < n; i++) {
-            TEST_ASSERT_TRUE(rows[i].info_flags & ST_FLAG_RW);
+            if (rows[i].info_flags & ST_FLAG_RW) rw++;
+        }
+        TEST_ASSERT_EQUAL(expected[t], rw);
+        if (t > 0) TEST_ASSERT_EQUAL(expected[t], n);
+        for (size_t i = 0; i < n; i++) {
             TEST_ASSERT_TRUE(strncmp(rows[i].info_type, "ups.delay.", 10) != 0);
             TEST_ASSERT_TRUE(strcmp(rows[i].info_type, "input.bypass.switch.on") != 0);
             TEST_ASSERT_TRUE(strcmp(rows[i].info_type, "input.bypass.switch.off") != 0);

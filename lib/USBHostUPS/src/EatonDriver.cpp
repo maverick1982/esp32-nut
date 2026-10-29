@@ -24,23 +24,23 @@
  * This sub-driver faithfully mirrors the official NUT behavior for Eaton/MGE HID devices.
  * - Reference: nut_repo/drivers/mge-hid.c
  * - Quirk 254/255: Mirrored from nut_repo/drivers/libhid.c (skip reports 254/255 to prevent freeze).
- * - iDeviceChemistry: Specific mapping for batteryType.
+ * - The PowerSummary/BatterySystem variables and the status come from mgeHid2Nut() (US-073,
+ *   ADR 0011): the standard mappings of the same keys are superseded below. Input, Output,
+ *   Flow and Outlet stay hand-written until US-074.
  */
 
-EatonDriver::EatonDriver() : _chemStrIdx(0), _iModelIdx(0), _iModelIdxSeen(false), _iModelSeen(false),
-    _apparentPowerSeen(false), _apparentPower(0), _countrySeen(false) {}
+EatonDriver::EatonDriver() : _iModelIdx(0), _iModelIdxSeen(false), _iModelSeen(false),
+    _apparentPowerSeen(false), _apparentPower(0) {}
 
 void EatonDriver::setup() {
     GenericDriver::setup();
     _map.invalidate();
-    _chemStrIdx = 0;
     _iModelIdx = 0;
     _iModelIdxSeen = false;
     _iModelSeen = false;
     _iModel = "";
     _apparentPowerSeen = false;
     _apparentPower = 0;
-    _countrySeen = false;
     // mge_type and country_code are known before the first walk upstream: the
     // model-dependent rows wait for them (NutTable::DecodeResult::DEFER)
     _nut_ctx.ready = false;
@@ -76,7 +76,8 @@ void EatonDriver::updateNutContext(IHidTransport* host, const UPSData& data) {
     } else {
         model_known = true;
     }
-    bool country_known = !hasUsagePath(usages, kCountryPath) || _countrySeen;
+    // device.country, an internal row of mgeHid2Nut() (eaton_check_country_info)
+    bool country_known = !hasUsagePath(usages, kCountryPath) || _nut_ctx.country_seen;
     bool product_known = data.hasKey("ups.model") || host->_iProduct == 0;
 
     // The first full poll is where upstream's initinfo would be done: decide with what is known
@@ -85,6 +86,47 @@ void EatonDriver::updateNutContext(IHidTransport* host, const UPSData& data) {
         _nut_ctx.mge_type = NutTable::mgeModelType(product.c_str(), model.c_str());
         _nut_ctx.ready = true;
     }
+}
+
+// The standard mappings of GenericDriver::decodeReport() whose keys come from the US-073
+// rows of mgeHid2Nut(), copied character by character from that table
+static const char* const kSupersededGenericPaths[] = {
+    // Status: only the BOOL rows of mge_hid2nut set the internal ups.status.* keys
+    "UPS.PowerSummary.PresentStatus.ACPresent", "UPS.PowerSummary.ACPresent",
+    "UPS.PowerSummary.PresentStatus.Discharging", "UPS.PowerSummary.Discharging",
+    "UPS.PowerSummary.PresentStatus.Charging", "UPS.PowerSummary.Charging",
+    "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "UPS.PowerSummary.BelowRemainingCapacityLimit",
+    "UPS.PowerSummary.PresentStatus.NeedReplacement", "UPS.PowerSummary.NeedReplacement",
+    "UPS.PowerSummary.PresentStatus.Overload", "UPS.PowerSummary.Overload",
+    "UPS.PowerSummary.PresentStatus.ShutdownImminent", "UPS.PowerSummary.ShutdownImminent",
+    "UPS.PowerSummary.PresentStatus.CommunicationLost", "UPS.PowerSummary.CommunicationLost",
+    "UPS.PowerSummary.PresentStatus.BatteryPresent", "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired",
+    "UPS.PowerSummary.PresentStatus.FullyCharged", "UPS.PowerSummary.PresentStatus.FullyDischarged",
+    // battery.voltage
+    "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Voltage", "UPS.Battery.Voltage",
+    // battery.charge, battery.charge.low
+    "UPS.PowerSummary.RemainingCapacity", "UPS.PowerSummary.RemainingCapacityLimit",
+    // battery.runtime
+    "UPS.PowerSummary.RunTimeToEmpty", "UPS.Battery.RunTimeToEmpty",
+    // ups.load
+    "UPS.PowerSummary.PercentLoad", "UPS.PowerConverter.Output.PercentLoad", "UPS.Output.PercentLoad",
+    // ups.temperature, battery.temperature
+    "UPS.PowerSummary.Temperature", "UPS.Battery.Temperature",
+    // battery.capacity
+    "UPS.BatterySystem.Battery.DesignCapacity",
+    // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
+    "UPS.BatterySystem.Battery.FullChargeCapacity",
+    // battery.voltage.nominal
+    "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
+    // ups.test.result
+    "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test",
+    // ups.timer.shutdown
+    "UPS.PowerSummary.DelayBeforeShutdown",
+};
+
+const char* const* EatonDriver::supersededGenericPaths(size_t& n) const {
+    n = sizeof(kSupersededGenericPaths) / sizeof(kSupersededGenericPaths[0]);
+    return kSupersededGenericPaths;
 }
 
 void EatonDriver::onLoop(IHidTransport* host, UPSData& data) {
@@ -98,7 +140,6 @@ bool EatonDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const
 
 void EatonDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
-    if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
     if (_iModelIdx > 0 && !_iModelSeen) out.push_back(_iModelIdx);
 }
 
@@ -109,10 +150,7 @@ void EatonDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t r
 
     typedef UsageMapIndex<EatonDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.Good", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.good", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.InternalFailure", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.internal_failure", v != 0 ? "1" : "0"); } },
         { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("outlet.1.switch", v != 0 ? "1" : "0"); d.set("outlet.2.switch", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Voltage", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { if (v > 0) { d.set("battery.voltage", String(v, 2)); } } },
         { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency.nominal", String((int)v)); d.set("output.frequency.nominal", String((int)v)); } },
         { "UPS.PowerConverter.ConverterType", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { 
             int type = (int)v;
@@ -122,14 +160,8 @@ void EatonDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t r
             else if (type == 4) { d.set("ups.type", "online - parallel with hot standy"); }
             else if (type == 5) { d.set("ups.type", "online - hot standby redundancy"); }
         } },
-        { "UPS.PowerSummary.iDeviceChemistry", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_chemStrIdx = (uint8_t)v; } },
-        // Inputs of mge_type and country_code (NutTable::Context, US-066)
+        // Input of mge_type (NutTable::Context, US-066); the country is the device.country row
         { kIModelPath, [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_iModelIdx = (uint8_t)v; drv->_iModelIdxSeen = true; } },
-        { kCountryPath, [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) {
-            // eaton_check_country_fun: the value is the country code, never published
-            drv->_nut_ctx.country = (int)v;
-            drv->_countrySeen = true;
-        } },
         { "UPS.Flow.ConfigApparentPower", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef* def) {
             if (def && NutTable::pathMatches(*def, kApparentPowerPath)) {
                 drv->_apparentPower = (long)v;
@@ -153,7 +185,6 @@ void EatonDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, cons
         }
     }
     
-    if (_chemStrIdx > 0 && index == _chemStrIdx) { ups_data.set("battery.type", str); }
     if (_iModelIdx > 0 && index == _iModelIdx) {
         _iModel = str;
         _iModelSeen = true;

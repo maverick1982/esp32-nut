@@ -13,12 +13,14 @@ struct UPSData {
 private:
     std::vector<UPSParameter> _parameters;
     bool _realPowerMeasured = false;
+    uint32_t _writes = 0;
 
 public:
     UPSData() {
     }
 
     void set(const String& key, const String& value) {
+        _writes++;
         for (auto& param : _parameters) {
             if (param.key == key) {
                 param.value = value;
@@ -26,6 +28,23 @@ public:
             }
         }
         _parameters.push_back({key, value});
+    }
+
+    // Writes done by set() and remove() since construction, for the tests (US-073)
+    uint32_t writes() const { return _writes; }
+
+    // The value of key without copying it, nullptr when missing (US-073)
+    const String* find(const char* key) const {
+        for (const auto& param : _parameters) {
+            if (param.key == key) return &param.value;
+        }
+        return nullptr;
+    }
+
+    // True when key holds exactly value; no temporary String (US-073, ADR 0007)
+    bool valueEquals(const char* key, const String& value) const {
+        const String* v = find(key);
+        return v && *v == value;
     }
 
     String get(const String& key, const String& defaultValue = "") const {
@@ -50,6 +69,7 @@ public:
         for (auto it = _parameters.begin(); it != _parameters.end(); ++it) {
             if (it->key == key) {
                 _parameters.erase(it);
+                _writes++;
                 return;
             }
         }

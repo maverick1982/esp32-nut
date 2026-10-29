@@ -42,7 +42,9 @@ public:
         _lengths.push_back(length);
         for (auto& a : _answers) {
             if (a.first == id && _driver && _data) {
+                // As USBHostUPS: the mappings, then the NUT table (US-066, US-073)
                 _driver->decodeReport(this, id, type, a.second.data(), a.second.size(), *_data);
+                _driver->postDecode(this, id, type, a.second.data(), a.second.size(), *_data);
             }
         }
         if (_answer_all && _driver && _data) {
@@ -50,6 +52,7 @@ public:
             if (buf.empty()) buf.resize(2, 0);
             buf[0] = id;
             _driver->decodeReport(this, id, type, buf.data(), buf.size(), *_data);
+            _driver->postDecode(this, id, type, buf.data(), buf.size(), *_data);
         }
         return true;
     }
@@ -224,6 +227,32 @@ void test_eaton_skips_reports_254_255(void) {
     for (const auto& r : host._reports) {
         TEST_ASSERT_TRUE(r.first != 254 && r.first != 255);
     }
+}
+
+// mge-hid.c:2040-2052, 2116-2117: the ABM rows are HU_FLAG_QUICK_POLL status rows, so their
+// report (Charger.Mode, FEATURE 0x26 on the Eaton 5P) is in the quick poll, as the quick
+// update upstream; a report of nominal values is not (US-073)
+void test_eaton_abm_report_in_quick_poll(void) {
+    standardDevice();
+    host.addUsage(0xFFFF0094, 0x26, 3, "UPS.BatterySystem.Charger.0xFFFF0094");
+    EatonDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+
+    runLoop(drv, 3000, 3500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(1, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(0x26, host._reports[1].first);
+
+    // The plain GenericDriver has no table: report 0x26 stays in the full poll
+    host._reports.clear();
+    GenericDriver plain;
+    plain.setup();
+    runLoop(plain, 1000, 1500);
+    host._reports.clear();
+    runLoop(plain, 3000, 3500);
+    TEST_ASSERT_EQUAL(1, host._reports.size());
 }
 
 void test_string_index_found_in_reports_requested_same_cycle(void) {
@@ -566,6 +595,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_report_id_zero_polled);
     RUN_TEST(test_cyberpower_policy);
     RUN_TEST(test_eaton_skips_reports_254_255);
+    RUN_TEST(test_eaton_abm_report_in_quick_poll);
     RUN_TEST(test_string_index_found_in_reports_requested_same_cycle);
     RUN_TEST(test_report_fresh_from_input_is_skipped);
     RUN_TEST(test_report_with_old_input_is_requested);

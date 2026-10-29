@@ -41,6 +41,12 @@ void setUp(void) {
 
 void tearDown(void) {}
 
+// As USBHostUPS: the hand-written mappings, then the NUT table (US-066, US-073)
+static void decodeAll(uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length) {
+    driver.decodeReport(&mockHost, report_id, report_type, data, length, ups_data);
+    driver.postDecode(&mockHost, report_id, report_type, data, length, ups_data);
+}
+
 void test_eaton_ac_present_and_discharging(void) {
     HIDUsageDef u_ac;
     u_ac.report_id = 0x01;
@@ -63,7 +69,7 @@ void test_eaton_ac_present_and_discharging(void) {
 
     // 1. Report con AC Present = 1, Discharging = 0
     uint8_t r1[] = { 0x01, 0x01 };
-    driver.decodeReport(&mockHost, 0x01, 1, r1, sizeof(r1), ups_data);
+    decodeAll(0x01, 1, r1, sizeof(r1));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.ac_present"));
     TEST_ASSERT_TRUE(ups_data.getBool("ups.status.ac_present"));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.discharging"));
@@ -71,7 +77,7 @@ void test_eaton_ac_present_and_discharging(void) {
 
     // 2. Report con AC Present = 0, Discharging = 1
     uint8_t r2[] = { 0x01, 0x10 };
-    driver.decodeReport(&mockHost, 0x01, 1, r2, sizeof(r2), ups_data);
+    decodeAll(0x01, 1, r2, sizeof(r2));
     TEST_ASSERT_FALSE(ups_data.getBool("ups.status.ac_present"));
     TEST_ASSERT_TRUE(ups_data.getBool("ups.status.discharging"));
 }
@@ -102,7 +108,7 @@ void test_eaton_voltage_and_battery(void) {
 
     // Report ID 0x06: capacity 85% (0x55), runtime 1200 sec (0x000004B0)
     uint8_t r6[] = { 0x06, 0x55, 0xB0, 0x04, 0x00, 0x00 };
-    driver.decodeReport(&mockHost, 0x06, 1, r6, sizeof(r6), ups_data);
+    decodeAll(0x06, 1, r6, sizeof(r6));
     TEST_ASSERT_TRUE(ups_data.hasKey("battery.charge"));
     TEST_ASSERT_EQUAL_UINT8(85, ups_data.getFloat("battery.charge"));
     TEST_ASSERT_TRUE(ups_data.hasKey("battery.runtime"));
@@ -170,13 +176,13 @@ void test_eaton_realpower_recalculated_when_config_arrives_after_load(void) {
 
     // 1. Load arrives first (40%)
     uint8_t r_load[] = { 0x01, 40 };
-    driver.decodeReport(&mockHost, 0x01, 1, r_load, sizeof(r_load), ups_data);
+    decodeAll(0x01, 1, r_load, sizeof(r_load));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
 
     // 2. ConfigActivePower arrives after (1000W = 0x03E8 -> 0xE8, 0x03)
     uint8_t r_cap[] = { 0x02, 0xE8, 0x03 };
-    driver.decodeReport(&mockHost, 0x02, 3, r_cap, sizeof(r_cap), ups_data);
+    decodeAll(0x02, 3, r_cap, sizeof(r_cap));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
     TEST_ASSERT_EQUAL_UINT16(1000, ups_data.getFloat("ups.realpower.nominal"));
     // 40% of 1000W = 400W
@@ -307,6 +313,173 @@ void test_eaton_3s_model_is_default(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("outlet.power"));
 }
 
+// --- mgeHid2Nut() read-only and BOOL rows (US-073) ---
+
+// One status bit of FEATURE report 0x01
+static HIDUsageDef statusField(const char* path, uint32_t usage, uint16_t bit) {
+    HIDUsageDef d = nutField(path, usage, 0x01, 3, 1);
+    d.bit_offset = bit;
+    return d;
+}
+
+// The PowerSummary.PresentStatus bits of the Eaton 3S, in one report
+static void addStatusFields() {
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.ACPresent", 0x008500d0, 0));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.Charging", 0x00850044, 1));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.Discharging", 0x00850045, 2));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", 0x00850042, 3));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.NeedReplacement", 0x0085004b, 4));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.Good", 0x00840061, 5));
+    mockHost._usages.push_back(statusField("UPS.PowerSummary.PresentStatus.InternalFailure", 0x00840062, 6));
+}
+
+static const uint8_t AC = 0x01, CHRG = 0x02, DISCHRG = 0x04, LOWBATT = 0x08, REPLACE = 0x10, GOOD = 0x20;
+
+static String status() { return UPSData::computeUPSStatusString(ups_data); }
+
+// online_info, eaton_discharging_info (ABM unknown): mains lost, then back
+void test_eaton_status_on_battery_and_back(void) {
+    addStatusFields();
+    feed(0x01, 3, DISCHRG | GOOD);
+    TEST_ASSERT_EQUAL_STRING("0", ups_data.get("ups.status.ac_present").c_str());
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", status().c_str());
+    feed(0x01, 3, AC | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+}
+
+// lowbatt_info and replacebatt_info
+void test_eaton_status_low_battery_and_replace(void) {
+    addStatusFields();
+    feed(0x01, 3, DISCHRG | LOWBATT | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", status().c_str());
+    feed(0x01, 3, AC | REPLACE | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OL RB", status().c_str());
+}
+
+// off_info is inverted (Good 0 = "off") and commfault_info replaces the old internal keys.
+// OFF is not rendered yet: ups.status is the same as with Good = 1.
+void test_eaton_status_good_is_off_info(void) {
+    addStatusFields();
+    feed(0x01, 3, AC | GOOD);
+    TEST_ASSERT_EQUAL_STRING("0", ups_data.get("ups.status.off").c_str());
+    TEST_ASSERT_EQUAL_STRING("0", ups_data.get("ups.status.commfault").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.status.good"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.status.internal_failure"));
+    feed(0x01, 3, AC);
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("ups.status.off").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+}
+
+// eaton_abm_check_chrg_fun: CHRG while charging below 100 %, not at 100 %
+void test_eaton_status_charging_below_full(void) {
+    addStatusFields();
+    ups_data.set("battery.charge", "80");
+    feed(0x01, 3, AC | CHRG | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OL CHRG", status().c_str());
+    ups_data.set("battery.charge", "100");
+    feed(0x01, 3, AC | CHRG | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+}
+
+// mge_battery_capacity (%.2f Ah) and ADR 0011 rule 2: battery.capacity.full is not a NUT name
+void test_eaton_capacity_full_never_published(void) {
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.DesignCapacity", 0x00850083, 0x23, 3, 16));
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.FullChargeCapacity", 0x00850067, 0x24, 3, 16));
+    uint8_t design[] = { 0x23, 0x70, 0x62 };   // 25200 As
+    uint8_t full[] = { 0x24, 0x70, 0x62 };
+    decodeAll(0x23, 3, design, sizeof(design));
+    decodeAll(0x24, 3, full, sizeof(full));
+    TEST_ASSERT_EQUAL_STRING("7.00", ups_data.get("battery.capacity").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.capacity.full"));
+}
+
+// ADR 0011 rule 2: standard names upstream mge-hid does not read stay as extensions
+void test_eaton_mfr_dates_kept(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.ManufacturerDate", 0x00850085, 0x25, 3, 16));
+    mockHost._usages.push_back(nutField("UPS.Battery.ManufacturerDate", 0x00850085, 0x26, 3, 16));
+    uint8_t ups_date[] = { 0x25, 0xB1, 0x50 };  // (2020-1980)<<9 | 5<<5 | 17 = 20657
+    uint8_t batt_date[] = { 0x26, 0xB1, 0x50 };
+    decodeAll(0x25, 3, ups_date, sizeof(ups_date));
+    decodeAll(0x26, 3, batt_date, sizeof(batt_date));
+    TEST_ASSERT_EQUAL_STRING("2020/05/17", ups_data.get("ups.mfr.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("2020/05/17", ups_data.get("battery.mfr.date").c_str());
+}
+
+// mge_battery_voltage_fun: UPS.PowerSummary.Voltage is battery.voltage only on some series
+void test_eaton_battery_voltage_depends_on_series(void) {
+    mockHost._iProduct = 2;
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF00F0", 0xffff00f0, 0x10, 3));
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.Voltage", 0x00840030, 0x0E, 3));
+    feed(0x10, 3, 5);   // iModel string index
+    feedString(2, "Eaton 3S");
+    feedString(5, "700");
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_TRUE(driver.nutContext().ready);
+    feed(0x0E, 3, 27);
+    driver.completeInitialPoll();
+    feed(0x0E, 3, 27);
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.voltage"));
+
+    driver.setup();
+    ups_data = UPSData();
+    feed(0x10, 3, 5);
+    feedString(2, "Eaton 5P");
+    feedString(5, "1550");
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_EQUAL_HEX(NutTable::EATON_5P, driver.nutContext().mge_type);
+    feed(0x0E, 3, 27);
+    TEST_ASSERT_EQUAL_STRING("27.0", ups_data.get("battery.voltage").c_str());
+}
+
+// stringid_conversion: battery.type from the iDeviceChemistry string
+void test_eaton_battery_type_from_string_row(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.iDeviceChemistry", 0x00850089, 0x10, 3));
+    feed(0x10, 3, 5);
+    driver.loop(&mockHost, ups_data, 1000);
+    TEST_ASSERT_EQUAL_UINT32(1, mockHost._requestedStrings.size());
+    TEST_ASSERT_EQUAL_UINT8(5, mockHost._requestedStrings[0]);
+    feedString(5, "PbAc");
+    TEST_ASSERT_EQUAL_STRING("PbAc", ups_data.get("battery.type").c_str());
+}
+
+// ABM enabled (5P/9E): eaton_discharging_info gives "!dischrg" and the Charger.Mode row
+// (eaton_abm_chrg_dischrg_info, mge-hid.c:2116) gives "dischrg". Upstream applies both in
+// table order at every walk; here they live in different reports, and DISCHRG must not
+// depend on which report came last.
+void test_eaton_abm_discharging_whatever_the_report_order(void) {
+    addStatusFields();
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Charger.0xFFFF0087", 0xffff0087, 0x29, 3)); // ABMEnable
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Charger.0xFFFF0094", 0xffff0094, 0x26, 3)); // Mode
+    feed(0x29, 3, 1);           // ABM enabled
+    feed(0x26, 3, 2);           // Mode 2: discharging (ABM_PATH_MODE)
+    feed(0x01, 3, DISCHRG | GOOD);
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", status().c_str());
+    TEST_ASSERT_EQUAL_STRING("discharging", ups_data.get("battery.charger.status").c_str());
+    feed(0x01, 3, DISCHRG | GOOD); // the next quick poll of the status report alone
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", status().c_str());
+
+    driver.setup();
+    ups_data = UPSData();
+    feed(0x29, 3, 1);
+    feed(0x01, 3, DISCHRG | GOOD);
+    feed(0x26, 3, 2);
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", status().c_str());
+    ups_data.set("battery.charge", "80"); // CHRG needs a charge below 100 % (computeUPSStatusString)
+    feed(0x26, 3, 1);           // Mode 1: charging, mains back
+    feed(0x01, 3, AC | CHRG | GOOD);
+    TEST_ASSERT_EQUAL_STRING("charging", ups_data.get("battery.charger.status").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL CHRG", status().c_str());
+}
+
+// eaton_check_country_fun through the device.country row: never published
+void test_eaton_country_from_table_row(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF0095", 0xffff0095, 0x15, 3));
+    feed(0x15, 3, 0);
+    TEST_ASSERT_TRUE(driver.nutContext().country_seen);
+    TEST_ASSERT_EQUAL(NutTable::COUNTRY_EUROPE, driver.nutContext().country);
+    TEST_ASSERT_FALSE(ups_data.hasKey("device.country"));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -321,6 +494,16 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_model_type_from_imodel);
     RUN_TEST(test_eaton_model_falls_back_to_apparent_power);
     RUN_TEST(test_eaton_3s_model_is_default);
+    RUN_TEST(test_eaton_status_on_battery_and_back);
+    RUN_TEST(test_eaton_status_low_battery_and_replace);
+    RUN_TEST(test_eaton_status_good_is_off_info);
+    RUN_TEST(test_eaton_status_charging_below_full);
+    RUN_TEST(test_eaton_capacity_full_never_published);
+    RUN_TEST(test_eaton_mfr_dates_kept);
+    RUN_TEST(test_eaton_battery_voltage_depends_on_series);
+    RUN_TEST(test_eaton_battery_type_from_string_row);
+    RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
+    RUN_TEST(test_eaton_country_from_table_row);
     return UNITY_END();
 }
 #else
@@ -336,6 +519,16 @@ void setup() {
     RUN_TEST(test_eaton_model_type_from_imodel);
     RUN_TEST(test_eaton_model_falls_back_to_apparent_power);
     RUN_TEST(test_eaton_3s_model_is_default);
+    RUN_TEST(test_eaton_status_on_battery_and_back);
+    RUN_TEST(test_eaton_status_low_battery_and_replace);
+    RUN_TEST(test_eaton_status_good_is_off_info);
+    RUN_TEST(test_eaton_status_charging_below_full);
+    RUN_TEST(test_eaton_capacity_full_never_published);
+    RUN_TEST(test_eaton_mfr_dates_kept);
+    RUN_TEST(test_eaton_battery_voltage_depends_on_series);
+    RUN_TEST(test_eaton_battery_type_from_string_row);
+    RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
+    RUN_TEST(test_eaton_country_from_table_row);
     UNITY_END();
 }
 void loop() {}

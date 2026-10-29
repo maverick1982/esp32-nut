@@ -196,10 +196,161 @@ void test_openups_no_shutdown_commands(void) {
     TEST_ASSERT_FALSE(openups.shutdownCommandsSupported());
 }
 
+// --- NUT table engine (US-073): a driver with a small table of its own
+
+static const NutTable::HidInfo kEngineTable[] = {
+    { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFFFF00F1", "%s", 0, NutTable::Conv::StringId, nullptr, 0 },
+    { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, 0, NutTable::Conv::Lookup, NUT_LKP(NutTable::kOnlineInfo) },
+    { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", 0, NutTable::Conv::AbmStatus, nullptr, 0 },
+};
+
+class TableDriver : public GenericDriver {
+public:
+    using GenericDriver::collectStringRequests;
+    const NutTable::HidInfo* hid2nut(size_t& n) const override {
+        n = sizeof(kEngineTable) / sizeof(kEngineTable[0]);
+        return kEngineTable;
+    }
+    const char* const* supersededGenericPaths(size_t& n) const override {
+        static const char* const paths[] = { "UPS.PowerSummary.PercentLoad", "UPS.PowerSummary.RunTimeToEmpty" };
+        n = 2;
+        return paths;
+    }
+};
+
+static TableDriver tableDriver;
+
+// Usages of the engine tests: one 8-bit value per report, report ID first
+static void addEngineUsages() {
+    addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 1, 3, 0, 1);
+    addUsage("UPS.BatterySystem.Charger.0xFFFF00E9", 3, 3, 0, 8);
+    addUsage("UPS.PowerSummary.PercentLoad", 7, 3, 0, 8);
+    addUsage("UPS.PowerSummary.RunTimeToEmpty", 7, 3, 8, 8);
+    addUsage("UPS.PowerSummary.0xFFFF00F1", 16, 3, 0, 8);
+    addUsage("UPS.Unmapped", 9, 3, 0, 8);
+    tableDriver.setup();
+}
+
+static void feed(GenericDriver& drv, std::initializer_list<uint8_t> bytes) {
+    std::vector<uint8_t> r(bytes);
+    drv.decodeReport(&mockHost, r[0], 3, r.data(), r.size(), ups_data);
+    drv.postDecode(&mockHost, r[0], 3, r.data(), r.size(), ups_data);
+}
+
+void test_engine_report_without_rows_writes_nothing(void) {
+    addEngineUsages();
+    feed(tableDriver, { 1, 1 });
+    feed(tableDriver, { 7, 5, 60 });
+    uint32_t before = ups_data.writes();
+    feed(tableDriver, { 9, 42 }); // no row and no mapping on report 9
+    TEST_ASSERT_EQUAL_UINT32(before, ups_data.writes());
+}
+
+void test_engine_same_value_is_not_rewritten(void) {
+    addEngineUsages();
+    feed(tableDriver, { 7, 5, 60 });
+    TEST_ASSERT_EQUAL_STRING("5", ups_data.get("ups.load").c_str());
+    uint32_t before = ups_data.writes();
+    feed(tableDriver, { 7, 5, 60 });
+    TEST_ASSERT_EQUAL_UINT32(before, ups_data.writes());
+}
+
+void test_engine_overwritten_value_is_restored(void) {
+    addEngineUsages();
+    feed(tableDriver, { 7, 5, 60 });
+    ups_data.set("ups.load", "99"); // as a hand-written mapping would
+    feed(tableDriver, { 7, 5, 60 });
+    TEST_ASSERT_EQUAL_STRING("5", ups_data.get("ups.load").c_str());
+}
+
+void test_engine_superseded_mapping_does_not_write(void) {
+    addEngineUsages();
+    feed(tableDriver, { 7, 5, 60 });
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.runtime")); // superseded, no table row
+    feed(driver, { 7, 5, 60 }); // the plain GenericDriver still maps it
+    TEST_ASSERT_EQUAL_STRING("60", ups_data.get("battery.runtime").c_str());
+}
+
+void test_engine_string_id_row(void) {
+    addEngineUsages();
+    feed(tableDriver, { 16, 6 });
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.firmware"));
+    std::vector<uint8_t> wanted;
+    tableDriver.collectStringRequests(&mockHost, ups_data, wanted);
+    TEST_ASSERT_EQUAL(1, wanted.size());
+    TEST_ASSERT_EQUAL(6, wanted[0]);
+
+    const uint8_t desc[] = { 8, 0x03, 'F', 0, 'W', 0, '1', 0 };
+    tableDriver.parseStringDescriptor(&mockHost, 6, desc, sizeof(desc), ups_data);
+    TEST_ASSERT_EQUAL_STRING("FW1", ups_data.get("ups.firmware").c_str());
+    wanted.clear();
+    tableDriver.collectStringRequests(&mockHost, ups_data, wanted);
+    TEST_ASSERT_EQUAL(0, wanted.size());
+}
+
+// UTF-16LE string descriptor of an ASCII text
+static std::vector<uint8_t> stringDescriptor(const char* text) {
+    std::vector<uint8_t> d = { (uint8_t)(2 + 2 * strlen(text)), 0x03 };
+    for (const char* c = text; *c; c++) {
+        d.push_back((uint8_t)*c);
+        d.push_back(0);
+    }
+    return d;
+}
+
+// stringid_conversion_fun (usbhid-ups.c:598-603) reads into static char buf[20]: a table
+// row gets at most 19 characters; the other strings are not table rows and stay whole
+void test_engine_string_id_truncated_to_19_chars(void) {
+    addEngineUsages();
+    mockHost._iManufacturer = 1;
+    feed(tableDriver, { 16, 6 });
+    std::vector<uint8_t> fw = stringDescriptor("0123456789ABCDEFGHIJKLMNO"); // 25 characters
+    tableDriver.parseStringDescriptor(&mockHost, 6, fw.data(), fw.size(), ups_data);
+    TEST_ASSERT_EQUAL_STRING("0123456789ABCDEFGHI", ups_data.get("ups.firmware").c_str());
+    std::vector<uint8_t> mfr = stringDescriptor("EATON EATON EATON EATON"); // 23 characters
+    tableDriver.parseStringDescriptor(&mockHost, 1, mfr.data(), mfr.size(), ups_data);
+    TEST_ASSERT_EQUAL_STRING("EATON EATON EATON EATON", ups_data.get("ups.mfr").c_str());
+    mockHost._iManufacturer = 0;
+}
+
+void test_engine_bool_row_sets_internal_key(void) {
+    addEngineUsages();
+    feed(tableDriver, { 1, 1 });
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("ups.status.ac_present").c_str());
+    feed(tableDriver, { 1, 0 });
+    TEST_ASSERT_EQUAL_STRING("0", ups_data.get("ups.status.ac_present").c_str());
+}
+
+void test_engine_clear_removes_key(void) {
+    addEngineUsages();
+    // ABM unknown (no ABMEnable row): eaton_abm_status_fun deletes the variable
+    ups_data.set("battery.charger.status", "charging");
+    feed(tableDriver, { 3, 1 });
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.charger.status"));
+}
+
+void test_engine_load_updates_realpower(void) {
+    addEngineUsages();
+    ups_data.set("ups.power.nominal", "1000");
+    feed(tableDriver, { 7, 50, 60 });
+    // UPSData::updateRealPower(): 1000 VA * 0.6 * 50 %
+    TEST_ASSERT_EQUAL_STRING("300", ups_data.get("ups.realpower").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_engine_report_without_rows_writes_nothing);
+    RUN_TEST(test_engine_same_value_is_not_rewritten);
+    RUN_TEST(test_engine_overwritten_value_is_restored);
+    RUN_TEST(test_engine_superseded_mapping_does_not_write);
+    RUN_TEST(test_engine_string_id_row);
+    RUN_TEST(test_engine_string_id_truncated_to_19_chars);
+    RUN_TEST(test_engine_bool_row_sets_internal_key);
+    RUN_TEST(test_engine_clear_removes_key);
+    RUN_TEST(test_engine_load_updates_realpower);
     RUN_TEST(test_battery_present_is_inverted);
     RUN_TEST(test_remaining_time_limit_expired);
     RUN_TEST(test_fully_charged_and_discharged);

@@ -49,6 +49,9 @@ public:
     // NUT table of the driver's upstream subdriver (US-066). Empty for drivers whose
     // subdriver has no rows yet.
     virtual const NutTable::HidInfo* hid2nut(size_t& n) const { n = 0; return nullptr; }
+    // Paths of the standard mappings of decodeReport() that a driver leaves to its NUT table
+    // (ADR 0011, US-073): their keys come only from the table rows. Empty by default.
+    virtual const char* const* supersededGenericPaths(size_t& n) const { n = 0; return nullptr; }
     // Rows bound to the attached device; built on the first decoded report
     const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }
 
@@ -86,6 +89,8 @@ protected:
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too
     virtual bool pollInputReports() const { return true; }
     virtual void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
+    // True for the usages of the HU_FLAG_QUICK_POLL status rows of hid2nut() (US-073)
+    bool isQuickPollStatusUsage(const HIDUsageDef& u) const;
     // String descriptors fetched at the start of a full poll (only the missing ones)
     virtual void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const;
     // True when the device measures ups.realpower in a report this driver reads
@@ -104,6 +109,9 @@ protected:
 
 private:
     void bindNutTable(IHidTransport* host);
+    // Writes the values of the table rows and the internal ups.status.* keys that differ
+    // from ups_data (US-073): nothing is rewritten when the value is the same
+    void publishNutRows(UPSData& ups_data);
 
     std::vector<NutTable::Bound> _nut_rows;
     bool _nut_bound;

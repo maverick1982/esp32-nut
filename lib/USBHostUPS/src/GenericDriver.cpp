@@ -132,6 +132,21 @@ bool GenericDriver::isDynamicUsage(const HIDUsageDef& u) {
            strstr(u.path, "LineFailCause") != nullptr;
 }
 
+// A usage of a HU_FLAG_QUICK_POLL status row of the driver's table (US-073): the internal
+// and BOOL rows and battery.charger.status (ABM, Charger.Mode/Status), refreshed by the quick
+// update upstream. The other HU_FLAG_QUICK_POLL rows (ups.timer.*, ...) keep the full poll.
+bool GenericDriver::isQuickPollStatusUsage(const HIDUsageDef& u) const {
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    for (size_t i = 0; i < n; i++) {
+        const NutTable::HidInfo& row = table[i];
+        if (!(row.hidflags & NutTable::HU_FLAG_QUICK_POLL)) continue;
+        if (!NutTable::isInternalRow(row) && row.conv != NutTable::Conv::AbmStatus) continue;
+        if (NutTable::pathMatches(u, row.hidpath)) return true;
+    }
+    return false;
+}
+
 void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick.clear();
     full.clear();
@@ -144,15 +159,16 @@ void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& q
     for (const auto& u : usages) {
         if (u.report_type != 1 && u.report_type != 3) continue; // OUTPUT reports are not read
         if (!acceptPollReport(u.report_type, u.report_id)) continue;
+        bool status = isStatusUsage(u) || isQuickPollStatusUsage(u);
         bool found = false;
         for (auto& r : reports) {
             if (r.type == u.report_type && r.id == u.report_id) {
-                r.status = r.status || isStatusUsage(u);
+                r.status = r.status || status;
                 found = true;
                 break;
             }
         }
-        if (!found) reports.push_back(Report{u.report_type, u.report_id, isStatusUsage(u)});
+        if (!found) reports.push_back(Report{u.report_type, u.report_id, status});
     }
 
     for (const auto& r : reports) {
@@ -249,6 +265,13 @@ void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& da
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
     if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
+    // Table rows with stringid_conversion still waiting for their text (US-073)
+    for (const auto& b : _nut_rows) {
+        if (b.info->conv == NutTable::Conv::StringId && b.string_index > 0 && !b.has &&
+            b.role != NutTable::Bound::Role::DEAD) {
+            out.push_back(b.string_index);
+        }
+    }
 }
 
 // Queues the missing strings not requested yet in this cycle
@@ -536,7 +559,9 @@ void GenericDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t
         if (_active_beeper == "") _active_beeper = "none";
     }
 
-    _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
+    size_t n_skip = 0;
+    const char* const* skip = supersededGenericPaths(n_skip);
+    _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data, skip, n_skip);
 }
 
 void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -546,6 +571,21 @@ void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, co
     else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
     else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
     else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
+
+    // Table rows whose value is this string (stringid_conversion, US-073)
+    bool any = false;
+    for (size_t i = 0; i < _nut_rows.size(); i++) {
+        const NutTable::Bound& b = _nut_rows[i];
+        if (b.info->conv != NutTable::Conv::StringId || b.string_index != index) continue;
+        if (!any && str.length() > 19) {
+            // stringid_conversion_fun (usbhid-ups.c:598-603) reads the string into
+            // static char buf[20]: at most 19 characters
+            str = str.substring(0, 19);
+        }
+        NutTable::onString(_nut_rows, i, str);
+        any = true;
+    }
+    if (any) publishNutRows(ups_data);
 }
 
 String GenericDriver::decodeStringDescriptor(IHidTransport* host, const uint8_t *data, size_t length) {
@@ -671,7 +711,7 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
             }
             if (pick < 0) continue;
             double v = HIDParser::extractUsage(&usages[pick], report_id, data, length);
-            NutTable::onValue(_nut_rows, i, v, _nut_ctx);
+            NutTable::onValue(_nut_rows, i, v, _nut_ctx, &ups_data);
         }
     }
 
@@ -681,10 +721,43 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
         _nut_init_done = true;
     }
 
-    // The table owns its variables: written last, whatever mapping ran before
-    for (const auto& b : _nut_rows) {
-        if (b.role == NutTable::Bound::Role::ACTIVE && b.has) ups_data.set(b.info->info_type, b.value);
+    // Every status row in table order, as one upstream walk: the reports of the BOOL rows
+    // arrive one at a time
+    NutTable::walkInternalRows(_nut_rows, _nut_ctx, &ups_data);
+    publishNutRows(ups_data);
+}
+
+// The table has the final word over a hand-written mapping of the same key, but writes only
+// what differs from ups_data: read-only rows would otherwise allocate Strings at every
+// report (ADR 0007, US-073)
+void GenericDriver::publishNutRows(UPSData& ups_data) {
+    bool load_written = false;
+    for (auto& b : _nut_rows) {
+        if (NutTable::isInternalRow(*b.info)) continue;
+        const char* name = b.info->info_type;
+        if (b.cleared) {
+            // dstate_delinfo() of an upstream function (battery.charger.status)
+            b.cleared = false;
+            if (ups_data.find(name)) ups_data.remove(name);
+            continue;
+        }
+        if (b.role != NutTable::Bound::Role::ACTIVE || !b.has) continue;
+        if (ups_data.valueEquals(name, b.value)) continue;
+        ups_data.set(name, b.value);
+        if (strcmp(name, "ups.load") == 0) load_written = true;
     }
+    // Internal ups.status.* keys from the BOOL rows; nothing for drivers without them
+    NutTable::statusKeys(_nut_ctx.status, [&ups_data](const char* key, const char* value) {
+        const String* current = ups_data.find(key);
+        if (!value) {
+            if (current) ups_data.remove(key);
+        } else if (!current || !(*current == value)) {
+            ups_data.set(key, value);
+        }
+    });
+    // As the generic PercentLoad mapping: the estimate follows the load (until the
+    // eaton_compute_realpower_info row of US-074)
+    if (load_written) ups_data.updateRealPower();
 }
 
 void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {

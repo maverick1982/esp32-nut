@@ -18,6 +18,8 @@ public:
     // Rows of mge_hid2nut (mge-hid.c), NutTable.h (US-066)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::mgeHid2Nut(n); }
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::mgeDelayPaths(); }
+    // Standard mappings whose keys come from mgeHid2Nut() (US-073)
+    const char* const* supersededGenericPaths(size_t& n) const override;
     // Model type and country as known now, for the tests
     const NutTable::Context& nutContext() const { return _nut_ctx; }
 
@@ -28,10 +30,10 @@ protected:
 
 private:
     UsageMapIndex<EatonDriver> _map;
-    uint8_t _chemStrIdx;
 
     // Inputs of mge_type (mge_format_model): the UPS.PowerSummary.iModel string, or
-    // UPS.Flow.[4].ConfigApparentPower when it is empty, and UPS.PowerSummary.Country
+    // UPS.Flow.[4].ConfigApparentPower when it is empty; the country comes from the
+    // device.country row (NutTable::Context::country_seen)
     void updateNutContext(IHidTransport* host, const UPSData& data);
     uint8_t _iModelIdx;
     bool _iModelIdxSeen;
@@ -39,7 +41,6 @@ private:
     String _iModel;
     bool _apparentPowerSeen;
     long _apparentPower;
-    bool _countrySeen;
 };
 
 #endif // EATON_DRIVER_H
