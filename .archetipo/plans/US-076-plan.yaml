@@ -1,0 +1,571 @@
+schema: archetipo/plan/v2
+spec_code: US-076
+body: |-
+  # US-076: Tabella unica APC (apc-hid) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 5 | **Bloccato da:** US-073 (DONE). Anche US-074 (comandi da tabella), US-107 (`ups.alarm`, token di stato, `input.transfer.reason`) e US-075 (CyberPower, 308e95a) sono DONE: il motore e il modello da seguire ci sono già.
+
+  `apcHid2Nut()` riceve tutte le righe di `apc_hid2nut` (`nut_repo/drivers/apc-hid.c:332-470`) nell'ordine upstream. `APCDriver` perde le mappature scritte a mano e tiene solo gli hook non tabellari: `splitProduct`/`formatDeviceStrings` (#76), il poll ridotto e `requestLength` dei Back-UPS BX (#60). Si applicano le regole dell'ADR 0011, come per Eaton e CyberPower.
+
+  ---
+
+  ## Cosa dice il dump delle 13 fixture (pianificazione, 2026-10-29)
+
+  Dal dump dei descriptor (lo stesso metodo di US-075, da rifare nel TASK-01) risulta:
+
+  - **Percorsi vendor APC.** `HIDParser` dà un nome solo a `APCBattReplaceDate` (`NUTUsages.h`). Tutti gli altri usage `0xFF86xxxx` hanno percorsi esadecimali, per esempio `UPS.0xFF860005.0xFF86007C` per `APCGeneralCollection.APCDelayBeforeReboot`. Le mappature di oggi su `UPS.APCGeneralCollection.*` e `UPS.APCEnvironment.*` non scattano quindi mai. Con la tabella tradotta in esadecimale, come per `APCSensitivity` in US-066, `ups.timer.reboot` (riga 371) compare su BGM2200, BX750MI, BX1500G, CS750RS, ES700G e RS900MI, e `ups.timer.shutdown` (370) sull'ES700G.
+  - **`APCStatusFlag`** (`UPS.PowerSummary.0xFF860060`, riga 399, BOOL con `HU_FLAG_QUICK_POLL`) c'è su BX1500G, CS750RS, ES700G, RS900MI e XS700U. Con il valore 0 dà il token `OFF` (US-107), con 8 o 16 lo toglie. Entra anche nel quick poll se il suo report non c'è già.
+  - **`APCLineFailCause`** (`UPS.Input.0xFF860052`, righe 403-404) c'è su 9 fixture. Con i valori 1/2/4/8/9 o 7 dà `vrange`/`frange` e quindi `input.transfer.reason` (US-107), anche con l'UPS da rete, come upstream.
+  - **Formati upstream diversi da quelli di oggi** (differenze visibili):
+    - `battery.voltage` `%.1f` (oggi due decimali, per esempio `27.90` → `27.9`);
+    - `ups.load` `%.1f` dalla riga 352 `UPS.Output.PercentLoad` (Smart-UPS 750 #78, CS500: `40` → `40.0`), `%.0f` dalla riga 353 `PowerConverter.PercentLoad` (Back-UPS: invariato);
+    - `output.voltage.nominal` `%.1f` (`230` → `230.0`);
+    - `output.current` `%.2f`, nuova (Smart-UPS #78).
+  - **Date.**
+    - `PowerSummary.APCBattReplaceDate` è la seconda riga di `battery.mfr.date` (348), mentre oggi APCDriver la scrive in `battery.date`. `Battery.APCBattReplaceDate` resta `battery.date` (349, CS750RS).
+    - `date_conversion` e `apc_date_conversion` danno `not set` per 0: oggi la mappatura generica salta lo 0.
+  - **Comandi.**
+    - Il Back-UPS CS (CS500) ha la riga diretta `shutdown.return` (461, `UPS.Output.0xFF86007C`, valore 1), che il ramo con tabella di `CommandCatalog` oggi non gestisce: con tabella ignora apposta il caso APC CS.
+    - `test.panel.*` stanno su `UPS.0xFF860072` e `UPS.PowerSummary.0xFF860072` (440-443); `shutdown.reboot` su `APCGeneralCollection` (459).
+  - **BX750MI.** Non ha `APCStatusFlag`: il suo quick poll non cambia. Il BX1500G sì (vedi decisioni).
+
+  ---
+
+  ## Decisioni prese in pianificazione (da confermare in review)
+
+  Seguono la fedeltà a upstream già applicata a Eaton e CyberPower.
+
+  1. **Formati come upstream.** `battery.voltage`, `ups.load` dalla riga 352, `output.voltage.nominal` e `output.current` prendono il formato della riga. Le differenze vanno nelle note: per Home Assistant `40.0` e `40` sono lo stesso numero.
+  2. **Righe vendor tradotte in esadecimale** (`apc_usage_lkp` → `0xFF86xxxx`), con il nome upstream nel commento. Chiavi nuove dove legano: `ups.timer.*` da `APCGeneralCollection`, `ambient.*` da `APCEnvironment`, `output.current`.
+  3. **Stato e allarmi dalle sole righe BOOL di apc-hid** (384-404), come per CPS ed Eaton: tutti i percorsi di stato generici si superano.
+     - `APCStatusFlag` → `OFF` e `APCLineFailCause` → `input.transfer.reason` arrivano dalla tabella.
+     - `FullyCharged`, `FullyDischarged` e `CommunicationLost` non sono letti da apc-hid; oggi `ups.status.comm_lost` è una chiave interna, mai mostrata.
+  4. **Quick poll come upstream.** La riga 399 ha `HU_FLAG_QUICK_POLL`: il report di `APCStatusFlag` entra nel quick poll dove non c'era. Sul BX1500G il quick poll resta a 10 s e i report statici si leggono una volta sola (#60). Se la baseline mostra un report in più su un BX, la differenza va nel test e nelle note.
+  5. **`shutdown.return` diretto.** Nel ramo con tabella di `CommandCatalog`, una riga `HU_TYPE_CMD` `shutdown.return` legata vale come in `instcmd()` (`usbhid-ups.c:1112`).
+     - Si scrive il suo campo con il parametro, se c'è, altrimenti con `dfl`.
+     - Il comando compare in LIST CMD se la riga è legata oppure se ci sono entrambi i ritardi.
+     - È il caso APC CS di US-058, ora preso dalla tabella.
+  6. **Estensioni (regola 2).**
+     - Restano: `input.frequency` (apc-hid non ha la riga), `ups.realpower` misurato da ActivePower e la stima quando manca, `ups.power`, `ups.power.nominal` (`Flow.ConfigApparentPower`), `ups.temperature`, `battery.capacity`.
+     - Sparisce `battery.capacity.full`.
+  7. **`apc_fix_report_desc` non serve.** Corregge LogMin/LogMax di `UPS.Input.Voltage` sul Back-UPS XS 1400U, ma `extractUsage()` non taglia al Logical Maximum, come per CPS. Va solo verificato e scritto nel commento del driver.
+  8. **Fuori scope**, hook upstream che il firmware non replica oggi e che questa spec non cambia:
+     - `general_apc_check` (`max_report_size` per "Back-UPS ES 525"/"CS"), oltre a quello che già fa `requestLength` sui BX;
+     - `disable_interrupt_pipe` per i PID 0x0003/0x0004.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Motore (`NutTable.h`)
+  - **`Conv::ApcDate`** (`apc_date_conversion_fun`, `apc-hid.c:114-139`): `not set` per 0; altrimenti anno, mese e giorno in BCD (anno ≥ 70 → 1900+, altrimenti 2000+) e `%04d/%02d/%02d`. Solo decode: le righe 348-349 sono RO.
+  - **Lookup verbatim:**
+    - `kApcStatusFlag` (`apcstatusflag_info`: 8 `!off`, 16 `!off`, 0 `off`);
+    - `kApcLineFailCauseVrange` (1, 2, 4, 8, 9 `vrange`; 0 `!vrange`);
+    - `kApcLineFailCauseFrange` (7 `frange`; 0 `!frange`).
+
+    `kNobatteryInfo`, `kShutdownimmInfo`, `kTimelimitexpiredInfo`, `kTestRead`, `kBeeperInfo` e `kApcSensitivity` ci sono già.
+
+  ### 2. `apcHid2Nut()`
+  - Tutte le righe 334-467 in ordine, con il commento `// apc-hid.c:N <path upstream>`.
+  - **Percorsi:** `APCGeneralCollection` `0xFF860005`, `APCEnvironment` `0xFF860006`, `APCProbe1` `0xFF860007`, `APCLineFailCause` `0xFF860052`, `APCStatusFlag` `0xFF860060`, `APCSensitivity` `0xFF860061`, `APCPanelTest` `0xFF860072`, `APCDelayBeforeReboot/Shutdown/Startup` `0xFF86007C/7D/7E`. `APCBattReplaceDate` resta col nome, perché il parser lo nomina.
+  - **Conversioni:** `ApcDate` (348-349), `BatteryDate` (347, 374-375), `KelvinCelsius` (345, 423), `StringId` (346), `Lookup` per test, beeper e stati.
+  - **Righe escluse o commentate:**
+    - `ups.delay.*` (355-356, 361-362, 367-368) restano escluse come oggi;
+    - le due righe commentate `APCProbe2` (426-427) si citano come commento.
+  - **Comandi 434-467**, con `DEFAULT_OFFDELAY`/`DEFAULT_ONDELAY` `"20"`/`"30"` (`usbhid-ups.h`).
+  - **Test:** `checkTableCoverage("nut_repo/drivers/apc-hid.c", "static hid_info_t apc_hid2nut[]", ..., "inline const HidInfo* apcHid2Nut", "inline const HidInfo* cpsHid2Nut")` e il test dei formati.
+
+  ### 3. `CommandCatalog` (ramo con tabella)
+  - **`shutdown.return` diretto**, come descritto nella decisione 5.
+  - Il ramo senza tabella (`apcCsReturnField`) resta per gli altri driver fino a US-079.
+
+  ### 4. `APCDriver`
+  - **Override:** `commandTable()` (`apcHid2Nut`) e `supersededGenericPaths()`.
+  - **Percorsi superati**, copiati carattere per carattere da `GenericDriver::decodeReport()`, per le chiavi che la tabella possiede:
+    - stato, tutti come in CPS;
+    - `battery.charge`/`.low`, `battery.runtime` (2), `battery.voltage` (3), `battery.voltage.nominal` (2), `battery.temperature`, `battery.mfr.date` (`Battery.ManufacturerDate`, `BatterySystem.Battery.Date`, `Battery.Date`);
+    - `ups.load` (3), `ups.timer.shutdown`, `ups.test.result` (3), `ups.beeper.status` (3), `ups.mfr.date` (2), `ups.realpower.nominal` (3);
+    - `input.voltage` (3), `input.voltage.nominal` (2), `input.transfer.*` (6), `output.voltage` (2), `output.voltage.nominal` (2), `output.frequency` (2);
+    - `battery.capacity.full`.
+  - **Restano:** le estensioni della decisione 6.
+  - **Si tolgono:** `decodeReport`, `_map`, `setup` (se resta solo la base), le mappature.
+  - **Non cambiano:** `onLoop` (BX), `quickPollMs`, `maxReportAgeMs`, `pollStaticReportsOnce`, `requestLength`, `splitProduct`, `formatDeviceStrings`.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video. Prova sul campo affidata a un tester APC (assunzione della spec).
+
+  - **Baseline prima del codice** (TASK-01):
+    - snapshot completo delle 13 fixture APC, con lo stesso `FixtureReplayRunner::snapshot()` di US-075;
+    - liste quick/full del poll di ognuna, da `buildPollLists()` attraverso una sonda di test che deriva da `APCDriver`.
+
+    Dopo la migrazione ogni differenza va commentata con la riga upstream o con la decisione del piano.
+  - **`test_nut_table`:**
+    - `ApcDate`: `0x102202` → `2002/10/22`, `0x102270` → `1970/10/22`, 0 → `not set`;
+    - i tre lookup nuovi;
+    - copertura di `apc-hid.c` e formati.
+  - **`test_command_catalog`:**
+    - sulle 13 fixture, i comandi con `apcHid2Nut()` confrontati col ramo senza tabella; le differenze vanno motivate;
+    - CS500: `shutdown.return` è una scrittura di 1 su `UPS.Output.0xFF86007C`, mai `shutdown.reboot` su quel campo;
+    - `test.panel.*` su `UPS.0xFF860072`.
+  - **`test_apc_driver`:**
+    - i test di oggi con decode + postDecode;
+    - nuovi casi: `ups.load` `%.1f` contro `%.0f` secondo la riga; `battery.voltage` con un decimale; `APCStatusFlag` 0 → `OFF` e 8 → nessun token; `APCLineFailCause` 8 → `input.transfer.reason`; timer di `APCGeneralCollection`; estensioni mantenute; `battery.capacity.full` assente.
+    - I test BX restano invariati.
+  - **`test_record_replay`:**
+    - righe legate per ogni fixture, ricavate a mano;
+    - LIST CMD/RW;
+    - BGM2200 (tre fixture: `OL DISCHRG` e valori senza zeri, #98);
+    - BX750MI (poll e set);
+    - baseline `ups.status` (con `OFF`/`ALARM` motivati se compaiono);
+    - snapshot e liste di poll con le differenze commentate.
+  - **Mutazioni** (ognuna deve far fallire almeno un test): togliere un percorso superato; togliere `shutdown.return` diretto; togliere una citazione da `apcHid2Nut()`; invertire il lookup `kApcStatusFlag`.
+  - **Regressione:** suite nativa completa a blocchi, build `esp32-s3-standard` da PowerShell. Con l'ok dell'utente, OTA sull'Eaton 3S con `nut_snapshot.py` prima e dopo (`GenericDriver` e `CommandCatalog` cambiano).
+
+  ---
+
+  ## Rischi e note
+
+  - **#60.** Un report in più nel quick poll di un BX è il rischio maggiore. La baseline del poll lo rende visibile; se capita va segnalato all'utente prima di accettarlo.
+  - **#98.** BGM2200: i campi ripetuti letti dalla prima occorrenza (parser, US-098) e `OL DISCHRG` (US-101, `computeUPSStatusString`) non stanno nella tabella. `bind()` lega il primo usage del percorso, in ordine di descriptor, quindi la scelta del campo è coerente.
+  - **Tester.** Smart-UPS (miskor-bgd, Sr-psycho) e Back-UPS XS 1500M (JSylvia007). Testo come bozza, pubblicazione solo su richiesta dell'utente.
+  - **Note di rilascio** in `docs/releases/v1.12.0.md`.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-29_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: snapshot e liste di poll delle 13 fixture APC'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima del codice, quello che il firmware pubblica e chiede oggi su ogni fixture APC.
+
+      **Leggi:**
+      - `test/test_record_replay/FixtureReplayRunner.h` (`snapshot()`, `replay()`);
+      - `test/test_record_replay/test_main.cpp` (`test_cyberpower_snapshot_baseline`);
+      - `lib/USBHostUPS/src/GenericDriver.h` (`buildPollLists`, `PollItem`).
+
+      **Modifica:**
+      1. Generalizza il test di US-075: un helper `checkSnapshots(const SnapshotCase*, size_t)` usato da `test_cyberpower_snapshot_baseline` e da un nuovo `test_apc_snapshot_baseline`, con 13 costanti `kApcSnapshot_<fixture>` prese dal codice di oggi.
+      2. Liste di poll: in `FixtureReplayRunner.h` una sonda di test `struct ApcPollProbe : APCDriver { using GenericDriver::buildPollLists; };`.
+         - Per ogni fixture: `replay()`, poi `ApcPollProbe` con `setup()`, `onLoop` equivalente (il flag BX viene da `ups.model`: chiama `loop()` una volta, oppure esponi `onLoop` con `using`), poi `buildPollLists(&host, quick, full)`.
+         - Il risultato è una stringa `quick: 1/3 8/1 ... | full: ...` (`id/tipo`).
+         - Costanti `kApcPoll_<fixture>` nel nuovo test `test_apc_poll_baseline`.
+      3. Commento sopra le costanti con le usage rilevanti di ogni fixture (dump temporaneo, NON committato):
+         - percorsi `0xFF86xxxx`, `Output.PercentLoad` / `PowerConverter.PercentLoad`, `Output.Current`, `Output.APCDelayBeforeReboot`;
+         - presenza di `APCStatusFlag` e `APCLineFailCause`, con il report in cui stanno.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde sul codice di oggi.
+
+      **Fatto:** baseline deterministica, nessun file di produzione modificato.
+
+      **Blocchi:** se `buildPollLists` non è raggiungibile senza toccare la produzione, fermati e proponi l'alternativa: richieste registrate dal mock host durante `loop()`.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — sonda del poll
+      - test/test_record_replay/test_main.cpp — helper degli snapshot, baseline APC e poll
+
+      ## Criteri di Completamento
+      - [ ] 13 snapshot e 13 liste di poll verdi sul codice attuale
+      - [ ] Il test CPS usa lo stesso helper ed è ancora verde
+    ref: TASK-01
+  - id: TASK-02
+    title: 'NutTable: apc_date_conversion e lookup di stato APC'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al motore le conversioni di apc-hid.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h` (`Conv`, `decode`, i lookup di stato, `Conv::BatteryDate`);
+      - `nut_repo/drivers/apc-hid.c:113-205`.
+
+      **Modifica:**
+      1. `Conv::ApcDate` con il commento `apc_date_conversion (apc-hid.c)`. In `decode()`:
+         - `(long)v == 0` → `not set`;
+         - poi `year = (v & 0xf) + 10*((v>>4) & 0xf)`, `month = ((v>>16) & 0xf) + 10*((v>>20) & 0xf)`, `day = ((v>>8) & 0xf) + 10*((v>>12) & 0xf)`, anno +1900 se ≥ 70, altrimenti +2000; `snprintf("%04d/%02d/%02d")`.
+      2. Lookup verbatim con il nome upstream:
+         - `kApcStatusFlag` `{ {8,"!off"}, {16,"!off"}, {0,"off"} }`;
+         - `kApcLineFailCauseVrange` `{ {1,"vrange"}, {2,"vrange"}, {4,"vrange"}, {8,"vrange"}, {9,"vrange"}, {0,"!vrange"} }`;
+         - `kApcLineFailCauseFrange` `{ {7,"frange"}, {0,"!frange"} }`.
+      3. Nessuna modifica a `encode()`: le righe con `ApcDate` sono RO.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_apc_driver` verde.
+
+      **Fatto:** API pronta, compilata con GCC 5.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `Conv::ApcDate`, tre lookup
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Test di apc_date_conversion e dei lookup APC
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il TASK-02 con attese da `apc-hid.c`.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (`conv()`, `statusToken`, i test CPS come modello).
+
+      **Modifica:** test nuovi, registrati in `main()`:
+      - `test_apc_date`: `0x102202` → `2002/10/22` (l'esempio del commento upstream); `0x102270` → `1970/10/22`; `0x092569` → `2069/09/25` (anno 69 < 70: +2000, regola upstream); 0 → `not set`;
+      - `test_apc_status_lookups`:
+        - `kApcStatusFlag`: 0 → `off` (bit OFF), 8 e 16 → `!off`, 4 → nessun token;
+        - `kApcLineFailCauseVrange`: 8 → `vrange`, 0 → `!vrange`, 7 → nessun token;
+        - `kApcLineFailCauseFrange`: 7 → `frange`, 0 → `!frange`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde. Mutazione: invertire `off`/`!off` in `kApcStatusFlag` deve far fallire il test.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** se un'attesa differisce da upstream, vale upstream.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi elencati verdi
+      - [ ] Mutazione colta
+    ref: TASK-03
+  - id: TASK-04
+    title: 'apcHid2Nut(): tutte le righe di apc_hid2nut, copertura e formati'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `apcHid2Nut()` con tutte le righe 334-467 nell'ordine upstream.
+
+      **Leggi:**
+      - `nut_repo/drivers/apc-hid.c:211-286` (`apc_usage_lkp`) e 332-470;
+      - `lib/USBHostUPS/src/NutTable.h` (`apcHid2Nut()` di oggi e `cpsHid2Nut()` come modello);
+      - `lib/USBHostUPS/src/NUTUsages.h` (nomi standard; `APCBattReplaceDate` è l'unico nome APC);
+      - `test/test_nut_table/test_main.cpp` (`checkTableCoverage`, `checkSupportedFormats`);
+      - `test/test_rw_catalog/test_main.cpp` (`full_table`).
+
+      **Modifica:**
+      1. Riscrivi `apcHid2Nut()`, ogni riga preceduta da `// apc-hid.c:N <path upstream>`. Un commento in testa elenca le traduzioni dei nomi vendor:
+         - `APCGeneralCollection` `0xFF860005`, `APCEnvironment` `0xFF860006`, `APCProbe1` `0xFF860007`;
+         - `APCLineFailCause` `0xFF860052`, `APCStatusFlag` `0xFF860060`, `APCSensitivity` `0xFF860061`, `APCPanelTest` `0xFF860072`;
+         - `APCDelayBeforeReboot` `0xFF86007C`, `APCDelayBeforeShutdown` `0xFF86007D`, `APCDelayBeforeStartup` `0xFF86007E`.
+      2. Righe e conversioni:
+         - 345 e 423 `KelvinCelsius`; 346 `StringId`; 347 RW di oggi; 348-349 `ApcDate`;
+         - 352 `%.1f`; 353 `%.0f`;
+         - 357-359, 363-365 e 369-371 timer con `HU_FLAG_QUICK_POLL`; le esclusioni `ups.delay.*` di oggi restano;
+         - 372 `kTestRead`, 373 `kBeeperInfo`, 374-375 `BatteryDate`;
+         - BOOL 384-399 e 403-404 con i lookup e i flag upstream;
+         - 418 `%.1f`, 419 `%.2f`, 424 `%.1f`;
+         - righe RW di oggi al loro posto.
+      3. Commenti per le righe senza riga attiva:
+         - 426-427 (`APCProbe2`, commentate upstream con `/* */`): `// ambient.* (apc-hid.c:426-427) commented out upstream`;
+         - le esclusioni `ups.delay.*` restano.
+      4. Comandi 434-467, `HU_TYPE_CMD`, dfl `"20"`/`"30"` per `DEFAULT_OFFDELAY`/`DEFAULT_ONDELAY` (`usbhid-ups.h`).
+      5. Test in `test_nut_table`:
+         - `test_apc_table_covers_every_upstream_row`: `checkTableCoverage(... "inline const HidInfo* apcHid2Nut", "inline const HidInfo* cpsHid2Nut")`;
+         - `test_apc_rows_have_supported_formats`.
+      6. In `test_rw_catalog`, `full_table` vale vero anche per apc. Il numero di righe RW resta 9.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog` verde.
+      - Mutazione: togliere il commento della 426-427 fa fallire la copertura.
+
+      **Fatto:** tabella completa.
+
+      **Blocchi:** `test_apc_driver` e `test_record_replay` possono fallire fino al TASK-07: non correggerli qui.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `apcHid2Nut()`
+      - test/test_nut_table/test_main.cpp — copertura e formati
+      - test/test_rw_catalog/test_main.cpp — `full_table`
+
+      ## Criteri di Completamento
+      - [ ] Copertura di `apc-hid.c` verde
+      - [ ] Le RW APC restano 9
+    ref: TASK-04
+  - id: TASK-05
+    title: 'CommandCatalog: riga diretta shutdown.return nel ramo con tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** una riga `HU_TYPE_CMD` `shutdown.return` legata vale come in `instcmd()` (`usbhid-ups.c:1112`). È il caso Back-UPS CS di `apc-hid.c:461`.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/CommandCatalog.h` (`buildFromTable`, `resolveShutdownSteps`, `apcCsReturnField`, `single`);
+      - `nut_repo/drivers/usbhid-ups.c:1030-1120` e 1640-1656.
+
+      **Modifica:**
+      1. `buildFromTable`: `shutdown.return` è disponibile con `(shutdown && startup) || (shutdown_cmds && has("shutdown.return"))`. `shutdown.stayoff` non cambia.
+      2. `resolveShutdownSteps` con una tabella:
+         - se `cmdField(table, n, usages, "shutdown.return", &dfl)` esiste, è un solo passo su quel campo, col valore del parametro se c'è (stesse regole di validazione dei parametri di `shutdown.reboot`), altrimenti `cmdDefault(dfl)`;
+         - altrimenti, la sequenza dei due ritardi di oggi.
+      3. Commento: la riga upstream che si cerca prima dei derivati (`find_nut_info`). Il ramo senza tabella (`apcCsReturnField`) resta invariato.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog -f test_hid_control -f test_record_replay` verde, perché nessun driver con tabella ha ancora quella riga.
+
+      **Fatto:** il ramo con tabella gestisce `shutdown.return` diretto.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/CommandCatalog.h — `buildFromTable`, `resolveShutdownSteps`
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+      - [ ] Ramo senza tabella invariato (diff)
+    ref: TASK-05
+  - id: TASK-06
+    title: Test di CommandCatalog con apcHid2Nut()
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che i comandi APC dalla tabella coincidono con quelli di oggi, salvo differenze motivate.
+
+      **Leggi:** `test/test_command_catalog/test_main.cpp` (`checkSameCommandsAsCatalog` con il parametro tabella, i test CPS di US-075).
+
+      **Modifica:**
+      1. `test_apc_table_gives_same_commands_on_fixtures`: `checkSameCommandsAsCatalog(f, NutTable::apcHid2Nut, 20, 30)` sulle 13 fixture APC.
+         - Se una fixture differisce per un motivo upstream (percorsi esatti contro i codici vendor del ramo senza tabella), toglila dal ciclo e scrivi un test dedicato con l'elenco atteso e la riga upstream.
+      2. `test_apc_cs500_shutdown_return_from_row`: sul CS500, `shutdown.return` è un solo passo `UPS.Output.0xFF86007C=1`; con parametro `5` vale 5. `shutdown.reboot` non usa mai quel campo.
+      3. `test_apc_panel_test_rows`: `test.panel.start`/`stop` su `UPS.0xFF860072` con 1/0, e su `UPS.PowerSummary.0xFF860072` (righe 442-443).
+      4. `test_apc_beeper_on_off_not_listed`: come per CPS.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog` verde.
+      - Mutazione: togliere il ramo `shutdown.return` diretto deve far fallire il caso 2.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** una differenza di LIST CMD su una fixture reale va segnalata all'utente, con la riga upstream, prima di accettarla.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-4 verdi
+      - [ ] Mutazione colta
+    ref: TASK-06
+  - id: TASK-07
+    title: 'APCDriver: solo hook non tabellari, mappature superate, comandi dalla tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `APCDriver` senza mappature scritte a mano (ADR 0011).
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/APCDriver.h` / `.cpp`;
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp` (`kSupersededGenericPaths` di US-075, il modello);
+      - `lib/USBHostUPS/src/GenericDriver.cpp` (mappature di `decodeReport`).
+
+      **Modifica:**
+      1. **Header:**
+         - togli `decodeReport`, `_map` e, se resta solo la base, `setup()`/il costruttore. `_back_ups_bx` resta, e `setup()` lo azzera;
+         - aggiungi `supersededGenericPaths()` e `commandTable()` (`NutTable::apcHid2Nut(n)`);
+         - `hid2nut()` e `delayPaths()` invariati.
+      2. **`kSupersededGenericPaths`:** l'elenco della sezione 4 del piano, copiato carattere per carattere da `GenericDriver::decodeReport()`, raggruppato per chiave.
+         - In fondo, un commento con le estensioni che restano: `input.frequency`, `ups.realpower` / `ups.power` / `ups.power.nominal`, `ups.temperature`, `battery.capacity`, la stima di `ups.realpower`.
+      3. **Commento in testa:**
+         - tutto da `apcHid2Nut()` (US-076, ADR 0011);
+         - hook: `splitProduct` (#76), poll BX e `requestLength` (#60);
+         - `apc_fix_report_desc` non serve (motivo: `extractUsage()` non taglia al Logical Maximum; verificalo in `HIDParser::extractUsage`);
+         - `general_apc_check` e `disable_interrupt_pipe` sono fuori scope.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_apc_driver -f test_record_replay -f test_command_catalog`;
+      - i fallimenti attesi sono solo quelli che i TASK-08..09 aggiornano;
+      - annota ogni differenza dello snapshot e delle liste di poll rispetto al TASK-01.
+
+      **Fatto:** `grep -c "d.set(" lib/USBHostUPS/src/APCDriver.cpp` = 0.
+
+      **Blocchi:**
+      - una differenza non spiegata da una riga upstream o da una decisione del piano va segnalata prima di aggiornare i test;
+      - un report in più nel quick poll del BX750MI va segnalato all'utente.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/APCDriver.h — hook
+      - lib/USBHostUPS/src/APCDriver.cpp — mappature tolte, percorsi superati
+
+      ## Criteri di Completamento
+      - [ ] Nessuna `d.set(` in `APCDriver.cpp`
+      - [ ] Ogni percorso superato esiste in `GenericDriver::decodeReport()`
+    ref: TASK-07
+  - id: TASK-08
+    title: Test di APCDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_apc_driver` e coprire le differenze volute.
+
+      **Leggi:** `test/test_apc_driver/test_main.cpp`; `test/test_cyberpower_driver/test_main.cpp` (helper `decode()` di US-075: decodeReport + postDecode).
+
+      **Modifica:**
+      1. Ogni report dei test di oggi passa da `decodeReport` + `postDecode`, come `USBHostUPS` (modifica meccanica). I test BX (`requestLength`, poll, report statici) restano invariati nell'asserto.
+      2. Test nuovi:
+         - `apc_load_format_follows_row`: `UPS.Output.PercentLoad` 40 → `40.0`; `UPS.PowerConverter.PercentLoad` 40 → `40`;
+         - `apc_battery_voltage_one_decimal`: 27,9 → `27.9`;
+         - `apc_status_flag_off`: `APCStatusFlag` 0 → `ups.status.off` = 1 e `OFF` in `computeUPSStatusString`; 8 → nessun `OFF`;
+         - `apc_line_fail_cause_reason`: `APCLineFailCause` 8 → `input.transfer.reason` = `input voltage out of range`; 7 → `input frequency out of range`; 0 → chiave assente;
+         - `apc_general_collection_timers`: `UPS.0xFF860005.0xFF86007C` → `ups.timer.reboot`;
+         - `apc_battery_dates`: `PowerSummary.APCBattReplaceDate` → `battery.mfr.date` (senza `Battery.ManufacturerDate`); `Battery.APCBattReplaceDate` → `battery.date`; 0 → `not set`;
+         - `apc_extensions_kept`: `UPS.Input.Frequency` → `input.frequency`, `BatterySystem.Battery.DesignCapacity` → `battery.capacity`; `BatterySystem.Battery.FullChargeCapacity` non scrive `battery.capacity.full`.
+      3. Registra i test in `main()`.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_apc_driver` verde.
+      - Mutazioni: togliere `UPS.PowerSummary.PresentStatus.ACPresent` da `kSupersededGenericPaths`; invertire `kApcStatusFlag`. Ognuna fa fallire un test.
+
+      **Fatto:** suite verde, mutazioni colte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_apc_driver/test_main.cpp — test aggiornati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Mutazioni colte
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Replay delle 13 fixture APC: righe legate, snapshot, poll, LIST CMD/RW, #60 e #98'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere i criteri 3, 4 e 5 della spec.
+
+      **Leggi:**
+      - `test/test_record_replay/test_main.cpp` (i casi APC, `NUT_ROWS_CPS_*` di US-075 come modello, `test_status_baseline_all_fixtures`, le baseline del TASK-01);
+      - l'appunto delle usage del TASK-01.
+
+      **Modifica:**
+      1. Per ogni fixture APC una macro `NUT_ROWS_APC_<fixture>` (BOOL, RO, RW, comandi, ordinati), ricavata a mano dalle usage e da `apc-hid.c`, non dal firmware. Commento con riga upstream e report. Può servire una base comune per le fixture che condividono il layout (BGM2200 ×3, BX750MI; BX1500G, CS750RS, RS900MI).
+      2. LIST CMD e LIST RW: le attese di oggi; una differenza solo con la riga upstream.
+      3. Snapshot e liste di poll del TASK-01 aggiornati al risultato nuovo. Sopra ogni costante va ogni differenza (chiave, prima → dopo, riga `apc-hid.c:N` o decisione del piano).
+         - Attese: `battery.voltage` con un decimale; `ups.load` `%.1f` su CS500 e Smart-UPS #78; `output.voltage.nominal` `230.0`; `output.current`; `ups.timer.reboot` e `ups.timer.shutdown` da `APCGeneralCollection`; `input.transfer.reason` dove `APCLineFailCause` vale 1/2/4/8/9/7; `OFF` dove `APCStatusFlag` vale 0; `not set` per date a 0.
+      4. **#98:** le tre fixture BGM2200 danno ancora `OL DISCHRG` (dump e da rete) e `OB DISCHRG` (batteria), senza valori a zero nuovi rispetto alla baseline, salvo i cambi di formato.
+      5. **#60:** i test del BX750MI (set cycle, `requestLength`) e la sua lista di poll restano identici.
+      6. `test_status_baseline_all_fixtures`: righe APC invariate, oppure con il motivo (`OFF`, `ALARM`) nel commento.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_rw_catalog` verde.
+
+      **Fatto:** replay verde, ogni differenza elencata e motivata.
+
+      **Blocchi:** una differenza che cambia un valore che l'utente vede oggi, oltre ai formati e alle chiavi nuove previste, va segnalata all'utente prima di accettarla. Vale in particolare per un `OFF` o un `ALARM` nuovo con l'UPS da rete.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — macro delle righe, baseline aggiornate, commenti
+      - test/fixtures/apc/*.json — solo se un `expected_ups_data` va corretto (con motivo)
+
+      ## Criteri di Completamento
+      - [ ] 13 fixture verdi con righe legate ricavate a mano
+      - [ ] LIST CMD/RW invariate o con differenze motivate
+      - [ ] BGM2200 e BX750MI come prima, salvo i formati
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Note di rilascio v1.12.0: sezione APC'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare per gli utenti APC le differenze trovate nel TASK-09.
+
+      **Leggi:**
+      - `docs/releases/v1.12.0.md` (sezioni Eaton e CyberPower);
+      - `data/www/bundle.js` (`NUT_DESCRIPTIONS`), solo per chiavi nuove senza descrizione (`output.current`, `ups.timer.reboot`, `input.transfer.reason`: controlla se ci sono già).
+
+      **Modifica:**
+      1. `docs/releases/v1.12.0.md`:
+         - nel `description:` e nell'intro cita anche APC (apc-hid, US-076);
+         - in "Upgrade notes", una voce **APC** con le differenze reali: formati, chiavi nuove, `OFF`, `input.transfer.reason` da `APCLineFailCause`, date `not set`, `battery.mfr.date` dalla data di sostituzione su PowerSummary, eventuali cambi di LIST CMD o del quick poll;
+         - in "Other changes", la voce driver APC, con gli hook che restano.
+      2. Una chiave nuova senza descrizione: aggiungila a `NUT_DESCRIPTIONS` e lancia `python scripts/embed_web.py`.
+
+      **Verifica:** rilettura del markdown; con `bundle.js` toccato, anche `web_assets.h` deve risultare nel diff.
+
+      **Fatto:** note coerenti con il TASK-09.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — voce APC
+      - data/www/bundle.js — solo per chiavi nuove
+
+      ## Criteri di Completamento
+      - [ ] Ogni differenza visibile del TASK-09 è nelle note
+    ref: TASK-10
+  - id: TASK-11
+    title: Regressione completa, build, mutazioni, OTA sul 3S e bozza per i tester
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con suite completa, build e verifica che l'Eaton non cambi.
+
+      **Leggi:** `scripts/nut_snapshot.py`; gli script OTA e log di US-075 (scratchpad della sessione, `hw/ota_upload.py`, `hw/fetch_logs.py`).
+
+      **Passi:**
+      1. Suite nativa completa in blocchi da circa 11 suite in foreground (`PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f ...`, limite 600 s). Annota il totale.
+      2. Build da PowerShell: `~\.platformio\penv\Scripts\pio.exe run -e esp32-s3-standard`. Annota flash e RAM (US-075: 49,1 %, 16,7 %).
+      3. Mutazioni del piano non già provate: togliere una citazione da `apcHid2Nut()`; togliere un percorso superato. Ognuna deve far fallire un test; poi ripristina.
+      4. Solo con l'ok esplicito dell'utente: OTA sull'Eaton 3S (192.168.1.126, UPS `eaton-3s-700`, credenziali lette da script, mai stampate). `nut_snapshot.py` prima e dopo; System Log senza errori USB.
+      5. Bozza del messaggio ai tester APC (miskor-bgd e Sr-psycho Smart-UPS, JSylvia007 Back-UPS XS 1500M): cosa confrontare (`upsc`, `upscmd -l` prima/dopo, rete staccata, comandi beeper e test), cosa allegare. Niente zip né pubblicazione senza richiesta.
+
+      **Verifica:** passi 1-3 verdi; il passo 4 fatto o saltato su decisione dell'utente.
+
+      **Fatto:** numeri annotati per la review, bozza pronta.
+
+      **Blocchi:** una regressione Eaton blocca la chiusura.
+
+      ## File Coinvolti
+      - nessun file di produzione (esecuzione); bozza nello scratchpad
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde con totale annotato
+      - [ ] Build ok con flash/RAM annotati
+      - [ ] Mutazioni colte
+      - [ ] OTA fatta o saltata su decisione dell'utente
+    ref: TASK-11

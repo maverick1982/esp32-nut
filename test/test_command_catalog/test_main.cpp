@@ -819,6 +819,9 @@ static void checkSameCommandsAsCatalog(const char* file, const NutTable::HidInfo
                                         "shutdown.return", "shutdown.stayoff" };
     for (const char* c : cmds) {
         for (const char* param : { (const char*)nullptr, "45" }) {
+            // A shutdown.return row takes the parameter (instcmd(), US-076); the table-less
+            // Back-UPS CS case ignored it: compared without a parameter only
+            if (param && strcmp(c, "shutdown.return") == 0 && CommandCatalog::cmdField(mge, n, u, c)) continue;
             std::vector<CommandCatalog::WriteStep> legacy, table_steps;
             auto r1 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, legacy);
             auto r2 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, table_steps, mge, n);
@@ -968,6 +971,115 @@ void test_cps_table_reboot_only_from_output() {
     TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(ps, false, true, true, nullptr, cps, n)).c_str());
 }
 
+// --- Commands from the apc-hid table (US-076) ---
+
+static const char* const kApcFixtures[] = {
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json",
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_onbattery.json",
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json",
+    "test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
+    "test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json",
+    "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
+    "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
+    "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0003_issue22.json",
+};
+
+// Same LIST CMD and same load / shutdown writes on every APC fixture (US-058 delays 20/30)
+void test_apc_table_gives_same_commands_on_fixtures() {
+    for (const char* f : kApcFixtures) checkSameCommandsAsCatalog(f, NutTable::apcHid2Nut, 20, 30);
+}
+
+// LIST CMD from apc_hid2nut, written by hand from the FEATURE usages of each descriptor and the
+// command rows of apc-hid.c (not from the catalog without a table): direct rows, then what
+// upsdrv_initinfo() derives (load.off / load.on, shutdown.return / stayoff), then the project
+// rules (beeper.toggle, shutdown.default), in the order of UpsCommands.h
+void test_apc_table_commands_from_upstream_rows() {
+    static const struct { const char* file; const char* expected; } cases[] = {
+        // 435/437/439 UPS.Battery.Test, 446/448 PowerSummary.DelayBeforeShutdown,
+        // 463-467 PowerSummary.AudibleAlarmControl; no DelayBeforeStartup, no DelayBeforeReboot
+        { "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
+          "beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep "
+          "test.battery.stop load.off load.off.delay shutdown.stop shutdown.default" },
+        // 440/441 UPS.APCPanelTest, 456/458/459 APCGeneralCollection.APCDelayBeforeShutdown and
+        // APCDelayBeforeReboot (no APCDelayBeforeStartup), 463-467; no Battery.Test (issue #71)
+        { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
+          "beeper.enable beeper.disable beeper.toggle beeper.mute test.panel.start test.panel.stop "
+          "load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default" },
+        // 435/437/439, 440/441, 446/448/449 PowerSummary delays, 451-454 Output delays (452 gives
+        // load.on.delay), 461 Output.APCDelayBeforeReboot (shutdown.return), 463-467
+        { "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json",
+          "beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep "
+          "test.battery.stop test.panel.start test.panel.stop load.off load.on load.off.delay load.on.delay "
+          "shutdown.return shutdown.stayoff shutdown.stop shutdown.reboot shutdown.default" },
+    };
+    size_t n;
+    const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
+    for (const auto& c : cases) {
+        HIDParser parser;
+        std::vector<HIDUsageDef> u = fixtureUsages(c.file, parser);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(c.expected, names(CommandCatalog::build(u, true, true, true, nullptr, apc, n)).c_str(), c.file);
+    }
+}
+
+void test_apc_cs500_shutdown_return_from_row() {
+    // apc-hid.c:461: shutdown.return is one write of 1 on UPS.Output.APCDelayBeforeReboot, or
+    // of the parameter (instcmd(), usbhid-ups.c:1112) when it fits the field's declared range;
+    // shutdown.reboot never uses that field
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages("test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json", parser);
+    size_t n;
+    const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
+    std::vector<CommandCatalog::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", nullptr, u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", stepsStr(steps).c_str());
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", "0", u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=0", stepsStr(steps).c_str());
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::INVALID_ARGUMENT,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", "abc", u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeReboot=10", stepsStr(steps).c_str());
+
+    // The row alone lists shutdown.return, without the two delays
+    std::vector<HIDUsageDef> only = { mk("UPS.Output.0xFF86007C", 0xff86007c, 0x03) };
+    TEST_ASSERT_EQUAL_STRING("shutdown.return shutdown.default",
+                             names(CommandCatalog::build(only, false, true, true, nullptr, apc, n)).c_str());
+}
+
+void test_apc_panel_test_rows() {
+    // apc-hid.c:440-443: test.panel.* on UPS.APCPanelTest, then UPS.PowerSummary.APCPanelTest
+    size_t n;
+    const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
+    HIDUsageDef def;
+    uint32_t value = 0;
+    for (const char* path : { "UPS.0xFF860072", "UPS.PowerSummary.0xFF860072" }) {
+        std::vector<HIDUsageDef> u = { mk(path, 0xff860072, 0x03) };
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("test.panel.start test.panel.stop",
+                                         names(CommandCatalog::build(u, false, true, true, nullptr, apc, n)).c_str(), path);
+        TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.start", u, def, value, apc, n));
+        TEST_ASSERT_EQUAL_STRING(path, def.path);
+        TEST_ASSERT_EQUAL(1, value);
+        TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.stop", u, def, value, apc, n));
+        TEST_ASSERT_EQUAL(0, value);
+    }
+}
+
+void test_apc_beeper_on_off_not_listed() {
+    // beeper.on/off (apc-hid.c:463-464) are rows, not names of UpsCommands.h
+    std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
+                             names(CommandCatalog::build(u, true, true, true, nullptr, apc, n)).c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -1017,6 +1129,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cps_table_write_values);
     RUN_TEST(test_cps_table_beeper_on_off_not_listed);
     RUN_TEST(test_cps_table_reboot_only_from_output);
+    RUN_TEST(test_apc_table_gives_same_commands_on_fixtures);
+    RUN_TEST(test_apc_table_commands_from_upstream_rows);
+    RUN_TEST(test_apc_cs500_shutdown_return_from_row);
+    RUN_TEST(test_apc_panel_test_rows);
+    RUN_TEST(test_apc_beeper_on_off_not_listed);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

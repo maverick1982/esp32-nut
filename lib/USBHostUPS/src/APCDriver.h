@@ -12,7 +12,6 @@ public:
     virtual ~APCDriver() = default;
 
     void setup() override;
-    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
 
     // Back-UPS BX: the firmware stops answering on EP0 under the default 2 s quick poll
     // (issue #60). Their users run usbhid-ups with pollinterval = 10.
@@ -33,9 +32,13 @@ public:
     // ups.model without the firmware, which goes to ups.firmware / ups.firmware.aux (issue #76)
     void formatDeviceStrings(UPSData& data) override;
 
-    // Rows of apc_hid2nut (apc-hid.c) (NutTable.h, US-066)
+    // Rows of apc_hid2nut (apc-hid.c), NutTable.h (US-066, US-076)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::apcHid2Nut(n); }
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::apcDelayPaths(); }
+    // Standard mappings whose keys come from apcHid2Nut() (US-076)
+    const char* const* supersededGenericPaths(size_t& n) const override;
+    // Instant commands from the HU_TYPE_CMD rows of apc_hid2nut (US-076)
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::apcHid2Nut(n); }
 
 protected:
     void onLoop(IHidTransport* host, UPSData& data) override;
@@ -45,7 +48,6 @@ protected:
     bool pollStaticReportsOnce() const override { return _back_ups_bx; }
 
 private:
-    UsageMapIndex<APCDriver> _map;
     bool _back_ups_bx;
 };
 

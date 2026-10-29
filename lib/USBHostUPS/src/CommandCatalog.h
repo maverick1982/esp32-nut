@@ -247,6 +247,8 @@ inline std::vector<const UPSCommandInfo*> buildFromTable(const std::vector<HIDUs
     const bool startup = shutdown_cmds && has("load.on.delay");
     const bool stop = shutdown_cmds && has("shutdown.stop");
     const bool reboot = shutdown_cmds && has("shutdown.reboot");
+    // A shutdown.return row of its own (apc-hid.c:461, US-076), besides the composite command
+    const bool return_row = shutdown_cmds && has("shutdown.return");
 
     std::vector<const UPSCommandInfo*> result;
     size_t count;
@@ -270,12 +272,14 @@ inline std::vector<const UPSCommandInfo*> buildFromTable(const std::vector<HIDUs
             available = startup;
         } else if (strcmp(n, "shutdown.stop") == 0) {
             available = stop;
-        } else if (strcmp(n, "shutdown.return") == 0 || strcmp(n, "shutdown.stayoff") == 0) {
+        } else if (strcmp(n, "shutdown.return") == 0) {
+            available = (shutdown && startup) || return_row;
+        } else if (strcmp(n, "shutdown.stayoff") == 0) {
             available = shutdown && startup;
         } else if (strcmp(n, "shutdown.reboot") == 0) {
             available = reboot;
         } else if (strcmp(n, "shutdown.default") == 0) {
-            available = reboot || shutdown;
+            available = reboot || shutdown || return_row;
         }
         if (available && allowed(allow, n)) result.push_back(&commands[i]);
     }
@@ -407,7 +411,8 @@ inline bool fitsField(const HIDUsageDef& field, int32_t value) {
  * HID writes of a load.* or shutdown.* command, with the semantics of instcmd() in
  * usbhid-ups.c and of the <brand>-hid.c tables. off_delay and on_delay are
  * ups.delay.shutdown and ups.delay.start. param is used only by load.off.delay,
- * load.on.delay and shutdown.reboot (nullptr or "" = default) and ignored by the others;
+ * load.on.delay, shutdown.reboot and a shutdown.return table row (nullptr or "" = default)
+ * and ignored by the others;
  * when not an integer >= -1, or outside the field's declared logical range,
  * INVALID_ARGUMENT with no steps. Missing usage: NOT_SUPPORTED. Two steps are written in
  * order, with the 125 ms pause of usbhid-ups between them. shutdown.default is not a
@@ -457,6 +462,12 @@ inline StepsResult resolveShutdownSteps(const char* name, const char* param, con
     if (strcmp(name, "shutdown.stop") == 0) return single(sd, -1, false);
     if (strcmp(name, "shutdown.reboot") == 0) return single(rebootField(usages), 10, true);
     if (strcmp(name, "shutdown.return") == 0) {
+        // A shutdown.return row of the table is found by find_nut_info() before the composite
+        // command: one write on its field of the parameter, or of the row's dfl (instcmd(),
+        // usbhid-ups.c:1112; the Back-UPS CS row of apc-hid.c:461, US-076)
+        const char* dfl = nullptr;
+        const HIDUsageDef* row = cmd_table ? cmdField(cmd_table, n_cmd_table, usages, "shutdown.return", &dfl) : nullptr;
+        if (row) return single(row, cmdDefault(dfl), true);
         const HIDUsageDef* cs = cmd_table ? nullptr : apcCsReturnField(usages);
         if (cs) {
             steps.push_back({ *cs, 1 });

@@ -54,9 +54,10 @@ public:
     }
     // US-074: the driver's command rows (mgeHid2Nut) and the beeper write on a row's field
     bool useTable = false;
+    const NutTable::HidInfo* (*tableFn)(size_t&) = NutTable::mgeHid2Nut;
     const NutTable::HidInfo* commandTable(size_t& n) const override {
         n = 0;
-        return useTable ? NutTable::mgeHid2Nut(n) : nullptr;
+        return useTable ? tableFn(n) : nullptr;
     }
     bool setBeeperField(const HIDUsageDef& field, bool enable) override {
         io.push_back({ std::string("beeperField:") + field.path, enable ? 1 : 0, depth });
@@ -576,6 +577,22 @@ void test_table_shutdown_sets_start_auto_first(void) {
     TEST_ASSERT_EQUAL(0, plain.planCalls);
 }
 
+void test_table_return_row_leaves_start_auto(void) {
+    // apc-hid.c:461: the Back-UPS CS shutdown.return row is one write of its dfl; upstream
+    // finds it with find_nut_info() and never reaches the composite branch that sets
+    // ups.start.auto (US-076)
+    FakePort port;
+    port.useTable = true;
+    port.tableFn = NutTable::apcHid2Nut;
+    HIDUsageDef cs = featureUsage("UPS.Output.0xFF86007C", 0xff86007c);
+    cs.bit_size = 8;
+    port.usages.push_back(cs);
+    port.data.set("ups.start.auto", "no");
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "shutdown.return", nullptr));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", ioStr(port).c_str());
+    TEST_ASSERT_EQUAL(0, port.planCalls);
+}
+
 void test_table_commands_listed_from_rows(void) {
     FakePort port;
     port.useTable = true;
@@ -617,6 +634,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_hid_port_is_its_hid_part);
     RUN_TEST(test_table_beeper_writes_row_field);
     RUN_TEST(test_table_shutdown_sets_start_auto_first);
+    RUN_TEST(test_table_return_row_leaves_start_auto);
     RUN_TEST(test_table_commands_listed_from_rows);
     RUN_TEST(test_table_start_auto_untouched_when_sequence_cannot_run);
     return UNITY_END();

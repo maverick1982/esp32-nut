@@ -331,7 +331,7 @@
         "ups.beeper.status": "disabled",
         "battery.mfr.date": "2001/01/01",
         "battery.voltage.nominal": "12.0",
-        "battery.voltage": "13.60",
+        "battery.voltage": "13.6",
         "input.voltage.nominal": "230",
         "input.voltage": "245.0",
         "input.transfer.low": "145",

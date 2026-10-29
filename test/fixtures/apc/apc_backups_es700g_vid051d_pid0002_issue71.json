@@ -447,7 +447,7 @@
         "ups.status.overload": "0",
         "ups.mfr.date": "2018/04/15",
         "battery.voltage.nominal": "12.0",
-        "battery.voltage": "13.26",
+        "battery.voltage": "13.3",
         "battery.charge.low": "10",
         "ups.beeper.status": "enabled",
         "battery.mfr.date": "2018/04/15",

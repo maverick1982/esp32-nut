@@ -607,6 +607,41 @@ void test_status_lookups_cps() {
     TEST_ASSERT_EQUAL_STRING("!timelimitexp", statusToken(expired, 0, ctx, nullptr));
 }
 
+// --- apc-hid.c conversions (US-076) ---
+
+void test_apc_date() {
+    // apc_date_conversion_fun: BCD 0xMMDDYY, years from 70 in the 1900s
+    HidInfo date = { "battery.mfr.date", 0, 0, "UPS.X", "%s", 0, Conv::ApcDate, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("2002/10/22", conv(date, 0x102202, ctx).c_str()); // the upstream example
+    TEST_ASSERT_EQUAL_STRING("1970/10/22", conv(date, 0x102270, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("2069/09/25", conv(date, 0x092569, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("not set", conv(date, 0, ctx).c_str());
+}
+
+void test_apc_status_lookups() {
+    // apcstatusflag_info, apc_linefailcause_vrange_info, apc_linefailcause_frange_info
+    HidInfo flag = { "BOOL", 0, 0, "UPS.X", nullptr, 0, Conv::Lookup, NUT_LKP(kApcStatusFlag) };
+    HidInfo vrange = { "BOOL", 0, 0, "UPS.Y", nullptr, 0, Conv::Lookup, NUT_LKP(kApcLineFailCauseVrange) };
+    HidInfo frange = { "BOOL", 0, 0, "UPS.Y", nullptr, 0, Conv::Lookup, NUT_LKP(kApcLineFailCauseFrange) };
+    Context ctx;
+    applyStatusToken(ctx.status, statusToken(flag, 0, ctx, nullptr));
+    TEST_ASSERT_TRUE(bit(ctx.status, ST_OFF));
+    TEST_ASSERT_EQUAL_STRING("!off", statusToken(flag, 8, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!off", statusToken(flag, 16, ctx, nullptr));
+    TEST_ASSERT_NULL(statusToken(flag, 4, ctx, nullptr));
+    applyStatusToken(ctx.status, statusToken(flag, 8, ctx, nullptr));
+    TEST_ASSERT_FALSE(bit(ctx.status, ST_OFF));
+
+    TEST_ASSERT_EQUAL_STRING("vrange", statusToken(vrange, 8, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("vrange", statusToken(vrange, 1, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!vrange", statusToken(vrange, 0, ctx, nullptr));
+    TEST_ASSERT_NULL(statusToken(vrange, 7, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("frange", statusToken(frange, 7, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!frange", statusToken(frange, 0, ctx, nullptr));
+    TEST_ASSERT_NULL(statusToken(frange, 8, ctx, nullptr));
+}
+
 void test_command_rows_never_published() {
     // HU_TYPE_CMD rows: bound, but outside the INIT rule and never given a value
     static const HidInfo t[] = {
@@ -721,6 +756,12 @@ void test_mge_rows_have_supported_formats() {
     checkSupportedFormats(t, n);
 }
 
+void test_apc_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = apcHid2Nut(n);
+    checkSupportedFormats(t, n);
+}
+
 void test_cps_rows_have_supported_formats() {
     size_t n;
     const HidInfo* t = cpsHid2Nut(n);
@@ -817,6 +858,12 @@ void test_mge_table_covers_every_upstream_row() {
                        "inline const HidInfo* mgeHid2Nut", "inline const HidInfo* apcHid2Nut");
 }
 
+void test_apc_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every apc_hid2nut row is in apcHid2Nut(), as a row or as a comment (US-076)
+    checkTableCoverage("nut_repo/drivers/apc-hid.c", "static hid_info_t apc_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* apcHid2Nut", "inline const HidInfo* cpsHid2Nut");
+}
+
 void test_cps_table_covers_every_upstream_row() {
     // ADR 0011 rule 1: every cps_hid2nut row is in cpsHid2Nut(), as a row or as a comment (US-075)
     checkTableCoverage("nut_repo/drivers/cps-hid.c", "static hid_info_t cps_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
@@ -855,9 +902,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_cps_frequency_scale);
     RUN_TEST(test_cps_frequency_scale_rule);
     RUN_TEST(test_status_lookups_cps);
+    RUN_TEST(test_apc_date);
+    RUN_TEST(test_apc_status_lookups);
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
     RUN_TEST(test_mge_table_covers_every_upstream_row);
+    RUN_TEST(test_apc_rows_have_supported_formats);
+    RUN_TEST(test_apc_table_covers_every_upstream_row);
     RUN_TEST(test_cps_rows_have_supported_formats);
     RUN_TEST(test_cps_table_covers_every_upstream_row);
     RUN_TEST(test_alarm_rows_of_mge_table);

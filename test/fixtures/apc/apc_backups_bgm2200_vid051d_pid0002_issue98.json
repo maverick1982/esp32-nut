@@ -334,7 +334,7 @@
         "ups.test.result": "No test initiated",
         "battery.runtime.low": "120",
         "battery.voltage.nominal": "24.0",
-        "battery.voltage": "0.00",
+        "battery.voltage": "0.0",
         "input.voltage.nominal": "230",
         "input.voltage": "0.0",
         "input.transfer.low": "176",
