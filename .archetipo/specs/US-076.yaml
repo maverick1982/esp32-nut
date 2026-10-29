@@ -16,20 +16,21 @@ body: |
   **User Story**
   Come utente di un UPS APC,
   voglio che variabili, stati e comandi vengano dalla tabella `apcHid2Nut()` copiata da `apc_hid2nut`,
-  in modo da avere gli stessi dati di usbhid-ups senza perdere le correzioni fatte per i Back-UPS BX, CS ed ES.
+  in modo da avere gli stessi dati di usbhid-ups senza perdere le correzioni fatte per i Back-UPS BX, CS, ES e BGM.
 
   **Dimostrazione**
-  Sulle 10 fixture APC, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che apc-hid ricava da quei descriptor. Sul BX750MI restano invariati il poll ridotto e il recupero dei blocchi EP0 (issue #60).
+  Sulle 13 fixture APC, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che apc-hid ricava da quei descriptor. Sul BX750MI restano invariati il poll ridotto e il recupero dei blocchi EP0 (issue #60); sul BGM2200 restano `OL DISCHRG` da rete e i valori senza zeri (issue #98).
 
   **Criteri di Accettazione**
   - [ ] `apcHid2Nut()` contiene tutte le righe di `apc_hid2nut` nell'ordine upstream, comprese le conversioni APC (`apc_date_conversion` e simili). Le esclusioni sono motivate.
   - [ ] `APCDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: `splitProduct` (issue #76), poll BX, quirk.
   - [ ] Per ogni fixture APC, gli elenchi attesi di variabili e comandi, ricavati in modo indipendente, coincidono con quelli pubblicati. Le differenze rispetto a prima sono nelle note di rilascio.
   - [ ] Il comportamento del BX (`pollStaticReportsOnce`, restart dopo blocchi EP0) e i suoi test restano invariati.
+  - [ ] Restano invariate le correzioni della #98 che stanno fuori dalla tabella: i campi ripetuti letti dalla prima occorrenza nel parser HID (US-098) e `OL DISCHRG` in `computeUPSStatusString` (US-101). Le tre fixture BGM2200 (dump, da rete, da batteria) danno gli stessi valori di prima.
   - [ ] Suite nativa verde e build ok.
 
   **Assunzioni**
-  - Prima del rilascio serve la prova di un tester APC (per esempio miskor-bgd o Sr-psycho, Smart-UPS).
+  - Prima del rilascio serve la prova di un tester APC (per esempio miskor-bgd o Sr-psycho, Smart-UPS; JSylvia007, Back-UPS XS 1500M).
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"

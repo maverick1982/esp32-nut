@@ -5,12 +5,12 @@ epic:
   code: EP-001
   title: Gestione USB Host
 priority: MEDIUM
-points: 5
+points: 8
 status: TODO
 body: |
   #### US-074: Tabella unica Eaton (mge-hid), parte 2: PowerConverter, Input/Output, Flow, Outlet e comandi
 
-  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 8 | **Stato:** TODO
   **Bloccato da:** US-073
 
   **User Story**
@@ -23,14 +23,15 @@ body: |
 
   **Criteri di Accettazione**
   - [ ] `mgeHid2Nut()` contiene tutte le restanti righe di `mge_hid2nut`, comandi `HU_TYPE_CMD` compresi, nell'ordine upstream. Restano escluse solo le tre variabili bypass/ECO di US-070 e le conversioni non portabili, con un commento.
-  - [ ] I comandi Eaton vengono dalla tabella. `LIST CMD` sulle fixture Eaton coincide con quello di oggi, salvo differenze motivate da upstream.
+  - [ ] Per gli Eaton l'elenco dei comandi e i loro passi di scrittura vengono dalle righe `HU_TYPE_CMD`, usate da `HidControl` (US-105) al posto delle voci di `CommandCatalog`. `LIST CMD` e i valori scritti sulle fixture Eaton coincidono con quelli di oggi, salvo differenze motivate da upstream. Restano invariati `IUpsSource`, `UpsCommands.h` (nomi e descrizioni per server NUT e Web API), l'ordine dei lock e i messaggi del System Log.
   - [ ] `EatonDriver` non ha più mappature scritte a mano. Restano solo gli hook non tabellari: stringhe, contesto modello e paese, quirk.
   - [ ] Per ogni fixture Eaton, l'elenco completo atteso delle variabili coincide con quello pubblicato, e le differenze rispetto a prima sono nelle note di rilascio, applicando la regola dell'ADR di US-073.
   - [ ] La pagina "UPS Telemetry" della Web UI funziona con le chiavi risultanti.
-  - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale.
+  - [ ] Suite nativa verde e build ok; prova sull'Eaton 3S reale, comandi compresi (beeper, test, `shutdown.stop`).
 
   **Assunzioni**
   - Usa il motore e la regola sulle chiavi decisi in US-073.
+  - Dopo EP-006 i comandi passano da `HidControl`, non più da `IUSBHostUPS`: questa spec cambia da dove `HidControl` prende l'elenco e i passi per gli Eaton, non l'interfaccia verso i consumatori.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"

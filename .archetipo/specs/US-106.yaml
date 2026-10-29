@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-106
+title: Tabelle uniche Legrand (legrand-hid) e Liebert/Phoenixtec (liebert-hid)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: LOW
+points: 3
+status: TODO
+blocked_by:
+  - US-073
+body: |
+  #### US-106: Tabelle uniche Legrand (legrand-hid) e Liebert/Phoenixtec (liebert-hid)
+
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-073
+
+  **User Story**
+  Come manutentore del firmware,
+  voglio che variabili, stati e comandi Legrand e Liebert/Phoenixtec vengano dalle tabelle `legrandHid2Nut()` e `liebertHid2Nut()` copiate da `legrand_hid2nut` e `liebert_hid2nut`,
+  in modo che anche i due driver nati dopo la decisione sulla convergenza abbiano una sola fonte per ogni valore, e che US-079 possa togliere tutte le mappature scritte a mano.
+
+  **Dimostrazione**
+  Sulle fixture Legrand Keor PDU 800 (issue #90) e Powerwalker VI 2200 SHL (issue #96), `upsc` e `upscmd -l` danno gli stessi valori di oggi, che vengono dalle righe delle tabelle upstream. `LegrandDriver` e `LiebertDriver` non hanno più mappature scritte a mano.
+
+  **Criteri di Accettazione**
+  - [ ] `legrandHid2Nut()` e `liebertHid2Nut()` contengono tutte le righe dei due subdriver upstream nell'ordine originale, comprese quelle `ups.delay.*` già usate da `legrandDelayPaths()` e `liebertDelayPaths()`. Le esclusioni sono motivate con un commento.
+  - [ ] Legrand: resta la scelta di US-087 di non applicare le conversioni `legrand_times*`/`divide_by_10` (sulla Keor PDU 800 il nostro esponente HID dà già 12/13,7/230 V). È scritta come esclusione motivata nella tabella.
+  - [ ] Restano gli hook non tabellari: per Legrand `encodeBeeperValue()` (2 = abilitato, 3 = disabilitato) e `beeperMuteSupported()`; per Liebert l'elenco dei comandi consentiti, il tipo di batteria dalla stringa e `input.transfer.*` dalle usage vendor di PowerConverter.Output. Ogni hook che resta ha il motivo in un commento.
+  - [ ] Il replay delle due fixture dà gli stessi valori di prima. Ogni differenza è motivata da una riga upstream ed elencata nel test e nelle note di rilascio, con la regola dell'ADR di US-073.
+  - [ ] `ups.status` e `LIST CMD` restano invariati sulle due fixture, salvo differenze motivate.
+  - [ ] Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Legrand (US-087) e Liebert (US-097) sono nati dopo il 2026-10-15 con il vecchio sistema: GenericDriver più le righe scritte a mano che mancavano al generico. In `NutTable.h` oggi hanno solo i percorsi dei ritardi.
+  - Nessun Legrand né Powerwalker in sede: prima del rilascio serve la prova di un tester: Mickel4711 ha segnalato entrambi i modelli (Keor PDU 800 nella #90, VI 2200 SHL nella #96).
+  - Usa il motore, il formato delle tabelle e la regola sulle chiavi decisi in US-073.
+history:
+  - status: TODO
+    at: "2026-10-29T08:52:42Z"

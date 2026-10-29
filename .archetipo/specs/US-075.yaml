@@ -4,32 +4,33 @@ title: 'Tabella unica CyberPower (cps-hid): voci RO, stati e comandi'
 epic:
   code: EP-001
   title: Gestione USB Host
-priority: MEDIUM
+priority: LOW
 points: 5
 status: TODO
 body: |
   #### US-075: Tabella unica CyberPower (cps-hid): voci RO, stati e comandi
 
-  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
   **Bloccato da:** US-073
 
   **User Story**
-  Come utente di un UPS CyberPower,
-  voglio che variabili, stati e comandi vengano dalla tabella `cpsHid2Nut()` copiata da `cps_hid2nut`,
-  in modo da avere gli stessi dati di usbhid-ups e meno differenze da inseguire una issue alla volta.
+  Come manutentore del firmware,
+  voglio che variabili, stati e comandi CyberPower vengano dalla tabella `cpsHid2Nut()` copiata da `cps_hid2nut`,
+  in modo da avere una sola fonte per ogni valore invece delle mappature scritte a mano allineate a cps-hid una issue alla volta.
 
   **Dimostrazione**
-  Sulle fixture BR700ELCD, CP1350C, CP1500EPFCLCD e CP1600EPFCLCD, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che cps-hid ricava da quei descriptor, con i ritardi CyberPower 60/120 di US-058.
+  Sulle fixture BR700ELCD, CP1350C, CP1500EPFCLCD, CP1600EPFCLCD e UT850EG, `upsc` e `upscmd -l` danno l'elenco di variabili e comandi che cps-hid ricava da quei descriptor, con i ritardi CyberPower 60/120 di US-058. I valori pubblicati oggi restano gli stessi.
 
   **Criteri di Accettazione**
-  - [ ] `cpsHid2Nut()` contiene tutte le righe di `cps_hid2nut` nell'ordine upstream, comprese le conversioni CyberPower (per esempio la correzione delle tensioni). Le esclusioni sono motivate.
-  - [ ] `CyberPowerDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: quirk e ritardi.
-  - [ ] Per ogni fixture CyberPower, gli elenchi attesi di variabili e comandi, ricavati in modo indipendente, coincidono con quelli pubblicati. Le differenze rispetto a prima sono nelle note di rilascio.
-  - [ ] `ups.status` resta invariato sulle fixture, salvo differenze motivate.
+  - [ ] `cpsHid2Nut()` contiene tutte le righe di `cps_hid2nut` nell'ordine upstream, comprese le conversioni CyberPower (scala di `battery.voltage` sui PID 0501, frequenze). Le esclusioni sono motivate.
+  - [ ] `CyberPowerDriver` non ha più mappature scritte a mano. Restano gli hook non tabellari: quirk, ritardi e la stima di `ups.realpower` quando l'UPS non la misura.
+  - [ ] Il replay di tutte le fixture CyberPower dà gli stessi valori di prima (già allineati a cps-hid con la #43 nella v1.9.0). Ogni differenza è motivata da una riga upstream ed elencata nel test e nelle note di rilascio.
+  - [ ] `ups.status` e `LIST CMD` restano invariati sulle fixture, salvo differenze motivate.
   - [ ] Suite nativa verde e build ok.
 
   **Assunzioni**
-  - Nessun CyberPower disponibile in sede: prima del rilascio serve la prova di un tester (per esempio Luca72, CP1600EPFCLCD).
+  - Con la v1.9.0 (#43) le variabili CyberPower sono già state allineate a cps-hid a mano: scale di tensione e frequenza, `ups.firmware`, `battery.type`, `battery.charge.warning`, `battery.status`, `battery.mfr.date`, `ups.power.nominal`, `ups.timer.*`. Questa spec quindi toglie la doppia fonte dei valori più che cambiare quello che vede l'utente: per questo è LOW.
+  - Nessun CyberPower disponibile in sede: prima del rilascio serve la prova di un tester (per esempio Luca72 con il CP1600EPFCLCD, keith721 o miskor-bgd con l'UT850EG).
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"

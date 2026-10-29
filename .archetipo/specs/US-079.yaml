@@ -5,13 +5,13 @@ epic:
   code: EP-001
   title: Gestione USB Host
 priority: LOW
-points: 5
+points: 8
 status: TODO
 body: |
   #### US-079: Tabella generica per le marche sconosciute e rimozione delle mappature a mano e di CommandCatalog
 
-  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
-  **Bloccato da:** US-074, US-075, US-076, US-077, US-078
+  **Epic:** EP-001 | **Priorità:** LOW | **Punti:** 8 | **Stato:** TODO
+  **Bloccato da:** US-074, US-075, US-076, US-077, US-078, US-106
 
   **User Story**
   Come manutentore del firmware,
@@ -19,16 +19,18 @@ body: |
   in modo da eliminare la doppia fonte dei valori e il codice ormai inutile.
 
   **Dimostrazione**
-  Il codice non contiene più lambda di mappatura in `GenericDriver` né `CommandCatalog.h`. Un UPS di marca sconosciuta, simulato con un descriptor PDC standard, pubblica le stesse variabili e gli stessi comandi di prima.
+  Il codice non contiene più tabelle di mappatura scritte a mano (`Mapping` di `UsageMapIndex`) in `GenericDriver` e nei driver derivati, né `CommandCatalog.h`. Un UPS di marca sconosciuta, simulato con un descriptor PDC standard, pubblica le stesse variabili e gli stessi comandi di prima.
 
   **Criteri di Accettazione**
   - [ ] `genericHid2Nut()` traduce in righe di tabella le mappature di `GenericDriver`, con nomi e formati NUT standard e i percorsi delle tabelle upstream quando coincidono. Per gli UPS di marca sconosciuta non si perde nessuna variabile oggi pubblicata, salvo quanto deciso nell'ADR di US-073.
-  - [ ] I comandi vengono tutti dalle tabelle (`HU_TYPE_CMD`). `CommandCatalog.h` è rimosso, insieme alla sua logica di presenza e di passi di scrittura, che passa al motore della tabella. `LIST CMD` non cambia su nessuna fixture.
-  - [ ] L'hook `postDecode` non deve più dare l'"ultima parola" su nessuna variabile, perché ogni variabile ha una sola fonte. La cache dei valori si rimuove se non serve più.
-  - [ ] Suite nativa verde, replay di tutte le fixture invariato rispetto a prima di questa spec, build ok con l'impatto su RAM e flash riportato.
+  - [ ] I comandi vengono tutti dalle righe `HU_TYPE_CMD` delle tabelle, usate da `HidControl`. `CommandCatalog.h` è rimosso, insieme alla sua logica di presenza e di passi di scrittura. `UpsCommands.h` resta: nomi e descrizioni dei comandi per server NUT e Web API, senza dipendenze HID (ADR 0010). `LIST CMD` non cambia su nessuna fixture.
+  - [ ] L'hook `postDecode` non deve più dare l'"ultima parola" su nessuna variabile, perché ogni variabile ha una sola fonte. La cache dei valori si rimuove se non serve più; `UsageMapIndex` si rimuove se nessun driver lo usa più.
+  - [ ] I controlli strutturali di EP-006 (`test_hid_transport`, `test_ups_source`, `test_ups_control_port`) restano verdi: nessun header HID nei consumatori.
+  - [ ] Suite nativa verde, replay di tutte le fixture invariato rispetto a prima di questa spec, build ok sulle tre immagini (ESP32-S3, ESP32-P4 v3.1+ e pre-v3) con l'impatto su RAM e flash riportato.
 
   **Assunzioni**
   - Ultima spec della convergenza decisa il 2026-10-15 (approccio C).
+  - Aggiornata il 2026-10-29 dopo EP-006 (US-103…105): la logica HID dei comandi sta in `HidControl`, i consumatori usano `IUpsSource` e `UpsCommands.h`. Legrand e Liebert, nati dopo il 2026-10-15 con mappature scritte a mano, migrano in US-106.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
