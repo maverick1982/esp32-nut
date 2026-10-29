@@ -1,0 +1,868 @@
+schema: archetipo/plan/v2
+spec_code: US-073
+body: |-
+  # US-073: Tabella unica Eaton (mge-hid), parte 1 — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 8
+
+  Il motore della tabella di US-066 impara le righe in sola lettura e le righe `BOOL`. `mgeHid2Nut()` riceve le righe upstream dei gruppi Device, Battery, UPS (PowerSummary/BatterySystem) e stato. Per gli Eaton, le mappature scritte a mano delle variabili coperte smettono di scrivere. `postDecode()` scrive in `UPSData` solo i valori cambiati. Le decisioni (regole 2, 3 e 4) sono nell'ADR 0011 e non vanno ridiscusse.
+
+  ---
+
+  ## Confine con US-074 (deciso in pianificazione)
+
+  Le righe vengono dal blocco `mge_hid2nut` che va da `mge-hid.c:2004` a `mge-hid.c:2160`, cioè le sezioni Device collection, Battery page, UPS page, BOOL e `ups.alarm`. US-073 prende:
+
+  - **Device:** 2006 `device.country`, una riga interna che non pubblica nulla e sostituisce la mappatura a mano del paese in `EatonDriver`, e 2007 `device.usb.version`.
+  - **Battery page:** tutte le righe da 2012 a 2059, comprese le righe ABM.
+  - **UPS page:** le righe con un percorso `UPS.PowerSummary.*` o `UPS.BatterySystem.*`: 2063 `ups.firmware`, 2064 `ups.load`, 2068-2070 `ups.timer.*`, 2071 `ups.test.result` e 2078 `ups.temperature`. Le righe RW di questo blocco sono già nella tabella.
+  - **BOOL:** tutte le righe da 2106 a 2152, qualunque sia il percorso, perché formano il gruppo di stato.
+
+  Restano a US-074, ciascuna con un commento `// <nome> (mge-hid.c:NNNN): row of US-074, <motivo>` nella posizione upstream:
+
+  - le righe UPS page su `UPS.PowerConverter`/`UPS.Flow`: 2062 `ups.efficiency`, 2079-2091 `ups.power*`, `ups.L*`, `ups.realpower*` (compresa `eaton_compute_realpower_info`) e 2103 `ups.type`;
+  - le tre righe `ups.beeper.status` (2075-2077). Vanno decise insieme ai comandi beeper e al percorso del beeper attivo usato da `HidControl`; oggi `USBHostUPS::getActiveBeeperPath()` e la riga upstream che vince potrebbero indicare usage diversi;
+  - le sei righe `ups.alarm` (2155-2160): il firmware non costruisce ancora `ups.alarm`;
+  - la sostituzione di `outlet.N.switch` con `outlet.N.status` (ADR 0011, regola 2), che appartiene alle righe Outlet.
+
+  Le righe `#if 0` (2108-2111) restano come commento. Il ramo `HAVE_STRPTIME` è quello già scelto da US-066.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Conversioni nuove in `NutTable.h`
+
+  `enum class Conv` cresce, sempre con una voce per ogni `info_lkp_t` upstream:
+
+  - **`Number` segue il formato `dfl`** della riga (`%.0f`, `%.1f`, `%.2f`). Oggi arrotonda sempre a intero. `formatRounded()` resta per `%.0f` (lrint, pari sui .5 come printf). Gli altri due formati usano `snprintf(dfl)`. Un formato diverso fa fallire la conversione (FAIL) e un test lo controlla su tutte le righe.
+  - **`StringId`** (`stringid_conversion`): il valore HID è un indice di stringa. Un indice ≤ 0 dà FAIL. Altrimenti la riga memorizza l'indice in `Bound::string_index` e resta in attesa (DEFER) finché arriva il descrittore. Vedi il punto 3.
+  - **`KelvinCelsius`** (`kelvin_celsius_conversion_fun`): `%.1f`, sottraendo 273.15 solo se 273 ≤ v ≤ 373.
+  - **`MgeBatteryCapacity`**: `%.2f` di v/3600.
+  - **`MgeBatteryVoltage` e `MgeBatteryVoltageNominal`** (`mge-hid.c:690-745`): DEFER finché `ctx.ready` è falso. Pubblicano solo se `mge_type & 0xFF00` vale MGE_EVOLUTION, MGE_PULSAR_M, EATON_5P o EATON_9E; nominale 12 per MGE_EVOLUTION_650. Altrimenti FAIL, come il NULL upstream.
+  - **Lookup nuove, copiate alla lettera:** `kTestRead` (`test_read_info`), `kEatonChargerType` (`eaton_charger_type_info`), `kMgeOnBatt` (`mge_onbatt_info`) e le tabelle di stato comuni (`online_info`, `discharging_info`, `lowbatt_info`, `overload_info`, `replacebatt_info`, `trim_info`, `boost_info`, `vrange_info`, `frange_info`, `off_info`, `bypass_auto_info`, `bypass_manual_info`, `eco_mode_info`, `fanfail_info`, `nobattery_info`, `chargerfail_info`, `battvolthi_info`, `battvoltlo_info`, `commfault_info`, `overheat_info`, `shutdownimm_info`).
+  - **Conversioni con stato:**
+    - `MgeCountry` (`eaton_check_country_fun`): scrive `ctx.country` e `ctx.country_seen`.
+    - `AbmEnabled`, `AbmPathMode`, `AbmPathStatus`: scrivono `ctx.abm` e `ctx.abm_path` come le funzioni upstream.
+    - `AbmStatus` (`eaton_abm_status_fun`): CLEAR se l'ABM è sconosciuto o disattivo, DEFER per i valori senza testo, altrimenti il testo secondo il percorso.
+    - Conversioni di stato `AbmChrgDischrg`, `EatonDischarging`, `EatonCharging` e `EatonConverterOnline`: producono un token, oppure DEFER al posto del NULL upstream. `EatonCharging` legge `battery.charge` da `UPSData`, come `dstate_getinfo`, quindi `decode()` riceve un `const UPSData*` opzionale (default `nullptr`: i test esistenti compilano senza modifiche). `EatonConverterOnline` legge il bit OFF dallo stato corrente.
+  - **`DecodeResult::CLEAR`:** la riga toglie la sua chiave da `UPSData` (`dstate_delinfo`), azzera `has` e resta indecisa come con DEFER.
+  - **`mgeModelType()`** porta tutte le righe di `mge_model_names` (`mge-hid.c:1760-1990`), solo prodotto, modello e tipo, comprese le righe con spazi finali e quelle `"unknown"`. Prima si fermava ai tipi sotto MGE_DEFAULT; ora servono anche Evolution, Pulsar M, 5P e 9E. `pegasusValid()` e `nominalVoltageValid()` non cambiano risultato: per loro ogni tipo ≥ MGE_DEFAULT valeva già come MGE_DEFAULT.
+
+  ### 2. Righe BOOL e interne
+
+  - **Righe interne:** le righe con `info_type` `"BOOL"` e le righe con conversione `MgeCountry`, `AbmEnabled`, `AbmPathMode` o `AbmPathStatus` (`device.country`, `battery.charger.abm.status`, `battery.charger.mode.status`, `battery.charger.type.status`). Upstream non le pubblica mai, quindi la regola INIT non le scarta. `bind()` le rende ACTIVE, `resolve()` le salta e `onValue()` non le rende mai DEAD. Non scrivono mai la propria `info_type` in `UPSData`.
+  - **`StatusBits`** (`NutTable.h`): due `uint32_t`, `set` e `known`, con le maschere di `status_info` di `usbhid-ups.c`. `applyStatusToken(bits, token)` porta `process_boolean_info()` alla lettera: `!` per cancellare, online e offline si neutralizzano a vicenda, così come fullycharged e notfullycharged, `strcasecmp`, e i token sconosciuti vengono ignorati. Ogni token toccato entra in `known`. I bit vivono in `Context`, insieme ad `abm`, `abm_path` e `country_seen`.
+  - **Chiavi interne (`statusKeys`)**, scritte solo per i token in `known`:
+    - online/offline → `ups.status.ac_present`: `1` con ONLINE, `0` con OFFLINE, chiave tolta se nessuno dei due. Con la chiave tolta, `computeUPSStatusString` non dà OL e dà OB solo con DISCHRG, come `ups_status_set()` quando manca uno stato di alimentazione;
+    - dischrg → `discharging`, chrg → `charging`, lowbatt → `battery_low`, overload → `overload`, replacebatt → `replace_battery`, shutdownimm → `shutdown_imminent`, nobattery → `no_battery`, depleted → `depleted`, timelimitexp → `remaining_time_limit_expired`;
+    - fullycharged/notfullycharged → `fully_charged` (`1`, `0` oppure tolta);
+    - tutti gli altri → `ups.status.<token>` (`off`, `commfault`, `trim`, `boost`, `bypassauto`, `bypassman`, `ecomode`, `essmode`, `cal`, `overheat`, `awaitingpower`, `fanfail`, `battvoltlo`, `battvolthi`, `chargerfail`, `vrange`, `frange`).
+  - **`computeUPSStatusString` non cambia.** I token che oggi non rende (OFF, TRIM, BOOST, BYPASS, CAL, ALARM) restano chiavi interne, come già per Liebert. Renderli, insieme a `ups.alarm` e `input.transfer.reason`, è un lavoro a parte da proporre come spec. I driver senza righe BOOL (tutti tranne Eaton) non toccano queste chiavi.
+
+  ### 3. Motore in `GenericDriver`
+
+  - **`postDecode()`:** elabora le righe del report nell'ordine della tabella, come oggi; le righe BOOL applicano il token a `_nut_ctx.status`. Poi pubblica:
+    - per ogni riga ACTIVE con `has`, `if (!ups_data.valueEquals(name, value)) ups_data.set(name, value)`. È lo stesso test per "valore cambiato" e per "una mappatura a mano l'ha sovrascritto", senza allocazioni quando il valore è uguale;
+    - le righe CLEAR tolgono la chiave;
+    - le chiavi di stato si sincronizzano con lo stesso confronto;
+    - se `ups.load` è stato scritto chiama `ups_data.updateRealPower()`, come la mappatura `PercentLoad` di oggi (resta fino alla riga `eaton_compute_realpower_info` di US-074).
+  - **`UPSData`:** `bool valueEquals(const char* key, const String& value) const` (confronto senza String temporanee) e un contatore `writes()`, incrementato da `set()` e `remove()` e usato dai test.
+  - **Stringhe:** `GenericDriver::collectStringRequests()` aggiunge gli indici delle righe `StringId` non ancora risolte. `GenericDriver::parseStringDescriptor()` assegna il testo, già decodificato da `decodeStringDescriptor()` con inversione e trim, alle righe con quell'indice, poi chiama `resolve()` e pubblica. `finishInit()` tratta una riga `StringId` con indice noto e senza testo come differita, non come fallita.
+  - **Mappature superate:** `UsageMapIndex::apply()` riceve un elenco opzionale di percorsi da saltare, applicato una volta in `build()`, quindi nessun costo per report. `GenericDriver` espone `virtual const char* const* supersededGenericPaths(size_t& n) const` (vuoto di default) e lo passa a `_generic_map.apply`. Solo `EatonDriver` lo riempie.
+
+  ### 4. `EatonDriver`
+
+  - **Percorsi generici saltati (40),** cioè tutte le mappature di `GenericDriver` che scrivono una chiave coperta dalle righe di US-073:
+    - stato, 20 percorsi: `PresentStatus.*` e `PowerSummary.*` di ACPresent, Discharging, Charging, BelowRemainingCapacityLimit, NeedReplacement, Overload, ShutdownImminent e CommunicationLost, più PresentStatus.BatteryPresent, RemainingTimeLimitExpired, FullyCharged e FullyDischarged. `mge_hid2nut` legge solo le sue righe BOOL;
+    - `battery.voltage`: PowerSummary, BatterySystem e Battery `.Voltage`;
+    - `battery.charge`: `RemainingCapacity`;
+    - `battery.charge.low`: `PowerSummary.RemainingCapacityLimit`;
+    - `battery.runtime`: `PowerSummary` e `Battery` `.RunTimeToEmpty`;
+    - `ups.load`: `PowerSummary`, `PowerConverter.Output` e `Output` `.PercentLoad`;
+    - `ups.temperature` e `battery.temperature`;
+    - `battery.capacity` (`BatterySystem.Battery.DesignCapacity`);
+    - `battery.capacity.full` (`BatterySystem.Battery.FullChargeCapacity`): nome non standard, si toglie (ADR 0011, regola 2);
+    - `battery.voltage.nominal`: `PowerSummary` e `Battery` `.ConfigVoltage`;
+    - `ups.test.result`: `BatterySystem.Battery.Test`, `Battery.Test`, `Output.Test`;
+    - `ups.timer.shutdown`: `PowerSummary.DelayBeforeShutdown`.
+  - **Restano (regola 2 o US-074):**
+    - `ups.mfr.date` e `battery.mfr.date`, estensioni documentate;
+    - `ups.beeper.status`;
+    - tutte le mappature di Input, Output, Flow e PowerConverter;
+    - `input.transfer.*`.
+  - **Mappature a mano di `EatonDriver` tolte:** `PresentStatus.Good`, `PresentStatus.InternalFailure`, `PowerSummary.Voltage`, `iDeviceChemistry` (con `_chemStrIdx` e la sua richiesta di stringa) e `Country` (con `_countrySeen`). Al loro posto: righe BOOL `off_info` e `commfault_info`, riga `mge_battery_voltage`, riga `StringId` di `battery.type`, riga interna `device.country`. `updateNutContext()` legge `_nut_ctx.country_seen`.
+  - **Restano fino a US-074:** `outlet.N.switch`, `Flow.ConfigFrequency`, `ConverterType`, e gli ingressi del contesto `iModel` e `Flow.[4].ConfigApparentPower`.
+
+  ### 5. Differenze attese (da confermare nel replay e sull'Eaton 3S)
+
+  - **Eaton 3S, fixture:**
+    - nuova `ups.timer.start` (`-1`);
+    - con le stringhe, sul dispositivo, nuove `ups.firmware` (indice 6) e `device.usb.version` (indice 8). `battery.type` arriva dalla riga `StringId` (indice 5) invece che dalla mappatura a mano;
+    - chiavi interne: `ups.status.good` diventa `ups.status.off` (invertito, `0`), `ups.status.internal_failure` diventa `ups.status.commfault`, `ups.status.comm_lost` sparisce (mge-hid non legge CommunicationLost), si aggiungono `ups.status.battvolthi` e `ups.status.battvoltlo`;
+    - `ups.status` resta `OL`.
+  - **Eaton 5P** (solo descriptor):
+    - legano anche `battery.capacity` (`%.2f`), `battery.voltage` e `battery.voltage.nominal` (solo con tipo 5P), le righe ABM, `battery.charger.status` e `battery.charger.type`, `ups.test.result`, e le righe BOOL `nobattery`, `chargerfail`, `fanfail` e `overheat`;
+    - `RB` quando `BatterySystem.Battery.PresentStatus.Present` vale 0;
+    - `battery.capacity.full` non viene più pubblicata.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI nuova: niente mockup né video. Le descrizioni Web di `ups.firmware`, `device.usb.version`, `battery.charger.*` e `ups.timer.start` esistono già in `data/www/bundle.js`. Playwright gira solo come regressione.
+
+  - **Unità, nuova suite `test/test_nut_table`:**
+    - ogni conversione nuova, valori limite compresi;
+    - `Number` con i tre formati e FAIL su un formato ignoto;
+    - `applyStatusToken` con neutralizzazioni e `!`;
+    - sequenze ABM con il percorso Mode e con il percorso Status;
+    - `EatonCharging` al 100%;
+    - `EatonConverterOnline` con OFF;
+    - righe interne e BOOL sempre ACTIVE;
+    - `StringId`;
+    - `statusKeys`, compresa la chiave `ac_present` tolta;
+    - `mgeModelType` per 3S, 5P, 9E ed Evolution 650;
+    - un controllo strutturale su `mgeHid2Nut()`: ogni riga ha un formato fra quelli supportati e una conversione che lo accetta.
+  - **Unità, `test_generic_driver`:**
+    - un report senza righe legate lascia `UPSData::writes()` invariato (criterio della spec);
+    - un valore uguale non riscrive;
+    - una mappatura che sovrascrive viene corretta;
+    - CLEAR toglie la chiave;
+    - il percorso saltato non scrive;
+    - flusso `StringId` fino alla pubblicazione;
+    - `updateRealPower` dopo `ups.load`.
+  - **Unità, `test_eaton_driver`:**
+    - OB (`ACPresent=0`, `Discharging=1` → `OB DISCHRG`), ritorno a OL, LB e RB;
+    - `battery.capacity.full` mai scritta;
+    - `battery.mfr.date` e `ups.mfr.date` ancora pubblicate;
+    - `battery.voltage` assente su un 3S e `%.1f` su un 5P.
+  - **Replay, `test_record_replay`:**
+    - per le due fixture Eaton, elenco delle righe legate ricavato a mano dal descriptor e da `mge-hid.c`, con un commento che cita usage e riga;
+    - valori pubblicati e differenze rispetto a prima elencati nel commento;
+    - aggiornate le chiavi interne attese nella fixture 3S;
+    - LIST RW e LIST CMD invariati;
+    - tutte le altre fixture invariate.
+  - **Prova delle mutazioni:** se si inverte `off_info`, si toglie la neutralizzazione online/offline o si rimette la riscrittura di tutte le righe, deve fallire almeno un test per ciascuna modifica.
+  - **Regressione:** suite nativa completa a blocchi, `npm run e2e` e build `esp32-s3-standard`, con RAM e flash annotate.
+  - **Hardware:**
+    - sull'Eaton 3S via OTA, `scripts/nut_snapshot.py` prima e dopo, con `diff`: devono comparire solo le differenze elencate;
+    - mains staccata (`OB DISCHRG`) e riattaccata (`OL`);
+    - `battery.type` invariata.
+
+  ---
+
+  ## Rischi e note
+
+  - **Ordine dei report (corretto dopo la code review):** i report delle righe BOOL arrivano uno alla volta. Dopo ogni report `walkInternalRows()` riapplica, in ordine di tabella, l'ultimo valore di ogni riga interna e BOOL, come il walk upstream. Senza, con ABM attivo, `!dischrg` del report di stato annullava `dischrg` di Charger.Mode. I report delle righe di stato `HU_FLAG_QUICK_POLL` (ABM) entrano nel quick poll. Nel replay del 3S `ups.status.charging` diventa `0` (Charging=1, ma con `battery.charge` a 100 `eaton_abm_check_chrg_fun` dà `!chrg`); `ups.status` resta `OL`.
+  - **Regola INIT semplificata di US-066:** vince la prima riga il cui primo valore converte. Si applica anche alle righe RO. Le righe che upstream tiene vive pur restituendo NULL (interne, BOOL, ABM) sono gestite come interne o con DEFER.
+  - **Contatore `writes()` in `UPSData`:** un `uint32_t` in più per istanza, accettabile.
+  - **Note di rilascio:** la versione la sceglie l'utente (TASK-12). Le differenze vanno anche nel test di replay.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-29_
+
+  ---
+
+  ## Rework (review del 2026-10-29)
+
+  La review ha accettato il comportamento, provato sull'Eaton 3S: `OB DISCHRG` → `OL CHRG`, diff `upsc` con solo le tre variabili attese. Ha chiesto due correzioni, che erano i miglioramenti lasciati aperti dalla code review.
+
+  - **Nessuna copia di String quando il testo non cambia** (`NutTable.h`, `onValue()`). Oggi `decode()` costruisce `out` e `onValue()` lo copia in `b.value` a ogni lettura. I testi che superano la SSO allocano e liberano a ogni full poll, per esempio `"Constant Charge (CC)"` di `eaton_charger_type_info`, contro ADR 0007 e il piano.
+    - Correzione: una funzione `staticText(info, v, ctx)` restituisce il `const char*` delle conversioni che pescano da tabelle statiche (`Conv::Lookup` e `Conv::AbmStatus`), oppure `nullptr`.
+    - `onValue()` la usa al posto di `decode()` per queste conversioni e assegna `b.value` solo se `!b.has || !(b.value == text)`.
+    - Per le altre conversioni (numeri, date, stringhe brevi) assegna `out` solo se è diverso.
+    - `decode()` resta il punto unico per i test e chiama `staticText()` per non duplicare le tabelle.
+  - **Troncamento a 19 caratteri delle righe `StringId`** (`GenericDriver::parseStringDescriptor`). `stringid_conversion_fun` (`usbhid-ups.c:598-603`) usa `static char buf[20]` con `HIDGetIndexString(..., sizeof(buf))`, quindi upstream `ups.firmware`, `battery.type` e `device.usb.version` hanno al massimo 19 caratteri.
+    - Correzione: il testo passato a `NutTable::onString()` per le righe `StringId` viene troncato a 19 caratteri, con il commento che cita la riga upstream.
+    - Le altre stringhe (`ups.mfr`, `ups.model`, `ups.serial`, `battery.mfr.date`) non cambiano: non sono righe della tabella.
+    - Deviazione minima: il trim finale dei `\r\n` di `decodeStringDescriptor()` avviene prima del troncamento, mentre upstream fa `str_rtrim` dopo `libusb`. Conta solo se un a capo cade attorno al diciannovesimo carattere.
+
+  **Test del rework.**
+  - `test_nut_table`: un contatore di `operator new` locale alla suite verifica che una seconda lettura con lo stesso valore di `battery.charger.type` (5, `"Constant Charge (CC)"`, 20 caratteri, oltre la SSO di libstdc++) non allochi. La prima lettura e un valore diverso continuano ad aggiornare `b.value`.
+  - `test_generic_driver`: una stringa di 25 caratteri su una riga `StringId` viene pubblicata con 19 caratteri, una di 10 resta intera.
+  - Mutazioni: rimettere `b.value = out` senza confronto e togliere il troncamento devono far fallire i test nuovi.
+  - Regressione completa, build e una verifica OTA rapida sull'Eaton 3S: `ups.firmware` (10 caratteri) e `battery.type` devono restare uguali.
+tasks:
+  - id: TASK-01
+    title: Conversioni RO, formati e tipi di modello mge in NutTable.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare a `NutTable.h` le conversioni in sola lettura delle righe Battery/UPS di mge-hid, senza ancora toccare la tabella né il driver.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h` (`Conv`, `decode`, `mgeModelType`, `Context`);
+      - `nut_repo/drivers/usbhid-ups.c` righe 501-520 (`test_read_info`, `beeper_info`), 598-608 (`stringid_conversion`) e 644-666 (`kelvin_celsius_conversion`);
+      - `nut_repo/drivers/mge-hid.c` righe 120-150 (enum dei tipi), 448-456 (`eaton_charger_type_info`), 680-760 (tensione e capacità batteria) e 1760-1995 (`mge_model_names`).
+
+      **Modifica:**
+      1. `Conv::Number` formatta secondo `info.dfl`:
+         - `"%.0f"` → `formatRounded()` come oggi;
+         - `"%.1f"` e `"%.2f"` → `snprintf(buf, sizeof(buf), info.dfl, v)`;
+         - altro → FAIL.
+      2. Nuove voci di `Conv`, ciascuna con il commento della funzione upstream:
+         - `StringId`: DEFER con indice > 0 e FAIL con indice ≤ 0. L'indice passa al chiamante in un parametro di uscita o in un campo che `onValue` scrive in `Bound::string_index`; il campo nuovo `uint8_t string_index = 0` va in `Bound`;
+         - `KelvinCelsius`;
+         - `MgeBatteryCapacity`;
+         - `MgeBatteryVoltage` e `MgeBatteryVoltageNominal`: DEFER se `!ctx.ready`; tipi ammessi `mge_type & 0xFF00` in {0x300, 0x400, 0x500, 0x900}; 12 per MGE_EVOLUTION_650 = 0x301.
+      3. Costanti: `MGE_EVOLUTION=0x300`, `MGE_EVOLUTION_650=0x301` e le altre Evolution in sequenza come l'enum upstream, `MGE_PULSAR_M=0x400` e le sue, `EATON_5P=0x500`, `EATON_9E=0x900`.
+      4. Lookup verbatim: `kTestRead`, `kEatonChargerType`.
+      5. `mgeModelType()` contiene tutte le righe di `mge_model_names` (prodotto, modello, tipo; la colonna nome non serve), nell'ordine upstream, spazi finali compresi. Togli la restrizione ai tipi sotto MGE_DEFAULT e aggiorna il commento.
+      6. `decode()` riceve un quinto parametro `const UPSData* data = nullptr` (usato da TASK-03); `onValue()` lo inoltra con lo stesso default.
+
+      **Verifica:** `test_rw_catalog` e `test_eaton_driver` verdi senza modifiche alle asserzioni.
+
+      **Fatto:** conversioni presenti, nessuna riga nuova in `mgeHid2Nut()`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — conversioni, costanti, lookup, `mgeModelType`, firma di `decode`/`onValue`
+
+      ## Criteri di Completamento
+      - [ ] `Number` rispetta `%.0f`/`%.1f`/`%.2f` e dà FAIL sugli altri formati
+      - [ ] `mgeModelType("Eaton 5P","1550")` = 0x500, `("Eaton 9E","1000i")` = 0x900, `("Evolution","650")` = 0x301, `("3S","700")` = 0x110
+      - [ ] `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_rw_catalog -f test_eaton_driver` verde
+    ref: TASK-01
+  - id: TASK-02
+    title: Stato BOOL, righe interne e ABM in NutTable.h
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare la raccolta dei bit di stato di usbhid-ups e le funzioni mge con stato (paese, ABM, charging/discharging), più la regola per cui le righe interne e BOOL restano sempre attive.
+
+      **Leggi:**
+      - `nut_repo/drivers/usbhid-ups.c` righe 280-500 (`status_info`, tabelle `*_info`) e 2030-2070 (`process_boolean_info`);
+      - `nut_repo/drivers/mge-hid.c` righe 240-600 (ABM, `eaton_abm_*`, `eaton_abm_check_*`), 811-815 (`mge_onbatt_info`), 1385-1396 (`eaton_check_country_fun`) e 1555-1567 (`eaton_converter_online_fun`);
+      - `lib/USBHostUPS/src/UPSData.h` (`computeUPSStatusString`).
+
+      **Modifica:**
+      1. `struct StatusBits { uint32_t set = 0; uint32_t known = 0; }`, una costante per bit nell'ordine di `status_info`. `applyStatusToken(StatusBits&, const char* token)` è il port letterale di `process_boolean_info`:
+         - online → `!offline`, offline → `!online`, fullycharged ↔ notfullycharged;
+         - `!` per cancellare, `strcasecmp`, token ignoti ignorati;
+         - ogni bit toccato entra in `known`.
+      2. `Context` riceve `StatusBits status`, `int abm = ABM_UNKNOWN`, `int abm_path = ABM_PATH_UNKNOWN` e `bool country_seen = false` (valori ABM come upstream).
+      3. Lookup di stato verbatim: tutte le tabelle comuni elencate nel piano e `kMgeOnBatt`. Usano `Conv::Lookup`: il testo è il token.
+      4. Conversioni nuove:
+         - `MgeCountry`: scrive `ctx.country = (int)v` e `country_seen = true`, poi DEFER;
+         - `AbmEnabled`, `AbmPathMode`, `AbmPathStatus`: stato come upstream, sempre DEFER;
+         - `AbmStatus`: CLEAR con ABM sconosciuto o disattivo, DEFER sui valori senza testo, altrimenti il testo secondo `abm_path`;
+         - `AbmChrgDischrg`, `EatonDischarging`, `EatonCharging` (con `data` nullo o `battery.charge` assente: nessun controllo del 100%) e `EatonConverterOnline` (DEFER se il bit OFF è impostato): producono il token oppure DEFER.
+         - Aggiungi `DecodeResult::CLEAR`.
+      5. `inline bool isInternalRow(const HidInfo&)`: `info_type` uguale a `"BOOL"`, oppure conversione MgeCountry, AbmEnabled, AbmPathMode o AbmPathStatus.
+         - `bind()` rende ACTIVE le righe interne;
+         - `resolve()` le esclude dai gruppi;
+         - `onValue()`: sulle righe BOOL, se il risultato è OK applica il token a `ctx.status`, e su una riga interna non tocca mai `first` né `role`. Sulle righe non interne, CLEAR mette `has=false`, imposta un flag `b.cleared=true` (campo nuovo di `Bound`) e lascia la riga indecisa come DEFER;
+         - `finishInit()` non rende FAIL le righe interne né le righe CLEAR o DEFER.
+      6. `statusKeys(const StatusBits&, callback)` (oppure un array `{key, value|nullptr}`) produce la mappatura del piano. `ac_present` e `fully_charged` sono a tre stati: `"1"`, `"0"` oppure "togli". Solo per i token in `known`.
+
+      **Verifica:** compila; suite esistenti verdi.
+
+      **Fatto:** API pronta per TASK-03/04; `computeUPSStatusString` invariato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `StatusBits`, lookup di stato, conversioni ABM/paese/stato, righe interne in `bind`/`resolve`/`onValue`/`finishInit`, `statusKeys`
+
+      ## Criteri di Completamento
+      - [ ] `UPSData.h::computeUPSStatusString` non modificato
+      - [ ] Le suite native esistenti restano verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Test della suite test_nut_table
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con test unitari conversioni e stato di TASK-01/02, indipendentemente dai driver.
+
+      **Leggi:** `test/test_rw_catalog/test_main.cpp` (helper `mk`, `conv`, stile), `lib/USBHostUPS/src/NutTable.h`.
+
+      **Modifica:** crea `test/test_nut_table/test_main.cpp` con `setUp`/`tearDown` vuoti e un `main` che esegue i casi seguenti.
+      - Conversioni:
+        - `Number`: 12.34 dà `12`, `12.3` e `12.34` nei tre formati; `"%d"` dà FAIL;
+        - `KelvinCelsius`: 298.15 → `25.0`, 25 → `25.0`, 373 → `99.9`;
+        - `MgeBatteryCapacity`: 25200 → `7.00`;
+        - `MgeBatteryVoltage(Nominal)`: DEFER con ready=false, FAIL con mge_type 0x110, `%.1f` con 0x500, 12 con 0x301;
+        - `StringId`: DEFER con l'indice e FAIL con 0;
+        - `kTestRead`, `kEatonChargerType`.
+      - `applyStatusToken`: online poi offline; `!online` lascia OFFLINE invariato; fullycharged ↔ notfullycharged; token ignoto; maiuscole.
+      - `statusKeys`:
+        - ONLINE → `ac_present=1`; OFFLINE → `0`; dopo `!online` senza OFFLINE la chiave va tolta;
+        - `off` → `ups.status.off`;
+        - nulla per i token non `known`.
+      - ABM:
+        - percorso Mode: enabled=1, poi Mode=1 → `battery.charger.status` `charging` e BOOL `chrg`, Mode=2 → `discharging`/`dischrg`;
+        - percorso Status: 4 → `discharging`/`dischrg`;
+        - ABM disabilitato → CLEAR;
+        - con ABM attivo `EatonCharging(1)` dà `!chrg`.
+      - `EatonCharging`: con `battery.charge=100` in `UPSData` dà `!chrg`, con 80 dà `chrg`, con data nullo dà `chrg`.
+      - `EatonConverterOnline`: con OFF impostato DEFER, altrimenti `online`/`!online`.
+      - `mgeModelType`: 3S 700, 3S 550, 5P 1550, 9E 1000i, Evolution 650, `Ellipse PRO` `"1200 "`, sconosciuto → MGE_DEFAULT.
+      - Righe interne: due righe BOOL e una `device.country` legate sono ACTIVE e restano ACTIVE dopo FAIL, DEFER e `finishInit()`; una riga normale con lo stesso nome di un'altra segue la regola INIT di sempre.
+      - Strutturale su `mgeHid2Nut()`: ogni riga ha `dfl` fra `%.0f`, `%.1f`, `%.2f`, `%s` oppure è una riga HU_FLAG_ABSENT/BOOL; le righe `%s` hanno una conversione diversa da `Number`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table`.
+
+      **Fatto:** suite verde. Mutazioni: invertire la neutralizzazione online/offline e togliere il `!` in `applyStatusToken` fanno fallire almeno un test ciascuna (prova e ripristina).
+
+      **Blocchi:** se un valore atteso differisce dal codice upstream, vale upstream: correggi il codice di TASK-01/02, non il test.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Suite `test_nut_table` verde
+      - [ ] Le due mutazioni fanno fallire almeno un test ciascuna
+    ref: TASK-03
+  - id: TASK-04
+    title: 'UPSData: confronto senza allocazioni e contatore delle scritture'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare a `postDecode()` il modo di scrivere solo i valori cambiati senza creare String, e ai test il modo di contare le scritture.
+
+      **Leggi:** `lib/USBHostUPS/src/UPSData.h`.
+
+      **Modifica:**
+      1. `bool valueEquals(const char* key, const String& value) const`: cerca `param.key == key` (String contro `const char*`, nessuna allocazione) e confronta `param.value == value`; false se la chiave manca.
+      2. `uint32_t _writes = 0;` incrementato in `set()` (anche a valore uguale) e in `remove()` quando toglie davvero una chiave; `uint32_t writes() const`. Commento: contatore per i test (US-073).
+      3. Nessun altro cambiamento.
+
+      **Verifica:** suite `test_ups_status`, `test_web_api` e `test_nut_server` verdi.
+
+      **Fatto:** API presente, comportamento invariato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — `valueEquals`, `writes`
+
+      ## Criteri di Completamento
+      - [ ] `valueEquals` non costruisce String temporanee: nessun `String(` nel corpo
+      - [ ] `pio test -e native -f test_ups_status -f test_web_api -f test_nut_server` verde
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Motore in GenericDriver: scritture solo se cambiate, stato, stringhe, mappature superate'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare il motore nuovo a `GenericDriver`, chiudendo il punto di `postDecode()` della code review di US-066.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/GenericDriver.cpp`: `postDecode`, `bindNutTable`, `collectStringRequests`, `parseStringDescriptor`, `decodeReport`, `completeInitialPoll`;
+      - `lib/USBHostUPS/src/GenericDriver.h`;
+      - `lib/USBHostUPS/src/UsageMapIndex.h`.
+
+      **Modifica:**
+      1. `UsageMapIndex::apply(...)` riceve due parametri opzionali `const char* const* skip = nullptr, size_t n_skip = 0`, passati a `build()`, che non indicizza le mappature il cui `path` è nell'elenco (strcmp). Il fingerprint resta com'è: l'elenco è fisso per classe di driver.
+      2. In `GenericDriver.h`: `virtual const char* const* supersededGenericPaths(size_t& n) const { n = 0; return nullptr; }`, con un commento che rimanda all'ADR 0011 e a US-073. In `decodeReport()`, `_generic_map.apply(..., skip, n_skip)`.
+      3. `postDecode()`:
+         - le righe del report passano per `onValue(_nut_rows, i, v, _nut_ctx, &ups_data)`;
+         - poi la pubblicazione. Per ogni riga non interna:
+           - se `role == ACTIVE && has` e `!ups_data.valueEquals(name, value)` → `set`, e se `name` è `ups.load` → `updateRealPower()` dopo il ciclo;
+           - se `cleared` → `remove(name)` quando la chiave c'è, poi `cleared=false`;
+         - infine sincronizza le chiavi di `statusKeys(_nut_ctx.status)` con `valueEquals`/`set`/`remove`;
+         - il commento "The table owns its variables: written last" diventa: la tabella ha l'ultima parola, ma scrive solo ciò che differisce da `UPSData`.
+      4. Stringhe:
+         - `collectStringRequests()` aggiunge `b.string_index` delle righe `Conv::StringId` con `string_index > 0`, `!has` e ruolo diverso da DEAD;
+         - `parseStringDescriptor()`: dopo il codice di oggi, se una riga `StringId` ha `string_index == index`, assegna `decodeStringDescriptor(host, data, length)` alla riga con una funzione nuova `NutTable::onString(binds, i, text)` (OK: value, has, first OK, `resolve`), poi pubblica le righe toccate con lo stesso confronto del punto 3. Estrai la pubblicazione in un metodo privato `publishNutRows(UPSData&)` usato in entrambi i punti.
+      5. `completeInitialPoll()` e il ramo di `finishInit` in `postDecode()` non cambiano.
+
+      **Verifica:** tutte le suite dei driver e il replay verdi, salvo le asserzioni Eaton che TASK-08/09 aggiornano. Gli altri driver non hanno righe BOOL né percorsi superati, quindi le loro chiavi non cambiano.
+
+      **Fatto:** nessuna riscrittura di righe con valore invariato; `writes()` invariato per i report senza righe legate.
+
+      **Blocchi:** se un test non Eaton cambia valore, fermati e verifica. Non deve succedere, perché senza percorsi superati e senza righe BOOL l'unico effetto è il confronto prima della scrittura.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UsageMapIndex.h — elenco di percorsi da saltare
+      - lib/USBHostUPS/src/GenericDriver.h — `supersededGenericPaths`, `publishNutRows`
+      - lib/USBHostUPS/src/GenericDriver.cpp — `postDecode`, stringhe, `decodeReport`
+      - lib/USBHostUPS/src/NutTable.h — `onString`
+
+      ## Criteri di Completamento
+      - [ ] `postDecode()` chiama `set()` solo quando `valueEquals` è falso
+      - [ ] `pio test -e native -f test_apc_driver -f test_cyberpower_driver -f test_generic_driver -f test_legrand_driver -f test_liebert_driver -f test_ecoflow_driver -f test_rw_catalog` verde
+    ref: TASK-05
+  - id: TASK-06
+    title: Test del motore in test_generic_driver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare il comportamento nuovo di `postDecode()` e delle stringhe su un driver di prova, senza dipendere dalla tabella mge.
+
+      **Leggi:** `test/test_generic_driver/test_main.cpp` (mock host e stile), `lib/USBHostUPS/src/GenericDriver.h`.
+
+      **Modifica:** aggiungi un driver di prova che deriva da `GenericDriver` con una tabella statica piccola: una riga RO `Number`, una riga `StringId`, una riga BOOL con `online_info`, una riga `AbmStatus`. `supersededGenericPaths` restituisce `UPS.PowerSummary.RemainingCapacity`. Casi:
+      1. Un report il cui ID non ha usage legate lascia `ups_data.writes()` invariato. È il criterio della spec.
+      2. Lo stesso report decodificato due volte: alla seconda `writes()` non cresce.
+      3. Una `ups_data.set` esterna con un valore diverso sulla chiave della riga viene corretta al report successivo della riga.
+      4. Il percorso superato non scrive `battery.charge` (nessuna chiave), mentre senza override la mappatura generica la scrive.
+      5. `StringId`: dopo il report l'indice è in `collectStringRequests`; dopo `parseStringDescriptor` la chiave ha il testo e l'indice non viene più richiesto.
+      6. Righe BOOL: ACPresent 1 → `ups.status.ac_present=1`, poi 0 → `0`.
+      7. CLEAR: con ABM sconosciuto la chiave `battery.charger.status`, messa a mano, viene tolta.
+      8. `ups.load` scritto dalla tabella con `ups.power.nominal` presente produce `ups.realpower` (`updateRealPower`).
+
+      **Verifica:** `pio test -e native -f test_generic_driver`.
+
+      **Fatto:** casi verdi. Mutazione: rimettere `set()` senza `valueEquals` fa fallire i casi 1 e 2.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_generic_driver/test_main.cpp — driver di prova e 8 casi
+
+      ## Criteri di Completamento
+      - [ ] 8 casi nuovi verdi
+      - [ ] La mutazione indicata fa fallire almeno un caso
+    ref: TASK-06
+  - id: TASK-07
+    title: Righe mge_hid2nut dei gruppi Device, Battery, UPS (PowerSummary/BatterySystem) e BOOL
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** copiare in `mgeHid2Nut()` le righe di US-073 nell'ordine upstream, lasciando le righe RW già presenti dove sono.
+
+      **Leggi:**
+      - `nut_repo/drivers/mge-hid.c` righe 2002-2160, con la tabella dei nomi alle righe 1570-1730 per tradurre gli usage vendor in `0xFFFFxxxx`;
+      - `lib/USBHostUPS/src/NUTUsages.h` (nomi standard);
+      - il piano, sezione "Confine con US-074".
+
+      **Modifica:**
+      1. Per ogni riga upstream dalla 2006 alla 2152, nell'ordine:
+         - **in ambito** (piano): `// mge-hid.c:NNNN <percorso upstream>` più la riga `HidInfo`. Percorso con nomi di `NUTUsages.h`, usage vendor come `0xFFFF00xx` maiuscolo, indici `[N]` come nelle righe esistenti. Flag, `info_len` e `dfl` copiati, `hidflags` copiati;
+         - **RW già presente:** resta;
+         - **di US-074:** commento `// <info_type> (mge-hid.c:NNNN): row of US-074, <motivo>`;
+         - **`#if 0`:** commento con il motivo upstream.
+      2. Conversioni:
+         - `NULL` → `Conv::Number` (formato da `dfl`);
+         - `stringid_conversion` → `StringId`;
+         - `kelvin_celsius_conversion` → `KelvinCelsius`;
+         - `mge_battery_capacity` → `MgeBatteryCapacity`;
+         - `mge_battery_voltage(_nominal)` → le due conversioni dedicate;
+         - `eaton_check_country_info` → `MgeCountry`;
+         - le righe ABM → `AbmEnabled`, `AbmPathMode`, `AbmPathStatus`, `AbmStatus`;
+         - `eaton_charger_type_info` e `test_read_info` → `Lookup`;
+         - le righe BOOL → `Lookup` con la tabella del token, oppure le conversioni `EatonDischarging`, `EatonCharging`, `AbmChrgDischrg`, `EatonConverterOnline`.
+      3. Percorsi tradotti, da ricontrollare uno per uno:
+         - Country `UPS.PowerSummary.0xFFFF0095`;
+         - System.USB.iVersion `UPS.0xFFFF00E5.0xFFFF0005.0xFFFF00F1`;
+         - RestartLevel `0xFFFF005F`;
+         - `UPS.StatisticSystem.Input.[1].Statistic.[1].Time` → `UPS.0xFFFF0004.Input.[1].0xFFFF0003.[1].0xFFFF0097`;
+         - Charger ABMEnable `0xFFFF0087`, Mode `0xFFFF0094`, Status `0xFFFF00E9`, ChargerType `0xFFFF006B`;
+         - iVersion `UPS.PowerSummary.0xFFFF00F1`;
+         - `UPS.PowerConverter.Output.Overload.[1].PresentStatus.OverThreshold` → `...0xFFFF007E`;
+         - LCMSystem/LCMAlarm/TimerExpired → `UPS.0xFFFF0018.0xFFFF001A.[2].PresentStatus.0xFFFF0093`;
+         - FanFailure `0xFFFF0077`, VoltageTooHigh `0xFFFF0074`, VoltageTooLow `0xFFFF0075`.
+      4. Aggiorna il commento di testa di `NutTable.h` e quello sopra le tabelle ("Partial on purpose (US-066)..."): mgeHid2Nut ha le righe RO e BOOL di US-073; le altre arrivano con US-074.
+
+      **Verifica:** `pio test -e native -f test_nut_table -f test_rw_catalog`. Il test `test_mge_first_row_wins_battery_charge_low` va aggiornato: ora legano due righe, la RW (indice 1) ACTIVE dopo il primo valore e la RO DEAD. Aggiorna anche il commento "the read-only row is not in the table yet".
+
+      **Fatto:** ogni riga upstream 2006-2152 compare una volta, come riga o come commento, con il numero di riga.
+
+      **Blocchi:** se un percorso upstream non si traduce (nome mancante in NUTUsages e in mge_usage_lkp), lascia la riga come commento con il motivo e segnalalo nella review.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — righe di `mgeHid2Nut()`, commenti
+      - test/test_rw_catalog/test_main.cpp — `test_mge_first_row_wins_battery_charge_low`
+
+      ## Criteri di Completamento
+      - [ ] Nessun numero di riga upstream fra 2006 e 2152 manca (controllo con `grep -o 'mge-hid.c:2[01][0-9][0-9]'`)
+      - [ ] Il test strutturale di TASK-03 e `test_rw_catalog` verdi
+    ref: TASK-07
+  - id: TASK-08
+    title: 'EatonDriver: via le mappature coperte, percorsi generici superati'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** per gli Eaton le variabili di US-073 vengono solo dalla tabella.
+
+      **Leggi:** `lib/USBHostUPS/src/EatonDriver.cpp` e `.h`, `lib/USBHostUPS/src/GenericDriver.cpp` (tabella `mappings` di `decodeReport`), il piano (sezione 4).
+
+      **Modifica:**
+      1. `EatonDriver.h`: override di `supersededGenericPaths` e rimozione di `_chemStrIdx` e `_countrySeen`.
+      2. `EatonDriver.cpp`:
+         - array statico `kSupersededGenericPaths[]` con i 40 percorsi del piano, copiati carattere per carattere dalla tabella di `GenericDriver::decodeReport` e raggruppati con un commento per chiave; `battery.capacity.full` porta il commento "ADR 0011 rule 2: not in nut-names.txt";
+         - togli le mappature `PresentStatus.Good`, `PresentStatus.InternalFailure`, `PowerSummary.Voltage`, `iDeviceChemistry` e `kCountryPath`;
+         - togli dalla `collectStringRequests` la riga di `_chemStrIdx` e dalla `parseStringDescriptor` il ramo `battery.type`;
+         - `updateNutContext()`: `country_known = !hasUsagePath(usages, kCountryPath) || _nut_ctx.country_seen`. `kCountryPath` resta come costante;
+         - aggiorna il commento ADR 0003 in testa: le variabili PowerSummary/BatterySystem e lo stato vengono da `mgeHid2Nut()` (US-073).
+      3. Restano: outlet switch, `Flow.ConfigFrequency`, `ConverterType`, `iModel`, `ConfigApparentPower` e il quirk dei report 254/255.
+
+      **Verifica:** `pio test -e native -f test_eaton_driver`. Le asserzioni su `ups.status.good`, `internal_failure` e `battery.type` si aggiornano in TASK-09: annota quali falliscono.
+
+      **Fatto:** nessuna `d.set` in `EatonDriver.cpp` scrive una chiave coperta dalle righe di US-073.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EatonDriver.h — override, campi tolti
+      - lib/USBHostUPS/src/EatonDriver.cpp — elenco dei percorsi superati, mappature tolte, contesto paese
+
+      ## Criteri di Completamento
+      - [ ] 40 percorsi nell'elenco, ognuno presente come stringa nella tabella di `GenericDriver::decodeReport`
+      - [ ] `EatonDriver.cpp` non contiene più `ups.status.good`, `ups.status.internal_failure`, `battery.voltage`, `battery.type`
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Test di EatonDriver: stato dalla tabella, regola 2, formati'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare il driver Eaton con la tabella nuova su descriptor sintetici o sui report della fixture 3S.
+
+      **Leggi:** `test/test_eaton_driver/test_main.cpp`, il piano (sezioni 2, 4 e 5).
+
+      **Modifica:**
+      1. Aggiorna i test esistenti che leggono `ups.status.good`/`internal_failure`: ora si leggono `ups.status.off` (invertito) e `ups.status.commfault`.
+      2. Casi nuovi:
+         - **OB:** ACPresent=0, Discharging=1, Charging=0 → `computeUPSStatusString` = `OB DISCHRG`; poi ACPresent=1, Discharging=0 → `OL`;
+         - **LB:** BelowRemainingCapacityLimit=1 in OB → contiene `LB`;
+         - **RB:** NeedReplacement=1 → contiene `RB`;
+         - **Good=0** → `ups.status.off=1` e `ups.status` invariato rispetto a Good=1 (OFF non è reso, piano punto 2);
+         - **CHRG:** Charging=1 con `battery.charge` 80 già presente → `CHRG`, con 100 → niente CHRG;
+         - **5P, `BatterySystem.Battery.FullChargeCapacity`** nel descriptor → `battery.capacity.full` mai presente;
+         - **`battery.mfr.date` e `ups.mfr.date`** (percorsi generici `Battery.ManufacturerDate` e `PowerSummary.ManufacturerDate`) ancora pubblicate;
+         - **`PowerSummary.Voltage`:** con ups.model `Eaton 3S` e iModel `700` non c'è `battery.voltage` dopo `completeInitialPoll()`; con `Eaton 5P`/`1550` vale `%.1f`;
+         - **`battery.type`:** l'indice da `iDeviceChemistry` è in `collectStringRequests` e il testo arriva in `battery.type`;
+         - **paese:** con `Country=0` e iModel noto, `nutContext().country == 0` e `ready`.
+
+      **Verifica:** `pio test -e native -f test_eaton_driver`.
+
+      **Fatto:** suite verde. Mutazione: invertire `off_info` (0 → `!off`) fa fallire il caso Good=0.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_eaton_driver/test_main.cpp — test aggiornati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite `test_eaton_driver` verde con i casi elencati
+      - [ ] La mutazione su `off_info` fa fallire almeno un caso
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Replay Eaton 3S/5P: righe legate, valori, differenze'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il criterio della spec sull'elenco atteso, ricavato in modo indipendente, e l'elenco delle differenze nel test di replay.
+
+      **Leggi:**
+      - `test/test_record_replay/test_main.cpp` (righe 1-60) e `FixtureReplayRunner.h`;
+      - `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`;
+      - `nut_repo/drivers/mge-hid.c` righe 2002-2160.
+
+      **Modifica:**
+      1. **Ricava a mano,** per ciascun descriptor, le righe di `mgeHid2Nut()` che legano. In pianificazione sono state ricavate così, da riverificare:
+         - **3S:** `BOOL battery.charge battery.charge.low battery.charger.status battery.charger.type.status battery.runtime battery.type device.country device.usb.version input.transfer.high input.transfer.low outlet.1.desc outlet.desc output.voltage.nominal ups.firmware ups.load ups.timer.shutdown ups.timer.start`;
+         - **5P:** `BOOL battery.capacity battery.charge battery.charge.low battery.charge.restart battery.charger.abm.status battery.charger.mode.status battery.charger.status battery.charger.type battery.charger.type.status battery.protection battery.runtime battery.type battery.voltage battery.voltage.nominal device.country output.voltage.nominal ups.firmware ups.load ups.shutdown ups.start.reboot ups.test.interval ups.test.result ups.timer.shutdown ups.timer.start`.
+
+         Sopra ogni elenco, un commento che cita per ogni riga nuova l'usage del descriptor (report ID) e la riga `mge-hid.c`, come per `RW_EATON_3S`.
+      2. **`test_replay_eaton_3s`:**
+         - elenco aggiornato;
+         - `expectedValues` con `ups.timer.start=-1`, `battery.runtime=3360`, `ups.load=5`, `ups.status.ac_present=1`, `ups.status.off=0`, `ups.status.commfault=0`, `ups.status.battvolthi=0`, `ups.status.battvoltlo=0`;
+         - LIST RW identico a oggi (`RW_EATON_3S`), LIST CMD identico.
+      3. **Fixture 3S, `expected_ups_data`:**
+         - togli `ups.status.good`, `ups.status.internal_failure` e `ups.status.comm_lost`, che non esistono più per Eaton;
+         - lascia `ups.status.charging=1`: il report 1 arriva prima del 6, vedi Rischi;
+         - aggiungi `ups.status` = `OL`, se non c'è già, per fissare che non cambia.
+      4. **`test_replay_eaton_5p`:** elenco aggiornato, LIST RW e LIST CMD invariati.
+      5. **Commento "Differenze US-073"** sopra i due test: aggiunte, rimosse e formati per 3S e 5P, presi dal piano sezione 5 e confermati dal run.
+      6. Nessuna altra fixture cambia: se un test non Eaton fallisce, è una regressione di TASK-05.
+
+      **Verifica:** `pio test -e native -f test_record_replay`.
+
+      **Fatto:** replay verde con gli elenchi verificati a mano.
+
+      **Blocchi:** se l'elenco del run differisce da quello ricavato a mano, non copiare l'output. Capisci quale dei due è sbagliato rileggendo descriptor e `mge-hid.c`, e correggi il codice o il commento.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — elenchi, valori, commento differenze
+      - test/fixtures/eaton/eaton_3s_vid0463_pidffff.json — `expected_ups_data` (solo chiavi interne e `ups.status`)
+
+      ## Criteri di Completamento
+      - [ ] `test_record_replay` verde, tutte le fixture
+      - [ ] LIST RW e LIST CMD Eaton invariati rispetto a prima della spec
+    ref: TASK-10
+  - id: TASK-11
+    title: Regressione completa e build
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-06
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessuna regressione fuori dagli Eaton e firmware che compila.
+
+      **Leggi:** memoria di progetto per i comandi (suite a blocchi di circa 8, timeout 600 s; `test_hid_parser` e `test_powercom_driver` senza `test_main.cpp`).
+
+      **Modifica:** nessuna modifica al codice salvo correzioni di regressioni, che vanno annotate.
+
+      **Passi:**
+      1. Suite native complete a blocchi: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f <8 suite>` finché le hai lanciate tutte.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: annota RAM e flash prima e dopo.
+      3. `npm run e2e`.
+
+      **Verifica:** tutto verde; flash in crescita di qualche KB (righe const), RAM statica invariata.
+
+      **Fatto:** numeri annotati nella spec/review.
+
+      **Blocchi:** "program.exe: Accesso negato": cancella `.pio/build/native/program.exe` e riprova.
+
+      ## File Coinvolti
+      - (nessuno, salvo correzioni)
+
+      ## Criteri di Completamento
+      - [ ] Suite native tutte verdi (numero totale annotato)
+      - [ ] Build `esp32-s3-standard` ok con RAM/flash annotate
+      - [ ] e2e verdi
+    ref: TASK-11
+  - id: TASK-12
+    title: Prova sull'Eaton 3S e note di rilascio
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** prova sul 3S reale e differenze nelle note di rilascio.
+
+      **Leggi:**
+      - `scripts/nut_snapshot.py`;
+      - le credenziali in `C:\Users\pasquale\.esp32-nut-cred.json`, solo da script e senza stamparle;
+      - il piano, sezione 5.
+
+      **Passi:**
+      1. Con il firmware attuale (v1.11.0) sull'Eaton 3S: `python scripts/nut_snapshot.py <ip> ups out/us073-before`.
+      2. Build e OTA, fatti dall'utente; poi `python scripts/nut_snapshot.py <ip> ups out/us073-after` e `diff --strip-trailing-cr` dei tre file.
+      3. Differenze accettate in `upsc`:
+         - nuove `ups.timer.start`, `ups.firmware` e `device.usb.version`;
+         - `battery.type` uguale;
+         - `ups.status` uguale (`OL`);
+         - nessun'altra chiave sparita.
+
+         `upscmd -l` e `upsrw` identici.
+      4. L'utente stacca la rete per circa 30 s: `upsc` deve mostrare `OB DISCHRG` entro 2-4 s, poi `OL` dopo il ritorno (CHRG solo sotto il 100%). Controlla nel System Log che non ci siano errori USB.
+      5. Chiedi all'utente la versione della prossima release e scrivi in `docs/releases/vX.Y.Z.md`, oppure annota nella spec se la release non è decisa, la sezione "Eaton: valori dalla tabella mge-hid (US-073)" con le differenze dei punti 3 e 5 del piano: `battery.capacity.full` tolta, `battery.capacity` a 2 decimali, `RB` con batteria assente sui 5P, nuove chiavi.
+
+      **Verifica:** diff con solo le differenze attese; OB/OL corretti.
+
+      **Fatto:** esito annotato nella spec; note scritte.
+
+      **Blocchi:** il passo 4 richiede l'utente; se non è possibile, segnalalo nella review invece di saltarlo in silenzio.
+
+      ## File Coinvolti
+      - docs/releases/vX.Y.Z.md — sezione US-073 (versione decisa dall'utente)
+
+      ## Criteri di Completamento
+      - [ ] Diff before/after con solo le differenze attese
+      - [ ] `OB DISCHRG` e ritorno a `OL` osservati sul 3S
+      - [ ] Differenze scritte nelle note di rilascio
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Fix: onValue senza copia di String quando il testo non cambia'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** review del 2026-10-29, `lib/USBHostUPS/src/NutTable.h:1061`. `onValue()` non deve allocare né copiare `b.value` quando il testo convertito è uguale a quello già memorizzato. È l'obiettivo di ADR 0007 e del piano di US-073.
+
+      **Leggi:** `lib/USBHostUPS/src/NutTable.h`: `decode()` (case `Conv::Lookup` e `Conv::AbmStatus`) e `onValue()`.
+
+      **Modifica:**
+      1. Aggiungi `inline const char* staticText(const HidInfo& info, double v, const Context& ctx)` subito prima di `decode()`. Restituisce:
+         - per `Conv::Lookup`, il `nut` della voce con `hid == (long)v`, altrimenti `nullptr`;
+         - per `Conv::AbmStatus` con `ctx.abm == ABM_ENABLED`, il testo delle due tabelle oggi dentro `decode()` (spostale qui), altrimenti `nullptr`;
+         - per le altre conversioni, `nullptr`.
+
+         Commento: "texts of static tables, returned without building a String (US-073 rework, ADR 0007)".
+      2. `decode()`:
+         - case `Lookup`: `const char* t = staticText(...)`; se `t` → `out = t`, OK, altrimenti FAIL, come oggi;
+         - case `AbmStatus`: CLEAR se l'ABM non è attivo, poi `staticText`; DEFER se `nullptr`, altrimenti OK. Comportamento invariato.
+      3. `onValue()`:
+         - dopo la gestione delle righe interne, di DEAD e di `string_index`, se `b.info->conv == Conv::Lookup` oppure (`Conv::AbmStatus` con ABM attivo), calcola `text = staticText(...)`:
+           - con `text`: `if (!b.has || !(b.value == text)) b.value = text;`, poi `has`, `deferred=false` e `first` come nel ramo OK, poi `resolve`, poi `return`;
+           - senza `text`: si continua con `decode()`, che dà FAIL, DEFER o CLEAR come oggi;
+         - nel ramo OK generico, `b.value = out;` diventa `if (!b.has || !(b.value == out)) b.value = out;`.
+      4. Non toccare `statusToken()`, che già restituisce `const char*`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog -f test_eaton_driver -f test_generic_driver` verde senza modifiche alle asserzioni esistenti.
+
+      **Fatto:** nessun `b.value = out;` senza confronto in `NutTable.h`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — `staticText`, `decode` (Lookup, AbmStatus), `onValue`
+
+      ## Criteri di Completamento
+      - [ ] `staticText` usata da `decode()` e da `onValue()`, nessuna tabella duplicata
+      - [ ] Le quattro suite indicate restano verdi
+    ref: TASK-13
+  - id: TASK-14
+    title: 'Test: nessuna allocazione a valore invariato'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-13
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare il criterio di TASK-13 con un conteggio reale delle allocazioni.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (helper `mgeRow`, `mk`), `test/mocks/Arduino.h` (String = `std::string`; la SSO di libstdc++ arriva a 15 caratteri).
+
+      **Modifica:**
+      1. In testa a `test/test_nut_table/test_main.cpp` aggiungi un contatore globale: `static size_t g_allocs = 0;`, più `void* operator new(size_t n)` che incrementa e chiama `malloc` (con `std::bad_alloc` su NULL) e `void operator delete(void* p) noexcept { free(p); }`, con la variante sized `operator delete(void*, size_t) noexcept`. Commento: conta le allocazioni di questa suite (US-073 rework).
+      2. Test `test_lookup_same_value_does_not_allocate`:
+         - bind di `UPS.BatterySystem.Charger.0xFFFF006B` (riga `battery.charger.type`, `mge-hid.c:2059`) con `mk(...)`;
+         - `onValue(b, i, 5, ctx)`: atteso `"Constant Charge (CC)"`, 20 caratteri;
+         - poi `size_t before = g_allocs; onValue(b, i, 5, ctx); TEST_ASSERT_EQUAL(before, g_allocs);`;
+         - poi `onValue(b, i, 4, ctx)` → `"ABM"`, valore aggiornato.
+      3. Test `test_abm_status_same_value_does_not_allocate`: Context con `abm = ABM_ENABLED` e `abm_path = ABM_PATH_STATUS`, riga `battery.charger.status` su `0xFFFF00E9`, valore 4 (`"discharging"`) due volte, nessuna allocazione alla seconda.
+      4. Registra i due test in `main()`.
+
+      **Verifica:** `pio test -e native -f test_nut_table` verde. Mutazione: in `onValue()` rimetti `b.value = text;` / `b.value = out;` senza confronto e rimuovi il ramo `staticText`. Il primo test deve fallire; poi ripristina.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** se `operator new` globale confligge con Unity o con il mock, sposta il contatore in un header locale della suite; non toccare `test/mocks`.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — contatore di allocazioni e 2 test
+
+      ## Criteri di Completamento
+      - [ ] 2 test nuovi verdi
+      - [ ] La mutazione indicata fa fallire `test_lookup_same_value_does_not_allocate`
+    ref: TASK-14
+  - id: TASK-15
+    title: 'Fix: righe StringId troncate a 19 caratteri come stringid_conversion'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** review del 2026-10-29, `lib/USBHostUPS/src/GenericDriver.cpp:580`. Il testo di una riga `Conv::StringId` ha al massimo 19 caratteri, come `stringid_conversion_fun` (`usbhid-ups.c:598-603`, `static char buf[20]` passato a `HIDGetIndexString`).
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.cpp`, `parseStringDescriptor()` (blocco "Table rows whose value is this string"); `nut_repo/drivers/usbhid-ups.c:598-603`.
+
+      **Modifica:**
+      1. Nel blocco delle righe di tabella di `parseStringDescriptor()`, prima del ciclo, prepara `String text = str;` e `if (text.length() > 19) text = text.substring(0, 19);`, con il commento: `stringid_conversion_fun (usbhid-ups.c:598-603) reads the string into static char buf[20]: at most 19 characters`. Poi passa `text` a `NutTable::onString`.
+      2. Il troncamento si fa solo quando almeno una riga ha quell'indice, così da non creare una String in più per le altre stringhe. Va bene anche calcolarlo dentro il ciclo alla prima riga trovata.
+      3. `ups.mfr`, `ups.model`, `ups.serial` e `battery.mfr.date` restano invariati.
+
+      **Verifica:** `pio test -e native -f test_generic_driver -f test_eaton_driver` verde.
+
+      **Fatto:** il testo pubblicato da una riga `StringId` non supera 19 caratteri.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.cpp — `parseStringDescriptor`
+
+      ## Criteri di Completamento
+      - [ ] Commento con la riga upstream presente
+      - [ ] Le due suite indicate verdi
+    ref: TASK-15
+  - id: TASK-16
+    title: 'Test: troncamento delle righe StringId'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-15
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare TASK-15 sul driver di prova del motore.
+
+      **Leggi:** `test/test_generic_driver/test_main.cpp` (`TableDriver`, `addEngineUsages`, `feed`, `test_engine_string_id_row`).
+
+      **Modifica:**
+      1. Test `test_engine_string_id_truncated_to_19_chars`: `addEngineUsages()`, `feed(tableDriver, { 16, 6 })`, poi `parseStringDescriptor` con l'indice 6 e la stringa `"0123456789ABCDEFGHIJKLMNO"` (25 caratteri; descrittore UTF-16LE costruito come in `test_engine_string_id_row`, con un helper se serve) → `ups.firmware` = `"0123456789ABCDEFGHI"`.
+      2. Nello stesso test una stringa di 10 caratteri su un indice di `ups.mfr` (`mockHost._iManufacturer = 1`) resta intera, perché non è una riga di tabella.
+      3. Registra il test in `main()`, in entrambe le liste.
+
+      **Verifica:** `pio test -e native -f test_generic_driver` verde. Mutazione: togli il troncamento, il test deve fallire; poi ripristina.
+
+      **Fatto:** test verde, mutazione colta.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_generic_driver/test_main.cpp — 1 test
+
+      ## Criteri di Completamento
+      - [ ] Test verde
+      - [ ] La mutazione indicata lo fa fallire
+    ref: TASK-16
+  - id: TASK-17
+    title: Regressione, build e verifica sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-14
+      - TASK-16
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessuna regressione dopo il rework, e firmware aggiornato sull'Eaton 3S.
+
+      **Leggi:** memoria di progetto: suite a blocchi da circa 12, `test_hid_parser` e `test_powercom_driver` inclusi; nome UPS `eaton-3s-700`, IP `192.168.1.126`; credenziali in `C:\Users\pasquale\.esp32-nut-cred.json`, solo da script.
+
+      **Passi:**
+      1. Suite native complete a blocchi (atteso 736 + 3 test nuovi) e `npm run e2e`.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: annota RAM e flash.
+      3. OTA del nuovo `firmware.bin` (script di login e upload multipart su `/update`, come nella prova di TASK-12; l'utente ha autorizzato l'OTA da Claude il 2026-10-29), attesa del ritorno di NUT, poi `python scripts/nut_snapshot.py 192.168.1.126 eaton-3s-700 <out>` e `diff` con lo snapshot "after" della prova precedente: nessuna differenza attesa (`ups.firmware` 02.08.0010 e `battery.type` PbAc invariati).
+      4. System Log: nessun GET_REPORT fallito.
+
+      **Verifica:** tutto verde, diff vuoto salvo i valori che variano da soli (`ups.load`, `battery.runtime`).
+
+      **Fatto:** numeri ed esito annotati nella spec.
+
+      **Blocchi:** se la scheda non risponde, chiedi all'utente invece di riprovare in ciclo.
+
+      ## File Coinvolti
+      - (nessuno, salvo correzioni di regressioni)
+
+      ## Criteri di Completamento
+      - [ ] Suite native ed e2e verdi
+      - [ ] Build ok con RAM/flash annotate
+      - [ ] Snapshot NUT sull'Eaton 3S invariato
+    ref: TASK-17

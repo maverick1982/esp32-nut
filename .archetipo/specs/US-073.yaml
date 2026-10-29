@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 8
-status: TODO
+status: DONE
 body: |
   #### US-073: Tabella unica Eaton (mge-hid), parte 1: motore per voci RO e stati BOOL, PowerSummary e BatterySystem
 
@@ -46,6 +46,29 @@ body: |
   - Il controllo modello e paese (Pegasus/3S) di US-066 si riusa.
   - La riduzione delle scritture di `postDecode()` viene dalla code review di US-066 (2026-10-15): va fatta qui perché è questa spec a portare le righe in sola lettura nel motore.
   - Architettura dopo EP-006 (US-103…105, ADR 0010): i driver ricevono `IHidTransport`, comandi e SET VAR stanno in `HidControl`. `NutTable.h` resta nel modulo `ups-protocol`: server NUT, Web API e Web UI continuano a vedere solo `IUpsSource`, e i loro test non cambiano.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **lib/USBHostUPS/src/NutTable.h:1061** — onValue() costruisce una String out e la copia in b.value a ogni valore letto, anche quando il testo non cambia: i testi Lookup più lunghi della SSO (es. "Done and passed", "Constant Charge (CC)") allocano e liberano a ogni full poll, contro l'obiettivo di ADR 0007 e del piano (nessuna allocazione a valore invariato). Assegnare b.value solo quando il testo è diverso; per Conv::Lookup confrontare b.value con lkp[i].nut (String contro const char*) senza costruire out. Aggiungere un test.
+  - **lib/USBHostUPS/src/GenericDriver.cpp:580** — stringid_conversion upstream (usbhid-ups.c:598-603) usa static char buf[20] con HIDGetIndexString(..., sizeof(buf)): ups.firmware, battery.type e device.usb.version escono al massimo di 19 caratteri. Qui il testo del descrittore passa intero. Troncare a 19 caratteri le righe Conv::StringId prima di NutTable::onString, con un commento che cita la riga upstream, e aggiungere un test con una stringa più lunga.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
+  - status: PLANNED
+    at: "2026-10-29T09:33:36Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T09:42:04Z"
+  - status: REVIEW
+    at: "2026-10-29T11:00:53Z"
+  - status: TODO
+    at: "2026-10-29T11:53:00Z"
+  - status: PLANNED
+    at: "2026-10-29T11:56:10Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T11:57:06Z"
+  - status: REVIEW
+    at: "2026-10-29T12:21:45Z"
+  - status: DONE
+    at: "2026-10-29T12:33:17Z"

@@ -77,11 +77,11 @@
 /**
  * HID -> NUT table of a subdriver, shaped like hid_info_t of usbhid-ups (US-066).
  *
- * This is the future single table of each driver (approach C, decided on 2026-10-15):
- * for now it holds only the ST_FLAG_RW rows of the upstream subdrivers, in their original
- * order, so that the migrations (US-073..US-079) can add the read-only rows, the BOOL
- * status rows and the commands in place. Nothing here assumes that a row is RW except
- * the helpers that build the LIST RW answer.
+ * This is the single table of each driver (approach C, ADR 0011), in the original upstream
+ * order. The engine handles writable, read-only, BOOL status and HU_FLAG_ABSENT rows; the
+ * migrations (US-073..US-079, US-106) fill the tables one subdriver at a time, so most
+ * tables still hold only their ST_FLAG_RW rows (US-066). Nothing here assumes that a row
+ * is RW except the helpers that build the LIST RW answer.
  *
  * Paths use the notation of HIDUsageDef::path (names from NUTUsages.h, unnamed usages as
  * "0x%08X") plus "[N]" after an indexed collection (HIDUsageDef::coll_index). Each row
@@ -102,14 +102,30 @@ constexpr uint16_t HU_FLAG_PARAM_REQUIRED = 256;
 
 // How a HID value becomes the NUT value (the info_lkp_t of the upstream row)
 enum class Conv : uint8_t {
-    Number,           // "%.0f"
+    Number,           // no info_lkp_t: the row's format, "%.0f", "%.1f" or "%.2f"
     Lookup,           // plain info_lkp_t table
     BatteryDate,      // date_conversion (usbhid-ups.c)
     MgeDate,          // mge_date_conversion
     MgeTime,          // mge_time_conversion
     NominalVoltage,   // nominal_output_voltage_info (mge-hid.c)
     PegasusThreshold, // pegasus_threshold_info (mge-hid.c)
-    PegasusYesNo      // pegasus_yes_no_info (mge-hid.c)
+    PegasusYesNo,     // pegasus_yes_no_info (mge-hid.c)
+    StringId,         // stringid_conversion (usbhid-ups.c): the value is a string index
+    KelvinCelsius,    // kelvin_celsius_conversion (usbhid-ups.c)
+    MgeBatteryCapacity,       // mge_battery_capacity (mge-hid.c)
+    MgeBatteryVoltage,        // mge_battery_voltage (mge-hid.c)
+    MgeBatteryVoltageNominal, // mge_battery_voltage_nominal (mge-hid.c)
+    // Internal rows (US-073): they keep state, never publish their info_type
+    MgeCountry,       // eaton_check_country_info (mge-hid.c)
+    AbmEnabled,       // eaton_abm_enabled_info (mge-hid.c)
+    AbmPathMode,      // eaton_abm_path_mode_info (mge-hid.c)
+    AbmPathStatus,    // eaton_abm_path_status_info (mge-hid.c)
+    AbmStatus,        // eaton_abm_status_info (mge-hid.c), battery.charger.status
+    // Functions of BOOL rows (US-073): they give a status token or nothing
+    AbmChrgDischrg,       // eaton_abm_chrg_dischrg_info (mge-hid.c)
+    EatonDischarging,     // eaton_discharging_info (mge-hid.c)
+    EatonCharging,        // eaton_charging_info (mge-hid.c)
+    EatonConverterOnline  // eaton_converter_online_info (mge-hid.c)
 };
 
 struct Lookup {
@@ -144,52 +160,401 @@ static constexpr Lookup kNominalOutputVoltage[] = {                             
     { 100, "100" }, { 110, "110" }, { 120, "120" }, { 127, "127" },
 };
 static constexpr Lookup kPegasusThreshold[] = { { 10, "10" }, { 25, "25" }, { 60, "60" } }; // pegasus_threshold_info
+static constexpr Lookup kTestRead[] = {                                                    // test_read_info
+    { 1, "Done and passed" }, { 2, "Done and warning" }, { 3, "Done and error" }, { 4, "Aborted" },
+    { 5, "In progress" }, { 6, "No test initiated" }, { 7, "Test scheduled" },
+};
+static constexpr Lookup kEatonChargerType[] = {                                            // eaton_charger_type_info
+    { 0, "None" }, { 1, "Extended (CLA)" }, { 2, "Large extension" }, { 3, "Extra large extension (XL)" },
+    { 4, "ABM" }, { 5, "Constant Charge (CC)" },
+};
 
 // mge-hid.c models_type_t and country_code_t values used by the conversions
 constexpr int MGE_DEFAULT_OFFLINE = 0;
 constexpr int MGE_PEGASUS = 0x100;
 constexpr int MGE_3S = 0x110;
 constexpr int MGE_DEFAULT = 0x200;
+constexpr int MGE_EVOLUTION = 0x300;
+constexpr int MGE_EVOLUTION_650 = 0x301;
+constexpr int MGE_EVOLUTION_850 = 0x302;
+constexpr int MGE_EVOLUTION_1150 = 0x303;
+constexpr int MGE_EVOLUTION_S_1250 = 0x304;
+constexpr int MGE_EVOLUTION_1550 = 0x305;
+constexpr int MGE_EVOLUTION_S_1750 = 0x306;
+constexpr int MGE_EVOLUTION_2000 = 0x307;
+constexpr int MGE_EVOLUTION_S_2500 = 0x308;
+constexpr int MGE_EVOLUTION_S_3000 = 0x309;
+constexpr int MGE_PULSAR_M = 0x400;
+constexpr int MGE_PULSAR_M_2200 = 0x401;
+constexpr int MGE_PULSAR_M_3000 = 0x402;
+constexpr int MGE_PULSAR_M_3000_XL = 0x403;
+constexpr int EATON_5P = 0x500;
+constexpr int EATON_9E = 0x900;
 constexpr int COUNTRY_UNKNOWN = -1;
 constexpr int COUNTRY_EUROPE = 0;
 constexpr int COUNTRY_EUROPE_208 = 2;
 
+// mge-hid.c advanced battery monitoring flags
+constexpr int ABM_UNKNOWN = -1;
+constexpr int ABM_DISABLED = 0;
+constexpr int ABM_ENABLED = 1;
+constexpr int ABM_PATH_UNKNOWN = -1;
+constexpr int ABM_PATH_STATUS = 0;
+constexpr int ABM_PATH_MODE = 1;
+
+/**
+ * The ups_status bits of usbhid-ups (status_bit_t, usbhid-ups.h), collected by the BOOL
+ * rows (US-073). known marks the bits a BOOL row has set or cleared at least once: only
+ * those become internal ups.status.* keys (statusKeys()).
+ */
+struct StatusBits {
+    uint32_t set = 0;
+    uint32_t known = 0;
+};
+
+// status_info of usbhid-ups.c: the token of each bit, bit number = index
+static constexpr const char* kStatusTokens[] = {
+    "online", "offline", "dischrg", "chrg", "lowbatt", "overload", "replacebatt", "shutdownimm",
+    "trim", "boost", "bypassauto", "bypassman", "ecomode", "essmode", "off", "cal",
+    "overheat", "commfault", "depleted", "timelimitexp", "fullycharged", "notfullycharged",
+    "awaitingpower", "fanfail", "nobattery", "battvoltlo", "battvolthi", "chargerfail",
+    "vrange", "frange",
+};
+constexpr int ST_ONLINE = 0;
+constexpr int ST_OFFLINE = 1;
+constexpr int ST_OFF = 14;
+constexpr int ST_FULLYCHARGED = 20;
+constexpr int ST_NOTFULLYCHARGED = 21;
+constexpr uint32_t statusBit(int b) { return (uint32_t)1 << b; }
+
+// process_boolean_info() (usbhid-ups.c:2030), literally: online and offline, fullycharged
+// and notfullycharged neuter each other, "!" clears, unknown tokens are ignored
+inline void applyStatusToken(StatusBits& s, const char* token) {
+    if (!token) return;
+    if (strcmp(token, "online") == 0) applyStatusToken(s, "!offline");
+    else if (strcmp(token, "offline") == 0) applyStatusToken(s, "!online");
+    if (strcmp(token, "fullycharged") == 0) applyStatusToken(s, "!notfullycharged");
+    else if (strcmp(token, "notfullycharged") == 0) applyStatusToken(s, "!fullycharged");
+
+    bool clear = false;
+    if (*token == '!') {
+        token++;
+        clear = true;
+    }
+    for (size_t b = 0; b < sizeof(kStatusTokens) / sizeof(kStatusTokens[0]); b++) {
+        if (!equalsIgnoreCase(kStatusTokens[b], token)) continue;
+        if (clear) s.set &= ~statusBit((int)b);
+        else s.set |= statusBit((int)b);
+        s.known |= statusBit((int)b);
+        return;
+    }
+}
+
+/**
+ * The internal ups.status.* keys read by UPSData::computeUPSStatusString(), from the bits
+ * known so far: f(key, value) with value nullptr when the key must not exist.
+ * online/offline make ups.status.ac_present ("1", "0", or no key when neither is set: no
+ * power state, as ups_status_set() sees it), fullycharged/notfullycharged make
+ * ups.status.fully_charged; the other bits keep the names the generic mappings already use,
+ * or ups.status.<token> for the bits no ups.status token is rendered from yet.
+ */
+template <typename F>
+inline void statusKeys(const StatusBits& s, F f) {
+    static const char* const keys[] = {
+        nullptr, nullptr, "ups.status.discharging", "ups.status.charging", "ups.status.battery_low",
+        "ups.status.overload", "ups.status.replace_battery", "ups.status.shutdown_imminent",
+        "ups.status.trim", "ups.status.boost", "ups.status.bypassauto", "ups.status.bypassman",
+        "ups.status.ecomode", "ups.status.essmode", "ups.status.off", "ups.status.cal",
+        "ups.status.overheat", "ups.status.commfault", "ups.status.depleted",
+        "ups.status.remaining_time_limit_expired", nullptr, nullptr, "ups.status.awaitingpower",
+        "ups.status.fanfail", "ups.status.no_battery", "ups.status.battvoltlo", "ups.status.battvolthi",
+        "ups.status.chargerfail", "ups.status.vrange", "ups.status.frange",
+    };
+    static_assert(sizeof(keys) / sizeof(keys[0]) == sizeof(kStatusTokens) / sizeof(kStatusTokens[0]),
+                  "one key per status bit");
+    const uint32_t power = statusBit(ST_ONLINE) | statusBit(ST_OFFLINE);
+    if (s.known & power) {
+        f("ups.status.ac_present", (s.set & statusBit(ST_ONLINE)) ? "1" : (s.set & statusBit(ST_OFFLINE)) ? "0" : nullptr);
+    }
+    const uint32_t full = statusBit(ST_FULLYCHARGED) | statusBit(ST_NOTFULLYCHARGED);
+    if (s.known & full) {
+        f("ups.status.fully_charged",
+          (s.set & statusBit(ST_FULLYCHARGED)) ? "1" : (s.set & statusBit(ST_NOTFULLYCHARGED)) ? "0" : nullptr);
+    }
+    for (size_t b = 0; b < sizeof(keys) / sizeof(keys[0]); b++) {
+        if (!keys[b] || !(s.known & statusBit((int)b))) continue;
+        f(keys[b], (s.set & statusBit((int)b)) ? "1" : "0");
+    }
+}
+
+// Status lookups of usbhid-ups.c and mge-hid.c, verbatim: the text is the token
+static constexpr Lookup kOnlineInfo[] = { { 1, "online" }, { 0, "offline" } };               // online_info
+static constexpr Lookup kDischargingInfo[] = { { 1, "dischrg" }, { 0, "!dischrg" } };        // discharging_info
+static constexpr Lookup kChargingInfo[] = { { 1, "chrg" }, { 0, "!chrg" } };                 // charging_info
+static constexpr Lookup kLowbattInfo[] = { { 1, "lowbatt" }, { 0, "!lowbatt" } };            // lowbatt_info
+static constexpr Lookup kOverloadInfo[] = { { 1, "overload" }, { 0, "!overload" } };         // overload_info
+static constexpr Lookup kReplacebattInfo[] = { { 1, "replacebatt" }, { 0, "!replacebatt" } }; // replacebatt_info
+static constexpr Lookup kTrimInfo[] = { { 1, "trim" }, { 0, "!trim" } };                     // trim_info
+static constexpr Lookup kBoostInfo[] = { { 1, "boost" }, { 0, "!boost" } };                  // boost_info
+static constexpr Lookup kBypassAutoInfo[] = { { 1, "bypassauto" }, { 0, "!bypassauto" } };   // bypass_auto_info
+static constexpr Lookup kBypassManualInfo[] = { { 1, "bypassman" }, { 0, "!bypassman" } };   // bypass_manual_info
+static constexpr Lookup kEcoModeInfo[] = { { 0, "normal" }, { 1, "ecomode" }, { 2, "essmode" } }; // eco_mode_info
+static constexpr Lookup kOffInfo[] = { { 0, "off" }, { 1, "!off" } };                        // off_info
+static constexpr Lookup kNobatteryInfo[] = { { 1, "!nobattery" }, { 0, "nobattery" } };      // nobattery_info
+static constexpr Lookup kFanfailInfo[] = { { 1, "fanfail" }, { 0, "!fanfail" } };            // fanfail_info
+static constexpr Lookup kShutdownimmInfo[] = { { 1, "shutdownimm" }, { 0, "!shutdownimm" } }; // shutdownimm_info
+static constexpr Lookup kOverheatInfo[] = { { 1, "overheat" }, { 0, "!overheat" } };         // overheat_info
+static constexpr Lookup kCommfaultInfo[] = { { 1, "commfault" }, { 0, "!commfault" } };      // commfault_info
+static constexpr Lookup kBattvoltloInfo[] = { { 1, "battvoltlo" }, { 0, "!battvoltlo" } };   // battvoltlo_info
+static constexpr Lookup kBattvolthiInfo[] = { { 1, "battvolthi" }, { 0, "!battvolthi" } };   // battvolthi_info
+static constexpr Lookup kChargerfailInfo[] = { { 1, "chargerfail" }, { 0, "!chargerfail" } }; // chargerfail_info
+static constexpr Lookup kVrangeInfo[] = { { 0, "!vrange" }, { 1, "vrange" } };               // vrange_info
+static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };               // frange_info
+static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
+
 // State the mge conversion functions keep in globals upstream (mge_type, country_code,
-// the static "nominal" of nominal_output_voltage_fun). Reset at every driver setup().
+// the static "nominal" of nominal_output_voltage_fun, the ABM flags, ups_status).
+// Reset at every driver setup().
 struct Context {
     long nominal = -1;
     int mge_type = MGE_DEFAULT;   // upstream default, overridden by mge_model_names
     int country = COUNTRY_UNKNOWN;
+    bool country_seen = false;    // a value of UPS.PowerSummary.Country was read
     // False until the inputs of the model-dependent conversions are known (upstream has
     // them before the first walk: mge_format_model and device.country come first).
     bool ready = true;
+    int abm = ABM_UNKNOWN;           // advanced_battery_monitoring
+    int abm_path = ABM_PATH_UNKNOWN; // advanced_battery_path
+    StatusBits status;               // ups_status, set by the BOOL rows
 };
 
-enum class DecodeResult { OK, FAIL, DEFER };
+// CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
+enum class DecodeResult { OK, FAIL, DEFER, CLEAR };
 
-// mge_type from iProduct/iModel as get_model_name() (mge-hid.c), restricted to the rows
-// whose type is below MGE_DEFAULT: every other row behaves like MGE_DEFAULT for the
-// conversions ported here.
+// Rows that never publish their info_type (US-073): the BOOL rows and the "dummy" rows whose
+// function only keeps state. Upstream never drops them at INIT (their name is never
+// published), so they are always active and outside the first-row-wins rule.
+inline bool isInternalRow(const HidInfo& info) {
+    if (info.info_type && strcmp(info.info_type, "BOOL") == 0) return true;
+    switch (info.conv) {
+    case Conv::MgeCountry:
+    case Conv::AbmEnabled:
+    case Conv::AbmPathMode:
+    case Conv::AbmPathStatus:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The state kept by an internal non-BOOL row (eaton_check_country_fun, eaton_abm_*_fun)
+inline void applyInternal(const HidInfo& info, double v, Context& ctx) {
+    switch (info.conv) {
+    case Conv::MgeCountry:
+        ctx.country = (int)v;
+        ctx.country_seen = true;
+        break;
+    case Conv::AbmEnabled: {
+        int value = (int)v;
+        ctx.abm = (value == ABM_DISABLED || value == ABM_ENABLED) ? value : ABM_UNKNOWN;
+        break;
+    }
+    case Conv::AbmPathMode:
+    case Conv::AbmPathStatus:
+        // Unknown or disabled ABM resets the path, so a re-enabled ABM can take another
+        if (ctx.abm != ABM_ENABLED) ctx.abm_path = ABM_PATH_UNKNOWN;
+        else if (ctx.abm_path == ABM_PATH_UNKNOWN)
+            ctx.abm_path = (info.conv == Conv::AbmPathMode) ? ABM_PATH_MODE : ABM_PATH_STATUS;
+        break;
+    default:
+        break;
+    }
+}
+
+// The token of a BOOL row for value v, nullptr when its function returns NULL (US-073)
+inline const char* statusToken(const HidInfo& info, double v, const Context& ctx, const UPSData* data) {
+    int value = (int)v;
+    bool abm_on = ctx.abm == ABM_ENABLED;
+    switch (info.conv) {
+    case Conv::Lookup:
+        for (uint8_t i = 0; i < info.lkp_count; i++) {
+            if (info.lkp[i].hid == (long)v) return info.lkp[i].nut;
+        }
+        return nullptr;
+    case Conv::EatonDischarging: // eaton_abm_check_dischrg_fun
+        if (abm_on) return "!dischrg";
+        return (v == 1) ? "dischrg" : "!dischrg";
+    case Conv::EatonCharging: // eaton_abm_check_chrg_fun
+        if (abm_on) return "!chrg";
+        if (v != 1) return "!chrg";
+        if (data) {
+            // CC-mode devices keep Charging asserted while floating: no CHRG at 100 %
+            const String* charge = data->find("battery.charge");
+            if (charge && strtod(charge->c_str(), nullptr) >= 100.0) return "!chrg";
+        }
+        return "chrg";
+    case Conv::AbmChrgDischrg: // eaton_abm_chrg_dischrg_fun
+        if (!abm_on) return nullptr;
+        if (ctx.abm_path == ABM_PATH_STATUS) {
+            switch (value) {
+            case 1: case 2: return "chrg";
+            case 4: return "dischrg";
+            default: return nullptr; // 3 resting, 5 undefined, 6 charger disabled
+            }
+        }
+        switch (value) {
+        case 1: case 3: return "chrg";
+        case 2: return "dischrg";
+        default: return nullptr; // 4 resting, 5 undefined, 6 charger disabled
+        }
+    case Conv::EatonConverterOnline: // eaton_converter_online_fun: only when not OFF
+        if (ctx.status.set & statusBit(ST_OFF)) return nullptr;
+        return (v == 0) ? "!online" : "online";
+    default:
+        return nullptr;
+    }
+}
+
+// mge_type from iProduct/iModel as get_model_name() (mge-hid.c): every row of
+// mge_model_names, in the upstream order, with only the fields that give the type (the
+// formatted name is mge_format_model(), outside the table). Trailing spaces in iModel are
+// upstream's (the Ellipse PRO rows).
 inline int mgeModelType(const char* iProduct, const char* iModel) {
     struct Row { const char* product; const char* model; int type; };
     static const Row rows[] = {
-        { "ELLIPSE", "300", MGE_DEFAULT_OFFLINE }, { "ELLIPSE", "500", MGE_DEFAULT_OFFLINE },
-        { "ELLIPSE", "650", MGE_DEFAULT_OFFLINE }, { "ELLIPSE", "800", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "300", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "500", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "650", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "800", MGE_DEFAULT_OFFLINE },
         { "ELLIPSE", "1200", MGE_DEFAULT_OFFLINE },
-        { "ellipse", "PR500", MGE_DEFAULT_OFFLINE }, { "ellipse", "PR650", MGE_DEFAULT_OFFLINE },
-        { "ellipse", "PR800", MGE_DEFAULT_OFFLINE }, { "ellipse", "PR1200", MGE_DEFAULT_OFFLINE },
-        { "ELLIPSE", "600", MGE_DEFAULT_OFFLINE }, { "ELLIPSE", "750", MGE_DEFAULT_OFFLINE },
-        { "ELLIPSE", "1000", MGE_DEFAULT_OFFLINE }, { "ELLIPSE", "1500", MGE_DEFAULT_OFFLINE },
-        { "Ellipse MAX", "600", MGE_DEFAULT_OFFLINE }, { "Ellipse MAX", "850", MGE_DEFAULT_OFFLINE },
-        { "Ellipse MAX", "1100", MGE_DEFAULT_OFFLINE }, { "Ellipse MAX", "1500", MGE_DEFAULT_OFFLINE },
-        { "PROTECTIONCENTER", "420", MGE_DEFAULT_OFFLINE }, { "PROTECTIONCENTER", "500", MGE_DEFAULT_OFFLINE },
+        { "ellipse", "PR500", MGE_DEFAULT_OFFLINE },
+        { "ellipse", "PR650", MGE_DEFAULT_OFFLINE },
+        { "ellipse", "PR800", MGE_DEFAULT_OFFLINE },
+        { "ellipse", "PR1200", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "600", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "750", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "1000", MGE_DEFAULT_OFFLINE },
+        { "ELLIPSE", "1500", MGE_DEFAULT_OFFLINE },
+        { "Ellipse MAX", "600", MGE_DEFAULT_OFFLINE },
+        { "Ellipse MAX", "850", MGE_DEFAULT_OFFLINE },
+        { "Ellipse MAX", "1100", MGE_DEFAULT_OFFLINE },
+        { "Ellipse MAX", "1500", MGE_DEFAULT_OFFLINE },
+        { "PROTECTIONCENTER", "420", MGE_DEFAULT_OFFLINE },
+        { "PROTECTIONCENTER", "500", MGE_DEFAULT_OFFLINE },
         { "PROTECTIONCENTER", "675", MGE_DEFAULT_OFFLINE },
-        { "Protection Station", "500", MGE_PEGASUS }, { "Protection Station", "650", MGE_PEGASUS },
+        { "Protection Station", "500", MGE_PEGASUS },
+        { "Protection Station", "650", MGE_PEGASUS },
         { "Protection Station", "800", MGE_PEGASUS },
-        { "Ellipse ECO", "650", MGE_PEGASUS }, { "Ellipse ECO", "800", MGE_PEGASUS },
-        { "Ellipse ECO", "1200", MGE_PEGASUS }, { "Ellipse ECO", "1600", MGE_PEGASUS },
-        { "3S", "450", MGE_DEFAULT_OFFLINE }, { "3S", "550", MGE_DEFAULT_OFFLINE },
-        { "3S", "700", MGE_3S }, { "3S", "750", MGE_3S },
+        { "Ellipse ECO", "650", MGE_PEGASUS },
+        { "Ellipse ECO", "800", MGE_PEGASUS },
+        { "Ellipse ECO", "1200", MGE_PEGASUS },
+        { "Ellipse ECO", "1600", MGE_PEGASUS },
+        { "3S", "450", MGE_DEFAULT_OFFLINE },
+        { "3S", "550", MGE_DEFAULT_OFFLINE },
+        { "3S", "700", MGE_3S },
+        { "3S", "750", MGE_3S },
+        { "Evolution", "500", MGE_DEFAULT },
+        { "Evolution", "800", MGE_DEFAULT },
+        { "Evolution", "1100", MGE_DEFAULT },
+        { "Evolution", "1500", MGE_DEFAULT },
+        { "Evolution", "2200", MGE_DEFAULT },
+        { "Evolution", "3000", MGE_DEFAULT },
+        { "Evolution", "3000XL", MGE_DEFAULT },
+        { "Evolution", "650", MGE_EVOLUTION_650 },
+        { "Evolution", "850", MGE_EVOLUTION_850 },
+        { "Evolution", "1150", MGE_EVOLUTION_1150 },
+        { "Evolution", "S 1250", MGE_EVOLUTION_S_1250 },
+        { "Evolution", "1550", MGE_EVOLUTION_1550 },
+        { "Evolution", "S 1750", MGE_EVOLUTION_S_1750 },
+        { "Evolution", "2000", MGE_EVOLUTION_2000 },
+        { "Evolution", "S 2500", MGE_EVOLUTION_S_2500 },
+        { "Evolution", "S 3000", MGE_EVOLUTION_S_3000 },
+        { "Eaton 5P", "650", EATON_5P },
+        { "Eaton 5P", "850", EATON_5P },
+        { "Eaton 5P", "1150", EATON_5P },
+        { "Eaton 5P", "1550", EATON_5P },
+        { "Eaton 5PX", "1500", EATON_5P },
+        { "Eaton 5PX", "2200", EATON_5P },
+        { "Eaton 5PX", "3000", EATON_5P },
+        { "Eaton 5SC", "500", EATON_5P },
+        { "Eaton 5SC", "750", EATON_5P },
+        { "Eaton 5SC", "1000", EATON_5P },
+        { "Eaton 5SC", "1500", EATON_5P },
+        { "Eaton 5SC", "2200", EATON_5P },
+        { "Eaton 5SC", "3000", EATON_5P },
+        { "Ellipse PRO", "1200 ", EATON_5P },
+        { "Ellipse PRO", "1500 ", EATON_5P },
+        { "Ellipse PRO", "1600 ", EATON_5P },
+        { "Eaton 9E", "1000", EATON_9E },
+        { "Eaton 9E", "1000i", EATON_9E },
+        { "Eaton 9E", "1000iau", EATON_9E },
+        { "Eaton 9E", "1000ir", EATON_9E },
+        { "Eaton 9E", "2000", EATON_9E },
+        { "Eaton 9E", "2000i", EATON_9E },
+        { "Eaton 9E", "2000iau", EATON_9E },
+        { "Eaton 9E", "2000ir", EATON_9E },
+        { "Eaton 9E", "3000", EATON_9E },
+        { "Eaton 9E", "3000i", EATON_9E },
+        { "Eaton 9E", "3000iau", EATON_9E },
+        { "Eaton 9E", "3000ir", EATON_9E },
+        { "Eaton 9E", "3000ixl", EATON_9E },
+        { "Eaton 9E", "3000ixlau", EATON_9E },
+        { "unknown", "1000", EATON_9E },
+        { "unknown", "2000", EATON_9E },
+        { "unknown", "3000", EATON_9E },
+        { "Eaton 9SX", "700i", EATON_9E },
+        { "Eaton 9SX", "1000i", EATON_9E },
+        { "Eaton 9SX", "1000im", EATON_9E },
+        { "Eaton 9SX", "1500i", EATON_9E },
+        { "Eaton 9SX", "2000i", EATON_9E },
+        { "Eaton 9SX", "3000i", EATON_9E },
+        { "Eaton 9SX", "3000im", EATON_9E },
+        { "Eaton 9SX", "1000ir", EATON_9E },
+        { "Eaton 9SX", "1500ir", EATON_9E },
+        { "Eaton 9SX", "2000ir", EATON_9E },
+        { "Eaton 9SX", "3000ir", EATON_9E },
+        { "Eaton 9PX", "1000irt2u", EATON_9E },
+        { "Eaton 9PX", "1500irt2u", EATON_9E },
+        { "Eaton 9PX", "1500irtm", EATON_9E },
+        { "Eaton 9PX", "2200irt2u", EATON_9E },
+        { "Eaton 9PX", "2200irt3u", EATON_9E },
+        { "Eaton 9PX", "3000irt2u", EATON_9E },
+        { "Eaton 9PX", "3000irt3u", EATON_9E },
+        { "Eaton 9PX", "3000irtm", EATON_9E },
+        { "PULSAR M", "2200", MGE_PULSAR_M_2200 },
+        { "PULSAR M", "3000", MGE_PULSAR_M_3000 },
+        { "PULSAR M", "3000 XL", MGE_PULSAR_M_3000_XL },
+        { "EX", "2200", MGE_PULSAR_M_2200 },
+        { "EX", "3000", MGE_PULSAR_M_3000 },
+        { "EX", "3000 XL", MGE_PULSAR_M_3000 },
+        { "PULSAR", "MX4000", MGE_DEFAULT },
+        { "PULSAR", "MX5000", MGE_DEFAULT },
+        { "NOVA AVR", "500", MGE_DEFAULT },
+        { "NOVA AVR", "600", MGE_DEFAULT },
+        { "NOVA AVR", "625", MGE_DEFAULT },
+        { "NOVA AVR", "1100", MGE_DEFAULT },
+        { "NOVA AVR", "1250", MGE_DEFAULT },
+        { "EXtreme", "700C", MGE_DEFAULT },
+        { "EXtreme", "1000C", MGE_DEFAULT },
+        { "EXtreme", "1500C", MGE_DEFAULT },
+        { "EXtreme", "1500CCLA", MGE_DEFAULT },
+        { "EXtreme", "2200C", MGE_DEFAULT },
+        { "EXtreme", "3200C", MGE_DEFAULT },
+        { "EX", "700RT", MGE_DEFAULT },
+        { "EX", "1000RT", MGE_DEFAULT },
+        { "EX", "1500RT", MGE_DEFAULT },
+        { "EX", "2200RT", MGE_DEFAULT },
+        { "EX", "3200RT", MGE_DEFAULT },
+        { "EX", "5RT31", MGE_DEFAULT },
+        { "EX", "7RT31", MGE_DEFAULT },
+        { "EX", "11RT31", MGE_DEFAULT },
+        { "EX", "5RT", MGE_DEFAULT },
+        { "EX", "7RT", MGE_DEFAULT },
+        { "EX", "11RT", MGE_DEFAULT },
+        { "GALAXY", "3000_10", MGE_DEFAULT },
+        { "GALAXY", "3000_15", MGE_DEFAULT },
+        { "GALAXY", "3000_20", MGE_DEFAULT },
+        { "GALAXY", "3000_30", MGE_DEFAULT },
     };
     if (!iProduct || !iModel || !iModel[0]) return MGE_DEFAULT;
     for (const Row& r : rows) {
@@ -238,22 +603,116 @@ inline String formatRounded(double v) {
     return String((long)lrint(v));
 }
 
-// Converts a HID value as ups_infoval_set() does. DEFER: the model-dependent inputs are
-// not known yet, retry with the next report.
-inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& out) {
+// The row's dstate_setinfo_dynamic() format: "%.0f" rounds as printf does (lrint), "%.1f"
+// and "%.2f" go through snprintf; any other format is not supported (FAIL)
+inline bool formatNumber(const char* fmt, double v, String& out) {
+    if (!fmt || strcmp(fmt, "%.0f") == 0) {
+        out = formatRounded(v);
+        return true;
+    }
+    if (strcmp(fmt, "%.1f") != 0 && strcmp(fmt, "%.2f") != 0) return false;
+    char buf[32];
+    snprintf(buf, sizeof(buf), fmt, v);
+    out = buf;
+    return true;
+}
+
+/**
+ * The text of the conversions that pick it from a static table (Lookup, and AbmStatus with
+ * ABM enabled), nullptr when there is none: texts of static tables, returned without
+ * building a String (US-073 rework, ADR 0007).
+ */
+inline const char* staticText(const HidInfo& info, double v, const Context& ctx) {
+    switch (info.conv) {
+    case Conv::Lookup:
+        for (uint8_t i = 0; i < info.lkp_count; i++) {
+            if (info.lkp[i].hid == (long)v) return info.lkp[i].nut;
+        }
+        return nullptr;
+    case Conv::AbmStatus: { // eaton_abm_status_fun
+        if (ctx.abm != ABM_ENABLED) return nullptr;
+        int value = (int)v;
+        if (value < 1 || value > 6) return nullptr;
+        if (ctx.abm_path == ABM_PATH_STATUS) {
+            static const char* const t[] = { nullptr, "charging", "floating", "resting", "discharging", nullptr, "off" };
+            return t[value];
+        }
+        static const char* const t[] = { nullptr, "charging", "discharging", "floating", "resting", nullptr, "off" };
+        return t[value]; // nullptr for 5, "ABM is not activated"
+    }
+    default:
+        return nullptr;
+    }
+}
+
+/**
+ * Converts a HID value as ups_infoval_set() does. DEFER: the model-dependent inputs are not
+ * known yet, or the upstream function returned NULL without it being a failure (a string
+ * index waiting for its descriptor, an ABM value without text): retry with the next value.
+ * CLEAR: the variable must be removed. data is the published state some upstream functions
+ * read with dstate_getinfo(); nullptr when there is none.
+ */
+inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& out, const UPSData* data = nullptr) {
+    (void)data;
     char buf[32];
     switch (info.conv) {
     case Conv::Number:
-        out = formatRounded(v);
+        return formatNumber(info.dfl, v, out) ? DecodeResult::OK : DecodeResult::FAIL;
+    case Conv::StringId:
+        // HIDGetIndexString() of index 0 or less fails; the text comes with the descriptor
+        return (v >= 1 && v <= 255) ? DecodeResult::DEFER : DecodeResult::FAIL;
+    case Conv::KelvinCelsius:
+        // The value may already be in °C (some HP implementations)
+        snprintf(buf, sizeof(buf), "%.1f", (v >= 273 && v <= 373) ? v - 273.15 : v);
+        out = buf;
         return DecodeResult::OK;
-    case Conv::Lookup:
-        for (uint8_t i = 0; i < info.lkp_count; i++) {
-            if (info.lkp[i].hid == (long)v) {
-                out = info.lkp[i].nut;
-                return DecodeResult::OK;
-            }
+    case Conv::MgeBatteryCapacity:
+        snprintf(buf, sizeof(buf), "%.2f", v / 3600); // As to Ah
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::MgeBatteryVoltage:
+    case Conv::MgeBatteryVoltageNominal: {
+        // Only some series report the battery in UPS.PowerSummary (mge_battery_voltage_fun)
+        if (!ctx.ready) return DecodeResult::DEFER;
+        bool nominal = info.conv == Conv::MgeBatteryVoltageNominal;
+        switch (ctx.mge_type & 0xFF00) {
+        case MGE_EVOLUTION:
+            if (nominal && ctx.mge_type == MGE_EVOLUTION_650) v = 12.0;
+            break;
+        case MGE_PULSAR_M:
+        case EATON_5P:
+        case EATON_9E:
+            break;
+        default:
+            return DecodeResult::FAIL;
         }
-        return DecodeResult::FAIL;
+        snprintf(buf, sizeof(buf), nominal ? "%.0f" : "%.1f", v);
+        out = buf;
+        return DecodeResult::OK;
+    }
+    case Conv::AbmStatus: { // eaton_abm_status_fun
+        if (ctx.abm != ABM_ENABLED) return DecodeResult::CLEAR; // user switched ABM off
+        const char* text = staticText(info, v, ctx);
+        if (!text) return DecodeResult::DEFER; // 5 "ABM is not activated", unknown values
+        out = text;
+        return DecodeResult::OK;
+    }
+    case Conv::MgeCountry:
+    case Conv::AbmEnabled:
+    case Conv::AbmPathMode:
+    case Conv::AbmPathStatus:
+    case Conv::AbmChrgDischrg:
+    case Conv::EatonDischarging:
+    case Conv::EatonCharging:
+    case Conv::EatonConverterOnline:
+        // Internal rows and BOOL functions: applyInternal() / statusToken()
+        return DecodeResult::DEFER;
+    case Conv::Lookup: {
+        const char* text = staticText(info, v, ctx);
+        if (!text) return DecodeResult::FAIL;
+        out = text;
+        return DecodeResult::OK;
+    }
     case Conv::BatteryDate: {
         long value = (long)v;
         if (value == 0) {
@@ -444,6 +903,9 @@ inline EncodeResult encode(const HidInfo& info, const char* val, const Context& 
         out = (double)sec;
         return EncodeResult::OK;
     }
+    default:
+        // Read-only conversions (US-073): no row with them is ST_FLAG_RW
+        break;
     }
     return EncodeResult::FAIL;
 }
@@ -507,14 +969,20 @@ struct Bound {
     String value;       // last converted value
     bool has = false;
     bool deferred = false; // last value arrived before the conversion inputs were known
+    bool cleared = false;  // CLEAR since the last publication: the key must be removed
+    uint8_t string_index = 0; // Conv::StringId: the string descriptor that holds the value
+    double last = 0;          // internal rows: last value read, applied again by walkInternalRows()
+    bool seen = false;        // internal rows: last holds a value
     enum class First : uint8_t { UNREAD, OK, FAIL } first = First::UNREAD;
     enum class Role : uint8_t { PENDING, ACTIVE, DEAD } role = Role::PENDING;
 };
 
 // The upstream INIT rule: per variable, the first row in table order whose first value
 // converts wins; later rows with the same name are dropped (item->hiddata = NULL).
+// Internal rows (isInternalRow) are outside the rule: always active.
 inline void resolve(std::vector<Bound>& binds) {
     for (size_t i = 0; i < binds.size(); i++) {
+        if (isInternalRow(*binds[i].info)) continue;
         const char* name = binds[i].info->info_type;
         bool first_of_group = true;
         for (size_t j = 0; j < i; j++) {
@@ -525,6 +993,7 @@ inline void resolve(std::vector<Bound>& binds) {
         bool blocked = false, decided = false;
         for (size_t j = i; j < binds.size(); j++) {
             Bound& b = binds[j];
+            if (isInternalRow(*b.info)) continue;
             if (strcmp(b.info->info_type, name) != 0) continue;
             if (decided || b.first == Bound::First::FAIL) {
                 b.role = Bound::Role::DEAD;
@@ -573,23 +1042,53 @@ inline std::vector<Bound> bind(const HidInfo* table, size_t n, const std::vector
             b.has = true;
             b.first = Bound::First::OK;
         }
+        if (isInternalRow(table[r])) b.role = Bound::Role::ACTIVE;
         binds.push_back(b);
     }
     resolve(binds);
     return binds;
 }
 
-// A value read for binds[i]
-inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx) {
+/**
+ * A value read for binds[i]. Internal rows only update ctx: a BOOL row applies its status
+ * token (process_boolean_info), the others keep their state (applyInternal). data is the
+ * published state read by some upstream functions (EatonCharging).
+ */
+inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx, const UPSData* data = nullptr) {
     Bound& b = binds[i];
     if (b.info->hidflags & HU_FLAG_ABSENT) return; // driver-side value, never read
+    if (isInternalRow(*b.info)) {
+        b.last = v;
+        b.seen = true;
+        if (strcmp(b.info->info_type, "BOOL") == 0) applyStatusToken(ctx.status, statusToken(*b.info, v, ctx, data));
+        else applyInternal(*b.info, v, ctx);
+        return;
+    }
     if (b.role == Bound::Role::DEAD) return;
+    if (b.info->conv == Conv::StringId && v >= 1 && v <= 255) b.string_index = (uint8_t)v;
+    // Texts of static tables: no String built, and none copied when the value is the same
+    if (b.info->conv == Conv::Lookup || (b.info->conv == Conv::AbmStatus && ctx.abm == ABM_ENABLED)) {
+        if (const char* text = staticText(*b.info, v, ctx)) {
+            if (!b.has || !(b.value == text)) b.value = text;
+            b.has = true;
+            b.deferred = false;
+            if (b.first == Bound::First::UNREAD) b.first = Bound::First::OK;
+            resolve(binds);
+            return;
+        }
+        // No text: decode() gives the same FAIL / DEFER as the upstream lookup
+    }
     String out;
-    DecodeResult r = decode(*b.info, v, ctx, out);
-    b.deferred = (r == DecodeResult::DEFER);
+    DecodeResult r = decode(*b.info, v, ctx, out, data);
+    if (r == DecodeResult::CLEAR) {
+        // dstate_delinfo(): the variable goes whoever wrote it
+        b.cleared = true;
+        b.has = false;
+    }
+    b.deferred = (r == DecodeResult::DEFER || r == DecodeResult::CLEAR);
     if (b.deferred) return;
     if (r == DecodeResult::OK) {
-        b.value = out;
+        if (!b.has || !(b.value == out)) b.value = out;
         b.has = true;
         if (b.first == Bound::First::UNREAD) b.first = Bound::First::OK;
     } else if (b.first == Bound::First::UNREAD) {
@@ -599,12 +1098,39 @@ inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx)
     resolve(binds);
 }
 
+/**
+ * The upstream walk over the internal rows (US-073): hid_ups_walk() applies every BOOL and
+ * state row in table order, then ups_status_set() reads the bits. Rows of different reports
+ * must not undo each other depending on which report came last (with ABM enabled,
+ * eaton_discharging_info gives "!dischrg" and the later Charger.Mode row gives "dischrg"),
+ * so after each report the last value of every row read so far is applied again, in order.
+ */
+inline void walkInternalRows(const std::vector<Bound>& binds, Context& ctx, const UPSData* data = nullptr) {
+    for (const Bound& b : binds) {
+        if (!b.seen || !isInternalRow(*b.info)) continue;
+        if (strcmp(b.info->info_type, "BOOL") == 0) applyStatusToken(ctx.status, statusToken(*b.info, b.last, ctx, data));
+        else applyInternal(*b.info, b.last, ctx);
+    }
+}
+
+// The text of string descriptor binds[i].string_index arrived (stringid_conversion)
+inline void onString(std::vector<Bound>& binds, size_t i, const String& text) {
+    Bound& b = binds[i];
+    if (b.role == Bound::Role::DEAD) return;
+    b.value = text;
+    b.has = true;
+    b.deferred = false;
+    if (b.first == Bound::First::UNREAD) b.first = Bound::First::OK;
+    resolve(binds);
+}
+
 // End of the first full poll, the end of upstream's INIT walk: rows never read count as
 // failed, so the next row with the same name can take over. A deferred row was read and
-// waits only for its conversion inputs: it is decided by its next value.
+// waits only for its conversion inputs (or its string): it is decided by its next value.
 inline void finishInit(std::vector<Bound>& binds) {
     bool changed = false;
     for (Bound& b : binds) {
+        if (isInternalRow(*b.info)) continue;
         if (b.first == Bound::First::UNREAD && !b.deferred) {
             b.first = Bound::First::FAIL;
             changed = true;
@@ -695,19 +1221,52 @@ inline const DelayPaths* legrandDelayPaths() {
     return &p;
 }
 
-// Subdriver tables. Partial on purpose (US-066): only the ST_FLAG_RW rows, in upstream
-// order. ups.delay.* is left to CommandCatalog::applyDefaultDelays.
+// Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() has the
+// rows of US-066 (ST_FLAG_RW) and US-073 (Device, Battery page, the UPS page rows of
+// PowerSummary/BatterySystem, BOOL status); the rows marked "row of US-074" come with that
+// spec. The other tables still hold only their ST_FLAG_RW rows (US-066). ups.delay.* is left
+// to CommandCatalog::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
     static const HidInfo t[] = {
+        // --- Device collection
+        // mge-hid.c:2006 UPS.PowerSummary.Country
+        { "device.country", ST_FLAG_STRING, 20, "UPS.PowerSummary.0xFFFF0095", "Europe", HU_FLAG_STATIC, Conv::MgeCountry, nullptr, 0 },
+        // mge-hid.c:2007 UPS.System.USB.iVersion
+        { "device.usb.version", ST_FLAG_STRING, 20, "UPS.0xFFFF00E5.0xFFFF0005.0xFFFF00F1", nullptr, HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // device.usb.mode (mge-hid.c:2008) and device.gateway.power.rate (mge-hid.c:2009): commented out upstream
+
+        // --- Battery page
+        // mge-hid.c:2012 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2013 UPS.PowerSummary.RemainingCapacityLimitSetting
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerSummary.0xFFFF004D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2014 UPS.PowerSummary.RemainingCapacityLimit
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2015 UPS.PowerSummary.RestartLevel
         { "battery.charge.restart", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.PowerSummary.0xFFFF005F", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2016 UPS.BatterySystem.Battery.DesignCapacity
+        { "battery.capacity", 0, 0, "UPS.BatterySystem.Battery.DesignCapacity", "%s", HU_FLAG_STATIC, Conv::MgeBatteryCapacity, nullptr, 0 },
+        // mge-hid.c:2017 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2018 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2019 UPS.StatisticSystem.Input.[1].Statistic.[1].Time
+        { "battery.runtime.elapsed", 0, 0, "UPS.0xFFFF0004.Input.[1].0xFFFF0003.[1].0xFFFF0097", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // mge-hid.c:2020 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2021 UPS.BatterySystem.Battery.Temperature
+        { "battery.temperature", 0, 0, "UPS.BatterySystem.Battery.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
+        // mge-hid.c:2022 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // mge-hid.c:2023 UPS.BatterySystem.Voltage
+        { "battery.voltage", 0, 0, "UPS.BatterySystem.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2024 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%s", 0, Conv::MgeBatteryVoltage, nullptr, 0 },
+        // mge-hid.c:2025 UPS.BatterySystem.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.BatterySystem.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2026 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%s", HU_FLAG_STATIC, Conv::MgeBatteryVoltageNominal, nullptr, 0 },
         // mge-hid.c:2027 UPS.BatterySystem.Battery.DeepDischargeProtection
         { "battery.protection", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.BatterySystem.Battery.0xFFFF0049", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
         // mge-hid.c:2028 UPS.PowerConverter.Input.[3].EnergySaving
@@ -720,12 +1279,51 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "battery.energysave.delay", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2034 UPS.PowerConverter.Input.[3].ConfigActivePower
         { "battery.energysave.realpower", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].ConfigActivePower", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ABM (Advanced Battery Monitoring): before the BOOL status, as upstream
+        // mge-hid.c:2040 UPS.BatterySystem.Charger.ABMEnable (internal)
+        { "battery.charger.abm.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0087", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmEnabled, nullptr, 0 },
+        // mge-hid.c:2047 UPS.BatterySystem.Charger.Mode (internal)
+        { "battery.charger.mode.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathMode, nullptr, 0 },
+        // mge-hid.c:2048 UPS.BatterySystem.Charger.Status (internal)
+        { "battery.charger.type.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathStatus, nullptr, 0 },
+        // mge-hid.c:2051 UPS.BatterySystem.Charger.Mode
+        { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
+        // mge-hid.c:2052 UPS.BatterySystem.Charger.Status
+        { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
+        // battery.charger.status (mge-hid.c:2056) UPS.BatterySystem.Charger.PresentStatus.Used: commented out upstream (Note 1)
+        // mge-hid.c:2059 UPS.BatterySystem.Charger.ChargerType
+        { "battery.charger.type", 0, 0, "UPS.BatterySystem.Charger.0xFFFF006B", "%.0f", HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kEatonChargerType) },
+
+        // --- UPS page
+        // ups.efficiency (mge-hid.c:2062): row of US-074, UPS.PowerConverter path
+        // mge-hid.c:2063 UPS.PowerSummary.iVersion
+        { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFFFF00F1", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // mge-hid.c:2064 UPS.PowerSummary.PercentLoad
+        { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2065 UPS.Flow.[4].ConfigPercentLoad
         { "ups.load.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.Flow.[4].ConfigPercentLoad", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // ups.delay.start (mge-hid.c:2066) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
         // ups.delay.shutdown (mge-hid.c:2067) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // mge-hid.c:2068 UPS.PowerSummary.DelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2069 UPS.PowerSummary.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2070 UPS.PowerSummary.DelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2071 UPS.BatterySystem.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
         // mge-hid.c:2072 UPS.BatterySystem.Battery.TestPeriod
         { "ups.test.interval", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.BatterySystem.Battery.0xFFFF0045", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ups.beeper.status (mge-hid.c:2075-2077): rows of US-074, with the beeper commands and the active beeper path of HidControl
+        // mge-hid.c:2078 UPS.PowerSummary.Temperature
+        { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
+        // ups.power (mge-hid.c:2079): row of US-074, UPS.PowerConverter path
+        // ups.L1.power, ups.L2.power, ups.L3.power (mge-hid.c:2080-2082): rows of US-074, UPS.PowerConverter path
+        // ups.power.nominal (mge-hid.c:2083): row of US-074, UPS.Flow path
+        // ups.realpower (mge-hid.c:2084): row of US-074, UPS.PowerConverter path
+        // ups.realpower (mge-hid.c:2087): row of US-074, eaton_compute_realpower_info on UPS.Flow.[4]
+        // ups.L1.realpower, ups.L2.realpower, ups.L3.realpower (mge-hid.c:2088-2090): rows of US-074, UPS.PowerConverter path
+        // ups.realpower.nominal (mge-hid.c:2091): row of US-074, UPS.Flow path
         // mge-hid.c:2092 UPS.PowerConverter.Input.[1].AutomaticRestart
         { "ups.start.auto", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[1].0xFFFF0043", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
         // mge-hid.c:2093 UPS.PowerConverter.Input.[3].StartOnBattery
@@ -738,6 +1336,78 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "ups.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeDate, nullptr, 0 },
         // mge-hid.c:2098 UPS.PowerSummary.Time
         { "ups.time", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeTime, nullptr, 0 },
+        // ups.type (mge-hid.c:2103): row of US-074, UPS.PowerConverter path
+
+        // --- BOOL status: they set the internal ups.status.* keys (NutTable::statusKeys)
+        // mge-hid.c:2106 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // mge-hid.c:2107 UPS.PowerConverter.Input.[3].PresentStatus.Used
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[3].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeOnbattInfo) },
+        // BOOL (mge-hid.c:2110) UPS.PowerConverter.Input.[1].PresentStatus.Used, online_info: #if 0 upstream (see 2136)
+        // mge-hid.c:2113 UPS.PowerSummary.PresentStatus.Discharging (ABM disabled)
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonDischarging, nullptr, 0 },
+        // mge-hid.c:2114 UPS.PowerSummary.PresentStatus.Charging (ABM disabled)
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonCharging, nullptr, 0 },
+        // mge-hid.c:2116 UPS.BatterySystem.Charger.Mode (ABM enabled)
+        { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
+        // mge-hid.c:2117 UPS.BatterySystem.Charger.Status (ABM enabled)
+        { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
+        // mge-hid.c:2119 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // mge-hid.c:2121 UPS.PowerConverter.Output.Overload.[1].PresentStatus.OverThreshold
+        { "BOOL", 0, 0, "UPS.PowerConverter.Output.Overload.[1].PresentStatus.0xFFFF007E", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // mge-hid.c:2123 UPS.PowerConverter.Output.Overload.[2].PresentStatus.OverThreshold
+        { "BOOL", 0, 0, "UPS.PowerConverter.Output.Overload.[2].PresentStatus.0xFFFF007E", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // mge-hid.c:2125 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // mge-hid.c:2126 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // mge-hid.c:2128 UPS.LCMSystem.LCMAlarm.[2].PresentStatus.TimerExpired
+        { "BOOL", 0, 0, "UPS.0xFFFF0018.0xFFFF001A.[2].PresentStatus.0xFFFF0093", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // mge-hid.c:2129 UPS.PowerConverter.Input.[1].PresentStatus.Buck
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Buck", nullptr, 0, Conv::Lookup, NUT_LKP(kTrimInfo) },
+        // mge-hid.c:2130 UPS.PowerConverter.Input.[1].PresentStatus.Boost
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
+        // mge-hid.c:2131 UPS.PowerConverter.Input.[1].PresentStatus.VoltageOutOfRange
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.VoltageOutOfRange", nullptr, 0, Conv::Lookup, NUT_LKP(kVrangeInfo) },
+        // mge-hid.c:2132 UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange", nullptr, 0, Conv::Lookup, NUT_LKP(kFrangeInfo) },
+        // mge-hid.c:2133 UPS.PowerSummary.PresentStatus.Good
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Good", nullptr, 0, Conv::Lookup, NUT_LKP(kOffInfo) },
+        // mge-hid.c:2136 UPS.PowerConverter.Input.[1].PresentStatus.Used (after Good: only when not OFF)
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Used", nullptr, 0, Conv::EatonConverterOnline, nullptr, 0 },
+        // mge-hid.c:2137 UPS.PowerConverter.Input.[2].PresentStatus.Used (automatic bypass)
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[2].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassAutoInfo) },
+        // mge-hid.c:2139 UPS.PowerConverter.Input.[4].PresentStatus.Used (manual bypass)
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[4].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassManualInfo) },
+        // mge-hid.c:2140 UPS.PowerConverter.Input.[5].PresentStatus.Used (ECO/ESS mode)
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[5].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kEcoModeInfo) },
+        // mge-hid.c:2141 UPS.PowerSummary.PresentStatus.FanFailure
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF0077", nullptr, 0, Conv::Lookup, NUT_LKP(kFanfailInfo) },
+        // mge-hid.c:2142 UPS.BatterySystem.Battery.PresentStatus.Present
+        { "BOOL", 0, 0, "UPS.BatterySystem.Battery.PresentStatus.Present", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // mge-hid.c:2143 UPS.BatterySystem.Charger.PresentStatus.InternalFailure
+        { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.InternalFailure", nullptr, 0, Conv::Lookup, NUT_LKP(kChargerfailInfo) },
+        // mge-hid.c:2144 UPS.BatterySystem.Charger.PresentStatus.VoltageTooHigh
+        { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
+        // mge-hid.c:2145 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooHigh
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
+        // mge-hid.c:2147 UPS.BatterySystem.Battery.PresentStatus.VoltageTooHigh
+        { "BOOL", 0, 0, "UPS.BatterySystem.Battery.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
+        // mge-hid.c:2148 UPS.BatterySystem.Charger.PresentStatus.VoltageTooLow
+        { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvoltloInfo) },
+        // mge-hid.c:2149 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooLow
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeOnbattInfo) },
+        // mge-hid.c:2150 UPS.PowerSummary.PresentStatus.InternalFailure
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.InternalFailure", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // mge-hid.c:2151 UPS.PowerSummary.PresentStatus.OverTemperature
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.OverTemperature", nullptr, 0, Conv::Lookup, NUT_LKP(kOverheatInfo) },
+        // mge-hid.c:2152 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+
+        // ups.alarm (mge-hid.c:2155-2160): rows of US-074, the firmware does not build ups.alarm yet
+
+        // --- Input page
         // mge-hid.c:2179 UPS.PowerConverter.Output.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2180 UPS.PowerConverter.Output.LowVoltageEcoTransfer

@@ -45,15 +45,64 @@ void tearDown(void) {}
 // neither before nor after completeInitialPoll() (DEFER, decided by its next value).
 #define RW_EATON_3S "battery.charge.low:5 input.transfer.high:5 input.transfer.low:5 outlet.1.desc:20 outlet.desc:20 " RW_DELAYS
 
+// mgeHid2Nut() rows bound by the Eaton 3S descriptor (US-073), derived from its usages and
+// mge-hid.c, beyond the RW rows above. Read-only: battery.charge (2012, RemainingCapacity,
+// FEATURE 0x06), battery.charge.low (2014, RemainingCapacityLimit, 0x08, dropped: 2013 wins),
+// battery.runtime (2017, RunTimeToEmpty, 0x06), battery.type (2022, iDeviceChemistry, 0x10),
+// ups.firmware (2063, PowerSummary.iVersion 0xFFFF00F1, 0x10), device.usb.version (2007,
+// System.USB.iVersion 0xFFFF00E5.0xFFFF0005.0xFFFF00F1, 0x10), ups.load (2064, PercentLoad,
+// 0x07), ups.timer.start/shutdown (2068/2069, DelayBeforeStartup/Shutdown, 0x0A/0x09),
+// battery.charger.status (2052, Charger.Status 0xFFFF00E9, 0x07). Internal: device.country
+// (2006, Country 0xFFFF0095, 0x15), battery.charger.type.status (2048, Charger.Status). BOOL:
+// ACPresent (2106), Discharging (2113), Charging (2114), Charger.Status (2117),
+// BelowRemainingCapacityLimit (2119), Overload (2125), NeedReplacement (2126), Good (2133),
+// Charger.PresentStatus.VoltageTooHigh/Low 0xFFFF0074/75 (2144/2148), InternalFailure (2150),
+// ShutdownImminent (2152), all in FEATURE 0x01 but the Charger ones (0x03).
+//
+// Differences US-073 (3S fixture): ups.timer.start added (-1). With the strings, on the
+// device: ups.firmware (index 6) and device.usb.version (index 8) added; battery.type (index
+// 5) from the table instead of the hand mapping. Internal keys: ups.status.good became
+// ups.status.off (inverted), ups.status.internal_failure became ups.status.commfault,
+// ups.status.comm_lost is gone (mge-hid reads no CommunicationLost), battvolthi/battvoltlo
+// added. battery.charger.status stays unpublished: no ABMEnable, ABM unknown. ups.status
+// stays "OL"; ups.status.charging becomes 0 (it was 1): Charging is 1, but every walk applies
+// eaton_abm_check_chrg_fun again, and once battery.charge (0x06) is 100 it gives "!chrg".
+#define NUT_ROWS_EATON_3S "BOOL battery.charge battery.charge.low battery.charger.status battery.charger.type.status " \
+    "battery.runtime battery.type device.country device.usb.version input.transfer.high input.transfer.low " \
+    "outlet.1.desc outlet.desc output.voltage.nominal ups.firmware ups.load ups.timer.shutdown ups.timer.start"
+
 void test_replay_eaton_3s(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
-        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low input.transfer.high input.transfer.low outlet.1.desc outlet.desc output.voltage.nominal",
-        {}, RW_EATON_3S, RW_EATON_3S);
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073) */ NUT_ROWS_EATON_3S,
+        { { "ups.timer.start", "-1" }, { "ups.timer.shutdown", "-1" }, { "battery.runtime", "3360" },
+          { "ups.load", "5" }, { "ups.status.ac_present", "1" }, { "ups.status.off", "0" },
+          { "ups.status.commfault", "0" }, { "ups.status.battvolthi", "0" }, { "ups.status.battvoltlo", "0" } },
+        RW_EATON_3S, RW_EATON_3S);
 }
+
+// mgeHid2Nut() rows bound by the Eaton 5P descriptor (US-073), beyond the RW rows: the 3S
+// ones but device.usb.version (no System.USB.iVersion), plus battery.capacity (2016,
+// BatterySystem.Battery.DesignCapacity), battery.voltage (2024, PowerSummary.Voltage) and
+// battery.voltage.nominal (2026, PowerSummary.ConfigVoltage), only for the 5P series,
+// battery.charger.abm.status (2040, ABMEnable 0xFFFF0087), battery.charger.mode.status (2047)
+// and battery.charger.status (2051) on Charger.Mode 0xFFFF0094, battery.charger.type (2059,
+// ChargerType 0xFFFF006B), ups.test.result (2071, BatterySystem.Battery.Test), and the BOOL
+// rows of Charger.Mode (2116), FanFailure 0xFFFF0077 (2141), Battery.PresentStatus.Present
+// (2142), Charger.PresentStatus.InternalFailure (2143) and OverTemperature (2151).
+//
+// Differences US-073 (5P, on the device): battery.capacity with two decimals (Ah),
+// battery.capacity.full no longer published (ADR 0011 rule 2), battery.voltage and
+// battery.voltage.nominal only for the 5P/9E/Pulsar M/Evolution series, battery.charger.status
+// and battery.charger.type added with ABM, RB when Battery.PresentStatus.Present is 0.
+#define NUT_ROWS_EATON_5P "BOOL battery.capacity battery.charge battery.charge.low battery.charge.restart " \
+    "battery.charger.abm.status battery.charger.mode.status battery.charger.status battery.charger.type " \
+    "battery.charger.type.status battery.protection battery.runtime battery.type battery.voltage " \
+    "battery.voltage.nominal device.country output.voltage.nominal ups.firmware ups.load ups.shutdown " \
+    "ups.start.reboot ups.test.interval ups.test.result ups.timer.shutdown ups.timer.start"
 
 void test_replay_eaton_5p(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.charge.restart battery.protection output.voltage.nominal ups.shutdown ups.start.reboot ups.test.interval",
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073) */ NUT_ROWS_EATON_5P,
         /* descriptor only: PowerSummary.DelayBeforeShutdown/Startup */ {}, RW_DELAYS, RW_DELAYS);
 }
 
