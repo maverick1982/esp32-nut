@@ -136,6 +136,7 @@ void CyberPowerDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint
 
     typedef UsageMapIndex<CyberPowerDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
+        // boost_info (cps-hid.c:402): ups.status.boost gives BOOST (US-107)
         { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
         { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
         // input.sensitivity comes from the NUT table (cps_sensitivity_info, US-066)

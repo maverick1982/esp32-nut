@@ -196,6 +196,37 @@ void test_openups_no_shutdown_commands(void) {
     TEST_ASSERT_FALSE(openups.shutdownCommandsSupported());
 }
 
+// --- ups.alarm and ALARM for every driver (US-107)
+
+// A generic device with NeedReplacement: ups.alarm "Replace battery!" and ups.status ALARM OL RB
+void test_need_replacement_gives_alarm(void) {
+    addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x01, 1, 0, 1);
+    addUsage("UPS.PowerSummary.PresentStatus.NeedReplacement", 0x01, 1, 1, 1);
+    uint8_t replace[] = { 0x01, 0x03 };
+    driver.decodeReport(&mockHost, 0x01, 1, replace, sizeof(replace), ups_data);
+    driver.postDecode(&mockHost, 0x01, 1, replace, sizeof(replace), ups_data);
+    TEST_ASSERT_EQUAL_STRING("Replace battery!", ups_data.get("ups.alarm").c_str());
+    TEST_ASSERT_EQUAL_STRING("ALARM OL RB", UPSData::computeUPSStatusString(ups_data).c_str());
+
+    uint8_t ok[] = { 0x01, 0x01 };
+    driver.decodeReport(&mockHost, 0x01, 1, ok, sizeof(ok), ups_data);
+    driver.postDecode(&mockHost, 0x01, 1, ok, sizeof(ok), ups_data);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(ups_data).c_str());
+}
+
+// CommunicationLost stays an internal key without alarm: apc-hid and cps-hid do not read it
+void test_communication_lost_gives_no_alarm(void) {
+    addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x01, 1, 0, 1);
+    addUsage("UPS.PowerSummary.PresentStatus.CommunicationLost", 0x01, 1, 1, 1);
+    uint8_t lost[] = { 0x01, 0x03 };
+    driver.decodeReport(&mockHost, 0x01, 1, lost, sizeof(lost), ups_data);
+    driver.postDecode(&mockHost, 0x01, 1, lost, sizeof(lost), ups_data);
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("ups.status.comm_lost").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(ups_data).c_str());
+}
+
 // --- NUT table engine (US-073): a driver with a small table of its own
 
 static const NutTable::HidInfo kEngineTable[] = {
@@ -351,6 +382,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_engine_bool_row_sets_internal_key);
     RUN_TEST(test_engine_clear_removes_key);
     RUN_TEST(test_engine_load_updates_realpower);
+    RUN_TEST(test_need_replacement_gives_alarm);
+    RUN_TEST(test_communication_lost_gives_no_alarm);
     RUN_TEST(test_battery_present_is_inverted);
     RUN_TEST(test_remaining_time_limit_expired);
     RUN_TEST(test_fully_charged_and_discharged);
@@ -369,6 +402,8 @@ int main(int argc, char **argv) {
 void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_battery_present_is_inverted);
+    RUN_TEST(test_need_replacement_gives_alarm);
+    RUN_TEST(test_communication_lost_gives_no_alarm);
     RUN_TEST(test_remaining_time_limit_expired);
     RUN_TEST(test_fully_charged_and_discharged);
     RUN_TEST(test_unrelated_report_creates_no_extended_keys);

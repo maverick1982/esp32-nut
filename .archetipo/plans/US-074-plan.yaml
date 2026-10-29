@@ -158,6 +158,7 @@ body: |-
   - **Righe comando duplicate:** `beeper.mute`, `beeper.disable` e `beeper.enable` hanno due o tre righe; vince la prima con un usage FEATURE, in ordine di tabella (`find_nut_info`).
   - **Non-Eaton:** senza tabella dei comandi, `HidControl` e `CommandCatalog` fanno esattamente quello di oggi; lo verificano `test_command_catalog` e il replay delle 21 fixture non Eaton.
   - **Note di rilascio v1.11.1:** vanno aggiunte le differenze del 3S, `ups.start.auto` e `ups.realpower` con powerfactor 0,8.
+    - Aggiornamento 2026-10-29: per decisione dell'utente la release è diventata **v1.12.0**, perché US-107 aggiunge funzionalità (`ups.alarm`, `input.transfer.reason`, token di `ups.status`). `docs/releases/v1.11.1.md` è stato rinominato in `docs/releases/v1.12.0.md`, che contiene anche le note di US-107; la v1.11.1 non esce.
 
   ---
 
@@ -593,6 +594,8 @@ tasks:
     body: |-
       ## Descrizione
       **Obiettivo:** le differenze di US-074 nelle note e nei commenti di testa.
+
+      > Aggiornamento 2026-10-29: per decisione dell'utente la release è diventata **v1.12.0**, perché US-107 aggiunge funzionalità (`ups.alarm`, `input.transfer.reason`, token di `ups.status`). `docs/releases/v1.11.1.md` è stato rinominato in `docs/releases/v1.12.0.md`, che contiene anche le note di US-107; la v1.11.1 non esce.
 
       **Leggi:** `docs/releases/v1.11.1.md`, `docs/releases/index.md`, il commento "Differenze US-074" del replay.
 

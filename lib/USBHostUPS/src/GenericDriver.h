@@ -114,6 +114,9 @@ private:
     // from ups_data (US-073): nothing is rewritten when the value is the same
     void publishNutRows(UPSData& ups_data);
     void publishRow(NutTable::Bound& b, UPSData& ups_data);
+    // ups.alarm and input.transfer.reason from the internal keys and the vendor ups.alarm
+    // rows, for every driver (US-107)
+    void publishAlarms(UPSData& ups_data);
 
     std::vector<NutTable::Bound> _nut_rows;
     bool _nut_bound;

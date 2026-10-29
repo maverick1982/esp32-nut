@@ -87,16 +87,23 @@ void tearDown(void) {}
 // hand mapping looked for "UPS.PowerConverter.ConverterType", a name HIDParser never gives to
 // the vendor usage 0xFFFF0041: ups.type was never published). Same output.voltage,
 // output.frequency.nominal, ups.power.nominal, ups.beeper.status, LIST CMD and LIST RW.
+//
+// US-107 rows bound by the 3S: the vendor ups.alarm row of Output.PresentStatus.ShortCircuit
+// (mge-hid.c:2160, 0xFFFF004A, FEATURE 0x03). Differences US-107 (every fixture, see
+// test_status_baseline_all_fixtures): none. No fixture has a key of US-107 set (trim, boost,
+// bypass*, off, cal, vrange, frange, the ups_alarm_set() bits, a vendor ups.alarm row) nor
+// LB+CHRG or RB+OVER together: ups.status, ups.alarm (absent) and input.transfer.reason
+// (absent) are the same as before. The new behavior is in test_eaton_3s_* below.
 #define NUT_ROWS_EATON_3S "BOOL battery.charge battery.charge.low battery.charger.status battery.charger.type.status " \
     "battery.runtime battery.type beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country " \
     "device.usb.version input.transfer.high input.transfer.low load.off.delay load.on.delay outlet.1.desc outlet.1.id " \
     "outlet.1.protect.status outlet.1.status outlet.1.switchable outlet.desc outlet.id outlet.switchable " \
-    "output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop ups.beeper.status ups.firmware " \
+    "output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop ups.alarm ups.beeper.status ups.firmware " \
     "ups.load ups.power.nominal ups.realpower ups.timer.shutdown ups.timer.start ups.type"
 
 void test_replay_eaton_3s(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
-        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074) */ NUT_ROWS_EATON_3S,
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074, US-107) */ NUT_ROWS_EATON_3S,
         { { "ups.timer.start", "-1" }, { "ups.timer.shutdown", "-1" }, { "battery.runtime", "3360" },
           { "ups.load", "5" }, { "ups.status.ac_present", "1" }, { "ups.status.off", "0" },
           { "ups.status.commfault", "0" }, { "ups.status.battvolthi", "0" }, { "ups.status.battvoltlo", "0" },
@@ -129,19 +136,22 @@ void test_replay_eaton_3s(void) {
 // 2238, 2240, 2241: PowerFactor 0xFFFF0069), outlet.1.status (2268, ACPresent: no
 // OutletSystem), and the command rows of Battery.Test, AudibleAlarmControl and
 // DelayBeforeShutdown/Startup. Descriptor only: no value to compare.
+//
+// US-107 rows bound by the 5P: the vendor ups.alarm rows of PresentStatus.EmergencyStop and
+// ConfigurationFailure (mge-hid.c:2155, 2157: 0xFFFF0068, 0xFFFF002D, FEATURE 0x03).
 #define NUT_ROWS_EATON_5P "BOOL battery.capacity battery.charge battery.charge.low battery.charge.restart " \
     "battery.charger.abm.status battery.charger.mode.status battery.charger.status battery.charger.type " \
     "battery.charger.type.status battery.protection battery.runtime battery.type battery.voltage " \
     "battery.voltage.nominal beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country " \
     "input.frequency.nominal input.voltage.nominal load.off.delay load.on.delay outlet.1.status output.current " \
     "output.frequency output.frequency.nominal output.powerfactor output.voltage output.voltage.nominal " \
-    "shutdown.stop test.battery.start.deep test.battery.start.quick test.battery.stop ups.beeper.status " \
+    "shutdown.stop test.battery.start.deep test.battery.start.quick test.battery.stop ups.alarm ups.beeper.status " \
     "ups.efficiency ups.firmware ups.load ups.power ups.power.nominal ups.realpower ups.realpower.nominal " \
     "ups.shutdown ups.start.reboot ups.test.interval ups.test.result ups.timer.shutdown ups.timer.start ups.type"
 
 void test_replay_eaton_5p(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074) */ NUT_ROWS_EATON_5P,
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074, US-107) */ NUT_ROWS_EATON_5P,
         /* descriptor only: PowerSummary.DelayBeforeShutdown/Startup */ {}, RW_DELAYS, RW_DELAYS);
 }
 
@@ -423,6 +433,70 @@ void test_set_cycle_apc_bx750mi_sensitivity(void) {
         "input.sensitivity", "high", 2, { 53, 2 }, "high");
 }
 
+// Demonstration of US-107 on the Eaton 3S descriptor: NeedReplacement (mge-hid.c:2126, FEATURE
+// 0x01) gives ups.alarm "Replace battery!" and ALARM OL RB; the vendor row of
+// Output.ShortCircuit (mge-hid.c:2160, FEATURE 0x03) gives its text first. The 3S descriptor
+// has no Input.[1] Buck/VoltageOutOfRange: those are in test_eaton_driver.
+void test_eaton_3s_need_replacement_alarm(void) {
+    FixtureReplayRunner::runFieldScenario("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
+        { { "UPS.PowerSummary.PresentStatus.NeedReplacement", 1 } }, "ALARM OL RB", "Replace battery!", "OL");
+}
+
+void test_eaton_3s_vendor_and_bit_alarms(void) {
+    FixtureReplayRunner::runFieldScenario("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
+        { { "UPS.PowerSummary.PresentStatus.NeedReplacement", 1 },
+          { "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", 1 } },
+        "ALARM OL RB", "Output short circuit! Replace battery!", "OL");
+}
+
+// PresentStatus.Good 0 (off_info, mge-hid.c:2133) gives OFF, with no alarm
+void test_eaton_3s_good_zero_is_off(void) {
+    FixtureReplayRunner::runFieldScenario("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
+        { { "UPS.PowerSummary.PresentStatus.Good", 0 } }, "OL OFF", nullptr, "OL");
+}
+
+// ups.status, ups.alarm and input.transfer.reason at the end of the replay of every fixture
+// (US-107). Taken from the firmware before US-107: the regression criterion is "the same
+// tokens as before, in the order of ups_status_set()", and every difference is commented
+// with the fixture key that causes it. No fixture had a status key of US-107 set (trim,
+// boost, bypass*, off, cal, vrange, frange, the ups_alarm_set() bits) nor LB+CHRG or RB+OVER
+// together. "Unknown": fixtures without reports. A new fixture must be added here.
+void test_status_baseline_all_fixtures(void) {
+    static const struct {
+        const char* file;
+        const char* status;
+        const char* alarm;   // nullptr: no ups.alarm
+        const char* reason;  // nullptr: no input.transfer.reason
+    } rows[] = {
+        { "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json", "OL DISCHRG", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_onbattery.json", "OB DISCHRG", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json", "OL DISCHRG", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json", "OL CHRG", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json", "OL", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json", "OL CHRG", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json", "OL", nullptr, nullptr },
+        { "test/fixtures/apc/apc_smartups_750_vid051d_pid0003_issue22.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", "OL", nullptr, nullptr },
+        { "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", "OL", nullptr, nullptr },
+        { "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json", "OL", nullptr, nullptr },
+        { "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json", "OL", nullptr, nullptr },
+        { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
+        { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
+    };
+    TEST_ASSERT_EQUAL_MESSAGE(24, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -456,6 +530,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_set_cycle_apc_cs750rs_mfr_date);
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
+    RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_eaton_3s_need_replacement_alarm);
+    RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
+    RUN_TEST(test_eaton_3s_good_zero_is_off);
     return UNITY_END();
 }
 #else
@@ -490,6 +568,10 @@ void setup() {
     RUN_TEST(test_set_cycle_apc_cs750rs_mfr_date);
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
+    RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_eaton_3s_need_replacement_alarm);
+    RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
+    RUN_TEST(test_eaton_3s_good_zero_is_off);
     UNITY_END();
 }
 void loop() {}

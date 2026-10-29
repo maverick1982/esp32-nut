@@ -712,7 +712,10 @@ void GenericDriver::completeInitialPoll() {
 void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (!host) return;
     bindNutTable(host);
-    if (_nut_rows.empty()) return;
+    if (_nut_rows.empty()) {
+        publishAlarms(ups_data);
+        return;
+    }
 
     const auto& usages = host->getUsages();
     if (length > 0 && data != NULL) {
@@ -746,6 +749,16 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
     // arrive one at a time
     NutTable::walkInternalRows(_nut_rows, _nut_ctx, &ups_data);
     publishNutRows(ups_data);
+    publishAlarms(ups_data);
+}
+
+// After the internal ups.status.* keys, as ups_alarm_set() and ups_status_set() after the
+// walk. Recomputed at every report: upstream rebuilds ups.alarm at the full update only
+// (US-107 planning)
+void GenericDriver::publishAlarms(UPSData& ups_data) {
+    String vendor;
+    NutTable::vendorAlarms(_nut_rows, vendor);
+    ups_data.applyAlarmVariables(vendor);
 }
 
 // The table has the final word over a hand-written mapping of the same key, but writes only

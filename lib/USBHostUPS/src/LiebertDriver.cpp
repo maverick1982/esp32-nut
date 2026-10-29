@@ -33,9 +33,10 @@
  *    drivers, except input.voltage.nominal from UPS.Flow.[4].ConfigVoltage and
  *    input.transfer.* from UPS.PowerConverter.Output.*VoltageTransfer, which upstream
  *    publishes as output.voltage.nominal and output.transfer.*.
- * 3. PresentStatus.Good, InternalFailure and Input.[1].PresentStatus.Buck/Boost are kept as
- *    internal ups.status.* keys: no OFF, TRIM, BOOST token nor ups.alarm, since
- *    computeUPSStatusString() produces none of them for any driver yet.
+ * 3. PresentStatus.Good and InternalFailure are kept as internal ups.status.* keys with
+ *    names of their own (good, internal_failure): no OFF token nor "Internal UPS fault!"
+ *    until the table migration (US-106). Input.[1].PresentStatus.Buck/Boost use the keys of
+ *    NutTable::statusKeys and give TRIM and BOOST (US-107).
  * 4. shutdown.default is offered, as for every driver of the project (US-058).
  * 5. GoldenMate devices (idowell-hid.c) and the other Phoenixtec products stay with
  *    GenericDriver (DriverRegistry).
@@ -150,8 +151,8 @@ void LiebertDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t
         { "UPS.PowerConverter.Output.0xFFFF00F8", [](LiebertDriver*, UPSData& d, double v, const HIDUsageDef*) {
             d.set("input.frequency.transfer.high", String(lrint(v)));
         } },
-        // Status flags kept as internal keys (deviation 3): off_info, commfault_info,
-        // trim_info and boost_info upstream
+        // Status flags as internal keys (deviation 3): off_info, commfault_info, trim_info
+        // and boost_info upstream; trim and boost give TRIM and BOOST (US-107)
         { "UPS.PowerSummary.PresentStatus.Good", [](LiebertDriver*, UPSData& d, double v, const HIDUsageDef*) {
             setFlag(d, "ups.status.good", v);
         } },

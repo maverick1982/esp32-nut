@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 5
-status: TODO
+status: DONE
 body: |
   #### US-107: ups.alarm e token di stato completi come usbhid-ups
 
@@ -19,20 +19,30 @@ body: |
   in modo da vedere allarmi, bypass, trim/boost e UPS spento come li vedrei con NUT su un PC.
 
   **Dimostrazione**
-  Nei test di stato e nel replay, un dispositivo con NeedReplacement attivo pubblica `ups.status` = `ALARM OL RB` e `ups.alarm` = `Replace battery!`. Un Eaton con PresentStatus.Good a 0 mostra `OFF`; con Input.[1].Buck attivo mostra `TRIM`. Con VoltageOutOfRange, `input.transfer.reason` vale `input voltage out of range`. Senza condizioni attive, `ups.alarm` non esiste e `ups.status` non cambia rispetto a oggi.
+  Nei test di stato e nel replay, un dispositivo con NeedReplacement attivo pubblica `ups.status` = `ALARM OL RB` e `ups.alarm` = `Replace battery!`. Un Eaton con PresentStatus.Good a 0 mostra `OFF`; con Input.[1].Buck attivo mostra `TRIM`. Con VoltageOutOfRange, `input.transfer.reason` vale `input voltage out of range`. Con batteria scarica in carica lo stato è `OL CHRG LB`, come usbhid-ups (oggi `OL LB CHRG`). Senza condizioni attive, `ups.alarm` non esiste e `ups.status` non cambia rispetto a oggi.
 
   **Criteri di Accettazione**
-  - [ ] `ups.status` rende anche OFF, TRIM, BOOST, BYPASS (bypass automatico o manuale) e CAL dalle chiavi interne `ups.status.*` raccolte dalle righe BOOL (US-073), nell'ordine e con le regole di `ups_status_set()`. ECO ed ESS non entrano in `ups.status`: upstream li mette in `ups.mode.buzzwords`, e restano fuori.
+  - [ ] `ups.status` rende anche OFF, TRIM, BOOST, BYPASS (bypass automatico o manuale) e CAL dalle chiavi interne `ups.status.*` raccolte dalle righe BOOL (US-073), con le regole di `ups_status_set()`. ECO ed ESS non entrano in `ups.status`: upstream li mette in `ups.mode.buzzwords`, e restano fuori.
+  - [ ] Tutti i token di `ups.status` seguono l'ordine di `ups_status_set()`: CAL, OL/OB, DISCHRG, CHRG, LB, OVER, RB, TRIM, BOOST, BYPASS, OFF. Rispetto a oggi CHRG passa prima di LB e OVER prima di RB.
   - [ ] `ups.alarm` contiene i testi di `ups_alarm_set()` per i bit attivi (Replace battery!, Shutdown imminent!, Fan failure!, No battery installed!, Battery voltage too low/high!, Battery charger fail!, Temperature too high!, Internal UPS fault!, Awaiting power!, Automatic/Manual bypass mode!) più i testi delle righe `ups.alarm` dei subdriver. Le sei righe di `mge-hid.c:2155-2160`, commentate in US-073/US-074, diventano attive. Testi separati da spazio come `alarm_set()`. Senza allarmi la variabile non c'è.
   - [ ] Con almeno un allarme, `ups.status` comincia con il token ALARM, come `status_commit()` (`dstate.c:2315-2321`).
   - [ ] `input.transfer.reason` vale `input voltage out of range` con VRANGE e `input frequency out of range` con FRANGE; senza nessuno dei due la variabile non c'è.
-  - [ ] Regressione: i driver che non producono le nuove chiavi danno lo stesso `ups.status` di oggi su tutte le fixture. Le differenze (per esempio ALARM e `ups.alarm` dove NeedReplacement o ShutdownImminent sono attivi) sono elencate nel replay e nelle note di rilascio.
+  - [ ] Regressione: i driver che non producono le nuove chiavi danno gli stessi token di oggi su tutte le fixture; l'ordine cambia solo quando LB e CHRG, o RB e OVER, sono attivi insieme. Le differenze (per esempio ALARM e `ups.alarm` dove NeedReplacement o ShutdownImminent sono attivi, o il nuovo ordine) sono elencate nel replay e nelle note di rilascio.
   - [ ] Suite nativa verde, build ok; prova sull'Eaton 3S: `upsc` invariato con l'UPS in condizioni normali.
 
   **Assunzioni**
   - Decisa il 2026-10-29 nella pianificazione di US-074, che lascia commentate le righe `ups.alarm`.
+  - Ordine dei token allineato a `ups_status_set()`: decisione dell'utente del 2026-10-29, nella pianificazione di US-107. upsmon e Home Assistant leggono i token uno per uno, quindi la differenza conta solo per chi confronta la stringa intera.
   - Le chiavi interne con cui Liebert oggi tiene Good e Buck/Boost si allineano a quelle di `NutTable::statusKeys` con la sua migrazione (US-106), non qui.
   - I ritardi di LB/RB in calibrazione (`lbrb_log_delay_sec`) e le opzioni `onlinedischarge_*` restano fuori, perché il firmware non ha le opzioni del driver.
 history:
   - status: TODO
     at: "2026-10-29T12:51:31Z"
+  - status: PLANNED
+    at: "2026-10-29T14:50:01Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T14:59:15Z"
+  - status: REVIEW
+    at: "2026-10-29T15:38:03Z"
+  - status: DONE
+    at: "2026-10-29T15:46:24Z"

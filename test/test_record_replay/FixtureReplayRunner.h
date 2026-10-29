@@ -369,6 +369,93 @@ public:
     }
 
     /**
+     * The status served at the end of the replay (US-107): ups.status, and ups.alarm /
+     * input.transfer.reason, where nullptr means that the key must be missing.
+     */
+    static void runStatusBaseline(const char* filePath, const char* expectedStatus, const char* expectedAlarm,
+                                  const char* expectedReason) {
+        ReplaySession s;
+        if (!replay(filePath, s)) return;
+        std::string where = std::string(filePath) + " - ";
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedStatus, UPSData::computeUPSStatusString(s.ups_data).c_str(),
+                                         (where + "ups.status").c_str());
+        const struct { const char* key; const char* expected; } vars[] = {
+            { "ups.alarm", expectedAlarm }, { "input.transfer.reason", expectedReason },
+        };
+        for (const auto& v : vars) {
+            std::string msg = where + v.key;
+            if (!v.expected) {
+                TEST_ASSERT_FALSE_MESSAGE(s.ups_data.hasKey(v.key), msg.c_str());
+                continue;
+            }
+            TEST_ASSERT_TRUE_MESSAGE(s.ups_data.hasKey(v.key), msg.c_str());
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(v.expected, s.ups_data.get(v.key).c_str(), msg.c_str());
+        }
+    }
+
+    /**
+     * The fixture's reports with some fields changed (US-107): each (path, raw) is written into
+     * the last replayed report holding the FEATURE usage of that path, the reports changed are
+     * decoded again, then the status served is checked as runStatusBaseline(). Then the
+     * original reports are decoded again and the status must be the baseline one.
+     */
+    static void runFieldScenario(const char* filePath, const std::vector<std::pair<const char*, uint32_t>>& fields,
+                                 const char* expectedStatus, const char* expectedAlarm, const char* baselineStatus) {
+        ReplaySession s;
+        if (!replay(filePath, s)) return;
+        std::vector<ReplayedReport> changed;
+        for (const auto& f : fields) {
+            const HIDUsageDef* def = nullptr;
+            for (const auto& u : s.host.getUsages()) {
+                if (u.report_type == 3 && NutTable::pathMatches(u, f.first)) { def = &u; break; }
+            }
+            TEST_ASSERT_NOT_NULL_MESSAGE(def, f.first);
+            ReplayedReport* target = nullptr;
+            for (auto& r : changed) {
+                if (r.id == def->report_id && r.type == 3) target = &r;
+            }
+            if (!target) {
+                const ReplayedReport* last = nullptr;
+                for (const auto& r : s.reports) {
+                    if (r.id == def->report_id && r.type == 3) last = &r;
+                }
+                TEST_ASSERT_NOT_NULL_MESSAGE(last, "no replayed FEATURE report holds the field");
+                changed.push_back(*last);
+                target = &changed.back();
+            }
+            uint8_t buf[256] = {0};
+            memcpy(buf, target->data.data(), target->data.size());
+            BeeperLogic::writeField(*def, f.second, buf, target->data.size());
+            target->data.assign(buf, buf + target->data.size());
+        }
+        for (const auto& r : changed) {
+            s.driver->decodeReport(&s.host, r.id, r.type, r.data.data(), r.data.size(), s.ups_data);
+            s.driver->postDecode(&s.host, r.id, r.type, r.data.data(), r.data.size(), s.ups_data);
+        }
+        std::string where = std::string(filePath) + " - ";
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedStatus, UPSData::computeUPSStatusString(s.ups_data).c_str(),
+                                         (where + "ups.status").c_str());
+        if (expectedAlarm) {
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedAlarm, s.ups_data.get("ups.alarm").c_str(), (where + "ups.alarm").c_str());
+        } else {
+            TEST_ASSERT_FALSE_MESSAGE(s.ups_data.hasKey("ups.alarm"), (where + "ups.alarm").c_str());
+        }
+
+        // The original reports again: the condition is gone
+        for (const auto& c : changed) {
+            const ReplayedReport* last = nullptr;
+            for (const auto& r : s.reports) {
+                if (r.id == c.id && r.type == c.type) last = &r;
+            }
+            s.driver->decodeReport(&s.host, last->id, last->type, last->data.data(), last->data.size(), s.ups_data);
+            s.driver->postDecode(&s.host, last->id, last->type, last->data.data(), last->data.size(), s.ups_data);
+        }
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(baselineStatus, UPSData::computeUPSStatusString(s.ups_data).c_str(),
+                                         (where + "ups.status after the original reports").c_str());
+        TEST_ASSERT_FALSE_MESSAGE(s.ups_data.hasKey("ups.alarm"), (where + "ups.alarm after the original reports").c_str());
+    }
+
+    /**
      * Write/read-back cycle of a SET VAR on the real reports of a fixture (US-067): the
      * driver's plan must be an HID write of expectedRaw; the field is written into the last
      * FEATURE report of the fixture with that report ID (expectedReport: the bytes sent), and
