@@ -250,14 +250,18 @@ bool GenericDriver::isFreshFromInput(IHidTransport* host, const PollItem& item, 
     return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
 }
 
-// The ActivePower usages mapped to ups.realpower, in a report the driver reads: an INPUT
-// report arrives on the interrupt endpoint, a FEATURE report only if it is polled
+// An INPUT report arrives on the interrupt endpoint, a FEATURE report only if it is polled
+bool GenericDriver::isReportRead(const HIDUsageDef& u) const {
+    if (u.report_type == 1) return true;
+    return u.report_type == 3 && acceptPollReport(u.report_type, u.report_id);
+}
+
+// The ActivePower usages mapped to ups.realpower, in a report the driver reads
 bool GenericDriver::readsActivePower(IHidTransport* host) const {
     for (const auto& u : host->getUsages()) {
         if (strcmp(u.path, "UPS.Output.ActivePower") != 0 &&
             strcmp(u.path, "UPS.PowerConverter.Output.ActivePower") != 0) continue;
-        if (u.report_type == 1) return true;
-        if (u.report_type == 3 && acceptPollReport(u.report_type, u.report_id)) return true;
+        if (isReportRead(u)) return true;
     }
     return false;
 }
@@ -268,6 +272,7 @@ void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& da
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
     if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
     // Table rows with stringid_conversion still waiting for their text (US-073)
+    if (!requestTableStrings(host)) return;
     for (const auto& b : _nut_rows) {
         if (b.info->conv == NutTable::Conv::StringId && b.string_index > 0 && !b.has &&
             b.role != NutTable::Bound::Role::DEAD) {
@@ -636,9 +641,17 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
     const NutTable::HidInfo* table = hid2nut(n);
     _nut_rows = NutTable::bind(table, n, usages);
     _nut_bound = true;
+    // A ups.realpower row owns the value only when its report is read (same rule as
+    // readsActivePower()): rows bound in a report the driver never requests (CyberPower vendor
+    // layouts, issue #40) leave the estimate (US-075). eaton_compute_realpower_info ignores its
+    // HID value and is computed again at each ups.load, wherever its report is.
     _nut_has_realpower = false;
     for (const auto& b : _nut_rows) {
-        if (strcmp(b.info->info_type, "ups.realpower") == 0) _nut_has_realpower = true;
+        if (strcmp(b.info->info_type, "ups.realpower") != 0) continue;
+        if (b.info->conv == NutTable::Conv::EatonComputeRealpower) _nut_has_realpower = true;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size() && isReportRead(usages[idx])) _nut_has_realpower = true;
+        }
     }
     _nut_init_done = false;
     _nut_usage_count = usages.size();
@@ -765,8 +778,8 @@ void GenericDriver::publishAlarms(UPSData& ups_data) {
 // what differs from ups_data: read-only rows would otherwise allocate Strings at every
 // report (ADR 0007, US-073)
 // One row: its value when it differs from ups_data, or the removal of a CLEAR. As the generic
-// PercentLoad mapping, the estimate follows the load unless a table row owns ups.realpower
-// (eaton_compute_realpower_info, US-074).
+// mappings, the estimate follows the load and the nominal powers unless a table row owns
+// ups.realpower (eaton_compute_realpower_info, US-074; Output.ActivePower, US-075).
 void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
     if (NutTable::isInternalRow(*b.info) || NutTable::isCommandRow(*b.info)) return;
     const char* name = b.info->info_type;
@@ -779,11 +792,14 @@ void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
     if (b.role != NutTable::Bound::Role::ACTIVE || !b.has) return;
     if (ups_data.valueEquals(name, b.value)) return;
     ups_data.set(name, b.value);
-    if (strcmp(name, "ups.load") != 0) return;
     if (!_nut_has_realpower) {
-        ups_data.updateRealPower();
+        // The estimate follows the load and the nominal powers it is computed from (US-075)
+        if (strcmp(name, "ups.load") == 0 || strcmp(name, "ups.power.nominal") == 0 ||
+            strcmp(name, "ups.realpower.nominal") == 0)
+            ups_data.updateRealPower();
         return;
     }
+    if (strcmp(name, "ups.load") != 0) return;
     // eaton_compute_realpower_info ignores its HID value and reads ups.load: computed again at
     // each new load instead of waiting for the next full poll of Flow.[4] (deviation: the
     // upstream walk recomputes it with the full update only)

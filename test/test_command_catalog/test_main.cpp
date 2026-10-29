@@ -802,11 +802,14 @@ static std::vector<HIDUsageDef> fixtureUsages(const char* file, HIDParser& parse
     return parser.getUsages();
 }
 
-static void checkSameCommandsAsCatalog(const char* file) {
+// The commands, steps and values of a table (mgeHid2Nut by default) are those of the
+// catalog without a table, with the driver's configured delays
+static void checkSameCommandsAsCatalog(const char* file, const NutTable::HidInfo* (*table)(size_t&) = NutTable::mgeHid2Nut,
+                                       int32_t off_delay = 20, int32_t on_delay = 30) {
     HIDParser parser;
     std::vector<HIDUsageDef> u = fixtureUsages(file, parser);
     size_t n;
-    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    const NutTable::HidInfo* mge = table(n);
     for (bool beeper : { true, false }) {
         TEST_ASSERT_EQUAL_STRING_MESSAGE(names(CommandCatalog::build(u, beeper)).c_str(),
             names(CommandCatalog::build(u, beeper, true, true, nullptr, mge, n)).c_str(), file);
@@ -816,11 +819,11 @@ static void checkSameCommandsAsCatalog(const char* file) {
                                         "shutdown.return", "shutdown.stayoff" };
     for (const char* c : cmds) {
         for (const char* param : { (const char*)nullptr, "45" }) {
-            std::vector<CommandCatalog::WriteStep> legacy, table;
-            auto r1 = CommandCatalog::resolveShutdownSteps(c, param, u, 20, 30, legacy);
-            auto r2 = CommandCatalog::resolveShutdownSteps(c, param, u, 20, 30, table, mge, n);
+            std::vector<CommandCatalog::WriteStep> legacy, table_steps;
+            auto r1 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, legacy);
+            auto r2 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, table_steps, mge, n);
             TEST_ASSERT_EQUAL_MESSAGE((int)r1, (int)r2, c);
-            TEST_ASSERT_EQUAL_STRING_MESSAGE(stepsStr(legacy).c_str(), stepsStr(table).c_str(), c);
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(stepsStr(legacy).c_str(), stepsStr(table_steps).c_str(), c);
         }
     }
 }
@@ -905,6 +908,66 @@ void test_mge_table_mute_respects_declared_range() {
     TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, mge, n));
 }
 
+// --- Commands from the cps-hid table (US-075) ---
+
+// Same LIST CMD and same load / shutdown writes on every CyberPower fixture, with the
+// CyberPower delays 60/120 (US-058)
+void test_cps_table_gives_same_commands_on_fixtures() {
+    static const char* const files[] = {
+        "test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json",
+        "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
+        "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
+        "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
+        "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
+    };
+    for (const char* f : files) checkSameCommandsAsCatalog(f, NutTable::cpsHid2Nut, 60, 120);
+}
+
+void test_cps_table_write_values() {
+    // cps-hid.c:427 test.battery.start.deep = 2 and 437 beeper.mute = 3
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages("test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", parser);
+    size_t n;
+    const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", u, def, value, cps, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.Test", def.path);
+    TEST_ASSERT_EQUAL(2, value);
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, cps, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", def.path);
+    TEST_ASSERT_EQUAL(3, value);
+}
+
+void test_cps_table_beeper_on_off_not_listed() {
+    // beeper.on/off (cps-hid.c:433-434) are rows, not names of UpsCommands.h
+    std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
+                             names(CommandCatalog::build(u, true, true, true, nullptr, cps, n)).c_str());
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(cps, n, u, "beeper.on"));
+}
+
+void test_cps_table_reboot_only_from_output() {
+    // cps-hid.c:432: shutdown.reboot on UPS.Output.DelayBeforeReboot, default 10
+    std::vector<HIDUsageDef> out = { mk("UPS.Output.DelayBeforeReboot", 0x00840055, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default",
+                             names(CommandCatalog::build(out, false, true, true, nullptr, cps, n)).c_str());
+    std::vector<CommandCatalog::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, out, 60, 120, steps, cps, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.DelayBeforeReboot=10", stepsStr(steps).c_str());
+    // Difference from the catalog without a table (US-075): cps-hid has no row on
+    // PowerSummary.DelayBeforeReboot, so a CyberPower declaring only that one has no
+    // shutdown.reboot, as with usbhid-ups (no CyberPower fixture has it)
+    std::vector<HIDUsageDef> ps = { mk(RB, 0x00840055, 0x03) };
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(CommandCatalog::build(ps, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(ps, false, true, true, nullptr, cps, n)).c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -950,6 +1013,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_mge_table_commands_outside_catalog_not_listed);
     RUN_TEST(test_mge_table_reboot_from_row);
     RUN_TEST(test_mge_table_mute_respects_declared_range);
+    RUN_TEST(test_cps_table_gives_same_commands_on_fixtures);
+    RUN_TEST(test_cps_table_write_values);
+    RUN_TEST(test_cps_table_beeper_on_off_not_listed);
+    RUN_TEST(test_cps_table_reboot_only_from_output);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

@@ -47,6 +47,13 @@ void setUp(void) {
 
 void tearDown(void) {}
 
+// As USBHostUPS: every report goes through decodeReport() and then postDecode(), where the
+// NUT table writes its rows (US-075: every CyberPower value comes from cpsHid2Nut())
+static void decode(uint8_t report_id, uint8_t report_type, const uint8_t* data, size_t length) {
+    driver.decodeReport(&mockHost, report_id, report_type, data, length, ups_data);
+    driver.postDecode(&mockHost, report_id, report_type, data, length, ups_data);
+}
+
 void test_cyberpower_status_and_voltage(void) {
     HIDUsageDef u_ac;
     u_ac.report_id = 0x01;
@@ -72,13 +79,13 @@ void test_cyberpower_status_and_voltage(void) {
     mockHost._usages.push_back(u_volt);
 
     uint8_t r1[] = { 0x01, 0x01 };
-    driver.decodeReport(&mockHost, 0x01, 1, r1, sizeof(r1), ups_data);
+    decode(0x01, 1, r1, sizeof(r1));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.status.ac_present"));
     TEST_ASSERT_TRUE(ups_data.getBool("ups.status.ac_present"));
 
     // 2305 = 0x0901 -> 0x01, 0x09
     uint8_t r2[] = { 0x02, 0x01, 0x09 };
-    driver.decodeReport(&mockHost, 0x02, 1, r2, sizeof(r2), ups_data);
+    decode(0x02, 1, r2, sizeof(r2));
     TEST_ASSERT_TRUE(ups_data.hasKey("output.voltage"));
     TEST_ASSERT_FLOAT_WITHIN(0.05, 230.5, ups_data.getFloat("output.voltage"));
 }
@@ -152,13 +159,13 @@ void test_cyberpower_load_and_zero_load_reset(void) {
 
     // 1. Decode ConfigActivePower = 810 W (0x032A -> 0x2A, 0x03)
     uint8_t r_cap[] = { 0x18, 0x2A, 0x03 };
-    driver.decodeReport(&mockHost, 0x18, 3, r_cap, sizeof(r_cap), ups_data);
+    decode(0x18, 3, r_cap, sizeof(r_cap));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
     TEST_ASSERT_EQUAL_UINT16(810, ups_data.getFloat("ups.realpower.nominal"));
 
     // 2. Decode Load = 11%
     uint8_t r_load11[] = { 0x13, 0x0B };
-    driver.decodeReport(&mockHost, 0x13, 3, r_load11, sizeof(r_load11), ups_data);
+    decode(0x13, 3, r_load11, sizeof(r_load11));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
     TEST_ASSERT_EQUAL_UINT8(11, ups_data.getFloat("ups.load"));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
@@ -166,7 +173,7 @@ void test_cyberpower_load_and_zero_load_reset(void) {
 
     // 3. Decode Load = 0% (zero payload [0x13, 0x00])
     uint8_t r_load0[] = { 0x13, 0x00 };
-    driver.decodeReport(&mockHost, 0x13, 3, r_load0, sizeof(r_load0), ups_data);
+    decode(0x13, 3, r_load0, sizeof(r_load0));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
     TEST_ASSERT_EQUAL_UINT8(0, ups_data.getFloat("ups.load"));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
@@ -196,7 +203,7 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
 
     // 2. Load arrives FIRST (before configActivePower is known)
     uint8_t r_load[] = { 0x13, 20 }; // 20%
-    driver.decodeReport(&mockHost, 0x13, 3, r_load, sizeof(r_load), ups_data);
+    decode(0x13, 3, r_load, sizeof(r_load));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
     TEST_ASSERT_EQUAL_UINT8(20, ups_data.getFloat("ups.load"));
     // ConfigActivePower not yet known -> realPower should not be valid yet
@@ -204,7 +211,7 @@ void test_cyberpower_realpower_recalculated_when_config_arrives_after_load(void)
 
     // 3. ConfigActivePower arrives AFTER load (e.g. 500W = 0x01F4 -> 0xF4, 0x01)
     uint8_t r_cap[] = { 0x18, 0xF4, 0x01 };
-    driver.decodeReport(&mockHost, 0x18, 3, r_cap, sizeof(r_cap), ups_data);
+    decode(0x18, 3, r_cap, sizeof(r_cap));
     TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
     TEST_ASSERT_EQUAL_UINT16(500, ups_data.getFloat("ups.realpower.nominal"));
     // realPower must be recalculated IMMEDIATELY: 20% of 500W = 100W
@@ -240,8 +247,7 @@ static HIDUsageDef nutField(const char* path, uint32_t usage, uint8_t report_id,
 
 static void feed(uint8_t report_id, uint8_t report_type, uint8_t value) {
     uint8_t data[] = { report_id, value };
-    driver.decodeReport(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
-    driver.postDecode(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+    decode(report_id, report_type, data, sizeof(data));
 }
 
 // cps-hid.c:416 + cps_sensitivity_info: UPS.Output.CPSInputSensitivity (0xff010043)
@@ -266,7 +272,7 @@ void test_cyberpower_input_sensitivity_from_nut_table(void) {
 
 static void feed16(uint8_t report_id, uint8_t report_type, uint16_t value) {
     uint8_t data[] = { report_id, (uint8_t)(value & 0xFF), (uint8_t)(value >> 8) };
-    driver.decodeReport(&mockHost, report_id, report_type, data, sizeof(data), ups_data);
+    decode(report_id, report_type, data, sizeof(data));
 }
 
 // cps_battvolt on PID 0x0501: 2/3 when the reading is above 1.4 x nominal (CP1350C fixture)
@@ -307,24 +313,6 @@ void test_cyberpower_battery_voltage_no_scale(void) {
     TEST_ASSERT_EQUAL_STRING("20.8", ups_data.get("battery.voltage").c_str());
 }
 
-void test_cyberpower_frequency_scale_rule(void) {
-    double scale = -1;
-    TEST_ASSERT_TRUE(CyberPowerDriver::frequencyScale(50.0, 0, 0, 0, scale));
-    TEST_ASSERT_EQUAL_FLOAT(1.0, scale);
-    TEST_ASSERT_TRUE(CyberPowerDriver::frequencyScale(500.0, 0, 0, 0, scale));
-    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
-    TEST_ASSERT_TRUE(CyberPowerDriver::frequencyScale(60.0, 0, 0, 0, scale));
-    TEST_ASSERT_EQUAL_FLOAT(1.0, scale);
-    TEST_ASSERT_TRUE(CyberPowerDriver::frequencyScale(599.0, 0, 0, 0, scale));
-    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
-    // Known nominal: 50 Hz +-5%
-    TEST_ASSERT_TRUE(CyberPowerDriver::frequencyScale(498.0, 50, 0, 0, scale));
-    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
-    // Neither 1 nor 0.1 fits: undecided
-    TEST_ASSERT_FALSE(CyberPowerDriver::frequencyScale(1000.0, 0, 0, 0, scale));
-    TEST_ASSERT_FALSE(CyberPowerDriver::frequencyScale(56.0, 50, 0, 0, scale));
-}
-
 void test_cyberpower_frequency_scaled_on_0501(void) {
     mockHost._usages.push_back(nutField("UPS.Input.Frequency", 0x00840032, 0x0E, 3, 16));
     mockHost._usages.push_back(nutField("UPS.Output.Frequency", 0x00840032, 0x12, 3, 16));
@@ -359,7 +347,7 @@ void test_cyberpower_cps_variables(void) {
     mockHost._usages.push_back(start);
 
     uint8_t r7[] = { 0x07, 20, 100 };
-    driver.decodeReport(&mockHost, 0x07, 3, r7, sizeof(r7), ups_data);
+    decode(0x07, 3, r7, sizeof(r7));
     TEST_ASSERT_EQUAL_STRING("20", ups_data.get("battery.charge.warning").c_str());
     TEST_ASSERT_EQUAL_STRING("100%", ups_data.get("battery.status").c_str());
     feed16(0x18, 3, 1500);
@@ -382,12 +370,12 @@ void test_cyberpower_string_values(void) {
     feed(0x05, 3, 5);
     feed(0x1B, 3, 6);
 
-    // Asked in the next full poll
+    // Asked in the next full poll, in the order of the cpsHid2Nut() rows (366, 368, 391)
     runLoopSteps(8);
     TEST_ASSERT_EQUAL_UINT32(3, mockHost._requestedStrings.size());
     TEST_ASSERT_EQUAL_UINT8(4, mockHost._requestedStrings[0]);
-    TEST_ASSERT_EQUAL_UINT8(6, mockHost._requestedStrings[1]);
-    TEST_ASSERT_EQUAL_UINT8(5, mockHost._requestedStrings[2]);
+    TEST_ASSERT_EQUAL_UINT8(5, mockHost._requestedStrings[1]);
+    TEST_ASSERT_EQUAL_UINT8(6, mockHost._requestedStrings[2]);
 
     uint8_t chem[] = { 8, 0x03, 'P', 0, 'b', 0, 'A', 0 };
     driver.parseStringDescriptor(&mockHost, 4, chem, sizeof(chem), ups_data);
@@ -455,6 +443,61 @@ void test_cyberpower_unread_activepower_keeps_estimate(void) {
     TEST_ASSERT_EQUAL_STRING("160", ups_data.get("ups.realpower").c_str());
 }
 
+// --- cpsHid2Nut() is the only source of the keys it owns (US-075, ADR 0011) ---
+
+// Usages cps-hid.c does not read: the generic mappings of the same keys are superseded
+void test_cyberpower_superseded_paths_write_nothing(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.PresentStatus.ShutdownImminent", 0x00840069, 0x01, 1, 1));
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.FullChargeCapacity", 0x00850067, 0x02, 3, 16));
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.PercentLoad", 0x00840035, 0x03, 3));
+    feed(0x01, 1, 1);
+    feed16(0x02, 3, 36000);
+    feed(0x03, 3, 40);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.status.shutdown_imminent"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("battery.capacity.full")); // not a NUT name (rule 2)
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.load"));              // cps-hid reads UPS.Output.PercentLoad
+}
+
+// Standard NUT names cps-hid does not read stay as documented extensions (ADR 0011 rule 2)
+void test_cyberpower_extensions_kept(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.ManufacturerDate", 0x00850085, 0x01, 3, 16));
+    mockHost._usages.push_back(nutField("UPS.Battery.Temperature", 0x00840036, 0x02, 3, 16));
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.DesignCapacity", 0x00850083, 0x03, 3, 16));
+    feed16(0x01, 3, (uint16_t)((46 << 9) | (3 << 5) | 15)); // 2026/03/15
+    feed16(0x02, 3, 300);
+    feed16(0x03, 3, 36000);
+    TEST_ASSERT_EQUAL_STRING("2026/03/15", ups_data.get("ups.mfr.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("26.9", ups_data.get("battery.temperature").c_str());
+    TEST_ASSERT_EQUAL_STRING("10", ups_data.get("battery.capacity").c_str());
+}
+
+// The estimate follows the nominal apparent power when it arrives after the load
+void test_cyberpower_realpower_estimate_when_apparent_nominal_after_load(void) {
+    mockHost._usages.push_back(nutField("UPS.Output.PercentLoad", 0x00840035, 0x13, 3));
+    mockHost._usages.push_back(nutField("UPS.Output.ConfigApparentPower", 0x00840043, 0x18, 3, 16));
+    feed(0x13, 3, 16);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
+    feed16(0x18, 3, 1000);
+    // UPSData::updateRealPower(): 60 % of 16 % of 1000 VA
+    TEST_ASSERT_EQUAL_STRING("96", ups_data.get("ups.realpower").c_str());
+}
+
+// stringid_conversion_fun reads into static char buf[20]: at most 19 characters
+void test_cyberpower_string_truncated_to_19(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.iOEMInformation", 0x0085008f, 0x05, 3));
+    feed(0x05, 3, 7);
+    const char* text = "ABCDEFGHIJKLMNOPQRSTUVWXY"; // 25 characters
+    uint8_t desc[2 + 2 * 25];
+    desc[0] = sizeof(desc);
+    desc[1] = 0x03;
+    for (int i = 0; i < 25; i++) {
+        desc[2 + 2 * i] = (uint8_t)text[i];
+        desc[3 + 2 * i] = 0;
+    }
+    driver.parseStringDescriptor(&mockHost, 7, desc, sizeof(desc), ups_data);
+    TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJKLMNOPQRS", ups_data.get("battery.mfr.date").c_str());
+}
+
 // driver.name, not ups.type (the UPS topology in NUT)
 void test_cyberpower_driver_name(void) {
     driver.loop(&mockHost, ups_data, 1000);
@@ -475,7 +518,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_input_sensitivity_from_nut_table);
     RUN_TEST(test_cyberpower_battery_voltage_scale);
     RUN_TEST(test_cyberpower_battery_voltage_no_scale);
-    RUN_TEST(test_cyberpower_frequency_scale_rule);
     RUN_TEST(test_cyberpower_frequency_scaled_on_0501);
     RUN_TEST(test_cyberpower_cps_variables);
     RUN_TEST(test_cyberpower_string_values);
@@ -483,6 +525,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_vendor_layout_adds_no_requests);
     RUN_TEST(test_cyberpower_measured_realpower_not_estimated);
     RUN_TEST(test_cyberpower_unread_activepower_keeps_estimate);
+    RUN_TEST(test_cyberpower_superseded_paths_write_nothing);
+    RUN_TEST(test_cyberpower_extensions_kept);
+    RUN_TEST(test_cyberpower_realpower_estimate_when_apparent_nominal_after_load);
+    RUN_TEST(test_cyberpower_string_truncated_to_19);
     RUN_TEST(test_cyberpower_driver_name);
     return UNITY_END();
 }
@@ -498,7 +544,6 @@ void setup() {
     RUN_TEST(test_cyberpower_input_sensitivity_from_nut_table);
     RUN_TEST(test_cyberpower_battery_voltage_scale);
     RUN_TEST(test_cyberpower_battery_voltage_no_scale);
-    RUN_TEST(test_cyberpower_frequency_scale_rule);
     RUN_TEST(test_cyberpower_frequency_scaled_on_0501);
     RUN_TEST(test_cyberpower_cps_variables);
     RUN_TEST(test_cyberpower_string_values);
@@ -506,6 +551,10 @@ void setup() {
     RUN_TEST(test_cyberpower_vendor_layout_adds_no_requests);
     RUN_TEST(test_cyberpower_measured_realpower_not_estimated);
     RUN_TEST(test_cyberpower_unread_activepower_keeps_estimate);
+    RUN_TEST(test_cyberpower_superseded_paths_write_nothing);
+    RUN_TEST(test_cyberpower_extensions_kept);
+    RUN_TEST(test_cyberpower_realpower_estimate_when_apparent_nominal_after_load);
+    RUN_TEST(test_cyberpower_string_truncated_to_19);
     RUN_TEST(test_cyberpower_driver_name);
     UNITY_END();
 }

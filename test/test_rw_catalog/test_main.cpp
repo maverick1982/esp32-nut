@@ -1105,8 +1105,9 @@ void test_ecoflow_table() {
 void test_tables_hold_only_rw_rows_without_ups_delay() {
     // US-066 scope: the RW rows of each subdriver, minus ups.delay.* (applyDefaultDelays)
     // and the three stateful mge rows left to US-070. Since US-073 mgeHid2Nut() has its
-    // read-only and BOOL rows too: only its RW rows are counted.
+    // read-only and BOOL rows too, cpsHid2Nut() since US-075: only their RW rows are counted.
     const HidInfo* (*tables[])(size_t&) = { mgeHid2Nut, apcHid2Nut, cpsHid2Nut, ecoflowHid2Nut };
+    const bool full_table[] = { true, false, true, false };
     const size_t expected[] = { 55, 9, 8, 1 };
     for (size_t t = 0; t < 4; t++) {
         size_t n;
@@ -1116,7 +1117,7 @@ void test_tables_hold_only_rw_rows_without_ups_delay() {
             if (rows[i].info_flags & ST_FLAG_RW) rw++;
         }
         TEST_ASSERT_EQUAL(expected[t], rw);
-        if (t > 0) TEST_ASSERT_EQUAL(expected[t], n);
+        if (!full_table[t]) TEST_ASSERT_EQUAL(expected[t], n);
         for (size_t i = 0; i < n; i++) {
             TEST_ASSERT_TRUE(strncmp(rows[i].info_type, "ups.delay.", 10) != 0);
             TEST_ASSERT_TRUE(strcmp(rows[i].info_type, "input.bypass.switch.on") != 0);
