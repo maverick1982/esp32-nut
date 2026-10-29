@@ -335,7 +335,7 @@
         "ups.test.result": "Done and passed",
         "battery.runtime.low": "120",
         "battery.voltage.nominal": "24.0",
-        "battery.voltage": "24.60",
+        "battery.voltage": "24.6",
         "input.voltage.nominal": "230",
         "input.voltage": "0.0",
         "input.transfer.low": "176",

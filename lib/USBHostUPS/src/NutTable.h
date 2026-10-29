@@ -134,7 +134,9 @@ enum class Conv : uint8_t {
     CpsBattStatus,        // cps_battstatus (cps-hid.c)
     CpsBattVolt,          // cps_battvolt (cps-hid.c)
     CpsInputFreq,         // cps_input_freq (cps-hid.c)
-    CpsOutputFreq         // cps_output_freq (cps-hid.c)
+    CpsOutputFreq,        // cps_output_freq (cps-hid.c)
+    // US-076
+    ApcDate               // apc_date_conversion (apc-hid.c)
 };
 
 struct Lookup {
@@ -322,6 +324,11 @@ static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };  
 static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
 static constexpr Lookup kFullychargedInfo[] = { { 1, "fullycharged" }, { 0, "notfullycharged" } }; // fullycharged_info
 static constexpr Lookup kTimelimitexpiredInfo[] = { { 1, "timelimitexp" }, { 0, "!timelimitexp" } }; // timelimitexpired_info
+static constexpr Lookup kApcStatusFlag[] = { { 8, "!off" }, { 16, "!off" }, { 0, "off" } };     // apcstatusflag_info
+static constexpr Lookup kApcLineFailCauseVrange[] = {                                        // apc_linefailcause_vrange_info
+    { 1, "vrange" }, { 2, "vrange" }, { 4, "vrange" }, { 8, "vrange" }, { 9, "vrange" }, { 0, "!vrange" },
+};
+static constexpr Lookup kApcLineFailCauseFrange[] = { { 7, "frange" }, { 0, "!frange" } };   // apc_linefailcause_frange_info
 
 // Vendor ups.alarm lookups of mge-hid.c (US-107), verbatim: the text is the alarm
 static constexpr Lookup kMgeEmergencyStop[] = { { 1, "Emergency stop!" } };                    // mge_emergency_stop
@@ -823,6 +830,20 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
             }
         }
         snprintf(buf, sizeof(buf), "%.1f", scale * v);
+        out = buf;
+        return DecodeResult::OK;
+    }
+    case Conv::ApcDate: { // apc_date_conversion_fun (apc-hid.c:114-139): BCD 0xMMDDYY
+        long value = (long)v;
+        if (value == 0) {
+            out = "not set";
+            return DecodeResult::OK;
+        }
+        int year = (value & 0xf) + 10 * ((value >> 4) & 0xf);
+        int month = ((value >> 16) & 0xf) + 10 * ((value >> 20) & 0xf);
+        int day = ((value >> 8) & 0xf) + 10 * ((value >> 12) & 0xf);
+        year += (year >= 70) ? 1900 : 2000;
+        snprintf(buf, sizeof(buf), "%04d/%02d/%02d", year, month, day);
         out = buf;
         return DecodeResult::OK;
     }
@@ -1951,22 +1972,130 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
     return t;
 }
 
+// Every row of apc_hid2nut (US-076, ADR 0011): values, status and instant commands. HIDParser
+// names APCBattReplaceDate; the other vendor usages of apc_usage_lkp have hex paths:
+// APCGeneralCollection 0xFF860005, APCEnvironment 0xFF860006, APCProbe1 0xFF860007,
+// APCLineFailCause 0xFF860052, APCStatusFlag 0xFF860060, APCSensitivity 0xFF860061,
+// APCPanelTest 0xFF860072, APCDelayBeforeReboot/Shutdown/Startup 0xFF86007C/7D/7E.
 inline const HidInfo* apcHid2Nut(size_t& n) {
     static const HidInfo t[] = {
+        // Battery page
+        // apc-hid.c:334 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
         // apc-hid.c:335 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // apc-hid.c:336 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:337 UPS.Battery.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.Battery.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:338 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
         // apc-hid.c:339 UPS.Battery.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Battery.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // apc-hid.c:340 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // apc-hid.c:341 UPS.Battery.Voltage
+        { "battery.voltage", 0, 0, "UPS.Battery.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:342 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:343 UPS.Battery.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.Battery.ConfigVoltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:344 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:345 UPS.Battery.Temperature
+        { "battery.temperature", 0, 0, "UPS.Battery.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
+        // apc-hid.c:346 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", 0, Conv::StringId, nullptr, 0 },
         // apc-hid.c:347 UPS.Battery.ManufacturerDate
         { "battery.mfr.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_SEMI_STATIC, Conv::BatteryDate, nullptr, 0 },
+        // apc-hid.c:348 UPS.PowerSummary.APCBattReplaceDate
+        { "battery.mfr.date", 0, 0, "UPS.PowerSummary.APCBattReplaceDate", "%s", 0, Conv::ApcDate, nullptr, 0 },
+        // apc-hid.c:349 UPS.Battery.APCBattReplaceDate
+        { "battery.date", 0, 0, "UPS.Battery.APCBattReplaceDate", "%s", 0, Conv::ApcDate, nullptr, 0 },
+
+        // UPS page
+        // apc-hid.c:352 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:353 UPS.PowerConverter.PercentLoad
+        { "ups.load", 0, 0, "UPS.PowerConverter.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
         // ups.delay.start (apc-hid.c:355) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
         // ups.delay.shutdown (apc-hid.c:356) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // apc-hid.c:357 UPS.PowerSummary.DelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:358 UPS.PowerSummary.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:359 UPS.PowerSummary.DelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // ups.delay.start (apc-hid.c:361) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
         // ups.delay.shutdown (apc-hid.c:362) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // apc-hid.c:363 UPS.Output.DelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.Output.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:364 UPS.Output.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.Output.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:365 UPS.Output.DelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // ups.delay.start (apc-hid.c:367) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
         // ups.delay.shutdown (apc-hid.c:368) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // apc-hid.c:369 UPS.APCGeneralCollection.APCDelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.0xFF860005.0xFF86007E", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:370 UPS.APCGeneralCollection.APCDelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.0xFF860005.0xFF86007D", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:371 UPS.APCGeneralCollection.APCDelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.0xFF860005.0xFF86007C", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // apc-hid.c:372 UPS.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
+        // apc-hid.c:373 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // apc-hid.c:374 UPS.ManufacturerDate
+        { "ups.mfr.date", 0, 0, "UPS.ManufacturerDate", "%s", 0, Conv::BatteryDate, nullptr, 0 },
+        // apc-hid.c:375 UPS.PowerSummary.ManufacturerDate
+        { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", 0, Conv::BatteryDate, nullptr, 0 },
+        // apc-hid.c:376 UPS.PowerConverter.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.PowerConverter.ConfigActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:377 UPS.Output.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+
+        // Special case: ups.status & ups.alarm
+        // apc-hid.c:384 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // apc-hid.c:385 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // apc-hid.c:386 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // apc-hid.c:387 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // apc-hid.c:388 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // apc-hid.c:389 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // apc-hid.c:390 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // apc-hid.c:391 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // apc-hid.c:392 UPS.PowerSummary.PresentStatus.BatteryPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // apc-hid.c:394 UPS.PowerSummary.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // apc-hid.c:395 UPS.PowerSummary.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // apc-hid.c:396 UPS.PowerSummary.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // apc-hid.c:397 UPS.PowerSummary.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // apc-hid.c:398 UPS.PowerSummary.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // apc-hid.c:399 UPS.PowerSummary.APCStatusFlag
+        { "BOOL", 0, 0, "UPS.PowerSummary.0xFF860060", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kApcStatusFlag) },
+        // apc-hid.c:403 UPS.Input.APCLineFailCause
+        { "BOOL", 0, 0, "UPS.Input.0xFF860052", nullptr, 0, Conv::Lookup, NUT_LKP(kApcLineFailCauseVrange) },
+        // apc-hid.c:404 UPS.Input.APCLineFailCause
+        { "BOOL", 0, 0, "UPS.Input.0xFF860052", nullptr, 0, Conv::Lookup, NUT_LKP(kApcLineFailCauseFrange) },
+
+        // Input page
+        // apc-hid.c:407 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:408 UPS.Input.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
         // apc-hid.c:409 UPS.Output.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Output.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // apc-hid.c:410 UPS.Output.HighVoltageTransfer
@@ -1977,6 +2106,81 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
         { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Input.HighVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // apc-hid.c:414 UPS.Input.APCSensitivity
         { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Input.0xFF860061", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kApcSensitivity) },
+
+        // Output page
+        // apc-hid.c:417 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:418 UPS.Output.ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:419 UPS.Output.Current
+        { "output.current", 0, 0, "UPS.Output.Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // apc-hid.c:420 UPS.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
+
+        // Environmental page
+        // apc-hid.c:423 UPS.APCEnvironment.APCProbe1.Temperature
+        { "ambient.temperature", 0, 0, "UPS.0xFF860006.0xFF860007.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
+        // apc-hid.c:424 UPS.APCEnvironment.APCProbe1.Humidity
+        { "ambient.humidity", 0, 0, "UPS.0xFF860006.0xFF860007.Humidity", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // ambient.temperature / ambient.humidity of APCProbe2 (apc-hid.c:426-427) are commented out upstream
+
+        // Instant commands (read by CommandCatalog, US-074)
+        // apc-hid.c:434 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:435 UPS.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:436 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:437 UPS.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.Battery.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:438 UPS.BatterySystem.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:439 UPS.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.Battery.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:440 UPS.APCPanelTest
+        { "test.panel.start", 0, 0, "UPS.0xFF860072", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:441 UPS.APCPanelTest
+        { "test.panel.stop", 0, 0, "UPS.0xFF860072", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:442 UPS.PowerSummary.APCPanelTest
+        { "test.panel.start", 0, 0, "UPS.PowerSummary.0xFF860072", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:443 UPS.PowerSummary.APCPanelTest
+        { "test.panel.stop", 0, 0, "UPS.PowerSummary.0xFF860072", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:446 UPS.PowerSummary.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:447 UPS.PowerSummary.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:448 UPS.PowerSummary.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:449 UPS.PowerSummary.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:451 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.Output.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:452 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.Output.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:453 UPS.Output.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.Output.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:454 UPS.Output.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:456 UPS.APCGeneralCollection.APCDelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.0xFF860005.0xFF86007D", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:457 UPS.APCGeneralCollection.APCDelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.0xFF860005.0xFF86007E", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:458 UPS.APCGeneralCollection.APCDelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.0xFF860005.0xFF86007D", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:459 UPS.APCGeneralCollection.APCDelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.0xFF860005.0xFF86007C", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:461 UPS.Output.APCDelayBeforeReboot
+        { "shutdown.return", 0, 0, "UPS.Output.0xFF86007C", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:463 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:464 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:465 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:466 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:467 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

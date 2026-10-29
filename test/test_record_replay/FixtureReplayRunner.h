@@ -384,6 +384,34 @@ public:
         return out;
     }
 
+    // A driver of class D with its poll hooks public (US-076)
+    template <class D>
+    struct PollListProbe : D {
+        using GenericDriver::buildPollLists;
+        using D::onLoop;
+    };
+
+    /**
+     * The quick and full poll lists the driver of class D builds for the fixture's descriptor
+     * (US-076), after one onLoop() with the replayed data (the Back-UPS BX flag comes from
+     * ups.model): "quick: id/type ... | full: id/type ...", type 1 = INPUT, 3 = FEATURE.
+     */
+    template <class D>
+    static std::string pollLists(const char* filePath) {
+        ReplaySession s;
+        if (!replay(filePath, s)) return "";
+        PollListProbe<D> probe;
+        probe.setup();
+        probe.onLoop(&s.host, s.ups_data);
+        std::vector<GenericDriver::PollItem> quick, full;
+        probe.buildPollLists(&s.host, quick, full);
+        std::string out = "quick:";
+        for (const auto& i : quick) out += " " + std::to_string(i.id) + "/" + std::to_string(i.report_type);
+        out += " | full:";
+        for (const auto& i : full) out += " " + std::to_string(i.id) + "/" + std::to_string(i.report_type);
+        return out;
+    }
+
     /**
      * The status served at the end of the replay (US-107): ups.status, and ups.alarm /
      * input.transfer.reason, where nullptr means that the key must be missing.

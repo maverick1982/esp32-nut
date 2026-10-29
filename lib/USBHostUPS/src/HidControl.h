@@ -133,8 +133,10 @@ public:
             if (sr != CommandCatalog::StepsResult::OK) return CommandResult::NOT_SUPPORTED;
             // instcmd() of usbhid-ups: ups.start.auto set to "yes" (return) or "no" (stayoff)
             // first, when supported, whatever the result (decided 2026-10-29, US-074). Only once
-            // the sequence can run, so a refused command leaves the setting alone.
-            if (start_auto) setVariable(port, "ups.start.auto", ret ? "yes" : "no");
+            // the sequence can run, so a refused command leaves the setting alone, and only for
+            // the composite command: a shutdown.return row of the table (one step, apc-hid.c:461)
+            // is run as it is, as upstream does when find_nut_info() finds it (US-076)
+            if (start_auto && steps.size() == 2) setVariable(port, "ups.start.auto", ret ? "yes" : "no");
             for (size_t i = 0; i < steps.size(); i++) {
                 if (i > 0) delay(125);  // usbhid-ups pause: some UPS reject commands sent too close
                 if (!hid->writeUsage(steps[i].def, (uint32_t)steps[i].value)) return CommandResult::FAILED;
