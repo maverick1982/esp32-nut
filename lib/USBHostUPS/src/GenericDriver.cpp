@@ -59,6 +59,7 @@ GenericDriver::GenericDriver() :
     _last_step(0),
     _nut_bound(false),
     _nut_init_done(false),
+    _nut_has_realpower(false),
     _nut_usage_count(0) {
 }
 
@@ -89,6 +90,7 @@ void GenericDriver::setup() {
     _nut_rows.clear();
     _nut_bound = false;
     _nut_init_done = false;
+    _nut_has_realpower = false;
     _nut_usage_count = 0;
     _nut_ctx = NutTable::Context();
     _absent_overrides.clear(); // the host sets the saved values again right after setup()
@@ -634,6 +636,10 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
     const NutTable::HidInfo* table = hid2nut(n);
     _nut_rows = NutTable::bind(table, n, usages);
     _nut_bound = true;
+    _nut_has_realpower = false;
+    for (const auto& b : _nut_rows) {
+        if (strcmp(b.info->info_type, "ups.realpower") == 0) _nut_has_realpower = true;
+    }
     _nut_init_done = false;
     _nut_usage_count = usages.size();
     // bind() gives the HU_FLAG_ABSENT rows their dfl: the values set since win
@@ -661,6 +667,17 @@ void GenericDriver::setDriverSideValue(const char* name, const char* value) {
     }
     if (!found) _absent_overrides.push_back(std::make_pair(String(name), String(value)));
     applyAbsentOverride(String(name), String(value));
+}
+
+// The active row of the variable takes the host's value until the next read of its report
+void GenericDriver::noteHostValue(const char* name, const char* value) {
+    if (!name || !value) return;
+    for (auto& b : _nut_rows) {
+        if (b.role != NutTable::Bound::Role::ACTIVE || NutTable::isInternalRow(*b.info)) continue;
+        if (strcmp(b.info->info_type, name) != 0) continue;
+        b.value = value;
+        b.has = true;
+    }
 }
 
 bool GenericDriver::resetDriverSideValue(const char* name, String& value) {
@@ -701,6 +718,7 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
     if (length > 0 && data != NULL) {
         for (size_t i = 0; i < _nut_rows.size(); i++) {
             const NutTable::Bound& b = _nut_rows[i];
+            if (NutTable::isCommandRow(*b.info)) continue; // written by commands, never read
             // The row's usage, or its twin in the other report type (libhid keeps one
             // buffer per report ID, so either refreshes the value)
             int pick = -1;
@@ -712,6 +730,9 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
             if (pick < 0) continue;
             double v = HIDParser::extractUsage(&usages[pick], report_id, data, length);
             NutTable::onValue(_nut_rows, i, v, _nut_ctx, &ups_data);
+            // Published right away, as dstate_setinfo() in the upstream walk: a later row of
+            // the same report may read it (eaton_compute_realpower_info, US-074)
+            publishRow(_nut_rows[i], ups_data);
         }
     }
 
@@ -730,22 +751,40 @@ void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t r
 // The table has the final word over a hand-written mapping of the same key, but writes only
 // what differs from ups_data: read-only rows would otherwise allocate Strings at every
 // report (ADR 0007, US-073)
-void GenericDriver::publishNutRows(UPSData& ups_data) {
-    bool load_written = false;
-    for (auto& b : _nut_rows) {
-        if (NutTable::isInternalRow(*b.info)) continue;
-        const char* name = b.info->info_type;
-        if (b.cleared) {
-            // dstate_delinfo() of an upstream function (battery.charger.status)
-            b.cleared = false;
-            if (ups_data.find(name)) ups_data.remove(name);
-            continue;
-        }
-        if (b.role != NutTable::Bound::Role::ACTIVE || !b.has) continue;
-        if (ups_data.valueEquals(name, b.value)) continue;
-        ups_data.set(name, b.value);
-        if (strcmp(name, "ups.load") == 0) load_written = true;
+// One row: its value when it differs from ups_data, or the removal of a CLEAR. As the generic
+// PercentLoad mapping, the estimate follows the load unless a table row owns ups.realpower
+// (eaton_compute_realpower_info, US-074).
+void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
+    if (NutTable::isInternalRow(*b.info) || NutTable::isCommandRow(*b.info)) return;
+    const char* name = b.info->info_type;
+    if (b.cleared) {
+        // dstate_delinfo() of an upstream function (battery.charger.status)
+        b.cleared = false;
+        if (ups_data.find(name)) ups_data.remove(name);
+        return;
     }
+    if (b.role != NutTable::Bound::Role::ACTIVE || !b.has) return;
+    if (ups_data.valueEquals(name, b.value)) return;
+    ups_data.set(name, b.value);
+    if (strcmp(name, "ups.load") != 0) return;
+    if (!_nut_has_realpower) {
+        ups_data.updateRealPower();
+        return;
+    }
+    // eaton_compute_realpower_info ignores its HID value and reads ups.load: computed again at
+    // each new load instead of waiting for the next full poll of Flow.[4] (deviation: the
+    // upstream walk recomputes it with the full update only)
+    for (size_t i = 0; i < _nut_rows.size(); i++) {
+        if (_nut_rows[i].info->conv != NutTable::Conv::EatonComputeRealpower) continue;
+        if (_nut_rows[i].role == NutTable::Bound::Role::DEAD) continue; // also a row deferred before the load
+        NutTable::onValue(_nut_rows, i, 0, _nut_ctx, &ups_data);
+        publishRow(_nut_rows[i], ups_data);
+    }
+}
+
+void GenericDriver::publishNutRows(UPSData& ups_data) {
+    // Rows that changed role since (INIT rule, strings) or that a mapping overwrote
+    for (auto& b : _nut_rows) publishRow(b, ups_data);
     // Internal ups.status.* keys from the BOOL rows; nothing for drivers without them
     NutTable::statusKeys(_nut_ctx.status, [&ups_data](const char* key, const char* value) {
         const String* current = ups_data.find(key);
@@ -755,9 +794,6 @@ void GenericDriver::publishNutRows(UPSData& ups_data) {
             ups_data.set(key, value);
         }
     });
-    // As the generic PercentLoad mapping: the estimate follows the load (until the
-    // eaton_compute_realpower_info row of US-074)
-    if (load_written) ups_data.updateRealPower();
 }
 
 void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable::RWVariable>& out) const {

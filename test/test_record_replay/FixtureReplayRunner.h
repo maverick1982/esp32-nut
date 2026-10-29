@@ -316,8 +316,11 @@ public:
             // Same inputs as IUSBHostUPS::getSupportedCommands(); ups_data is the replayed data
             bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
             std::string actual;
+            size_t n_cmd = 0;
+            const NutTable::HidInfo* cmd_table = driver->commandTable(n_cmd); // US-074: the driver's command rows
             for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported(),
-                                                               driver->beeperMuteSupported(), driver->commandAllowList())) {
+                                                               driver->beeperMuteSupported(), driver->commandAllowList(),
+                                                               cmd_table, n_cmd)) {
                 if (!actual.empty()) actual += " ";
                 actual += c->name;
             }

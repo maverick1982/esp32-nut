@@ -71,6 +71,8 @@ public:
     bool shutdownCommandsSupported() const override;
     bool beeperMuteSupported() const override;
     const char* const* commandAllowList() const override;
+    const NutTable::HidInfo* commandTable(size_t& n) const override;
+    bool setBeeperField(const HIDUsageDef& field, bool enable) override;
 
     void setLogCallback(LogCallback cb);
     // USB peripheral the UPS is attached to, from the board profile (US-090); call before
@@ -184,7 +186,8 @@ private:
     void retryInterfaceStart(uint32_t now);
     void requestRestart(const char* why);
     void logStats(uint32_t now);
-    bool setBeeperLocked(bool enable); // _op_mutex held
+    // _op_mutex held; field: the beeper usage to write, nullptr = the active beeper (US-074)
+    bool setBeeperLocked(bool enable, const HIDUsageDef* field = nullptr);
     bool writeUsageLocked(const HIDUsageDef& def, uint32_t value); // _op_mutex held
     void log(const char* level, const char* fmt, ...) const;
 

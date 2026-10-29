@@ -4,6 +4,9 @@
 #include "NutTable.h"
 #include <cstdlib>
 #include <new>
+#include <fstream>
+#include <set>
+#include <sstream>
 
 // Counts the allocations of this suite (US-073 rework): String is std::string in the mock,
 // whose texts longer than 15 characters go to the heap
@@ -340,7 +343,9 @@ void test_internal_rows_always_active() {
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<Bound> b = bind(t, n, usages);
-    TEST_ASSERT_EQUAL(4, b.size());
+    // BOOL ACPresent, Good, device.country, battery.charge, and since US-074 outlet.1.status
+    // (mge-hid.c:2268, on_off_info on ACPresent for the low end models)
+    TEST_ASSERT_EQUAL(5, b.size());
     Context ctx;
     for (const Bound& x : b) {
         if (isInternalRow(*x.info)) TEST_ASSERT_TRUE(x.role == Bound::Role::ACTIVE);
@@ -442,6 +447,70 @@ void test_abm_status_same_value_does_not_allocate() {
     TEST_ASSERT_EQUAL(before, g_allocs);
 }
 
+// --- UPS, Output and Outlet pages (US-074)
+
+void test_us074_lookups() {
+    Context ctx;
+    // mge_upstype_conversion, on_off_info, eaton_outlet_protection_status_info,
+    // outlet_eco_yes_no_info, beeper_info: verbatim
+    HidInfo type = { "ups.type", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kUpsType) };
+    TEST_ASSERT_EQUAL_STRING("offline / line interactive", conv(type, 1, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("online - hot standby redundancy", conv(type, 5, ctx).c_str());
+    conv(type, 0, ctx, DecodeResult::FAIL);
+    HidInfo onoff = { "outlet.1.status", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) };
+    TEST_ASSERT_EQUAL_STRING("off", conv(onoff, 0, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("on", conv(onoff, 1, ctx).c_str());
+    HidInfo prot = { "outlet.1.protect.status", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) };
+    TEST_ASSERT_EQUAL_STRING("not protected", conv(prot, 1, ctx).c_str());
+    HidInfo eco = { "outlet.1.ecocontrol", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kOutletEco) };
+    TEST_ASSERT_EQUAL_STRING("The outlet is ECO controlled", conv(eco, 1, ctx).c_str());
+    HidInfo beeper = { "ups.beeper.status", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kBeeperInfo) };
+    TEST_ASSERT_EQUAL_STRING("disabled", conv(beeper, 1, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("muted", conv(beeper, 3, ctx).c_str());
+}
+
+void test_power_factor() {
+    // mge_powerfactor_conversion_fun: "%.2f" of value / 100
+    HidInfo pf = { "output.powerfactor", 0, 0, "UPS.X", "%s", 0, Conv::MgePowerFactor, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("0.95", conv(pf, 95, ctx).c_str());
+}
+
+void test_compute_realpower() {
+    // eaton_compute_realpower_fun (mge-hid.c:1404-1431): round(load * 0.01 * nominal * pf)
+    HidInfo rp = { "ups.realpower", 0, 0, "UPS.X", "-1", 0, Conv::EatonComputeRealpower, nullptr, 0 };
+    Context ctx;
+    UPSData data;
+    conv(rp, 700, ctx, DecodeResult::DEFER, nullptr);
+    conv(rp, 700, ctx, DecodeResult::DEFER, &data);        // no load, no nominal: NULL upstream
+    data.set("ups.load", "5");
+    conv(rp, 700, ctx, DecodeResult::DEFER, &data);        // no nominal
+    data.set("ups.power.nominal", "700");
+    TEST_ASSERT_EQUAL_STRING("28", conv(rp, 700, ctx, DecodeResult::OK, &data).c_str()); // pf 0.80
+    data.set("output.powerfactor", "0.60");
+    TEST_ASSERT_EQUAL_STRING("21", conv(rp, 700, ctx, DecodeResult::OK, &data).c_str());
+}
+
+void test_command_rows_never_published() {
+    // HU_TYPE_CMD rows: bound, but outside the INIT rule and never given a value
+    static const HidInfo t[] = {
+        { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", 0, Conv::Number, nullptr, 0 },
+    };
+    std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 3, 9) };
+    std::vector<Bound> b = bind(t, 2, usages);
+    TEST_ASSERT_EQUAL(2, b.size());
+    Context ctx;
+    onValue(b, 0, 20, ctx);
+    onValue(b, 1, 20, ctx);
+    finishInit(b);
+    TEST_ASSERT_FALSE(b[0].has);
+    TEST_ASSERT_TRUE(b[0].role == Bound::Role::PENDING);
+    TEST_ASSERT_TRUE(b[0].first == Bound::First::UNREAD);
+    TEST_ASSERT_TRUE(b[1].role == Bound::Role::ACTIVE);
+    TEST_ASSERT_EQUAL_STRING("20", b[1].value.c_str());
+}
+
 // --- structure of the table
 
 void test_mge_rows_have_supported_formats() {
@@ -449,14 +518,108 @@ void test_mge_rows_have_supported_formats() {
     const HidInfo* t = mgeHid2Nut(n);
     for (size_t i = 0; i < n; i++) {
         const HidInfo& r = t[i];
-        // Rows that never format a value: driver-side defaults, internal rows, string indices
-        if ((r.hidflags & HU_FLAG_ABSENT) || isInternalRow(r) || r.conv == Conv::StringId) continue;
+        // Rows that never format a value: driver-side defaults, internal rows, string indices,
+        // instant commands (dfl is the value written) and eaton_compute_realpower_info (dfl
+        // "-1" upstream, the function formats the value)
+        if ((r.hidflags & HU_FLAG_ABSENT) || isInternalRow(r) || isCommandRow(r) || r.conv == Conv::StringId ||
+            r.conv == Conv::EatonComputeRealpower)
+            continue;
         TEST_ASSERT_NOT_NULL_MESSAGE(r.dfl, r.info_type);
         bool number = strcmp(r.dfl, "%.0f") == 0 || strcmp(r.dfl, "%.1f") == 0 || strcmp(r.dfl, "%.2f") == 0;
         TEST_ASSERT_TRUE_MESSAGE(number || strcmp(r.dfl, "%s") == 0, r.info_type);
         // A "%s" row needs a conversion that gives text
         if (strcmp(r.dfl, "%s") == 0) TEST_ASSERT_TRUE_MESSAGE(r.conv != Conv::Number, r.info_type);
     }
+}
+
+// --- Coverage of the upstream table (ADR 0011 rule 1, US-074 rework) ---
+
+static std::vector<std::string> readLines(const char* path) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        std::string msg = std::string("cannot open ") + path;
+        TEST_FAIL_MESSAGE(msg.c_str());
+    }
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(f, line)) lines.push_back(line);
+    return lines;
+}
+
+static std::string joinNumbers(const std::vector<int>& v) {
+    std::string out;
+    for (int n : v) out += (out.empty() ? "" : " ") + std::to_string(n);
+    return out;
+}
+
+/**
+ * Every row of the upstream table (lines starting with { "..." between the table name and
+ * its { NULL, 0, 0, NULL terminator, commented out or in #if 0 too) must be cited in the
+ * port as <upstream basename>:N or :N-M (a row, or a comment with the reason), and every
+ * cited number must be a row of the upstream table. Reusable by the next migrations.
+ */
+static void checkTableCoverage(const char* upstream_file, const char* upstream_table, const char* source_file,
+                               const char* function_start, const char* function_end) {
+    // Rows of the upstream table, 1-based line numbers
+    std::vector<std::string> up = readLines(upstream_file);
+    std::set<int> rows;
+    bool in_table = false;
+    for (size_t i = 0; i < up.size(); i++) {
+        const std::string& l = up[i];
+        if (!in_table) {
+            in_table = l.find(upstream_table) != std::string::npos;
+            continue;
+        }
+        if (l.find("{ NULL, 0, 0, NULL") != std::string::npos) break;
+        size_t p = l.find_first_not_of(" \t");
+        if (p != std::string::npos && l.compare(p, 2, "/*") == 0) p = l.find_first_not_of(" \t", p + 2);
+        if (p != std::string::npos && l.compare(p, 1, "{") == 0) {
+            size_t q = l.find_first_not_of(" \t", p + 1);
+            if (q != std::string::npos && l[q] == '"') rows.insert((int)i + 1);
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(rows.size() > 0, "no upstream rows found");
+
+    // Citations inside the port function
+    std::ifstream f(source_file);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string src = ss.str();
+    size_t a = src.find(function_start);
+    size_t b = src.find(function_end, a == std::string::npos ? 0 : a);
+    TEST_ASSERT_TRUE_MESSAGE(a != std::string::npos && b != std::string::npos, function_start);
+    std::string body = src.substr(a, b - a);
+    std::string base = upstream_file;
+    base = base.substr(base.find_last_of('/') + 1) + ":";
+    std::set<int> cited;
+    std::vector<int> unknown;
+    for (size_t p = body.find(base); p != std::string::npos; p = body.find(base, p + 1)) {
+        const char* c = body.c_str() + p + base.size();
+        char* end = nullptr;
+        long first = strtol(c, &end, 10);
+        if (end == c) continue;
+        long last = first;
+        if (*end == '-' && end[1] >= '0' && end[1] <= '9') last = strtol(end + 1, nullptr, 10);
+        for (long n : { first, last }) {
+            if (!rows.count((int)n)) unknown.push_back((int)n);
+        }
+        for (long n = first; n <= last; n++) cited.insert((int)n);
+    }
+
+    std::vector<int> missing;
+    for (int r : rows) {
+        if (!cited.count(r)) missing.push_back(r);
+    }
+    std::string msg = std::string(base) + " rows not in the port (add the row or a comment): " + joinNumbers(missing);
+    TEST_ASSERT_TRUE_MESSAGE(missing.empty(), msg.c_str());
+    msg = std::string(base) + " cited lines that are not rows of the table: " + joinNumbers(unknown);
+    TEST_ASSERT_TRUE_MESSAGE(unknown.empty(), msg.c_str());
+}
+
+void test_mge_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every mge_hid2nut row is in mgeHid2Nut(), as a row or as a comment
+    checkTableCoverage("nut_repo/drivers/mge-hid.c", "static hid_info_t mge_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* mgeHid2Nut", "inline const HidInfo* apcHid2Nut");
 }
 
 int main(int argc, char** argv) {
@@ -482,6 +645,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_allocation_counter_sees_strings);
     RUN_TEST(test_lookup_same_value_does_not_allocate);
     RUN_TEST(test_abm_status_same_value_does_not_allocate);
+    RUN_TEST(test_us074_lookups);
+    RUN_TEST(test_power_factor);
+    RUN_TEST(test_compute_realpower);
+    RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
+    RUN_TEST(test_mge_table_covers_every_upstream_row);
     return UNITY_END();
 }

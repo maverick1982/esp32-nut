@@ -1,0 +1,769 @@
+schema: archetipo/plan/v2
+spec_code: US-074
+body: |-
+  # US-074: Tabella unica Eaton (mge-hid), parte 2 — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 8 | **Bloccato da:** US-073 (DONE, commit 3e28944)
+
+  `mgeHid2Nut()` riceve tutte le righe di `mge_hid2nut` che US-073 ha lasciato (UPS page su PowerConverter/Flow, beeper, Input, Bypass, Output, Outlet), compresi i comandi `HU_TYPE_CMD`. Per gli Eaton, `HidControl` prende elenco e passi dei comandi da quelle righe. `EatonDriver` resta senza mappature scritte a mano. Si applicano le regole dell'ADR 0011.
+
+  ---
+
+  ## Decisioni prese in pianificazione (2026-10-29)
+
+  - **`ups.alarm` fuori da US-074 (decisione dell'utente).** Le sei righe `ups.alarm` (`mge-hid.c:2155-2160`) restano commentate. Una spec nuova costruirà `ups.alarm` (righe vendor più bit di stato, come `ups_alarm_set()`) e i token OFF/TRIM/BOOST/BYPASS di `ups.status`, per tutti i driver.
+  - **`ups.start.auto` come upstream (decisione dell'utente).**
+    - `shutdown.return` imposta `ups.start.auto=yes` e `shutdown.stayoff` imposta `ups.start.auto=no` prima della sequenza, solo quando la variabile esiste; il risultato si ignora, come fa upstream.
+    - È una scrittura permanente sull'UPS, da citare nelle note. Sul 3S non cambia nulla, perché non ha la variabile.
+  - **`UpsCommands.h` invariato (criterio della spec).**
+    - Le righe comando senza nome nel catalogo si copiano nella tabella ma non entrano in LIST CMD: `beeper.on`/`beeper.off` (alias upstream di `beeper.enable`/`disable`), `outlet.N.load.on/off`, `bypass.start/stop`, `experimental.ecomode.*`, `experimental.essmode.*`.
+    - Le due righe `experimental.bypass.ecomode.*` usano la funzione con stato `eaton_input_eco_mode_auto_on_off_info` di US-070: restano commentate insieme alle tre variabili bypass/ECO.
+  - **Deviazioni dei comandi che restano:**
+    - `beeper.toggle` (estensione del progetto);
+    - `shutdown.default` (sequenza di `upsdrv_shutdown()`);
+    - default di `load.off.delay`/`load.on.delay` uguale a `ups.delay.*` configurato (US-058) invece del `dfl` della riga (20/30): oggi coincidono, ma un `SET VAR` dell'utente vince;
+    - LIST CMD con i comandi beeper solo se `ups.beeper.status` è noto e il beeper è controllabile;
+    - `beeper.mute` solo se 3 sta nel campo (`fitsField`).
+  - **`ups.realpower`.** La stima di `UPSData::updateRealPower()` (60% della potenza apparente) non vale più per i driver che legano una riga `ups.realpower`. Sugli Eaton senza ActivePower la sostituisce `eaton_compute_realpower_info` (`mge-hid.c:1404-1431`): `round(load × 0,01 × nominal × powerfactor)`, con powerfactor da `output.powerfactor` o 0,80. Sul 3S passa da 21 a 28 W.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Conversioni e righe comando (`NutTable.h`)
+
+  - **Lookup verbatim:**
+    - `kUpsType` (`mge_upstype_conversion`), `kOnOff` (`on_off_info`, `usbhid-ups.c:525`);
+    - `kOutletProtection` (`eaton_outlet_protection_status_info`) e `kOutletEco` (`outlet_eco_yes_no_info`, `mge-hid.c:903`);
+    - `kBeeperInfo` (`beeper_info`, `usbhid-ups.c:512`: 1 disabled, 2 enabled, 3 muted).
+  - **Conversioni:**
+    - `Conv::MgePowerFactor`: `%.2f` di v/100;
+    - `Conv::EatonComputeRealpower`: legge `ups.load`, `ups.power.nominal` e `output.powerfactor` da `UPSData` senza allocare (`find()`); DEFER se mancano i primi due; `lround`, `%.0f`;
+    - entrambe con `staticText` o con il confronto prima di assegnare, come stabilito nel rework di US-073.
+  - **Righe comando (`HU_TYPE_CMD`):** `isCommandRow(info)`.
+    - `bind()` le lega come le altre ma le lascia fuori da `resolve()`, cioè non entrano nella regola INIT.
+    - `onValue()` le ignora, e non vengono mai pubblicate.
+    - `writableVariables()` e `planSet()` non le vedono, perché `info_flags` è 0 e i nomi non sono variabili.
+  - **`GenericDriver::publishNutRows()`:** chiama `updateRealPower()` solo se la tabella non lega una riga `ups.realpower`.
+
+  ### 2. Righe di `mgeHid2Nut()`
+
+  Nell'ordine upstream, al posto dei commenti "row of US-074":
+  - **UPS page:** 2062 `ups.efficiency`, 2075-2077 `ups.beeper.status`, 2079-2091 potenze (`ups.power*`, `ups.L*`, `ups.realpower*`, compresa la 2087 con `EatonComputeRealpower` e dfl "-1"), 2103 `ups.type`.
+  - **Input page:** 2163-2177, più le RW che ci sono già, 2179-2198.
+  - **Bypass page:** 2201-2215 e 2222 (RW, già presente); 2218-2219 restano escluse per US-070.
+  - **Output page:** 2225-2241, con la 2232 RW già presente.
+  - **Outlet page:** 2246-2320, dove i RW e gli HU_FLAG_ABSENT ci sono già.
+  - **Comandi:** 2326-2367; 2361-2363 escluse per US-070.
+  - **Commenti:** `ups.alarm` (2155-2160) come "row of the ups.alarm spec"; 2373 resta esclusa (US-070).
+
+  I percorsi vendor si traducono con `mge_usage_lkp`, per esempio Efficiency `0xFFFF0086`, ConverterType `0xFFFF0041`, OutletID e Status `0xFFFF00E9`, iDesignator, ECOControl, SwitchOnControl/SwitchOffControl, Inverter `0xFFFF0014`. I nomi standard vengono da `NUTUsages.h`. Gli indici `[N]` sono quelli upstream.
+
+  ### 3. Comandi dalla tabella
+
+  - **Driver.** `IUPSDriver::commandTable(size_t& n)`, con default `nullptr`. `EatonDriver` restituisce `mgeHid2Nut()`. Le tabelle sono dati statici, quindi il puntatore resta valido anche dopo che il driver è stato cancellato.
+  - **Porta.** `IHidControlPort::commandTable(size_t& n)`, con default `nullptr`; `USBHostUPS` lo implementa sotto `_mutex`, come `commandAllowList()`.
+  - **`CommandCatalog`:** le funzioni `build()`, `resolveWrite()` e `resolveShutdownSteps()` ricevono `(const NutTable::HidInfo* table, size_t n)`. Con `nullptr` il comportamento è quello di oggi (gruppi e codici APC). Con una tabella:
+    - `cmdField(table, n, usages, name, dfl)` restituisce la prima riga `HU_TYPE_CMD` con quel nome il cui percorso (`pathMatches`, con gli indici) ha un usage FEATURE, cioè `find_nut_info` con `hiddata` scrivibile;
+    - **disponibilità:**
+      - righe dirette per `test.battery.*`, `load.off.delay`, `load.on.delay`, `shutdown.stop`, `shutdown.reboot` e `beeper.enable/disable/mute`;
+      - comandi derivati come `upsdrv_initinfo()` (`usbhid-ups.c:1642-1656`): `load.off` da `load.off.delay`, `load.on` da `load.on.delay`, `shutdown.return`/`stayoff` da entrambi;
+      - `beeper.toggle` con `beeper.enable` e `beeper.disable`, più `beeper_available`;
+      - `shutdown.default` come oggi; `shutdown_cmds`, `mute_allowed` e la lista consentita come oggi;
+    - **valori:**
+      - `test.*` e `beeper.mute` prendono `atol(dfl)` della riga;
+      - `shutdown.stop` prende -1 dal dfl, `shutdown.reboot` il dfl 10 oppure il parametro;
+      - `load.*.delay` prendono il ritardo configurato (deviazione US-058); i campi delle sequenze sono quelli delle righe `load.off.delay` e `load.on.delay`;
+      - il caso APC CS resta solo nel ramo senza tabella.
+  - **`HidControl`:**
+    - prende la tabella dalla porta e la passa a `CommandCatalog`;
+    - per `beeper.enable`, `beeper.disable` e `beeper.toggle` scrive il campo della riga (`IHidControlPort::setBeeperField(field, enable)`, che `USBHostUPS` implementa come `setBeeperLocked` con il campo dato al posto di `activeBeeper()`: stesse righe di log, stesso aggiornamento di `ups.beeper.status`); senza tabella si usa `setBeeper(enable)` come oggi;
+    - per `shutdown.return` e `shutdown.stayoff`, se `upsData()` ha `ups.start.auto`, chiama prima `setVariable(port, "ups.start.auto", "yes"/"no")` e ne ignora l'esito;
+    - ordine dei lock e pausa di 125 ms invariati.
+
+  ### 4. `EatonDriver`
+
+  - **Override:** `commandTable()`.
+  - **Mappature tolte:** outlet switch, `Flow.ConfigFrequency`, `ConverterType`.
+  - **Hook che restano:** gli ingressi del contesto (`iModel` e `Flow.[4].ConfigApparentPower`, nessuna pubblicazione), stringhe, quirk.
+  - **Percorsi generici superati:** si aggiungono tutte le mappature di `GenericDriver::decodeReport()` le cui chiavi sono ora righe: input/output voltage e frequency, le nominali, potenze e potenze nominali, `ups.beeper.status`, `input.transfer.*`. Restano solo le estensioni della regola 2: `ups.mfr.date` (ManufacturerDate, due percorsi) e `battery.mfr.date` (`Battery.ManufacturerDate`, `BatterySystem.Battery.Date`, `Battery.Date`).
+
+  ### 5. Differenze attese sul 3S (da confermare nel replay e sull'hardware)
+
+  - **Prese:** `outlet.1.switch` e `outlet.2.switch` diventano `outlet.1.status=on` (Outlet.[2] SwitchOn/Off). Il 3S non ha Outlet.[3], quindi non c'è `outlet.2.status`.
+  - **Nominali d'ingresso:** spariscono `input.voltage.nominal` e `input.frequency.nominal`, perché upstream le legge da Flow.[1], che il 3S non ha; i valori di oggi venivano da Flow.[4], cioè dall'uscita (regola 2). `output.frequency.nominal` resta.
+  - **Potenza:** `ups.realpower` passa da 21 a 28.
+  - **Nuove variabili** se legate: `outlet.id`, `outlet.switchable`, `outlet.1.id`, `outlet.1.switchable`, `outlet.1.protect.status`.
+  - **Invariati:** `ups.type`, `output.voltage`, `ups.power.nominal`, `ups.beeper.status`, `input.transfer.*`, LIST CMD e LIST RW.
+  - La Web UI ha già le descrizioni di `outlet.N.status`.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI nuova: niente mockup né video. La pagina UPS Telemetry usa `ups.realpower`, `ups.load`, `ups.type`, `ups.test.result`, `battery.charge`, `ups.beeper.status` e `ups.status`, che restano tutte. Gli e2e Playwright girano come regressione, e la prova finale sul 3S comprende la pagina.
+
+  - **`test_nut_table`:**
+    - le nuove conversioni, con valori upstream;
+    - `EatonComputeRealpower`: 5% × 700 VA × 0,8 = 28, `output.powerfactor` usato quando c'è, DEFER senza nominale;
+    - righe comando legate ma mai pubblicate né risolte;
+    - controllo strutturale esteso: nessuna riga `mge-hid.c` fra 2002 e 2375 senza riga o commento.
+  - **`test_command_catalog`:**
+    - con `mgeHid2Nut()` sui descriptor 3S e 5P l'elenco coincide con quello senza tabella di oggi;
+    - passi e valori uguali;
+    - `beeper.mute` su un campo a 1 bit non disponibile;
+    - `outlet.*` ed `experimental.*` mai elencati;
+    - `shutdown.reboot` dalla riga.
+  - **`test_hid_control`:**
+    - porta finta con tabella: `beeper.enable` scrive il campo della riga e non `activeBeeper()`;
+    - `shutdown.return` con `ups.start.auto` presente fa prima `planSet` di `ups.start.auto=yes`, poi i due passi con 125 ms in mezzo; con `stayoff` vale `no`; senza la variabile non c'è nessun `planSet`; un fallimento del set non blocca la sequenza;
+    - nessun lock tenuto durante le scritture.
+  - **`test_eaton_driver`:**
+    - `outlet.1.status` on/off;
+    - `ups.realpower` calcolato;
+    - `input.voltage.nominal` assente con il solo Flow.[4];
+    - `ups.type`;
+    - `ups.beeper.status` dalla tabella;
+    - nessuna chiave scritta da mappature generiche superate.
+  - **`test_record_replay`:**
+    - elenco delle righe legate su 3S e 5P, ricavato a mano dai descriptor (dumper delle usage come in US-073) e da `mge-hid.c`;
+    - valori e differenze nel commento;
+    - LIST CMD e LIST RW invariati;
+    - `expected_ups_data` della fixture 3S aggiornata (`outlet.1.status`, niente `outlet.N.switch`, niente `input.*.nominal`, `ups.realpower` 28).
+  - **Mutazioni:**
+    - togliere un comando derivato;
+    - far scrivere il beeper su `activeBeeper()`;
+    - togliere `ups.start.auto`.
+
+    Ciascuna mutazione deve far fallire almeno un test.
+  - **Regressione e hardware:** suite completa, e2e, build. Poi OTA sul 3S:
+    - `nut_snapshot.py` con il diff dalla prova di US-073;
+    - `beeper.toggle` due volte, `shutdown.stop`, SET VAR `battery.charge.low` andata e ritorno;
+    - System Log invariato;
+    - pagina Telemetry controllata dall'utente.
+
+  ---
+
+  ## Rischi e note
+
+  - **Fixture 5P solo descriptor:** l'elenco dei comandi senza `ups.beeper.status` resta senza beeper, come oggi.
+  - **Righe comando duplicate:** `beeper.mute`, `beeper.disable` e `beeper.enable` hanno due o tre righe; vince la prima con un usage FEATURE, in ordine di tabella (`find_nut_info`).
+  - **Non-Eaton:** senza tabella dei comandi, `HidControl` e `CommandCatalog` fanno esattamente quello di oggi; lo verificano `test_command_catalog` e il replay delle 21 fixture non Eaton.
+  - **Note di rilascio v1.11.1:** vanno aggiunte le differenze del 3S, `ups.start.auto` e `ups.realpower` con powerfactor 0,8.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-29_
+
+  ---
+
+  ## Rework (review del 2026-10-29)
+
+  La review ha accettato il comportamento, provato sull'Eaton 3S: diff `upsc` atteso, comandi, SET VAR e pagina Telemetry. Ha chiesto il test di copertura che la strategia di test prevedeva ("controllo strutturale esteso: nessuna riga `mge-hid.c` fra 2002 e 2375 senza riga o commento") e che non era stato scritto: la copertura era verificata solo con uno script fuori dal repo.
+
+  **Correzione.** Un test nativo in `test/test_nut_table`:
+  - legge `nut_repo/drivers/mge-hid.c` e `lib/USBHostUPS/src/NutTable.h` (i test nativi girano dalla radice del progetto, come per le fixture);
+  - ricava le righe di `mge_hid2nut` senza numeri fissi: dalla riga dopo `static hid_info_t mge_hid2nut[]` fino al terminatore `{ NULL, 0, 0, NULL...`, conta ogni riga che comincia con `{ "`, anche dentro `/* */` o `#if 0`;
+  - raccoglie da `mgeHid2Nut()` (dal suo `inline const HidInfo* mgeHid2Nut` al successivo `inline const HidInfo* apcHid2Nut`) tutti i riferimenti `mge-hid.c:N` e gli intervalli `mge-hid.c:N-M`.
+
+  Due controlli:
+  1. ogni riga upstream è citata almeno una volta; il messaggio indica le righe mancanti;
+  2. ogni numero citato corrisponde a una riga upstream, così una citazione rimasta indietro dopo un aggiornamento di `mge-hid.c` fa fallire il test.
+
+  Il test è scritto come helper riusabile (`checkTableCoverage(file, table_name, function_name, next_function)`), così le prossime migrazioni (US-075, US-076, US-106) potranno chiamarlo sulle loro tabelle.
+
+  **Mutazioni:** togliere da `mgeHid2Nut()` il commento di una riga esclusa (per esempio `ups.alarm` 2155) e cambiare un numero citato in uno che non è una riga upstream: devono far fallire il test.
+tasks:
+  - id: TASK-01
+    title: 'NutTable: conversioni UPS/Output/Outlet, righe comando, stima di ups.realpower'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al motore ciò che serve alle righe restanti di mge-hid.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h`: `Conv`, `staticText`, `decode`, `isInternalRow`, `bind`, `resolve`, `onValue`, `finishInit`;
+      - `lib/USBHostUPS/src/GenericDriver.cpp`: `publishNutRows`;
+      - `nut_repo/drivers/usbhid-ups.c:512-529` (`beeper_info`, `on_off_info`);
+      - `nut_repo/drivers/mge-hid.c`: 737-741 (powerfactor), 765-771 (`upstype`), 903-907 (`outlet_eco`), 1398-1431 (`compute_realpower`), 1560 (`outlet_protection`).
+
+      **Modifica:**
+      1. Lookup verbatim: `kUpsType`, `kOnOff`, `kOutletProtection`, `kOutletEco`, `kBeeperInfo`, ciascuna con il nome upstream nel commento.
+      2. Nuove voci di `Conv`:
+         - `MgePowerFactor`: `%.2f` di v/100;
+         - `EatonComputeRealpower`: con `data` nullo, o senza `ups.load` o `ups.power.nominal` in `data->find()`, DEFER, come il NULL upstream; altrimenti `pf = output.powerfactor` (`strtod`) oppure 0.80, poi `lround(load*0.01*nominal*pf)` formattato `%.0f`. Commento con la riga upstream.
+      3. `inline bool isCommandRow(const HidInfo& i) { return i.hidflags & HU_TYPE_CMD; }`:
+         - in `resolve()` saltale come le righe interne;
+         - in `bind()` lasciale PENDING (non servono ruoli);
+         - in `onValue()` `return` subito;
+         - in `finishInit()` saltale;
+         - `GenericDriver::publishNutRows()` le salta.
+      4. In `GenericDriver::publishNutRows()`, `updateRealPower()` solo se nessuna riga legata ha nome `ups.realpower` (calcolalo una volta in `bindNutTable()` in un bool `_nut_has_realpower`).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog -f test_generic_driver -f test_eaton_driver` verde.
+
+      **Fatto:** API pronta, nessuna riga nuova in tabella.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — lookup, conversioni, `isCommandRow`
+      - lib/USBHostUPS/src/GenericDriver.h / .cpp — righe comando in `publishNutRows`, `_nut_has_realpower`
+
+      ## Criteri di Completamento
+      - [ ] Le quattro suite indicate verdi
+      - [ ] Nessuna String costruita da `EatonComputeRealpower` senza dati (DEFER prima di formattare)
+    ref: TASK-01
+  - id: TASK-02
+    title: Test delle nuove conversioni e delle righe comando
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire TASK-01 con attese ricavate da upstream.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp`.
+
+      **Modifica:** test nuovi:
+      - `kUpsType` (1 → `offline / line interactive`, 5);
+      - `kOnOff`, `kOutletProtection`, `kOutletEco`, `kBeeperInfo` (3 → `muted`);
+      - `MgePowerFactor` (95 → `0.95`);
+      - `EatonComputeRealpower`:
+        - `ups.load=5`, `ups.power.nominal=700` → `28`;
+        - con `output.powerfactor=0.60` → `21`;
+        - senza nominale → DEFER;
+        - con `data` nullo → DEFER;
+      - una riga `HU_TYPE_CMD` legata resta PENDING dopo `onValue` e `finishInit` e non diventa mai ACTIVE con un valore; `resolve` non la mette in gruppo con una variabile omonima.
+
+      Registra i test in `main()`.
+
+      **Verifica:** `pio test -e native -f test_nut_table` verde.
+
+      **Fatto:** test verdi.
+
+      **Blocchi:** se un'attesa differisce dal codice upstream, vale upstream: correggi TASK-01.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde con i casi elencati
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Righe restanti di mge_hid2nut: UPS page, Input, Bypass, Output, Outlet, comandi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `mgeHid2Nut()` con tutte le righe di `mge_hid2nut` da 2006 a 2373, nell'ordine upstream. Le uniche escluse, con un commento, sono `ups.alarm` (spec a parte), le righe US-070 (2218, 2219, 2361-2363, 2373), i blocchi `#if 0` e i commenti upstream.
+
+      **Leggi:**
+      - `nut_repo/drivers/mge-hid.c` righe 2062-2103 e 2155-2373, con la tabella dei nomi alle righe 1570-1730;
+      - `lib/USBHostUPS/src/NUTUsages.h`;
+      - le righe esistenti di `mgeHid2Nut()`.
+
+      **Modifica:**
+      1. Sostituisci i commenti "row of US-074" (2062, 2075-2077, 2079-2091, 2103) con le righe. Conversioni:
+         - `beeper_info` → `Lookup kBeeperInfo`;
+         - `eaton_compute_realpower_info` → `Conv::EatonComputeRealpower`, dfl `"-1"`;
+         - `mge_upstype_conversion` → `Lookup kUpsType`.
+      2. Sostituisci `// ups.alarm (mge-hid.c:2155-2160): rows of US-074...` con `// ups.alarm (mge-hid.c:2155-2160): rows of the ups.alarm spec, the firmware does not build ups.alarm yet`.
+      3. Input page 2163-2177 e Bypass page 2201-2215: le RO nuove, nell'ordine, accanto alle RW che ci sono già (2179-2198, 2222). `input.bypass.switch.on/off` restano commentate.
+      4. Output page 2225-2241: `mge_powerfactor_conversion` → `Conv::MgePowerFactor`; la 2232 resta.
+      5. Outlet page 2246-2320: RO nuove, con le RW e ABSENT che ci sono già. Conversioni:
+         - `on_off_info` → `kOnOff`;
+         - `eaton_outlet_protection_status_info` → `kOutletProtection`;
+         - `outlet_eco_yes_no_info` → `kOutletEco`;
+         - `stringid_conversion` → `StringId`;
+         - `yes_no_info` → `kYesNo`;
+         - `pegasus_yes_no_info` → `PegasusYesNo`.
+      6. Comandi 2326-2367: `{ name, 0, 0, path, "<dfl>", HU_TYPE_CMD, Conv::Number, nullptr, 0 }`. `DEFAULT_OFFDELAY`/`DEFAULT_ONDELAY` diventano `"20"`/`"30"`, con il commento "usbhid-ups.h". Le 2361-2363 restano commentate (US-070).
+      7. Traduzioni dei percorsi da verificare una per una: Efficiency `0xFFFF0086`; ConverterType `0xFFFF0041`; Outlet Status `0xFFFF00E9`; ECOControl, iDesignator, SwitchOnControl, SwitchOffControl, LowVoltageTransfer… (quelle che `NUTUsages.h` non nomina, prese da `mge_usage_lkp`); `Phase.[12]` e simili come indice 12; Inverter `0xFFFF0014`.
+
+      **Verifica:** `pio test -e native -f test_nut_table -f test_rw_catalog` verde. Controllo con `grep -o 'mge-hid.c:2[0-3][0-9][0-9]'`: ogni riga upstream da 2006 a 2373 compare come riga o come commento.
+
+      **Fatto:** tabella completa.
+
+      **Blocchi:** un percorso non traducibile resta commentato con il motivo, da segnalare nella review.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — righe di `mgeHid2Nut()`
+
+      ## Criteri di Completamento
+      - [ ] Ogni riga upstream 2006-2373 presente come riga o come commento
+      - [ ] `test_rw_catalog` verde: le RW restano 55
+    ref: TASK-03
+  - id: TASK-04
+    title: 'CommandCatalog: elenco e passi dei comandi da una tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `build()`, `resolveWrite()` e `resolveShutdownSteps()` funzionano anche con una tabella di righe `HU_TYPE_CMD`; senza tabella resta il comportamento di oggi.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/CommandCatalog.h` (tutto);
+      - `nut_repo/drivers/usbhid-ups.c:1640-1656` (`initinfo`), `instcmd` (circa 1300) e `find_nut_info`.
+
+      **Modifica:**
+      1. `inline const HIDUsageDef* cmdField(const NutTable::HidInfo* t, size_t n, const std::vector<HIDUsageDef>& usages, const char* name, const char** dfl)`: la prima riga con `info_type == name` e `HU_TYPE_CMD` per cui esiste un usage FEATURE con `NutTable::pathMatches(u, row.hidpath)`. Restituisce l'usage e il dfl della riga.
+      2. `build(..., const NutTable::HidInfo* table = nullptr, size_t n_table = 0)`. Con una tabella:
+         - `test.battery.start.quick/deep/stop`, `load.off.delay`, `load.on.delay`, `shutdown.stop`, `shutdown.reboot`: riga presente;
+         - `load.off`/`load.on`: righe `.delay`;
+         - `shutdown.return`/`stayoff`: entrambe;
+         - `beeper.enable`/`disable`: riga presente e `beeper_available`;
+         - `beeper.toggle`: entrambe e `beeper_available`;
+         - `beeper.mute`: riga presente, `fitsField(field,3)`, `mute_allowed` e `beeper_available`;
+         - `test.battery.start` e `test.panel.*`: riga presente;
+         - `shutdown.default`: `reboot || shutdown`;
+         - `shutdown_cmds` e `allow` come oggi.
+
+         Solo nomi del catalogo `UpsCommands.h`, nel suo ordine.
+      3. `resolveWrite(..., table, n)`: con una tabella, per `test.*` e `beeper.mute` usa `cmdField` e `atol(dfl)`.
+      4. `resolveShutdownSteps(..., table, n)`: con una tabella:
+         - `sd = cmdField("load.off.delay")`, `st = cmdField("load.on.delay")`;
+         - `shutdown.stop` scrive il `dfl` di `cmdField("shutdown.stop")`;
+         - `shutdown.reboot` usa il campo della sua riga, default `atol(dfl)`;
+         - nessun caso APC CS.
+
+         Il resto (parametri, `fitsField`, `kNoDelay`, sequenze, ritardi configurati) non cambia.
+      5. Commenti: il nuovo ramo segue `find_nut_info`/`instcmd`; le deviazioni dei comandi elencate nel piano.
+
+      **Verifica:** `pio test -e native -f test_command_catalog -f test_hid_control -f test_record_replay` verde, perché nessun chiamante passa ancora una tabella.
+
+      **Fatto:** nuovo ramo presente, vecchio invariato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/CommandCatalog.h — `cmdField`, rami con tabella
+
+      ## Criteri di Completamento
+      - [ ] Le tre suite verdi senza modifiche
+      - [ ] Il ramo senza tabella è identico a prima (diff: solo parametri aggiunti con default)
+    ref: TASK-04
+  - id: TASK-05
+    title: Test di CommandCatalog con la tabella mge
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che per gli Eaton la tabella dà gli stessi comandi e gli stessi valori di oggi, salvo quanto dice upstream.
+
+      **Leggi:** `test/test_command_catalog/test_main.cpp` (helper e fixture), `test/test_record_replay/FixtureReplayRunner.h` (come caricare un descriptor).
+
+      **Modifica:** test nuovi:
+      1. Descriptor del 3S e del 5P caricati dalle fixture: `build(..., mgeHid2Nut)` restituisce gli stessi nomi di `build(...)` senza tabella, con `beeper_available` vero e poi falso.
+      2. `resolveShutdownSteps` con la tabella sul 3S, per ognuno di `load.off`, `load.on`, `load.off.delay` (con e senza parametro), `load.on.delay`, `shutdown.stop`, `shutdown.return`, `shutdown.stayoff`: stessi campi e valori del ramo senza tabella.
+      3. `resolveWrite("beeper.mute")` sul 3S: campo `UPS.BatterySystem.Battery.AudibleAlarmControl` (prima riga, 2337), valore 3. Con un descriptor sintetico a 1 bit `beeper.mute` non è elencato.
+      4. Un descriptor sintetico con `UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown` e `UPS.PowerConverter.Input.[5].Switchable` non elenca `outlet.1.load.off` né `experimental.*`, perché non stanno in `UpsCommands.h`.
+      5. `shutdown.reboot` con `PowerSummary.DelayBeforeReboot`: valore 10 dal dfl della riga 2332, oppure il parametro.
+
+      **Verifica:** `pio test -e native -f test_command_catalog` verde. Mutazione: togliere `load.off` derivato deve far fallire il caso 1.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** se 3S o 5P differiscono dal ramo vecchio per un motivo upstream, scrivilo nel test e nella review, senza forzare l'uguaglianza.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-5 verdi
+      - [ ] La mutazione indicata colta
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Porta e HidControl: tabella dei comandi, campo del beeper, ups.start.auto'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** per i driver con tabella, `HidControl` usa le righe; beeper e `shutdown.return`/`stayoff` si comportano come upstream.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/HidControl.h`, `IHidControlPort.h`, `IUPSDriver.h` (`commandAllowList`);
+      - `lib/USBHostUPS/src/USBHostUPS.h` e `.cpp` (`commandAllowList`, `setBeeper`, `setBeeperLocked` alle righe 800-860);
+      - `nut_repo/drivers/usbhid-ups.c`, `instcmd`: rami `shutdown.return`/`stayoff`.
+
+      **Modifica:**
+      1. `IUPSDriver`: `virtual const NutTable::HidInfo* commandTable(size_t& n) const { n = 0; return nullptr; }`. Commento: tabella statica, valida anche dopo la cancellazione del driver.
+      2. `IHidControlPort`:
+         - `virtual const NutTable::HidInfo* commandTable(size_t& n) const { n = 0; return nullptr; }`;
+         - `virtual bool setBeeperField(const HIDUsageDef& field, bool enable) { return false; }`.
+      3. `USBHostUPS`:
+         - `commandTable()` sotto `_mutex`, come `commandAllowList()`;
+         - `setBeeperField()` usa lo stesso `_op_mutex` di `setBeeper()` e chiama `setBeeperLocked(enable, &field)`;
+         - `setBeeperLocked(bool enable, const HIDUsageDef* field = nullptr)` usa `field` al posto di `CommandCatalog::activeBeeper()` quando è dato, cercando l'item Feature/Output dello stesso percorso come fa `activeBeeper()`;
+         - log e aggiornamento di `ups.beeper.status` invariati.
+      4. `HidControl`:
+         - `supportedCommands` passa `hid->commandTable(n)` a `build`;
+         - `executeCommand` la passa a `resolveWrite` e `resolveShutdownSteps`;
+         - beeper: con la tabella, `enable`/`disable`/`toggle` prendono il campo con `cmdField("beeper.enable"/"beeper.disable")` sotto `PortLock` e poi chiamano `hid->setBeeperField(field, enable)` senza lock; senza tabella `port.setBeeper()` come oggi;
+         - `shutdown.return`/`stayoff`: prima dei passi, se `port.upsData().hasKey("ups.start.auto")` letto sotto `PortLock`, chiama `setVariable(port, "ups.start.auto", return ? "yes" : "no")` e ignora il risultato. Commento con `usbhid-ups.c instcmd` e la decisione del 2026-10-29.
+      5. Ordine dei lock (`_op_mutex` poi `_mutex`, ADR 0008), pausa di 125 ms e messaggi invariati.
+
+      **Verifica:** `pio test -e native -f test_hid_control -f test_nut_server -f test_web_api -f test_usb_host_interface -f test_ups_control_port` verde senza modifiche.
+
+      **Fatto:** con `commandTable` nullo non cambia nulla.
+
+      **Blocchi:** se `setBeeperLocked` con un campo dato non trova l'item scrivibile, restituisci false senza scrivere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — `commandTable`
+      - lib/USBHostUPS/src/IHidControlPort.h — `commandTable`, `setBeeperField`
+      - lib/USBHostUPS/src/USBHostUPS.h / .cpp — implementazioni
+      - lib/USBHostUPS/src/HidControl.h — uso della tabella, beeper, `ups.start.auto`
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi senza modifiche
+      - [ ] Nessun lock tenuto attorno a `setBeeperField`, `writeUsage` e `setVariable`
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di HidControl con la tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare il ramo con tabella di `HidControl` su una porta finta.
+
+      **Leggi:** `test/test_hid_control/test_main.cpp`: porta finta con la profondità del lock, registro delle scritture, `planSet`.
+
+      **Modifica:**
+      1. Estendi la porta finta con `commandTable()` (restituisce `mgeHid2Nut` quando un flag è attivo) e `setBeeperField()`, che registra il campo, il valore e la profondità del lock.
+      2. Usage in stile 3S (Battery.AudibleAlarmControl prima di PowerSummary.AudibleAlarmControl, `PowerSummary.DelayBeforeShutdown`/`Startup`) e casi:
+         - `beeper.enable` usa `setBeeperField` con il campo Battery.AudibleAlarmControl e non `setBeeper`;
+         - `beeper.toggle` da `disabled`;
+         - `shutdown.return` con `ups.start.auto` nei dati: `planSet(ups.start.auto, yes)` prima dei due `writeUsage`, che restano separati da 125 ms;
+         - `shutdown.stayoff`: `no`;
+         - senza `ups.start.auto` nessun `planSet`;
+         - un `planSet` che restituisce `FAILED` non ferma la sequenza;
+         - profondità del lock a 0 durante tutte le scritture;
+         - con `commandTable` nullo i test esistenti restano identici.
+      3. Mutazioni (prova e ripristina):
+         - beeper via `setBeeper` nel ramo con tabella;
+         - rimozione di `ups.start.auto`.
+
+         Devono far fallire almeno un test ciascuna.
+
+      **Verifica:** `pio test -e native -f test_hid_control` verde.
+
+      **Fatto:** test verdi, mutazioni colte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_hid_control/test_main.cpp — porta finta estesa, test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi elencati verdi
+      - [ ] Due mutazioni colte
+    ref: TASK-07
+  - id: TASK-08
+    title: 'EatonDriver: comandi dalla tabella, nessuna mappatura a mano'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio della spec "EatonDriver non ha più mappature scritte a mano".
+
+      **Leggi:** `lib/USBHostUPS/src/EatonDriver.{h,cpp}`, `lib/USBHostUPS/src/GenericDriver.cpp` (tabella delle mappature di `decodeReport`).
+
+      **Modifica:**
+      1. `EatonDriver.h`: `const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::mgeHid2Nut(n); }`.
+      2. `EatonDriver.cpp`:
+         - togli le mappature outlet switch, `UPS.Flow.ConfigFrequency` e `UPS.PowerConverter.ConverterType`;
+         - restano le due di contesto (`kIModelPath`, `UPS.Flow.ConfigApparentPower`), con il commento "context inputs, never published".
+      3. `kSupersededGenericPaths`: aggiungi tutti i percorsi della tabella `mappings` di `GenericDriver::decodeReport()` che non ci sono già, tranne quelli di `ups.mfr.date` (`UPS.PowerSummary.ManufacturerDate`, `UPS.ManufacturerDate`) e di `battery.mfr.date` (`UPS.Battery.ManufacturerDate`, `UPS.BatterySystem.Battery.Date`, `UPS.Battery.Date`), che restano per la regola 2. Raggruppali con un commento per chiave.
+      4. Aggiorna il commento ADR 0003 in testa: tutte le variabili e i comandi vengono da `mgeHid2Nut()`.
+
+      **Verifica:** `pio test -e native -f test_eaton_driver`. Le asserzioni su `outlet.N.switch`, `input.voltage.nominal`, `ups.realpower` e `input.frequency.nominal` si aggiornano in TASK-09: annota quali falliscono.
+
+      **Fatto:** in `EatonDriver.cpp` non c'è più nessun `d.set(`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EatonDriver.h — `commandTable`
+      - lib/USBHostUPS/src/EatonDriver.cpp — mappature tolte, percorsi superati
+
+      ## Criteri di Completamento
+      - [ ] `grep -c 'd.set(' lib/USBHostUPS/src/EatonDriver.cpp` = 0
+      - [ ] Ogni percorso di `kSupersededGenericPaths` esiste nella tabella di `GenericDriver::decodeReport` (controllo con script come in US-073)
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Test di EatonDriver: prese, potenza, nominali, beeper'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare le righe nuove sul driver Eaton.
+
+      **Leggi:** `test/test_eaton_driver/test_main.cpp` (`nutField`, `feed`, `decodeAll`).
+
+      **Modifica:**
+      1. Aggiorna i test che leggevano `outlet.N.switch`, `input.voltage.nominal`, `input.frequency.nominal` e `ups.realpower` (0,6). Ora valgono le righe upstream:
+         - il test `realpower_recalculated` usa `UPS.Flow.ConfigActivePower` senza indice: verifica che cosa dice upstream (`ups.realpower.nominal` è `Flow.[4].ConfigActivePower`) e adegua il descriptor del test con l'indice 4, scrivendo il motivo.
+      2. Casi nuovi:
+         - `Outlet.[2].PresentStatus.SwitchOn/Off` 1 e 0 → `outlet.1.status` on/off; mai `outlet.1.switch`;
+         - `PercentLoad=5` e `Flow.[4].ConfigApparentPower=700` → `ups.realpower=28`;
+         - con il solo `Flow.[4].ConfigVoltage=230` → `output.voltage.nominal` (dopo il contesto) e nessun `input.voltage.nominal`;
+         - `ConverterType 0xFFFF0041=2` → `ups.type=online`;
+         - `Battery.AudibleAlarmControl=1` → `ups.beeper.status=disabled`, dalla riga 2075;
+         - `Flow.[4].ConfigFrequency=50` → `output.frequency.nominal=50` e nessun `input.frequency.nominal`.
+
+      **Verifica:** `pio test -e native -f test_eaton_driver` verde.
+
+      **Fatto:** suite verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_eaton_driver/test_main.cpp — test aggiornati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi elencati verdi
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Replay Eaton 3S/5P: righe legate, valori, comandi, differenze'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio "elenco completo atteso per ogni fixture Eaton" e differenze nel test.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (blocco US-073), `test/fixtures/eaton/eaton_3s_vid0463_pidffff.json`, `nut_repo/drivers/mge-hid.c` righe 2002-2373.
+
+      **Modifica:**
+      1. Ricava a mano le righe legate da 3S e 5P. Usa un dumper delle usage come in US-073 (in scratchpad, non nel repo): `HIDParser` con i percorsi a indice. Aggiorna `NUT_ROWS_EATON_3S` e `NUT_ROWS_EATON_5P`, che ora contengono anche i nomi dei comandi legati, con un commento per ogni riga nuova (usage, report, riga `mge-hid.c`).
+      2. 3S:
+         - `expectedValues` con `outlet.1.status=on`, `ups.realpower=28`, `ups.type`, `output.frequency.nominal=50`, `ups.beeper.status=disabled`;
+         - nella fixture `expected_ups_data`: togli `outlet.1.switch`, `outlet.2.switch`, `input.voltage.nominal` e `input.frequency.nominal`; porta `ups.realpower` a 28; aggiungi `outlet.1.status`.
+      3. LIST CMD 3S e 5P invariati (`CMD_*`), LIST RW invariati.
+      4. Commento "Differenze US-074": aggiunte, rimosse, valori cambiati, ciascuna con la regola dell'ADR o la riga upstream.
+      5. Le altre fixture non devono cambiare.
+
+      **Verifica:** `pio test -e native -f test_record_replay` verde.
+
+      **Fatto:** replay verde con gli elenchi verificati a mano.
+
+      **Blocchi:** se il run differisce dall'elenco ricavato a mano, capisci quale dei due è sbagliato; non copiare l'output.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — elenchi, valori, differenze
+      - test/fixtures/eaton/eaton_3s_vid0463_pidffff.json — `expected_ups_data`
+
+      ## Criteri di Completamento
+      - [ ] Replay verde, tutte le fixture
+      - [ ] LIST CMD e LIST RW Eaton invariati
+    ref: TASK-10
+  - id: TASK-11
+    title: Note di rilascio v1.11.1 e commenti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le differenze di US-074 nelle note e nei commenti di testa.
+
+      **Leggi:** `docs/releases/v1.11.1.md`, `docs/releases/index.md`, il commento "Differenze US-074" del replay.
+
+      **Modifica:**
+      1. `docs/releases/v1.11.1.md`: aggiorna "Upgrade notes" con:
+         - Eaton 3S: `outlet.N.switch` → `outlet.1.status`; `input.voltage.nominal` e `input.frequency.nominal` non più pubblicate (erano i valori d'uscita); `ups.realpower` stimata come NUT, con fattore di potenza 0,8 invece di 0,6; nuove variabili `outlet.*`;
+         - tutti gli Eaton: `shutdown.return`/`stayoff` impostano `ups.start.auto` come NUT, quando c'è.
+
+         Aggiorna anche la riga del frontmatter, quella dell'indice e "Other changes" (comandi Eaton dalla tabella mge-hid).
+      2. `NutTable.h`: il commento sopra `mgeHid2Nut()` dice che la tabella è completa (US-073, US-074), salvo `ups.alarm` e US-070.
+      3. `python scripts/release_notes.py docs/releases/v1.11.1.md` senza errori.
+      4. Verifica che `data/www/bundle.js` abbia le descrizioni di `outlet.N.status`, `outlet.N.id`, `outlet.N.protect.status` e `ups.efficiency`; se una manca, aggiungila da `nut_repo/data/cmdvartab` e lancia `python scripts/embed_web.py`.
+
+      **Verifica:** script ok; `git diff data/www` vuoto o solo descrizioni.
+
+      **Fatto:** note aggiornate.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.11.1.md — differenze US-074
+      - docs/releases/index.md — riga aggiornata
+      - lib/USBHostUPS/src/NutTable.h — commento
+      - data/www/bundle.js — solo se manca una descrizione
+
+      ## Criteri di Completamento
+      - [ ] Note con tutte le differenze del replay
+      - [ ] `scripts/release_notes.py` ok
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa e build
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-07
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessuna regressione, firmware compilato.
+
+      **Leggi:** memoria di progetto: suite a blocchi da circa 12 (`test_hid_parser` e `test_powercom_driver` inclusi), link statico dei test nativi.
+
+      **Passi:**
+      1. Suite native complete a blocchi; annota il totale (base 740 più i test nuovi).
+      2. `npm run e2e`.
+      3. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: RAM e flash rispetto a 3e28944 (flash 2017593, RAM 54648).
+
+      **Verifica:** tutto verde.
+
+      **Fatto:** numeri annotati.
+
+      **Blocchi:** "program.exe: Accesso negato": cancella `.pio/build/native/program.exe`.
+
+      ## File Coinvolti
+      - (nessuno, salvo correzioni)
+
+      ## Criteri di Completamento
+      - [ ] Nativi ed e2e verdi
+      - [ ] Build ok con RAM/flash annotate
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Prova sull''Eaton 3S: valori, comandi, Web UI'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Descrizione
+      **Obiettivo:** criterio della spec "prova sull'Eaton 3S reale, comandi compresi (beeper, test, shutdown.stop)" e Web UI funzionante.
+
+      **Leggi:**
+      - memoria: IP `192.168.1.126`, UPS `eaton-3s-700`, credenziali da `C:\Users\pasquale\.esp32-nut-cred.json` (solo da script);
+      - script OTA, snapshot e azioni usati per US-073, in scratchpad e in `.pio/test_ups_control_v2/tools/ups_action.py`.
+
+      **Passi:**
+      1. Snapshot "prima" con il firmware di US-073 (`python scripts/nut_snapshot.py 192.168.1.126 eaton-3s-700 <out>`).
+      2. OTA (autorizzata dall'utente), attesa del ritorno di NUT, snapshot "dopo" e `diff`. Le differenze devono essere esattamente quelle del replay (`outlet.1.status`, nominali d'ingresso, `ups.realpower`, `outlet.*` nuove). `upscmd -l` e `upsrw` identici.
+      3. Comandi:
+         - `beeper.toggle` due volte via NUT (stato `enabled`, poi `disabled`, con le stesse righe di System Log di prima);
+         - `shutdown.stop` → OK;
+         - `SET VAR battery.charge.low` 25, poi di nuovo 20.
+
+         Il 3S non ha `Battery.Test`, quindi niente test della batteria: va annotato.
+      4. L'utente apre la pagina UPS Telemetry e conferma che i valori compaiono (Real Power 28 W).
+      5. System Log: nessun GET_REPORT fallito.
+
+      **Verifica:** diff con solo le differenze attese, comandi ok.
+
+      **Fatto:** esito annotato nella spec.
+
+      **Blocchi:** il passo 4 richiede l'utente; se la scheda non risponde, chiedi prima di riprovare.
+
+      ## File Coinvolti
+      - (nessuno)
+
+      ## Criteri di Completamento
+      - [ ] Diff NUT con solo le differenze attese
+      - [ ] beeper.toggle, shutdown.stop e SET VAR ok
+      - [ ] Pagina Telemetry confermata dall'utente
+    ref: TASK-13
+  - id: TASK-14
+    title: Test di copertura delle righe di mge_hid2nut in mgeHid2Nut()
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** review del 2026-10-29 (Rework Feedback su `test/test_nut_table/test_main.cpp`). Un test nativo verifica che ogni riga upstream di `mge_hid2nut` sia in `mgeHid2Nut()` come riga o come commento, e che non ci siano citazioni di righe inesistenti.
+
+      **Leggi:**
+      - `test/test_nut_table/test_main.cpp`: struttura, `main`, include;
+      - `nut_repo/drivers/mge-hid.c` righe 2002-2376 (inizio della tabella e terminatore);
+      - `lib/USBHostUPS/src/NutTable.h`: commenti `// mge-hid.c:N` dentro `mgeHid2Nut()`;
+      - `test/test_command_catalog/test_main.cpp` (`fixtureUsages`): come un test legge un file dal percorso relativo alla radice.
+
+      **Modifica:**
+      1. In `test/test_nut_table/test_main.cpp` aggiungi `#include <fstream>`, `<sstream>`, `<set>`, `<regex>` (o un parsing a mano se `<regex>` è lento da compilare) e un helper `static std::vector<std::string> readLines(const char* path)` con `TEST_FAIL` se il file non si apre.
+      2. Helper `static void checkTableCoverage(const char* upstream_file, const char* upstream_table, const char* source_file, const char* function_start, const char* function_end)`:
+         - **righe upstream:** trova la riga che contiene `upstream_table`; da lì, fino alla prima riga che contiene `{ NULL, 0, 0, NULL`, raccoglie i numeri (base 1) delle righe il cui testo, tolti spazi e un eventuale `/*`, comincia con `{ "`;
+         - **citazioni:** nel sorgente prende il testo fra `function_start` e `function_end` e raccoglie ogni `<basename>:N` e `<basename>:N-M`, con il nome del file upstream, per esempio `mge-hid.c`;
+         - **controllo 1:** ogni riga upstream ha una citazione; altrimenti `TEST_FAIL_MESSAGE` con l'elenco delle mancanti;
+         - **controllo 2:** ogni numero citato, compresi gli estremi degli intervalli, è una riga upstream; altrimenti `TEST_FAIL_MESSAGE` con l'elenco.
+      3. Test `test_mge_table_covers_every_upstream_row`, che chiama l'helper con `nut_repo/drivers/mge-hid.c`, `static hid_info_t mge_hid2nut[]`, `lib/USBHostUPS/src/NutTable.h`, `inline const HidInfo* mgeHid2Nut` e `inline const HidInfo* apcHid2Nut`. Commento: ADR 0011 regola 1, US-074 rework.
+      4. Registra il test in `main()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde.
+
+      **Mutazioni** (prova e ripristina), ognuna deve far fallire il test con un messaggio che cita la riga:
+      - (a) togli da `NutTable.h` la riga di commento di `ups.alarm (mge-hid.c:2155)`;
+      - (b) cambia un `mge-hid.c:2264` in `mge-hid.c:2263` (2263 è un commento upstream, non una riga);
+      - (c) togli una riga di dati con il suo commento.
+
+      **Fatto:** test verde, tre mutazioni colte.
+
+      **Blocchi:** se il test trova righe davvero mancanti o citazioni sbagliate, correggi `mgeHid2Nut()` (riga o commento con il motivo), non il test.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — helper `checkTableCoverage`, test nuovo
+
+      ## Criteri di Completamento
+      - [ ] `test_mge_table_covers_every_upstream_row` verde
+      - [ ] Le mutazioni (a), (b), (c) fanno fallire il test
+    ref: TASK-14
+  - id: TASK-15
+    title: Regressione dopo il rework
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-14
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il rework tocca solo un test, quindi basta confermare che la suite resta verde.
+
+      **Leggi:** memoria di progetto (suite native a blocchi).
+
+      **Passi:**
+      1. Suite native complete a blocchi; il totale atteso è 759 + 1.
+      2. Nessuna build né OTA: il firmware non cambia (`git diff --stat` del rework solo su `test/test_nut_table/test_main.cpp`).
+
+      **Verifica:** tutto verde.
+
+      **Fatto:** totale annotato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - (nessuno)
+
+      ## Criteri di Completamento
+      - [ ] Suite native verdi
+      - [ ] Il diff del rework tocca solo il test
+    ref: TASK-15

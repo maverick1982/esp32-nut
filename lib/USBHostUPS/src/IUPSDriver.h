@@ -84,6 +84,13 @@ public:
     virtual void setDriverSideValue(const char* name, const char* value) {}
 
     /**
+     * @brief A value the host set itself right after a write to the device (US-074): the
+     * beeper status after setBeeper(), before the report is read again. A driver whose NUT
+     * table owns the variable must keep it, or the table would write the old value back.
+     */
+    virtual void noteHostValue(const char* name, const char* value) {}
+
+    /**
      * @brief Forgets the value set with setDriverSideValue() (US-068): the HU_FLAG_ABSENT rows
      * named name go back to the dfl of the table, also at the next bind.
      *
@@ -165,6 +172,15 @@ public:
      * enable/disable/mute. test.battery.start is offered only through such a list.
      */
     virtual const char* const* commandAllowList() const { return nullptr; }
+
+    /**
+     * @brief NUT table whose HU_TYPE_CMD rows give the commands of the device (US-074).
+     *
+     * nullptr keeps the command catalog built on the HID usages (CommandCatalog groups). The
+     * tables are static data: the pointer stays valid after the driver is deleted, so the
+     * host can hand it to HidControl outside its lock.
+     */
+    virtual const NutTable::HidInfo* commandTable(size_t& n) const { n = 0; return nullptr; }
 
     /**
      * @brief True when the load.* and shutdown.* commands are offered (US-058).

@@ -3,6 +3,9 @@
 #include <string>
 #include "CommandCatalog.h"
 #include "DriverVarStore.h"
+#include "HIDParser.h"
+#include <fstream>
+#include <sstream>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -780,6 +783,128 @@ void test_default_delays_after_reset() {
     TEST_ASSERT_EQUAL_STRING("90", d.get("ups.delay.start").c_str());
 }
 
+// --- Commands from the mge-hid table (US-074) ---
+
+// Usages of a fixture's report descriptor (the "report_descriptor_hex" array)
+static std::vector<HIDUsageDef> fixtureUsages(const char* file, HIDParser& parser) {
+    std::ifstream f(file);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string text = ss.str();
+    size_t a = text.find("\"report_descriptor_hex\"");
+    size_t b = text.find(']', a);
+    std::vector<uint8_t> desc;
+    for (size_t p = text.find("0x", a); p != std::string::npos && p < b; p = text.find("0x", p + 2)) {
+        desc.push_back((uint8_t)strtol(text.substr(p + 2, 2).c_str(), nullptr, 16));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(desc.size() > 0, file);
+    parser.parseReportDescriptor(desc.data(), desc.size());
+    return parser.getUsages();
+}
+
+static void checkSameCommandsAsCatalog(const char* file) {
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages(file, parser);
+    size_t n;
+    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    for (bool beeper : { true, false }) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(names(CommandCatalog::build(u, beeper)).c_str(),
+            names(CommandCatalog::build(u, beeper, true, true, nullptr, mge, n)).c_str(), file);
+    }
+    // Same writes for every load / shutdown command, with and without a parameter
+    static const char* const cmds[] = { "load.off", "load.on", "load.off.delay", "load.on.delay", "shutdown.stop",
+                                        "shutdown.return", "shutdown.stayoff" };
+    for (const char* c : cmds) {
+        for (const char* param : { (const char*)nullptr, "45" }) {
+            std::vector<CommandCatalog::WriteStep> legacy, table;
+            auto r1 = CommandCatalog::resolveShutdownSteps(c, param, u, 20, 30, legacy);
+            auto r2 = CommandCatalog::resolveShutdownSteps(c, param, u, 20, 30, table, mge, n);
+            TEST_ASSERT_EQUAL_MESSAGE((int)r1, (int)r2, c);
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(stepsStr(legacy).c_str(), stepsStr(table).c_str(), c);
+        }
+    }
+}
+
+void test_mge_table_gives_same_commands_on_eaton_3s() {
+    checkSameCommandsAsCatalog("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json");
+}
+
+void test_mge_table_gives_same_commands_on_eaton_5p() {
+    checkSameCommandsAsCatalog("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json");
+}
+
+void test_mge_table_mute_on_first_row_field() {
+    // mge-hid.c:2337: beeper.mute on UPS.BatterySystem.Battery.AudibleAlarmControl, 3
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", parser);
+    size_t n;
+    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, mge, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.AudibleAlarmControl", def.path);
+    TEST_ASSERT_EQUAL(3, value);
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.enable", u, def, value, mge, n)); // via setBeeperField
+
+    // A 1-bit beeper cannot hold 3: no beeper.mute
+    HIDUsageDef bit = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03);
+    bit.bit_size = 1;
+    std::vector<HIDUsageDef> one = { bit };
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle",
+                             names(CommandCatalog::build(one, true, true, true, nullptr, mge, n)).c_str());
+}
+
+void test_mge_table_commands_outside_catalog_not_listed() {
+    // outlet.N.load.*, experimental.*, bypass.* and beeper.on/off are rows of mge-hid.c
+    // (2333-2334, 2347-2367) but not names of UpsCommands.h
+    std::vector<HIDUsageDef> u = {
+        mk("UPS.PowerConverter.Input.Switchable", 0x0084006c, 0x03),
+        mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03),
+    };
+    u[0].coll_index[2] = 6; // Input.[5]
+    HIDUsageDef outlet = mk("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x00840057, 0x03);
+    outlet.coll_index[2] = 3; // Outlet.[2]
+    u.push_back(outlet);
+    size_t n;
+    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
+                             names(CommandCatalog::build(u, true, true, true, nullptr, mge, n)).c_str());
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(mge, n, u, "outlet.1.load.off"));
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(mge, n, u, "experimental.ecomode.start"));
+}
+
+void test_mge_table_reboot_from_row() {
+    // mge-hid.c:2332: shutdown.reboot on PowerSummary.DelayBeforeReboot, default 10
+    std::vector<HIDUsageDef> u = { mk(RB, 0x00840055, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default",
+                             names(CommandCatalog::build(u, false, true, true, nullptr, mge, n)).c_str());
+    std::vector<CommandCatalog::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, mge, n));
+    TEST_ASSERT_EQUAL_STRING(RB "=10", stepsStr(steps).c_str());
+    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
+        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", "30", u, 20, 30, steps, mge, n));
+    TEST_ASSERT_EQUAL_STRING(RB "=30", stepsStr(steps).c_str());
+}
+
+void test_mge_table_mute_respects_declared_range() {
+    // A 2-bit beeper declared 1..2 cannot take 3: no beeper.mute (as muteField())
+    HIDUsageDef b = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03);
+    b.bit_size = 2;
+    b.logical_min = 1;
+    b.logical_max = 2;
+    std::vector<HIDUsageDef> u = { b };
+    size_t n;
+    const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle",
+                             names(CommandCatalog::build(u, true, true, true, nullptr, mge, n)).c_str());
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, mge, n));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -819,6 +944,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_resolve_plain_battery_test_writes_1);
     RUN_TEST(test_apply_default_delays);
     RUN_TEST(test_driver_var_store_json_round_trip);
+    RUN_TEST(test_mge_table_gives_same_commands_on_eaton_3s);
+    RUN_TEST(test_mge_table_gives_same_commands_on_eaton_5p);
+    RUN_TEST(test_mge_table_mute_on_first_row_field);
+    RUN_TEST(test_mge_table_commands_outside_catalog_not_listed);
+    RUN_TEST(test_mge_table_reboot_from_row);
+    RUN_TEST(test_mge_table_mute_respects_declared_range);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

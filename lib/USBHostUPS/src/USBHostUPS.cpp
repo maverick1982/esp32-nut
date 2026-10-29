@@ -798,7 +798,22 @@ bool USBHostUPS::setBeeper(bool enable) {
     return ok;
 }
 
-bool USBHostUPS::setBeeperLocked(bool enable) {
+bool USBHostUPS::setBeeperField(const HIDUsageDef& field, bool enable) {
+    // Same wait and lock order as setBeeper() (ADR 0008)
+    if (!_op_mutex || xSemaphoreTake(_op_mutex, pdMS_TO_TICKS(OP_WAIT_MS)) != pdTRUE) return false;
+    bool ok = setBeeperLocked(enable, &field);
+    xSemaphoreGive(_op_mutex);
+    return ok;
+}
+
+const NutTable::HidInfo* USBHostUPS::commandTable(size_t& n) const {
+    // Same lock as commandAllowList(): _driver is deleted under _mutex. The table is static.
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    n = 0;
+    return _driver ? _driver->commandTable(n) : nullptr;
+}
+
+bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     // Devices that ignore the beeper commands must not be written to at all
     if (_driver && !_driver->beeperControllable()) return false;
@@ -809,8 +824,20 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     bool shared_report = true;
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        // Feature/Output item of the active beeper path, as beeper.mute writes it
-        const HIDUsageDef* found = CommandCatalog::activeBeeper(_hid_parser.getUsages());
+        // Feature/Output item of the active beeper path, as beeper.mute writes it, or of the
+        // command row's field (US-074)
+        const HIDUsageDef* found = nullptr;
+        if (field) {
+            for (const auto& u : _hid_parser.getUsages()) {
+                if (strcmp(u.path, field->path) == 0 && memcmp(u.coll_index, field->coll_index, sizeof(u.coll_index)) == 0 &&
+                    (u.report_type == 0x03 || u.report_type == 0x02)) {
+                    found = &u;
+                    break;
+                }
+            }
+        } else {
+            found = CommandCatalog::activeBeeper(_hid_parser.getUsages());
+        }
         if (!found) {
             return false;
         }
@@ -855,6 +882,8 @@ bool USBHostUPS::setBeeperLocked(bool enable) {
     if (err == ESP_OK) {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         _ups_data.set("ups.beeper.status", enable ? "enabled" : "disabled");
+        // The driver's table row too, or the next report would write the old value back (US-074)
+        if (_driver) _driver->noteHostValue("ups.beeper.status", enable ? "enabled" : "disabled");
     }
 
     return err == ESP_OK;

@@ -67,16 +67,42 @@ void tearDown(void) {}
 // added. battery.charger.status stays unpublished: no ABMEnable, ABM unknown. ups.status
 // stays "OL"; ups.status.charging becomes 0 (it was 1): Charging is 1, but every walk applies
 // eaton_abm_check_chrg_fun again, and once battery.charge (0x06) is 100 it gives "!chrg".
+//
+// US-074 rows bound by the 3S, derived the same way: ups.beeper.status (2075-2076, Battery and
+// PowerSummary AudibleAlarmControl, FEATURE 0x20/0x1F), ups.power.nominal and ups.realpower
+// (2083, 2087: Flow.[4].ConfigApparentPower, 0x0D), ups.type (2103, ConverterType 0xFFFF0041,
+// 0x0C), output.voltage (2225, 0x0E), output.frequency.nominal (2240, Flow.[4], 0x0D),
+// outlet.id / outlet.switchable (2246, 2248: Outlet.[1], 0x0B / 0x0C), outlet.1.id,
+// outlet.1.switchable, outlet.1.status, outlet.1.protect.status (2260, 2262, 2264, 2265:
+// Outlet.[2], 0x0B / 0x19 / 0x02 / 0x07; 2268 on ACPresent too), and the command rows of
+// AudibleAlarmControl (beeper.off/on/mute/disable/enable, 2333-2342) and
+// DelayBeforeShutdown/Startup (load.off.delay, load.on.delay, shutdown.stop, 2329-2331).
+//
+// Differences US-074 (3S fixture): outlet.1.switch and outlet.2.switch become outlet.1.status
+// "on" (mge-hid.c:2264, ADR 0011 rule 2); input.voltage.nominal and input.frequency.nominal are
+// gone (upstream reads them from Flow.[1]; the 3S has Flow.[4] only, the output: rule 2);
+// ups.realpower 21 -> 28 (eaton_compute_realpower_info, powerfactor 0.80 instead of the 0.60
+// estimate); added outlet.id "0", outlet.switchable "yes", outlet.1.id "1", outlet.1.switchable
+// "no", outlet.1.protect.status "not protected", ups.type "offline / line interactive" (the old
+// hand mapping looked for "UPS.PowerConverter.ConverterType", a name HIDParser never gives to
+// the vendor usage 0xFFFF0041: ups.type was never published). Same output.voltage,
+// output.frequency.nominal, ups.power.nominal, ups.beeper.status, LIST CMD and LIST RW.
 #define NUT_ROWS_EATON_3S "BOOL battery.charge battery.charge.low battery.charger.status battery.charger.type.status " \
-    "battery.runtime battery.type device.country device.usb.version input.transfer.high input.transfer.low " \
-    "outlet.1.desc outlet.desc output.voltage.nominal ups.firmware ups.load ups.timer.shutdown ups.timer.start"
+    "battery.runtime battery.type beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country " \
+    "device.usb.version input.transfer.high input.transfer.low load.off.delay load.on.delay outlet.1.desc outlet.1.id " \
+    "outlet.1.protect.status outlet.1.status outlet.1.switchable outlet.desc outlet.id outlet.switchable " \
+    "output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop ups.beeper.status ups.firmware " \
+    "ups.load ups.power.nominal ups.realpower ups.timer.shutdown ups.timer.start ups.type"
 
 void test_replay_eaton_3s(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
-        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073) */ NUT_ROWS_EATON_3S,
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074) */ NUT_ROWS_EATON_3S,
         { { "ups.timer.start", "-1" }, { "ups.timer.shutdown", "-1" }, { "battery.runtime", "3360" },
           { "ups.load", "5" }, { "ups.status.ac_present", "1" }, { "ups.status.off", "0" },
-          { "ups.status.commfault", "0" }, { "ups.status.battvolthi", "0" }, { "ups.status.battvoltlo", "0" } },
+          { "ups.status.commfault", "0" }, { "ups.status.battvolthi", "0" }, { "ups.status.battvoltlo", "0" },
+          // US-074
+          { "outlet.id", "0" }, { "outlet.switchable", "yes" }, { "outlet.1.id", "1" }, { "outlet.1.switchable", "no" },
+          { "outlet.1.protect.status", "not protected" }, { "ups.type", "offline / line interactive" } },
         RW_EATON_3S, RW_EATON_3S);
 }
 
@@ -94,15 +120,28 @@ void test_replay_eaton_3s(void) {
 // battery.capacity.full no longer published (ADR 0011 rule 2), battery.voltage and
 // battery.voltage.nominal only for the 5P/9E/Pulsar M/Evolution series, battery.charger.status
 // and battery.charger.type added with ABM, RB when Battery.PresentStatus.Present is 0.
+//
+// US-074 rows bound by the 5P: input.voltage.nominal / input.frequency.nominal (2170, 2177:
+// Flow.[1]), ups.efficiency (2062, 0xFFFF0086), ups.power (2079), ups.realpower (2084
+// ActivePower, 2087), ups.power.nominal / ups.realpower.nominal (2083, 2091: Flow.[4]),
+// ups.type (2103), ups.beeper.status (2076, PowerSummary.AudibleAlarmControl), output.voltage,
+// output.current, output.frequency, output.frequency.nominal, output.powerfactor (2225, 2233,
+// 2238, 2240, 2241: PowerFactor 0xFFFF0069), outlet.1.status (2268, ACPresent: no
+// OutletSystem), and the command rows of Battery.Test, AudibleAlarmControl and
+// DelayBeforeShutdown/Startup. Descriptor only: no value to compare.
 #define NUT_ROWS_EATON_5P "BOOL battery.capacity battery.charge battery.charge.low battery.charge.restart " \
     "battery.charger.abm.status battery.charger.mode.status battery.charger.status battery.charger.type " \
     "battery.charger.type.status battery.protection battery.runtime battery.type battery.voltage " \
-    "battery.voltage.nominal device.country output.voltage.nominal ups.firmware ups.load ups.shutdown " \
-    "ups.start.reboot ups.test.interval ups.test.result ups.timer.shutdown ups.timer.start"
+    "battery.voltage.nominal beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country " \
+    "input.frequency.nominal input.voltage.nominal load.off.delay load.on.delay outlet.1.status output.current " \
+    "output.frequency output.frequency.nominal output.powerfactor output.voltage output.voltage.nominal " \
+    "shutdown.stop test.battery.start.deep test.battery.start.quick test.battery.stop ups.beeper.status " \
+    "ups.efficiency ups.firmware ups.load ups.power ups.power.nominal ups.realpower ups.realpower.nominal " \
+    "ups.shutdown ups.start.reboot ups.test.interval ups.test.result ups.timer.shutdown ups.timer.start ups.type"
 
 void test_replay_eaton_5p(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073) */ NUT_ROWS_EATON_5P,
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074) */ NUT_ROWS_EATON_5P,
         /* descriptor only: PowerSummary.DelayBeforeShutdown/Startup */ {}, RW_DELAYS, RW_DELAYS);
 }
 

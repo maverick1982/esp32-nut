@@ -39,6 +39,7 @@ public:
     NutTable::SetStatus planSet(const UPSData& data, const std::vector<HIDUsageDef>& usages,
                                 const char* name, const char* value, NutTable::SetPlan& plan) const override;
     void setDriverSideValue(const char* name, const char* value) override;
+    void noteHostValue(const char* name, const char* value) override;
     bool resetDriverSideValue(const char* name, String& value) override;
     void invalidateReport(uint8_t report_type, uint8_t report_id) override;
 
@@ -112,10 +113,12 @@ private:
     // Writes the values of the table rows and the internal ups.status.* keys that differ
     // from ups_data (US-073): nothing is rewritten when the value is the same
     void publishNutRows(UPSData& ups_data);
+    void publishRow(NutTable::Bound& b, UPSData& ups_data);
 
     std::vector<NutTable::Bound> _nut_rows;
     bool _nut_bound;
     bool _nut_init_done;                  // finishInit() applied after the first full poll
+    bool _nut_has_realpower;              // a table row owns ups.realpower: no estimate (US-074)
     size_t _nut_usage_count;
     // Values set for the HU_FLAG_ABSENT rows (name, value): applied again at every bind
     std::vector<std::pair<String, String>> _absent_overrides;

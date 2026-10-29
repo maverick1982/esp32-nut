@@ -125,7 +125,10 @@ enum class Conv : uint8_t {
     AbmChrgDischrg,       // eaton_abm_chrg_dischrg_info (mge-hid.c)
     EatonDischarging,     // eaton_discharging_info (mge-hid.c)
     EatonCharging,        // eaton_charging_info (mge-hid.c)
-    EatonConverterOnline  // eaton_converter_online_info (mge-hid.c)
+    EatonConverterOnline, // eaton_converter_online_info (mge-hid.c)
+    // US-074
+    MgePowerFactor,       // mge_powerfactor_conversion (mge-hid.c)
+    EatonComputeRealpower // eaton_compute_realpower_info (mge-hid.c)
 };
 
 struct Lookup {
@@ -312,6 +315,20 @@ static constexpr Lookup kVrangeInfo[] = { { 0, "!vrange" }, { 1, "vrange" } };  
 static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };               // frange_info
 static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
 
+// Lookups of the UPS, Output and Outlet pages (US-074), verbatim
+static constexpr Lookup kBeeperInfo[] = { { 1, "disabled" }, { 2, "enabled" }, { 3, "muted" } }; // beeper_info
+static constexpr Lookup kOnOff[] = { { 0, "off" }, { 1, "on" } };                           // on_off_info
+static constexpr Lookup kUpsType[] = {                                                      // mge_upstype_conversion
+    { 1, "offline / line interactive" }, { 2, "online" }, { 3, "online - unitary/parallel" },
+    { 4, "online - parallel with hot standy" }, { 5, "online - hot standby redundancy" },
+};
+static constexpr Lookup kOutletProtection[] = {                                             // eaton_outlet_protection_status_info
+    { 0, "not powered" }, { 1, "not protected" }, { 2, "protected" },
+};
+static constexpr Lookup kOutletEco[] = {                                                    // outlet_eco_yes_no_info
+    { 0, "The outlet is not ECO controlled" }, { 1, "The outlet is ECO controlled" },
+};
+
 // State the mge conversion functions keep in globals upstream (mge_type, country_code,
 // the static "nominal" of nominal_output_voltage_fun, the ABM flags, ups_status).
 // Reset at every driver setup().
@@ -330,6 +347,12 @@ struct Context {
 
 // CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
 enum class DecodeResult { OK, FAIL, DEFER, CLEAR };
+
+// Instant command rows (HU_TYPE_CMD, US-074): bound to the device, never read, published or
+// resolved; CommandCatalog takes their path and value (find_nut_info / instcmd upstream)
+inline bool isCommandRow(const HidInfo& info) {
+    return (info.hidflags & HU_TYPE_CMD) != 0;
+}
 
 // Rows that never publish their info_type (US-073): the BOOL rows and the "dummy" rows whose
 // function only keeps state. Upstream never drops them at INIT (their name is never
@@ -666,6 +689,25 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
         snprintf(buf, sizeof(buf), "%.1f", (v >= 273 && v <= 373) ? v - 273.15 : v);
         out = buf;
         return DecodeResult::OK;
+    case Conv::MgePowerFactor:
+        snprintf(buf, sizeof(buf), "%.2f", v / 100); // mge_powerfactor_conversion_fun
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::EatonComputeRealpower: {
+        // eaton_compute_realpower_fun (mge-hid.c:1404-1431): an approximation from the load,
+        // the nominal apparent power and output.powerfactor (default 0.80) when the device
+        // has no ActivePower; NULL (nothing published) while the inputs are missing
+        if (!data) return DecodeResult::DEFER;
+        const String* load = data->find("ups.load");
+        const String* nominal = data->find("ups.power.nominal");
+        if (!load || !nominal) return DecodeResult::DEFER;
+        const String* pf_text = data->find("output.powerfactor");
+        float pf = pf_text ? (float)atof(pf_text->c_str()) : 0.80f; // float, as upstream
+        long realpower = lround(atoi(load->c_str()) * 0.01 * atoi(nominal->c_str()) * pf);
+        snprintf(buf, sizeof(buf), "%ld", realpower);
+        out = buf;
+        return DecodeResult::OK;
+    }
     case Conv::MgeBatteryCapacity:
         snprintf(buf, sizeof(buf), "%.2f", v / 3600); // As to Ah
         out = buf;
@@ -982,7 +1024,7 @@ struct Bound {
 // Internal rows (isInternalRow) are outside the rule: always active.
 inline void resolve(std::vector<Bound>& binds) {
     for (size_t i = 0; i < binds.size(); i++) {
-        if (isInternalRow(*binds[i].info)) continue;
+        if (isInternalRow(*binds[i].info) || isCommandRow(*binds[i].info)) continue;
         const char* name = binds[i].info->info_type;
         bool first_of_group = true;
         for (size_t j = 0; j < i; j++) {
@@ -993,7 +1035,7 @@ inline void resolve(std::vector<Bound>& binds) {
         bool blocked = false, decided = false;
         for (size_t j = i; j < binds.size(); j++) {
             Bound& b = binds[j];
-            if (isInternalRow(*b.info)) continue;
+            if (isInternalRow(*b.info) || isCommandRow(*b.info)) continue;
             if (strcmp(b.info->info_type, name) != 0) continue;
             if (decided || b.first == Bound::First::FAIL) {
                 b.role = Bound::Role::DEAD;
@@ -1057,6 +1099,7 @@ inline std::vector<Bound> bind(const HidInfo* table, size_t n, const std::vector
 inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx, const UPSData* data = nullptr) {
     Bound& b = binds[i];
     if (b.info->hidflags & HU_FLAG_ABSENT) return; // driver-side value, never read
+    if (isCommandRow(*b.info)) return;             // HU_TYPE_CMD: written, never published
     if (isInternalRow(*b.info)) {
         b.last = v;
         b.seen = true;
@@ -1130,7 +1173,7 @@ inline void onString(std::vector<Bound>& binds, size_t i, const String& text) {
 inline void finishInit(std::vector<Bound>& binds) {
     bool changed = false;
     for (Bound& b : binds) {
-        if (isInternalRow(*b.info)) continue;
+        if (isInternalRow(*b.info) || isCommandRow(*b.info)) continue;
         if (b.first == Bound::First::UNREAD && !b.deferred) {
             b.first = Bound::First::FAIL;
             changed = true;
@@ -1221,11 +1264,11 @@ inline const DelayPaths* legrandDelayPaths() {
     return &p;
 }
 
-// Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() has the
-// rows of US-066 (ST_FLAG_RW) and US-073 (Device, Battery page, the UPS page rows of
-// PowerSummary/BatterySystem, BOOL status); the rows marked "row of US-074" come with that
-// spec. The other tables still hold only their ST_FLAG_RW rows (US-066). ups.delay.* is left
-// to CommandCatalog::applyDefaultDelays.
+// Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
+// row of mge_hid2nut (US-066, US-073, US-074), instant commands included, but the ups.alarm
+// rows (US-107) and the rows of the stateful mge functions (US-070). The other tables still
+// hold only their ST_FLAG_RW rows (US-066). ups.delay.* is left to
+// CommandCatalog::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
     static const HidInfo t[] = {
@@ -1234,7 +1277,8 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "device.country", ST_FLAG_STRING, 20, "UPS.PowerSummary.0xFFFF0095", "Europe", HU_FLAG_STATIC, Conv::MgeCountry, nullptr, 0 },
         // mge-hid.c:2007 UPS.System.USB.iVersion
         { "device.usb.version", ST_FLAG_STRING, 20, "UPS.0xFFFF00E5.0xFFFF0005.0xFFFF00F1", nullptr, HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // device.usb.mode (mge-hid.c:2008) and device.gateway.power.rate (mge-hid.c:2009): commented out upstream
+        // device.usb.mode (mge-hid.c:2008): commented out upstream
+        // device.gateway.power.rate (mge-hid.c:2009): commented out upstream
 
         // --- Battery page
         // mge-hid.c:2012 UPS.PowerSummary.RemainingCapacity
@@ -1279,23 +1323,25 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "battery.energysave.delay", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2034 UPS.PowerConverter.Input.[3].ConfigActivePower
         { "battery.energysave.realpower", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].ConfigActivePower", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ABM (Advanced Battery Monitoring): before the BOOL status, as upstream
-        // mge-hid.c:2040 UPS.BatterySystem.Charger.ABMEnable (internal)
+
+        // --- ABM (Advanced Battery Monitoring) processing
+        // mge-hid.c:2040 UPS.BatterySystem.Charger.ABMEnable
         { "battery.charger.abm.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0087", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmEnabled, nullptr, 0 },
-        // mge-hid.c:2047 UPS.BatterySystem.Charger.Mode (internal)
+        // mge-hid.c:2047 UPS.BatterySystem.Charger.Mode
         { "battery.charger.mode.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathMode, nullptr, 0 },
-        // mge-hid.c:2048 UPS.BatterySystem.Charger.Status (internal)
+        // mge-hid.c:2048 UPS.BatterySystem.Charger.Status
         { "battery.charger.type.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathStatus, nullptr, 0 },
         // mge-hid.c:2051 UPS.BatterySystem.Charger.Mode
         { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
         // mge-hid.c:2052 UPS.BatterySystem.Charger.Status
         { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
-        // battery.charger.status (mge-hid.c:2056) UPS.BatterySystem.Charger.PresentStatus.Used: commented out upstream (Note 1)
+        // battery.charger.status (mge-hid.c:2056): commented out upstream
         // mge-hid.c:2059 UPS.BatterySystem.Charger.ChargerType
         { "battery.charger.type", 0, 0, "UPS.BatterySystem.Charger.0xFFFF006B", "%.0f", HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kEatonChargerType) },
 
         // --- UPS page
-        // ups.efficiency (mge-hid.c:2062): row of US-074, UPS.PowerConverter path
+        // mge-hid.c:2062 UPS.PowerConverter.Output.Efficiency
+        { "ups.efficiency", 0, 0, "UPS.PowerConverter.Output.0xFFFF0086", "%.0f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2063 UPS.PowerSummary.iVersion
         { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFFFF00F1", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
         // mge-hid.c:2064 UPS.PowerSummary.PercentLoad
@@ -1314,16 +1360,36 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
         // mge-hid.c:2072 UPS.BatterySystem.Battery.TestPeriod
         { "ups.test.interval", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.BatterySystem.Battery.0xFFFF0045", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ups.beeper.status (mge-hid.c:2075-2077): rows of US-074, with the beeper commands and the active beeper path of HidControl
+        // mge-hid.c:2075 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // mge-hid.c:2076 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // mge-hid.c:2077 UPS.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
         // mge-hid.c:2078 UPS.PowerSummary.Temperature
         { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
-        // ups.power (mge-hid.c:2079): row of US-074, UPS.PowerConverter path
-        // ups.L1.power, ups.L2.power, ups.L3.power (mge-hid.c:2080-2082): rows of US-074, UPS.PowerConverter path
-        // ups.power.nominal (mge-hid.c:2083): row of US-074, UPS.Flow path
-        // ups.realpower (mge-hid.c:2084): row of US-074, UPS.PowerConverter path
-        // ups.realpower (mge-hid.c:2087): row of US-074, eaton_compute_realpower_info on UPS.Flow.[4]
-        // ups.L1.realpower, ups.L2.realpower, ups.L3.realpower (mge-hid.c:2088-2090): rows of US-074, UPS.PowerConverter path
-        // ups.realpower.nominal (mge-hid.c:2091): row of US-074, UPS.Flow path
+        // mge-hid.c:2079 UPS.PowerConverter.Output.ApparentPower
+        { "ups.power", 0, 0, "UPS.PowerConverter.Output.ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2080 UPS.PowerConverter.Output.Phase.[1].ApparentPower
+        { "ups.L1.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2081 UPS.PowerConverter.Output.Phase.[2].ApparentPower
+        { "ups.L2.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2082 UPS.PowerConverter.Output.Phase.[3].ApparentPower
+        { "ups.L3.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2083 UPS.Flow.[4].ConfigApparentPower
+        { "ups.power.nominal", 0, 0, "UPS.Flow.[4].ConfigApparentPower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2084 UPS.PowerConverter.Output.ActivePower
+        { "ups.realpower", 0, 0, "UPS.PowerConverter.Output.ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2087 UPS.Flow.[4].ConfigApparentPower
+        { "ups.realpower", 0, 0, "UPS.Flow.[4].ConfigApparentPower", "-1", 0, Conv::EatonComputeRealpower, nullptr, 0 },
+        // mge-hid.c:2088 UPS.PowerConverter.Output.Phase.[1].ActivePower
+        { "ups.L1.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2089 UPS.PowerConverter.Output.Phase.[2].ActivePower
+        { "ups.L2.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2090 UPS.PowerConverter.Output.Phase.[3].ActivePower
+        { "ups.L3.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2091 UPS.Flow.[4].ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.Flow.[4].ConfigActivePower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2092 UPS.PowerConverter.Input.[1].AutomaticRestart
         { "ups.start.auto", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[1].0xFFFF0043", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
         // mge-hid.c:2093 UPS.PowerConverter.Input.[3].StartOnBattery
@@ -1336,21 +1402,25 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "ups.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeDate, nullptr, 0 },
         // mge-hid.c:2098 UPS.PowerSummary.Time
         { "ups.time", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeTime, nullptr, 0 },
-        // ups.type (mge-hid.c:2103): row of US-074, UPS.PowerConverter path
+        // ups.date (mge-hid.c:2100): in a disabled preprocessor branch upstream
+        // ups.time (mge-hid.c:2101): in a disabled preprocessor branch upstream
+        // mge-hid.c:2103 UPS.PowerConverter.ConverterType
+        { "ups.type", 0, 0, "UPS.PowerConverter.0xFFFF0041", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kUpsType) },
 
-        // --- BOOL status: they set the internal ups.status.* keys (NutTable::statusKeys)
+        // --- Special case: boolean values that are mapped to ups.status and ups.alarm
         // mge-hid.c:2106 UPS.PowerSummary.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
         // mge-hid.c:2107 UPS.PowerConverter.Input.[3].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[3].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeOnbattInfo) },
-        // BOOL (mge-hid.c:2110) UPS.PowerConverter.Input.[1].PresentStatus.Used, online_info: #if 0 upstream (see 2136)
-        // mge-hid.c:2113 UPS.PowerSummary.PresentStatus.Discharging (ABM disabled)
+        // #if 0 upstream (line 2108): the row below is disabled there
+        // BOOL (mge-hid.c:2110): in a disabled preprocessor branch upstream
+        // mge-hid.c:2113 UPS.PowerSummary.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonDischarging, nullptr, 0 },
-        // mge-hid.c:2114 UPS.PowerSummary.PresentStatus.Charging (ABM disabled)
+        // mge-hid.c:2114 UPS.PowerSummary.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonCharging, nullptr, 0 },
-        // mge-hid.c:2116 UPS.BatterySystem.Charger.Mode (ABM enabled)
+        // mge-hid.c:2116 UPS.BatterySystem.Charger.Mode
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
-        // mge-hid.c:2117 UPS.BatterySystem.Charger.Status (ABM enabled)
+        // mge-hid.c:2117 UPS.BatterySystem.Charger.Status
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
         // mge-hid.c:2119 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
@@ -1374,13 +1444,13 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange", nullptr, 0, Conv::Lookup, NUT_LKP(kFrangeInfo) },
         // mge-hid.c:2133 UPS.PowerSummary.PresentStatus.Good
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Good", nullptr, 0, Conv::Lookup, NUT_LKP(kOffInfo) },
-        // mge-hid.c:2136 UPS.PowerConverter.Input.[1].PresentStatus.Used (after Good: only when not OFF)
+        // mge-hid.c:2136 UPS.PowerConverter.Input.[1].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Used", nullptr, 0, Conv::EatonConverterOnline, nullptr, 0 },
-        // mge-hid.c:2137 UPS.PowerConverter.Input.[2].PresentStatus.Used (automatic bypass)
+        // mge-hid.c:2137 UPS.PowerConverter.Input.[2].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[2].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassAutoInfo) },
-        // mge-hid.c:2139 UPS.PowerConverter.Input.[4].PresentStatus.Used (manual bypass)
+        // mge-hid.c:2139 UPS.PowerConverter.Input.[4].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[4].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassManualInfo) },
-        // mge-hid.c:2140 UPS.PowerConverter.Input.[5].PresentStatus.Used (ECO/ESS mode)
+        // mge-hid.c:2140 UPS.PowerConverter.Input.[5].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[5].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kEcoModeInfo) },
         // mge-hid.c:2141 UPS.PowerSummary.PresentStatus.FanFailure
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF0077", nullptr, 0, Conv::Lookup, NUT_LKP(kFanfailInfo) },
@@ -1405,9 +1475,45 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         // mge-hid.c:2152 UPS.PowerSummary.PresentStatus.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
 
-        // ups.alarm (mge-hid.c:2155-2160): rows of US-074, the firmware does not build ups.alarm yet
+        // --- Vendor specific ups.alarm
+        // ups.alarm (mge-hid.c:2155) UPS.PowerSummary.PresentStatus.EmergencyStop: row of the ups.alarm spec (US-107)
+        // ups.alarm (mge-hid.c:2156) UPS.PowerConverter.Input.[1].PresentStatus.WiringFault: row of the ups.alarm spec (US-107)
+        // ups.alarm (mge-hid.c:2157) UPS.PowerSummary.PresentStatus.ConfigurationFailure: row of the ups.alarm spec (US-107)
+        // ups.alarm (mge-hid.c:2158) UPS.PowerConverter.Inverter.PresentStatus.VoltageTooHigh: row of the ups.alarm spec (US-107)
+        // ups.alarm (mge-hid.c:2159) UPS.PowerConverter.Inverter.PresentStatus.VoltageTooLow: row of the ups.alarm spec (US-107)
+        // ups.alarm (mge-hid.c:2160) UPS.PowerConverter.Output.PresentStatus.ShortCircuit: row of the ups.alarm spec (US-107)
 
         // --- Input page
+        // mge-hid.c:2163 UPS.PowerConverter.Input.[1].Voltage
+        { "input.voltage", 0, 0, "UPS.PowerConverter.Input.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2164 UPS.PowerConverter.Input.[1].Phase.[1].Voltage
+        { "input.L1-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2165 UPS.PowerConverter.Input.[1].Phase.[2].Voltage
+        { "input.L2-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2166 UPS.PowerConverter.Input.[1].Phase.[3].Voltage
+        { "input.L3-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2167 UPS.PowerConverter.Input.[1].Phase.[12].Voltage
+        { "input.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2168 UPS.PowerConverter.Input.[1].Phase.[23].Voltage
+        { "input.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2169 UPS.PowerConverter.Input.[1].Phase.[31].Voltage
+        { "input.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2170 UPS.Flow.[1].ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Flow.[1].ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2171 UPS.PowerConverter.Input.[1].Current
+        { "input.current", 0, 0, "UPS.PowerConverter.Input.[1].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2172 UPS.PowerConverter.Input.[1].Phase.[1].Current
+        { "input.L1.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2173 UPS.PowerConverter.Input.[1].Phase.[2].Current
+        { "input.L2.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2174 UPS.PowerConverter.Input.[1].Phase.[3].Current
+        { "input.L3.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2175 UPS.Flow.[1].ConfigCurrent
+        { "input.current.nominal", 0, 0, "UPS.Flow.[1].ConfigCurrent", "%.2f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2176 UPS.PowerConverter.Input.[1].Frequency
+        { "input.frequency", 0, 0, "UPS.PowerConverter.Input.[1].Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2177 UPS.Flow.[1].ConfigFrequency
+        { "input.frequency.nominal", 0, 0, "UPS.Flow.[1].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2179 UPS.PowerConverter.Output.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2180 UPS.PowerConverter.Output.LowVoltageEcoTransfer
@@ -1446,44 +1552,258 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "input.voltage.extended", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF004B", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
         // mge-hid.c:2198 UPS.PowerConverter.Output.ExtendedFrequencyMode
         { "input.frequency.extended", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF004E", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
+
+        // --- Bypass page
+        // mge-hid.c:2201 UPS.PowerConverter.Input.[2].Voltage
+        { "input.bypass.voltage", 0, 0, "UPS.PowerConverter.Input.[2].Voltage", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2202 UPS.PowerConverter.Input.[2].Phase.[1].Voltage
+        { "input.bypass.L1-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2203 UPS.PowerConverter.Input.[2].Phase.[2].Voltage
+        { "input.bypass.L2-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2204 UPS.PowerConverter.Input.[2].Phase.[3].Voltage
+        { "input.bypass.L3-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2205 UPS.PowerConverter.Input.[2].Phase.[12].Voltage
+        { "input.bypass.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2206 UPS.PowerConverter.Input.[2].Phase.[23].Voltage
+        { "input.bypass.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2207 UPS.PowerConverter.Input.[2].Phase.[31].Voltage
+        { "input.bypass.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2208 UPS.Flow.[2].ConfigVoltage
+        { "input.bypass.voltage.nominal", 0, 0, "UPS.Flow.[2].ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2209 UPS.PowerConverter.Input.[2].Current
+        { "input.bypass.current", 0, 0, "UPS.PowerConverter.Input.[2].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2210 UPS.PowerConverter.Input.[2].Phase.[1].Current
+        { "input.bypass.L1.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2211 UPS.PowerConverter.Input.[2].Phase.[2].Current
+        { "input.bypass.L2.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2212 UPS.PowerConverter.Input.[2].Phase.[3].Current
+        { "input.bypass.L3.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2213 UPS.Flow.[2].ConfigCurrent
+        { "input.bypass.current.nominal", 0, 0, "UPS.Flow.[2].ConfigCurrent", "%.2f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2214 UPS.PowerConverter.Input.[2].Frequency
+        { "input.bypass.frequency", 0, 0, "UPS.PowerConverter.Input.[2].Frequency", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2215 UPS.Flow.[2].ConfigFrequency
+        { "input.bypass.frequency.nominal", 0, 0, "UPS.Flow.[2].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // input.bypass.switch.on (mge-hid.c:2218) excluded: stateful mge function, US-070
         // input.bypass.switch.off (mge-hid.c:2219) excluded: stateful mge function, US-070
         // mge-hid.c:2222 UPS.PowerConverter.Input.[2].Switchable
         { "input.bypass.switchable", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.PowerConverter.Input.[2].Switchable", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kEnableDisable) },
+
+        // --- Output page
+        // mge-hid.c:2225 UPS.PowerConverter.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2226 UPS.PowerConverter.Output.Phase.[1].Voltage
+        { "output.L1-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2227 UPS.PowerConverter.Output.Phase.[2].Voltage
+        { "output.L2-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2228 UPS.PowerConverter.Output.Phase.[3].Voltage
+        { "output.L3-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2229 UPS.PowerConverter.Output.Phase.[12].Voltage
+        { "output.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2230 UPS.PowerConverter.Output.Phase.[23].Voltage
+        { "output.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2231 UPS.PowerConverter.Output.Phase.[31].Voltage
+        { "output.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2232 UPS.Flow.[4].ConfigVoltage
         { "output.voltage.nominal", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.Flow.[4].ConfigVoltage", "%.0f", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::NominalVoltage, NUT_LKP(kNominalOutputVoltage) },
+        // mge-hid.c:2233 UPS.PowerConverter.Output.Current
+        { "output.current", 0, 0, "UPS.PowerConverter.Output.Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2234 UPS.PowerConverter.Output.Phase.[1].Current
+        { "output.L1.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2235 UPS.PowerConverter.Output.Phase.[2].Current
+        { "output.L2.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2236 UPS.PowerConverter.Output.Phase.[3].Current
+        { "output.L3.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2237 UPS.Flow.[4].ConfigCurrent
+        { "output.current.nominal", 0, 0, "UPS.Flow.[4].ConfigCurrent", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2238 UPS.PowerConverter.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2240 UPS.Flow.[4].ConfigFrequency
+        { "output.frequency.nominal", 0, 0, "UPS.Flow.[4].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2241 UPS.PowerConverter.Output.PowerFactor
+        { "output.powerfactor", 0, 0, "UPS.PowerConverter.Output.0xFFFF0069", "%s", 0, Conv::MgePowerFactor, nullptr, 0 },
+
+        // --- Outlet page (using MGE UPS SYSTEMS - PowerShare technology)
+        // mge-hid.c:2246 UPS.OutletSystem.Outlet.[1].OutletID
+        { "outlet.id", 0, 0, "UPS.OutletSystem.Outlet.[1].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2247 UPS.OutletSystem.Outlet.[1].OutletID
         { "outlet.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[1].OutletID", "Main Outlet", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2248 UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable
+        { "outlet.switchable", 0, 0, "UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
         // mge-hid.c:2252 UPS.OutletSystem.Outlet.[1].ConfigApparentPower
         { "outlet.power", ST_FLAG_RW | ST_FLAG_STRING, 6, "UPS.OutletSystem.Outlet.[1].ConfigApparentPower", "%s", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::PegasusThreshold, NUT_LKP(kPegasusThreshold) },
+        // mge-hid.c:2254 UPS.OutletSystem.Outlet.[1].ApparentPower
+        { "outlet.power", 0, 0, "UPS.OutletSystem.Outlet.[1].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2255 UPS.OutletSystem.Outlet.[1].ActivePower
+        { "outlet.realpower", 0, 0, "UPS.OutletSystem.Outlet.[1].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2256 UPS.OutletSystem.Outlet.[1].Current
+        { "outlet.current", 0, 0, "UPS.OutletSystem.Outlet.[1].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2257 UPS.OutletSystem.Outlet.[1].PowerFactor
+        { "outlet.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[1].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
+
+        // --- First outlet (group) [2]
+        // mge-hid.c:2260 UPS.OutletSystem.Outlet.[2].OutletID
+        { "outlet.1.id", 0, 0, "UPS.OutletSystem.Outlet.[2].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2261 UPS.OutletSystem.Outlet.[2].OutletID
         { "outlet.1.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[2].OutletID", "PowerShare Outlet 1", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2262 UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable
+        { "outlet.1.switchable", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
+        // mge-hid.c:2264 UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off
+        { "outlet.1.status", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
+        // mge-hid.c:2265 UPS.OutletSystem.Outlet.[2].Status
+        { "outlet.1.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
+        // mge-hid.c:2266 UPS.OutletSystem.Outlet.[2].iDesignator
+        { "outlet.1.designator", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF00BA", nullptr, HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // mge-hid.c:2268 UPS.PowerSummary.PresentStatus.ACPresent
+        { "outlet.1.status", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
         // mge-hid.c:2270 UPS.OutletSystem.Outlet.[2].RemainingCapacityLimit
         { "outlet.1.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[2].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2271 UPS.OutletSystem.Outlet.[2].ShutdownTimer
         { "outlet.1.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[2].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2272 UPS.OutletSystem.Outlet.[2].StartupTimer
         { "outlet.1.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[2].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2273 UPS.OutletSystem.Outlet.[2].ApparentPower
+        { "outlet.1.power", 0, 0, "UPS.OutletSystem.Outlet.[2].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2274 UPS.OutletSystem.Outlet.[2].ActivePower
+        { "outlet.1.realpower", 0, 0, "UPS.OutletSystem.Outlet.[2].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2275 UPS.OutletSystem.Outlet.[2].Current
+        { "outlet.1.current", 0, 0, "UPS.OutletSystem.Outlet.[2].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2276 UPS.OutletSystem.Outlet.[2].PowerFactor
+        { "outlet.1.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2278 UPS.OutletSystem.Outlet.[2].ECOControl
+        { "outlet.1.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
+
+        // --- Second outlet (group) [3]
+        // mge-hid.c:2281 UPS.OutletSystem.Outlet.[3].OutletID
+        { "outlet.2.id", 0, 0, "UPS.OutletSystem.Outlet.[3].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2282 UPS.OutletSystem.Outlet.[3].OutletID
         { "outlet.2.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[3].OutletID", "PowerShare Outlet 2", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
         // mge-hid.c:2285 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
         { "outlet.2.switchable", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable", "%s", HU_FLAG_SEMI_STATIC, Conv::PegasusYesNo, NUT_LKP(kYesNo) },
+        // mge-hid.c:2287 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
+        { "outlet.2.switchable", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable", "%s", 0, Conv::Lookup, NUT_LKP(kYesNo) },
+        // mge-hid.c:2288 UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off
+        { "outlet.2.status", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
+        // mge-hid.c:2289 UPS.OutletSystem.Outlet.[3].Status
+        { "outlet.2.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
         // mge-hid.c:2291 UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit
         { "outlet.2.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2292 UPS.OutletSystem.Outlet.[3].ShutdownTimer
         { "outlet.2.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2293 UPS.OutletSystem.Outlet.[3].StartupTimer
         { "outlet.2.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2294 UPS.OutletSystem.Outlet.[3].ApparentPower
+        { "outlet.2.power", 0, 0, "UPS.OutletSystem.Outlet.[3].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2295 UPS.OutletSystem.Outlet.[3].ActivePower
+        { "outlet.2.realpower", 0, 0, "UPS.OutletSystem.Outlet.[3].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2296 UPS.OutletSystem.Outlet.[3].Current
+        { "outlet.2.current", 0, 0, "UPS.OutletSystem.Outlet.[3].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2297 UPS.OutletSystem.Outlet.[3].PowerFactor
+        { "outlet.2.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2299 UPS.OutletSystem.Outlet.[3].ECOControl
+        { "outlet.2.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
+
+        // --- Third outlet (group) [4]
+        // mge-hid.c:2302 UPS.OutletSystem.Outlet.[4].OutletID
+        { "outlet.3.id", 0, 0, "UPS.OutletSystem.Outlet.[4].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2303 UPS.OutletSystem.Outlet.[4].OutletID
         { "outlet.3.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[4].OutletID", "PowerShare Outlet 2", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
         // mge-hid.c:2306 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
         { "outlet.3.switchable", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", "%s", HU_FLAG_SEMI_STATIC, Conv::PegasusYesNo, NUT_LKP(kYesNo) },
+        // mge-hid.c:2308 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
+        { "outlet.3.switchable", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", "%s", 0, Conv::Lookup, NUT_LKP(kYesNo) },
+        // mge-hid.c:2309 UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off
+        { "outlet.3.status", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
+        // mge-hid.c:2310 UPS.OutletSystem.Outlet.[4].Status
+        { "outlet.3.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
         // mge-hid.c:2312 UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit
         { "outlet.3.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2313 UPS.OutletSystem.Outlet.[4].ShutdownTimer
         { "outlet.3.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // mge-hid.c:2314 UPS.OutletSystem.Outlet.[4].StartupTimer
         { "outlet.3.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2315 UPS.OutletSystem.Outlet.[4].ApparentPower
+        { "outlet.3.power", 0, 0, "UPS.OutletSystem.Outlet.[4].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2316 UPS.OutletSystem.Outlet.[4].ActivePower
+        { "outlet.3.realpower", 0, 0, "UPS.OutletSystem.Outlet.[4].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2317 UPS.OutletSystem.Outlet.[4].Current
+        { "outlet.3.current", 0, 0, "UPS.OutletSystem.Outlet.[4].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2318 UPS.OutletSystem.Outlet.[4].PowerFactor
+        { "outlet.3.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2320 UPS.OutletSystem.Outlet.[4].ECOControl
+        { "outlet.3.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
+
+        // --- instant commands.
+        // mge-hid.c:2326 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2327 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2328 UPS.BatterySystem.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2329 UPS.PowerSummary.DelayBeforeShutdown
+        { "load.off.delay", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2330 UPS.PowerSummary.DelayBeforeStartup
+        { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2331 UPS.PowerSummary.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2332 UPS.PowerSummary.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2333 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2334 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2337 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2338 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2339 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2340 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2341 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2342 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2343 UPS.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2344 UPS.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+
+        // --- Command for the outlet collection
+        // mge-hid.c:2347 UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown
+        { "outlet.1.load.off", 0, 0, "UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2348 UPS.OutletSystem.Outlet.[2].DelayBeforeStartup
+        { "outlet.1.load.on", 0, 0, "UPS.OutletSystem.Outlet.[2].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2349 UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown
+        { "outlet.2.load.off", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2350 UPS.OutletSystem.Outlet.[3].DelayBeforeStartup
+        { "outlet.2.load.on", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2351 UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown
+        { "outlet.3.load.off", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2352 UPS.OutletSystem.Outlet.[4].DelayBeforeStartup
+        { "outlet.3.load.on", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+
+        // --- Command to switch ECO(HE), ESS Mode
+        // mge-hid.c:2355 UPS.PowerConverter.Input.[5].Switchable
+        { "experimental.ecomode.stop", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2356 UPS.PowerConverter.Input.[5].Switchable
+        { "experimental.ecomode.start", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2357 UPS.PowerConverter.Input.[5].Switchable
+        { "experimental.essmode.start", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2358 UPS.PowerConverter.Input.[5].Switchable
+        { "experimental.essmode.stop", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+
+        // --- Command to switch ECO(HE) Mode with switch to Automatic Bypass Mode on before
+        // experimental.bypass.ecomode.start (mge-hid.c:2361) excluded: stateful mge function, US-070
+
+        // --- Command to switch from ECO(HE) Mode with switch from Automatic Bypass Mode on before
+        // experimental.bypass.ecomode.stop (mge-hid.c:2363) excluded: stateful mge function, US-070
+
+        // --- Command to switch Automatic Bypass Mode on/off
+        // mge-hid.c:2366 UPS.PowerConverter.Input.[2].SwitchOnControl
+        { "bypass.start", 0, 0, "UPS.PowerConverter.Input.[2].SwitchOnControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2367 UPS.PowerConverter.Input.[2].SwitchOffControl
+        { "bypass.stop", 0, 0, "UPS.PowerConverter.Input.[2].SwitchOffControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
         // input.eco.switchable (mge-hid.c:2373) excluded: stateful mge function, US-070
     };
     n = sizeof(t) / sizeof(t[0]);

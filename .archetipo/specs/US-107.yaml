@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-107
+title: ups.alarm e token di stato completi come usbhid-ups
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-107: ups.alarm e token di stato completi come usbhid-ups
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-074
+
+  **User Story**
+  Come utente che controlla l'UPS da Home Assistant o con upsmon,
+  voglio che `ups.status`, `ups.alarm` e `input.transfer.reason` riportino le stesse condizioni che usbhid-ups ricava dai bit di stato,
+  in modo da vedere allarmi, bypass, trim/boost e UPS spento come li vedrei con NUT su un PC.
+
+  **Dimostrazione**
+  Nei test di stato e nel replay, un dispositivo con NeedReplacement attivo pubblica `ups.status` = `ALARM OL RB` e `ups.alarm` = `Replace battery!`. Un Eaton con PresentStatus.Good a 0 mostra `OFF`; con Input.[1].Buck attivo mostra `TRIM`. Con VoltageOutOfRange, `input.transfer.reason` vale `input voltage out of range`. Senza condizioni attive, `ups.alarm` non esiste e `ups.status` non cambia rispetto a oggi.
+
+  **Criteri di Accettazione**
+  - [ ] `ups.status` rende anche OFF, TRIM, BOOST, BYPASS (bypass automatico o manuale) e CAL dalle chiavi interne `ups.status.*` raccolte dalle righe BOOL (US-073), nell'ordine e con le regole di `ups_status_set()`. ECO ed ESS non entrano in `ups.status`: upstream li mette in `ups.mode.buzzwords`, e restano fuori.
+  - [ ] `ups.alarm` contiene i testi di `ups_alarm_set()` per i bit attivi (Replace battery!, Shutdown imminent!, Fan failure!, No battery installed!, Battery voltage too low/high!, Battery charger fail!, Temperature too high!, Internal UPS fault!, Awaiting power!, Automatic/Manual bypass mode!) più i testi delle righe `ups.alarm` dei subdriver. Le sei righe di `mge-hid.c:2155-2160`, commentate in US-073/US-074, diventano attive. Testi separati da spazio come `alarm_set()`. Senza allarmi la variabile non c'è.
+  - [ ] Con almeno un allarme, `ups.status` comincia con il token ALARM, come `status_commit()` (`dstate.c:2315-2321`).
+  - [ ] `input.transfer.reason` vale `input voltage out of range` con VRANGE e `input frequency out of range` con FRANGE; senza nessuno dei due la variabile non c'è.
+  - [ ] Regressione: i driver che non producono le nuove chiavi danno lo stesso `ups.status` di oggi su tutte le fixture. Le differenze (per esempio ALARM e `ups.alarm` dove NeedReplacement o ShutdownImminent sono attivi) sono elencate nel replay e nelle note di rilascio.
+  - [ ] Suite nativa verde, build ok; prova sull'Eaton 3S: `upsc` invariato con l'UPS in condizioni normali.
+
+  **Assunzioni**
+  - Decisa il 2026-10-29 nella pianificazione di US-074, che lascia commentate le righe `ups.alarm`.
+  - Le chiavi interne con cui Liebert oggi tiene Good e Buck/Boost si allineano a quelle di `NutTable::statusKeys` con la sua migrazione (US-106), non qui.
+  - I ritardi di LB/RB in calibrazione (`lbrb_log_delay_sec`) e le opzioni `onlinedischarge_*` restano fuori, perché il firmware non ha le opzioni del driver.
+history:
+  - status: TODO
+    at: "2026-10-29T12:51:31Z"

@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 8
-status: TODO
+status: DONE
 body: |
   #### US-074: Tabella unica Eaton (mge-hid), parte 2: PowerConverter, Input/Output, Flow, Outlet e comandi
 
@@ -32,6 +32,28 @@ body: |
   **Assunzioni**
   - Usa il motore e la regola sulle chiavi decisi in US-073.
   - Dopo EP-006 i comandi passano da `HidControl`, non più da `IUSBHostUPS`: questa spec cambia da dove `HidControl` prende l'elenco e i passi per gli Eaton, non l'interfaccia verso i consumatori.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **test/test_nut_table/test_main.cpp** — Manca il test di copertura previsto dalla strategia di test del piano ("controllo strutturale esteso: nessuna riga mge-hid.c fra 2002 e 2375 senza riga o commento"), segnalato anche dalla code review. Oggi la copertura è verificata solo con uno script fuori dal repo. Aggiungere un test nativo che legga nut_repo/drivers/mge-hid.c e lib/USBHostUPS/src/NutTable.h e verifichi che ogni riga upstream di mge_hid2nut (le righe che iniziano con { "...", anche commentate) fra 2004 e 2375 sia citata come mge-hid.c:N in mgeHid2Nut(), come riga o come commento con il motivo. Il test deve fallire se si toglie una riga o il suo commento.
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
+  - status: PLANNED
+    at: "2026-10-29T12:44:12Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T13:10:58Z"
+  - status: REVIEW
+    at: "2026-10-29T14:01:22Z"
+  - status: TODO
+    at: "2026-10-29T14:15:58Z"
+  - status: PLANNED
+    at: "2026-10-29T14:22:05Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T14:22:39Z"
+  - status: REVIEW
+    at: "2026-10-29T14:31:56Z"
+  - status: DONE
+    at: "2026-10-29T14:37:27Z"
