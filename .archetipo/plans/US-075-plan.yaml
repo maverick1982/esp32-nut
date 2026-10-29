@@ -1,0 +1,573 @@
+schema: archetipo/plan/v2
+spec_code: US-075
+body: |-
+  # US-075: Tabella unica CyberPower (cps-hid) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 5 | **Bloccato da:** US-073 (DONE, 3e28944). Anche US-074 (comandi da tabella, 398bc38) e US-107 (`ups.alarm`, token di stato, 13f7671) sono DONE: il motore ha già tutto quello che serve alle righe BOOL e `HU_TYPE_CMD`.
+
+  `cpsHid2Nut()` riceve tutte le righe di `cps_hid2nut` (`nut_repo/drivers/cps-hid.c:356-440`), nell'ordine upstream. `CyberPowerDriver` perde le mappature scritte a mano e tiene solo gli hook non tabellari. Si applicano le regole dell'ADR 0011, come per Eaton.
+
+  ---
+
+  ## Decisioni prese in pianificazione (da confermare in review)
+
+  Seguono le scelte già confermate per Eaton in US-073/074. Nessuna richiede una domanda prima di partire.
+
+  - **Stato solo dalle righe BOOL di cps-hid (regola 1 dell'ADR 0011).**
+    - Le nove righe BOOL (`cps-hid.c:395-403`) sono l'unica sorgente di `ups.status`. Tutte le mappature di stato generiche si superano, come in `EatonDriver`.
+    - Conseguenza: su un CyberPower non si leggono più `ShutdownImminent` (→ LB, fix #65), `BatteryPresent`, `FullyDischarged`, `CommunicationLost`, né `PowerSummary.PresentStatus.Overload` (cps-hid legge solo `UPS.Output.Overload`). Se una fixture ha queste usage, la differenza va nel test e nelle note.
+  - **Estensioni (regola 2).**
+    - Restano: `ups.mfr.date` (ManufacturerDate), `battery.capacity` (`BatterySystem.Battery.DesignCapacity`), `battery.temperature` (`Battery.Temperature`). Sono nomi standard che cps-hid non legge.
+    - Sparisce `battery.capacity.full`, che non è un nome standard.
+    - `battery.mfr.date` è una chiave della tabella (367, 368): si superano anche `Battery.ManufacturerDate` generico e le stringhe `BatterySystem.Battery.Date` / `Battery.Date`.
+  - **Stima di `ups.realpower` (hook che la spec tiene).**
+    - Oggi `GenericDriver` stima solo se nessuna riga lega `ups.realpower`. Con la tabella completa la riga 384 (`Output.ActivePower`) si lega sempre quando il descriptor ha l'usage, anche se il report non viene mai letto (report vendor ≥ 130, report 4 e 6: issue #40). Lo copre il test `test_cyberpower_unread_activepower_keeps_estimate`.
+    - Regola nuova: la stima si spegne solo se la riga `ups.realpower` legata sta in un report che il driver legge (INPUT, oppure FEATURE accettato da `acceptPollReport()`): è la regola di `readsActivePower()`.
+    - La stima si ricalcola anche quando la tabella pubblica `ups.power.nominal` o `ups.realpower.nominal` (oggi lo fa l'hook di `Output.ConfigApparentPower`).
+    - Eaton non cambia: la riga 2087 sta in FEATURE accettato.
+  - **Scala del PID 0x0501.** `cps_usb_device_table` aggancia `cps_battery_scale()` al solo PID 0x0501.
+    - Lo stato (`might_need_*`, `battery_scale`, `*_freq_scale`, `*_checked`) va in `NutTable::Context`, che si azzera a ogni `setup()`. Upstream sono globali di processo: non serve replicarlo.
+    - Il flag si imposta in `CyberPowerDriver::decodeReport()` prima di chiamare `GenericDriver::decodeReport()`. È l'unico motivo per cui l'override resta.
+  - **Stringhe.**
+    - `battery.type` (366), `battery.mfr.date` da iOEMInformation (368) e `ups.firmware` (391) diventano righe `StringId`, gestite da `GenericDriver`. Prendono anche il troncamento a 19 caratteri di `stringid_conversion`: oggi il driver CyberPower non tronca, e la differenza va nelle note.
+    - Il quirk della #40 resta come hook: sul layout BR700ELCD (report vendor) non si chiede nessuna stringa delle righe della tabella. Nuovo hook `GenericDriver::requestTableStrings(host)`, default `true`.
+  - **Comandi dalla tabella (US-074).**
+    - `CyberPowerDriver::commandTable()` restituisce `cpsHid2Nut()`.
+    - `beeper.on`/`beeper.off` (433-434) si copiano ma non entrano in LIST CMD, perché `UpsCommands.h` non li ha.
+    - `load.off.delay`/`load.on.delay` hanno dfl `"60"`/`"120"` (`DEFAULT_OFFDELAY_CPS`/`DEFAULT_ONDELAY_CPS`, `usbhid-ups.h:66-67`). Vale la deviazione US-058: si usa il ritardo configurato, che di default coincide.
+    - LIST CMD sulle cinque fixture deve restare identica, salvo differenze motivate (per esempio `shutdown.reboot` solo da `Output.DelayBeforeReboot`).
+  - **Righe `unmapped.*` (357-363).** Si copiano così come sono dentro `#if WITH_UNMAPPED_DATA_POINTS`, mai definito (decisione 2 dell'ADR 0011).
+  - **`cps_fix_report_desc` non serve.** `extractUsage()` non taglia i valori al Logical Maximum. Il commento resta nel driver.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Motore (`NutTable.h`)
+
+  - **Lookup verbatim** (`usbhid-ups.c:452-476`): `kFullychargedInfo` (`fullycharged_info`: 1 `fullycharged`, 0 `notfullycharged`) e `kTimelimitexpiredInfo` (`timelimitexpired_info`: 1 `timelimitexp`, 0 `!timelimitexp`). Gli altri lookup (`kOnlineInfo`, `kChargingInfo`, `kDischargingInfo`, `kLowbattInfo`, `kReplacebattInfo`, `kBoostInfo`, `kOverloadInfo`, `kBeeperInfo`, `kTestRead`, `kCpsSensitivity`) ci sono già.
+  - **`Context::cps`**: `might_need_scale`, `battery_scale` (1), `battery_checked`, `input_freq_scale`/`output_freq_scale` (1), `input_checked`/`output_checked`.
+  - **Conversioni nuove:**
+    - `Conv::CpsBattCharge` (`cps_battcharge_fun`): `"%.0f"` di `min(v, 100)`;
+    - `Conv::CpsBattStatus` (`cps_battstatus_fun`): `"%.0f%%"`;
+    - `Conv::CpsBattVolt` (`cps_battvolt_fun` + `cps_adjust_battery_scale`): se `might_need_scale` e non ancora deciso, legge `battery.voltage.nominal` da `data->find()`; se è diverso da 0 decide una volta sola (2/3 sopra 1,4×). Poi `"%.1f"` di `scale × v`. Senza nominale pubblica il valore non scalato e decide al prossimo valore, come upstream;
+    - `Conv::CpsInputFreq` / `Conv::CpsOutputFreq` (`cps_*_freq_fun` + `cps_adjust_frequency_scale`): stessa logica di oggi, con nominal/low/high da `data->find()`.
+  - **`cpsFrequencyScale(report, nominal, low, high, scale)`** si sposta da `CyberPowerDriver::frequencyScale` a `NutTable`. Il test esistente si aggiorna.
+  - **Costanti:** `kCpsBatteryVoltageSanityCheck = 1.4`.
+  - **Formato:** `snprintf` come upstream, non `String(v, 1)`.
+    - Attenzione al gotcha del toolchain x87: un valore esattamente a metà può arrotondare in modo diverso tra nativo e scheda. Le attese dei test usano valori non ambigui.
+
+  ### 2. `cpsHid2Nut()`
+
+  Tutte le righe `cps-hid.c:357-437`, in ordine, con il commento `// cps-hid.c:N <path upstream>` come le tabelle esistenti:
+  - **357-363:** `unmapped.*` dentro `#if WITH_UNMAPPED_DATA_POINTS`;
+  - **366-376 (Battery page):** `StringId` per 366/368, `BatteryDate` per 367 (c'è già), `CpsBattCharge`, `CpsBattVolt`, `CpsBattStatus`, `Number` per gli altri;
+  - **379-392 (UPS page):**
+    - `kBeeperInfo` per 380 e `kTestRead` per 381;
+    - 386-387 restano esclusi (`ups.delay.*` da `CommandCatalog::applyDefaultDelays`);
+    - 391 su `UPS.PowerSummary.0xFF0100D0` (`CPSFirmwareVersion`, `cps_usage_lkp`) con `HU_FLAG_STATIC`;
+    - 392 `KelvinCelsius`;
+  - **395-403:** BOOL con i lookup indicati, `HU_FLAG_QUICK_POLL` dove upstream lo ha;
+  - **408-423 (Input/Output page):** `CpsInputFreq`, `CpsOutputFreq`, `Number` con i formati `%.0f`/`%.1f` della riga. Le RW 411-416 ci sono già;
+  - **426-437 (comandi):** `{ name, 0, 0, path, "<dfl>", HU_TYPE_CMD, Conv::Number, nullptr, 0 }`, con dfl `"60"`/`"120"` per 429/430 e il commento `usbhid-ups.h:66-67`.
+
+  ### 3. `GenericDriver`
+
+  - **`bindNutTable()`:** `_nut_has_realpower` vale vero solo se una riga `ups.realpower` legata ha l'usage (o il suo gemello) in un report letto: `report_type == 1`, oppure `report_type == 3 && acceptPollReport(...)`.
+  - **`publishRow()`:** senza `_nut_has_realpower`, chiama `ups_data.updateRealPower()` dopo aver scritto `ups.load`, `ups.power.nominal` o `ups.realpower.nominal`. Il ramo `EatonComputeRealpower` non cambia.
+  - **Hook nuovo** `virtual bool requestTableStrings(IHidTransport* host) const { return true; }`: `collectStringRequests()` aggiunge gli indici delle righe `StringId` solo se vale vero. Le stringhe del dispositivo (mfr, model, serial) non cambiano.
+
+  ### 4. `CyberPowerDriver`
+
+  - **Restano:**
+    - `acceptPollReport`, `pollInputReports`, `quickPollMs`/`fullPollMs`, `hasVendorReports`;
+    - `defaultOffDelay`/`defaultOnDelay`, `delayPaths()`, `hid2nut()`;
+    - nuovi: `commandTable()`, `supersededGenericPaths()`, `requestTableStrings()` (= `!hasVendorReports(host)`);
+    - `decodeReport()` ridotto a `_nut_ctx.cps.might_need_scale = host->getPID() == 0x0501` più la chiamata alla base.
+  - **Si tolgono:** la tabella `mappings[]`, `_map`, gli indici delle stringhe, `scaleFrequency`, i campi di scala, l'override di `parseStringDescriptor` e quello di `collectStringRequests`.
+  - **`kSupersededGenericPaths`**, copiati carattere per carattere da `GenericDriver::decodeReport()`, per ogni chiave che la tabella possiede:
+    - stato: tutti i percorsi di stato, come in Eaton;
+    - `battery.voltage` (3 percorsi), `battery.charge`, `battery.charge.low`, `battery.runtime` (2), `battery.voltage.nominal` (2);
+    - `ups.load` (3), `ups.temperature` (`PowerSummary.Temperature`), `ups.test.result` (3), `ups.timer.shutdown` (`PowerSummary.DelayBeforeShutdown`);
+    - `input.voltage` (3), `input.frequency` (3), `output.voltage` (2), `output.frequency` (2);
+    - `ups.realpower` (2), `ups.power` (2), `ups.realpower.nominal` (3), `ups.power.nominal` (`Flow.ConfigApparentPower`);
+    - `input.voltage.nominal` (2), `output.voltage.nominal` (2), `input.transfer.*` (6), `ups.beeper.status` (3);
+    - `battery.mfr.date` (`Battery.ManufacturerDate`, `BatterySystem.Battery.Date`, `Battery.Date`);
+    - `battery.capacity.full` (`BatterySystem.Battery.FullChargeCapacity`, regola 2).
+
+    Un commento finale elenca le estensioni che restano.
+
+  ### 5. Differenze attese
+
+  Le differenze si ricavano nel TASK-01 (baseline) e nel TASK-09 (confronto). Ognuna va nel test, con la riga upstream, e nelle note v1.12.0. Candidate:
+  - token di stato e chiavi `ups.status.*` dalle usage che cps-hid non legge;
+  - `battery.capacity.full` sparisce;
+  - stringhe oltre i 19 caratteri troncate;
+  - `ups.beeper.status` su un campo a 1 bit: upstream `beeper_info` non ha 0;
+  - `ups.temperature` con la soglia di `kelvin_celsius_conversion` (273-373) al posto di `> 200`;
+  - arrotondamenti `%.0f` al posto di `(int)` per valori non interi.
+
+  Ci si aspetta che i valori pubblicati oggi restino uguali: la #43 (v1.9.0) li ha già allineati.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, niente e2e nuovi, niente video demo. `data/www` e le API non cambiano, quindi gli e2e non sono richiesti come regressione. Nessun CyberPower in sede: la prova sul campo resta a un tester, prima del rilascio (assunzione della spec).
+
+  - **Baseline (prima del codice):** snapshot completo di `UPSData` dopo il replay di ognuna delle cinque fixture CyberPower (tutte le chiavi, `ups.status`, LIST CMD, LIST RW), scritto come test che passa sul codice di oggi. Dopo la migrazione lo stesso test mostra ogni differenza, che va commentata con la riga upstream.
+  - **`test_nut_table`:**
+    - le conversioni CPS con valori upstream: 20,8 V con nominale 12 sul PID 0501 → `13.9`, decisa una volta; senza nominale → valore non scalato; 501 → `50.1`; 120 % → `100`; 100 → `100%`;
+    - i due lookup nuovi;
+    - `checkTableCoverage("nut_repo/drivers/cps-hid.c", "static hid_info_t cps_hid2nut[]", ..., "inline const HidInfo* cpsHid2Nut", "inline const HidInfo* ecoflowHid2Nut")`;
+    - formati supportati per ogni riga di `cpsHid2Nut()`, come `test_mge_rows_have_supported_formats`.
+  - **`test_cyberpower_driver`:**
+    - i test di oggi riscritti sulle API pubbliche;
+    - nuovi casi: nessuna chiave dalle mappature superate (ShutdownImminent, FullChargeCapacity del BatterySystem); estensioni ancora scritte; stima con ActivePower in un report non letto; stima ricalcolata quando il nominale arriva dopo il carico; nessuna richiesta di stringhe della tabella sul layout vendor; scala solo sul PID 0501; troncamento a 19.
+  - **`test_command_catalog`:** con `cpsHid2Nut()` sui descriptor delle fixture, stessi nomi, passi e valori del ramo senza tabella; `beeper.on`/`off` mai elencati; `shutdown.reboot` solo con `Output.DelayBeforeReboot`.
+  - **`test_record_replay`:**
+    - righe legate da ogni descriptor (BOOL, comandi, RO), ricavate dai dump delle usage e da `cps-hid.c`, non dal firmware;
+    - LIST CMD e LIST RW invariate;
+    - `test_status_baseline_all_fixtures` invariato o con differenze motivate.
+  - **Mutazioni** (ognuna deve far fallire almeno un test): togliere un percorso superato; togliere il controllo del PID 0501; far restituire sempre `true` a `requestTableStrings`; non ricalcolare la stima sul nominale; togliere una citazione da `cpsHid2Nut()`.
+  - **Regressione:** suite nativa completa (in blocchi da circa 8 suite), build `esp32-s3-standard` da PowerShell con flash/RAM. Con l'ok dell'utente, OTA sull'Eaton 3S con `nut_snapshot.py` prima/dopo: `GenericDriver` cambia e l'Eaton deve restare identico.
+
+  ---
+
+  ## Rischi e note
+
+  - **BR700ELCD (#40):** descriptor senza report da replicare. Il quirk delle stringhe e dei report vendor è l'unica protezione contro il blocco del firmware: va coperto da un test diretto.
+  - **Righe legate ma mai lette:** con `acceptPollReport` alcune righe restano PENDING fino a `finishInit()`, poi la riga successiva omonima può subentrare (`battery.mfr.date` 367 → 368, `input.transfer.*` 411 → 414). È il comportamento di US-066, già provato su CP1600.
+  - **`readsActivePower()`:** se dopo il TASK-05 non lo usa più nessuno, si toglie. Altrimenti resta, condiviso con la nuova regola.
+  - **Note di rilascio:** vanno in `docs/releases/v1.12.0.md`, nella sezione delle note di aggiornamento ("CyberPower: ...") e in "Other changes". Il testo per i tester (Luca72 CP1600EPFCLCD, keith721 CP1500PFCLCDa, miskor-bgd UT850EG) si prepara come bozza: lo zip e la pubblicazione solo su richiesta dell'utente.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-29_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: snapshot completo delle cinque fixture CyberPower e dump delle usage'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima di toccare il codice, quello che il firmware pubblica oggi sulle cinque fixture CyberPower e quali usage hanno i loro descriptor.
+
+      **Leggi:**
+      - `test/test_record_replay/FixtureReplayRunner.h` (`replay()`, `ReplaySession`, `listRW()`);
+      - `test/test_record_replay/test_main.cpp` (`test_replay_cyberpower_*`, `test_status_baseline_all_fixtures`);
+      - `test/fixtures/cyberpower/*.json`.
+
+      **Modifica:**
+      1. In `FixtureReplayRunner` aggiungi `static std::string snapshot(const char* filePath)`: esegue `replay()` e restituisce tutte le chiavi di `UPSData` ordinate, una per riga `chiave=valore`, più `ups.status=<computeUPSStatusString>`.
+      2. In `test_main.cpp` aggiungi `test_cyberpower_snapshot_baseline()`: per ognuna delle cinque fixture confronta `snapshot()` con una costante scritta a mano (`static const char* kCpsSnapshot_<modello>`). Valori presi dall'esecuzione sul codice di oggi.
+      3. Dump temporaneo delle usage, da NON committare (un `printf` in un test locale o uno script nello scratchpad): per ogni fixture, `path`, `report_id`, `report_type` e `bit_size`. Annota in un commento sopra le costanti quali percorsi di `cps-hid.c` sono presenti in ogni descriptor e se ci sono `ShutdownImminent`, `BatteryPresent`, `FullyDischarged`, `CommunicationLost`, `PowerSummary.PresentStatus.Overload`, `BatterySystem.Battery.FullChargeCapacity`, `Battery.Date`, `DelayBeforeReboot`, `Output.ActivePower` (e in quale report).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde sul codice di oggi.
+
+      **Fatto:** cinque snapshot nel test, commento con le usage rilevanti, nessun codice di produzione toccato.
+
+      **Blocchi:** se la stessa fixture dà snapshot diversi a ogni esecuzione (ordine dei report), fermati e segnalalo: la baseline deve essere deterministica.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — `snapshot()`
+      - test/test_record_replay/test_main.cpp — `test_cyberpower_snapshot_baseline` e costanti
+
+      ## Criteri di Completamento
+      - [ ] Test verde sul codice attuale
+      - [ ] Commento con le usage rilevanti per ogni fixture
+      - [ ] Nessun file di produzione modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'NutTable: conversioni e stato di scala CyberPower, lookup fullycharged/timelimitexpired'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al motore le conversioni di cps-hid, senza ancora aggiungere righe.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h`: `Conv`, `Context`, `decode`, `staticText`, i lookup di stato;
+      - `lib/USBHostUPS/src/CyberPowerDriver.cpp`: `frequencyScale`, `scaleFrequency`, la mappatura `PowerSummary.Voltage`;
+      - `nut_repo/drivers/cps-hid.c:96-330`;
+      - `nut_repo/drivers/usbhid-ups.c:452-476`.
+
+      **Modifica:**
+      1. Lookup verbatim, con il nome upstream nel commento: `kFullychargedInfo` (`{1,"fullycharged"},{0,"notfullycharged"}`) e `kTimelimitexpiredInfo` (`{1,"timelimitexp"},{0,"!timelimitexp"}`).
+      2. In `Context`, `struct CpsScale { bool might_need_scale = false; double battery = 1; bool battery_checked = false; double input_freq = 1, output_freq = 1; bool input_checked = false, output_checked = false; } cps;`, con un commento sulle globali upstream.
+      3. `inline bool cpsFrequencyScale(double report, double nominal, double low, double high, double& scale)`: il corpo di `CyberPowerDriver::frequencyScale`, che si toglie nel TASK-06.
+      4. Nuove voci di `Conv`, con commento alla funzione upstream: `CpsBattCharge`, `CpsBattStatus`, `CpsBattVolt`, `CpsInputFreq`, `CpsOutputFreq`. In `decode()`:
+         - `CpsBattCharge`: `snprintf("%.0f", v < 100 ? v : 100)`;
+         - `CpsBattStatus`: `snprintf("%.0f%%", v)`;
+         - `CpsBattVolt`: se `ctx.cps.might_need_scale && !ctx.cps.battery_checked && data`, legge `battery.voltage.nominal` con `data->find()`; se esiste ed è diverso da 0, imposta `battery = 2.0/3` quando `v / nom > 1.4` e mette `battery_checked`. Poi `snprintf("%.1f", battery * v)`;
+         - `CpsInputFreq`/`CpsOutputFreq`: se `might_need_scale` e non ancora deciso, `cpsFrequencyScale(v, nom, low, high, s)` con `<prefix>.frequency.nominal/low/high` da `data->find()` (0 se assenti); se dà vero, salva la scala e il flag. Poi `snprintf("%.1f", scale * v)`.
+      5. Nessuna di queste è una riga interna: niente modifiche a `isInternalRow`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_cyberpower_driver` verde (il driver non usa ancora il nuovo codice).
+
+      **Fatto:** API pronta e compilata con GCC 5 (niente variabili inline).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — lookup, `Context::cps`, `cpsFrequencyScale`, conversioni
+
+      ## Criteri di Completamento
+      - [ ] Le due suite indicate verdi
+      - [ ] Ogni nuova conversione cita la funzione upstream
+    ref: TASK-02
+  - id: TASK-03
+    title: Test delle conversioni CyberPower
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il TASK-02 con attese ricavate da `cps-hid.c`.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (helper, `test_compute_realpower` come modello).
+
+      **Modifica:** test nuovi, registrati in `main()`:
+      - `test_cps_battcharge`: 87 → `87`, 120 → `100`;
+      - `test_cps_battstatus`: 100 → `100%`;
+      - `test_cps_battvolt_scale`:
+        - PID 0501 (`ctx.cps.might_need_scale = true`) con `battery.voltage.nominal=12` in `UPSData`: 20,8 → `13.9`;
+        - un secondo valore 18,0 → `12.0`: scala già decisa;
+        - con `might_need_scale=false`: 20,8 → `20.8`;
+        - senza nominale: 20,8 → `20.8`, e `battery_checked` resta falso;
+        - con nominale 24 e 27,2 → `27.2` (rapporto sotto 1,4);
+      - `test_cps_frequency_scale`:
+        - `CpsInputFreq` 501 → `50.1`, poi 499 → `49.9` (scala tenuta);
+        - 50 → `50.0`;
+        - `might_need_scale=false` e 501 → `501.0`;
+        - `CpsOutputFreq` indipendente dall'input;
+      - `test_cps_frequency_scale_rule`: i casi oggi in `test_cyberpower_frequency_scale_rule`, spostati su `NutTable::cpsFrequencyScale`;
+      - `test_status_lookups_cps`: `kFullychargedInfo` 1 → `fullycharged` e 0 → `notfullycharged` (con il bit opposto azzerato da `applyStatusToken`); `kTimelimitexpiredInfo`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde. Mutazione: togliere `battery_checked = true` deve far fallire `test_cps_battvolt_scale`.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** se un'attesa differisce dal codice upstream, vale upstream: correggi il TASK-02.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi elencati verdi
+      - [ ] La mutazione indicata colta
+    ref: TASK-03
+  - id: TASK-04
+    title: 'cpsHid2Nut(): tutte le righe di cps_hid2nut e test di copertura'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `cpsHid2Nut()` con tutte le righe di `cps-hid.c:357-437`, nell'ordine upstream.
+
+      **Leggi:**
+      - `nut_repo/drivers/cps-hid.c:340-440` (`cps_usage_lkp` e `cps_hid2nut`);
+      - `lib/USBHostUPS/src/NutTable.h`: `cpsHid2Nut()` e `mgeHid2Nut()` come modello (commenti, `#if`, righe comando);
+      - `lib/USBHostUPS/src/NUTUsages.h` per i nomi standard;
+      - `test/test_nut_table/test_main.cpp`: `checkTableCoverage`, `test_mge_rows_have_supported_formats`.
+
+      **Modifica:**
+      1. Riscrivi `cpsHid2Nut()` riga per riga, ognuna preceduta da `// cps-hid.c:N <path upstream>`:
+         - 357-363: le cinque `unmapped.*` dentro `#if WITH_UNMAPPED_DATA_POINTS` / `#endif`;
+         - 366 `StringId`; 367 la riga RW di oggi; 368 `StringId`; 369 `Number`; 370 RW di oggi; 371 `CpsBattCharge` con dfl `"%s"`; 372 `Number`; 373 RW di oggi; 374 `Number`; 375 `CpsBattVolt`; 376 `CpsBattStatus`;
+         - 379 `Number`; 380 `Lookup kBeeperInfo`; 381 `Lookup kTestRead`; 382-385 `Number`; 386-387 i commenti di esclusione di oggi; 388-390 `Number` con `HU_FLAG_QUICK_POLL`; 391 `StringId` su `UPS.PowerSummary.0xFF0100D0` con `HU_FLAG_STATIC`; 392 `KelvinCelsius`;
+         - 395-403: `BOOL` con `kOnlineInfo`, `kChargingInfo`, `kDischargingInfo`, `kLowbattInfo` (queste quattro con `HU_FLAG_QUICK_POLL`), `kFullychargedInfo`, `kTimelimitexpiredInfo`, `kReplacebattInfo`, `kBoostInfo`, `kOverloadInfo`;
+         - 408 `CpsInputFreq` (dfl `"%.1f"`); 409 `Number "%.0f"`; 410 `Number "%.1f"`; 411-416 le RW di oggi; 421 `CpsOutputFreq`; 422 `"%.1f"`; 423 `"%.0f"`;
+         - 426-437: righe `HU_TYPE_CMD`; 429/430 con `"60"`/`"120"` e il commento `DEFAULT_OFFDELAY_CPS / DEFAULT_ONDELAY_CPS (usbhid-ups.h:66-67)`.
+      2. In `test/test_nut_table/test_main.cpp`:
+         - `test_cps_table_covers_every_upstream_row()`: `checkTableCoverage("nut_repo/drivers/cps-hid.c", "static hid_info_t cps_hid2nut[]", "lib/USBHostUPS/src/NutTable.h", "inline const HidInfo* cpsHid2Nut", "inline const HidInfo* ecoflowHid2Nut")`;
+         - `test_cps_rows_have_supported_formats()`: come quello mge, sulle righe di `cpsHid2Nut()`.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog` verde: le RW CPS restano le stesse.
+      - Mutazione: togliere il commento `cps-hid.c:386` fa fallire il test di copertura.
+
+      **Fatto:** tabella completa, copertura verificata dal test.
+
+      **Blocchi:** `test_cyberpower_driver` e `test_record_replay` possono fallire finché il TASK-06 non supera le mappature generiche. È atteso: non correggerli qui.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — righe di `cpsHid2Nut()`
+      - test/test_nut_table/test_main.cpp — copertura e formati
+
+      ## Criteri di Completamento
+      - [ ] Ogni riga 358-437 presente come riga o come commento (test verde)
+      - [ ] `test_rw_catalog` verde senza modifiche
+    ref: TASK-04
+  - id: TASK-05
+    title: 'GenericDriver: stima di ups.realpower solo con riga leggibile, ricalcolo sul nominale, hook requestTableStrings'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** adattare la base ai driver la cui tabella lega righe che il driver non legge mai.
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.h` / `.cpp`: `bindNutTable`, `publishRow`, `collectStringRequests`, `readsActivePower`, `acceptPollReport`.
+
+      **Modifica:**
+      1. `bindNutTable()`: `_nut_has_realpower` vale vero solo se una riga `ups.realpower` legata ha l'usage (`b.idx`) o il gemello (`b.twin_idx`) con `report_type == 1`, oppure `report_type == 3 && acceptPollReport(3, report_id)`. Commento: le righe legate in report mai letti (CyberPower, issue #40) lasciano la stima.
+      2. `publishRow()`: senza `_nut_has_realpower`, chiama `ups_data.updateRealPower()` dopo aver scritto `ups.load`, `ups.power.nominal` o `ups.realpower.nominal` (oggi solo `ups.load`). Il ramo Eaton (`EatonComputeRealpower`) resta identico.
+      3. `virtual bool requestTableStrings(IHidTransport* host) const { return true; }` nella sezione protetta, con commento. In `collectStringRequests()` il ciclo sulle righe `StringId` gira solo se `requestTableStrings(host)`.
+      4. Se `readsActivePower()` non ha più chiamanti dopo il TASK-06, toglilo lì; per ora resta.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_eaton_driver -f test_poll_cycle -f test_nut_table` verde. Il replay Eaton 3S/5P non deve cambiare: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` può fallire solo sui casi CyberPower.
+
+      **Fatto:** Eaton e Generic invariati, nuovo hook disponibile.
+
+      **Blocchi:** se un test Eaton cambia, fermati: la regola di `_nut_has_realpower` deve dare vero per la riga 2087.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — hook `requestTableStrings`
+      - lib/USBHostUPS/src/GenericDriver.cpp — `bindNutTable`, `publishRow`, `collectStringRequests`
+
+      ## Criteri di Completamento
+      - [ ] Le quattro suite indicate verdi
+      - [ ] Replay Eaton invariato
+    ref: TASK-05
+  - id: TASK-06
+    title: 'CyberPowerDriver: solo hook non tabellari, mappature generiche superate, comandi dalla tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `CyberPowerDriver` senza mappature scritte a mano (ADR 0011).
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/CyberPowerDriver.h` / `.cpp`;
+      - `lib/USBHostUPS/src/EatonDriver.cpp` (`kSupersededGenericPaths`, `commandTable`) come modello;
+      - `lib/USBHostUPS/src/GenericDriver.cpp:385-567` (percorsi di `decodeReport`).
+
+      **Modifica:**
+      1. **Header:**
+         - togli `parseStringDescriptor`, `collectStringRequests`, `scaleFrequency`, `frequencyScale` (spostato nel TASK-02), `_map`, gli indici delle stringhe e i campi di scala;
+         - aggiungi `supersededGenericPaths()`, `commandTable()` (`NutTable::cpsHid2Nut(n)`) e `requestTableStrings()` (protetto: `!hasVendorReports(host)`).
+      2. **`decodeReport()`:** solo `if (!host) return; _nut_ctx.cps.might_need_scale = host->getPID() == 0x0501; GenericDriver::decodeReport(...)`, con il commento `cps_usb_device_table: cps_battery_scale()`.
+      3. **`setup()`:** solo `GenericDriver::setup()`, che azzera già `_nut_ctx` (e quindi `_nut_ctx.cps`) con `_nut_ctx = NutTable::Context()`.
+      4. **`kSupersededGenericPaths`:** l'elenco della sezione 4 del piano, copiato carattere per carattere da `GenericDriver::decodeReport()`, raggruppato per chiave come in Eaton. In fondo un commento con le estensioni che restano: `ups.mfr.date`, `battery.capacity`, `battery.temperature`.
+      5. **Commento in testa:** tutto da `cpsHid2Nut()` (US-075, ADR 0011). Restano qui quirk, ritardi, scala PID 0501 e layout vendor; `cps_fix_report_desc` non serve (motivo di oggi).
+      6. Se `readsActivePower()` non è più chiamato da nessuno, togli dichiarazione e definizione.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_cyberpower_driver -f test_record_replay -f test_command_catalog`.
+      - I fallimenti attesi sono solo quelli che i TASK-07..09 aggiornano. Annota ogni differenza dallo snapshot del TASK-01 in un appunto per il TASK-09.
+
+      **Fatto:** il driver compila, nessuna mappatura a mano, `grep -c "d.set(" lib/USBHostUPS/src/CyberPowerDriver.cpp` = 0.
+
+      **Blocchi:** se una differenza dello snapshot non si spiega con una riga upstream o con le decisioni del piano, fermati e segnalala prima di aggiornare i test.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/CyberPowerDriver.h — hook
+      - lib/USBHostUPS/src/CyberPowerDriver.cpp — mappature tolte, percorsi superati
+      - lib/USBHostUPS/src/GenericDriver.h / .cpp — eventuale rimozione di `readsActivePower`
+
+      ## Criteri di Completamento
+      - [ ] Nessuna `d.set(` in `CyberPowerDriver.cpp`
+      - [ ] Ogni percorso superato esiste in `GenericDriver::decodeReport()`
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di CyberPowerDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_cyberpower_driver` e coprire gli hook che restano.
+
+      **Leggi:**
+      - `test/test_cyberpower_driver/test_main.cpp`;
+      - `test/test_eaton_driver/test_main.cpp` (come si verifica un percorso superato);
+      - i mock in `test/mocks`. Gotcha: un mock che chiama solo `decodeReport()` va allineato a `USBHostUPS`, cioè anche `postDecode()`.
+
+      **Modifica:**
+      1. Aggiorna i test di oggi senza cambiarne il significato: stato, tensione e scala, sensibilità, ritardi 60/120, `cps variables`, stringhe, stima di `ups.realpower`. `test_cyberpower_frequency_scale_rule` passa in `test_nut_table` (TASK-03): toglilo qui.
+      2. Test nuovi:
+         - `superseded_status_paths_write_nothing`: `PowerSummary.PresentStatus.ShutdownImminent=1` e `BatterySystem.Battery.FullChargeCapacity` non scrivono `ups.status.shutdown_imminent` né `battery.capacity.full`;
+         - `extensions_kept`: `PowerSummary.ManufacturerDate` → `ups.mfr.date`, `Battery.Temperature` → `battery.temperature`;
+         - `realpower_estimate_when_nominal_after_load`: carico 16 %, poi `Output.ConfigApparentPower=1000` → `ups.realpower` stimato (`96`, regola di `updateRealPower`);
+         - `vendor_layout_requests_no_table_strings`: descriptor con un report ≥ 130 e `iDeviceChemistry` letto → `collectStringRequests` senza quell'indice; senza report vendor l'indice c'è;
+         - `scale_only_on_pid_0501`: stesso Voltage 20,8 con nominale 12 → `13.9` su 0501 e `20.8` su 0601;
+         - `string_truncated_to_19`: iOEMInformation di 25 caratteri → `battery.mfr.date` di 19.
+      3. Registra i test in `main()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_cyberpower_driver` verde. Mutazioni: togliere il controllo del PID; far restituire sempre `true` a `requestTableStrings`; non ricalcolare la stima sul nominale. Ognuna deve far fallire un test.
+
+      **Fatto:** suite verde, tre mutazioni colte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_cyberpower_driver/test_main.cpp — test aggiornati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Tre mutazioni colte
+    ref: TASK-07
+  - id: TASK-08
+    title: Test di CommandCatalog con cpsHid2Nut()
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che i comandi CyberPower dalla tabella coincidono con quelli di oggi.
+
+      **Leggi:**
+      - `test/test_command_catalog/test_main.cpp` (i test US-074 con `mgeHid2Nut()` come modello);
+      - `lib/USBHostUPS/src/CommandCatalog.h` (`cmdField`, `buildFromTable`, `resolveShutdownSteps`).
+
+      **Modifica:** test nuovi:
+      1. Per CP1350C, CP1500EPFCLCD, CP1600EPFCLCD e UT850EG: `build(..., cpsHid2Nut)` dà gli stessi nomi di `build(...)` senza tabella, con `beeper_available` vero e poi falso.
+      2. `resolveShutdownSteps` con la tabella su CP1500EPFCLCD per `load.off`, `load.on`, `load.off.delay` (con e senza parametro), `load.on.delay`, `shutdown.stop`, `shutdown.return`, `shutdown.stayoff`: stessi campi e valori del ramo senza tabella, con ritardi 60/120.
+      3. `resolveWrite` di `beeper.mute` → `UPS.PowerSummary.AudibleAlarmControl` con valore 3; `test.battery.start.deep` → `UPS.Output.Test` con valore 2.
+      4. Un descriptor sintetico con `UPS.PowerSummary.AudibleAlarmControl` FEATURE non elenca `beeper.on` né `beeper.off`.
+      5. `shutdown.reboot` è elencato con `UPS.Output.DelayBeforeReboot` FEATURE (valore 10 dalla riga 432) e non lo è con il solo `UPS.PowerSummary.DelayBeforeReboot`. Quest'ultima è una differenza dal ramo senza tabella: scrivila nel commento con la riga upstream.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog` verde.
+
+      **Fatto:** casi 1-5 verdi.
+
+      **Blocchi:** se una fixture differisce dal ramo vecchio per un motivo upstream, scrivilo nel test e nell'appunto per le note, senza forzare l'uguaglianza.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-5 verdi
+      - [ ] Differenze motivate commentate
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Replay delle fixture CyberPower: righe legate, snapshot, LIST CMD/RW, ups.status'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere i criteri 3 e 4 della spec sulle cinque fixture.
+
+      **Leggi:**
+      - `test/test_record_replay/test_main.cpp` (`NUT_ROWS_EATON_3S` come modello, i casi CyberPower, `test_status_baseline_all_fixtures`, lo snapshot del TASK-01);
+      - l'appunto delle usage del TASK-01.
+
+      **Modifica:**
+      1. Per ogni fixture una macro `NUT_ROWS_CPS_<modello>` con i nomi delle righe legate, ordinati (BOOL, RO, RW, comandi). Vanno ricavati a mano dalle usage del descriptor e da `cps-hid.c`, non dal firmware. Sopra, un commento con la riga upstream e il report di ogni riga, come per il 3S. Sostituisci con queste macro gli elenchi di US-066 nei cinque `runFixtureTest`.
+      2. LIST CMD e LIST RW restano le attese di oggi. Una differenza si accetta solo se motivata da una riga upstream, con commento.
+      3. Snapshot del TASK-01: aggiorna le costanti al risultato nuovo. Sopra ogni costante elenca ogni differenza (chiave, prima → dopo, riga `cps-hid.c:N` o decisione del piano). Una differenza non motivata è un bug da correggere nel codice, non nel test.
+      4. `test_status_baseline_all_fixtures`: le righe CyberPower restano uguali, oppure cambiano con il motivo nel commento.
+      5. `expectedValues` dei cinque casi: aggiorna solo se necessario, e solo con un commento.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_rw_catalog` verde.
+
+      **Fatto:** replay verde, ogni differenza elencata e motivata.
+
+      **Blocchi:** una differenza che cambia un valore che l'utente vede oggi (non una chiave in più o in meno) va segnalata all'utente prima di accettarla.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — macro delle righe, snapshot aggiornati, commenti
+      - test/fixtures/cyberpower/*.json — solo se un `expected_ups_data` va corretto (con motivo)
+
+      ## Criteri di Completamento
+      - [ ] Cinque fixture verdi con righe legate ricavate a mano
+      - [ ] LIST CMD/RW invariate o con differenze motivate
+      - [ ] Ogni differenza dello snapshot commentata con la riga upstream
+    ref: TASK-09
+  - id: TASK-10
+    title: Note di rilascio v1.12.0 e documentazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare per gli utenti CyberPower le differenze trovate nel TASK-09.
+
+      **Leggi:**
+      - `docs/releases/v1.12.0.md`;
+      - `docs/adr/0011-single-hid-to-nut-table-per-subdriver.md` (ordine di migrazione);
+      - `data/www/bundle.js` (`NUT_DESCRIPTIONS`), solo se nel TASK-09 è comparsa una chiave nuova.
+
+      **Modifica:**
+      1. `docs/releases/v1.12.0.md`:
+         - aggiorna l'intro e il `description:` del front matter perché citino anche CyberPower (cps-hid, US-075);
+         - in "Upgrade notes" una voce **CyberPower** con le differenze reali: chiavi tolte, `ups.status` da usage non lette da cps-hid, troncamento a 19 caratteri, eventuali differenze di LIST CMD. Se non c'è nessuna differenza visibile, scrivi una riga che lo dice;
+         - in "Other changes" la voce driver CyberPower, come quella Eaton.
+      2. Nella frase di `ups.alarm` che oggi dice "on the other brands ... will as each driver moves to its NUT table", nessuna modifica: cps-hid non legge `CommunicationLost`/`InternalFailure`.
+      3. Se l'ADR 0011 tiene uno stato delle migrazioni, segna US-075 come fatta. Altrimenti non toccarlo.
+      4. Se c'è una chiave nuova senza descrizione, aggiungila a `NUT_DESCRIPTIONS` e rigenera con `python scripts/embed_web.py`.
+
+      **Verifica:**
+      - `python scripts/release_notes.py` (se accetta un controllo del file) oppure una rilettura del markdown;
+      - con `bundle.js` toccato, `git diff --stat` mostra anche `web_assets.h` rigenerato.
+
+      **Fatto:** note complete e coerenti con il TASK-09.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — voce CyberPower
+      - docs/adr/0011-single-hid-to-nut-table-per-subdriver.md — solo se tiene uno stato
+      - data/www/bundle.js — solo per chiavi nuove
+
+      ## Criteri di Completamento
+      - [ ] Ogni differenza del TASK-09 visibile all'utente è nelle note
+      - [ ] Nessuna promessa di prova su hardware CyberPower
+    ref: TASK-10
+  - id: TASK-11
+    title: Regressione completa, build, mutazioni e bozza per i tester
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con suite completa, build e verifica che l'Eaton non cambi.
+
+      **Leggi:** `scripts/nut_snapshot.py`; la memoria del progetto per i gotcha (suite nativa a blocchi, build da PowerShell).
+
+      **Passi:**
+      1. Suite nativa completa in blocchi da circa 8 suite in foreground (`PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f ...`, limite 600 s). Annota il totale `N/N`. Una suite ERRORED transitoria si rilancia da sola.
+      2. Build da PowerShell: `~\.platformio\penv\Scripts\pio.exe run -e esp32-s3-standard`. Annota flash e RAM e confrontali con la build di US-107 (49,2 %).
+      3. Mutazioni del piano non già provate nei task: togliere un percorso da `kSupersededGenericPaths` (per esempio `UPS.PowerSummary.PresentStatus.ShutdownImminent`) e togliere una citazione da `cpsHid2Nut()`. Ognuna deve far fallire un test; poi ripristina.
+      4. Solo con l'ok esplicito dell'utente: OTA sull'Eaton 3S (IP 192.168.1.126, UPS `eaton-3s-700`, credenziali lette da script, mai stampate) e `nut_snapshot.py` prima/dopo. Atteso: snapshot identico, salvo `battery.runtime` (3360/3840).
+      5. Bozza del messaggio ai tester (Luca72 CP1600EPFCLCD, keith721 CP1500PFCLCDa, miskor-bgd UT850EG): cosa provare (`upsc`, `upscmd -l`, `ups.status` con rete staccata, beeper) e cosa allegare (export USB diagnostics). Niente zip né pubblicazione senza richiesta dell'utente.
+
+      **Verifica:** i passi 1-3 verdi; il passo 4 fatto o esplicitamente saltato dall'utente.
+
+      **Fatto:** numeri annotati nella review, bozza pronta.
+
+      **Blocchi:** una regressione Eaton blocca la chiusura: torna al TASK-05.
+
+      ## File Coinvolti
+      - nessun file di produzione (solo esecuzione); bozza ai tester nello scratchpad
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde con totale annotato
+      - [ ] Build ok con flash/RAM annotati
+      - [ ] Mutazioni colte
+      - [ ] OTA sul 3S fatta o saltata su decisione dell'utente
+    ref: TASK-11

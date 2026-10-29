@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: LOW
 points: 5
-status: TODO
+status: DONE
 body: |
   #### US-075: Tabella unica CyberPower (cps-hid): voci RO, stati e comandi
 
@@ -34,3 +34,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
+  - status: PLANNED
+    at: "2026-10-29T18:12:59Z"
+  - status: IN PROGRESS
+    at: "2026-10-29T18:15:17Z"
+  - status: REVIEW
+    at: "2026-10-29T19:08:03Z"
+  - status: DONE
+    at: "2026-10-29T19:28:55Z"

@@ -491,6 +491,122 @@ void test_compute_realpower() {
     TEST_ASSERT_EQUAL_STRING("21", conv(rp, 700, ctx, DecodeResult::OK, &data).c_str());
 }
 
+// --- cps-hid.c conversions (US-075)
+
+void test_cps_battcharge() {
+    // cps_battcharge_fun: "%.0f", clamped to 100
+    HidInfo charge = { "battery.charge", 0, 0, "UPS.X", "%s", 0, Conv::CpsBattCharge, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("87", conv(charge, 87, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("100", conv(charge, 120, ctx).c_str());
+}
+
+void test_cps_battstatus() {
+    // cps_battstatus_fun: "%.0f%%"
+    HidInfo status = { "battery.status", 0, 0, "UPS.X", "%s", 0, Conv::CpsBattStatus, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("100%", conv(status, 100, ctx).c_str());
+}
+
+void test_cps_battvolt_scale() {
+    // cps_battvolt_fun + cps_adjust_battery_scale: 2/3 when voltage / nominal > 1.4, decided once
+    HidInfo volt = { "battery.voltage", 0, 0, "UPS.X", "%s", 0, Conv::CpsBattVolt, nullptr, 0 };
+    UPSData data;
+    data.set("battery.voltage.nominal", "12");
+    Context ctx;
+    ctx.cps.might_need_scale = true; // PID 0x0501
+    TEST_ASSERT_EQUAL_STRING("13.9", conv(volt, 20.8, ctx, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_TRUE(ctx.cps.battery_checked);
+    TEST_ASSERT_EQUAL_STRING("12.0", conv(volt, 18.0, ctx, DecodeResult::OK, &data).c_str()); // scale kept
+
+    Context other; // no cps_battery_scale hook
+    TEST_ASSERT_EQUAL_STRING("20.8", conv(volt, 20.8, other, DecodeResult::OK, &data).c_str());
+
+    Context no_nominal;
+    no_nominal.cps.might_need_scale = true;
+    UPSData empty;
+    TEST_ASSERT_EQUAL_STRING("20.8", conv(volt, 20.8, no_nominal, DecodeResult::OK, &empty).c_str());
+    TEST_ASSERT_FALSE(no_nominal.cps.battery_checked); // decided by a later value
+    TEST_ASSERT_EQUAL_STRING("20.8", conv(volt, 20.8, no_nominal, DecodeResult::OK, nullptr).c_str());
+
+    Context below;
+    below.cps.might_need_scale = true;
+    UPSData nominal24;
+    nominal24.set("battery.voltage.nominal", "24");
+    TEST_ASSERT_EQUAL_STRING("27.2", conv(volt, 27.2, below, DecodeResult::OK, &nominal24).c_str());
+    TEST_ASSERT_TRUE(below.cps.battery_checked);
+    TEST_ASSERT_EQUAL_STRING("40.0", conv(volt, 40.0, below, DecodeResult::OK, &nominal24).c_str()); // 1.0 kept
+}
+
+void test_cps_frequency_scale() {
+    // cps_input_freq_fun / cps_output_freq_fun: one factor per direction, decided once
+    HidInfo in = { "input.frequency", 0, 0, "UPS.X", "%.1f", 0, Conv::CpsInputFreq, nullptr, 0 };
+    HidInfo out = { "output.frequency", 0, 0, "UPS.Y", "%.1f", 0, Conv::CpsOutputFreq, nullptr, 0 };
+    UPSData data;
+    Context ctx;
+    ctx.cps.might_need_scale = true;
+    TEST_ASSERT_EQUAL_STRING("50.1", conv(in, 501, ctx, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_EQUAL_STRING("49.9", conv(in, 499, ctx, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_EQUAL_STRING("50.0", conv(out, 50, ctx, DecodeResult::OK, &data).c_str()); // its own factor
+    TEST_ASSERT_EQUAL_STRING("50.1", conv(out, 50.1, ctx, DecodeResult::OK, &data).c_str());
+
+    Context other; // no hook: as reported
+    TEST_ASSERT_EQUAL_STRING("501.0", conv(in, 501, other, DecodeResult::OK, &data).c_str());
+
+    // input.frequency.nominal published: 60 Hz +-5 %, so 50 fits neither factor
+    Context nominal60;
+    nominal60.cps.might_need_scale = true;
+    data.set("input.frequency.nominal", "60");
+    TEST_ASSERT_EQUAL_STRING("50.0", conv(in, 50, nominal60, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_FALSE(nominal60.cps.input_checked);
+
+    // output.frequency.low/high published: 500 / 10 = 50 is inside 47..53
+    Context limits;
+    limits.cps.might_need_scale = true;
+    data.set("output.frequency.low", "47");
+    data.set("output.frequency.high", "53");
+    TEST_ASSERT_EQUAL_STRING("50.0", conv(out, 500, limits, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_TRUE(limits.cps.output_checked);
+    // 46 fits neither 47..53 nor (4.6) it: published as it is, undecided
+    Context below;
+    below.cps.might_need_scale = true;
+    TEST_ASSERT_EQUAL_STRING("46.0", conv(out, 46, below, DecodeResult::OK, &data).c_str());
+    TEST_ASSERT_FALSE(below.cps.output_checked);
+}
+
+void test_cps_frequency_scale_rule() {
+    // cps_adjust_frequency_scale: guessed nominal, then +-5 % of it, or 45..65 Hz
+    double scale = -1;
+    TEST_ASSERT_TRUE(cpsFrequencyScale(50.0, 0, 0, 0, scale));
+    TEST_ASSERT_EQUAL_FLOAT(1.0, scale);
+    TEST_ASSERT_TRUE(cpsFrequencyScale(500.0, 0, 0, 0, scale));
+    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
+    TEST_ASSERT_TRUE(cpsFrequencyScale(60.0, 0, 0, 0, scale));
+    TEST_ASSERT_EQUAL_FLOAT(1.0, scale);
+    TEST_ASSERT_TRUE(cpsFrequencyScale(599.0, 0, 0, 0, scale));
+    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
+    // Known nominal: 50 Hz +-5%
+    TEST_ASSERT_TRUE(cpsFrequencyScale(498.0, 50, 0, 0, scale));
+    TEST_ASSERT_EQUAL_FLOAT(0.1, scale);
+    // Neither 1 nor 0.1 fits: undecided
+    TEST_ASSERT_FALSE(cpsFrequencyScale(1000.0, 0, 0, 0, scale));
+    TEST_ASSERT_FALSE(cpsFrequencyScale(56.0, 50, 0, 0, scale));
+}
+
+void test_status_lookups_cps() {
+    // fullycharged_info and timelimitexpired_info (usbhid-ups.c:452-476)
+    HidInfo full = { "BOOL", 0, 0, "UPS.X", nullptr, 0, Conv::Lookup, NUT_LKP(kFullychargedInfo) };
+    HidInfo expired = { "BOOL", 0, 0, "UPS.Y", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) };
+    Context ctx;
+    applyStatusToken(ctx.status, statusToken(full, 0, ctx, nullptr));
+    TEST_ASSERT_TRUE(bit(ctx.status, ST_NOTFULLYCHARGED));
+    applyStatusToken(ctx.status, statusToken(full, 1, ctx, nullptr));
+    TEST_ASSERT_TRUE(bit(ctx.status, ST_FULLYCHARGED));
+    TEST_ASSERT_FALSE(bit(ctx.status, ST_NOTFULLYCHARGED));
+    TEST_ASSERT_EQUAL_STRING("timelimitexp", statusToken(expired, 1, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!timelimitexp", statusToken(expired, 0, ctx, nullptr));
+}
+
 void test_command_rows_never_published() {
     // HU_TYPE_CMD rows: bound, but outside the INIT rule and never given a value
     static const HidInfo t[] = {
@@ -580,9 +696,9 @@ void test_vendor_alarms_in_table_order() {
 
 // --- structure of the table
 
-void test_mge_rows_have_supported_formats() {
-    size_t n;
-    const HidInfo* t = mgeHid2Nut(n);
+// Every row of a table formats its value with a format formatNumber() supports, or "%s" with a
+// conversion that gives text
+static void checkSupportedFormats(const HidInfo* t, size_t n) {
     for (size_t i = 0; i < n; i++) {
         const HidInfo& r = t[i];
         // Rows that never format a value: driver-side defaults, internal rows, string indices,
@@ -597,6 +713,18 @@ void test_mge_rows_have_supported_formats() {
         // A "%s" row needs a conversion that gives text
         if (strcmp(r.dfl, "%s") == 0) TEST_ASSERT_TRUE_MESSAGE(r.conv != Conv::Number, r.info_type);
     }
+}
+
+void test_mge_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = mgeHid2Nut(n);
+    checkSupportedFormats(t, n);
+}
+
+void test_cps_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = cpsHid2Nut(n);
+    checkSupportedFormats(t, n);
 }
 
 // --- Coverage of the upstream table (ADR 0011 rule 1, US-074 rework) ---
@@ -689,6 +817,12 @@ void test_mge_table_covers_every_upstream_row() {
                        "inline const HidInfo* mgeHid2Nut", "inline const HidInfo* apcHid2Nut");
 }
 
+void test_cps_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every cps_hid2nut row is in cpsHid2Nut(), as a row or as a comment (US-075)
+    checkTableCoverage("nut_repo/drivers/cps-hid.c", "static hid_info_t cps_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* cpsHid2Nut", "inline const HidInfo* ecoflowHid2Nut");
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_number_follows_row_format);
@@ -715,9 +849,17 @@ int main(int argc, char** argv) {
     RUN_TEST(test_us074_lookups);
     RUN_TEST(test_power_factor);
     RUN_TEST(test_compute_realpower);
+    RUN_TEST(test_cps_battcharge);
+    RUN_TEST(test_cps_battstatus);
+    RUN_TEST(test_cps_battvolt_scale);
+    RUN_TEST(test_cps_frequency_scale);
+    RUN_TEST(test_cps_frequency_scale_rule);
+    RUN_TEST(test_status_lookups_cps);
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
     RUN_TEST(test_mge_table_covers_every_upstream_row);
+    RUN_TEST(test_cps_rows_have_supported_formats);
+    RUN_TEST(test_cps_table_covers_every_upstream_row);
     RUN_TEST(test_alarm_rows_of_mge_table);
     RUN_TEST(test_vendor_alarms_in_table_order);
     return UNITY_END();

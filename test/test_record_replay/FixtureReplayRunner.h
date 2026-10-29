@@ -369,6 +369,22 @@ public:
     }
 
     /**
+     * Everything served at the end of the replay (US-075): every key of UPSData sorted, one
+     * "key=value" per line, then ups.status. Empty when the fixture is unusable.
+     */
+    static std::string snapshot(const char* filePath) {
+        ReplaySession s;
+        if (!replay(filePath, s)) return "";
+        std::vector<std::string> lines;
+        for (const auto& p : s.ups_data.getAll()) lines.push_back(std::string(p.key.c_str()) + "=" + p.value.c_str());
+        std::sort(lines.begin(), lines.end());
+        std::string out;
+        for (const auto& l : lines) out += l + "\n";
+        out += "ups.status=" + std::string(UPSData::computeUPSStatusString(s.ups_data).c_str()) + "\n";
+        return out;
+    }
+
+    /**
      * The status served at the end of the replay (US-107): ups.status, and ups.alarm /
      * input.transfer.reason, where nullptr means that the key must be missing.
      */

@@ -14,10 +14,6 @@
 
 #include "CyberPowerDriver.h"
 #include "IHidTransport.h"
-#include "HIDParser.h"
-#include "HIDUsages.h"
-#include "Quirks.h"
-#include <cmath>
 
 /**
  * @brief CyberPower Driver Implementation
@@ -25,42 +21,13 @@
  * ADR 0003 COMPLIANCE:
  * This sub-driver faithfully mirrors the official NUT behavior for CyberPower HID devices.
  * - Reference: nut_repo/drivers/cps-hid.c
- * - ConfigVoltage: UPS.PowerSummary.ConfigVoltage -> battery.voltage.nominal, as in cps-hid (GenericDriver mapping).
+ * - Every variable, the status and the instant commands come from cpsHid2Nut() (US-075,
+ *   ADR 0011): the standard mappings of the same keys are superseded below, and the driver
+ *   keeps only hooks (poll quirks, delays, the PID 0x0501 scale hook, vendor layouts).
  * - String Inversion: cps-hid handles UTF-16 inversion (handled generically via QUIRK_INVERT_STRINGS).
- * - cps_battvolt / cps_input_freq / cps_output_freq: the 2/3 and 0.1 scales of PID 0x0501.
  * - cps_fix_report_desc is not needed: extractUsage() does not clip values to the
  *   Logical Maximum, so the wrong LogMax of the voltages and ConfigActivePower is harmless.
  */
-
-// cps-hid.c: battery_voltage_sanity_check
-static const double kBatteryVoltageSanityCheck = 1.4;
-
-CyberPowerDriver::CyberPowerDriver() :
-    _chemStrIdx(0),
-    _oemStrIdx(0),
-    _firmwareStrIdx(0),
-    _mightNeedScale(false),
-    _batteryScale(1.0),
-    _batteryScaleChecked(false),
-    _inputFreqScale(1.0),
-    _outputFreqScale(1.0),
-    _inputFreqScaleChecked(false),
-    _outputFreqScaleChecked(false) {}
-
-void CyberPowerDriver::setup() {
-    GenericDriver::setup();
-    _map.invalidate();
-    _chemStrIdx = 0;
-    _oemStrIdx = 0;
-    _firmwareStrIdx = 0;
-    _mightNeedScale = false;
-    _batteryScale = 1.0;
-    _batteryScaleChecked = false;
-    _inputFreqScale = 1.0;
-    _outputFreqScale = 1.0;
-    _inputFreqScaleChecked = false;
-    _outputFreqScaleChecked = false;
-}
 
 // Traffic on EP0 is what makes these firmwares stall: status values come from the
 // INPUT reports the UPS sends every few seconds, the rest is read every 30 s.
@@ -76,116 +43,72 @@ bool CyberPowerDriver::hasVendorReports(IHidTransport* host) {
     return false;
 }
 
-void CyberPowerDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
-    GenericDriver::collectStringRequests(host, data, out);
-    if (hasVendorReports(host)) return;
-    if (_chemStrIdx > 0 && !data.hasKey("battery.type")) out.push_back(_chemStrIdx);
-    if (_firmwareStrIdx > 0 && !data.hasKey("ups.firmware")) out.push_back(_firmwareStrIdx);
-    if (_oemStrIdx > 0 && !data.hasKey("battery.mfr.date")) out.push_back(_oemStrIdx);
-}
+// The standard mappings of GenericDriver::decodeReport() whose keys come from cpsHid2Nut(),
+// copied character by character from that table (US-075)
+static const char* const kSupersededGenericPaths[] = {
+    // Status: only the BOOL rows of cps_hid2nut set the internal ups.status.* keys
+    "UPS.PowerSummary.PresentStatus.ACPresent", "UPS.PowerSummary.ACPresent",
+    "UPS.PowerSummary.PresentStatus.Discharging", "UPS.PowerSummary.Discharging",
+    "UPS.PowerSummary.PresentStatus.Charging", "UPS.PowerSummary.Charging",
+    "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "UPS.PowerSummary.BelowRemainingCapacityLimit",
+    "UPS.PowerSummary.PresentStatus.NeedReplacement", "UPS.PowerSummary.NeedReplacement",
+    "UPS.PowerSummary.PresentStatus.Overload", "UPS.PowerSummary.Overload",
+    "UPS.PowerSummary.PresentStatus.ShutdownImminent", "UPS.PowerSummary.ShutdownImminent",
+    "UPS.PowerSummary.PresentStatus.CommunicationLost", "UPS.PowerSummary.CommunicationLost",
+    "UPS.PowerSummary.PresentStatus.BatteryPresent", "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired",
+    "UPS.PowerSummary.PresentStatus.FullyCharged", "UPS.PowerSummary.PresentStatus.FullyDischarged",
+    // input.voltage, input.frequency, output.voltage, output.frequency
+    "UPS.PowerConverter.Input.Voltage", "UPS.Input.Voltage", "UPS.Flow.Voltage",
+    "UPS.PowerConverter.Input.Frequency", "UPS.Input.Frequency", "UPS.Flow.Frequency",
+    "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
+    "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",
+    // ups.realpower, ups.power
+    "UPS.PowerConverter.Output.ActivePower", "UPS.Output.ActivePower",
+    "UPS.PowerConverter.Output.ApparentPower", "UPS.Output.ApparentPower",
+    // battery.voltage
+    "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Voltage", "UPS.Battery.Voltage",
+    // battery.charge, battery.charge.low, battery.runtime
+    "UPS.PowerSummary.RemainingCapacity", "UPS.PowerSummary.RemainingCapacityLimit",
+    "UPS.PowerSummary.RunTimeToEmpty", "UPS.Battery.RunTimeToEmpty",
+    // ups.load
+    "UPS.PowerSummary.PercentLoad", "UPS.PowerConverter.Output.PercentLoad", "UPS.Output.PercentLoad",
+    // battery.mfr.date: the ManufacturerDate and iOEMInformation rows
+    "UPS.Battery.ManufacturerDate", "UPS.BatterySystem.Battery.Date", "UPS.Battery.Date",
+    // ups.temperature
+    "UPS.PowerSummary.Temperature",
+    // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
+    "UPS.BatterySystem.Battery.FullChargeCapacity",
+    // ups.realpower.nominal, ups.power.nominal
+    "UPS.Flow.ConfigActivePower", "UPS.PowerConverter.ConfigActivePower", "UPS.Output.ConfigActivePower",
+    "UPS.Flow.ConfigApparentPower",
+    // battery.voltage.nominal, input.voltage.nominal, output.voltage.nominal
+    "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
+    "UPS.Flow.ConfigVoltage", "UPS.Input.ConfigVoltage",
+    "UPS.PowerConverter.Output.ConfigVoltage", "UPS.Output.ConfigVoltage",
+    // input.transfer.high, input.transfer.low
+    "UPS.PowerConverter.Output.HighVoltageTransfer", "UPS.PowerConverter.Output.LowVoltageTransfer",
+    "UPS.Output.LowVoltageTransfer", "UPS.Input.LowVoltageTransfer",
+    "UPS.Output.HighVoltageTransfer", "UPS.Input.HighVoltageTransfer",
+    // ups.beeper.status
+    "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
+    // ups.test.result
+    "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test",
+    // ups.timer.shutdown
+    "UPS.PowerSummary.DelayBeforeShutdown",
+    // Kept (ADR 0011 rule 2, standard names cps-hid does not read): ups.mfr.date from
+    // ManufacturerDate, battery.capacity from BatterySystem.Battery.DesignCapacity,
+    // battery.temperature from Battery.Temperature
+};
 
-bool CyberPowerDriver::frequencyScale(double report, double nominal, double low, double high, double& scale) {
-    if (nominal == 0) {
-        if (45 < low && low <= 50) nominal = 50;
-        else if (50 <= high && high <= 55) nominal = 50;
-        else if (45 < report && report <= 55) nominal = 50;
-        else if (450 < report && report <= 550) nominal = 50;
-        else if (55 < low && low <= 60) nominal = 60;
-        else if (60 <= high && high <= 65) nominal = 60;
-        else if (55 < report && report <= 65) nominal = 60;
-        else if (550 < report && report <= 650) nominal = 60;
-    }
-    if (low == 0) low = (nominal == 0) ? 45.0 : nominal * 0.95;
-    if (high == 0) high = (nominal == 0) ? 65.0 : nominal * 1.05;
-
-    if (low <= report && report <= high) {
-        scale = 1.0;
-        return true;
-    }
-    if (low <= report / 10.0 && report / 10.0 <= high) {
-        scale = 0.1;
-        return true;
-    }
-    return false;
-}
-
-// cps_input_freq_fun / cps_output_freq_fun
-void CyberPowerDriver::scaleFrequency(UPSData& d, double v, bool input) {
-    double& scale = input ? _inputFreqScale : _outputFreqScale;
-    bool& checked = input ? _inputFreqScaleChecked : _outputFreqScaleChecked;
-    const char* prefix = input ? "input" : "output";
-    if (_mightNeedScale && !checked) {
-        double s;
-        if (frequencyScale(v, d.getFloat(String(prefix) + ".frequency.nominal"),
-                           d.getFloat(String(prefix) + ".frequency.low"),
-                           d.getFloat(String(prefix) + ".frequency.high"), s)) {
-            scale = s;
-            checked = true;
-        }
-    }
-    d.set(String(prefix) + ".frequency", String(scale * v, 1));
+const char* const* CyberPowerDriver::supersededGenericPaths(size_t& n) const {
+    n = sizeof(kSupersededGenericPaths) / sizeof(kSupersededGenericPaths[0]);
+    return kSupersededGenericPaths;
 }
 
 void CyberPowerDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length == 0 || data == NULL || !host) return;
-
+    if (!host) return;
+    // cps_usb_device_table: cps_battery_scale() is the hook of PID 0x0501 only (battery
+    // voltage and frequency scales, read by the cpsHid2Nut() conversions)
+    _nut_ctx.cps.might_need_scale = host->getPID() == 0x0501;
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
-
-    // cps_usb_device_table: cps_battery_scale() is the hook of PID 0x0501 only
-    _mightNeedScale = host->getPID() == 0x0501;
-
-    typedef UsageMapIndex<CyberPowerDriver>::Mapping Mapping;
-    static const Mapping mappings[] = {
-        // boost_info (cps-hid.c:402): ups.status.boost gives BOOST (US-107)
-        { "UPS.Output.Boost", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.boost", v != 0 ? "1" : "0"); } },
-        { "UPS.Output.Overload", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        // input.sensitivity comes from the NUT table (cps_sensitivity_info, US-066)
-
-        // cps_battvolt: "%.1f", scaled by 2/3 when the reading is well above nominal
-        { "UPS.PowerSummary.Voltage", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef*) {
-            if (drv->_mightNeedScale && !drv->_batteryScaleChecked) {
-                // cps_adjust_battery_scale(): decided once the nominal voltage is known
-                float nominal = d.getFloat("battery.voltage.nominal");
-                if (nominal != 0) {
-                    if (v / nominal > kBatteryVoltageSanityCheck) drv->_batteryScale = 2.0 / 3;
-                    drv->_batteryScaleChecked = true;
-                }
-            }
-            d.set("battery.voltage", String(drv->_batteryScale * v, 1));
-        } },
-        { "UPS.Input.Frequency", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef*) { drv->scaleFrequency(d, v, true); } },
-        { "UPS.Output.Frequency", [](CyberPowerDriver* drv, UPSData& d, double v, const HIDUsageDef*) { drv->scaleFrequency(d, v, false); } },
-
-        { "UPS.PowerSummary.WarningCapacityLimit", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge.warning", String(lrint(v))); } },
-        // cps_battstatus: FullChargeCapacity in percent
-        { "UPS.PowerSummary.FullChargeCapacity", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.status", String(lrint(v)) + "%"); } },
-        { "UPS.Output.ConfigApparentPower", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.power.nominal", String(lrint(v)));
-            d.updateRealPower();
-        } },
-        // Timers read from the device; ups.delay.* are the configured delays (US-058)
-        { "UPS.Output.DelayBeforeStartup", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.start", String(lrint(v))); } },
-        { "UPS.Output.DelayBeforeShutdown", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.shutdown", String(lrint(v))); } },
-        { "UPS.Output.DelayBeforeReboot", [](CyberPowerDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.reboot", String(lrint(v))); } },
-
-        // String indices (stringid_conversion), read by collectStringRequests()
-        { "UPS.PowerSummary.iDeviceChemistry", [](CyberPowerDriver* drv, UPSData&, double v, const HIDUsageDef*) { if (v > 0) drv->_chemStrIdx = (uint8_t)v; } },
-        { "UPS.PowerSummary.iOEMInformation", [](CyberPowerDriver* drv, UPSData&, double v, const HIDUsageDef*) { if (v > 0) drv->_oemStrIdx = (uint8_t)v; } },
-        // CPSFirmwareVersion (0xff0100d0, cps_usage_lkp)
-        { "UPS.PowerSummary.0xFF0100D0", [](CyberPowerDriver* drv, UPSData&, double v, const HIDUsageDef*) { if (v > 0) drv->_firmwareStrIdx = (uint8_t)v; } }
-    };
-
-    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
-}
-
-void CyberPowerDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
-    GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
-    if (length < 2 || data[1] != 0x03) return;
-
-    // The same index may name more than one value (iOEMInformation is often iManufacturer)
-    String str = decodeStringDescriptor(host, data, length);
-    if (_chemStrIdx > 0 && index == _chemStrIdx) ups_data.set("battery.type", str);
-    if (_firmwareStrIdx > 0 && index == _firmwareStrIdx) ups_data.set("ups.firmware", str);
-    // Second battery.mfr.date row of cps_hid2nut, after UPS.Battery.ManufacturerDate
-    if (_oemStrIdx > 0 && index == _oemStrIdx && !ups_data.hasKey("battery.mfr.date")) ups_data.set("battery.mfr.date", str);
 }

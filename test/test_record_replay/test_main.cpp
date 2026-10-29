@@ -308,16 +308,58 @@ void test_replay_powercom_spd750u(void) {
         /* no table rows; powercom-hid.c:620-639 delays with aux 8 */ "ups.delay.shutdown:8 ups.delay.start:8", "ups.delay.shutdown:8 ups.delay.start:8");
 }
 
-// Descriptor only, no scenarios: checks the NUT table rows (US-066)
+// cpsHid2Nut() rows bound by the CyberPower descriptors (US-075), derived from their usages and
+// cps-hid.c, not from the firmware. Common to all five: battery.type (366, iDeviceChemistry),
+// battery.mfr.date (368, iOEMInformation: no UPS.Battery collection, so no 367 row),
+// battery.charge.warning / battery.charge.low / battery.status (369, 370, 376: FEATURE 0x07),
+// battery.charge / battery.runtime / battery.runtime.low (371-373), battery.voltage.nominal and
+// battery.voltage (374-375), ups.load (379, Output.PercentLoad), ups.beeper.status (380,
+// PowerSummary.AudibleAlarmControl), ups.test.result (381, Output.Test), ups.realpower.nominal
+// (385), ups.timer.start / ups.timer.shutdown (388-389), the BOOL rows of PresentStatus.ACPresent,
+// Charging, Discharging, BelowRemainingCapacityLimit, FullyCharged, RemainingTimeLimitExpired
+// (395-400), Output.Boost and Output.Overload (402-403), input.voltage.nominal / input.voltage
+// (409-410), input.transfer.low/high (411-412 on UPS.Input, 414-415 on UPS.Output for the
+// CP1600EPFCLCD), output.voltage (422) and the command rows of Output.Test (426-428),
+// DelayBeforeShutdown/Startup (429-431) and AudibleAlarmControl (433-437). No descriptor has
+// NeedReplacement (401), PowerSummary.Temperature (392), DelayBeforeReboot (390, 432),
+// Output.Frequency (421) or Output.ConfigVoltage (423).
+#define NUT_ROWS_CPS_COMMON_1 "BOOL battery.charge battery.charge.low battery.charge.warning battery.mfr.date " \
+    "battery.runtime battery.runtime.low battery.status battery.type battery.voltage battery.voltage.nominal " \
+    "beeper.disable beeper.enable beeper.mute beeper.off beeper.on "
+#define NUT_ROWS_CPS_COMMON_2 "input.transfer.high input.transfer.low input.voltage input.voltage.nominal " \
+    "load.off.delay load.on.delay output.voltage shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "test.battery.stop ups.beeper.status "
+// BR700ELCD: plus ups.firmware (391, CPSFirmwareVersion 0xFF0100D0) and ups.power.nominal (383,
+// Output.ConfigApparentPower, FEATURE 62)
+#define NUT_ROWS_CPS_BR700ELCD NUT_ROWS_CPS_COMMON_1 NUT_ROWS_CPS_COMMON_2 \
+    "ups.firmware ups.load ups.power.nominal ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
+// CP1350C: neither CPSFirmwareVersion nor Output.ConfigApparentPower
+#define NUT_ROWS_CPS_CP1350C NUT_ROWS_CPS_COMMON_1 NUT_ROWS_CPS_COMMON_2 \
+    "ups.load ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
+// CP1500EPFCLCD: plus ups.firmware (391) and input.sensitivity (416, Output.CPSInputSensitivity)
+#define NUT_ROWS_CPS_CP1500EPFCLCD NUT_ROWS_CPS_COMMON_1 "input.sensitivity " NUT_ROWS_CPS_COMMON_2 \
+    "ups.firmware ups.load ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
+// CP1600EPFCLCD: plus ups.firmware (391), input.sensitivity (416), ups.power (382,
+// Output.ApparentPower 29), ups.power.nominal (383, FEATURE 24) and ups.realpower (384,
+// Output.ActivePower 25: measured, no estimate)
+#define NUT_ROWS_CPS_CP1600EPFCLCD NUT_ROWS_CPS_COMMON_1 "input.sensitivity " NUT_ROWS_CPS_COMMON_2 \
+    "ups.firmware ups.load ups.power ups.power.nominal ups.realpower ups.realpower.nominal ups.test.result " \
+    "ups.timer.shutdown ups.timer.start"
+// UT850EG: the BR700ELCD rows plus input.frequency (408, Input.Frequency FEATURE 42). Its
+// 0xFF010043 is under UPS.0xFF0100BA, not UPS.Output: no input.sensitivity row
+#define NUT_ROWS_CPS_UT850EG NUT_ROWS_CPS_COMMON_1 "input.frequency " NUT_ROWS_CPS_COMMON_2 \
+    "ups.firmware ups.load ups.power.nominal ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
+
+// Descriptor only, no scenarios: checks the NUT table rows (US-066, US-075)
 void test_replay_cyberpower_br700elcd(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json", nullptr, nullptr,
-        "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low",
+        NUT_ROWS_CPS_BR700ELCD,
         /* Output.DelayBeforeShutdown/Startup */ {}, RW_DELAYS, RW_DELAYS);
 }
 
 void test_replay_cyberpower_cp1350c(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP1350C,
         // cps-hid.c rows, aux 10: RemainingCapacityLimit FEATURE 0x07 byte 4 [7, 100, 5, 10, ...]
         // = 10; RemainingTimeLimit INPUT 0x08 bytes 4-5 [.., 44, 1] = 300; Input.Low/High
         // VoltageTransfer FEATURE 0x10 [16, 90, 140] (8 bits each)
@@ -331,7 +373,7 @@ void test_replay_cyberpower_cp1350c(void) {
 
 void test_replay_cyberpower_cp1500epfclcd(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP1500EPFCLCD,
         /* replayed FEATURE 0x1A, CPSInputSensitivity = 2 -> cps_sensitivity_info */ { { "input.sensitivity", "high" },
           // issue #43: FEATURE 0x07 [7, 100, 5, 10, 20, 10, 100] FullChargeCapacity / WarningCapacityLimit,
           // FEATURE 0x15/0x16 [.., 255, 255] = -1, battery.voltage "%.1f" as cps_battvolt
@@ -344,7 +386,7 @@ void test_replay_cyberpower_cp1500epfclcd(void) {
 }
 
 void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
-    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", nullptr, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.sensitivity input.transfer.high input.transfer.low",
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", nullptr, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP1600EPFCLCD,
         /* replayed FEATURE 0x1A, CPSInputSensitivity = 1 -> cps_sensitivity_info */ { { "input.sensitivity", "normal" },
           // issue #43: Output.ConfigApparentPower (FEATURE 0x18 [24, 232, 3, 64, 6] = 1600), and
           // ups.realpower measured by Output.ActivePower (INPUT 0x19 [25, 153, 0], the last
@@ -359,7 +401,7 @@ void test_replay_cyberpower_cp1600epfclcd_issue48(void) {
 
 void test_replay_cyberpower_ut850eg_discussion95(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066) */ "battery.charge.low battery.runtime.low input.transfer.high input.transfer.low",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_UT850EG,
         // issue #43: FEATURE 0x2A [42, 245, 1] Input.Frequency = 501, ten times 50 Hz ->
         // cps_adjust_frequency_scale 0.1 (v1.8.0 served 501.0); battery.voltage "%.1f" as
         // cps_battvolt. No UPS.Battery collection, so no battery.mfr.date row (discussion #95)
@@ -497,6 +539,194 @@ void test_status_baseline_all_fixtures(void) {
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
+
+// US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
+// the firmware before the cps_hid2nut migration. After the migration (every value, status
+// flag and command from cpsHid2Nut()) it is the same, key by key: no difference to list. Usages of the descriptors that matter to the
+// migration (from a dump of the parsed descriptors):
+// - no descriptor has PresentStatus.ShutdownImminent, BatteryPresent, FullyDischarged,
+//   CommunicationLost, PowerSummary.PresentStatus.Overload, BatterySystem.Battery.FullChargeCapacity,
+//   Battery.ManufacturerDate, Battery.Date, PowerSummary.Temperature or any DelayBeforeReboot: the
+//   generic mappings the migration supersedes have nothing to read on these fixtures;
+// - Output.ActivePower and Output.ApparentPower only on the CP1600EPFCLCD (reports 25 and 29,
+//   INPUT and FEATURE); the other four estimate ups.realpower;
+// - BR700ELCD and UT850EG have vendor reports (>= 130: RemainingTimeLimit 130, Output.Test 133,
+//   DelayBeforeShutdown/Startup 134/135), so no table string is requested (issue #40);
+//   CPSFirmwareVersion 0xFF0100D0 is in every descriptor but the CP1350C, iDeviceChemistry and
+//   iOEMInformation in all five, but no fixture records those strings;
+// - Input.Frequency only on the UT850EG (FEATURE 42), no Output.Frequency anywhere;
+// - the CP1600EPFCLCD has Output.InternalFailure/VoltageOutOfRange/FrequencyOutOfRange and the
+//   BR700ELCD and UT850EG have Output.Buck: cps-hid reads none of them.
+static const char* const kCpsSnapshotBr700elcd =
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.mfr=CPS\n"
+    "ups.model=BR700ELCD\n"
+    "ups.status=Unknown\n";
+
+static const char* const kCpsSnapshotCp1350c =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=5040\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=12\n"
+    "battery.voltage=13.9\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.transfer.high=140\n"
+    "input.transfer.low=90\n"
+    "input.voltage.nominal=120\n"
+    "input.voltage=123.0\n"
+    "output.voltage=124.0\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=0\n"
+    "ups.mfr=CPS\n"
+    "ups.model= CP 1350C\n"
+    "ups.realpower.nominal=810\n"
+    "ups.realpower=0\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.timer.shutdown=2048\n"
+    "ups.timer.start=851\n"
+    "ups.status=OL\n";
+
+static const char* const kCpsSnapshotCp1500epfclcd =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=15000\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=24\n"
+    "battery.voltage=24.0\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.sensitivity=high\n"
+    "input.transfer.high=260\n"
+    "input.transfer.low=180\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=238.0\n"
+    "output.voltage=238.0\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=0\n"
+    "ups.mfr=CPS\n"
+    "ups.model=CP1500EPFCLCD\n"
+    "ups.realpower.nominal=900\n"
+    "ups.realpower=0\n"
+    "ups.serial=redacted\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.test.result=Done and passed\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.timer.start=-1\n"
+    "ups.status=OL\n";
+
+static const char* const kCpsSnapshotCp1600epfclcd =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=2900\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=24\n"
+    "battery.voltage=27.2\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.sensitivity=normal\n"
+    "input.transfer.high=257\n"
+    "input.transfer.low=195\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=226.0\n"
+    "output.voltage=226.0\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=16\n"
+    "ups.mfr=CPS\n"
+    "ups.model=CP1600EPFCLCD\n"
+    "ups.power.nominal=1600\n"
+    "ups.power=204\n"
+    "ups.realpower.nominal=1000\n"
+    "ups.realpower=153\n"
+    "ups.serial=TEST0000\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.test.result=No test initiated\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.timer.start=-1\n"
+    "ups.status=OL\n";
+
+static const char* const kCpsSnapshotUt850eg =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=8830\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=12\n"
+    "battery.voltage=13.2\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.frequency=50.1\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=232.0\n"
+    "output.voltage=233.0\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=0\n"
+    "ups.mfr=CPS\n"
+    "ups.model=UT850EG\n"
+    "ups.power.nominal=0\n"
+    "ups.realpower.nominal=425\n"
+    "ups.realpower=0\n"
+    "ups.serial=                \n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.test.result=Done and passed\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.timer.start=-1\n"
+    "ups.status=OL\n";
+
+void test_cyberpower_snapshot_baseline(void) {
+    const struct { const char* file; const char* expected; } fixtures[] = {
+        { "test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json", kCpsSnapshotBr700elcd },
+        { "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json", kCpsSnapshotCp1350c },
+        { "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", kCpsSnapshotCp1500epfclcd },
+        { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", kCpsSnapshotCp1600epfclcd },
+        { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", kCpsSnapshotUt850eg },
+    };
+    for (const auto& f : fixtures) {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(f.expected, FixtureReplayRunner::snapshot(f.file).c_str(), f.file);
+    }
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -531,6 +761,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
     RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);
@@ -569,6 +800,7 @@ void setup() {
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
     RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);

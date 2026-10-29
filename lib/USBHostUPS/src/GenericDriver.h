@@ -92,8 +92,13 @@ protected:
     virtual void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
     // True for the usages of the HU_FLAG_QUICK_POLL status rows of hid2nut() (US-073)
     bool isQuickPollStatusUsage(const HIDUsageDef& u) const;
+    // False when the strings of the table's stringid_conversion rows must not be requested
+    // (CyberPower vendor layouts, issue #40); the device strings are requested anyway (US-075)
+    virtual bool requestTableStrings(IHidTransport* host) const { return true; }
     // String descriptors fetched at the start of a full poll (only the missing ones)
     virtual void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const;
+    // True when the driver reads the report of u: INPUT, or a FEATURE report acceptPollReport() takes
+    bool isReportRead(const HIDUsageDef& u) const;
     // True when the device measures ups.realpower in a report this driver reads
     bool readsActivePower(IHidTransport* host) const;
     // Text of a string descriptor (bLength, bDescriptorType 0x03, UTF-16LE), with the

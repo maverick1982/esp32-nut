@@ -128,7 +128,13 @@ enum class Conv : uint8_t {
     EatonConverterOnline, // eaton_converter_online_info (mge-hid.c)
     // US-074
     MgePowerFactor,       // mge_powerfactor_conversion (mge-hid.c)
-    EatonComputeRealpower // eaton_compute_realpower_info (mge-hid.c)
+    EatonComputeRealpower, // eaton_compute_realpower_info (mge-hid.c)
+    // US-075
+    CpsBattCharge,        // cps_battcharge (cps-hid.c)
+    CpsBattStatus,        // cps_battstatus (cps-hid.c)
+    CpsBattVolt,          // cps_battvolt (cps-hid.c)
+    CpsInputFreq,         // cps_input_freq (cps-hid.c)
+    CpsOutputFreq         // cps_output_freq (cps-hid.c)
 };
 
 struct Lookup {
@@ -314,6 +320,8 @@ static constexpr Lookup kChargerfailInfo[] = { { 1, "chargerfail" }, { 0, "!char
 static constexpr Lookup kVrangeInfo[] = { { 0, "!vrange" }, { 1, "vrange" } };               // vrange_info
 static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };               // frange_info
 static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
+static constexpr Lookup kFullychargedInfo[] = { { 1, "fullycharged" }, { 0, "notfullycharged" } }; // fullycharged_info
+static constexpr Lookup kTimelimitexpiredInfo[] = { { 1, "timelimitexp" }, { 0, "!timelimitexp" } }; // timelimitexpired_info
 
 // Vendor ups.alarm lookups of mge-hid.c (US-107), verbatim: the text is the alarm
 static constexpr Lookup kMgeEmergencyStop[] = { { 1, "Emergency stop!" } };                    // mge_emergency_stop
@@ -351,6 +359,18 @@ struct Context {
     int abm = ABM_UNKNOWN;           // advanced_battery_monitoring
     int abm_path = ABM_PATH_UNKNOWN; // advanced_battery_path
     StatusBits status;               // ups_status, set by the BOOL rows
+    // The scale factors of cps-hid.c (US-075), globals upstream: cps_battery_scale(), the hook
+    // of PID 0x0501, sets might_need_scale; each factor is decided once, by the first value
+    // that tells it
+    struct CpsScale {
+        bool might_need_scale = false; // might_need_battery_scale / might_need_freq_scale
+        double battery = 1;            // battery_scale
+        bool battery_checked = false;
+        double input_freq = 1;         // input_freq_scale
+        double output_freq = 1;        // output_freq_scale
+        bool input_checked = false;
+        bool output_checked = false;
+    } cps;
 };
 
 // CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
@@ -639,6 +659,45 @@ inline bool nominalVoltageValid(long value, Context& ctx) {
     }
 }
 
+// cps-hid.c: battery_voltage_sanity_check
+constexpr double kCpsBatteryVoltageSanityCheck = 1.4;
+
+/**
+ * cps_adjust_frequency_scale() (cps-hid.c:104-209): the factor (1 or 0.1) that brings the
+ * reported frequency inside low..high; nominal, low and high are 0 when unknown. False when
+ * neither fits: the value is published as it is and checked again on the next one.
+ */
+inline bool cpsFrequencyScale(double report, double nominal, double low, double high, double& scale) {
+    if (nominal == 0) {
+        if (45 < low && low <= 50) nominal = 50;
+        else if (50 <= high && high <= 55) nominal = 50;
+        else if (45 < report && report <= 55) nominal = 50;
+        else if (450 < report && report <= 550) nominal = 50;
+        else if (55 < low && low <= 60) nominal = 60;
+        else if (60 <= high && high <= 65) nominal = 60;
+        else if (55 < report && report <= 65) nominal = 60;
+        else if (550 < report && report <= 650) nominal = 60;
+    }
+    if (low == 0) low = (nominal == 0) ? 45.0 : nominal * 0.95;
+    if (high == 0) high = (nominal == 0) ? 65.0 : nominal * 1.05;
+
+    if (low <= report && report <= high) {
+        scale = 1.0;
+        return true;
+    }
+    if (low <= report / 10.0 && report / 10.0 <= high) {
+        scale = 0.1;
+        return true;
+    }
+    return false;
+}
+
+// A published value as strtod() reads it from dstate_getinfo(), 0 when missing
+inline double publishedNumber(const UPSData* data, const char* key) {
+    const String* v = data ? data->find(key) : nullptr;
+    return v ? strtod(v->c_str(), nullptr) : 0;
+}
+
 inline String formatRounded(double v) {
     return String((long)lrint(v));
 }
@@ -722,6 +781,48 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
         float pf = pf_text ? (float)atof(pf_text->c_str()) : 0.80f; // float, as upstream
         long realpower = lround(atoi(load->c_str()) * 0.01 * atoi(nominal->c_str()) * pf);
         snprintf(buf, sizeof(buf), "%ld", realpower);
+        out = buf;
+        return DecodeResult::OK;
+    }
+    case Conv::CpsBattCharge: // cps_battcharge_fun: clamped to 100 %
+        snprintf(buf, sizeof(buf), "%.0f", v < 100.0 ? v : 100.0);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::CpsBattStatus: // cps_battstatus_fun: FullChargeCapacity in percent
+        snprintf(buf, sizeof(buf), "%.0f%%", v);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::CpsBattVolt: { // cps_battvolt_fun
+        Context::CpsScale& cps = ctx.cps;
+        if (cps.might_need_scale && !cps.battery_checked) {
+            // cps_adjust_battery_scale(): decided once battery.voltage.nominal is known
+            double nominal = publishedNumber(data, "battery.voltage.nominal");
+            if (nominal != 0) {
+                if (v / nominal > kCpsBatteryVoltageSanityCheck) cps.battery = 2.0 / 3;
+                cps.battery_checked = true;
+            }
+        }
+        snprintf(buf, sizeof(buf), "%.1f", cps.battery * v);
+        out = buf;
+        return DecodeResult::OK;
+    }
+    case Conv::CpsInputFreq:   // cps_input_freq_fun
+    case Conv::CpsOutputFreq: { // cps_output_freq_fun
+        bool input = info.conv == Conv::CpsInputFreq;
+        Context::CpsScale& cps = ctx.cps;
+        double& scale = input ? cps.input_freq : cps.output_freq;
+        bool& checked = input ? cps.input_checked : cps.output_checked;
+        if (cps.might_need_scale && !checked) {
+            double s;
+            if (cpsFrequencyScale(v,
+                    publishedNumber(data, input ? "input.frequency.nominal" : "output.frequency.nominal"),
+                    publishedNumber(data, input ? "input.frequency.low" : "output.frequency.low"),
+                    publishedNumber(data, input ? "input.frequency.high" : "output.frequency.high"), s)) {
+                scale = s;
+                checked = true;
+            }
+        }
+        snprintf(buf, sizeof(buf), "%.1f", scale * v);
         out = buf;
         return DecodeResult::OK;
     }
@@ -1881,16 +1982,103 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
     return t;
 }
 
+// Every row of cps_hid2nut (US-075, ADR 0011): values, status and instant commands. Vendor
+// usages as cps_usage_lkp names them: CPSFirmwareVersion 0xFF0100D0, CPSInputSensitivity
+// 0xFF010043.
 inline const HidInfo* cpsHid2Nut(size_t& n) {
     static const HidInfo t[] = {
+#if WITH_UNMAPPED_DATA_POINTS
+        // cps-hid.c:358 UPS.PowerSummary.Rechargeable
+        { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:359 UPS.PowerSummary.CapacityMode
+        { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:360 UPS.PowerSummary.DesignCapacity
+        { "unmapped.ups.powersummary.designcapacity", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:361 UPS.PowerSummary.CapacityGranularity1
+        { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:362 UPS.PowerSummary.CapacityGranularity2
+        { "unmapped.ups.powersummary.capacitygranularity2", 0, 0, "UPS.PowerSummary.CapacityGranularity2", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+
+        // Battery page
+        // cps-hid.c:366 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", 0, Conv::StringId, nullptr, 0 },
         // cps-hid.c:367 UPS.Battery.ManufacturerDate
         { "battery.mfr.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_SEMI_STATIC, Conv::BatteryDate, nullptr, 0 },
+        // cps-hid.c:368 UPS.PowerSummary.iOEMInformation
+        { "battery.mfr.date", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", 0, Conv::StringId, nullptr, 0 },
+        // cps-hid.c:369 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
         // cps-hid.c:370 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // cps-hid.c:371 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%s", 0, Conv::CpsBattCharge, nullptr, 0 },
+        // cps-hid.c:372 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
         // cps-hid.c:373 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // cps-hid.c:374 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:375 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%s", 0, Conv::CpsBattVolt, nullptr, 0 },
+        // cps-hid.c:376 UPS.PowerSummary.FullChargeCapacity
+        { "battery.status", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%s", 0, Conv::CpsBattStatus, nullptr, 0 },
+
+        // UPS page
+        // cps-hid.c:379 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:380 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // cps-hid.c:381 UPS.Output.Test
+        { "ups.test.result", 0, 0, "UPS.Output.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
+        // cps-hid.c:382 UPS.Output.ApparentPower
+        { "ups.power", 0, 0, "UPS.Output.ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:383 UPS.Output.ConfigApparentPower
+        { "ups.power.nominal", 0, 0, "UPS.Output.ConfigApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:384 UPS.Output.ActivePower
+        { "ups.realpower", 0, 0, "UPS.Output.ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:385 UPS.Output.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
         // ups.delay.start (cps-hid.c:386) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
         // ups.delay.shutdown (cps-hid.c:387) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // cps-hid.c:388 UPS.Output.DelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.Output.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // cps-hid.c:389 UPS.Output.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.Output.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // cps-hid.c:390 UPS.Output.DelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // cps-hid.c:391 UPS.PowerSummary.CPSFirmwareVersion
+        { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFF0100D0", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // cps-hid.c:392 UPS.PowerSummary.Temperature
+        { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
+
+        // Special case: ups.status & ups.alarm
+        // cps-hid.c:395 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // cps-hid.c:396 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // cps-hid.c:397 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // cps-hid.c:398 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // cps-hid.c:399 UPS.PowerSummary.PresentStatus.FullyCharged
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, 0, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
+        // cps-hid.c:400 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // cps-hid.c:401 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // cps-hid.c:402 UPS.Output.Boost
+        { "BOOL", 0, 0, "UPS.Output.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
+        // cps-hid.c:403 UPS.Output.Overload
+        { "BOOL", 0, 0, "UPS.Output.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+
+        // Input page
+        // cps-hid.c:408 UPS.Input.Frequency
+        { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", 0, Conv::CpsInputFreq, nullptr, 0 },
+        // cps-hid.c:409 UPS.Input.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:410 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
         // cps-hid.c:411 UPS.Input.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Input.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // cps-hid.c:412 UPS.Input.HighVoltageTransfer
@@ -1901,6 +2089,41 @@ inline const HidInfo* cpsHid2Nut(size_t& n) {
         { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Output.HighVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
         // cps-hid.c:416 UPS.Output.CPSInputSensitivity
         { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 0, "UPS.Output.0xFF010043", "%s", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::Lookup, NUT_LKP(kCpsSensitivity) },
+
+        // Output page
+        // cps-hid.c:421 UPS.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", 0, Conv::CpsOutputFreq, nullptr, 0 },
+        // cps-hid.c:422 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // cps-hid.c:423 UPS.Output.ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+
+        // Instant commands (read by CommandCatalog since US-074): beeper.on/off are not in
+        // UpsCommands.h, never listed
+        // cps-hid.c:426 UPS.Output.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:427 UPS.Output.Test
+        { "test.battery.start.deep", 0, 0, "UPS.Output.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:428 UPS.Output.Test
+        { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:429 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY_CPS (usbhid-ups.h:66-67)
+        { "load.off.delay", 0, 0, "UPS.Output.DelayBeforeShutdown", "60", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:430 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY_CPS (usbhid-ups.h:66-67)
+        { "load.on.delay", 0, 0, "UPS.Output.DelayBeforeStartup", "120", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:431 UPS.Output.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.Output.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:432 UPS.Output.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:433 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:434 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:435 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:436 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // cps-hid.c:437 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;
