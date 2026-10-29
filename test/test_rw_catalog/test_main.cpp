@@ -180,10 +180,12 @@ void test_absent_rows_take_default() {
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<HIDUsageDef> usages = { mk("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 3, 11, { 0, 0, 2 }) };
     std::vector<Bound> b = bind(t, n, usages);
-    TEST_ASSERT_EQUAL(1, b.size());
-    TEST_ASSERT_EQUAL_STRING("outlet.desc", b[0].info->info_type);
-    TEST_ASSERT_TRUE(b[0].role == Bound::Role::ACTIVE);
-    TEST_ASSERT_EQUAL_STRING("Main Outlet", b[0].value.c_str());
+    // Since US-074 outlet.id (mge-hid.c:2246) reads the same OutletID, before outlet.desc
+    TEST_ASSERT_EQUAL(2, b.size());
+    TEST_ASSERT_EQUAL_STRING("outlet.id", b[0].info->info_type);
+    TEST_ASSERT_EQUAL_STRING("outlet.desc", b[1].info->info_type);
+    TEST_ASSERT_TRUE(b[1].role == Bound::Role::ACTIVE);
+    TEST_ASSERT_EQUAL_STRING("Main Outlet", b[1].value.c_str());
 }
 
 void test_read_only_row_is_bound_but_not_rw() {

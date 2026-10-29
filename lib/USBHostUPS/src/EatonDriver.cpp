@@ -24,9 +24,9 @@
  * This sub-driver faithfully mirrors the official NUT behavior for Eaton/MGE HID devices.
  * - Reference: nut_repo/drivers/mge-hid.c
  * - Quirk 254/255: Mirrored from nut_repo/drivers/libhid.c (skip reports 254/255 to prevent freeze).
- * - The PowerSummary/BatterySystem variables and the status come from mgeHid2Nut() (US-073,
- *   ADR 0011): the standard mappings of the same keys are superseded below. Input, Output,
- *   Flow and Outlet stay hand-written until US-074.
+ * - Every variable, the status and the instant commands come from mgeHid2Nut() (US-073,
+ *   US-074, ADR 0011): the standard mappings of the same keys are superseded below, and the
+ *   driver keeps only hooks (string descriptors, model and country context, quirks).
  */
 
 EatonDriver::EatonDriver() : _iModelIdx(0), _iModelIdxSeen(false), _iModelSeen(false),
@@ -122,6 +122,30 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test",
     // ups.timer.shutdown
     "UPS.PowerSummary.DelayBeforeShutdown",
+    // US-074. input.voltage, input.frequency
+    "UPS.PowerConverter.Input.Voltage", "UPS.Input.Voltage", "UPS.Flow.Voltage",
+    "UPS.PowerConverter.Input.Frequency", "UPS.Input.Frequency", "UPS.Flow.Frequency",
+    // output.voltage, output.frequency
+    "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
+    "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",
+    // ups.realpower, ups.power
+    "UPS.PowerConverter.Output.ActivePower", "UPS.Output.ActivePower",
+    "UPS.PowerConverter.Output.ApparentPower", "UPS.Output.ApparentPower",
+    // ups.realpower.nominal, ups.power.nominal
+    "UPS.Flow.ConfigActivePower", "UPS.PowerConverter.ConfigActivePower", "UPS.Output.ConfigActivePower",
+    "UPS.Flow.ConfigApparentPower",
+    // input.voltage.nominal: ADR 0011 rule 2, the Flow.[4] value is the output nominal
+    "UPS.Flow.ConfigVoltage", "UPS.Input.ConfigVoltage",
+    // output.voltage.nominal
+    "UPS.PowerConverter.Output.ConfigVoltage", "UPS.Output.ConfigVoltage",
+    // input.transfer.high, input.transfer.low
+    "UPS.PowerConverter.Output.HighVoltageTransfer", "UPS.PowerConverter.Output.LowVoltageTransfer",
+    "UPS.Output.LowVoltageTransfer", "UPS.Input.LowVoltageTransfer",
+    "UPS.Output.HighVoltageTransfer", "UPS.Input.HighVoltageTransfer",
+    // ups.beeper.status
+    "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
+    // Kept (ADR 0011 rule 2, standard names mge-hid does not read): ups.mfr.date from
+    // ManufacturerDate, battery.mfr.date from Battery.ManufacturerDate and the Date strings
 };
 
 const char* const* EatonDriver::supersededGenericPaths(size_t& n) const {
@@ -150,17 +174,8 @@ void EatonDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t r
 
     typedef UsageMapIndex<EatonDriver>::Mapping Mapping;
     static const Mapping mappings[] = {
-        { "UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("outlet.1.switch", v != 0 ? "1" : "0"); d.set("outlet.2.switch", v != 0 ? "1" : "0"); } },
-        { "UPS.Flow.ConfigFrequency", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency.nominal", String((int)v)); d.set("output.frequency.nominal", String((int)v)); } },
-        { "UPS.PowerConverter.ConverterType", [](EatonDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            int type = (int)v;
-            if (type == 1) { d.set("ups.type", "offline / line interactive"); }
-            else if (type == 2) { d.set("ups.type", "online"); }
-            else if (type == 3) { d.set("ups.type", "online - unitary/parallel"); }
-            else if (type == 4) { d.set("ups.type", "online - parallel with hot standy"); }
-            else if (type == 5) { d.set("ups.type", "online - hot standby redundancy"); }
-        } },
-        // Input of mge_type (NutTable::Context, US-066); the country is the device.country row
+        // Context inputs, never published: iModel and Flow.[4].ConfigApparentPower give mge_type
+        // (NutTable::Context, US-066); the country is the device.country row
         { kIModelPath, [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_iModelIdx = (uint8_t)v; drv->_iModelIdxSeen = true; } },
         { "UPS.Flow.ConfigApparentPower", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef* def) {
             if (def && NutTable::pathMatches(*def, kApparentPowerPath)) {

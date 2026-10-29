@@ -154,43 +154,6 @@ void test_eaton_loop_polling_and_string_requests(void) {
     TEST_ASSERT_EQUAL_UINT8(3, mockHost._requestedStrings[2]);
 }
 
-void test_eaton_realpower_recalculated_when_config_arrives_after_load(void) {
-    HIDUsageDef u_load;
-    u_load.report_id = 0x01;
-    u_load.report_type = 1;
-    u_load.bit_offset = 0;
-    u_load.bit_size = 8;
-    strcpy(u_load.path, "UPS.PowerSummary.PercentLoad");
-    u_load.found = true;
-
-    HIDUsageDef u_cap;
-    u_cap.report_id = 0x02;
-    u_cap.report_type = 3;
-    u_cap.bit_offset = 0;
-    u_cap.bit_size = 16;
-    strcpy(u_cap.path, "UPS.Flow.ConfigActivePower");
-    u_cap.found = true;
-
-    mockHost._usages.push_back(u_load);
-    mockHost._usages.push_back(u_cap);
-
-    // 1. Load arrives first (40%)
-    uint8_t r_load[] = { 0x01, 40 };
-    decodeAll(0x01, 1, r_load, sizeof(r_load));
-    TEST_ASSERT_TRUE(ups_data.hasKey("ups.load"));
-    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
-
-    // 2. ConfigActivePower arrives after (1000W = 0x03E8 -> 0xE8, 0x03)
-    uint8_t r_cap[] = { 0x02, 0xE8, 0x03 };
-    decodeAll(0x02, 3, r_cap, sizeof(r_cap));
-    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower.nominal"));
-    TEST_ASSERT_EQUAL_UINT16(1000, ups_data.getFloat("ups.realpower.nominal"));
-    // 40% of 1000W = 400W
-    TEST_ASSERT_TRUE(ups_data.hasKey("ups.realpower"));
-    TEST_ASSERT_EQUAL_UINT16(400, ups_data.getFloat("ups.realpower"));
-}
-
-
 // --- NUT table (US-066) ---
 
 static HIDUsageDef nutField(const char* path, uint32_t usage, uint8_t report_id, uint8_t report_type,
@@ -480,6 +443,94 @@ void test_eaton_country_from_table_row(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("device.country"));
 }
 
+// --- mgeHid2Nut() UPS, Input, Output and Outlet pages (US-074) ---
+
+// eaton_compute_realpower_info (mge-hid.c:2087): ups.realpower from the load and the nominal
+// apparent power with powerfactor 0.80, once UPS.Flow.[4].ConfigApparentPower is read. No
+// estimate from ups.realpower.nominal any more (it was 40 % of 1000 W = 400 here).
+void test_eaton_realpower_computed_as_mge_hid(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.PercentLoad", 0x00840035, 0x01, 3));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigActivePower", 0x00840044, 0x02, 3, 16, { 0, 5 }));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigApparentPower", 0x00840043, 0x03, 3, 16, { 0, 5 }));
+    feed(0x01, 3, 40);
+    TEST_ASSERT_EQUAL_STRING("40", ups_data.get("ups.load").c_str());
+    uint8_t active[] = { 0x02, 0xE8, 0x03 }; // 1000 W
+    decodeAll(0x02, 3, active, sizeof(active));
+    TEST_ASSERT_EQUAL_STRING("1000", ups_data.get("ups.realpower.nominal").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
+    uint8_t apparent[] = { 0x03, 0xE8, 0x03 }; // 1000 VA
+    decodeAll(0x03, 3, apparent, sizeof(apparent));
+    TEST_ASSERT_EQUAL_STRING("1000", ups_data.get("ups.power.nominal").c_str());
+    TEST_ASSERT_EQUAL_STRING("320", ups_data.get("ups.realpower").c_str()); // round(40 * 0.01 * 1000 * 0.8)
+}
+
+// mge-hid.c:2264, on_off_info: outlet.1.status per outlet; outlet.N.switch is gone (ADR 0011 rule 2)
+void test_eaton_outlet_status_on_off(void) {
+    mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", 0x00840049, 0x02, 3, 1, { 0, 0, 3 }));
+    feed(0x02, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("on", ups_data.get("outlet.1.status").c_str());
+    feed(0x02, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("off", ups_data.get("outlet.1.status").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("outlet.1.switch"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("outlet.2.switch"));
+}
+
+// mge-hid.c:2170/2177: input.*.nominal come from Flow.[1]. A device with Flow.[4] only (the 3S)
+// has output.*.nominal and no input nominal values (they were the Flow.[4] values)
+void test_eaton_flow4_is_output_only(void) {
+    mockHost._iProduct = 2;
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigVoltage", 0x00840040, 0x12, 3, 8, { 0, 5 }));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigFrequency", 0x00840042, 0x13, 3, 8, { 0, 5 }));
+    feedString(2, "Eaton 3S");
+    driver.loop(&mockHost, ups_data, 1000);
+    feed(0x12, 3, 230);
+    feed(0x13, 3, 50);
+    TEST_ASSERT_EQUAL_STRING("230", ups_data.get("output.voltage.nominal").c_str());
+    TEST_ASSERT_EQUAL_STRING("50", ups_data.get("output.frequency.nominal").c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("input.voltage.nominal"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("input.frequency.nominal"));
+}
+
+// mge-hid.c:2103 mge_upstype_conversion and 2075 beeper_info
+void test_eaton_ups_type_and_beeper_from_table(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerConverter.0xFFFF0041", 0xffff0041, 0x0C, 3));
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.AudibleAlarmControl", 0x0084005a, 0x20, 3));
+    feed(0x0C, 3, 2);
+    feed(0x20, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("online", ups_data.get("ups.type").c_str());
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+    feed(0x20, 3, 3);
+    TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
+}
+
+// A beeper write is applied by the host before the beeper report is read again: the table
+// row must keep the new status, or the next status report would write the old one back
+void test_eaton_beeper_status_kept_after_host_write(void) {
+    addStatusFields();
+    mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.AudibleAlarmControl", 0x0084005a, 0x20, 3));
+    feed(0x20, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+    // As USBHostUPS::setBeeperLocked() after a successful write
+    ups_data.set("ups.beeper.status", "enabled");
+    driver.noteHostValue("ups.beeper.status", "enabled");
+    feed(0x01, 3, AC | GOOD); // a status report: publishes the table rows again
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+    feed(0x20, 3, 1); // the next read of the beeper report wins
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+}
+
+// eaton_compute_realpower_info reads ups.load: recomputed at each new load
+void test_eaton_realpower_follows_load(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.PercentLoad", 0x00840035, 0x01, 3));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigApparentPower", 0x00840043, 0x03, 3, 16, { 0, 5 }));
+    uint8_t apparent[] = { 0x03, 0xE8, 0x03 }; // 1000 VA
+    decodeAll(0x03, 3, apparent, sizeof(apparent));
+    feed(0x01, 3, 40);
+    TEST_ASSERT_EQUAL_STRING("320", ups_data.get("ups.realpower").c_str());
+    feed(0x01, 3, 50);
+    TEST_ASSERT_EQUAL_STRING("400", ups_data.get("ups.realpower").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -488,7 +539,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
-    RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_eaton_battery_charge_low_owned_by_table);
     RUN_TEST(test_eaton_outlet_desc_default);
     RUN_TEST(test_eaton_model_type_from_imodel);
@@ -504,6 +554,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_battery_type_from_string_row);
     RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
     RUN_TEST(test_eaton_country_from_table_row);
+    RUN_TEST(test_eaton_realpower_computed_as_mge_hid);
+    RUN_TEST(test_eaton_outlet_status_on_off);
+    RUN_TEST(test_eaton_flow4_is_output_only);
+    RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
+    RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
+    RUN_TEST(test_eaton_realpower_follows_load);
     return UNITY_END();
 }
 #else
@@ -513,7 +569,6 @@ void setup() {
     RUN_TEST(test_eaton_voltage_and_battery);
     RUN_TEST(test_eaton_string_descriptors);
     RUN_TEST(test_eaton_loop_polling_and_string_requests);
-    RUN_TEST(test_eaton_realpower_recalculated_when_config_arrives_after_load);
     RUN_TEST(test_eaton_battery_charge_low_owned_by_table);
     RUN_TEST(test_eaton_outlet_desc_default);
     RUN_TEST(test_eaton_model_type_from_imodel);
@@ -529,6 +584,12 @@ void setup() {
     RUN_TEST(test_eaton_battery_type_from_string_row);
     RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
     RUN_TEST(test_eaton_country_from_table_row);
+    RUN_TEST(test_eaton_realpower_computed_as_mge_hid);
+    RUN_TEST(test_eaton_outlet_status_on_off);
+    RUN_TEST(test_eaton_flow4_is_output_only);
+    RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
+    RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
+    RUN_TEST(test_eaton_realpower_follows_load);
     UNITY_END();
 }
 void loop() {}

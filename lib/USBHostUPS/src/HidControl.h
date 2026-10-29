@@ -46,8 +46,10 @@ public:
         // The data lock guards the parsed usages too
         PortLock lk(port);
         bool beeper = port.supportsBeeperToggle() && port.upsData().hasKey("ups.beeper.status");
+        size_t n_table = 0;
+        const NutTable::HidInfo* table = hid->commandTable(n_table); // US-074: the driver's command rows
         return CommandCatalog::build(hid->getUsages(), beeper, port.shutdownCommandsSupported(), port.beeperMuteSupported(),
-                                     port.commandAllowList());
+                                     port.commandAllowList(), table, n_table);
     }
 
     /**
@@ -67,19 +69,30 @@ public:
             if (strcmp(c->name, name) == 0) { supported = true; break; }
         }
         if (!supported) return CommandResult::NOT_SUPPORTED;
+        size_t n_table = 0;
+        const NutTable::HidInfo* table = hid->commandTable(n_table); // static data, outlives the lock
 
-        if (strcmp(name, "beeper.enable") == 0 || strcmp(name, "beeper.disable") == 0) {
-            return port.setBeeper(strcmp(name, "beeper.enable") == 0) ? CommandResult::OK : CommandResult::FAILED;
-        }
-        if (strcmp(name, "beeper.toggle") == 0) {
-            // Read first: the data lock must not be held across setBeeper().
-            // A muted beeper is not disabled: toggling it disables it.
-            bool disabled;
+        if (strcmp(name, "beeper.enable") == 0 || strcmp(name, "beeper.disable") == 0 ||
+            strcmp(name, "beeper.toggle") == 0) {
+            bool enable = strcmp(name, "beeper.enable") == 0;
+            HIDUsageDef field;
+            bool from_row = false;
             {
+                // Read first: the data lock must not be held across the beeper write.
+                // A muted beeper is not disabled: toggling it disables it.
                 PortLock lk(port);
-                disabled = port.upsData().get("ups.beeper.status") == "disabled";
+                if (strcmp(name, "beeper.toggle") == 0) enable = port.upsData().get("ups.beeper.status") == "disabled";
+                if (table) {
+                    // US-074: the field of the beeper.enable / beeper.disable row (find_nut_info)
+                    const HIDUsageDef* f = CommandCatalog::cmdField(table, n_table, hid->getUsages(),
+                                                                    enable ? "beeper.enable" : "beeper.disable");
+                    if (!f) return CommandResult::NOT_SUPPORTED;
+                    field = *f;
+                    from_row = true;
+                }
             }
-            return port.setBeeper(disabled) ? CommandResult::OK : CommandResult::FAILED;
+            bool ok = from_row ? hid->setBeeperField(field, enable) : port.setBeeper(enable);
+            return ok ? CommandResult::OK : CommandResult::FAILED;
         }
         if (strcmp(name, "shutdown.default") == 0) {
             // upsdrv_shutdown() order; each attempt goes through the port's executeCommand(),
@@ -101,6 +114,8 @@ public:
             return CommandResult::FAILED;
         }
         if (strncmp(name, "load.", 5) == 0 || strncmp(name, "shutdown.", 9) == 0) {
+            bool ret = strcmp(name, "shutdown.return") == 0;
+            bool start_auto = false;
             std::vector<CommandCatalog::WriteStep> steps;
             CommandCatalog::StepsResult sr;
             {
@@ -108,12 +123,18 @@ public:
                 // Configured delays (set at connection with the driver defaults). Missing or
                 // not a number: the commands that need them are not run (a fixed fallback
                 // could be too short for CyberPower, which rounds delays down to 60 s)
+                start_auto = (ret || strcmp(name, "shutdown.stayoff") == 0) && port.upsData().hasKey("ups.start.auto");
                 int32_t off_delay = configuredDelay(port.upsData(), "ups.delay.shutdown");
                 int32_t on_delay = configuredDelay(port.upsData(), "ups.delay.start");
-                sr = CommandCatalog::resolveShutdownSteps(name, param, hid->getUsages(), off_delay, on_delay, steps);
+                sr = CommandCatalog::resolveShutdownSteps(name, param, hid->getUsages(), off_delay, on_delay, steps,
+                                                          table, n_table);
             }
             if (sr == CommandCatalog::StepsResult::INVALID_ARGUMENT) return CommandResult::INVALID_ARGUMENT;
             if (sr != CommandCatalog::StepsResult::OK) return CommandResult::NOT_SUPPORTED;
+            // instcmd() of usbhid-ups: ups.start.auto set to "yes" (return) or "no" (stayoff)
+            // first, when supported, whatever the result (decided 2026-10-29, US-074). Only once
+            // the sequence can run, so a refused command leaves the setting alone.
+            if (start_auto) setVariable(port, "ups.start.auto", ret ? "yes" : "no");
             for (size_t i = 0; i < steps.size(); i++) {
                 if (i > 0) delay(125);  // usbhid-ups pause: some UPS reject commands sent too close
                 if (!hid->writeUsage(steps[i].def, (uint32_t)steps[i].value)) return CommandResult::FAILED;
@@ -125,7 +146,7 @@ public:
         uint32_t value = 0;
         {
             PortLock lk(port);  // guards the parsed usages too
-            if (!CommandCatalog::resolveWrite(name, hid->getUsages(), def, value)) {
+            if (!CommandCatalog::resolveWrite(name, hid->getUsages(), def, value, table, n_table)) {
                 return CommandResult::NOT_SUPPORTED;
             }
         }

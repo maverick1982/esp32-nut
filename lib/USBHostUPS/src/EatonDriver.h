@@ -20,6 +20,8 @@ public:
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::mgeDelayPaths(); }
     // Standard mappings whose keys come from mgeHid2Nut() (US-073)
     const char* const* supersededGenericPaths(size_t& n) const override;
+    // Instant commands from the HU_TYPE_CMD rows of mge_hid2nut (US-074)
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::mgeHid2Nut(n); }
     // Model type and country as known now, for the tests
     const NutTable::Context& nutContext() const { return _nut_ctx; }
 

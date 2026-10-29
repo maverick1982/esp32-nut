@@ -192,9 +192,101 @@ inline bool allowed(const char* const* allow, const char* name) {
     return false;
 }
 
+inline bool fitsField(const HIDUsageDef& field, int32_t value);
+
+/**
+ * Field of an instant command row of a NUT table (US-074): the first HU_TYPE_CMD row with
+ * this name whose path has a FEATURE usage, as find_nut_info() in instcmd() (the first row
+ * with hiddata). Deviation: a row whose path exists only as INPUT is skipped, since it could
+ * not be written. dfl receives the row's default value (the value written without a
+ * parameter, atol() upstream).
+ */
+inline const HIDUsageDef* cmdField(const NutTable::HidInfo* table, size_t n, const std::vector<HIDUsageDef>& usages,
+                                   const char* name, const char** dfl = nullptr) {
+    if (!table || !name) return nullptr;
+    for (size_t i = 0; i < n; i++) {
+        const NutTable::HidInfo& row = table[i];
+        if (!NutTable::isCommandRow(row) || strcmp(row.info_type, name) != 0) continue;
+        for (const auto& u : usages) {
+            if (u.report_type == 0x03 && NutTable::pathMatches(u, row.hidpath)) {
+                if (dfl) *dfl = row.dfl;
+                return &u;
+            }
+        }
+    }
+    return nullptr;
+}
+
+// Value written by a command row without a parameter (atol() of its dfl in instcmd())
+inline int32_t cmdDefault(const char* dfl) {
+    return dfl ? (int32_t)atol(dfl) : 0;
+}
+
+// The value fits the field and, when the field declares a logical range, lies within it, as
+// muteField() requires for beeper.mute (deviation: upstream writes whatever the row says)
+inline bool cmdValueFits(const HIDUsageDef& field, int32_t value) {
+    if (!fitsField(field, value)) return false;
+    bool range_declared = field.logical_max > field.logical_min;
+    return !range_declared || value == -1 || (value >= field.logical_min && value <= field.logical_max);
+}
+
+/**
+ * Commands of a driver with a NUT table (US-074): the HU_TYPE_CMD rows found in the
+ * descriptor, plus the commands upsdrv_initinfo() derives (usbhid-ups.c:1642-1656): load.off
+ * from load.off.delay, load.on from load.on.delay, shutdown.return and shutdown.stayoff from
+ * both. Only names of the UpsCommands.h catalog, in its order: beeper.on/off (aliases upstream),
+ * outlet.N.load.*, bypass.* and experimental.* stay out. Project rules kept: beeper commands
+ * only with beeper_available, beeper.toggle from beeper.enable and beeper.disable, beeper.mute
+ * only when 3 fits the field, shutdown.default, shutdown_cmds, mute_allowed and allow.
+ */
+inline std::vector<const UPSCommandInfo*> buildFromTable(const std::vector<HIDUsageDef>& usages, bool beeper_available,
+                                                         bool shutdown_cmds, bool mute_allowed, const char* const* allow,
+                                                         const NutTable::HidInfo* cmd_table, size_t n_cmd_table) {
+    auto has = [&](const char* name) { return cmdField(cmd_table, n_cmd_table, usages, name) != nullptr; };
+    const bool shutdown = shutdown_cmds && has("load.off.delay");
+    const bool startup = shutdown_cmds && has("load.on.delay");
+    const bool stop = shutdown_cmds && has("shutdown.stop");
+    const bool reboot = shutdown_cmds && has("shutdown.reboot");
+
+    std::vector<const UPSCommandInfo*> result;
+    size_t count;
+    const UPSCommandInfo* commands = table(count);
+    for (size_t i = 0; i < count; i++) {
+        const char* n = commands[i].name;
+        bool available = false;
+        if (strcmp(n, "beeper.mute") == 0) {
+            const char* dfl = nullptr;
+            const HIDUsageDef* f = cmdField(cmd_table, n_cmd_table, usages, n, &dfl);
+            available = mute_allowed && beeper_available && f && cmdValueFits(*f, cmdDefault(dfl));
+        } else if (strcmp(n, "beeper.toggle") == 0) {
+            available = beeper_available && has("beeper.enable") && has("beeper.disable");
+        } else if (strncmp(n, "beeper.", 7) == 0) {
+            available = beeper_available && has(n);
+        } else if (strncmp(n, "test.", 5) == 0) {
+            available = has(n);
+        } else if (strcmp(n, "load.off") == 0 || strcmp(n, "load.off.delay") == 0) {
+            available = shutdown;
+        } else if (strcmp(n, "load.on") == 0 || strcmp(n, "load.on.delay") == 0) {
+            available = startup;
+        } else if (strcmp(n, "shutdown.stop") == 0) {
+            available = stop;
+        } else if (strcmp(n, "shutdown.return") == 0 || strcmp(n, "shutdown.stayoff") == 0) {
+            available = shutdown && startup;
+        } else if (strcmp(n, "shutdown.reboot") == 0) {
+            available = reboot;
+        } else if (strcmp(n, "shutdown.default") == 0) {
+            available = reboot || shutdown;
+        }
+        if (available && allowed(allow, n)) result.push_back(&commands[i]);
+    }
+    return result;
+}
+
 inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& usages, bool beeper_available,
                                                 bool shutdown_cmds = true, bool mute_allowed = true,
-                                                const char* const* allow = nullptr) {
+                                                const char* const* allow = nullptr,
+                                                const NutTable::HidInfo* cmd_table = nullptr, size_t n_cmd_table = 0) {
+    if (cmd_table) return buildFromTable(usages, beeper_available, shutdown_cmds, mute_allowed, allow, cmd_table, n_cmd_table);
     const bool test = hasFeature(usages, kTest);
     const bool panel = hasFeature(usages, kPanel);
     const bool shutdown = shutdown_cmds && hasFeature(usages, kShutdown);
@@ -234,8 +326,19 @@ inline std::vector<const UPSCommandInfo*> build(const std::vector<HIDUsageDef>& 
  * False for the other beeper commands (written by setBeeper()), the load and shutdown commands
  * (sequences of writes, resolved by resolveShutdownSteps()) and unknown names or usages.
  */
-inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value) {
+inline bool resolveWrite(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value,
+                         const NutTable::HidInfo* cmd_table = nullptr, size_t n_cmd_table = 0) {
     if (!name) return false;
+    if (cmd_table) {
+        // US-074: the command row and the value of its dfl (instcmd(), atol())
+        if (strcmp(name, "beeper.mute") != 0 && strncmp(name, "test.", 5) != 0) return false;
+        const char* dfl = nullptr;
+        const HIDUsageDef* f = cmdField(cmd_table, n_cmd_table, usages, name, &dfl);
+        if (!f || !cmdValueFits(*f, cmdDefault(dfl))) return false;
+        def = *f;
+        value = (uint32_t)cmdDefault(dfl);
+        return true;
+    }
     if (strcmp(name, "beeper.mute") == 0) {
         const HIDUsageDef* b = muteField(usages);
         if (!b) return false;
@@ -311,11 +414,16 @@ inline bool fitsField(const HIDUsageDef& field, int32_t value) {
  * sequence (the host tries the commands one by one): NOT_SUPPORTED here.
  */
 inline StepsResult resolveShutdownSteps(const char* name, const char* param, const std::vector<HIDUsageDef>& usages,
-                                        int32_t off_delay, int32_t on_delay, std::vector<WriteStep>& steps) {
+                                        int32_t off_delay, int32_t on_delay, std::vector<WriteStep>& steps,
+                                        const NutTable::HidInfo* cmd_table = nullptr, size_t n_cmd_table = 0) {
     steps.clear();
     if (!name) return StepsResult::NOT_SUPPORTED;
-    const HIDUsageDef* sd = findFeature(usages, kShutdown);
-    const HIDUsageDef* st = findFeature(usages, kStartup);
+    // With a NUT table (US-074) the fields are those of its load.off.delay / load.on.delay
+    // rows; the delays stay the configured ones (US-058) instead of the rows' dfl
+    const HIDUsageDef* sd = cmd_table ? cmdField(cmd_table, n_cmd_table, usages, "load.off.delay")
+                                      : findFeature(usages, kShutdown);
+    const HIDUsageDef* st = cmd_table ? cmdField(cmd_table, n_cmd_table, usages, "load.on.delay")
+                                      : findFeature(usages, kStartup);
 
     // One write on a field, with the parameter when the command takes one
     auto single = [&](const HIDUsageDef* field, int32_t dfl, bool takes_param) -> StepsResult {
@@ -340,10 +448,17 @@ inline StepsResult resolveShutdownSteps(const char* name, const char* param, con
     if (strcmp(name, "load.on") == 0) return single(st, 0, false);
     if (strcmp(name, "load.off.delay") == 0) return single(sd, off_delay, true);
     if (strcmp(name, "load.on.delay") == 0) return single(st, on_delay, true);
+    if (cmd_table && (strcmp(name, "shutdown.stop") == 0 || strcmp(name, "shutdown.reboot") == 0)) {
+        // The row's field and dfl: -1 for shutdown.stop, 10 for shutdown.reboot (mge-hid.c:2331-2332)
+        const char* dfl = nullptr;
+        const HIDUsageDef* f = cmdField(cmd_table, n_cmd_table, usages, name, &dfl);
+        return single(f, cmdDefault(dfl), strcmp(name, "shutdown.reboot") == 0);
+    }
     if (strcmp(name, "shutdown.stop") == 0) return single(sd, -1, false);
     if (strcmp(name, "shutdown.reboot") == 0) return single(rebootField(usages), 10, true);
     if (strcmp(name, "shutdown.return") == 0) {
-        if (const HIDUsageDef* cs = apcCsReturnField(usages)) {
+        const HIDUsageDef* cs = cmd_table ? nullptr : apcCsReturnField(usages);
+        if (cs) {
             steps.push_back({ *cs, 1 });
             return StepsResult::OK;
         }

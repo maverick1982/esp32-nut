@@ -52,6 +52,16 @@ public:
         io.push_back({ "beeper", enable ? 1 : 0, depth });
         return beeperOk;
     }
+    // US-074: the driver's command rows (mgeHid2Nut) and the beeper write on a row's field
+    bool useTable = false;
+    const NutTable::HidInfo* commandTable(size_t& n) const override {
+        n = 0;
+        return useTable ? NutTable::mgeHid2Nut(n) : nullptr;
+    }
+    bool setBeeperField(const HIDUsageDef& field, bool enable) override {
+        io.push_back({ std::string("beeperField:") + field.path, enable ? 1 : 0, depth });
+        return beeperOk;
+    }
     bool writeUsage(const HIDUsageDef& def, uint32_t value) override {
         io.push_back({ def.path, (int32_t)value, depth });
         return std::find(failPaths.begin(), failPaths.end(), def.path) == failPaths.end();
@@ -75,6 +85,7 @@ public:
     SetStatus resetResult = SetStatus::OK;
     NutTable::SetStatus planSet(const char* name, const char* value, SetPlan& plan) const override {
         const_cast<FakePort*>(this)->planCalls++;
+        const_cast<FakePort*>(this)->io.push_back({ std::string("set:") + name + "=" + (value ? value : ""), 0, depth });
         if (planResult != SetStatus::OK) return planResult;
         plan.kind = planKind;
         plan.name = "ups.delay.shutdown";
@@ -508,6 +519,87 @@ void test_hid_port_is_its_hid_part(void) {
     TEST_ASSERT_TRUE(neutral.hidPort() == &port);
 }
 
+// --- Commands from the driver's NUT table (US-074) ---
+
+#define P_BATT_BEEPER "UPS.BatterySystem.Battery.AudibleAlarmControl"
+
+// Beepers as on the Eaton 3S: Battery.AudibleAlarmControl and PowerSummary.AudibleAlarmControl
+static void addEatonBeepers(FakePort& port, const char* status) {
+    for (const char* path : { P_BATT_BEEPER, P_BEEPER }) {
+        HIDUsageDef b = featureUsage(path, 0x0084005a);
+        b.bit_size = 8;
+        port.usages.push_back(b);
+    }
+    port.data.set("ups.beeper.status", status);
+}
+
+void test_table_beeper_writes_row_field(void) {
+    // mge-hid.c:2339-2342: the Battery.AudibleAlarmControl rows come first (find_nut_info)
+    FakePort port;
+    port.useTable = true;
+    addEatonBeepers(port, "disabled");
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.enable", nullptr));
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.toggle", nullptr));
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.disable", nullptr));
+    TEST_ASSERT_EQUAL_STRING("beeperField:" P_BATT_BEEPER "=1 beeperField:" P_BATT_BEEPER "=1 beeperField:" P_BATT_BEEPER "=0",
+                             ioStr(port).c_str());
+    for (const auto& w : port.io) TEST_ASSERT_EQUAL(0, w.depth);
+}
+
+void test_table_shutdown_sets_start_auto_first(void) {
+    // instcmd() of usbhid-ups: ups.start.auto first, then the sequence with the 125 ms pause
+    FakePort port;
+    port.useTable = true;
+    addDelayUsages(port, true, true, false);
+    port.data.set("ups.start.auto", "no");
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "shutdown.return", nullptr));
+    TEST_ASSERT_EQUAL_STRING("set:ups.start.auto=yes=0 " P_ST "=30 " P_SD "=20", ioStr(port).c_str());
+    TEST_ASSERT_EQUAL_UINT32(125, mock_delay_total_ms());
+    for (const auto& w : port.io) TEST_ASSERT_EQUAL(0, w.depth);
+
+    port.io.clear();
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "shutdown.stayoff", nullptr));
+    TEST_ASSERT_EQUAL_STRING("set:ups.start.auto=no=0 " P_ST "=-1 " P_SD "=20", ioStr(port).c_str());
+
+    // A failed set does not stop the sequence, as upstream ignores the result of setvar()
+    port.io.clear();
+    port.planResult = SetStatus::FAILED;
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "shutdown.return", nullptr));
+    TEST_ASSERT_EQUAL_STRING("set:ups.start.auto=yes=0 " P_ST "=30 " P_SD "=20", ioStr(port).c_str());
+
+    // Without the variable nothing is set
+    FakePort plain;
+    plain.useTable = true;
+    addDelayUsages(plain, true, true, false);
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(plain, "shutdown.return", nullptr));
+    TEST_ASSERT_EQUAL_STRING(P_ST "=30 " P_SD "=20", ioStr(plain).c_str());
+    TEST_ASSERT_EQUAL(0, plain.planCalls);
+}
+
+void test_table_commands_listed_from_rows(void) {
+    FakePort port;
+    port.useTable = true;
+    addDelayUsages(port, true, true, false);
+    addEatonBeepers(port, "enabled");
+    std::vector<std::string> expected = { "beeper.enable", "beeper.disable", "beeper.toggle", "beeper.mute", "load.off",
+        "load.on", "load.off.delay", "load.on.delay", "shutdown.return", "shutdown.stayoff", "shutdown.stop",
+        "shutdown.default" };
+    TEST_ASSERT_TRUE(expected == names(control().supportedCommands(port)));
+}
+
+void test_table_start_auto_untouched_when_sequence_cannot_run(void) {
+    // ups.delay.* missing: shutdown.return is refused and ups.start.auto is not written
+    FakePort port;
+    port.useTable = true;
+    addDelayUsages(port, true, true, false);
+    port.data.remove("ups.delay.shutdown");
+    port.data.remove("ups.delay.start");
+    port.data.set("ups.start.auto", "no");
+    TEST_ASSERT_EQUAL((int)CommandResult::NOT_SUPPORTED, (int)control().executeCommand(port, "shutdown.return", nullptr));
+    TEST_ASSERT_EQUAL(0, port.planCalls);
+    TEST_ASSERT_EQUAL(0, port.io.size());
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_supported_commands_match_catalog);
@@ -523,5 +615,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_host_goes_through_the_driver_control);
     RUN_TEST(test_hid_control_needs_the_hid_part);
     RUN_TEST(test_hid_port_is_its_hid_part);
+    RUN_TEST(test_table_beeper_writes_row_field);
+    RUN_TEST(test_table_shutdown_sets_start_auto_first);
+    RUN_TEST(test_table_commands_listed_from_rows);
+    RUN_TEST(test_table_start_auto_untouched_when_sequence_cannot_run);
     return UNITY_END();
 }
