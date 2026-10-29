@@ -315,6 +315,14 @@ static constexpr Lookup kVrangeInfo[] = { { 0, "!vrange" }, { 1, "vrange" } };  
 static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };               // frange_info
 static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
 
+// Vendor ups.alarm lookups of mge-hid.c (US-107), verbatim: the text is the alarm
+static constexpr Lookup kMgeEmergencyStop[] = { { 1, "Emergency stop!" } };                    // mge_emergency_stop
+static constexpr Lookup kMgeWiringFault[] = { { 1, "Wiring fault!" } };                        // mge_wiring_fault
+static constexpr Lookup kMgeConfigFailure[] = { { 1, "Fatal EEPROM fault!" } };                // mge_config_failure
+static constexpr Lookup kMgeInverterVolthi[] = { { 1, "Inverter AC voltage too high!" } };     // mge_inverter_volthi
+static constexpr Lookup kMgeInverterVoltlo[] = { { 1, "Inverter AC voltage too low!" } };      // mge_inverter_voltlo
+static constexpr Lookup kMgeShortCircuit[] = { { 1, "Output short circuit!" } };               // mge_short_circuit
+
 // Lookups of the UPS, Output and Outlet pages (US-074), verbatim
 static constexpr Lookup kBeeperInfo[] = { { 1, "disabled" }, { 2, "enabled" }, { 3, "muted" } }; // beeper_info
 static constexpr Lookup kOnOff[] = { { 0, "off" }, { 1, "on" } };                           // on_off_info
@@ -354,11 +362,20 @@ inline bool isCommandRow(const HidInfo& info) {
     return (info.hidflags & HU_TYPE_CMD) != 0;
 }
 
-// Rows that never publish their info_type (US-073): the BOOL rows and the "dummy" rows whose
-// function only keeps state. Upstream never drops them at INIT (their name is never
-// published), so they are always active and outside the first-row-wins rule.
+// Vendor ups.alarm rows (US-107): their text goes to ups.alarm through alarm_set()
+// (usbhid-ups.c:3194), never as a variable of their own; duplicates are allowed
+// (usbhid-ups.c:2323)
+inline bool isAlarmRow(const HidInfo& info) {
+    return info.info_type && strcmp(info.info_type, "ups.alarm") == 0;
+}
+
+// Rows that never publish their info_type (US-073): the BOOL rows, the ups.alarm rows
+// (US-107) and the "dummy" rows whose function only keeps state. Upstream never drops them
+// at INIT (their name is never published), so they are always active and outside the
+// first-row-wins rule.
 inline bool isInternalRow(const HidInfo& info) {
     if (info.info_type && strcmp(info.info_type, "BOOL") == 0) return true;
+    if (isAlarmRow(info)) return true;
     switch (info.conv) {
     case Conv::MgeCountry:
     case Conv::AbmEnabled:
@@ -1104,7 +1121,7 @@ inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx,
         b.last = v;
         b.seen = true;
         if (strcmp(b.info->info_type, "BOOL") == 0) applyStatusToken(ctx.status, statusToken(*b.info, v, ctx, data));
-        else applyInternal(*b.info, v, ctx);
+        else if (!isAlarmRow(*b.info)) applyInternal(*b.info, v, ctx); // ups.alarm: read by vendorAlarms()
         return;
     }
     if (b.role == Bound::Role::DEAD) return;
@@ -1150,9 +1167,26 @@ inline void onValue(std::vector<Bound>& binds, size_t i, double v, Context& ctx,
  */
 inline void walkInternalRows(const std::vector<Bound>& binds, Context& ctx, const UPSData* data = nullptr) {
     for (const Bound& b : binds) {
-        if (!b.seen || !isInternalRow(*b.info)) continue;
+        if (!b.seen || !isInternalRow(*b.info) || isAlarmRow(*b.info)) continue;
         if (strcmp(b.info->info_type, "BOOL") == 0) applyStatusToken(ctx.status, statusToken(*b.info, b.last, ctx, data));
         else applyInternal(*b.info, b.last, ctx);
+    }
+}
+
+/**
+ * The texts of the vendor ups.alarm rows read so far, in table order and separated by a
+ * space, as hid_ups_walk() calls alarm_set() (US-107). A value without a text in the row's
+ * lookup gives none, as a failed hu_find_infoval().
+ */
+inline void vendorAlarms(const std::vector<Bound>& binds, String& out) {
+    for (const Bound& b : binds) {
+        if (!b.seen || !isAlarmRow(*b.info)) continue;
+        for (uint8_t i = 0; i < b.info->lkp_count; i++) {
+            if (b.info->lkp[i].hid != (long)b.last) continue;
+            if (out.length() > 0) out += ' ';
+            out += b.info->lkp[i].nut;
+            break;
+        }
     }
 }
 
@@ -1265,8 +1299,8 @@ inline const DelayPaths* legrandDelayPaths() {
 }
 
 // Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
-// row of mge_hid2nut (US-066, US-073, US-074), instant commands included, but the ups.alarm
-// rows (US-107) and the rows of the stateful mge functions (US-070). The other tables still
+// row of mge_hid2nut (US-066, US-073, US-074, US-107), instant commands and ups.alarm rows
+// included, but the rows of the stateful mge functions (US-070). The other tables still
 // hold only their ST_FLAG_RW rows (US-066). ups.delay.* is left to
 // CommandCatalog::applyDefaultDelays.
 
@@ -1476,12 +1510,18 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
 
         // --- Vendor specific ups.alarm
-        // ups.alarm (mge-hid.c:2155) UPS.PowerSummary.PresentStatus.EmergencyStop: row of the ups.alarm spec (US-107)
-        // ups.alarm (mge-hid.c:2156) UPS.PowerConverter.Input.[1].PresentStatus.WiringFault: row of the ups.alarm spec (US-107)
-        // ups.alarm (mge-hid.c:2157) UPS.PowerSummary.PresentStatus.ConfigurationFailure: row of the ups.alarm spec (US-107)
-        // ups.alarm (mge-hid.c:2158) UPS.PowerConverter.Inverter.PresentStatus.VoltageTooHigh: row of the ups.alarm spec (US-107)
-        // ups.alarm (mge-hid.c:2159) UPS.PowerConverter.Inverter.PresentStatus.VoltageTooLow: row of the ups.alarm spec (US-107)
-        // ups.alarm (mge-hid.c:2160) UPS.PowerConverter.Output.PresentStatus.ShortCircuit: row of the ups.alarm spec (US-107)
+        // mge-hid.c:2155 UPS.PowerSummary.PresentStatus.EmergencyStop
+        { "ups.alarm", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF0068", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeEmergencyStop) },
+        // mge-hid.c:2156 UPS.PowerConverter.Input.[1].PresentStatus.WiringFault
+        { "ups.alarm", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeWiringFault) },
+        // mge-hid.c:2157 UPS.PowerSummary.PresentStatus.ConfigurationFailure
+        { "ups.alarm", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF002D", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeConfigFailure) },
+        // mge-hid.c:2158 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooHigh
+        { "ups.alarm", 0, 0, "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeInverterVolthi) },
+        // mge-hid.c:2159 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooLow
+        { "ups.alarm", 0, 0, "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeInverterVoltlo) },
+        // mge-hid.c:2160 UPS.PowerConverter.Output.PresentStatus.ShortCircuit
+        { "ups.alarm", 0, 0, "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeShortCircuit) },
 
         // --- Input page
         // mge-hid.c:2163 UPS.PowerConverter.Input.[1].Voltage

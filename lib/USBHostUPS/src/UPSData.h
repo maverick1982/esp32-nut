@@ -93,6 +93,12 @@ public:
 
 
     // --- LOGIC ---
+    // getBool() without the String copy: the same true values (US-107)
+    static bool flagSet(const UPSData& d, const char* key) {
+        const String* v = d.find(key);
+        return v && (*v == "1" || *v == "true" || *v == "yes" || *v == "enabled");
+    }
+
     static String computeUPSStatusString(const UPSData& d) {
         String status = "";
         
@@ -122,16 +128,16 @@ public:
         bool timeLimitExpired = d.getBool("ups.status.remaining_time_limit_expired");
         bool noBattery = d.getBool("ups.status.no_battery");
 
+        // Token order of ups_status_set() (usbhid-ups.c:2691-3010): CAL, OL/OB, DISCHRG, CHRG,
+        // LB, OVER, RB, TRIM, BOOST, BYPASS, OFF (US-107). Calibration comes first upstream,
+        // since it looks like OFF or OB on many devices (usbhid-ups.c:2703-2711).
+        if (flagSet(d, "ups.status.cal")) status += "CAL ";
+        // OL and OB exclude each other here: upstream writes OB first when a device reports
+        // both, which this function never produces.
         if (online) status += "OL ";
         if (hasAc ? !acPresent : dischrg) status += "OB ";
         // DEPLETED suppresses DISCHRG, as upstream: DISCHRG && !DEPLETED.
         if (dischrg && !depleted) status += "DISCHRG "; // from the Discharging usage, as usbhid-ups
-        // LB covers lowbatt, timelimitexp and shutdownimm, as upstream
-        // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent never gives FSD:
-        // only the upsmon primary sets it, and upsmon shuts down on FSD even on
-        // mains (issue #65).
-        bool shutdownImminent = d.getBool("ups.status.shutdown_imminent");
-        if (d.getBool("ups.status.battery_low") || timeLimitExpired || shutdownImminent) status += "LB ";
 
         // CHRG is qualified by FullyCharged when the device reports it: present
         // and false (notfullycharged) shows CHRG, present and true hides it.
@@ -145,17 +151,94 @@ public:
             }
         }
 
+        // LB covers lowbatt, timelimitexp and shutdownimm, as upstream
+        // (LOWBATT | TIMELIMITEXP | SHUTDOWNIMM). ShutdownImminent never gives FSD:
+        // only the upsmon primary sets it, and upsmon shuts down on FSD even on
+        // mains (issue #65).
+        bool shutdownImminent = d.getBool("ups.status.shutdown_imminent");
+        if (d.getBool("ups.status.battery_low") || timeLimitExpired || shutdownImminent) status += "LB ";
+
+        if (d.getBool("ups.status.overload")) status += "OVER ";
         // RB covers replacebatt and nobattery, as upstream (REPLACEBATT | NOBATTERY).
         if (d.getBool("ups.status.replace_battery") || noBattery) status += "RB ";
-        if (d.getBool("ups.status.overload")) status += "OVER ";
+        if (flagSet(d, "ups.status.trim")) status += "TRIM ";
+        if (flagSet(d, "ups.status.boost")) status += "BOOST ";
+        if (flagSet(d, "ups.status.bypassauto") || flagSet(d, "ups.status.bypassman")) status += "BYPASS ";
+        // ups.status.ecomode / essmode give no token: upstream puts ECO and ESS in
+        // experimental.ups.mode.buzzwords (buzzmode_set), out of US-107.
+        if (flagSet(d, "ups.status.off")) status += "OFF ";
         // CommunicationLost is an internal fault bit upstream (commfault ->
         // ups.alarm), not a status token: COMM_LOST is not NUT vocabulary (issue #65).
-        // ups.status.shutdown_imminent and ups.status.comm_lost stay in the
-        // dictionary for a future ups.alarm.
+        // ups.status.comm_lost (and the internal_failure of the hand-written mappings)
+        // give no ups.alarm either: they become commfault with the table migration of
+        // their subdriver (US-107 planning).
 
-        if (status.length() == 0) status = "Unknown";
         status.trim();
+        // ALARM leads when ups.alarm is published, as status_commit() with alarm_active
+        // (dstate.c:2315-2321): "ALARM" alone when no other token is set
+        if (d.find("ups.alarm")) return status.length() == 0 ? String("ALARM") : String("ALARM ") + status;
+        if (status.length() == 0) status = "Unknown";
         return status;
+    }
+
+    /**
+     * ups.alarm as usbhid-ups builds it (US-107): the texts of the vendor ups.alarm rows,
+     * applied during hid_ups_walk() (usbhid-ups.c:3194), then those of ups_alarm_set()
+     * (usbhid-ups.c:2606-2644) in its order, separated by a space as alarm_set()
+     * (dstate.c:2370). Empty when no alarm is active. ups.status.comm_lost and
+     * ups.status.internal_failure are left out on purpose: apc-hid and cps-hid do not read
+     * CommunicationLost, and the hand-written keys become commfault with the table
+     * migration of their subdriver.
+     */
+    static void alarmText(const UPSData& d, const String& vendor, String& out) {
+        static const struct { const char* key; const char* text; } bits[] = {
+            { "ups.status.replace_battery", "Replace battery!" },
+            { "ups.status.shutdown_imminent", "Shutdown imminent!" },
+            { "ups.status.fanfail", "Fan failure!" },
+            { "ups.status.no_battery", "No battery installed!" },
+            { "ups.status.battvoltlo", "Battery voltage too low!" },
+            { "ups.status.battvolthi", "Battery voltage too high!" },
+            { "ups.status.chargerfail", "Battery charger fail!" },
+            { "ups.status.overheat", "Temperature too high!" },
+            { "ups.status.commfault", "Internal UPS fault!" },
+            { "ups.status.awaitingpower", "Awaiting power!" },
+            { "ups.status.bypassauto", "Automatic bypass mode!" },
+            { "ups.status.bypassman", "Manual bypass mode!" },
+        };
+        out = vendor;
+        for (const auto& b : bits) {
+            if (!flagSet(d, b.key)) continue;
+            if (out.length() > 0) out += ' ';
+            out += b.text;
+        }
+    }
+
+    // input.transfer.reason of ups_status_set() (usbhid-ups.c:2695-2701), nullptr when the
+    // variable must not exist (US-107)
+    static const char* transferReason(const UPSData& d) {
+        if (flagSet(d, "ups.status.vrange")) return "input voltage out of range";
+        if (flagSet(d, "ups.status.frange")) return "input frequency out of range";
+        return nullptr;
+    }
+
+    // Publishes or removes ups.alarm and input.transfer.reason, writing only what changed
+    // (alarm_commit(), US-107): no String is built and nothing is written while no alarm is
+    // active and nothing changes (ADR 0007)
+    void applyAlarmVariables(const String& vendor) {
+        String text;
+        alarmText(*this, vendor, text);
+        if (text.length() == 0) {
+            if (find("ups.alarm")) remove("ups.alarm");
+        } else if (!valueEquals("ups.alarm", text)) {
+            set("ups.alarm", text);
+        }
+        const char* reason = transferReason(*this);
+        const String* current = find("input.transfer.reason");
+        if (!reason) {
+            if (current) remove("input.transfer.reason");
+        } else if (!current || !(*current == reason)) {
+            set("input.transfer.reason", reason);
+        }
     }
 
     // The device measures ups.realpower (ActivePower): updateRealPower() never estimates

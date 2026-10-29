@@ -316,11 +316,16 @@ void test_eaton_status_low_battery_and_replace(void) {
     feed(0x01, 3, DISCHRG | LOWBATT | GOOD);
     TEST_ASSERT_EQUAL_STRING("OB DISCHRG LB", status().c_str());
     feed(0x01, 3, AC | REPLACE | GOOD);
-    TEST_ASSERT_EQUAL_STRING("OL RB", status().c_str());
+    // replacebatt also gives ups.alarm, and ALARM leads (US-107)
+    TEST_ASSERT_EQUAL_STRING("Replace battery!", ups_data.get("ups.alarm").c_str());
+    TEST_ASSERT_EQUAL_STRING("ALARM OL RB", status().c_str());
+    feed(0x01, 3, AC | GOOD);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
 }
 
 // off_info is inverted (Good 0 = "off") and commfault_info replaces the old internal keys.
-// OFF is not rendered yet: ups.status is the same as with Good = 1.
+// Good = 0 gives the OFF token (US-107).
 void test_eaton_status_good_is_off_info(void) {
     addStatusFields();
     feed(0x01, 3, AC | GOOD);
@@ -330,6 +335,62 @@ void test_eaton_status_good_is_off_info(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.status.internal_failure"));
     feed(0x01, 3, AC);
     TEST_ASSERT_EQUAL_STRING("1", ups_data.get("ups.status.off").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL OFF", status().c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm")); // OFF is no alarm upstream
+}
+
+// Input.[1] Buck and VoltageOutOfRange (mge-hid.c:2129, 2131) and the vendor ups.alarm row of
+// Output.ShortCircuit (mge-hid.c:2160), in FEATURE report 0x05 (US-107)
+static const uint8_t BUCK = 0x01, VRANGE = 0x02, SHORTC = 0x04;
+static void addInputFields() {
+    HIDUsageDef buck = nutField("UPS.PowerConverter.Input.PresentStatus.Buck", 0x0084006f, 0x05, 3, 1, { 0, 0, 2 });
+    HIDUsageDef vrange = nutField("UPS.PowerConverter.Input.PresentStatus.VoltageOutOfRange", 0x00840063, 0x05, 3, 1, { 0, 0, 2 });
+    vrange.bit_offset = 1;
+    HIDUsageDef shortc = nutField("UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", 0xffff004a, 0x05, 3, 1);
+    shortc.bit_offset = 2;
+    mockHost._usages.push_back(buck);
+    mockHost._usages.push_back(vrange);
+    mockHost._usages.push_back(shortc);
+}
+
+// trim_info gives TRIM, no alarm
+void test_eaton_status_buck_is_trim(void) {
+    addStatusFields();
+    addInputFields();
+    feed(0x01, 3, AC | GOOD);
+    feed(0x05, 3, BUCK);
+    TEST_ASSERT_EQUAL_STRING("OL TRIM", status().c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
+    feed(0x05, 3, 0);
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+}
+
+// vrange_info gives input.transfer.reason (ups_status_set()), no token and no alarm
+void test_eaton_voltage_out_of_range_gives_transfer_reason(void) {
+    addStatusFields();
+    addInputFields();
+    feed(0x01, 3, AC | GOOD);
+    feed(0x05, 3, VRANGE);
+    TEST_ASSERT_EQUAL_STRING("input voltage out of range", ups_data.get("input.transfer.reason").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+    feed(0x05, 3, 0);
+    TEST_ASSERT_FALSE(ups_data.hasKey("input.transfer.reason"));
+}
+
+// The vendor text comes before the ups_alarm_set() ones, and goes with its bit
+void test_eaton_vendor_alarm_row(void) {
+    addStatusFields();
+    addInputFields();
+    feed(0x01, 3, AC | GOOD);
+    feed(0x05, 3, SHORTC);
+    TEST_ASSERT_EQUAL_STRING("Output short circuit!", ups_data.get("ups.alarm").c_str());
+    TEST_ASSERT_EQUAL_STRING("ALARM OL", status().c_str());
+    feed(0x01, 3, AC | REPLACE | GOOD);
+    TEST_ASSERT_EQUAL_STRING("Output short circuit! Replace battery!", ups_data.get("ups.alarm").c_str());
+    TEST_ASSERT_EQUAL_STRING("ALARM OL RB", status().c_str());
+    feed(0x05, 3, 0);
+    feed(0x01, 3, AC | GOOD);
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
     TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
 }
 
@@ -547,6 +608,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_status_on_battery_and_back);
     RUN_TEST(test_eaton_status_low_battery_and_replace);
     RUN_TEST(test_eaton_status_good_is_off_info);
+    RUN_TEST(test_eaton_status_buck_is_trim);
+    RUN_TEST(test_eaton_voltage_out_of_range_gives_transfer_reason);
+    RUN_TEST(test_eaton_vendor_alarm_row);
     RUN_TEST(test_eaton_status_charging_below_full);
     RUN_TEST(test_eaton_capacity_full_never_published);
     RUN_TEST(test_eaton_mfr_dates_kept);
@@ -577,6 +641,9 @@ void setup() {
     RUN_TEST(test_eaton_status_on_battery_and_back);
     RUN_TEST(test_eaton_status_low_battery_and_replace);
     RUN_TEST(test_eaton_status_good_is_off_info);
+    RUN_TEST(test_eaton_status_buck_is_trim);
+    RUN_TEST(test_eaton_voltage_out_of_range_gives_transfer_reason);
+    RUN_TEST(test_eaton_vendor_alarm_row);
     RUN_TEST(test_eaton_status_charging_below_full);
     RUN_TEST(test_eaton_capacity_full_never_published);
     RUN_TEST(test_eaton_mfr_dates_kept);

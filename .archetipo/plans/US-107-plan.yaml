@@ -1,0 +1,560 @@
+schema: archetipo/plan/v2
+spec_code: US-107
+body: |
+  # US-107: ups.alarm e token di stato completi come usbhid-ups — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 5 | **Bloccato da:** US-074 (DONE, commit 398bc38)
+
+  `ups.status` rende anche CAL, TRIM, BOOST, BYPASS e OFF, con ALARM in testa quando c'è un allarme. `ups.alarm` riporta i testi di `ups_alarm_set()` più quelli delle righe vendor `ups.alarm` (le sei di `mge-hid.c:2155-2160`), e `input.transfer.reason` arriva da VRANGE/FRANGE. I driver che non producono le chiavi nuove danno gli stessi token di oggi; l'ordine di tutti i token segue `ups_status_set()`.
+
+  ---
+
+  ## Decisioni prese in pianificazione (2026-10-29)
+
+  - **Solo i nomi di `NutTable::statusKeys` producono i token e gli allarmi nuovi.** Le mappature scritte a mano che usano già quei nomi ne approfittano subito:
+    - GenericDriver (`replace_battery`, `shutdown_imminent`, `no_battery`) dà ALARM e `ups.alarm` su tutti i driver: è la differenza prevista dalla spec;
+    - CyberPower (`UPS.Output.Boost`, `ups.status.boost`) dà BOOST, come `cps-hid.c:402`; Liebert (`Input.PresentStatus.Buck/Boost`, `ups.status.trim/boost`) dà TRIM e BOOST, come `liebert-hid.c:129-130`;
+    - `ups.status.comm_lost` (GenericDriver, CommunicationLost) e `ups.status.internal_failure` (Liebert, Powercom) **non** danno `Internal UPS fault!`. apc-hid e cps-hid non leggono CommunicationLost, quindi ALARM su APC e CyberPower sarebbe una differenza da usbhid-ups. Allineare quei nomi a `commfault` spetta alle migrazioni dei subdriver (US-075+, US-106);
+    - `ups.status.good` di Liebert resta il fallback di OL e non dà OFF (US-106, come da assunzione della spec).
+  - **Ordine dei token allineato a upstream (decisione dell'utente, 2026-10-29).**
+    - Upstream (`usbhid-ups.c`) scrive CAL (2710), OB/OL (2726-2775, 2900), DISCHRG (2908), CHRG (2914/2922), LB (2933), OVER (2954), RB (2964), TRIM (2985), BOOST (2989), BYPASS (2993), OFF (3009), con ALARM davanti a tutto (`dstate.c:2315-2321`).
+    - Il firmware oggi scrive OL OB DISCHRG LB CHRG RB OVER: CHRG passa prima di LB e OVER prima di RB. `ups.status` cambia solo con LB e CHRG, o RB e OVER, attivi insieme (per esempio `OL LB CHRG` diventa `OL CHRG LB`).
+    - OL e OB nel firmware si escludono per costruzione, quindi il loro ordine relativo non conta.
+    - Il criterio di regressione della spec è stato riformulato: stessi token di oggi, ordine di `ups_status_set()`. upsmon e Home Assistant leggono i token uno per uno; la differenza conta solo per chi confronta la stringa intera, ed entra nelle note di rilascio.
+  - **ALARM senza altri token** dà `ALARM`, non `Unknown`, come `status_commit()`. `USBHostUPS::service()` considera fatto il primo poll quando lo stato non è `Unknown`: con un allarme il dispositivo comunica comunque, e va bene così.
+  - **ALARM segue la variabile pubblicata.** `computeUPSStatusString()` aggiunge ALARM quando `ups.alarm` esiste in `UPSData`, come `alarm_active` impostato da `alarm_commit()`. Non ricalcola gli allarmi.
+  - **Ricalcolo a ogni report (deviazione di tempi).** Upstream ricostruisce `ups.alarm` solo al full update (`alarm_init`, `ups_alarm_set`, `alarm_commit`, `usbhid-ups.c:1535-1546`) e lo tiene nei quick update. Il firmware ricalcola `ups.alarm` e `input.transfer.reason` alla fine di ogni `postDecode()` con i valori correnti.
+  - **Testi e ordine.** Prima i testi delle righe vendor `ups.alarm`, nell'ordine della tabella, perché upstream li applica durante `hid_ups_walk()` (`usbhid-ups.c:3194`); poi i testi di `ups_alarm_set()` nel suo ordine (`usbhid-ups.c:2606-2644`). Separatore: uno spazio, come `alarm_set()` (`dstate.c:2370`). Un valore senza testo nella lookup (0) non dà allarme, come `hu_find_infoval()` che fallisce.
+  - **ECO/ESS** restano fuori (`ups.mode.buzzwords`). **CAL:** oggi nessuna tabella ha una riga di calibrazione, quindi il token si implementa e si prova con la chiave `ups.status.cal`.
+  - **Versione della release:** da chiedere all'utente. v1.11.1 era stata decisa come patch senza funzionalità nuove, mentre US-107 aggiunge variabili e token (probabile v1.12.0).
+    - Aggiornamento 2026-10-29: per decisione dell'utente la release è diventata **v1.12.0**, perché US-107 aggiunge funzionalità (`ups.alarm`, `input.transfer.reason`, token di `ups.status`). `docs/releases/v1.11.1.md` è stato rinominato in `docs/releases/v1.12.0.md`, che contiene anche le note di US-107; la v1.11.1 non esce.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. `UPSData` (`lib/USBHostUPS/src/UPSData.h`)
+
+  - **`computeUPSStatusString()`:**
+    - CAL prima di OL se `ups.status.cal` vale 1;
+    - CHRG prima di LB e OVER prima di RB, come `ups_status_set()`;
+    - dopo RB: TRIM (`ups.status.trim`), BOOST (`ups.status.boost`), BYPASS (`ups.status.bypassauto` o `ups.status.bypassman`, un solo token), OFF (`ups.status.off`);
+    - alla fine: con `find("ups.alarm")` lo stato diventa `ALARM <token>` oppure `ALARM`; senza allarmi e senza token resta `Unknown`;
+    - le chiavi `ecomode`/`essmode` vengono ignorate;
+    - il commento obsoleto su `comm_lost` "for a future ups.alarm" si aggiorna con la decisione sopra.
+  - **Allarmi:** `static void alarmText(const UPSData& d, const String& vendor, String& out)`.
+    - Parte da `vendor`, poi aggiunge i testi della tabella statica `{chiave, testo}` nell'ordine di `ups_alarm_set()`: replace_battery `Replace battery!`, shutdown_imminent `Shutdown imminent!`, fanfail `Fan failure!`, no_battery `No battery installed!`, battvoltlo `Battery voltage too low!`, battvolthi `Battery voltage too high!`, chargerfail `Battery charger fail!`, overheat `Temperature too high!`, commfault `Internal UPS fault!`, awaitingpower `Awaiting power!`, bypassauto `Automatic bypass mode!`, bypassman `Manual bypass mode!`.
+    - Legge con `find()`, senza copiare String.
+  - **Motivo del trasferimento:** `static const char* transferReason(const UPSData& d)`.
+    - vrange dà `input voltage out of range`; altrimenti frange dà `input frequency out of range`; altrimenti `nullptr` (`usbhid-ups.c:2695-2701`).
+  - **Scrittura:** `void applyAlarmVariables(const String& vendor)` imposta o rimuove `ups.alarm` e `input.transfer.reason` solo quando cambiano (`valueEquals`/`find`). Senza allarmi non costruisce String e non scrive nulla (ADR 0007).
+
+  ### 2. Righe vendor `ups.alarm` (`NutTable.h`)
+
+  - **Lookup verbatim** (`mge-hid.c:781-809`): `kMgeEmergencyStop` (`Emergency stop!`), `kMgeWiringFault` (`Wiring fault!`), `kMgeConfigFailure` (`Fatal EEPROM fault!`), `kMgeInverterVolthi` (`Inverter AC voltage too high!`), `kMgeInverterVoltlo` (`Inverter AC voltage too low!`), `kMgeShortCircuit` (`Output short circuit!`), ciascuna con il solo valore 1.
+  - **Classificazione:** `isAlarmRow(info)` è vero quando `info_type` vale `ups.alarm`, e `isInternalRow()` restituisce true per queste righe. Non vengono mai pubblicate e i duplicati sono ammessi, come `usbhid-ups.c:2323`; quindi restano fuori da INIT, LIST RW e `publishRow`.
+  - **Motore:**
+    - `onValue()` memorizza solo `last` e `seen`;
+    - `walkInternalRows()` le salta;
+    - `vendorAlarms(binds, out)` scorre le righe in ordine di tabella e concatena i testi dei valori che ne hanno uno.
+  - **`mgeHid2Nut()`:** i sei commenti diventano righe (flag 0, dfl `nullptr`, `Conv::Lookup`) con i percorsi tradotti da `mge_usage_lkp`:
+    - 2155 `UPS.PowerSummary.PresentStatus.0xFFFF0068`;
+    - 2156 `UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078`;
+    - 2157 `UPS.PowerSummary.PresentStatus.0xFFFF002D`;
+    - 2158 `UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074`;
+    - 2159 `UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075`;
+    - 2160 `UPS.PowerConverter.Output.PresentStatus.0xFFFF004A`.
+
+  ### 3. Pubblicazione (`GenericDriver`)
+
+  - **`publishAlarms(ups_data)`:** chiama `NutTable::vendorAlarms(_nut_rows, vendor)` e poi `ups_data.applyAlarmVariables(vendor)`.
+  - **Quando:** alla fine di ogni `postDecode()`, dopo `publishNutRows()`, così le chiavi interne dei BOOL sono già scritte. Si chiama anche quando la tabella è vuota (oggi c'è un `return` anticipato), così valgono anche OpenUPS, Powercom, Legrand e Liebert. Tutti i driver derivano da GenericDriver, e il replay e i test già chiamano `postDecode()` dopo `decodeReport()`.
+  - **Commenti:** si aggiornano la deviazione 3 di `LiebertDriver.cpp` (TRIM/BOOST ora resi; Good e InternalFailure restano a US-106) e la mappatura Boost di CyberPower.
+
+  ### 4. Consumatori
+
+  - **NUTServer** nasconde solo `ups.status.*`, quindi `ups.alarm` e `input.transfer.reason` escono in LIST VAR e GET VAR senza modifiche.
+  - **Web API e UI** mostrano `ups.status` così com'è; `bundle.js` ha già le etichette delle due variabili.
+  - **Home Assistant** (integrazione NUT) conosce già ALARM e `ups.alarm`.
+
+  ---
+
+  ## Strategia di Test
+
+  - **Baseline prima del codice (TASK-01).** `ups.status`, `ups.alarm` e `input.transfer.reason` a fine replay per tutte e 24 le fixture, presi dal codice attuale. Dopo il cambiamento (TASK-09) ogni differenza si aggiorna con un commento `Difference US-107` che cita la chiave della fixture che la causa. Una differenza non spiegata dalle regole sopra, ordine compreso, è un bug.
+  - **Unit `test_ups_status`:**
+    - ordine upstream dei token esistenti (`OL CHRG LB`, `OL OVER RB`); token nuovi e loro posizione; BYPASS unico; ECO/ESS ignorati;
+    - ALARM con e senza altri token;
+    - testi degli allarmi nell'ordine upstream, a prescindere dall'ordine di scrittura delle chiavi;
+    - vendor prima dei bit;
+    - `comm_lost` e `internal_failure` senza allarme;
+    - priorità di VRANGE su FRANGE e rimozione delle variabili;
+    - `writes()` invariato quando lo stato non cambia.
+  - **Unit `test_nut_table`:** righe `ups.alarm` interne, `vendorAlarms` in ordine di tabella, valore 0 senza testo, le sei righe di `mgeHid2Nut` con percorsi e testi, `checkTableCoverage` ancora verde.
+  - **Driver:**
+    - `test_eaton_driver`: i quattro casi della Dimostrazione su report del 3S/5P (NeedReplacement, Good=0, Buck, VoltageOutOfRange), poi il ritorno a zero;
+    - `test_generic_driver`: NeedReplacement dà `ALARM OL RB` con `Replace battery!`; CommunicationLost non dà allarme.
+  - **e2e:** nessun test nuovo, perché non c'è UI nuova (`ups.status` è mostrato com'è). La suite Playwright si rilancia come regressione. Niente video demo: la Dimostrazione si vede nei test e nel replay.
+  - **Hardware:** sull'Eaton 3S, `nut_snapshot.py` prima e dopo l'OTA; il diff in condizioni normali deve essere vuoto. A rete staccata si annota se compare `input.transfer.reason`, che sarebbe il comportamento upstream.
+
+  ---
+
+  ## Note
+
+  - Il conteggio dei test nativi prima di US-107 è 760/760, gli e2e 121/121.
+  - Gotcha: i mock che chiamano solo `decodeReport()` vanno allineati a USBHostUPS chiamando anche `postDecode()`, altrimenti `ups.alarm` non viene mai scritta.
+tasks:
+  - id: TASK-01
+    title: Baseline di ups.status, ups.alarm e input.transfer.reason su tutte le fixture
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima di toccare il codice di produzione, lo stato che le 24 fixture producono oggi. È la base del criterio di regressione.
+
+      **Leggi:**
+      - `test/test_record_replay/FixtureReplayRunner.h`: `replay()`, `ReplaySession`, `runFixtureTest()`;
+      - `test/test_record_replay/test_main.cpp`: commenti delle differenze US-073/US-074 e `RUN_TEST`;
+      - l'elenco `find test/fixtures -name '*.json'` (24 file).
+
+      **Modifica:**
+      1. In `FixtureReplayRunner` aggiungi `static void runStatusBaseline(const char* filePath, const char* expectedStatus, const char* expectedAlarm, const char* expectedReason)`. Esegue `replay(filePath, s)`, poi confronta `UPSData::computeUPSStatusString(s.ups_data)` con `expectedStatus`. Per `ups.alarm` e `input.transfer.reason`: `nullptr` significa che la chiave deve mancare, altrimenti il valore deve essere uguale. I messaggi includono il percorso della fixture.
+      2. In `test_main.cpp` aggiungi `test_status_baseline_all_fixtures`, con una tabella `{percorso, status, alarm, reason}` di una riga per fixture (24). I valori vengono dal codice attuale: prima esecuzione con stampa (`printf`/`TEST_MESSAGE`), poi li incolli e togli la stampa. Oggi alarm e reason sono tutti `nullptr`.
+      3. Asserisci che la tabella abbia 24 righe, con un commento: una fixture nuova va aggiunta qui.
+      4. Registra il test in `RUN_TEST`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde, senza modifiche a `lib/`.
+
+      **Fatto:** baseline di 24 righe nel test, verde sul codice attuale.
+
+      **Blocchi:** se una fixture non si riproduce (`replay` restituisce false), fermati e segnala.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — `runStatusBaseline()`
+      - test/test_record_replay/test_main.cpp — tabella baseline e `RUN_TEST`
+
+      ## Criteri di Completamento
+      - [ ] Tabella con le 24 fixture e valori presi dal codice attuale
+      - [ ] `test_record_replay` verde senza modifiche alla produzione
+    ref: TASK-01
+  - id: TASK-02
+    title: Ordine upstream, token CAL, TRIM, BOOST, BYPASS, OFF e prefisso ALARM in computeUPSStatusString
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere i token mancanti con le regole di `ups_status_set()` e il prefisso ALARM di `status_commit()`, e allineare l'ordine di tutti i token a `ups_status_set()` (decisione dell'utente del 2026-10-29).
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/UPSData.h` (`computeUPSStatusString`);
+      - `nut_repo/drivers/usbhid-ups.c:2691-3010` (`ups_status_set`);
+      - `nut_repo/drivers/dstate.c:2239-2321` (`status_commit`).
+
+      **Modifica:**
+      1. Prima di OL: `CAL ` se `ups.status.cal` vale 1. Commento: upstream riporta la calibrazione per prima.
+      2. Ordine upstream dei token esistenti: sposta il blocco di CHRG prima di quello di LB e `OVER` prima di `RB` (`usbhid-ups.c:2914-2964`). Commento con le righe upstream e la nota che OL e OB qui si escludono.
+      3. Dopo `RB`, nell'ordine upstream:
+         - `TRIM` (`ups.status.trim`);
+         - `BOOST` (`ups.status.boost`);
+         - `BYPASS` una sola volta se `ups.status.bypassauto` o `ups.status.bypassman`;
+         - `OFF` (`ups.status.off`).
+      4. `ups.status.ecomode`/`essmode` non danno token: commento con il riferimento a `buzzmode_set`.
+      5. Dopo `trim()`:
+         - con `ups.alarm` presente (`d.find("ups.alarm")`): stato vuoto diventa `ALARM`, altrimenti `ALARM ` + stato;
+         - senza allarme e senza token: `Unknown`, come oggi.
+         Commento con `dstate.c:2315-2321`.
+      6. Aggiorna i commenti obsoleti su `comm_lost` ("for a future ups.alarm"): `comm_lost` resta interna e non dà allarme finché le migrazioni non la mappano a commfault.
+      7. Per le chiavi nuove usa `find()`, non `getBool()` che copia String.
+
+      **Verifica:** `pio test -e native -f test_ups_status` verde: fallisce solo `test_status_multiple_alarm_flags` (`OL RB OVER` diventa `OL OVER RB`), che aggiorna TASK-03; gli altri test esistenti non cambiano. Lancia anche `-f test_record_replay` e annota le differenze di baseline: le sistema TASK-09.
+
+      **Fatto:** token nuovi resi, ordine uguale a `ups_status_set()`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — `computeUPSStatusString`
+
+      ## Criteri di Completamento
+      - [ ] CAL in testa; CHRG prima di LB; OVER prima di RB; TRIM BOOST BYPASS OFF dopo RB
+      - [ ] ALARM in testa solo con `ups.alarm` presente; `ALARM` da solo senza altri token
+      - [ ] Unico test esistente da aggiornare: `test_status_multiple_alarm_flags` (in TASK-03)
+    ref: TASK-02
+  - id: TASK-03
+    title: Test dei token nuovi e del prefisso ALARM
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire TASK-02 con attese ricavate da `ups_status_set()` e `status_commit()`.
+
+      **Leggi:** `test/test_ups_status/test_main.cpp`. Ci sono due blocchi di `RUN_TEST`, `setup()` e `main()`: registra i test in entrambi.
+
+      **Modifica:** test nuovi:
+      - `cal=1`, `ac_present=1` → `CAL OL`;
+      - `ac_present=1` con `trim=1` → `OL TRIM`; con `boost=1` → `OL BOOST`;
+      - `bypassauto=1` e `bypassman=1` → un solo `BYPASS`;
+      - `off=1` da sola → `OFF`; con `ac_present=1` → `OL OFF`;
+      - ordine completo: `ac_present`, `overload`, `replace_battery`, `trim`, `bypassman`, `off` a 1 → `OL OVER RB TRIM BYPASS OFF`;
+      - `ac_present=1`, `charging=1`, `battery_low=1`, `battery.charge` 20, senza `fully_charged` → `OL CHRG LB` (oggi `OL LB CHRG`);
+      - aggiorna `test_status_multiple_alarm_flags`: `OL OVER RB`, con un commento sull'ordine di `ups_status_set()`;
+      - `ecomode=1`, `essmode=1` → nessun token in più;
+      - chiavi a `0` → nessun token;
+      - `ups.alarm` = `Replace battery!` con `ac_present=1` e `replace_battery=1` → `ALARM OL RB`;
+      - solo `ups.alarm` → `ALARM`; rimossa → `Unknown`.
+
+      **Verifica:** `pio test -e native -f test_ups_status` verde. Mutazione: togliendo il prefisso ALARM deve fallire almeno un test.
+
+      **Fatto:** casi nuovi verdi e registrati in entrambi i runner.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_ups_status/test_main.cpp — test nuovi e `RUN_TEST`
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti e verdi
+      - [ ] Test esistenti invariati tranne `test_status_multiple_alarm_flags`
+    ref: TASK-03
+  - id: TASK-04
+    title: ups.alarm e input.transfer.reason calcolati in UPSData
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** funzioni pure che ricavano `ups.alarm` e `input.transfer.reason` dalle chiavi interne, con scrittura solo quando cambiano.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/UPSData.h`;
+      - `nut_repo/drivers/usbhid-ups.c:2606-2644` (`ups_alarm_set`) e `2695-2701` (`input.transfer.reason`);
+      - `nut_repo/drivers/dstate.c:2370-2490` (`alarm_set`, `alarm_commit`).
+
+      **Modifica:**
+      1. Helper privato `static bool flagSet(const UPSData& d, const char* key)`: `find()` più gli stessi valori veri di `getBool()` (`1`, `true`, `yes`, `enabled`), senza copiare String.
+      2. `static void alarmText(const UPSData& d, const String& vendor, String& out)`:
+         - `out = vendor`;
+         - poi la tabella statica `{chiave, testo}` nell'ordine di `ups_alarm_set()`: `ups.status.replace_battery` `Replace battery!`, `ups.status.shutdown_imminent` `Shutdown imminent!`, `ups.status.fanfail` `Fan failure!`, `ups.status.no_battery` `No battery installed!`, `ups.status.battvoltlo` `Battery voltage too low!`, `ups.status.battvolthi` `Battery voltage too high!`, `ups.status.chargerfail` `Battery charger fail!`, `ups.status.overheat` `Temperature too high!`, `ups.status.commfault` `Internal UPS fault!`, `ups.status.awaitingpower` `Awaiting power!`, `ups.status.bypassauto` `Automatic bypass mode!`, `ups.status.bypassman` `Manual bypass mode!`;
+         - separatore: uno spazio solo se `out` non è vuoto.
+         Commento: `comm_lost` e `internal_failure` sono escluse di proposito (decisione della pianificazione).
+      3. `static const char* transferReason(const UPSData& d)`: vrange dà `input voltage out of range`; altrimenti frange dà `input frequency out of range`; altrimenti `nullptr`.
+      4. Membro `void applyAlarmVariables(const String& vendor)`:
+         - calcola il testo; se è vuoto, `remove("ups.alarm")` solo se la chiave esiste; altrimenti `set` solo se `!valueEquals`;
+         - per la reason: se `nullptr`, rimuove la chiave se c'è; altrimenti `set` solo se il valore attuale è diverso (confronta con `find()`).
+      5. Commenti che citano le righe upstream.
+
+      **Verifica:** `pio test -e native -f test_ups_status` compila ed è verde.
+
+      **Fatto:** API pronta, nessun chiamante ancora.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — `alarmText`, `transferReason`, `applyAlarmVariables`
+
+      ## Criteri di Completamento
+      - [ ] Testi e ordine identici a `ups_alarm_set()`
+      - [ ] Nessuna scrittura e nessuna String costruita quando non ci sono allarmi e nulla cambia
+    ref: TASK-04
+  - id: TASK-05
+    title: Test di alarmText, transferReason e applyAlarmVariables
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire TASK-04 con attese ricavate da upstream.
+
+      **Leggi:** `test/test_ups_status/test_main.cpp`; `UPSData::writes()`.
+
+      **Modifica:** test nuovi, registrati in entrambi i runner:
+      - **nessuna chiave:** dopo `applyAlarmVariables("")` due volte, nessuna `ups.alarm` né `input.transfer.reason` e `writes()` invariato;
+      - **ordine upstream:** imposta `shutdown_imminent=1` e poi `replace_battery=1` → `Replace battery! Shutdown imminent!`;
+      - **tutti e dodici i bit a 1** → la stringa completa letterale, nell'ordine di `ups_alarm_set()`;
+      - **vendor prima dei bit:** vendor `Emergency stop!` con `replace_battery=1` → `Emergency stop! Replace battery!`;
+      - **esclusioni:** `comm_lost=1` e `internal_failure=1` → nessuna `ups.alarm`;
+      - **rimozione:** riportando i bit a 0, la chiave viene rimossa;
+      - **reason:** vrange → `input voltage out of range`; vrange e frange → voltage; solo frange → `input frequency out of range`; nessuna delle due → chiave rimossa;
+      - **niente scritture ripetute:** con lo stesso stato attivo, una seconda chiamata non cambia `writes()`;
+      - **integrazione:** `ac_present=1`, `replace_battery=1`, poi `applyAlarmVariables("")` → `computeUPSStatusString` vale `ALARM OL RB`.
+
+      **Verifica:** `pio test -e native -f test_ups_status` verde.
+
+      **Fatto:** casi verdi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_ups_status/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Ordine, separatore, esclusioni e rimozioni verificati
+      - [ ] Contatore `writes()` invariato senza cambiamenti
+    ref: TASK-05
+  - id: TASK-06
+    title: Righe vendor ups.alarm nel motore NutTable e in mgeHid2Nut
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere attive le sei righe `ups.alarm` di `mge-hid.c:2155-2160` come righe interne che producono testi.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h`: `isInternalRow`, `onValue`, `walkInternalRows`, `bind`, `resolve`, `finishInit` e le righe 1265-1273 e 1478-1484;
+      - `nut_repo/drivers/mge-hid.c:781-809` (lookup) e `2154-2160`;
+      - `nut_repo/drivers/usbhid-ups.c:2323` (duplicati ammessi) e `3194` (`alarm_set`).
+
+      **Modifica:**
+      1. **Lookup verbatim**, con il nome upstream in commento: `kMgeEmergencyStop` `{1, "Emergency stop!"}`, `kMgeWiringFault` `Wiring fault!`, `kMgeConfigFailure` `Fatal EEPROM fault!`, `kMgeInverterVolthi` `Inverter AC voltage too high!`, `kMgeInverterVoltlo` `Inverter AC voltage too low!`, `kMgeShortCircuit` `Output short circuit!`.
+      2. **`inline bool isAlarmRow(const HidInfo& info)`:** `info_type` non nullo e uguale a `ups.alarm`. `isInternalRow()` restituisce true anche per queste righe; aggiorna il commento.
+      3. **`onValue()`:** per le righe interne, se `BOOL` → `applyStatusToken`; se `isAlarmRow` → solo `last` e `seen`; altrimenti `applyInternal`.
+      4. **`walkInternalRows()`:** salta le righe alarm.
+      5. **`inline void vendorAlarms(const std::vector<Bound>& binds, String& out)`:** per ogni riga alarm già letta, in ordine di tabella, cerca `lkp[i].hid == (long)last`. Se c'è un testo lo aggiunge, separato da spazio; un valore senza testo non aggiunge nulla.
+      6. **`mgeHid2Nut()`:** sostituisci i sei commenti con le righe `{ "ups.alarm", 0, 0, <path>, nullptr, 0, Conv::Lookup, NUT_LKP(...) }`, ciascuna preceduta dal commento `// mge-hid.c:N <path upstream>`. Percorsi:
+         - 2155 `UPS.PowerSummary.PresentStatus.0xFFFF0068`;
+         - 2156 `UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078`;
+         - 2157 `UPS.PowerSummary.PresentStatus.0xFFFF002D`;
+         - 2158 `UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074`;
+         - 2159 `UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075`;
+         - 2160 `UPS.PowerConverter.Output.PresentStatus.0xFFFF004A`.
+         Controlla i nomi standard in `NUTUsages.h` e i codici vendor in `mge_usage_lkp` (`mge-hid.c:1584-1668`).
+      7. **Commento di testa di `mgeHid2Nut`** (riga ~1268): togli "but the ups.alarm rows (US-107)".
+      8. **Controllo:** `writableVariables`, `planSet`, `publishRow` e `finishInit` devono già ignorarle tramite `isInternalRow`; aggiungi un `continue` dove manca.
+
+      **Verifica:** `pio test -e native -f test_nut_table -f test_rw_catalog` verde. `checkTableCoverage` deve trovare le righe 2155-2160 come righe.
+
+      **Fatto:** righe attive, motore pronto, nessuna pubblicazione ancora.
+
+      **Blocchi:** se un percorso non è traducibile con `mge_usage_lkp`, lascia la riga commentata con il motivo e segnala.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — lookup, `isAlarmRow`, `onValue`, `walkInternalRows`, `vendorAlarms`, righe 2155-2160
+
+      ## Criteri di Completamento
+      - [ ] Sei righe attive con citazione `mge-hid.c:N`
+      - [ ] Righe `ups.alarm` mai pubblicate né in LIST RW
+      - [ ] `test_nut_table` e `test_rw_catalog` verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: GenericDriver pubblica ups.alarm e input.transfer.reason in postDecode
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** scrivere le due variabili alla fine di ogni `postDecode()`, per tutti i driver.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/GenericDriver.cpp:712-800` (`postDecode`, `publishNutRows`);
+      - `GenericDriver.h` (dichiarazioni, `completeInitialPoll` alla riga ~47);
+      - `LiebertDriver.cpp:25-45` e `150-166`;
+      - `CyberPowerDriver.cpp:139`.
+
+      **Modifica:**
+      1. In `GenericDriver.h` aggiungi la dichiarazione privata `void publishAlarms(UPSData& ups_data);`.
+      2. Implementazione: `String vendor; NutTable::vendorAlarms(_nut_rows, vendor); ups_data.applyAlarmVariables(vendor);`.
+      3. In `postDecode()`:
+         - dopo `bindNutTable(host)`, se `_nut_rows.empty()`: `publishAlarms(ups_data); return;`;
+         - alla fine, dopo `publishNutRows(ups_data)`: `publishAlarms(ups_data)`.
+         Il `return` su `!host` resta com'è.
+      4. Se `completeInitialPoll()` chiama `publishNutRows`, chiama dopo anche `publishAlarms`.
+      5. In `LiebertDriver.cpp`, deviazione 3: Buck e Boost danno ora TRIM e BOOST (stesse chiavi di `statusKeys`); Good e InternalFailure restano chiavi interne senza OFF né `Internal UPS fault!` fino a US-106. Aggiorna anche il commento vicino alle mappature ("Status flags kept as internal keys").
+      6. `CyberPowerDriver.cpp:139`: commento che il Boost dà BOOST, come `cps-hid.c:402`.
+
+      **Verifica:** `pio test -e native -f test_generic_driver -f test_eaton_driver -f test_liebert_driver -f test_cyberpower_driver -f test_powercom_driver -f test_openups_driver -f test_poll_cycle` (salta le suite che non esistono). Deve essere verde; ogni fallimento deve venire da uno stato che cambia per le regole nuove, e va annotato per TASK-08/09.
+
+      **Fatto:** variabili pubblicate da tutti i driver.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — `publishAlarms`
+      - lib/USBHostUPS/src/GenericDriver.cpp — `postDecode`, `publishAlarms`
+      - lib/USBHostUPS/src/LiebertDriver.cpp — commento della deviazione 3
+      - lib/USBHostUPS/src/CyberPowerDriver.cpp — commento del Boost
+
+      ## Criteri di Completamento
+      - [ ] `publishAlarms` chiamata in tutti i rami di `postDecode` dopo il check dell'host
+      - [ ] Commenti di Liebert e CyberPower allineati
+    ref: TASK-07
+  - id: TASK-08
+    title: Test del motore e dei driver per i casi della Dimostrazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare end-to-end (report HID → `UPSData`) i casi della Dimostrazione e le righe vendor.
+
+      **Leggi:**
+      - `test/test_nut_table/test_main.cpp` (bind sintetici, `checkTableCoverage`);
+      - `test/test_eaton_driver/test_main.cpp` (helper di decode alla riga ~47, descrittore del 3S);
+      - `test/test_generic_driver/test_main.cpp`;
+      - l'helper che scrive un campo in un report (vedi `runSetCycle` in `FixtureReplayRunner.h` o `test_rw_catalog`).
+
+      **Modifica:**
+      1. **`test_nut_table`:**
+         - `isInternalRow` è vero per una riga `ups.alarm`;
+         - `vendorAlarms` su bind sintetici con due righe alarm: valori 1 e 0 danno solo il primo testo; 1 e 1 danno entrambi nell'ordine di tabella separati da spazio; righe mai lette non danno nulla;
+         - le sei righe di `mgeHid2Nut()` hanno percorsi e testi esatti;
+         - una riga `ups.alarm` non compare in `writableVariables`.
+      2. **`test_eaton_driver`**, con il descrittore e i report del 3S. Imposta i bit sulla copia del report FEATURE che li contiene, ricavando posizione e report dagli usage del parser, non a mano:
+         - (a) NeedReplacement=1 → `ups.status` `ALARM OL RB` e `ups.alarm` `Replace battery!`;
+         - (b) Good=0 → lo stato contiene `OFF`;
+         - (c) Input.[1].PresentStatus.Buck=1 → `TRIM`. Se il 3S non ha l'usage, usa il descrittore del 5P (`eaton_5p_vid0463_pidffff_issue18.json`); se non c'è nemmeno lì, un caso sintetico in `test_nut_table`;
+         - (d) VoltageOutOfRange=1 → `input.transfer.reason` `input voltage out of range`;
+         - (e) riportati a valori normali: `ups.alarm` e `input.transfer.reason` assenti, `ups.status` come prima.
+      3. **Righe vendor sui descrittori Eaton:** se uno dei due ha EmergencyStop o un altro percorso 2155-2160, un caso che dà il testo vendor prima di `Replace battery!`.
+      4. **`test_generic_driver`:**
+         - un dispositivo generico con `PresentStatus.NeedReplacement=1` → `ALARM OL RB` e `Replace battery!`;
+         - `CommunicationLost=1` → nessuna `ups.alarm`.
+
+      **Verifica:** `pio test -e native -f test_nut_table -f test_eaton_driver -f test_generic_driver` verde.
+
+      **Fatto:** i quattro casi della Dimostrazione verdi.
+
+      **Blocchi:** se un usage della Dimostrazione non esiste in nessun descrittore, copri il caso con bind sintetici e annotalo.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — righe alarm, `vendorAlarms`
+      - test/test_eaton_driver/test_main.cpp — casi della Dimostrazione
+      - test/test_generic_driver/test_main.cpp — NeedReplacement e CommunicationLost
+
+      ## Criteri di Completamento
+      - [ ] Casi (a)-(e) verdi
+      - [ ] Testo vendor prima dei testi dei bit, provato almeno in modo sintetico
+      - [ ] CommunicationLost senza allarme
+    ref: TASK-08
+  - id: TASK-09
+    title: Baseline del replay aggiornata con le differenze US-107
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** soddisfare il criterio di regressione: stesso `ups.status` dove le chiavi nuove non ci sono, differenze elencate dove ci sono.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (baseline di TASK-01, commenti delle differenze US-073/074, `NUT_ROWS_EATON_3S` e la lista del 5P) e le fixture che falliscono.
+
+      **Modifica:**
+      1. Esegui `test_record_replay`. Per ogni riga della baseline che fallisce:
+         - verifica nella fixture (ultimo scenario) che la differenza nasca da una chiave delle regole nuove: `replace_battery`, `shutdown_imminent`, `no_battery`, `fanfail`, `battvolt*`, `chargerfail`, `overheat`, `commfault`, `awaitingpower`, `bypass*`, `trim`, `boost`, `off`, `cal`, `vrange`, `frange`, una riga vendor, oppure il nuovo ordine (LB e CHRG, o RB e OVER, attivi insieme);
+         - aggiorna i valori attesi con un commento `// Difference US-107: <chiave> -> <effetto>`.
+      2. Aggiungi in testa al file un blocco `Differences US-107` che elenca le fixture cambiate, come quelli di US-073 e US-074.
+      3. Se i descrittori del 3S o del 5P legano righe `ups.alarm`, aggiorna `NUT_ROWS_EATON_3S` e la lista del 5P, che conterranno `ups.alarm`.
+      4. Se cambia uno degli `expected_ups_data` dentro i JSON delle fixture (oggi `OL`, `OL CHRG`, `OB DISCHRG`, `OL DISCHRG`), non modificare il JSON: fermati e segnala, perché non dovrebbe succedere.
+
+      **Verifica:** `pio test -e native -f test_record_replay` verde.
+
+      **Fatto:** baseline verde. Ogni differenza ha un commento che ne cita la causa, e nessuna resta senza spiegazione.
+
+      **Blocchi:** una differenza non spiegata dalle regole è un bug di TASK-02..07: correggilo lì, non nella baseline.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — baseline, blocco `Differences US-107`, liste delle righe legate
+
+      ## Criteri di Completamento
+      - [ ] Fixture senza chiavi nuove e senza LB+CHRG o RB+OVER: valori identici alla baseline di TASK-01
+      - [ ] Ogni differenza commentata con la causa
+      - [ ] `test_record_replay` verde
+    ref: TASK-09
+  - id: TASK-10
+    title: Note di rilascio e documentazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare i cambiamenti visibili agli utenti (upsmon, Home Assistant).
+
+      > Aggiornamento 2026-10-29: per decisione dell'utente la release è diventata **v1.12.0**, perché US-107 aggiunge funzionalità (`ups.alarm`, `input.transfer.reason`, token di `ups.status`). `docs/releases/v1.11.1.md` è stato rinominato in `docs/releases/v1.12.0.md`, che contiene anche le note di US-107; la v1.11.1 non esce.
+
+      **Leggi:**
+      - `docs/releases/v1.11.1.md` e `docs/releases/index.md`;
+      - il blocco `Differences US-107` di TASK-09;
+      - `grep -rn "ups.status\|ups.alarm" README.md docs/*.md`.
+
+      **Modifica:**
+      1. **Prima chiedi all'utente la versione.** v1.11.1 era decisa come patch senza funzionalità nuove; US-107 aggiunge variabili e token, quindi probabilmente v1.12.0. Crea o aggiorna il file della release scelta e la riga in `index.md`.
+      2. **Upgrade notes** (in inglese, come i file esistenti):
+         - `ups.status` può iniziare con `ALARM`: upsmon lo notifica, Home Assistant mostra Alarm;
+         - token nuovi `TRIM`, `BOOST`, `BYPASS`, `OFF`, `CAL`;
+         - token nell'ordine di NUT: CHRG prima di LB e OVER prima di RB (per esempio `OL CHRG LB` al posto di `OL LB CHRG`); conta solo per chi confronta la stringa intera;
+         - variabili nuove `ups.alarm` e `input.transfer.reason`;
+         - per marca, le differenze di TASK-09, per esempio `ALARM ... RB` con `Replace battery!` sugli UPS che segnalano batteria da sostituire, BOOST su CyberPower, TRIM/BOOST su Liebert, allarmi vendor Eaton.
+      3. Se la release è ancora v1.11.1, correggi la frase "Nothing changes for the other brands".
+      4. Aggiorna README e docs se elencano i token di `ups.status` o le variabili supportate.
+
+      **Verifica:** `git diff --stat docs README.md` mostra solo i file attesi; rilettura delle note.
+
+      **Fatto:** note e documentazione allineate.
+
+      **Blocchi:** versione della release da confermare con l'utente.
+
+      ## File Coinvolti
+      - docs/releases/<versione>.md — upgrade notes US-107
+      - docs/releases/index.md — riga della release se nuova
+      - README.md — solo se elenca token o variabili
+
+      ## Criteri di Completamento
+      - [ ] Versione confermata dall'utente
+      - [ ] ALARM, token nuovi, ordine NUT, `ups.alarm` e `input.transfer.reason` documentati con le differenze per marca
+    ref: TASK-10
+  - id: TASK-11
+    title: Regressione completa, build e prova sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere i criteri: suite nativa verde, build ok, `upsc` invariato sul 3S in condizioni normali.
+
+      **Leggi:** `scripts/nut_snapshot.py`; le note di memoria sulla prova di US-073/074 (IP 192.168.1.126, nome UPS NUT `eaton-3s-700`, OTA via `/api/auth/login` e POST multipart su `/update`).
+
+      **Modifica:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`: tutto verde. Riporta il conteggio (prima 760/760). Se compare "program.exe: Accesso negato", cancella `.pio/build/native/program.exe`.
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: build ok, riporta la differenza di flash.
+      3. `npx playwright test`: e2e tutti verdi (prima 121/121), nessun test nuovo.
+      4. **Prova hardware.** Prima di fare l'OTA chiedi conferma all'utente. Poi:
+         - `nut_snapshot.py` prima, OTA, `nut_snapshot.py` dopo;
+         - in condizioni normali il diff deve essere vuoto: niente `ups.alarm`, niente `input.transfer.reason`, `ups.status` uguale;
+         - con l'aiuto dell'utente, rete staccata (`OB DISCHRG`): annota se compaiono `input.transfer.reason` o allarmi (comportamento upstream) e riportali nelle note;
+         - rete riattaccata: si torna allo stato iniziale;
+         - System Log senza errori nuovi.
+
+      **Verifica:** i comandi sopra; diff dello snapshot allegato nel riepilogo.
+
+      **Fatto:** criteri della spec soddisfatti; risultati della prova annotati.
+
+      **Blocchi:** OTA e prova a rete staccata richiedono la conferma e la presenza dell'utente.
+
+      ## File Coinvolti
+      - docs/releases/<versione>.md — eventuale nota sul comportamento a rete staccata
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa verde con il conteggio riportato
+      - [ ] Build esp32-s3-standard ok
+      - [ ] e2e verdi
+      - [ ] `upsc` del 3S invariato in condizioni normali
+    ref: TASK-11

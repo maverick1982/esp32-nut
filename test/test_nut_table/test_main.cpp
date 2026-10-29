@@ -511,6 +511,73 @@ void test_command_rows_never_published() {
     TEST_ASSERT_EQUAL_STRING("20", b[1].value.c_str());
 }
 
+// --- vendor ups.alarm rows (US-107)
+
+void test_alarm_rows_of_mge_table() {
+    static const struct { const char* path; const char* text; } rows[] = {
+        { "UPS.PowerSummary.PresentStatus.0xFFFF0068", "Emergency stop!" },                         // mge-hid.c:2155
+        { "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078", "Wiring fault!" },               // mge-hid.c:2156
+        { "UPS.PowerSummary.PresentStatus.0xFFFF002D", "Fatal EEPROM fault!" },                     // mge-hid.c:2157
+        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074", "Inverter AC voltage too high!" }, // mge-hid.c:2158
+        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075", "Inverter AC voltage too low!" },  // mge-hid.c:2159
+        { "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", "Output short circuit!" },          // mge-hid.c:2160
+    };
+    size_t n;
+    const HidInfo* t = mgeHid2Nut(n);
+    size_t count = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (!isAlarmRow(t[i])) continue;
+        TEST_ASSERT_TRUE_MESSAGE(count < 6, "more ups.alarm rows than mge-hid.c:2155-2160");
+        TEST_ASSERT_EQUAL_STRING(rows[count].path, t[i].hidpath);
+        TEST_ASSERT_TRUE(isInternalRow(t[i]));
+        TEST_ASSERT_EQUAL(0, t[i].info_flags & ST_FLAG_RW); // never in LIST RW
+        TEST_ASSERT_EQUAL(1, t[i].lkp_count);
+        TEST_ASSERT_EQUAL(1, t[i].lkp[0].hid);
+        TEST_ASSERT_EQUAL_STRING(rows[count].text, t[i].lkp[0].nut);
+        count++;
+    }
+    TEST_ASSERT_EQUAL(6, count);
+}
+
+static String vendorText(const std::vector<Bound>& b) {
+    String out;
+    vendorAlarms(b, out);
+    return out;
+}
+
+void test_vendor_alarms_in_table_order() {
+    std::vector<HIDUsageDef> usages = {
+        mk("UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", 0xffff004a, 3, 3),
+        mk("UPS.PowerSummary.PresentStatus.0xFFFF0068", 0xffff0068, 3, 3),
+    };
+    size_t n;
+    const HidInfo* t = mgeHid2Nut(n);
+    std::vector<Bound> b = bind(t, n, usages);
+    TEST_ASSERT_EQUAL(2, b.size());
+    for (const Bound& x : b) TEST_ASSERT_TRUE(x.role == Bound::Role::ACTIVE); // duplicates allowed
+    // Rows never read give nothing
+    TEST_ASSERT_EQUAL_STRING("", vendorText(b).c_str());
+
+    // bind() keeps the table order: EmergencyStop (2155) first
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.PresentStatus.0xFFFF0068", b[0].info->hidpath);
+    Context ctx;
+    onValue(b, 1, 1, ctx);
+    onValue(b, 0, 0, ctx); // no text for 0, as a failed hu_find_infoval()
+    TEST_ASSERT_EQUAL_STRING("Output short circuit!", vendorText(b).c_str());
+    onValue(b, 0, 1, ctx);
+    // Table order, not the order of the reads
+    TEST_ASSERT_EQUAL_STRING("Emergency stop! Output short circuit!", vendorText(b).c_str());
+
+    finishInit(b);
+    for (const Bound& x : b) {
+        TEST_ASSERT_TRUE(x.role == Bound::Role::ACTIVE);
+        TEST_ASSERT_FALSE(x.has); // never a published value
+    }
+    // No status bit comes from them
+    walkInternalRows(b, ctx);
+    TEST_ASSERT_EQUAL_UINT32(0, ctx.status.known);
+}
+
 // --- structure of the table
 
 void test_mge_rows_have_supported_formats() {
@@ -651,5 +718,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
     RUN_TEST(test_mge_table_covers_every_upstream_row);
+    RUN_TEST(test_alarm_rows_of_mge_table);
+    RUN_TEST(test_vendor_alarms_in_table_order);
     return UNITY_END();
 }
