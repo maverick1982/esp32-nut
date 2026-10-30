@@ -100,6 +100,9 @@ void WebConfigServer::begin(bool isAPMode) {
     // Board page (US-094): not public in AuthPolicy, so protected by the login
     server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
     server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
+    // Remote logging (issue #69): not public in AuthPolicy, so protected by the login
+    server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
+    server.on("/api/logging", HTTP_POST, guarded([this]() { handleSetLogging(); }));
     server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
@@ -259,6 +262,48 @@ void WebConfigServer::handleSetBoard() {
         should_restart = true;
         restart_request_time = millis();
     }
+}
+
+void WebConfigServer::setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog) {
+    log_store = store;
+    syslog_output = syslog;
+}
+
+void WebConfigServer::handleGetLogging() {
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json",
+                WebApiJson::remoteLogJson(log_store->loadSyslog(), syslog_output->status()));
+}
+
+void WebConfigServer::handleSetLogging() {
+    if (!requireJson()) return;
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    SyslogSettings next;
+    String rejected;
+    if (int status = WebApiJson::checkRemoteLogBody(doc, log_store->loadSyslog(), next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!log_store->saveSyslog(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    // Applied by the log task within a second, no restart
+    syslog_output->configure(next);
+    AppLogger::log("INFO", String("[SYSLOG] Settings changed from the Web UI by '") + webUiUser() + "'");
+    server.send(200, "application/json", "{\"success\":true}");
 }
 
 void WebConfigServer::openRecoveryWindow(uint32_t now) {

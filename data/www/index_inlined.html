@@ -2594,6 +2594,46 @@ body.auth-page {
     .port-options { grid-template-columns: 1fr; }
     .board-usb-form .form-actions .btn-primary { width: 100%; justify-content: center; }
 }
+
+/* --- Remote logging (issue #69) --- */
+.rlog-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.9rem;
+    padding: 0.8rem 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.25);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+.rlog-state { color: var(--text-primary); text-transform: uppercase; letter-spacing: 1px; }
+.rlog-target { color: var(--accent); overflow-wrap: anywhere; }
+.rlog-counters { color: var(--text-secondary); }
+.rlog-refresh { margin-left: auto; padding: 0.35rem 0.8rem; font-size: 0.75rem; }
+.rlog-problem { flex-basis: 100%; color: var(--warning); }
+.rlog-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1.25rem 1.5rem;
+    align-items: end;
+}
+.rlog-form .set-field select { padding-top: 0.8rem; padding-bottom: 0.8rem; font-size: 0.9rem; }
+.rlog-host { grid-column: span 2; }
+.rlog-enable .switch { margin: 0.45rem 0; }
+.rlog-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 1rem;
+}
+@media (max-width: 768px) {
+    .rlog-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .rlog-refresh { margin-left: 0; }
+}
 </style>
 </head>
 
@@ -2673,6 +2713,15 @@ body.auth-page {
                         <path d="M4 6h16M4 12h16M4 18h16" />
                     </svg>
                     System Logs
+                </button>
+                <!-- Issue #69: remote log outputs (syslog) -->
+                <button class="tab" data-target="remotelog">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h10M4 12h7M4 18h10" />
+                        <path d="M15 9l5 3-5 3" />
+                        <path d="M20 12h-8" />
+                    </svg>
+                    Remote Logging
                 </button>
                 <button class="tab" data-target="ota">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3265,6 +3314,89 @@ body.auth-page {
                     </div>
                     <div class="terminal-container" id="terminal-output">
                     </div>
+                </div>
+            </div>
+
+            <!-- Issue #69: remote logging. GET /api/logging when the tab opens, POST to save;
+                 the settings apply without a restart -->
+            <div class="tab-content" id="content-remotelog">
+                <div class="panel config-panel">
+                    <div class="panel-header">
+                        <h2>Syslog</h2>
+                    </div>
+                    <p class="auth-lead">Send the System Log to a syslog server over UDP. Lines are sent from a
+                        background task, so a slow or missing server never delays the UPS or the NUT server.
+                        The board has no clock: the server adds the time of arrival.</p>
+
+                    <div class="auth-alert" id="rlog-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span id="rlog-error-text"></span>
+                    </div>
+
+                    <div class="rlog-status" id="rlog-status">
+                        <span class="status-indicator" id="rlog-ind"></span>
+                        <span class="rlog-state" id="rlog-state">--</span>
+                        <span class="rlog-target" id="rlog-target"></span>
+                        <span class="rlog-counters" id="rlog-counters"></span>
+                        <button type="button" class="btn btn-outline rlog-refresh" id="btn-rlog-refresh">Refresh</button>
+                        <span class="rlog-problem" id="rlog-problem" hidden></span>
+                    </div>
+
+                    <form id="rlog-form" class="rlog-form" novalidate>
+                        <div class="form-group rlog-enable">
+                            <label for="rlog-enabled">Enabled</label>
+                            <label class="switch">
+                                <input type="checkbox" id="rlog-enabled" aria-label="Send logs to syslog">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="form-group rlog-host">
+                            <label for="rlog-host">Server</label>
+                            <input type="text" id="rlog-host" placeholder="192.168.1.10 or rsyslog.lan" maxlength="63"
+                                autocomplete="off" spellcheck="false">
+                        </div>
+                        <div class="form-group">
+                            <label for="rlog-port">UDP port</label>
+                            <input type="text" id="rlog-port" inputmode="numeric" placeholder="514" maxlength="5">
+                        </div>
+                        <div class="form-group">
+                            <label for="rlog-protocol">Format</label>
+                            <div class="set-field">
+                                <select id="rlog-protocol">
+                                    <option value="rfc3164">RFC 3164 (BSD)</option>
+                                    <option value="rfc5424">RFC 5424</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="rlog-facility">Facility</label>
+                            <div class="set-field"><select id="rlog-facility"></select></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="rlog-level">Minimum level</label>
+                            <div class="set-field">
+                                <select id="rlog-level">
+                                    <option value="INFO">INFO and above</option>
+                                    <option value="WARN">WARN and above</option>
+                                    <option value="ERROR">ERROR only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="rlog-rate">Max lines per second</label>
+                            <input type="text" id="rlog-rate" inputmode="numeric" placeholder="10" maxlength="3">
+                        </div>
+                        <div class="form-actions rlog-actions">
+                            <span class="cmd-result" id="rlog-result" aria-live="polite"></span>
+                            <button type="submit" class="btn btn-primary" id="btn-save-rlog">
+                                <span class="glow"></span>
+                                Save
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
 
@@ -5389,6 +5521,169 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
         if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
+    }
+
+    // Issue #69: Remote Logging page. GET /api/logging when the tab opens or on Refresh
+    // (no polling); Save posts the syslog settings, which apply without a restart.
+    const rlogContent = document.getElementById('content-remotelog');
+    if (rlogContent) {
+        const R = (id) => document.getElementById(id);
+        const RLOG_ERRORS = { 400: 'Invalid request', 500: 'Failed to save settings', 503: 'Remote logging not available' };
+        const RLOG_STATES = {
+            disabled: { text: 'Disabled', cls: '' },
+            waiting: { text: 'Waiting', cls: 'warning' },
+            active: { text: 'Sending', cls: 'success' },
+            error: { text: 'Error', cls: 'danger' }
+        };
+        const form = R('rlog-form');
+        const btnSave = R('btn-save-rlog');
+        const result = R('rlog-result');
+        let rlogLoadSeq = 0;
+        let rlogSaving = false;
+        let rateMin = 1, rateMax = 100;
+        let resultTimer = null;
+
+        function rlogShowResult(text, ok) {
+            clearTimeout(resultTimer);
+            result.textContent = text;
+            result.className = 'cmd-result ' + (ok ? 'success' : 'error');
+            if (ok) resultTimer = setTimeout(() => { result.textContent = ''; result.className = 'cmd-result'; }, 4000);
+        }
+
+        function rlogRenderStatus(st) {
+            const info = RLOG_STATES[st && st.state] || { text: '--', cls: '' };
+            R('rlog-ind').className = 'status-indicator' + (info.cls ? ' ' + info.cls : '');
+            R('rlog-state').textContent = info.text;
+            R('rlog-target').textContent = st && st.state !== 'disabled' && st.target ? st.target : '';
+            const n = (k) => (st && Number.isFinite(st[k]) ? st[k] : 0);
+            const parts = [];
+            if (st && st.state !== 'disabled') {
+                parts.push(`${n('sent')} sent`);
+                if (n('rate_limited')) parts.push(`${n('rate_limited')} rate-limited`);
+                if (n('failed')) parts.push(`${n('failed')} failed`);
+                if (n('not_ready')) parts.push(`${n('not_ready')} dropped while offline`);
+            }
+            R('rlog-counters').textContent = parts.join(' · ');
+            const problem = st && typeof st.error === 'string' ? st.error : '';
+            R('rlog-problem').textContent = problem;
+            R('rlog-problem').hidden = problem === '';
+        }
+
+        function rlogRenderSettings(data) {
+            const sl = data.syslog || {};
+            const opt = data.options || {};
+            const fac = R('rlog-facility');
+            const facilities = Array.isArray(opt.facilities) && opt.facilities.length ? opt.facilities : ['local0'];
+            fac.innerHTML = '';
+            facilities.forEach(f => {
+                const o = document.createElement('option');
+                o.value = f;
+                o.textContent = f;
+                fac.appendChild(o);
+            });
+            if (Number.isInteger(opt.rate_min)) rateMin = opt.rate_min;
+            if (Number.isInteger(opt.rate_max)) rateMax = opt.rate_max;
+            R('rlog-enabled').checked = sl.enabled === true;
+            R('rlog-host').value = typeof sl.host === 'string' ? sl.host : '';
+            R('rlog-port').value = Number.isInteger(sl.port) ? String(sl.port) : '514';
+            R('rlog-protocol').value = sl.protocol === 'rfc5424' ? 'rfc5424' : 'rfc3164';
+            fac.value = facilities.includes(sl.facility) ? sl.facility : facilities[0];
+            R('rlog-level').value = ['INFO', 'WARN', 'ERROR'].includes(sl.min_level) ? sl.min_level : 'INFO';
+            R('rlog-rate').value = Number.isInteger(sl.rate) ? String(sl.rate) : '10';
+            R('rlog-rate').title = `${rateMin}-${rateMax} lines per second`;
+        }
+
+        async function rlogLoad(settingsToo) {
+            if (sessionExpired) return;
+            const seq = ++rlogLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/logging', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch remote logging settings:', err);
+            }
+            if (seq !== rlogLoadSeq) return;
+            if (!data || typeof data !== 'object') {
+                R('rlog-error-text').textContent = 'Could not read the remote logging settings. Open the tab again to retry.';
+                R('rlog-error').hidden = false;
+                return;
+            }
+            R('rlog-error').hidden = true;
+            if (settingsToo) rlogRenderSettings(data);
+            rlogRenderStatus(data.status && data.status.syslog);
+        }
+
+        function rlogReadForm() {
+            const enabled = R('rlog-enabled').checked;
+            const host = R('rlog-host').value.trim();
+            const port = Number(R('rlog-port').value.trim());
+            const rate = Number(R('rlog-rate').value.trim());
+            if (enabled && host === '') return { error: 'Enter the syslog server to enable it' };
+            if (host !== '' && !/^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$/.test(host)) {
+                return { error: 'Server: a host name or an IPv4 address' };
+            }
+            if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: 'Port: 1-65535' };
+            if (!Number.isInteger(rate) || rate < rateMin || rate > rateMax) {
+                return { error: `Max lines per second: ${rateMin}-${rateMax}` };
+            }
+            return {
+                body: {
+                    syslog: {
+                        enabled, host, port, rate,
+                        protocol: R('rlog-protocol').value,
+                        facility: R('rlog-facility').value,
+                        min_level: R('rlog-level').value
+                    }
+                }
+            };
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (rlogSaving) return;
+            const req = rlogReadForm();
+            if (req.error) {
+                rlogShowResult(req.error, false);
+                return;
+            }
+            rlogSaving = true;
+            btnSave.disabled = true;
+            try {
+                const res = await apiFetch('/api/logging', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(req.body)
+                });
+                let json = null;
+                try { json = await res.json(); } catch (err) { json = null; }
+                if (res.status === 200 && json && json.success === true) {
+                    rlogShowResult('Saved', true);
+                    // The log task applies the settings within a second
+                    setTimeout(() => rlogLoad(false), 1500);
+                } else {
+                    const msg = json && typeof json.error === 'string' && json.error !== '' ? json.error : null;
+                    rlogShowResult(msg || RLOG_ERRORS[res.status] || `Failed (HTTP ${res.status})`, false);
+                }
+            } catch (err) {
+                console.error('Remote logging save error:', err);
+                rlogShowResult('Network error', false);
+            } finally {
+                rlogSaving = false;
+                btnSave.disabled = false;
+            }
+        });
+
+        R('btn-rlog-refresh').addEventListener('click', () => rlogLoad(false));
+
+        // One read per opening, no periodic requests
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'remotelog') rlogLoad(true);
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'remotelog') rlogLoad(true);
     }
 
     // US-061 Log out (this session) and US-062 Log out of all devices: same

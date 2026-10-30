@@ -12,6 +12,9 @@
 #include "board/board.h"
 #include "core/board_settings_store.h"
 #include "NetBootPlan.h"
+#include "core/log_dispatcher.h"
+#include "core/log_settings_store.h"
+#include "network/syslog_output.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -25,6 +28,11 @@ static NvsDriverVarStore driver_var_store;
 
 // Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
 static BoardSettingsStore board_settings_store;
+
+// Remote logging (issue #69): queue + log task, syslog output, settings in NVS "logout"
+static LogDispatcher log_dispatcher;
+static SyslogOutput syslog_output;
+static LogSettingsStore log_settings_store;
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -82,6 +90,10 @@ LedState computeSystemState(bool wifiConnected, bool upsConnected) {
 void setup() {
     // Prima di tutto: protegge il panic handler se manca la partizione coredump
     CrashDiag::begin();
+
+    // Log queue before the first line: the boot log reaches the remote outputs once the
+    // network is up (issue #69). The task starts later, when the outputs are configured
+    if (log_dispatcher.init()) AppLogger::setForwarder(&LogDispatcher::forward, &log_dispatcher);
 
     // Inizializzazione della porta seriale per il debug diagnostico
     Serial.begin(MONITOR_BAUD_RATE);
@@ -155,6 +167,20 @@ void setup() {
         web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }
+    // Remote logging (issue #69): the syslog output identifies the board with the same
+    // device id as the Web UI ("ESP32-S3-A1B2C3")
+    {
+        uint8_t mac[6];
+        network_mgr.macAddress(mac);
+        char device_id[32];
+        snprintf(device_id, sizeof(device_id), "%s-%02X%02X%02X", ESP.getChipModel(), mac[3], mac[4], mac[5]);
+        syslog_output.begin(&network_mgr, device_id);
+        syslog_output.configure(log_settings_store.loadSyslog());
+        log_dispatcher.addOutput(&syslog_output);
+        log_dispatcher.start();
+        web_server.setRemoteLog(&log_settings_store, &syslog_output);
+    }
+
     // Boards without Wi-Fi have no AP: the double reset opens the recovery window (US-091)
     if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());
 

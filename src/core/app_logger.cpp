@@ -9,6 +9,14 @@ LogMessage AppLogger::logBuffer[AppLogger::MAX_LOGS];
 int AppLogger::head = 0;
 int AppLogger::count = 0;
 uint32_t AppLogger::nextId = 1;
+AppLogger::Forwarder AppLogger::forwarder = nullptr;
+void* AppLogger::forwarderCtx = nullptr;
+
+void AppLogger::setForwarder(Forwarder fn, void* ctx) {
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+    forwarder = fn;
+    forwarderCtx = ctx;
+}
 
 void AppLogger::log(const String& level, const String& msg) {
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
@@ -25,6 +33,9 @@ void AppLogger::log(const String& level, const String& msg) {
     if (count < MAX_LOGS) {
         count++;
     }
+
+    // Remote outputs: a non-blocking copy into the log queue (issue #69)
+    if (forwarder) forwarder(forwarderCtx, level.c_str(), msg.c_str());
 }
 
 void AppLogger::log(const char* level, const char* format, ...) {

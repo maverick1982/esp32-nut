@@ -2590,6 +2590,46 @@ body.auth-page {
     .port-options { grid-template-columns: 1fr; }
     .board-usb-form .form-actions .btn-primary { width: 100%; justify-content: center; }
 }
+
+/* --- Remote logging (issue #69) --- */
+.rlog-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.9rem;
+    padding: 0.8rem 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.25);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+.rlog-state { color: var(--text-primary); text-transform: uppercase; letter-spacing: 1px; }
+.rlog-target { color: var(--accent); overflow-wrap: anywhere; }
+.rlog-counters { color: var(--text-secondary); }
+.rlog-refresh { margin-left: auto; padding: 0.35rem 0.8rem; font-size: 0.75rem; }
+.rlog-problem { flex-basis: 100%; color: var(--warning); }
+.rlog-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1.25rem 1.5rem;
+    align-items: end;
+}
+.rlog-form .set-field select { padding-top: 0.8rem; padding-bottom: 0.8rem; font-size: 0.9rem; }
+.rlog-host { grid-column: span 2; }
+.rlog-enable .switch { margin: 0.45rem 0; }
+.rlog-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 1rem;
+}
+@media (max-width: 768px) {
+    .rlog-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .rlog-refresh { margin-left: 0; }
+}
 </style>
 </head>
 
