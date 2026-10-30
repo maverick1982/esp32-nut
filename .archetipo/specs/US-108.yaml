@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-108
+title: 'APC Smart-UPS 5G (051d:0003/0004): letture con GET_REPORT come apc-hid'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 2
+status: TODO
+blocked_by:
+  - US-079
+body: |
+  #### US-108: APC Smart-UPS 5G (051d:0003/0004): letture con GET_REPORT come apc-hid
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-079
+
+  **User Story**
+  Come utente di un APC Smart-UPS con PID 0x0003 o 0x0004,
+  voglio che il firmware legga i valori dell'UPS con GET_REPORT come fa apc-hid (`disable_interrupt_pipe`),
+  in modo da vedere tutte le variabili, comprese tensioni, carico e soglie, e poter impostare `battery.charge.low` e `battery.runtime.low` da UPS Settings.
+
+  **Dimostrazione**
+  Con la build di test sul Smart-UPS 750L di Sr-psycho (#100), UPS Settings elenca `battery.charge.low` e `battery.runtime.low`, e un valore scritto con Apply viene riletto dall'UPS. Nel replay della fixture #22 (051d:0003) con il quirk applicato, il firmware chiede i report FEATURE e ignora gli INPUT.
+
+  **Criteri di Accettazione**
+  - [ ] `QUIRK_NO_GET_REPORT` non è più applicato a 051d:0003/0004: i report FEATURE di questi modelli si leggono come sugli altri APC.
+  - [ ] Su 051d:0003/0004 i report INPUT sono ignorati, come `disable_interrupt_pipe` di apc-hid (sui modelli 5G l'interrupt pipe porta un protocollo proprietario). Il controllo del link non scambia l'assenza di INPUT per un guasto.
+  - [ ] Scrittura da UPS Settings e `upsrw`, rilettura compresa, e comandi funzionano senza eccezioni per questi PID.
+  - [ ] Il replay applica i quirk del dispositivo; la fixture #22 verifica liste di poll, righe legate e LIST RW (`battery.charge.low`, `battery.runtime.low`, `ups.delay.shutdown`).
+  - [ ] L'ADR 0005 riporta la correzione: il quirk della #39 era l'opposto di quello di upstream.
+  - [ ] Note di rilascio v1.12.0 aggiornate. Suite nativa verde e build ok.
+
+  **Assunzioni**
+  - Il blocco della #39 (v1.5.0, GET_REPORT appeso per sempre su uno STALL) dovrebbe essere coperto dai timeout e dal ripristino introdotti con l'ADR 0008. Serve la prova di Sr-psycho, che ha l'UPS della #39, prima del rilascio (promessa nella #100, issuecomment-6524435968).
+  - La stessa build vale come prova su hardware della migrazione APC (US-076) su un Smart-UPS.
+  - Fuori scope: lo spegnimento automatico dalla scheda chiesto nella #100.
+history:
+  - status: TODO
+    at: "2026-10-30T13:51:21Z"
