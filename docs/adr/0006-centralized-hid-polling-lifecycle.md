@@ -53,8 +53,17 @@ The first implementation (`7dbde3e`) never reached `main`: until 1.5.x every dri
   * **Eaton:** excludes reports 254 and 255.
   * **Powercom:** fixed lists, 0x0A every 2 s and 0x0A, 0x1D, 0x21, 0x1F every 30 s. The `0xA4` report is decoded if it arrives but is not requested.
 * **Not implemented:**
-  * Point 3: only string descriptors are static. Nominal values are re-read at every full poll.
+  * Point 3: only string descriptors are static. Nominal values are re-read at every full poll. (Since US-072 the semi-static reports are read once: see "Semi-static reports".)
   * Point 4: `GenericDriver` writes every decoded value as received; there is no zero filter. The zeros of issue #36 and #48 turned out to be responses shifted after a control transfer timeout (ADR 0008), not UPS glitches.
+
+### Semi-static reports (US-072, 2026-10-30)
+Point 3, as `hid_ups_walk(HU_WALKMODE_FULL_UPDATE)` does it (usbhid-ups.c:2343-2362), once every value comes from a table row (US-079):
+* **Classification per report.** A report (type, ID) is semi-static when at least one field of it is read by a bound row (the row's usage or its twin) and every such row has `HU_FLAG_STATIC` or `HU_FLAG_SEMI_STATIC`. Command rows, `HU_FLAG_ABSENT` rows and the rows the INIT rule dropped (`DEAD`) do not count, since upstream never reads them. Fields without a row are not read upstream either, so a report made only of them is still read as before. The active beeper decoded outside the rows (`decodeBeeperStatus()`) keeps its report dynamic. A row still undecided (a value deferred until the conversion inputs are known, as the Eaton nominal values before `mge_type`, or a row waiting behind it) keeps its report dynamic until a read decides it: upstream knows `mge_type` before its INIT walk. `GenericDriver::classifySemiStatic()` runs once the first full poll has ended and `finishInit()` has been applied, again at each full poll while a row is undecided, and after a new bind (new device).
+* **Full poll.** `startCycle()` leaves out of the full poll the semi-static reports already decoded. The quick poll, the reports `pollSoon()` puts at the head (Powercom) and the existing `pollStaticReportsOnce()` skip (APC Back-UPS BX, Powercom) are not touched. A report invalidated after a failed read back is read again.
+* **After a change.** `IUPSDriver::noteDataChanged()`, called by `USBHostUPS` after a successful HID write of SET VAR (`writePlannedValue()`) and after an INSTCMD that returned OK (`executeCommand()`), is `data_has_changed` (usbhid-ups.c:1157, 1239): the next cycle is a full poll right away, even before 30 s, and reads the semi-static reports too (usbhid-ups.c:1534-1543). Driver-side values (`ups.delay.*`, `HU_FLAG_ABSENT` rows) write nothing to the UPS and do not set it, as upstream.
+* **Deviation:** `HU_FLAG_STATIC` and `HU_FLAG_SEMI_STATIC` rows are treated alike, so after a change the static ones are read again too (one extra read per report, only after a SET or an INSTCMD). Upstream reads only the semi-static ones again.
+* **Accepted effect, as upstream:** a semi-static value changed outside NUT (front panel, the manufacturer's software) shows only after the next SET VAR, INSTCMD or reconnection.
+* **Effect:** over the 24 fixtures the full poll at steady state goes from 827 to 773 reports; on the Eaton 3S from 24 to 16 (16 requests a minute fewer). The replay never reads again the reports of the Eaton rows deferred at INIT (16 and 18); on the device a later read decides them and the full poll drops to 14 reports. The Back-UPS BX already skipped its static reports: unchanged.
 
 ## Consequences
 ### Positive
@@ -69,7 +78,7 @@ The first implementation (`7dbde3e`) never reached `main`: until 1.5.x every dri
 ## Impact on Agent Implementation
 * **`GenericDriver` State Machine**:
   - Poll timing comes from the hooks `quickPollMs()` (default 2000 ms, 0 disables the quick poll) and `fullPollMs()` (default 30000 ms, matching NUT `DEFAULT_POLLFREQ`). Agents MUST change a driver's policy only through the hooks listed in "Implementation status", never with a new state machine.
-  - String descriptors are static: they are requested only while the key is missing (`collectStringRequests()`), and an index that failed is not asked again for that device. Nominal voltages are not static yet (see "Implementation status").
+  - String descriptors are static: they are requested only while the key is missing (`collectStringRequests()`), and an index that failed is not asked again for that device. Nominal values and limits are read once as semi-static reports (US-072, see "Semi-static reports"): a driver changes nothing to get it, the flags of its table rows decide.
 * **Spurious Zero Protection** (not implemented, see "Implementation status"):
   - In `GenericDriver::decodeReport()`, ensure analog telemetry fields (e.g. `input.voltage`, `output.voltage`, `battery.temperature`, `ups.temperature`) do not overwrite existing valid positive values with `0.0` when the UPS is reported as `OL` (Online).
 * **Vendor Quirks Preservation**:

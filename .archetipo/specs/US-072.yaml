@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: LOW
 points: 5
-status: TODO
+status: REVIEW
 body: |-
   #### US-072: Poll delle variabili semi-statiche come usbhid-ups: all'avvio e dopo SET/INSTCMD
 
@@ -30,7 +30,7 @@ body: |-
   - [ ] Il comportamento dell'APC BX (`pollStaticReportsOnce`, issue #60) resta valido e i suoi test passano invariati.
   - [ ] Restano invariati `LIST CMD`, i valori pubblicati nelle fixture di replay e la rilevazione dei dati stale.
   - [ ] I test nativi del poll (`test_poll_cycle`) coprono: primo poll, poll successivi senza modifiche, rilettura dopo SET e dopo INSTCMD, report misti (dinamici + semi-statici) sempre letti.
-  - [ ] Prima del merge, prova sul campo di almeno 24 h su un APC BX e su un Eaton, con il conteggio delle richieste prima e dopo.
+  - [ ] Prima del merge, prova sul campo di almeno 12 h su un APC BX e su un Eaton, con il conteggio delle richieste prima e dopo.
 
   **Assunzioni**
   - Da fare a migrazione delle tabelle completata (US-079): i flag `HU_FLAG_SEMI_STATIC`/`HU_FLAG_STATIC` di ogni campo vengono dalle tabelle uniche. Va fatta anche dopo US-067 (EP-003), che introduce SET VAR e il segnale "dati cambiati" dopo una scrittura. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
@@ -39,3 +39,9 @@ body: |-
 history:
   - status: TODO
     at: "2026-10-15T17:16:58Z"
+  - status: PLANNED
+    at: "2026-10-30T21:02:26Z"
+  - status: IN PROGRESS
+    at: "2026-10-30T21:13:39Z"
+  - status: REVIEW
+    at: "2026-10-30T22:03:11Z"

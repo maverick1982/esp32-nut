@@ -34,7 +34,8 @@ public:
     void unlock() const override {}
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
-    String getActiveBeeperPath() const override { return ""; }
+    String _beeper_path;
+    String getActiveBeeperPath() const override { return _beeper_path; }
     uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override { return _paused; }
     bool requestReport(uint8_t id, uint8_t type, uint16_t length) override {
@@ -569,6 +570,204 @@ void test_apc_back_ups_bx750mi_requests_per_minute(void) {
     TEST_ASSERT_EQUAL(50, bx750miRequestsPerMinute("Back-UPS BX750MI"));
 }
 
+// US-072: a small table. Report 1: status, dynamic rows (quick poll). Report 2: a STATIC row.
+// Report 3: a SEMI_STATIC row. Report 4: mixed, a STATIC and a dynamic row. Report 5: no row.
+// Report 6: a STATIC row, a row the INIT rule drops (DEAD: test.dup is taken by report 1) and a
+// command row, both without flags.
+static const NutTable::HidInfo kSemiStaticTable[] = {
+    { "test.charge", 0, 0, "UPS.T.Charge", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.dup", 0, 0, "UPS.T.Dup1", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.nominal", 0, 0, "UPS.T.Nominal", "%.0f", NutTable::HU_FLAG_STATIC, NutTable::Conv::Number, nullptr, 0 },
+    { "test.limit", NutTable::ST_FLAG_RW, 0, "UPS.T.Limit", "%.0f", NutTable::HU_FLAG_SEMI_STATIC, NutTable::Conv::Number, nullptr, 0 },
+    { "test.config", 0, 0, "UPS.T.Config", "%.0f", NutTable::HU_FLAG_STATIC, NutTable::Conv::Number, nullptr, 0 },
+    { "test.measure", 0, 0, "UPS.T.Measure", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.serial", 0, 0, "UPS.T.Serial", "%.0f", NutTable::HU_FLAG_STATIC, NutTable::Conv::Number, nullptr, 0 },
+    { "test.dup", 0, 0, "UPS.T.Dup6", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.cmd", 0, 0, "UPS.T.Cmd", "1", NutTable::HU_TYPE_CMD, NutTable::Conv::Number, nullptr, 0 },
+    // Report 7, only in test_semi_static_deferred_row_read_until_decided: deferred until the
+    // conversion inputs are known, as the Eaton nominal values before mge_type
+    { "test.vnom", 0, 0, "UPS.T.VNom", "%.0f", NutTable::HU_FLAG_SEMI_STATIC, NutTable::Conv::NominalVoltage, nullptr, 0 },
+};
+
+class SemiStaticDriver : public GenericDriver {
+public:
+    const NutTable::HidInfo* hid2nut(size_t& n) const override {
+        n = sizeof(kSemiStaticTable) / sizeof(kSemiStaticTable[0]);
+        return kSemiStaticTable;
+    }
+    using GenericDriver::pollSoon;
+    void setInputsKnown(bool known) { _nut_ctx.ready = known; }
+};
+
+static void semiStaticDevice() {
+    host.addUsage(0x00850066, 1, 3, "UPS.T.Charge"); // RemainingCapacity: a status usage
+    host.addUsage(0xFFFF0001, 1, 3, "UPS.T.Dup1");
+    host.addUsage(0xFFFF0002, 2, 3, "UPS.T.Nominal");
+    host.addUsage(0xFFFF0003, 3, 3, "UPS.T.Limit");
+    host.addUsage(0xFFFF0004, 4, 3, "UPS.T.Config");
+    host.addUsage(0xFFFF0005, 4, 3, "UPS.T.Measure");
+    host.addUsage(0xFFFF0006, 5, 3, "UPS.T.Vendor");
+    host.addUsage(0xFFFF0007, 6, 3, "UPS.T.Serial");
+    host.addUsage(0xFFFF0008, 6, 3, "UPS.T.Dup6");
+    host.addUsage(0xFFFF0009, 6, 3, "UPS.T.Cmd");
+    host._answer_all = true;
+}
+
+// The report IDs requested since the last clear, in order
+static std::string requestedIds() {
+    std::string out;
+    for (const auto& r : host._reports) {
+        if (!out.empty()) out += " ";
+        out += std::to_string(r.first);
+    }
+    return out;
+}
+
+// First full poll at 1 s, quick polls until 30 s: the rows are bound and the reports classified
+static void runFirstMinuteHalf(SemiStaticDriver& drv) {
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 30000);
+}
+
+void test_semi_static_first_full_poll_reads_every_report(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_TRUE(data.hasKey("test.limit"));
+}
+
+void test_semi_static_reports_left_out_of_later_full_polls(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    // Report 4 (mixed) and 5 (no row) stay; 6 is semi-static: DEAD and command rows do not count
+    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+    host._reports.clear();
+    runLoop(drv, 61000, 61500);
+    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+}
+
+// SET VAR or INSTCMD: the next cycle is a full poll right away, with the semi-static reports;
+// the one after leaves them out again
+void test_semi_static_reports_read_again_after_data_change(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    runLoop(drv, 31000, 31500);
+    host._reports.clear();
+    IUPSDriver& d = drv;
+    d.noteDataChanged();
+    runLoop(drv, 40000, 40500); // 9 s after the last full poll
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    host._reports.clear();
+    runLoop(drv, 42000, 69500); // quick polls only
+    TEST_ASSERT_EQUAL_STRING("1 1 1 1 1 1 1 1 1 1 1 1 1 1", requestedIds().c_str());
+    host._reports.clear();
+    runLoop(drv, 70000, 70500); // 30 s after the full poll of the change
+    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+}
+
+// A change in the middle of a full poll: the running cycle is not touched, the next one is a
+// full poll with every report
+void test_semi_static_change_during_full_poll_reads_next_cycle(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    host._reports.clear();
+    runLoop(drv, 31000, 31000); // first request of the full poll
+    IUPSDriver& d = drv;
+    d.noteDataChanged();
+    runLoop(drv, 31060, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 4 5 1 2 3 4 5 6", requestedIds().c_str());
+}
+
+// pollSoon() (Powercom) is not filtered: a semi-static report it asks for is read
+void test_semi_static_report_requested_by_poll_soon(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    runLoop(drv, 31000, 31500);
+    host._reports.clear();
+    drv.pollSoon(GenericDriver::PollItem{3, 3, 0});
+    runLoop(drv, 31560, 31600);
+    TEST_ASSERT_EQUAL_STRING("3", requestedIds().c_str());
+}
+
+// The quick poll keeps its reports once the semi-static ones are known
+void test_semi_static_quick_poll_unchanged(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    runLoop(drv, 3000, 3500); // before the classification
+    TEST_ASSERT_EQUAL_STRING("1", requestedIds().c_str());
+    runLoop(drv, 31000, 31500);
+    host._reports.clear();
+    runLoop(drv, 33000, 33500); // after
+    TEST_ASSERT_EQUAL_STRING("1", requestedIds().c_str());
+}
+
+// The active beeper is read outside the rows (decodeBeeperStatus()): its report stays dynamic
+void test_semi_static_active_beeper_report_stays_read(void) {
+    semiStaticDevice();
+    host.addUsage(0x0084005A, 3, 3, "UPS.T.Beeper"); // AudibleAlarmControl in report 3
+    host._beeper_path = "UPS.T.Beeper";
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 3 4 5", requestedIds().c_str());
+}
+
+// A deferred row is not decided by the first full poll: its report stays in the full poll
+// until a read decides it, then it is left out (review of US-072: the Eaton nominal values)
+void test_semi_static_deferred_row_read_until_decided(void) {
+    semiStaticDevice();
+    host.addUsage(0xFFFF000A, 7, 3, "UPS.T.VNom");
+    host._answers.push_back({7, {7, 230}});
+    SemiStaticDriver drv;
+    drv.setup();
+    drv.setInputsKnown(false);
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 30000);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 4 5 7", requestedIds().c_str());
+    TEST_ASSERT_FALSE(data.hasKey("test.vnom"));
+
+    drv.setInputsKnown(true);
+    host._reports.clear();
+    runLoop(drv, 61000, 61500); // reads report 7 again: the row is decided
+    TEST_ASSERT_EQUAL_STRING("1 4 5 7", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("230", data.get("test.vnom").c_str());
+    host._reports.clear();
+    runLoop(drv, 91000, 91500);
+    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+}
+
+// A new enumeration (setup()) reads everything again and classifies again
+void test_semi_static_new_enumeration_reads_every_report(void) {
+    semiStaticDevice();
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    drv.setup();
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+}
+
 // Issue #60: the host serves the data only after the first full poll
 void test_initial_poll_done_after_first_full_cycle(void) {
     standardDevice();
@@ -612,5 +811,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_other_models_read_static_reports_every_full_poll);
     RUN_TEST(test_apc_back_ups_bx750mi_requests_per_minute);
     RUN_TEST(test_initial_poll_done_after_first_full_cycle);
+    RUN_TEST(test_semi_static_first_full_poll_reads_every_report);
+    RUN_TEST(test_semi_static_reports_left_out_of_later_full_polls);
+    RUN_TEST(test_semi_static_reports_read_again_after_data_change);
+    RUN_TEST(test_semi_static_change_during_full_poll_reads_next_cycle);
+    RUN_TEST(test_semi_static_report_requested_by_poll_soon);
+    RUN_TEST(test_semi_static_quick_poll_unchanged);
+    RUN_TEST(test_semi_static_active_beeper_report_stays_read);
+    RUN_TEST(test_semi_static_deferred_row_read_until_decided);
+    RUN_TEST(test_semi_static_new_enumeration_reads_every_report);
     return UNITY_END();
 }

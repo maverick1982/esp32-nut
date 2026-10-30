@@ -777,6 +777,21 @@ void test_golden_generic_all_fixtures(void) {
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, true);
 }
 
+// US-072: on every fixture, with the registry's driver and with GenericDriver, the full poll
+// leaves out exactly the semi-static reports (FixtureReplayRunner::checkSemiStaticReports)
+// and reads them again after a SET VAR or an INSTCMD. Eaton 3S: 6 reports (11, 19, 20, 21, 32,
+// 34); 12 and 25 are semi-static too but the quick poll reads them, 16 and 18 have rows deferred
+// until mge_type is known, which the replay never reads again.
+void test_semi_static_reports_skipped_after_first_full_poll(void) {
+    size_t total = 0;
+    for (const char* f : kAllFixtures) {
+        total += FixtureReplayRunner::checkSemiStaticReports(f, false);
+        total += FixtureReplayRunner::checkSemiStaticReports(f, true);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(total > 0, "some fixture has semi-static reports");
+    TEST_ASSERT_EQUAL(6, FixtureReplayRunner::checkSemiStaticReports("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", false));
+}
+
 // US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
 // the firmware before the cps_hid2nut migration. After the migration (every value, status
 // flag and command from cpsHid2Nut()) it is the same, key by key: no difference to list. Usages of the descriptors that matter to the
@@ -1739,6 +1754,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_baseline_all_fixtures);
     RUN_TEST(test_golden_registry_all_fixtures);
     RUN_TEST(test_golden_generic_all_fixtures);
+    RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
@@ -1785,6 +1801,7 @@ void setup() {
     RUN_TEST(test_status_baseline_all_fixtures);
     RUN_TEST(test_golden_registry_all_fixtures);
     RUN_TEST(test_golden_generic_all_fixtures);
+    RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
