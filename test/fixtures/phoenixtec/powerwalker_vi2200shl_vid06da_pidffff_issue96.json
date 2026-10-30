@@ -5,7 +5,7 @@
   "manufacturer": "PPC",
   "product": "Offline UPS",
   "serial_number": "000000000",
-  "notes": "Powerwalker VI 2200 SHL (Phoenixtec electronics, strings PPC / Offline UPS), live dump of v1.8.0 attached to issue #96 (0 failed requests). A bench power supply stood in for the dead battery: battery values are not those of a real battery. The report descriptor is byte for byte the one of the Salicru SPS SOHO+ of issue #97. Reports 0x01, 0x06 and 0x2D are both Input and Feature: the dump lists the Input reports first, so they are moved after the Feature ones (older GET_REPORT reads). PresentStatus.Good is 0 with the UPS on mains; upstream would add OFF to ups.status, kept out of scope in US-097. Second scenario: dump of the liebert-v1 test build, UPS on mains with PresentStatus.Good = 1 and output voltage/frequency reported; its iDeviceChemistry string is \"PbAc\r\n\" (not replayed: the runner injects strings before the reports).",
+  "notes": "Powerwalker VI 2200 SHL (Phoenixtec electronics, strings PPC / Offline UPS), live dump of v1.8.0 attached to issue #96 (0 failed requests). A bench power supply stood in for the dead battery: battery values are not those of a real battery. The report descriptor is byte for byte the one of the Salicru SPS SOHO+ of issue #97. Reports 0x01, 0x06 and 0x2D are both Input and Feature: the dump lists the Input reports first, so they are moved after the Feature ones (older GET_REPORT reads). PresentStatus.Good is 0 with the UPS on mains: since US-106 off_info (liebert-hid.c:126) adds OFF to ups.status, as usbhid-ups. Second scenario: dump of the liebert-v1 test build, UPS on mains with PresentStatus.Good = 1 and output voltage/frequency reported; its iDeviceChemistry string is \"PbAc\r\n\" (not replayed: the runner injects strings before the reports).",
   "report_descriptor_hex": [
     "0x05", "0x84", "0x09", "0x04", "0xA1", "0x01", "0x09", "0x10", "0xA1", "0x00",
     "0x09", "0x12", "0xA1", "0x00", "0x05", "0x84", "0x09", "0x58", "0x85", "0x24",
@@ -182,7 +182,7 @@
         "ups.serial": "000000000",
         "ups.delay.shutdown": "20",
         "ups.delay.start": "30",
-        "ups.status": "OL CHRG",
+        "ups.status": "OL CHRG OFF",
         "battery.charge": "22",
         "battery.runtime": "739",
         "battery.voltage": "27.60",
@@ -197,7 +197,7 @@
         "ups.power.nominal": "9",
         "ups.test.result": "No test initiated",
         "ups.beeper.status": "disabled",
-        "ups.status.good": "0"
+        "ups.status.off": "1"
       }
     },
     {
@@ -315,8 +315,8 @@
         "ups.status.charging": "1",
         "ups.status.discharging": "0",
         "ups.status.overload": "0",
-        "ups.status.good": "1",
-        "ups.status.internal_failure": "0",
+        "ups.status.off": "0",
+        "ups.status.commfault": "0",
         "battery.charge": "30",
         "battery.runtime": "1007",
         "ups.load": "0",

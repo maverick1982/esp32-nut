@@ -261,7 +261,8 @@ inline std::vector<const UPSCommandInfo*> buildFromTable(const std::vector<HIDUs
             const HIDUsageDef* f = cmdField(cmd_table, n_cmd_table, usages, n, &dfl);
             available = mute_allowed && beeper_available && f && cmdValueFits(*f, cmdDefault(dfl));
         } else if (strcmp(n, "beeper.toggle") == 0) {
-            available = beeper_available && has("beeper.enable") && has("beeper.disable");
+            // A beeper.toggle row of its own (liebert-hid.c:141, US-106), or the enable/disable pair
+            available = beeper_available && (has("beeper.toggle") || (has("beeper.enable") && has("beeper.disable")));
         } else if (strncmp(n, "beeper.", 7) == 0) {
             available = beeper_available && has(n);
         } else if (strncmp(n, "test.", 5) == 0) {

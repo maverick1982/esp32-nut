@@ -1294,7 +1294,9 @@ inline bool pathMatches(const HIDUsageDef& u, const char* path) {
         size_t plen = pe ? (size_t)(pe - p) : strlen(p);
         const char* qe = strchr(q, '.');
         size_t qlen = qe ? (size_t)(qe - q) : strlen(q);
-        if (plen != qlen || strncmp(p, q, plen) != 0) return false;
+        // Usage names ignore case, as string_to_path() (libhid.c:1047, strcasecmp): legrand-hid.c:144
+        // writes UPS.PowerSummary.RuntimeToEmpty for the RunTimeToEmpty usage (US-106)
+        if (plen != qlen || !equalsIgnoreCaseN(p, q, plen)) return false;
 
         // An index token right after this segment
         uint8_t want = 0;
@@ -1598,8 +1600,8 @@ inline const DelayPaths* legrandDelayPaths() {
 // Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
 // row of mge_hid2nut (US-066, US-073, US-074, US-107), instant commands and ups.alarm rows
 // included, but the rows of the stateful mge functions (US-070); apcHid2Nut() (US-076),
-// cpsHid2Nut() (US-075), powercomHid2Nut() (US-077), ecoflowHid2Nut() and openupsHid2Nut()
-// (US-078) every row of their upstream table. ups.delay.* is left to
+// cpsHid2Nut() (US-075), powercomHid2Nut() (US-077), ecoflowHid2Nut(), openupsHid2Nut() (US-078),
+// legrandHid2Nut() and liebertHid2Nut() (US-106) every row of their upstream table. ups.delay.* is left to
 // CommandCatalog::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
@@ -2925,6 +2927,214 @@ inline const HidInfo* powercomHid2Nut(size_t& n) {
         // ups.delay.start (powercom-hid.c:728) excluded: ups.delay.* are the configured delays, not device values (US-058)
         // powercom-hid.c:729 PowercomUPS.PowercomPowerConverter.PowercomDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058)
         { "load.off", 0, 0, "0x00020004.0x00020016.0x00020057", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+// Every row of legrand_hid2nut (US-106, ADR 0011): values, status and instant commands. The rows
+// with legrand_times10/100k/1M/10M or divide_by_10_conversion keep their value as libhid.c reads
+// it, with the HID unit exponent, and the "%0.1f" of the excluded function (US-087, user decision
+// of 2026-10-30): on the Keor PDU 800 (issue #90) those conversions give values off by a factor of
+// 10 or more with NUT too. ups.delay.* is left to legrandDelayPaths() / applyDefaultDelays (US-066).
+inline const HidInfo* legrandHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+        // legrand-hid.c:129 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:130 UPS.PowerConverter.Input.Voltage, legrand_times1M_info excluded (US-087)
+        { "input.voltage", 0, 0, "UPS.PowerConverter.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:131 UPS.Input.HighVoltageTransfer
+        { "input.transfer.high", 0, 0, "UPS.Input.HighVoltageTransfer", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:132 UPS.PowerConverter.Output.HighVoltageTransfer, legrand_times10_info excluded (US-087)
+        { "input.transfer.high", 0, 0, "UPS.PowerConverter.Output.HighVoltageTransfer", "%.1f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:133 UPS.Input.LowVoltageTransfer
+        { "input.transfer.low", 0, 0, "UPS.Input.LowVoltageTransfer", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:134 UPS.PowerConverter.Output.LowVoltageTransfer
+        { "input.transfer.low", 0, 0, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:135 UPS.Input.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:136 UPS.Flow.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Flow.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:139 UPS.PowerSummary.ConfigVoltage, divide_by_10_conversion excluded (US-087)
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.1f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:140 UPS.BatterySystem.Battery.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.BatterySystem.Battery.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:141 UPS.PowerSummary.Voltage, divide_by_10_conversion excluded (US-087)
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:142 UPS.BatterySystem.Battery.Voltage, legrand_times100k_info excluded (US-087)
+        { "battery.voltage", 0, 0, "UPS.BatterySystem.Battery.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:143 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:144 UPS.PowerSummary.RuntimeToEmpty: the RunTimeToEmpty usage, names
+        // ignore case as in string_to_path() (pathMatches)
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RuntimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:145 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:146 UPS.PowerSummary.RemainingCapacityLimit
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:149 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:150 UPS.PowerConverter.Output.Voltage, legrand_times10M_info excluded (US-087)
+        { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:151 UPS.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:152 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:153 UPS.OutletSystem.Outlet.PercentLoad
+        { "ups.load", 0, 0, "UPS.OutletSystem.Outlet.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:154 UPS.Output.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:155 UPS.Flow.ConfigApparentPower
+        { "ups.realpower.nominal", 0, 0, "UPS.Flow.ConfigApparentPower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:158 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // legrand-hid.c:159 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // legrand-hid.c:160 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // legrand-hid.c:161 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // legrand-hid.c:162 UPS.Output.Overload
+        { "BOOL", 0, 0, "UPS.Output.Overload", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // ups.delay.shutdown (legrand-hid.c:165) excluded: legrandDelayPaths() / applyDefaultDelays (US-066)
+        // ups.delay.start (legrand-hid.c:166) excluded: legrandDelayPaths() / applyDefaultDelays (US-066)
+        // ups.delay.shutdown (legrand-hid.c:167) excluded: legrandDelayPaths() / applyDefaultDelays (US-066)
+        // ups.delay.start (legrand-hid.c:168) excluded: legrandDelayPaths() / applyDefaultDelays (US-066)
+        // legrand-hid.c:169 UPS.OutletSystem.Outlet.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:170 UPS.OutletSystem.Outlet.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:171 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.Output.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:172 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.Output.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:175 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:176 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:177 UPS.BatterySystem.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:178 UPS.Output.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:179 UPS.Output.Test
+        { "test.battery.start.deep", 0, 0, "UPS.Output.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:180 UPS.Output.Test
+        { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:183 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:184 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+// Every row of liebert_hid2nut (US-106, ADR 0011): values, status and instant commands. The vendor
+// usages written ffff0057 ... upstream (string_to_path reads them in hex) are 0xFFFF0057 ... here.
+// ups.delay.* is left to liebertDelayPaths() / applyDefaultDelays (US-066).
+inline const HidInfo* liebertHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+#if WITH_UNMAPPED_DATA_POINTS
+        // liebert-hid.c:73 UPS.PowerSummary.FlowID
+        { "unmapped.ups.powersummary.flowid", 0, 0, "UPS.PowerSummary.FlowID", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:74 UPS.PowerSummary.PowerSummaryID
+        { "unmapped.ups.powersummary.powersummaryid", 0, 0, "UPS.PowerSummary.PowerSummaryID", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:75 UPS.PowerSummary.CapacityGranularity1
+        { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:76 UPS.PowerSummary.CapacityMode
+        { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:77 UPS.PowerSummary.Rechargeable
+        { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:78 UPS.PowerSummary.iProduct
+        { "unmapped.ups.powersummary.iproduct", 0, 0, "UPS.PowerSummary.iProduct", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:79 UPS.PowerSummary.iProduct
+        { "unmapped.ups.powersummary.product", 0, 0, "UPS.PowerSummary.iProduct", "%s", 0, Conv::StringId, nullptr, 0 },
+        // liebert-hid.c:80 UPS.PowerSummary.iManufacturer
+        { "unmapped.ups.powersummary.imanufacturer", 0, 0, "UPS.PowerSummary.iManufacturer", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:81 UPS.PowerSummary.iManufacturer
+        { "unmapped.ups.powersummary.manufacturer", 0, 0, "UPS.PowerSummary.iManufacturer", "%s", 0, Conv::StringId, nullptr, 0 },
+        // liebert-hid.c:82 UPS.PowerSummary.iSerialNumber
+        { "unmapped.ups.powersummary.iserialnumber", 0, 0, "UPS.PowerSummary.iSerialNumber", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:83 UPS.PowerSummary.iSerialNumber
+        { "unmapped.ups.powersummary.serialnumber", 0, 0, "UPS.PowerSummary.iSerialNumber", "%s", 0, Conv::StringId, nullptr, 0 },
+#endif
+        // liebert-hid.c:87 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:88 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:89 UPS.PowerSummary.FullChargeCapacity
+        { "experimental.battery.capacity", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:90 UPS.PowerSummary.DesignCapacity
+        { "experimental.battery.capacity.nominal", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:91 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:92 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", 0, Conv::StringId, nullptr, 0 },
+        // liebert-hid.c:95 UPS.PowerSummary.PercentLoad
+        { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:96 UPS.Flow.[4].ConfigApparentPower
+        { "ups.power.nominal", 0, 0, "UPS.Flow.[4].ConfigApparentPower", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:98 UPS.BatterySystem.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
+        // liebert-hid.c:100 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // liebert-hid.c:103 UPS.PowerConverter.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:104 UPS.Flow.[4].ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Flow.[4].ConfigVoltage", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:105 UPS.PowerConverter.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:106 UPS.Flow.[4].ConfigFrequency
+        { "output.frequency.nominal", 0, 0, "UPS.Flow.[4].ConfigFrequency", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:108 UPS.PowerConverter.Output.HighVoltageTransfer
+        { "output.transfer.high", 0, 0, "UPS.PowerConverter.Output.HighVoltageTransfer", "%.1f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:109 UPS.PowerConverter.Output.LowVoltageTransfer
+        { "output.transfer.low", 0, 0, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.1f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:112 UPS.PowerConverter.Input.[1].Voltage
+        { "input.voltage", 0, 0, "UPS.PowerConverter.Input.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:113 UPS.PowerConverter.Input.[1].Frequency
+        { "input.frequency", 0, 0, "UPS.PowerConverter.Input.[1].Frequency", "%.2f", 0, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:115 UPS.PowerConverter.Output.ffff0057
+        { "input.transfer.low", 0, 0, "UPS.PowerConverter.Output.0xFFFF0057", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:116 UPS.PowerConverter.Output.ffff0058
+        { "input.transfer.high", 0, 0, "UPS.PowerConverter.Output.0xFFFF0058", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:117 UPS.PowerConverter.Output.ffff00f9
+        { "input.frequency.transfer.low", 0, 0, "UPS.PowerConverter.Output.0xFFFF00F9", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:118 UPS.PowerConverter.Output.ffff00f8
+        { "input.frequency.transfer.high", 0, 0, "UPS.PowerConverter.Output.0xFFFF00F8", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:121 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // liebert-hid.c:122 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // liebert-hid.c:123 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // liebert-hid.c:124 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // liebert-hid.c:125 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // liebert-hid.c:126 UPS.PowerSummary.PresentStatus.Good: OFF when 0, as usbhid-ups (US-106)
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Good", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOffInfo) },
+        // liebert-hid.c:127 UPS.PowerSummary.PresentStatus.InternalFailure
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.InternalFailure", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // liebert-hid.c:128 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // liebert-hid.c:129 UPS.PowerConverter.Input.[1].PresentStatus.Buck
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Buck", nullptr, 0, Conv::Lookup, NUT_LKP(kTrimInfo) },
+        // liebert-hid.c:130 UPS.PowerConverter.Input.[1].PresentStatus.Boost
+        { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
+        // ups.delay.start (liebert-hid.c:133) excluded: liebertDelayPaths() / applyDefaultDelays (US-066)
+        // ups.delay.shutdown (liebert-hid.c:134) excluded: liebertDelayPaths() / applyDefaultDelays (US-066)
+        // liebert-hid.c:137 UPS.BatterySystem.Battery.Test
+        { "test.battery.start", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:138 UPS.PowerSummary.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:139 UPS.PowerSummary.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:140 UPS.PowerSummary.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // liebert-hid.c:141 UPS.PowerSummary.AudibleAlarmControl: the project toggles from
+        // ups.beeper.status instead of writing 1 (US-097 deviation 1)
+        { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

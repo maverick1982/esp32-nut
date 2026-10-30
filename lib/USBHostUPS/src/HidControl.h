@@ -86,6 +86,11 @@ public:
                     // US-074: the field of the beeper.enable / beeper.disable row (find_nut_info)
                     const HIDUsageDef* f = CommandCatalog::cmdField(table, n_table, hid->getUsages(),
                                                                     enable ? "beeper.enable" : "beeper.disable");
+                    // A beeper.toggle row of its own (liebert-hid.c:141, US-106): its field, with the
+                    // value the project computes from ups.beeper.status (US-097 deviation 1)
+                    if (!f && strcmp(name, "beeper.toggle") == 0) {
+                        f = CommandCatalog::cmdField(table, n_table, hid->getUsages(), "beeper.toggle");
+                    }
                     if (!f) return CommandResult::NOT_SUPPORTED;
                     field = *f;
                     from_row = true;

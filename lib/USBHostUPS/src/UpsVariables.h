@@ -39,6 +39,17 @@ inline bool equalsIgnoreCase(const char* a, const char* b) {
     return *a == *b;
 }
 
+// The first n characters of a and b equal ignoring case, as strncasecmp() == 0 (US-106)
+inline bool equalsIgnoreCaseN(const char* a, const char* b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char ca = (a[i] >= 'A' && a[i] <= 'Z') ? (char)(a[i] + 32) : a[i];
+        char cb = (b[i] >= 'A' && b[i] <= 'Z') ? (char)(b[i] + 32) : b[i];
+        if (ca != cb) return false;
+        if (!ca) return true;
+    }
+    return true;
+}
+
 inline int compareIgnoreCase(const char* a, const char* b) {
     while (*a && *b) {
         int ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;

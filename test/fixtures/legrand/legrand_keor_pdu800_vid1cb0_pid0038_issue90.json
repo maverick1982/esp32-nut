@@ -5,7 +5,7 @@
   "manufacturer": "Legrand",
   "product": "KEOR PDU 800",
   "serial_number": "                ",
-  "notes": "Legrand Keor PDU 800, live dump of v1.7.2 (then GenericDriver) attached to issue #90, 0 failed requests. The serial string is 16 spaces, published as is like usbhid-ups (format_serial returns hd->Serial). Voltages use the HID unit exponent (Volts, exponent 6 or 7) without the legrand-hid.c divide_by_10 / legrand_times* conversions, which give values off by a factor of 10 on this model (US-087, deviation 1).",
+  "notes": "Legrand Keor PDU 800, live dump of v1.7.2 (then GenericDriver) attached to issue #90, 0 failed requests. The serial string is 16 spaces, published as is like usbhid-ups (format_serial returns hd->Serial). Voltages use the HID unit exponent (Volts, exponent 6 or 7) without the legrand-hid.c divide_by_10 / legrand_times* conversions, which give values off by a factor of 10 on this model (US-087, deviation 1). Since US-106 the values come from legrand_hid2nut: the rows of UPS.Input.Voltage, UPS.Output.Voltage and UPS.Output.Frequency have \"%.0f\" (230, 50), the rows with an excluded conversion keep its \"%0.1f\" (battery.voltage 13.7, battery.voltage.nominal 12.0).",
   "report_descriptor_hex": [
     "0x05", "0x84", "0x09", "0x04", "0xA1", "0x01", "0x09", "0x24", "0xA1", "0x00",
     "0x85", "0x01", "0x09", "0xFE", "0x75", "0x08", "0x95", "0x01", "0x15", "0x00",
@@ -308,8 +308,8 @@
         "battery.charge": "100",
         "battery.runtime": "2160",
         "battery.charge.low": "10",
-        "battery.voltage.nominal": "12",
-        "battery.voltage": "13.70",
+        "battery.voltage.nominal": "12.0",
+        "battery.voltage": "13.7",
         "ups.status.ac_present": "1",
         "ups.status.charging": "1",
         "ups.status.discharging": "0",
@@ -318,15 +318,15 @@
         "ups.status.remaining_time_limit_expired": "0",
         "ups.beeper.status": "enabled",
         "input.voltage.nominal": "230",
-        "input.voltage": "230.2",
+        "input.voltage": "230",
         "input.transfer.low": "180",
         "input.transfer.high": "270",
         "input.frequency": "50.0",
-        "output.voltage": "230.2",
+        "output.voltage": "230",
         "ups.load": "25",
         "ups.realpower.nominal": "480",
         "ups.realpower": "120",
-        "output.frequency": "50.0"
+        "output.frequency": "50"
       }
     }
   ]

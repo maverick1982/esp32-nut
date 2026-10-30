@@ -20,6 +20,8 @@
 #include "PowercomDriver.h"
 #include "GenericDriver.h"
 #include "OpenUPSDriver.h"
+#include "LegrandDriver.h"
+#include "LiebertDriver.h"
 #include "DriverRegistry.h"
 #include "CommandCatalog.h"
 #include "BeeperLogic.h"
