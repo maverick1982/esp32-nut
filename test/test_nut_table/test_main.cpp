@@ -715,6 +715,102 @@ void test_powercom_beeper_lookup() {
     conv(beeper, 3, ctx, DecodeResult::FAIL);
 }
 
+// --- ecoflow-hid.c and openups-hid.c conversions (US-078)
+
+void test_ecoflow_runtime_conversion() {
+    // ecoflow_battery_runtime_conversion: minutes to seconds, NULL (no value) when negative
+    HidInfo rt = { "battery.runtime", 0, 0, "UPS.X", "%.0f", HU_FLAG_QUICK_POLL, Conv::EcoflowRuntime, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("2700", conv(rt, 45, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("0", conv(rt, 0, ctx).c_str());
+    conv(rt, -1, ctx, DecodeResult::FAIL);
+}
+
+void test_openups_scales() {
+    // openups_scale_*_fun: "%.2f" for the voltages, "%.3f" for the currents, after the scale of
+    // get_voltage_multiplier(); 1 until the product ID is known
+    HidInfo vin = { "input.voltage", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsVin, nullptr, 0 };
+    HidInfo vout = { "output.voltage", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsVout, nullptr, 0 };
+    HidInfo cin = { "input.current", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsCcharge, nullptr, 0 };
+    HidInfo cout = { "output.current", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsCdischarge, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("123.00", conv(vin, 123, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("13.000", conv(cout, 13, ctx).c_str());
+
+    // PID 0xD005
+    ctx.openups.vin = ctx.openups.vout = ctx.openups.ccharge = ctx.openups.cdischarge = 0.1;
+    TEST_ASSERT_EQUAL_STRING("12.30", conv(vin, 123, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("12.20", conv(vout, 122, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("1.300", conv(cin, 13, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("1.300", conv(cout, 13, ctx).c_str());
+
+    // PID 0xD004
+    ctx.openups.vin = kOpenupsVinScaleD004;
+    ctx.openups.vout = kOpenupsVoutScaleD004;
+    ctx.openups.ccharge = kOpenupsCchargeScaleD004;
+    ctx.openups.cdischarge = kOpenupsCdischargeScaleD004;
+    TEST_ASSERT_EQUAL_STRING("354.50", conv(vin, 100, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("257.10", conv(vout, 100, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("0.827", conv(cin, 10, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("16.113", conv(cout, 10, ctx).c_str());
+}
+
+void test_openups_temperature() {
+    // openups_temperature_fun: thermistor = value * 100 against therm_tbl (-40 .. 125 °C, 5 °C
+    // steps); "%d" at the ends and on a point of the table, "%.2f" in between
+    HidInfo temp = { "battery.temperature", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsTemperature, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("-40", conv(temp, 0.3, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("-40", conv(temp, 0.49, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("125", conv(temp, 10, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("25", conv(temp, 5.12, ctx).c_str()); // 0x200, 14th point
+    TEST_ASSERT_EQUAL_STRING("31.78", conv(temp, 5.75, ctx).c_str()); // 575 between 0x22F and 0x25C
+}
+
+void test_openups_status_functions() {
+    // openups-hid.c:180-198: true for any value but 0; online is cleared with "!online", not
+    // set to "offline"; off is inverted
+    struct Case { Conv conv; const char* on_token; const char* off_token; };
+    static const Case cases[] = {
+        { Conv::OpenupsCharging, "chrg", "!chrg" },
+        { Conv::OpenupsDischarging, "dischrg", "!dischrg" },
+        { Conv::OpenupsOnline, "online", "!online" },
+        { Conv::OpenupsOff, "!off", "off" },
+    };
+    Context ctx;
+    String out;
+    for (const auto& c : cases) {
+        HidInfo row = { "BOOL", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, c.conv, nullptr, 0 };
+        TEST_ASSERT_EQUAL_STRING(c.on_token, statusToken(row, 1, ctx, nullptr));
+        TEST_ASSERT_EQUAL_STRING(c.on_token, statusToken(row, 2, ctx, nullptr));
+        TEST_ASSERT_EQUAL_STRING(c.off_token, statusToken(row, 0, ctx, nullptr));
+        TEST_ASSERT_TRUE(decode(row, 1, ctx, out) == DecodeResult::DEFER);
+    }
+}
+
+void test_nobattery_bit_constant() {
+    // ST_NOBATTERY (OpenUPSDriver::filterStatus, US-078) is the bit of the nobattery token
+    StatusBits s;
+    applyStatusToken(s, "nobattery");
+    TEST_ASSERT_EQUAL_UINT32(statusBit(ST_NOBATTERY), s.set);
+    TEST_ASSERT_EQUAL_STRING("nobattery", kStatusTokens[ST_NOBATTERY]);
+}
+
+void test_depleted_lookup() {
+    // depleted_info (usbhid-ups.c): the token of PresentStatus.FullyDischarged
+    HidInfo row = { "BOOL", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDepletedInfo) };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("depleted", statusToken(row, 1, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!depleted", statusToken(row, 0, ctx, nullptr));
+}
+
+void test_format_three_decimals() {
+    // openups-hid.c:303 battery.current "%.3f"
+    HidInfo cur = { "battery.current", 0, 0, "UPS.X", "%.3f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("0.010", conv(cur, 0.01, ctx).c_str());
+}
+
 void test_command_rows_never_published() {
     // HU_TYPE_CMD rows: bound, but outside the INIT rule and never given a value
     static const HidInfo t[] = {
@@ -810,13 +906,16 @@ static void checkSupportedFormats(const HidInfo* t, size_t n) {
     for (size_t i = 0; i < n; i++) {
         const HidInfo& r = t[i];
         // Rows that never format a value: driver-side defaults, internal rows, string indices,
-        // instant commands (dfl is the value written) and eaton_compute_realpower_info (dfl
-        // "-1" upstream, the function formats the value)
+        // instant commands (dfl is the value written), eaton_compute_realpower_info (dfl
+        // "-1" upstream, the function formats the value) and the openups-hid.c functions (dfl
+        // NULL upstream, the function formats the value, US-078)
         if ((r.hidflags & HU_FLAG_ABSENT) || isInternalRow(r) || isCommandRow(r) || r.conv == Conv::StringId ||
-            r.conv == Conv::EatonComputeRealpower)
+            r.conv == Conv::EatonComputeRealpower || r.conv == Conv::OpenupsVin || r.conv == Conv::OpenupsVout ||
+            r.conv == Conv::OpenupsCcharge || r.conv == Conv::OpenupsCdischarge || r.conv == Conv::OpenupsTemperature)
             continue;
         TEST_ASSERT_NOT_NULL_MESSAGE(r.dfl, r.info_type);
-        bool number = strcmp(r.dfl, "%.0f") == 0 || strcmp(r.dfl, "%.1f") == 0 || strcmp(r.dfl, "%.2f") == 0;
+        bool number = strcmp(r.dfl, "%.0f") == 0 || strcmp(r.dfl, "%.1f") == 0 || strcmp(r.dfl, "%.2f") == 0 ||
+                      strcmp(r.dfl, "%.3f") == 0;
         TEST_ASSERT_TRUE_MESSAGE(number || strcmp(r.dfl, "%s") == 0, r.info_type);
         // A "%s" row needs a conversion that gives text
         if (strcmp(r.dfl, "%s") == 0) TEST_ASSERT_TRUE_MESSAGE(r.conv != Conv::Number, r.info_type);
@@ -844,6 +943,18 @@ void test_cps_rows_have_supported_formats() {
 void test_powercom_rows_have_supported_formats() {
     size_t n;
     const HidInfo* t = powercomHid2Nut(n);
+    checkSupportedFormats(t, n);
+}
+
+void test_ecoflow_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = ecoflowHid2Nut(n);
+    checkSupportedFormats(t, n);
+}
+
+void test_openups_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = openupsHid2Nut(n);
     checkSupportedFormats(t, n);
 }
 
@@ -955,6 +1066,36 @@ void test_powercom_table_covers_every_upstream_row() {
                        "inline const HidInfo* powercomHid2Nut", "} // namespace NutTable");
 }
 
+void test_ecoflow_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every ecoflow_hid2nut row is in ecoflowHid2Nut(), as a row or as a comment (US-078)
+    checkTableCoverage("nut_repo/drivers/ecoflow-hid.c", "static hid_info_t ecoflow_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* ecoflowHid2Nut", "inline const HidInfo* openupsHid2Nut");
+}
+
+void test_openups_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every openups_hid2nut row is in openupsHid2Nut(), as a row or as a comment (US-078)
+    checkTableCoverage("nut_repo/drivers/openups-hid.c", "static hid_info_t openups_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* openupsHid2Nut", "inline const HidInfo* powercomHid2Nut");
+}
+
+void test_ecoflow_and_openups_publish_only_upstream_names() {
+    // ADR 0011 rule 3: the unmapped.* rows of ecoflow-hid.c stay inside #if WITH_UNMAPPED_DATA_POINTS;
+    // the experimental.* rows are active upstream and published (US-078)
+    size_t n;
+    const HidInfo* t = ecoflowHid2Nut(n);
+    int experimental = 0;
+    for (size_t i = 0; i < n; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(strncmp(t[i].info_type, "unmapped.", 9) != 0, t[i].info_type);
+        if (strncmp(t[i].info_type, "experimental.", 13) == 0) experimental++;
+    }
+    TEST_ASSERT_EQUAL_INT(4, experimental);
+    t = openupsHid2Nut(n);
+    for (size_t i = 0; i < n; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(strncmp(t[i].info_type, "unmapped.", 9) != 0, t[i].info_type);
+        TEST_ASSERT_TRUE_MESSAGE(!isCommandRow(t[i]), t[i].info_type); // openups-hid.c has no commands
+    }
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_number_follows_row_format);
@@ -994,6 +1135,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_powercom_timers);
     RUN_TEST(test_powercom_hack_voltage);
     RUN_TEST(test_powercom_beeper_lookup);
+    RUN_TEST(test_ecoflow_runtime_conversion);
+    RUN_TEST(test_openups_scales);
+    RUN_TEST(test_openups_temperature);
+    RUN_TEST(test_openups_status_functions);
+    RUN_TEST(test_depleted_lookup);
+    RUN_TEST(test_nobattery_bit_constant);
+    RUN_TEST(test_format_three_decimals);
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
     RUN_TEST(test_mge_table_covers_every_upstream_row);
@@ -1003,6 +1151,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_cps_table_covers_every_upstream_row);
     RUN_TEST(test_powercom_rows_have_supported_formats);
     RUN_TEST(test_powercom_table_covers_every_upstream_row);
+    RUN_TEST(test_ecoflow_rows_have_supported_formats);
+    RUN_TEST(test_openups_rows_have_supported_formats);
+    RUN_TEST(test_ecoflow_table_covers_every_upstream_row);
+    RUN_TEST(test_openups_table_covers_every_upstream_row);
+    RUN_TEST(test_ecoflow_and_openups_publish_only_upstream_names);
     RUN_TEST(test_alarm_rows_of_mge_table);
     RUN_TEST(test_vendor_alarms_in_table_order);
     return UNITY_END();

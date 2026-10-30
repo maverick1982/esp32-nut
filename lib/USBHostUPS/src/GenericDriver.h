@@ -134,6 +134,9 @@ protected:
     static String decodeStringDescriptor(IHidTransport* host, const uint8_t *data, size_t length);
     // Called by every loop() with the host lock held: values that need no request
     virtual void onLoop(IHidTransport* host, UPSData& data) {}
+    // The status bits of the BOOL rows as they become the internal ups.status.* keys: a driver
+    // can drop a bit its device reports wrongly (US-078). The engine's bits are not changed.
+    virtual void filterStatus(NutTable::StatusBits& status) const { (void)status; }
 
     String _active_beeper;
     uint8_t _batteryDateStringIndex;
