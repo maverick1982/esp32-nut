@@ -1,0 +1,578 @@
+schema: archetipo/plan/v2
+spec_code: US-077
+body: |
+  # US-077: Tabella unica Powercom (powercom-hid) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-29
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 3 | **Bloccato da:** US-073 (DONE). Anche US-074 (comandi da tabella), US-107 (`ups.alarm`, token di stato), US-075 (CyberPower) e US-076 (APC, c6448b0) sono DONE: motore, test di copertura e modello di migrazione ci sono già.
+
+  Oggi Powercom non ha una tabella, nemmeno RW: le sole righe RW di upstream sono `ups.delay.*` con `HU_FLAG_ABSENT`, gestite da `delayPaths()` dal US-066. Nasce `powercomHid2Nut()` con tutte le righe di `powercom_hid2nut` (`nut_repo/drivers/powercom-hid.c:543-733`, righe 544-729) nell'ordine upstream. `PowercomDriver` perde le mappature scritte a mano e tiene solo gli hook non tabellari (ADR 0011).
+
+  ---
+
+  ## Cosa dice il descriptor del SPD-750U (fixture #21, pianificazione 2026-10-29)
+
+  - **La fixture ha solo il descriptor**, nessun report. Il replay verifica righe legate, LIST CMD/RW e liste di poll. I valori si verificano con report sintetici in `test_powercom_driver`.
+  - **Nessuna usage della pagina vendor 0x0002** (`PowercomUPS.*`): sul SPD-750U si legano solo righe con percorsi standard. Le righe vendor servono agli altri modelli (PID 0x00a2-0x00a6, 0x0001), che oggi passano dalle mappature a mano su `0x0002xxxx`.
+  - **Righe legate** (report FEATURE salvo nota):
+    - BOOL 544-553 (report 10, anche INPUT); BOOL 557-559 e 562-568 (report 38; `Boost`/`Buck` 560-561 assenti);
+    - `battery.voltage` 587 su `ACPresent` (10), valore dal report 0xA4;
+    - `battery.charge` 589 (14, anche INPUT) e 590 (24); `battery.charge.low` 591 (12); `battery.charge.warning` 592 (11); `battery.runtime` 593 (55, anche INPUT);
+    - `battery.mfr.date` 594 (23, STATIC); `battery.type` 595 (5, STATIC, StringId);
+    - `ups.beeper.status` 601 (19) e 602 (37); `ups.load` 603 (31); `ups.date` 604 (13, STATIC); `ups.test.result` 605 (21);
+    - `ups.timer.start` 621 (16); `ups.timer.shutdown` 638 (15);
+    - `input.voltage` 642 (29: `bind()` prende il primo `Input.Voltage`, non quello del report 46); `input.voltage.nominal` 643 (28, STATIC); `input.frequency` 644 (30);
+    - `output.voltage` 646 (33); `output.voltage.nominal` 647 (32, STATIC); `output.frequency` 648 (34);
+    - `battery.temperature` 677 (45, `%.1f`): è il report di temperatura della #36;
+    - comandi: `beeper.toggle/enable/disable` 658-660 (19, il beeper della #36), `test.battery.start.quick` 661 (21), `load.on.delay` 662 (16), `shutdown.return`/`stayoff` 663-664 (15).
+  - **Non legate sul SPD-750U:** `PCMDelayBefore*` (`0x00FF0056/57`), `Output.DelayBefore*` (35, 36), e `PowerSummary.Temperature` (44), che in powercom-hid non ha righe.
+  - **Chiavi nuove sul SPD-750U** (oggi il loro report non è nel poll): `battery.charge.low`, `battery.charge.warning`, `battery.mfr.date`, `battery.type`, `ups.date`, `ups.test.result`, `ups.timer.start`, `ups.timer.shutdown`, `input.voltage.nominal`, `input.frequency`, `output.voltage.nominal`, `output.frequency`. Con quelle di oggi formano l'elenco della Dimostrazione.
+  - **LIST CMD:** oggi `test.battery.start.quick test.battery.start.deep test.battery.stop` (catalogo generico) → `test.battery.start.quick` (riga 661: powercom-hid non ha deep/stop). **LIST RW** invariata: `ups.delay.shutdown:8 ups.delay.start:8`.
+
+  ---
+
+  ## Decisioni
+
+  ### Prese con l'utente (2026-10-29)
+
+  1. **Poll completo del SPD-750U.** Ogni 30 s si leggono i report delle righe legate senza `HU_FLAG_STATIC`. I report con sole righe STATIC si leggono una volta (`pollStaticReportsOnce()`, staticità decisa dai flag della tabella). La seconda riga di un gruppo il cui primo candidato sta in un report letto non fa leggere il suo report (590 → 24, 602 → 37). Sono circa 15 richieste per ciclo (≈12 s a 800 ms) contro le 7 di oggi. Prova di fox1047 obbligatoria: nella #36, leggendo tutti i FEATURE, i valori crollavano a 0 dopo pochi minuti.
+  2. **Report 38 nel quick poll.** Il quick poll legge 0x0A (il keep-alive di oggi, 8 byte) e i report FEATURE delle righe BOOL legate (38 sul SPD-750U), ogni 2 s. Motivo: `walkInternalRows()` riapplica le righe BOOL in ordine di tabella dopo ogni report. Un report 38 vecchio (righe 557-568, dopo le 544-553) coprirebbe quindi un OB arrivato col report 10 fino al poll successivo.
+
+  ### Prese in pianificazione (da confermare in review)
+
+  3. **Traduzione della pagina vendor.** Il parser nomina la collection applicativa col suo codice, quindi i percorsi vendor iniziano con `0x00020004.`, non con `UPS.` (da verificare con un descriptor fatto a mano, TASK-07).
+     - `PowercomUPS` `0x00020004`, `PowercomBatterySystem` `0x00020010`, `PowercomPowerConverter` `0x00020016`, `PowercomInput` `0x0002001A`, `PowercomOutput` `0x0002001C`;
+     - `PowercomVoltage` `0x00020030`, `PowercomFrequency` `0x00020032`, `PowercomPercentLoad` `0x00020035`, `PowercomTemperature` `0x00020036`;
+     - `PowercomDelayBeforeStartup` `0x00020056`, `PowercomDelayBeforeShutdown` `0x00020057`, `PowercomTest` `0x00020058`, `PowercomShutdownRequested` `0x00020068`;
+     - `PowercomInternalChargeController` `0x00020081`, `PowercomPrimaryBatterySupport` `0x00020082`, `PowercomDesignCapacity` `0x00020083`, `PowercomSpecificationInfo` `0x00020084`, `PowercomManufacturerDate` `0x00020085`, `PowercomSerialNumber` `0x00020086`, `PowercomManufacturerName` `0x00020087`;
+     - `PCMDelayBeforeStartup` / `PCMDelayBeforeShutdown`: `UPS.PowerSummary.0x00FF0056` / `0x00FF0057` (come `powercomDelayPaths()`);
+     - `POWERCOM1` `0x0084002F`, `POWERCOM2` `0xFF860060`, `POWERCOM3` `0xFF860080`: solo in righe commentate o dentro `#if`.
+  4. **Righe escluse con commento.** `ups.delay.*` 620, 637, 639 (RW `HU_FLAG_ABSENT`, già coperte da `delayPaths()`/`applyDefaultDelays`, US-066) e 727-728 (RO dai ritardi vendor: per US-058 `ups.delay.*` sono ritardi configurati, non valori del dispositivo).
+  5. **Righe commentate e `#if`.** Le righe commentate upstream (554-556, 569-572) e il blocco 577-580 diventano commenti. Le righe dentro `#if WITH_UNMAPPED_DATA_POINTS` (597-598, 607-611, 651-654, 673, 680, 697, 714, 725) si copiano come sono (ADR 0011, regola 3).
+  6. **Hack 0xA4** (riga 587, `powercom_hack_voltage`).
+     - `Conv::PowercomHackVoltage` restituisce l'ultima lettura valida di 0xA4. `PowercomDriver::decodeReport` la salva nel contesto (`Context::powercom_battery_voltage`, come `last_valid`) con le regole upstream: salta il report ID, al massimo 7 caratteri, dalla prima cifra o punto, valida solo se contiene un punto.
+     - Il testo si copia com'è (`%s`): `13.70` di oggi diventa `13.7`.
+     - Deviazione: senza una lettura valida la riga resta DEFER; upstream pubblicherebbe `0.0`, che però i 5 tentativi all'avvio di solito evitano.
+     - La lettura di 0xA4 resta nel poll completo (FEATURE, 8 byte), non dentro la conversione.
+  7. **Comandi.** Le righe 658-668 e 729 sono in tabella; le espone solo `buildFromTable`.
+     - SPD-750U: `test.battery.start.quick` (661). Beeper assenti per `QUIRK_NO_BEEPER_CONTROL`, come oggi.
+     - `load.on.delay`, `shutdown.return`/`stayoff`, `load.on`/`load.off`: legati ma non esposti, perché `shutdownCommandsSupported()` resta false (US-058: le codifiche `powercom_startup/shutdown/stayoff_nuf` non sono portate). Commento sulle righe.
+     - Il beeper si scrive ancora con `encodeBeeperValue` (1 abilita, 2 disabilita, come `powercom_beeper_info`). La riga 660 scrive `0`: deviazione dichiarata (ADR 0011: la codifica del beeper è un hook).
+     - `beeper.mute` non è in powercom-hid: sui Powercom senza quirk esce da LIST CMD (oggi c'è con un campo a 8 bit). Va nelle note.
+  8. **Conversioni dei timer.** `ups.timer.start` con `powercom_startup_fun` (`60*(((i&0xFF)<<8)+(i>>8))`, `i` uint16), `ups.timer.shutdown` con `powercom_shutdown_fun` nella variante di default (`60*(i>>8)+(i&0xFF)`). Le opzioni di ups.conf `powercom_sdcmd_byte_order_fallback` e `powercom_sdcmd_discrete_delay` non esistono nel firmware: si porta solo il default.
+  9. **Estensioni (ADR 0011, regola 2).**
+     - Superati, significato sbagliato secondo upstream (`powercom-hid.c:574-581`, "PowerCOM duplicates the output.voltage(.nominal) here"): `battery.voltage` e `battery.voltage.nominal` dai percorsi standard.
+     - Sparisce `battery.capacity.full` (nome non standard).
+     - Restano le altre estensioni del generico (`ups.temperature` da `PowerSummary.Temperature`, `battery.capacity`), ma compaiono solo se il loro report si legge: sul SPD-750U nessuna (il report 44 non è nel poll).
+  10. **Hook che restano.**
+      - `stepSpacingMs()` 800 (#36), i quirk, `encodeBeeperValue`, le deleghe dei ritardi (US-066);
+      - `buildPollLists` (decisioni 1-2);
+      - `onLoop`: `ups.mfr` e `ups.model` dal PID. Upstream usa `hd->Product` ("HID UPS Battery" sul SPD-750U); si tiene il nome di oggi per non cambiare i nomi dei dispositivi in Home Assistant. Deviazione da confermare;
+      - richieste di stringhe: solo le righe StringId della tabella (`battery.type`, `ups.serial`/`ups.mfr` vendor), mai iManufacturer/iProduct/iSerialNumber, come oggi.
+  11. **Fuori scope:** `powercom_claim` (PID 0x0001 `interrupt_only`/`interrupt_size` 8, rifiuto del PID 0x0002) e `fix_report_desc`.
+
+  ---
+
+  ### Decisione dell'utente in review (2026-10-30): i tre punti aperti come NUT
+
+  - **Decisione 6:** `battery.voltage` vale `0.0` finché non arriva una lettura valida di 0xA4 (`last_valid` di upstream), non DEFER.
+  - **Decisione 7:** il beeper si scrive con i valori delle righe 659-660 (`beeper.enable` 1, `beeper.disable` 0) tramite `encodeBeeperValue`, a ogni dimensione di campo.
+  - **Decisione 10:** niente modello ricavato dal PID. `formatDeviceStrings` fa `powercom_format_mfr` (`PowerCOM` senza stringa del produttore); `ups.model` e `ups.serial` sono le stringhe USB e mancano se il dispositivo non le ha.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Motore (`NutTable.h`)
+  - **`Conv` nuove:** `PowercomHackVoltage`, `PowercomVoltage` (`powercom_voltage_conversion_fun`, `%0.0f` di `value*4`), `PowercomStartup`, `PowercomShutdown`, e le funzioni BOOL `PowercomUpsfail`, `PowercomReplacebatt`, `PowercomTest`, `PowercomShutdownimm`, `PowercomOnline`, `PowercomLowbatt`, `PowercomTrim`, `PowercomBoost`, `PowercomOverload` (`powercom-hid.c:308-423`).
+  - **`statusToken()`:** le nove funzioni BOOL, sul valore `(long)v` con le maschere upstream (`upsfail` dà `fanfail`, come upstream).
+  - **`decode()`:** le conversioni dei valori; le funzioni BOOL danno DEFER, come le altre funzioni BOOL.
+  - **Lookup:** `kPowercomBeeperInfo` `{ {1,"enabled"}, {2,"disabled"} }`.
+  - **`Context`:** `char powercom_battery_voltage[32]` (vuoto = nessuna lettura valida), azzerato con il contesto a ogni `setup()`.
+
+  ### 2. `powercomHid2Nut()`
+  - Dopo `ecoflowHid2Nut()`, righe 544-729 in ordine, ognuna con `// powercom-hid.c:N <path upstream>`. In testa, un commento con le traduzioni della decisione 3.
+  - Conversioni: `Lookup` per stati, beeper e test (`kTestRead` 605 e 723); `BatteryDate` 594, 604 e 675; `StringId` 595, 670 e 671; `PowercomVoltage` 683-684; `PowercomStartup` 621; `PowercomShutdown` 638 e 640; `PowercomHackVoltage` 587.
+  - Commenti per le righe escluse e per quelle commentate upstream (decisioni 4-5).
+  - Comandi 658-668 e 729 con `HU_TYPE_CMD`, valori upstream (`nullptr` dove upstream ha `NULL`), commento "non esposti" sui comandi di carico e spegnimento.
+  - Il commento sopra `mgeHid2Nut()` che elenca le tabelle complete va aggiornato.
+
+  ### 3. `GenericDriver` (hook piccoli, riusabili da US-078)
+  - `virtual bool isStaticUsage(const HIDUsageDef& u) const` (default `!isDynamicUsage(u)`), chiamata da `findStaticReports()` al posto di `isDynamicUsage`. Il comportamento degli altri driver non cambia.
+  - Helper protetto `appendTableReports(IHidTransport*, std::vector<PollItem>&, rows)`: aggiunge, senza duplicati e in ordine di tabella, i report FEATURE delle righe di `hid2nut()` che passano un filtro.
+  - `collectStringRequests()` diviso: la parte delle righe StringId diventa il metodo protetto `collectTableStringRequests()`.
+
+  ### 4. `PowercomDriver`
+  - **Override:** `hid2nut()` e `commandTable()` (`NutTable::powercomHid2Nut`), `supersededGenericPaths()`, `pollStaticReportsOnce()` true, `isStaticUsage()` (usage statica se ogni riga legata ha `HU_FLAG_STATIC`), `collectStringRequests()` (solo `collectTableStringRequests()`).
+  - **`buildPollLists`:**
+    - quick = `{3, 0x0A, 8}` più i report delle righe BOOL legate;
+    - full = quick, poi i report delle altre righe legate (niente `HU_FLAG_ABSENT`, niente comandi, niente secondi candidati dietro un primo letto), poi `{3, 0xA4, 8}`;
+    - lunghezza 8 per 0x0A, 0x1D, 0x1F, 0x21 e 0xA4 come oggi, 0 (dal descriptor) per gli altri.
+  - **`decodeReport`:** salva 0xA4 nel contesto (decisione 6), poi `GenericDriver::decodeReport`. Via tutto il resto: mappature, salvataggio/ripristino di `battery.voltage`/`ups.beeper.status`, codici `0x0002xxxx`.
+  - **Si toglie** l'override di `parseStringDescriptor`: quello generico applica già l'inversione e serve le righe StringId.
+  - **`kSupersededGenericPaths`:** i percorsi di `GenericDriver::decodeReport()` copiati carattere per carattere, per le chiavi della tabella: tutti gli stati, `battery.charge`/`.low`/`.warning`, `battery.runtime`, `battery.voltage`, `battery.voltage.nominal` (decisione 9), `battery.temperature`, `battery.mfr.date`, `ups.mfr.date`, `ups.load`, `ups.beeper.status`, `ups.test.result`, `ups.timer.*`, `input.voltage`/`.nominal`/`.frequency`, `output.voltage`/`.nominal`/`.frequency`, `battery.capacity.full`.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video. Prova sul campo affidata a fox1047 (assunzione della spec).
+
+  - **Baseline prima del codice** (TASK-01): report sintetici sul descriptor del SPD-750U (decodeReport + postDecode, come `USBHostUPS`) con lo snapshot completo di `UPSData`, e liste quick/full del poll di oggi. Dopo la migrazione ogni differenza va commentata con la riga upstream o con la decisione.
+  - **`test_nut_table`:** conversioni e funzioni BOOL Powercom (maschere, tensione ×4, timer, hack 0xA4 DEFER/OK), copertura di `powercom-hid.c` con `checkTableCoverage`, formati.
+  - **`test_powercom_driver`** (il file è `test_powercom_driver.cpp`, non `test_main.cpp`): test di oggi riallineati; percorsi della pagina 0x0002 da un descriptor fatto a mano; stati vendor (`OB`, `LB`, `TRIM`, `BOOST`, `OVER`, `CAL`, `ALARM` con "Fan failure!"); hack 0xA4; liste di poll delle decisioni 1-2; estensioni.
+  - **`test_command_catalog`:** SPD-750U con la tabella → solo `test.battery.start.quick`; un Powercom senza quirk → beeper enable/disable/toggle senza mute; carico e spegnimento mai esposti.
+  - **`test_record_replay`:** `NUT_ROWS_POWERCOM_SPD750U` ricavata a mano dal descriptor e da `powercom-hid.c`, LIST CMD con la differenza motivata, LIST RW invariata, snapshot e baseline `ups.status` aggiornati con commento.
+  - **Mutazioni** (ognuna fa fallire almeno un test): togliere una citazione da `powercomHid2Nut()`; invertire la maschera di `PowercomOnline`; togliere un percorso superato; togliere il report 38 dal quick poll.
+  - **Regressione:** suite nativa completa a blocchi, build `esp32-s3-standard` da PowerShell, OTA sull'Eaton 3S con l'ok dell'utente (`GenericDriver` cambia).
+
+  ---
+
+  ## Rischi e note
+
+  - **#36.** Il poll passa da 7 a circa 15 richieste per ciclo e il quick poll da 1 a 2. È il rischio principale: la prova di fox1047 (almeno 24 h, System Log senza GET_REPORT falliti, valori mai a 0) serve prima del rilascio. Se fallisce, si torna alla lista della #36 con le statiche lette una volta (alternativa discussa con l'utente).
+  - **Modelli con pagina 0x0002.** Non abbiamo fixture: righe e conversioni si provano con descriptor fatti a mano. Le differenze rispetto alle mappature di oggi (per esempio `ups.status.internal_failure` → `fanfail`, come upstream) vanno nelle note.
+  - **Tester.** fox1047 (#36, SPD-750U). Testo in bozza; pubblicazione solo su richiesta dell'utente.
+  - **Note di rilascio** in `docs/releases/v1.12.0.md`.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-29_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: snapshot sintetico del SPD-750U e liste di poll di oggi'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima del codice, quello che il firmware pubblica e chiede oggi sul SPD-750U.
+
+      **Leggi:**
+      - `test/test_powercom_driver/test_powercom_driver.cpp` (`MockHost`, `test_powercom_full_poll_spd750u_descriptor`);
+      - `test/test_cyberpower_driver/test_main.cpp` (helper `decode()` di US-075: decodeReport + postDecode);
+      - `test/test_record_replay/test_main.cpp` (`checkSnapshots`, `test_replay_powercom_spd750u`).
+
+      **Modifica:**
+      1. In `test_powercom_driver.cpp`, un helper `decodeAll(PowercomDriver&, MockHost&, UPSData&, const Report*, size_t)` che passa ogni report da `decodeReport` + `postDecode`, come `USBHostUPS`, e un helper `snapshotOf(const UPSData&)` (`chiave=valore` ordinati, separati da `\n`).
+      2. Report sintetici `kSpd750uReports` sul descriptor della fixture (report ID come primo byte, valori little endian), con valori diversi tra loro per riconoscerli:
+         - 10 e 38: Charging, ACPresent, BatteryPresent a 1;
+         - 14 `RemainingCapacity` 87; 24 `Battery.RemainingCapacity` 86; 55 `RunTimeToEmpty` 1500; 12 `RemainingCapacityLimit` 10; 11 `WarningCapacityLimit` 20;
+         - 13 e 23 date (`(39<<9)|(3<<5)|15`, cioè 2019/03/15); 5 `iDeviceChemistry` 4;
+         - 15 `DelayBeforeShutdown` 0x0102; 16 `DelayBeforeStartup` 0x0300; 17 e 18 `PowerSummary.ConfigVoltage`/`Voltage` 220;
+         - 19 e 37 beeper 1; 21 `Battery.Test` 6; 25 e 26 `Battery.ConfigVoltage`/`Voltage`;
+         - 28 230, 29 218, 30 50, 31 22, 32 220, 33 216, 34 50, 44 50, 45 30 (valori della #36);
+         - 0xA4 `" 13.7 2"`.
+      3. Test `test_powercom_snapshot_baseline` con la costante `kPowercomSnapshotBefore` presa dal codice di oggi.
+      4. Test `test_powercom_poll_baseline`: liste quick/full di oggi (`id/tipo/lunghezza`), da una sonda `struct PowercomPollProbe : PowercomDriver { using PowercomDriver::buildPollLists; };`.
+      5. In `test_record_replay`, `test_powercom_snapshot_baseline` con `checkSnapshots` sulla fixture (senza report: snapshot minimo, ma fissa le chiavi da descriptor).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_powercom_driver -f test_record_replay` verde sul codice di oggi.
+
+      **Fatto:** baseline deterministica, nessun file di produzione modificato.
+
+      **Blocchi:** se un report sintetico non si decodifica (lunghezza attesa diversa), correggi i byte, non il parser.
+
+      ## File Coinvolti
+      - test/test_powercom_driver/test_powercom_driver.cpp — helper, report sintetici, baseline snapshot e poll
+      - test/test_record_replay/test_main.cpp — snapshot della fixture
+
+      ## Criteri di Completamento
+      - [ ] Baseline snapshot e poll verdi sul codice attuale
+      - [ ] Nessun file in lib/ modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'NutTable: conversioni, funzioni BOOL e contesto Powercom'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al motore le conversioni di powercom-hid.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h` (`Conv`, `Context`, `statusToken`, `decode`, i lookup di stato, `Conv::ApcDate` come modello);
+      - `nut_repo/drivers/powercom-hid.c:83-497`.
+
+      **Modifica:**
+      1. `Conv` nuove, ognuna col commento della funzione upstream: `PowercomHackVoltage`, `PowercomVoltage`, `PowercomStartup`, `PowercomShutdown`, `PowercomUpsfail`, `PowercomReplacebatt`, `PowercomTest`, `PowercomShutdownimm`, `PowercomOnline`, `PowercomLowbatt`, `PowercomTrim`, `PowercomBoost`, `PowercomOverload`.
+      2. `statusToken()`, su `long value = (long)v`, con le maschere upstream:
+         - `Upsfail` 0x01 → `fanfail`/`!fanfail`; `Replacebatt` 0x02; `Test` 0x04 → `cal`; `Shutdownimm` 0x10;
+         - `Online` 0x01 → `!online`, altrimenti `online`; `Lowbatt` 0x02; `Trim` `(v & 0x18) == 0x08`; `Boost` `(v & 0x18) == 0x18`; `Overload` 0x20.
+      3. `decode()`:
+         - le nove funzioni BOOL nel gruppo che dà DEFER;
+         - `PowercomVoltage`: `snprintf("%0.0f", v * 4)`;
+         - `PowercomStartup`: `uint16_t i = (uint16_t)(long)v;` (commento: upstream converte double → uint16_t implicitamente), `%d` di `60 * (((i & 0x00FF) << 8) + (i >> 8))`;
+         - `PowercomShutdown`: `%d` di `60 * (i >> 8) + (i & 0x00FF)` (variante di default; commento sull'opzione `powercom_sdcmd_byte_order_fallback` non portata);
+         - `PowercomHackVoltage`: `ctx.powercom_battery_voltage` vuoto → DEFER, altrimenti OK con il testo.
+      4. `kPowercomBeeperInfo` `{ {1,"enabled"}, {2,"disabled"} }` (`powercom_beeper_info`).
+      5. `Context`: `char powercom_battery_voltage[32] = ""` col commento (`last_valid` di `powercom_hack_voltage`, scritto da `PowercomDriver::decodeReport`).
+      6. Nessuna modifica a `encode()`: le righe Powercom sono RO.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_powercom_driver` verde.
+
+      **Fatto:** API pronta, compilata con GCC 5.
+
+      **Blocchi:** niente variabili inline (GCC 5): il buffer sta in `Context`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — Conv, statusToken, decode, lookup, Context
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+      - [ ] Ogni Conv nuova ha il nome della funzione upstream nel commento
+    ref: TASK-02
+  - id: TASK-03
+    title: Test delle conversioni e delle funzioni BOOL Powercom
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il TASK-02 con attese ricavate da `powercom-hid.c`.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (`conv()`, `statusToken`, i test APC/CPS come modello).
+
+      **Modifica:** test nuovi, registrati in `main()`:
+      - `test_powercom_status_functions`: per ogni funzione, un valore che accende il bit e uno che lo spegne. Per esempio `PowercomOnline` 0 → `online`, 1 → `!online`; `PowercomTrim` 0x08 → `trim`, 0x18 → `!trim`; `PowercomBoost` 0x18 → `boost`, 0x08 → `!boost`; `PowercomUpsfail` 1 → `fanfail`; `PowercomTest` 4 → `cal`.
+      - `test_powercom_voltage_times_four`: 55 → `220`, 57.6 → `230` (`%0.0f`).
+      - `test_powercom_timers`: `PowercomShutdown` 0x0102 → `62`; `PowercomStartup` 0x0300 → `180` (`60*((0x00<<8)+0x03)`); 0 → `0` per entrambi.
+      - `test_powercom_hack_voltage`: contesto vuoto → DEFER; con `"13.7"` → OK `13.7`.
+      - `test_powercom_beeper_lookup`: 1 → `enabled`, 2 → `disabled`, 3 → nessun testo.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde. Mutazione: invertire `online`/`!online` in `PowercomOnline` deve far fallire un test.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** se un'attesa differisce da upstream, vale upstream.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi elencati verdi
+      - [ ] Mutazione colta
+    ref: TASK-03
+  - id: TASK-04
+    title: 'powercomHid2Nut(): tutte le righe di powercom_hid2nut, copertura e formati'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `powercomHid2Nut()` con tutte le righe 544-729 nell'ordine upstream.
+
+      **Leggi:**
+      - `nut_repo/drivers/powercom-hid.c:499-733` (`powercom_usage_lkp`, `powercom_hid2nut`);
+      - `lib/USBHostUPS/src/NutTable.h` (`cpsHid2Nut()` e `apcHid2Nut()` come modello, `powercomDelayPaths()`);
+      - `lib/USBHostUPS/src/NUTUsages.h` (nomi standard: `ManufacturerDate`, `RemainingTimeLimitExpired`, `ShutdownRequested`, `Initialized`, `Tested` ci sono);
+      - `test/test_nut_table/test_main.cpp` (`checkTableCoverage`, il test dei formati);
+      - il piano, decisioni 3-7.
+
+      **Modifica:**
+      1. Dopo `ecoflowHid2Nut()`, `inline const HidInfo* powercomHid2Nut(size_t& n)`. Ogni riga è preceduta da `// powercom-hid.c:N <path upstream>`. In testa, un commento con le traduzioni della decisione 3.
+      2. Righe e conversioni:
+         - BOOL 544-553 e 557-568 con i lookup di stato esistenti (`kOnlineInfo`, `kNobatteryInfo`, `kLowbattInfo`, `kChargingInfo`, `kCommfaultInfo`, `kDischargingInfo`, `kReplacebattInfo`, `kOverloadInfo`, `kTimelimitexpiredInfo`, `kShutdownimmInfo`, `kBoostInfo`, `kTrimInfo`), flag upstream (nessun `HU_FLAG_QUICK_POLL`);
+         - 587 `PowercomHackVoltage` su `UPS.PowerSummary.PresentStatus.ACPresent`;
+         - 589-595 (`BatteryDate` 594, `StringId` 595); 601-602 `kPowercomBeeperInfo`; 603-605 (`BatteryDate` 604, `kTestRead` 605);
+         - 621 `PowercomStartup`; 638 e 640 `PowercomShutdown` con `HU_FLAG_QUICK_POLL`;
+         - 642-648 con i formati upstream; 670-671 `StringId`; 675 `BatteryDate`; 676-678; 682-685 (`PowercomVoltage` 683-684);
+         - BOOL 699-702 e 716-721 con `HU_FLAG_QUICK_POLL` e le funzioni del TASK-02; 722-723.
+      3. Commenti al posto delle righe:
+         - 554-556 e 569-572 (commentate upstream); il blocco 577-580 (`battery.voltage(.nominal)` ignorati: PowerCOM duplica `output.voltage`);
+         - 620, 637, 639, 727, 728 esclusi (decisione 4).
+      4. Righe dentro `#if WITH_UNMAPPED_DATA_POINTS` copiate come sono: 597-598, 607-611, 651-654, 673, 680, 697, 714, 725.
+      5. Comandi 658-668 e 729, `HU_TYPE_CMD`, `Conv::Number`, valori upstream (`nullptr` per `NULL`). Commenti: carico e spegnimento non esposti (`shutdownCommandsSupported()` false, US-058); `beeper.disable` "0" non usato (il beeper si scrive con `encodeBeeperValue`).
+      6. Aggiorna il commento sopra `mgeHid2Nut()` che dice quali tabelle sono complete.
+      7. Test in `test_nut_table`:
+         - `test_powercom_table_covers_every_upstream_row`: `checkTableCoverage("nut_repo/drivers/powercom-hid.c", "static hid_info_t powercom_hid2nut[]", "lib/USBHostUPS/src/NutTable.h", "inline const HidInfo* powercomHid2Nut", "} // namespace NutTable")`;
+         - `test_powercom_rows_have_supported_formats`, come per APC e CPS.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog` verde;
+      - mutazione: togliere il commento della 727-728 fa fallire la copertura.
+
+      **Fatto:** tabella completa; nessun `cmdDefault(nullptr)` raggiungibile per i comandi non esposti (verifica in `CommandCatalog.h`).
+
+      **Blocchi:** `test_powercom_driver` e `test_record_replay` possono fallire fino al TASK-07: non correggerli qui. Il driver non usa ancora la tabella.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — powercomHid2Nut()
+      - test/test_nut_table/test_main.cpp — copertura e formati
+
+      ## Criteri di Completamento
+      - [ ] Copertura di powercom-hid.c verde
+      - [ ] Le righe #if WITH_UNMAPPED_DATA_POINTS sono 11 unmapped.* più le 5 con nome UPS.*
+    ref: TASK-04
+  - id: TASK-05
+    title: 'GenericDriver: staticità per usage, report delle righe di tabella, stringhe di tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** tre hook piccoli in `GenericDriver` che servono al poll di Powercom (decisioni 1-2) e alle richieste di stringhe, senza cambiare gli altri driver.
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.h` / `.cpp` (`isDynamicUsage`, `findStaticReports`, `isStaticAndKnown`, `isQuickPollStatusUsage`, `collectStringRequests`).
+
+      **Modifica:**
+      1. `virtual bool isStaticUsage(const HIDUsageDef& u) const { return !isDynamicUsage(u); }` (protetta). `findStaticReports()` la chiama al posto di `isDynamicUsage`; nessun override esistente cambia.
+      2. Helper protetto `void appendTableReports(IHidTransport* host, std::vector<PollItem>& out, bool (*keep)(const NutTable::HidInfo&, ...)) const` (firma libera, anche una lambda via template). Per ogni riga di `hid2nut()` in ordine, se passa il filtro: il primo usage FEATURE (`report_type == 3`, `report_id != 0`) che `pathMatches`, aggiunto senza duplicati come `PollItem{3, id, 0}`.
+      3. `collectStringRequests()` diviso: il ciclo sulle righe StringId (`_nut_rows`) diventa `void collectTableStringRequests(IHidTransport*, std::vector<uint8_t>&) const` (protetta), chiamata da `collectStringRequests()` dopo `requestTableStrings()`.
+      4. Commento: hook pensati anche per US-078.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_apc_driver -f test_poll_cycle -f test_record_replay` verde (nessun comportamento cambia).
+
+      **Fatto:** API pronta, liste di poll degli altri driver identiche (le baseline APC/CPS di `test_record_replay` restano verdi).
+
+      **Blocchi:** se `PollItem` o `pathMatches` non sono raggiungibili da `GenericDriver.cpp` senza include nuovi, aggiungi l'include minimo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — isStaticUsage, appendTableReports, collectTableStringRequests
+      - lib/USBHostUPS/src/GenericDriver.cpp — findStaticReports, collectStringRequests diviso
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+      - [ ] Baseline di poll APC e CPS invariate
+    ref: TASK-05
+  - id: TASK-06
+    title: 'PowercomDriver: solo hook non tabellari, poll dalla tabella, comandi dalla tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `PowercomDriver` senza mappature scritte a mano (ADR 0011), con il poll delle decisioni 1-2.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/PowercomDriver.h` / `.cpp`;
+      - `lib/USBHostUPS/src/APCDriver.cpp` e `CyberPowerDriver.cpp` (`kSupersededGenericPaths`, il modello);
+      - `lib/USBHostUPS/src/GenericDriver.cpp` (mappature di `decodeReport`, da cui copiare i percorsi);
+      - `nut_repo/drivers/powercom-hid.c:432-497` (`powercom_hack_voltage`).
+
+      **Modifica:**
+      1. **Header:**
+         - aggiungi `hid2nut()` e `commandTable()` (`NutTable::powercomHid2Nut(n)`), `supersededGenericPaths()`, `pollStaticReportsOnce()` true, `isStaticUsage()`, `collectStringRequests()` che chiama solo `collectTableStringRequests()`;
+         - togli `parseStringDescriptor` (resta quello generico);
+         - restano `stepSpacingMs()` 800, `encodeBeeperValue`, `shutdownCommandsSupported()` false, le deleghe dei ritardi, `onLoop`, `buildPollLists`.
+      2. **`decodeReport`:** solo il report 0xA4 (FEATURE). Con il report ID in `data[0]` lo salta, prende al massimo 7 caratteri, cerca la prima cifra o punto, prende cifre e punti, e se c'è un punto copia il testo in `_nut_ctx.powercom_battery_voltage`. Poi `GenericDriver::decodeReport`. Il dump di debug sotto `USBUPS_DEBUG_LOG` può restare.
+      3. **`buildPollLists`:**
+         - quick: `{3, 0x0A, 8}`, poi `appendTableReports` con le righe BOOL (`info_type` "BOOL");
+         - full: le voci di quick, poi `appendTableReports` con le righe non BOOL, non comando, senza `HU_FLAG_ABSENT`, che non hanno davanti un'altra riga con lo stesso `info_type` legata a un report letto; in fondo `{3, 0xA4, 8}`;
+         - lunghezza 8 per 0x1D, 0x1F e 0x21 come oggi (commento #36).
+      4. **`isStaticUsage(u)`:** vero se ogni riga di `powercomHid2Nut()` che `pathMatches(u)` ha `HU_FLAG_STATIC`; un usage senza righe resta statico.
+      5. **`kSupersededGenericPaths`:** l'elenco della sezione 4 del piano, copiato carattere per carattere da `GenericDriver::decodeReport()`, raggruppato per chiave. In fondo, un commento con le estensioni che restano (decisione 9).
+      6. **Commento in testa** (al posto di quello "ADR 0003"): tutto da `powercomHid2Nut()` (US-077, ADR 0011); hook e motivi (#36: poll e spaziatura; quirk; beeper; modello dal PID); fuori scope `powercom_claim` e `fix_report_desc`.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_powercom_driver -f test_record_replay -f test_command_catalog`;
+      - falliscono solo i test che i TASK-07..09 aggiornano;
+      - annota ogni differenza rispetto alle baseline del TASK-01.
+
+      **Fatto:** in `PowercomDriver.cpp` gli unici `set(` sono `ups.mfr` e `ups.model` di `onLoop`.
+
+      **Blocchi:**
+      - una differenza non spiegata da una riga upstream o da una decisione del piano va segnalata prima di aggiornare i test;
+      - se la lista full del SPD-750U supera 16 voci, fermati e mostrala all'utente (decisione 1).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/PowercomDriver.h — hook
+      - lib/USBHostUPS/src/PowercomDriver.cpp — mappature tolte, poll dalla tabella, 0xA4 nel contesto, percorsi superati
+
+      ## Criteri di Completamento
+      - [ ] Nessuna mappatura in PowercomDriver.cpp oltre a ups.mfr/ups.model in onLoop
+      - [ ] Ogni percorso superato esiste in GenericDriver::decodeReport()
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di PowercomDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_powercom_driver` e coprire le differenze volute.
+
+      **Leggi:** `test/test_powercom_driver/test_powercom_driver.cpp` (baseline del TASK-01); `test/test_apc_driver/test_main.cpp` (test di US-076 come modello).
+
+      **Modifica:**
+      1. Test di oggi:
+         - i test 0xA4 controllano `battery.voltage` dopo 0xA4 + report 10, con il testo com'è (`13.7`); senza lettura valida la chiave non c'è;
+         - i test beeper passano dalla tabella (1 `enabled`, 2 `disabled`);
+         - `test_powercom_delay_*` invariati.
+      2. Baseline del TASK-01:
+         - `kPowercomSnapshotBefore` resta come riferimento; nuovo `kPowercomSnapshotAfter`, e sopra ogni differenza la riga `powercom-hid.c:N` o la decisione;
+         - attese: chiavi nuove dell'elenco del piano; `battery.voltage` `13.7`; nessun `battery.voltage.nominal`; `ups.timer.shutdown` `62`, `ups.timer.start` `180`; `battery.temperature` `30.0`.
+      3. Liste di poll: quick `0x0A/8, 38`; full come la decisione 1, con 0xA4 in fondo; i report statici (5, 13, 23, 28, 32) saltati dopo la prima lettura (`isStaticAndKnown`).
+      4. `test_powercom_vendor_page_paths`: un descriptor fatto a mano (`05 02 09 04 A1 01 09 16 A1 00 09 1C A1 00 85 01 09 81 75 08 95 01 15 00 26 FF 00 B1 02 ...`) con `InternalChargeController`, `PrimaryBatterySupport` e `Voltage`/`PercentLoad` sotto `PowercomOutput`/`PowercomInput`. Asserisce i percorsi (`0x00020004.0x00020016.0x0002001C.0x00020081` ...) e che le righe 683-685, 699-702 e 716-721 si legano. Se il parser dà un'altra radice, correggi le traduzioni del TASK-04 e scrivilo qui.
+      5. Stati vendor sul descriptor del punto 4: `PrimaryBatterySupport` 0x01 → `OB`; 0x03 → `OB LB`; 0x08 → `TRIM`; 0x18 → `BOOST`; 0x20 → `OVER`; `InternalChargeController` 0x01 → `ALARM` con `ups.alarm` "Fan failure!"; 0x04 → `CAL`; 0x10 → `LB`. Tensione vendor 55 → `input.voltage` `220`.
+      6. `test_powercom_status_38_follows_10`: report 38 con `ACPresent` 1, poi report 10 INPUT con `ACPresent` 0 e quick poll del 38 con 0 → `OB` dopo il 38 fresco. Documenta nel commento perché il 38 sta nel quick poll.
+      7. `test_powercom_extensions`: niente `battery.capacity.full`, niente `battery.voltage.nominal`.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_powercom_driver` verde;
+      - mutazioni: togliere il report 38 dal quick; togliere `UPS.PowerSummary.PresentStatus.ACPresent` da `kSupersededGenericPaths`. Ognuna fa fallire un test.
+
+      **Fatto:** suite verde, mutazioni colte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_powercom_driver/test_powercom_driver.cpp — test aggiornati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Mutazioni colte
+      - [ ] Ogni differenza tra snapshot prima e dopo è commentata
+    ref: TASK-07
+  - id: TASK-08
+    title: Test di CommandCatalog con powercomHid2Nut()
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che i comandi Powercom vengono dalla tabella e che carico e spegnimento restano assenti (US-058).
+
+      **Leggi:** `test/test_command_catalog/test_main.cpp` (i test CPS e APC con `checkSameCommandsAsCatalog`, il caso Powercom con `powercomDelayPaths()`); `lib/USBHostUPS/src/CommandCatalog.h` (`buildFromTable`).
+
+      **Modifica:**
+      1. `test_powercom_spd750u_commands_from_table`: descriptor della fixture, `beeper_available` false (quirk), `shutdown_cmds` false → solo `test.battery.start.quick` (riga 661); `test.battery.start.deep`/`stop` assenti, con la riga upstream nel commento.
+      2. `test_powercom_beeper_without_quirk`: stesso descriptor con `beeper_available` true → `beeper.enable beeper.disable beeper.toggle`, senza `beeper.mute` (nessuna riga in powercom-hid).
+      3. `test_powercom_load_shutdown_never_listed`: con `shutdown_cmds` false, nessun `load.*` né `shutdown.*`, anche se le righe 662-664 sono legate.
+      4. `test_powercom_quick_test_value`: `test.battery.start.quick` scrive 1 su `UPS.Battery.Test`.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_command_catalog -f test_hid_control` verde;
+      - mutazione: mettere `shutdownCommandsSupported()` a true fa fallire il caso 3.
+
+      **Fatto:** test verdi, mutazione colta.
+
+      **Blocchi:** una differenza di LIST CMD oltre a deep/stop e mute va segnalata all'utente, con la riga upstream, prima di accettarla.
+
+      ## File Coinvolti
+      - test/test_command_catalog/test_main.cpp — test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-4 verdi
+      - [ ] Mutazione colta
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Replay del SPD-750U: righe legate, LIST CMD/RW, snapshot, ups.status'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere i criteri 1, 2 e 4 della spec sulla fixture.
+
+      **Leggi:**
+      - `test/test_record_replay/test_main.cpp` (`test_replay_powercom_spd750u`, le macro `NUT_ROWS_APC_*`/`NUT_ROWS_CPS_*` come modello, `test_status_baseline_all_fixtures`, la baseline del TASK-01);
+      - il piano, sezione "Cosa dice il descriptor del SPD-750U".
+
+      **Modifica:**
+      1. Macro `NUT_ROWS_POWERCOM_SPD750U` (BOOL, RO, comandi, ordinati come le altre macro), ricavata a mano dal descriptor e da `powercom-hid.c`, non dal firmware. Commento con riga upstream e report per ogni voce.
+      2. `test_replay_powercom_spd750u`:
+         - LIST CMD `test.battery.start.quick`, con il commento sulla differenza (riga 661; deep/stop venivano dal catalogo generico);
+         - LIST RW `ups.delay.shutdown:8 ups.delay.start:8` invariata;
+         - `ups.delay.start` 60 e `ups.delay.shutdown` 20 invariati.
+      3. Snapshot della fixture del TASK-01 aggiornato, con le differenze commentate.
+      4. `test_status_baseline_all_fixtures`: riga Powercom invariata (`Unknown`: la fixture non ha report), oppure con il motivo.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_rw_catalog` verde.
+
+      **Fatto:** replay verde, ogni differenza elencata e motivata.
+
+      **Blocchi:** una differenza che cambia un valore che l'utente vede oggi, oltre a quelle previste nel piano, va segnalata all'utente prima di accettarla.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — macro delle righe, LIST CMD/RW, snapshot
+
+      ## Criteri di Completamento
+      - [ ] Righe legate ricavate a mano e verdi
+      - [ ] LIST CMD con la sola differenza motivata, LIST RW invariata
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Note di rilascio v1.12.0: sezione Powercom'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare per gli utenti Powercom le differenze trovate nei TASK-07..09.
+
+      **Leggi:** `docs/releases/v1.12.0.md` (sezioni Eaton, CyberPower, APC); `data/www/bundle.js` (`NUT_DESCRIPTIONS`: `ups.date` e `ups.timer.start` ci sono già).
+
+      **Modifica:**
+      1. `docs/releases/v1.12.0.md`:
+         - nel `description:` e nell'intro cita anche Powercom (powercom-hid, US-077);
+         - in "Upgrade notes", una voce **Powercom** con le differenze reali:
+           - chiavi nuove sul SPD-750U, `battery.voltage` con un decimale come lo manda l'UPS;
+           - LIST CMD senza `test.battery.start.deep`/`stop`; `beeper.mute` non più offerto sui modelli senza quirk;
+           - stati dai bit vendor come upstream (`fanfail` per il guasto UPS, `CAL`, `TRIM`/`BOOST`), `commfault` → ALARM;
+           - poll più ampio (circa 15 report ogni 30 s; report 38 ogni 2 s): chiedere di segnalare valori a 0 o errori USB nel System Log;
+         - in "Other changes", la voce driver Powercom con gli hook che restano.
+      2. Una chiave nuova senza descrizione: aggiungila a `NUT_DESCRIPTIONS` e lancia `python scripts/embed_web.py`.
+
+      **Verifica:** rilettura del markdown; con `bundle.js` toccato, anche `web_assets.h` deve comparire nel diff.
+
+      **Fatto:** note coerenti con i TASK-07..09.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — voce Powercom
+      - data/www/bundle.js — solo per chiavi nuove
+
+      ## Criteri di Completamento
+      - [ ] Ogni differenza visibile dei TASK-07..09 è nelle note
+    ref: TASK-10
+  - id: TASK-11
+    title: Regressione completa, build, mutazioni, OTA sul 3S e bozza per fox1047
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con suite completa, build e verifica che l'Eaton non cambi (`GenericDriver` è cambiato).
+
+      **Leggi:** `scripts/nut_snapshot.py`; gli script OTA e log di US-075/US-076 (`hw/ota_upload.py`, `hw/fetch_logs.py` negli scratchpad delle sessioni precedenti).
+
+      **Passi:**
+      1. Suite nativa completa in blocchi da circa 11 suite in foreground (`PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f ...`, limite 600 s). Annota il totale (US-076: 823).
+      2. Build da PowerShell: `~\.platformio\penv\Scripts\pio.exe run -e esp32-s3-standard`. Annota flash e RAM (US-076: flash 49,1 %).
+      3. Mutazioni del piano non ancora provate: togliere una citazione da `powercomHid2Nut()`; togliere un percorso superato. Ognuna deve far fallire un test; poi ripristina.
+      4. Solo con l'ok esplicito dell'utente: OTA sull'Eaton 3S (192.168.1.126, UPS `eaton-3s-700`, credenziali lette da script, mai stampate). `nut_snapshot.py` prima e dopo; System Log senza errori USB.
+      5. Bozza del messaggio a fox1047 (#36, SPD-750U): cosa confrontare (`upsc`, `upscmd -l` prima/dopo, rete staccata e riattaccata, beeper dalla Web UI), quanto tenerlo acceso (24 h), cosa allegare (System Log, `usb_diagnostics.json`). Niente zip né pubblicazione senza richiesta.
+
+      **Verifica:** passi 1-3 verdi; il passo 4 fatto o saltato su decisione dell'utente.
+
+      **Fatto:** numeri annotati per la review, bozza pronta.
+
+      **Blocchi:** una regressione Eaton blocca la chiusura.
+
+      ## File Coinvolti
+      - nessun file di produzione (esecuzione); bozza nello scratchpad
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde con totale annotato
+      - [ ] Build ok con flash/RAM annotati
+      - [ ] Mutazioni colte
+      - [ ] OTA fatta o saltata su decisione dell'utente
+    ref: TASK-11

@@ -437,12 +437,40 @@ void test_replay_legrand_keor_pdu800_issue90(void) {
         RW_DELAYS, RW_DELAYS);
 }
 
+// powercomHid2Nut() rows bound by the SPD-750U descriptor (US-077), derived from its usages and
+// powercom-hid.c, not from the firmware. No usage of the PowercomUPS vendor page: only the
+// rows with standard paths bind.
+// - BOOL: PowerSummary.PresentStatus.* (544-553, report 10, INPUT and FEATURE), and
+//   UPS.PresentStatus.* (557-568, report 38) with Boost/Buck (560-561, usages 0x6E/0x6F);
+// - battery.voltage (587, on PowerSummary.PresentStatus.ACPresent, the value of report 0xA4);
+// - battery.charge (589 report 14, 590 report 24), battery.charge.low (591, 12),
+//   battery.charge.warning (592, 11), battery.runtime (593, 55), battery.mfr.date (594, 23),
+//   battery.type (595, iDeviceChemistry 5), battery.temperature (677, Battery.Temperature 45:
+//   the temperature report of issue #36);
+// - ups.beeper.status (601 report 19: the beeper of issue #36; 602 report 37), ups.load (603,
+//   31), ups.date (604, PowerSummary.ManufacturerDate 13), ups.test.result (605, 21),
+//   ups.timer.start (621, 16), ups.timer.shutdown (638, 15);
+// - input.voltage (642, 29), input.voltage.nominal (643, 28), input.frequency (644, 30),
+//   output.voltage (646, 33), output.voltage.nominal (647, 32), output.frequency (648, 34);
+// - commands: beeper.toggle/enable/disable (658-660, report 19), test.battery.start.quick
+//   (661, Battery.Test 21), load.on.delay (662, 16), shutdown.return/stayoff (663-664, 15).
+// Not bound: PCMDelayBefore* (640, 665-668), PowerSummary.Temperature has no row.
+#define NUT_ROWS_POWERCOM_SPD750U "BOOL battery.charge battery.charge.low battery.charge.warning battery.mfr.date " \
+    "battery.runtime battery.temperature battery.type battery.voltage beeper.disable beeper.enable beeper.toggle " \
+    "input.frequency input.voltage input.voltage.nominal load.on.delay output.frequency output.voltage " \
+    "output.voltage.nominal shutdown.return shutdown.stayoff test.battery.start.quick ups.beeper.status ups.date " \
+    "ups.load ups.test.result ups.timer.shutdown ups.timer.start"
+
 void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
-        /* PowercomDriver: no shutdown commands (US-058) */ "test.battery.start.quick test.battery.start.deep test.battery.stop", nullptr, /* NUT table rows (US-066) */ "",
+        // US-077: commands from powercomHid2Nut(). Only test.battery.start.quick (661):
+        // test.battery.start.deep and test.battery.stop came from the catalog without a table,
+        // powercom-hid has no row for them. No beeper (QUIRK_NO_BEEPER_CONTROL), no load or
+        // shutdown command (shutdownCommandsSupported() false, US-058) although 662-664 bind
+        "test.battery.start.quick", nullptr, NUT_ROWS_POWERCOM_SPD750U,
         /* powercom-hid.c:620-637: ups.delay.start "60", ups.delay.shutdown DEFAULT_OFFDELAY */
         { { "ups.delay.start", "60" }, { "ups.delay.shutdown", "20" } },
-        /* no table rows; powercom-hid.c:620-639 delays with aux 8 */ "ups.delay.shutdown:8 ups.delay.start:8", "ups.delay.shutdown:8 ups.delay.start:8");
+        /* no RW row; powercom-hid.c:620-639 delays with aux 8 */ "ups.delay.shutdown:8 ups.delay.start:8", "ups.delay.shutdown:8 ups.delay.start:8");
 }
 
 // cpsHid2Nut() rows bound by the CyberPower descriptors (US-075), derived from their usages and
@@ -1321,6 +1349,32 @@ void test_apc_poll_baseline(void) {
     }
 }
 
+// US-077: the SPD-750U fixture (issue #21) has no reports, so the snapshot holds only what the
+// descriptor alone gives: unchanged by the migration (ups.mfr and ups.model come from the
+// fixture, ups.delay.* from applyDefaultDelays). Poll lists ("id/type"), before:
+// "quick: 10/3 | full: 10/3 29/3 33/3 31/3 45/3 19/3 164/3" (issue #36). After (user decisions
+// of 2026-10-29): report 38 of the BOOL rows 557-568 joins the quick poll; the full poll reads
+// the reports of the bound rows in table order (not 24 and 37: rows 590 and 602 are second
+// candidates), the static ones (5, 13, 23, 28, 32) only once, then 0xA4 (164).
+static const char* const kPowercomSnapshotSpd750u =
+    "ups.delay.shutdown=20\n"
+    "ups.delay.start=60\n"
+    "ups.mfr=POWERCOM Co.,LTD\n"
+    "ups.model=HID UPS Battery\n"
+    "ups.status=Unknown\n";
+static const char* const kPowercomPollSpd750u =
+    "quick: 10/3 38/3 | full: 10/3 38/3 14/3 12/3 11/3 55/3 23/3 5/3 19/3 31/3 13/3 21/3 16/3 15/3 29/3 28/3 30/3 "
+    "33/3 32/3 34/3 45/3 164/3";
+
+void test_powercom_snapshot_baseline(void) {
+    static const SnapshotCase cases[] = {
+        { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", kPowercomSnapshotSpd750u },
+    };
+    checkSnapshots(cases, sizeof(cases) / sizeof(cases[0]));
+    TEST_ASSERT_EQUAL_STRING(kPowercomPollSpd750u,
+        FixtureReplayRunner::pollLists<PowercomDriver>("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -1358,6 +1412,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
+    RUN_TEST(test_powercom_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);
@@ -1399,6 +1454,7 @@ void setup() {
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
+    RUN_TEST(test_powercom_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);

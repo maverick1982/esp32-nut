@@ -1080,6 +1080,68 @@ void test_apc_beeper_on_off_not_listed() {
                              names(CommandCatalog::build(u, true, true, true, nullptr, apc, n)).c_str());
 }
 
+// --- Commands from the powercom-hid table (US-077) ---
+
+static const char* const kSpd750u = "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json";
+
+void test_powercom_spd750u_commands_from_table() {
+    // SPD-750U: QUIRK_NO_BEEPER_CONTROL (no beeper) and shutdownCommandsSupported() false.
+    // Only test.battery.start.quick (powercom-hid.c:661): powercom-hid has no
+    // test.battery.start.deep / test.battery.stop rows, which the catalog without a table
+    // offered from UPS.Battery.Test
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick", names(CommandCatalog::build(u, false, false, true, nullptr, t, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
+                             names(CommandCatalog::build(u, false, false, true)).c_str());
+}
+
+void test_powercom_beeper_without_quirk() {
+    // The same descriptor on a Powercom without the quirk: beeper.enable/disable (659-660) and
+    // toggle; no beeper.mute, which powercom-hid has no row for
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle test.battery.start.quick",
+                             names(CommandCatalog::build(u, true, false, true, nullptr, t, n)).c_str());
+}
+
+void test_powercom_load_shutdown_never_listed() {
+    // load.on.delay and shutdown.return/stayoff (662-664) are bound on the SPD-750U, load.on,
+    // load.off, shutdown.return/stayoff (665-668, 729) on the PCM / vendor delays: none is
+    // listed while shutdownCommandsSupported() is false (US-058)
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
+    std::vector<HIDUsageDef> pcm = { mk("UPS.PowerSummary.0x00FF0056", 0x00ff0056, 0x03),
+                                     mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, u, "load.on.delay"));
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, u, "shutdown.return"));
+    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, pcm, "load.off"));
+    for (const auto* usages : { &u, &pcm }) {
+        std::string list = names(CommandCatalog::build(*usages, true, false, true, nullptr, t, n));
+        TEST_ASSERT_TRUE_MESSAGE(list.find("load.") == std::string::npos, list.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(list.find("shutdown.") == std::string::npos, list.c_str());
+    }
+}
+
+void test_powercom_quick_test_value() {
+    // powercom-hid.c:661: test.battery.start.quick writes 1 on UPS.Battery.Test
+    HIDParser parser;
+    std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", u, def, value, t, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Battery.Test", def.path);
+    TEST_ASSERT_EQUAL(1, value);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -1134,6 +1196,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_cs500_shutdown_return_from_row);
     RUN_TEST(test_apc_panel_test_rows);
     RUN_TEST(test_apc_beeper_on_off_not_listed);
+    RUN_TEST(test_powercom_spd750u_commands_from_table);
+    RUN_TEST(test_powercom_beeper_without_quirk);
+    RUN_TEST(test_powercom_load_shutdown_never_listed);
+    RUN_TEST(test_powercom_quick_test_value);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

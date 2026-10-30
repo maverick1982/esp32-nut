@@ -84,6 +84,9 @@ protected:
     // Static reports are read once per enumeration, then left out of the full poll, like
     // HU_FLAG_STATIC in usbhid-ups (issue #60). False = every full poll reads them.
     virtual bool pollStaticReportsOnce() const { return false; }
+    // A usage whose value never changes: a report with only such usages is static. By default
+    // the usage code decides (isDynamicUsage); a driver can follow its table's HU_FLAG_STATIC
+    virtual bool isStaticUsage(const HIDUsageDef& u) const { return !isDynamicUsage(u); }
     // wLength of a GET_REPORT: IUPSDriver::requestLength(), public as the host uses it too
     // Reports a driver must never request (e.g. ones that freeze the firmware)
     virtual bool acceptPollReport(uint8_t report_type, uint8_t report_id) const { return true; }
@@ -92,11 +95,36 @@ protected:
     virtual void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
     // True for the usages of the HU_FLAG_QUICK_POLL status rows of hid2nut() (US-073)
     bool isQuickPollStatusUsage(const HIDUsageDef& u) const;
+    // The FEATURE report of the first usage with the row's path, 0 when none (US-077)
+    static uint8_t featureReportOf(const std::vector<HIDUsageDef>& usages, const NutTable::HidInfo& row);
+    // Appends the FEATURE reports of the hid2nut() rows keep(row, index) accepts, in table
+    // order and without duplicates: poll lists built on the table (US-077, also for US-078)
+    template <typename Keep>
+    void appendTableReports(const std::vector<HIDUsageDef>& usages, std::vector<PollItem>& out, Keep keep) const {
+        size_t n = 0;
+        const NutTable::HidInfo* table = hid2nut(n);
+        for (size_t i = 0; i < n; i++) {
+            if (!keep(table[i], i)) continue;
+            uint8_t id = featureReportOf(usages, table[i]);
+            if (!id) continue;
+            bool found = false;
+            for (const auto& p : out) {
+                if (p.report_type == 3 && p.id == id) { found = true; break; }
+            }
+            if (!found) out.push_back(PollItem{3, id, 0});
+        }
+    }
     // False when the strings of the table's stringid_conversion rows must not be requested
     // (CyberPower vendor layouts, issue #40); the device strings are requested anyway (US-075)
     virtual bool requestTableStrings(IHidTransport* host) const { return true; }
     // String descriptors fetched at the start of a full poll (only the missing ones)
     virtual void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const;
+    // The strings of the table's stringid_conversion rows still waiting for their text
+    void collectTableStringRequests(std::vector<uint8_t>& out) const;
+    // Puts a report at the head of the pending requests, inside the running cycle or as a
+    // cycle of its own; nothing when it is already pending (US-077). Same task as loop():
+    // decodeReport() runs from it
+    void pollSoon(const PollItem& item);
     // True when the driver reads the report of u: INPUT, or a FEATURE report acceptPollReport() takes
     bool isReportRead(const HIDUsageDef& u) const;
     // True when the device measures ups.realpower in a report this driver reads

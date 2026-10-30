@@ -71,12 +71,14 @@ void test_beeper_powercom_quirk() {
     
     uint8_t buffer[64] = {0};
     
-    // Powercom quirk: enable -> 1, disable -> 2
+    // Powercom: the values of the beeper.enable / beeper.disable rows of powercom-hid.c
+    // (659-660), enable -> 1, disable -> 0 (US-077, as NUT)
     BeeperLogic::manipulateBeeperBuffer(true, &def, buffer, 1, &drv);
     TEST_ASSERT_EQUAL(1, buffer[0]);
     
+    buffer[0] = 0xFF;
     BeeperLogic::manipulateBeeperBuffer(false, &def, buffer, 1, &drv);
-    TEST_ASSERT_EQUAL(2, buffer[0]);
+    TEST_ASSERT_EQUAL(0, buffer[0]);
 }
 
 void test_beeper_buffer_expansion() {

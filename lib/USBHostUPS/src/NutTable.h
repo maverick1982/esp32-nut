@@ -136,7 +136,21 @@ enum class Conv : uint8_t {
     CpsInputFreq,         // cps_input_freq (cps-hid.c)
     CpsOutputFreq,        // cps_output_freq (cps-hid.c)
     // US-076
-    ApcDate               // apc_date_conversion (apc-hid.c)
+    ApcDate,              // apc_date_conversion (apc-hid.c)
+    // US-077
+    PowercomHackVoltage,  // powercom_hack_voltage_lkp (powercom-hid.c): the last valid report 0xA4
+    PowercomVoltage,      // powercom_voltage_conversion (powercom-hid.c)
+    PowercomStartup,      // powercom_startup_info (powercom-hid.c)
+    PowercomShutdown,     // powercom_shutdown_info (powercom-hid.c)
+    PowercomUpsfail,      // powercom_upsfail_conversion (powercom-hid.c)
+    PowercomReplacebatt,  // powercom_replacebatt_conversion (powercom-hid.c)
+    PowercomTest,         // powercom_test_conversion (powercom-hid.c)
+    PowercomShutdownimm,  // powercom_shutdownimm_conversion (powercom-hid.c)
+    PowercomOnline,       // powercom_online_conversion (powercom-hid.c)
+    PowercomLowbatt,      // powercom_lowbatt_conversion (powercom-hid.c)
+    PowercomTrim,         // powercom_trim_conversion (powercom-hid.c)
+    PowercomBoost,        // powercom_boost_conversion (powercom-hid.c)
+    PowercomOverload      // powercom_overload_conversion (powercom-hid.c)
 };
 
 struct Lookup {
@@ -329,6 +343,7 @@ static constexpr Lookup kApcLineFailCauseVrange[] = {                           
     { 1, "vrange" }, { 2, "vrange" }, { 4, "vrange" }, { 8, "vrange" }, { 9, "vrange" }, { 0, "!vrange" },
 };
 static constexpr Lookup kApcLineFailCauseFrange[] = { { 7, "frange" }, { 0, "!frange" } };   // apc_linefailcause_frange_info
+static constexpr Lookup kPowercomBeeperInfo[] = { { 1, "enabled" }, { 2, "disabled" } };    // powercom_beeper_info
 
 // Vendor ups.alarm lookups of mge-hid.c (US-107), verbatim: the text is the alarm
 static constexpr Lookup kMgeEmergencyStop[] = { { 1, "Emergency stop!" } };                    // mge_emergency_stop
@@ -378,6 +393,9 @@ struct Context {
         bool input_checked = false;
         bool output_checked = false;
     } cps;
+    // last_valid of powercom_hack_voltage (powercom-hid.c, US-077): the text of the last
+    // valid report 0xA4, written by PowercomDriver::decodeReport; empty ("0.0") until the first one
+    char powercom_battery_voltage[32] = "";
 };
 
 // CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
@@ -477,6 +495,26 @@ inline const char* statusToken(const HidInfo& info, double v, const Context& ctx
     case Conv::EatonConverterOnline: // eaton_converter_online_fun: only when not OFF
         if (ctx.status.set & statusBit(ST_OFF)) return nullptr;
         return (v == 0) ? "!online" : "online";
+    // powercom-hid.c:308-423, the status bytes of the PowercomUPS page. upsfail is "fanfail"
+    // upstream although bit 0 is the UPS fault
+    case Conv::PowercomUpsfail:
+        return ((long)v & 0x0001) ? "fanfail" : "!fanfail";
+    case Conv::PowercomReplacebatt:
+        return ((long)v & 0x0002) ? "replacebatt" : "!replacebatt";
+    case Conv::PowercomTest:
+        return ((long)v & 0x0004) ? "cal" : "!cal";
+    case Conv::PowercomShutdownimm:
+        return ((long)v & 0x0010) ? "shutdownimm" : "!shutdownimm";
+    case Conv::PowercomOnline:
+        return ((long)v & 0x0001) ? "!online" : "online";
+    case Conv::PowercomLowbatt:
+        return ((long)v & 0x0002) ? "lowbatt" : "!lowbatt";
+    case Conv::PowercomTrim:
+        return (((long)v & 0x0018) == 0x0008) ? "trim" : "!trim";
+    case Conv::PowercomBoost:
+        return (((long)v & 0x0018) == 0x0018) ? "boost" : "!boost";
+    case Conv::PowercomOverload:
+        return ((long)v & 0x0020) ? "overload" : "!overload";
     default:
         return nullptr;
     }
@@ -847,6 +885,29 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
         out = buf;
         return DecodeResult::OK;
     }
+    case Conv::PowercomHackVoltage:
+        // powercom_hack_voltage ignores the row's value (ACPresent) and serves the last valid
+        // report 0xA4, read by the poll; "0.0" until the first one (last_valid upstream)
+        out = ctx.powercom_battery_voltage[0] ? ctx.powercom_battery_voltage : "0.0";
+        return DecodeResult::OK;
+    case Conv::PowercomVoltage: // powercom_voltage_conversion_fun
+        snprintf(buf, sizeof(buf), "%0.0f", v * 4);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::PowercomStartup: { // powercom_startup_fun: minutes, bytes swapped
+        uint16_t i = (uint16_t)(long)v; // upstream converts double to uint16_t implicitly
+        snprintf(buf, sizeof(buf), "%d", 60 * (((i & 0x00FF) << 8) + (i >> 8)));
+        out = buf;
+        return DecodeResult::OK;
+    }
+    case Conv::PowercomShutdown: { // powercom_shutdown_fun: minutes in the high byte, seconds in the low one
+        // The default byte order only: the ups.conf flag powercom_sdcmd_byte_order_fallback
+        // has no counterpart in the firmware
+        uint16_t i = (uint16_t)(long)v;
+        snprintf(buf, sizeof(buf), "%d", 60 * (i >> 8) + (i & 0x00FF));
+        out = buf;
+        return DecodeResult::OK;
+    }
     case Conv::MgeBatteryCapacity:
         snprintf(buf, sizeof(buf), "%.2f", v / 3600); // As to Ah
         out = buf;
@@ -886,6 +947,15 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
     case Conv::EatonDischarging:
     case Conv::EatonCharging:
     case Conv::EatonConverterOnline:
+    case Conv::PowercomUpsfail:
+    case Conv::PowercomReplacebatt:
+    case Conv::PowercomTest:
+    case Conv::PowercomShutdownimm:
+    case Conv::PowercomOnline:
+    case Conv::PowercomLowbatt:
+    case Conv::PowercomTrim:
+    case Conv::PowercomBoost:
+    case Conv::PowercomOverload:
         // Internal rows and BOOL functions: applyInternal() / statusToken()
         return DecodeResult::DEFER;
     case Conv::Lookup: {
@@ -1422,8 +1492,9 @@ inline const DelayPaths* legrandDelayPaths() {
 
 // Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
 // row of mge_hid2nut (US-066, US-073, US-074, US-107), instant commands and ups.alarm rows
-// included, but the rows of the stateful mge functions (US-070). The other tables still
-// hold only their ST_FLAG_RW rows (US-066). ups.delay.* is left to
+// included, but the rows of the stateful mge functions (US-070); apcHid2Nut() (US-076),
+// cpsHid2Nut() (US-075) and powercomHid2Nut() (US-077) every row of their upstream table.
+// ecoflowHid2Nut() still holds only its ST_FLAG_RW rows (US-066). ups.delay.* is left to
 // CommandCatalog::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
@@ -2337,6 +2408,242 @@ inline const HidInfo* ecoflowHid2Nut(size_t& n) {
     static const HidInfo t[] = {
         // ecoflow-hid.c:181 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+// Every row of powercom_hid2nut (US-077, ADR 0011): values, status and instant commands.
+// Vendor usages as powercom_usage_lkp names them; the application collection is
+// PowercomUPS itself, so those paths start with its code, not with "UPS.":
+// PowercomUPS 0x00020004, PowercomBatterySystem 0x00020010, PowercomPowerConverter 0x00020016,
+// PowercomInput 0x0002001A, PowercomOutput 0x0002001C, PowercomVoltage 0x00020030,
+// PowercomFrequency 0x00020032, PowercomPercentLoad 0x00020035, PowercomTemperature 0x00020036,
+// PowercomDelayBeforeStartup 0x00020056, PowercomDelayBeforeShutdown 0x00020057, PowercomTest
+// 0x00020058, PowercomShutdownRequested 0x00020068, PowercomInternalChargeController 0x00020081,
+// PowercomPrimaryBatterySupport 0x00020082, PowercomDesignCapacity 0x00020083,
+// PowercomSpecificationInfo 0x00020084, PowercomManufacturerDate 0x00020085,
+// PowercomSerialNumber 0x00020086, PowercomManufacturerName 0x00020087,
+// PCMDelayBeforeStartup 0x00FF0056, PCMDelayBeforeShutdown 0x00FF0057, POWERCOM1 0x0084002F,
+// POWERCOM2 0xFF860060, POWERCOM3 0xFF860080.
+inline const HidInfo* powercomHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+        // powercom-hid.c:544 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // powercom-hid.c:545 UPS.PowerSummary.PresentStatus.BatteryPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // powercom-hid.c:546 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, 0, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // powercom-hid.c:547 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, 0, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // powercom-hid.c:548 UPS.PowerSummary.PresentStatus.CommunicationLost
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // powercom-hid.c:549 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, 0, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // powercom-hid.c:550 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // powercom-hid.c:551 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // powercom-hid.c:552 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // powercom-hid.c:553 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // powercom-hid.c:554 UPS.PowerSummary.PresentStatus.POWERCOM3 (BOOL): commented out upstream
+        // powercom-hid.c:555 UPS.PowerSummary.PresentStatus.ShutdownRequested (BOOL): commented out upstream
+        // powercom-hid.c:556 UPS.PowerSummary.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
+        // powercom-hid.c:557 UPS.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PresentStatus.ACPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // powercom-hid.c:558 UPS.PresentStatus.BatteryPresent
+        { "BOOL", 0, 0, "UPS.PresentStatus.BatteryPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // powercom-hid.c:559 UPS.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PresentStatus.BelowRemainingCapacityLimit", nullptr, 0, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // powercom-hid.c:560 UPS.PresentStatus.Boost
+        { "BOOL", 0, 0, "UPS.PresentStatus.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
+        // powercom-hid.c:561 UPS.PresentStatus.Buck
+        { "BOOL", 0, 0, "UPS.PresentStatus.Buck", nullptr, 0, Conv::Lookup, NUT_LKP(kTrimInfo) },
+        // powercom-hid.c:562 UPS.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PresentStatus.Charging", nullptr, 0, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // powercom-hid.c:563 UPS.PresentStatus.CommunicationLost
+        { "BOOL", 0, 0, "UPS.PresentStatus.CommunicationLost", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // powercom-hid.c:564 UPS.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PresentStatus.Discharging", nullptr, 0, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // powercom-hid.c:565 UPS.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // powercom-hid.c:566 UPS.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // powercom-hid.c:567 UPS.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // powercom-hid.c:568 UPS.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // powercom-hid.c:569 UPS.PresentStatus.POWERCOM3 (BOOL): commented out upstream
+        // powercom-hid.c:570 UPS.PresentStatus.ShutdownRequested (BOOL): commented out upstream
+        // powercom-hid.c:571 UPS.PresentStatus.Tested (BOOL): commented out upstream
+        // powercom-hid.c:572 UPS.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
+        // battery.voltage(.nominal) on UPS.PowerSummary/Battery Voltage and ConfigVoltage (lines 577-580
+        // of the upstream file), commented out there: PowerCOM duplicates output.voltage(.nominal)
+        // powercom-hid.c:587 UPS.PowerSummary.PresentStatus.ACPresent
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%s", 0, Conv::PowercomHackVoltage, nullptr, 0 },
+        // powercom-hid.c:589 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:590 UPS.Battery.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.Battery.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:591 UPS.PowerSummary.RemainingCapacityLimit
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:592 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:593 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:594 UPS.Battery.ManufacturerDate
+        { "battery.mfr.date", 0, 0, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_STATIC, Conv::BatteryDate, nullptr, 0 },
+        // powercom-hid.c:595 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:597 UPS.Battery.DelayBeforeStartup
+        { "unmapped.ups.battery.delaybeforestartup", 0, 0, "UPS.Battery.DelayBeforeStartup", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:598 UPS.Battery.Initialized
+        { "unmapped.ups.battery.initialized", 0, 0, "UPS.Battery.Initialized", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:601 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kPowercomBeeperInfo) },
+        // powercom-hid.c:602 UPS.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kPowercomBeeperInfo) },
+        // powercom-hid.c:603 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:604 UPS.PowerSummary.ManufacturerDate
+        { "ups.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", HU_FLAG_STATIC, Conv::BatteryDate, nullptr, 0 },
+        // powercom-hid.c:605 UPS.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:607 UPS.PowerSummary.iManufacturer
+        { "unmapped.ups.powersummary.imanufacturer", 0, 0, "UPS.PowerSummary.iManufacturer", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // powercom-hid.c:608 UPS.PowerSummary.iProduct
+        { "unmapped.ups.powersummary.iproduct", 0, 0, "UPS.PowerSummary.iProduct", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // powercom-hid.c:609 UPS.PowerSummary.iSerialNumber
+        { "unmapped.ups.powersummary.iserialnumber", 0, 0, "UPS.PowerSummary.iSerialNumber", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // powercom-hid.c:610 UPS.iName
+        { "unmapped.ups.iname", 0, 0, "UPS.iName", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // powercom-hid.c:611 UPS.PowerSummary.iOEMInformation
+        { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+#endif
+        // ups.delay.start (powercom-hid.c:620) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:621 UPS.PowerSummary.DelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", 0, Conv::PowercomStartup, nullptr, 0 },
+        // ups.delay.shutdown (powercom-hid.c:637) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:638 UPS.PowerSummary.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
+        // ups.delay.shutdown (powercom-hid.c:639) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:640 UPS.PowerSummary.PCMDelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.0x00FF0057", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
+        // powercom-hid.c:642 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:643 UPS.Input.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:644 UPS.Input.Frequency
+        { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:646 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:647 UPS.Output.ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:648 UPS.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:651 UPS.POWERCOM1
+        { "unmapped.ups.powercom1", 0, 0, "UPS.0x0084002F", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:652 UPS.POWERCOM2
+        { "unmapped.ups.powercom2", 0, 0, "UPS.0xFF860060", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:653 UPS.PowerSummary.Rechargeable
+        { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:654 UPS.ShutdownImminent
+        { "unmapped.ups.shutdownimminent", 0, 0, "UPS.ShutdownImminent", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:658 UPS.PowerSummary.AudibleAlarmControl, not used: CommandCatalog builds beeper.toggle from beeper.enable and beeper.disable
+        { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:659 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 1)
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:660 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 0)
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:661 UPS.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:662 UPS.PowerSummary.DelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
+        { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", nullptr, HU_TYPE_CMD, Conv::PowercomStartup, nullptr, 0 },
+        // powercom-hid.c:663 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
+        { "shutdown.return", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", nullptr, HU_TYPE_CMD, Conv::PowercomShutdown, nullptr, 0 },
+        // powercom-hid.c:664 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        { "shutdown.stayoff", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", nullptr, HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:665 UPS.PowerSummary.PCMDelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
+        { "load.on", 0, 0, "UPS.PowerSummary.0x00FF0056", "0", HU_TYPE_CMD, Conv::PowercomStartup, nullptr, 0 },
+        // powercom-hid.c:666 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        { "load.off", 0, 0, "UPS.PowerSummary.0x00FF0057", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:667 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
+        { "shutdown.return", 0, 0, "UPS.PowerSummary.0x00FF0057", nullptr, HU_TYPE_CMD, Conv::PowercomShutdown, nullptr, 0 },
+        // powercom-hid.c:668 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        { "shutdown.stayoff", 0, 0, "UPS.PowerSummary.0x00FF0057", nullptr, HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:670 PowercomUPS.PowercomSerialNumber
+        { "ups.serial", 0, 0, "0x00020004.0x00020086", "%s", 0, Conv::StringId, nullptr, 0 },
+        // powercom-hid.c:671 PowercomUPS.PowercomManufacturerName
+        { "ups.mfr", 0, 0, "0x00020004.0x00020087", "%s", 0, Conv::StringId, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:673 PowercomUPS.PowercomDesignCapacity
+        { "UPS.DesignCapacity", 0, 0, "0x00020004.0x00020083", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:675 PowercomUPS.PowercomManufacturerDate
+        { "ups.mfr.date", 0, 0, "0x00020004.0x00020085", "%s", 0, Conv::BatteryDate, nullptr, 0 },
+        // powercom-hid.c:676 PowercomUPS.PowercomBatterySystem.PowercomTemperature
+        { "battery.temperature", 0, 0, "0x00020004.0x00020010.0x00020036", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:677 UPS.Battery.Temperature
+        { "battery.temperature", 0, 0, "UPS.Battery.Temperature", "%.1f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:678 PowercomUPS.PowercomBatterySystem.PowercomVoltage
+        { "battery.charge", 0, 0, "0x00020004.0x00020010.0x00020030", "%.0f", 0, Conv::Number, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:680 PowercomUPS.PowercomBatterySystem.PowercomSpecificationInfo
+        { "UPS.BatterySystem.SpecificationInfo", 0, 0, "0x00020004.0x00020010.0x00020084", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:682 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomFrequency
+        { "input.frequency", 0, 0, "0x00020004.0x00020016.0x0002001A.0x00020032", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:683 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomVoltage
+        { "input.voltage", 0, 0, "0x00020004.0x00020016.0x0002001A.0x00020030", "%.0f", 0, Conv::PowercomVoltage, nullptr, 0 },
+        // powercom-hid.c:684 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomVoltage
+        { "output.voltage", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020030", "%.0f", 0, Conv::PowercomVoltage, nullptr, 0 },
+        // powercom-hid.c:685 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPercentLoad
+        { "ups.load", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020035", "%.0f", 0, Conv::Number, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:697 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        { "UPS.PowerConverter.Output.InternalChargeController", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:699 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomUpsfail, nullptr, 0 },
+        // powercom-hid.c:700 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomReplacebatt, nullptr, 0 },
+        // powercom-hid.c:701 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomTest, nullptr, 0 },
+        // powercom-hid.c:702 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomShutdownimm, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:714 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "UPS.PowerConverter.Output.PrimaryBatterySupport", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // powercom-hid.c:716 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomOnline, nullptr, 0 },
+        // powercom-hid.c:718 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomLowbatt, nullptr, 0 },
+        // powercom-hid.c:719 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomTrim, nullptr, 0 },
+        // powercom-hid.c:720 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomBoost, nullptr, 0 },
+        // powercom-hid.c:721 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomOverload, nullptr, 0 },
+        // powercom-hid.c:722 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomFrequency
+        { "output.frequency", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020032", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // powercom-hid.c:723 PowercomUPS.PowercomPowerConverter.PowercomTest
+        { "ups.test.result", 0, 0, "0x00020004.0x00020016.0x00020058", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
+#if WITH_UNMAPPED_DATA_POINTS
+        // powercom-hid.c:725 PowercomUPS.PowercomPowerConverter.PowercomShutdownRequested
+        { "UPS.PowerConverter.ShutdownRequested", 0, 0, "0x00020004.0x00020016.0x00020068", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+        // ups.delay.shutdown (powercom-hid.c:727) excluded: ups.delay.* are the configured delays, not device values (US-058)
+        // ups.delay.start (powercom-hid.c:728) excluded: ups.delay.* are the configured delays, not device values (US-058)
+        // powercom-hid.c:729 PowercomUPS.PowercomPowerConverter.PowercomDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058)
+        { "load.off", 0, 0, "0x00020004.0x00020016.0x00020057", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

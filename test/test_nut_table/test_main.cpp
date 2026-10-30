@@ -642,6 +642,79 @@ void test_apc_status_lookups() {
     TEST_ASSERT_NULL(statusToken(frange, 8, ctx, nullptr));
 }
 
+// --- powercom-hid.c conversions (US-077)
+
+void test_powercom_status_functions() {
+    // powercom-hid.c:308-423: one bit (or the AVR pair 0x18) of a status byte per function
+    struct Case { Conv conv; double on; const char* on_token; double off; const char* off_token; };
+    static const Case cases[] = {
+        { Conv::PowercomUpsfail, 0x01, "fanfail", 0x02, "!fanfail" },
+        { Conv::PowercomReplacebatt, 0x02, "replacebatt", 0x01, "!replacebatt" },
+        { Conv::PowercomTest, 0x04, "cal", 0x08, "!cal" },
+        { Conv::PowercomShutdownimm, 0x10, "shutdownimm", 0x08, "!shutdownimm" },
+        { Conv::PowercomOnline, 0x00, "online", 0x01, "!online" },
+        { Conv::PowercomLowbatt, 0x02, "lowbatt", 0x01, "!lowbatt" },
+        { Conv::PowercomTrim, 0x08, "trim", 0x18, "!trim" },
+        { Conv::PowercomBoost, 0x18, "boost", 0x08, "!boost" },
+        { Conv::PowercomOverload, 0x20, "overload", 0x10, "!overload" },
+    };
+    Context ctx;
+    String out;
+    for (const auto& c : cases) {
+        HidInfo row = { "BOOL", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, c.conv, nullptr, 0 };
+        TEST_ASSERT_EQUAL_STRING(c.on_token, statusToken(row, c.on, ctx, nullptr));
+        TEST_ASSERT_EQUAL_STRING(c.off_token, statusToken(row, c.off, ctx, nullptr));
+        // A BOOL function publishes nothing of its own
+        TEST_ASSERT_TRUE(decode(row, c.on, ctx, out) == DecodeResult::DEFER);
+    }
+    // The AVR pair: buck alone is trim, buck with boost mode is boost, neither without AVR
+    HidInfo trim = { "BOOL", 0, 0, "UPS.X", nullptr, 0, Conv::PowercomTrim, nullptr, 0 };
+    HidInfo boost = { "BOOL", 0, 0, "UPS.X", nullptr, 0, Conv::PowercomBoost, nullptr, 0 };
+    TEST_ASSERT_EQUAL_STRING("!trim", statusToken(trim, 0x10, ctx, nullptr));
+    TEST_ASSERT_EQUAL_STRING("!boost", statusToken(boost, 0x10, ctx, nullptr));
+}
+
+void test_powercom_voltage_times_four() {
+    // powercom_voltage_conversion_fun: "%0.0f" of value * 4
+    HidInfo volt = { "input.voltage", 0, 0, "UPS.X", "%.0f", 0, Conv::PowercomVoltage, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("220", conv(volt, 55, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("230", conv(volt, 57.6, ctx).c_str());
+}
+
+void test_powercom_timers() {
+    // powercom_shutdown_fun: minutes in the high byte, seconds in the low one;
+    // powercom_startup_fun: minutes with the two bytes swapped
+    HidInfo sd = { "ups.timer.shutdown", 0, 0, "UPS.X", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 };
+    HidInfo st = { "ups.timer.start", 0, 0, "UPS.X", "%.0f", 0, Conv::PowercomStartup, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("62", conv(sd, 0x0102, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("180", conv(st, 0x0300, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("15360", conv(st, 0x0001, ctx).c_str()); // 60 * 0x0100
+    TEST_ASSERT_EQUAL_STRING("0", conv(sd, 0, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("0", conv(st, 0, ctx).c_str());
+}
+
+void test_powercom_hack_voltage() {
+    // powercom_hack_voltage: the row's value is ignored, the last valid report 0xA4 is served,
+    // "0.0" before the first one (last_valid)
+    HidInfo hack = { "battery.voltage", 0, 0, "UPS.X", "%s", 0, Conv::PowercomHackVoltage, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("0.0", conv(hack, 1, ctx).c_str());
+    strcpy(ctx.powercom_battery_voltage, "13.7");
+    TEST_ASSERT_EQUAL_STRING("13.7", conv(hack, 1, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("13.7", conv(hack, 0, ctx).c_str());
+}
+
+void test_powercom_beeper_lookup() {
+    // powercom_beeper_info: 1 enabled, 2 disabled, nothing else
+    HidInfo beeper = { "ups.beeper.status", 0, 0, "UPS.X", "%s", 0, Conv::Lookup, NUT_LKP(kPowercomBeeperInfo) };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("enabled", conv(beeper, 1, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("disabled", conv(beeper, 2, ctx).c_str());
+    conv(beeper, 3, ctx, DecodeResult::FAIL);
+}
+
 void test_command_rows_never_published() {
     // HU_TYPE_CMD rows: bound, but outside the INIT rule and never given a value
     static const HidInfo t[] = {
@@ -768,6 +841,12 @@ void test_cps_rows_have_supported_formats() {
     checkSupportedFormats(t, n);
 }
 
+void test_powercom_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = powercomHid2Nut(n);
+    checkSupportedFormats(t, n);
+}
+
 // --- Coverage of the upstream table (ADR 0011 rule 1, US-074 rework) ---
 
 static std::vector<std::string> readLines(const char* path) {
@@ -870,6 +949,12 @@ void test_cps_table_covers_every_upstream_row() {
                        "inline const HidInfo* cpsHid2Nut", "inline const HidInfo* ecoflowHid2Nut");
 }
 
+void test_powercom_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every powercom_hid2nut row is in powercomHid2Nut(), as a row or as a comment (US-077)
+    checkTableCoverage("nut_repo/drivers/powercom-hid.c", "static hid_info_t powercom_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* powercomHid2Nut", "} // namespace NutTable");
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_number_follows_row_format);
@@ -904,6 +989,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_status_lookups_cps);
     RUN_TEST(test_apc_date);
     RUN_TEST(test_apc_status_lookups);
+    RUN_TEST(test_powercom_status_functions);
+    RUN_TEST(test_powercom_voltage_times_four);
+    RUN_TEST(test_powercom_timers);
+    RUN_TEST(test_powercom_hack_voltage);
+    RUN_TEST(test_powercom_beeper_lookup);
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
     RUN_TEST(test_mge_table_covers_every_upstream_row);
@@ -911,6 +1001,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_apc_table_covers_every_upstream_row);
     RUN_TEST(test_cps_rows_have_supported_formats);
     RUN_TEST(test_cps_table_covers_every_upstream_row);
+    RUN_TEST(test_powercom_rows_have_supported_formats);
+    RUN_TEST(test_powercom_table_covers_every_upstream_row);
     RUN_TEST(test_alarm_rows_of_mge_table);
     RUN_TEST(test_vendor_alarms_in_table_order);
     return UNITY_END();
