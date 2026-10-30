@@ -438,7 +438,7 @@ void WebConfigServer::handleUpsCommand() {
         filter["name"] = true;
         JsonDocument req;
         if (!deserializeJson(req, body, DeserializationOption::Filter(filter))) {
-            const UPSCommandInfo* info = CommandCatalog::find(req["name"].as<const char*>());
+            const UPSCommandInfo* info = UpsCommands::find(req["name"].as<const char*>());
             if (info && info->destructive) {
                 AppLogger::log("WARN", String("[CMD] Destructive command '") + info->name +
                                "' run from the Web UI by '" + webUiUser() + "'");

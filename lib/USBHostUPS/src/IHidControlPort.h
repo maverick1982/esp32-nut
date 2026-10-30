@@ -36,7 +36,7 @@ public:
     virtual NutTable::SetStatus writePlannedValue(const NutTable::SetPlan& plan) { return NutTable::SetStatus::FAILED; }
 
     // NUT table of the attached driver whose HU_TYPE_CMD rows give the commands (US-074,
-    // IUPSDriver::commandTable); nullptr keeps the CommandCatalog groups
+    // IUPSDriver::commandTable); nullptr: no command
     virtual const NutTable::HidInfo* commandTable(size_t& n) const { n = 0; return nullptr; }
     // setBeeper() on a given field, the one of the command row (US-074): same checks, writes
     // and log lines as setBeeper() on the active beeper. No lock may be held around it.

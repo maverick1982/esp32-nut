@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: LOW
 points: 8
-status: TODO
+status: DONE
 body: |
   #### US-079: Tabella generica per le marche sconosciute e rimozione delle mappature a mano e di CommandCatalog
 
@@ -34,3 +34,11 @@ body: |
 history:
   - status: TODO
     at: "2026-10-15T18:45:06Z"
+  - status: PLANNED
+    at: "2026-10-30T16:06:14Z"
+  - status: IN PROGRESS
+    at: "2026-10-30T16:15:01Z"
+  - status: REVIEW
+    at: "2026-10-30T18:51:27Z"
+  - status: DONE
+    at: "2026-10-30T20:42:08Z"

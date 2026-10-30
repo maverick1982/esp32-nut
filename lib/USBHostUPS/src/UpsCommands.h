@@ -13,7 +13,7 @@
 
 // NUT instant commands known to the bridge, without HID: what the NUT server and the
 // web API need to name, describe and run a command (US-103). The HID side that maps
-// commands to usages stays in CommandCatalog.h.
+// commands to usages is the HU_TYPE_CMD rows of the NUT tables, run by HidControl (US-079).
 
 #include <stddef.h>
 #include <stdint.h>
@@ -29,7 +29,7 @@ struct UPSCommandInfo {
 
 enum class CommandResult { OK, NOT_SUPPORTED, NOT_CONNECTED, FAILED, INVALID_ARGUMENT };
 
-namespace CommandCatalog {
+namespace UpsCommands {
 
 inline const UPSCommandInfo* table(size_t& count) {
     static const UPSCommandInfo commands[] = {
@@ -68,6 +68,6 @@ inline const UPSCommandInfo* find(const char* name) {
     return nullptr;
 }
 
-} // namespace CommandCatalog
+} // namespace UpsCommands
 
 #endif // UPS_COMMANDS_H

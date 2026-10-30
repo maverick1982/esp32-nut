@@ -11,7 +11,7 @@ tags: [adr, decision, drivers, nut, hid, upstream-fidelity]
 * **Date:** 2026-10-29
 * **Authors:** @maverick1982, Claude
 * **Extends:** ADR 0003 (upstream fidelity becomes verifiable row by row)
-* **Amends:** ADR 0004, once US-079 is done (`GenericDriver` stays the base class for the poll state machine and the hooks, its standard mappings become the `genericHid2Nut()` table)
+* **Amends:** ADR 0004, in force since US-079 (`GenericDriver` stays the base class for the poll state machine and the hooks, its standard mappings became the `genericHid2Nut()` table)
 * **Related:** ADR 0007 (String fragmentation), ADR 0010 (`ups-protocol` module, consumers without HID types), specs US-066 (table and binding engine, RW rows), US-073…079 and US-106 (migrations)
 
 ## Context and Problem Statement
@@ -75,6 +75,14 @@ Once the engine handles read-only and `BOOL` rows (end of US-073), a new driver 
 ### Migration order
 
 US-073 and US-074 (Eaton, mge-hid; US-073 also builds the engine), then US-075 (CyberPower), US-076 (APC), US-077 (Powercom), US-078 (EcoFlow and OpenUPS), US-106 (Legrand and Liebert), and last US-079: `genericHid2Nut()` for unknown brands, removal of the hand-written mappings, of `UsageMapIndex` if unused and of `CommandCatalog.h`.
+
+### Done with US-079 (2026-10-30)
+
+* Every value and every command of the HID drivers comes from a table row. `GenericDriver` binds the driver's table, then the rows of `genericHid2Nut()` the driver does not list in `supersededGenericPaths()`: the keys only we publish (rule 2) are those tail rows. For the brands without a subdriver `genericHid2Nut()` is the whole table, with commands and `genericDelayPaths()`.
+* `genericHid2Nut()` is not an upstream file: each row has the path, format and conversion of the upstream row it cites, or `esp32-nut` and the reason. Its rows carry `HU_FLAG_ANY_INDEX` (a project flag): they match a usage whatever its collection indices, as the hand-written mappings did.
+* `ups.beeper.status` stays a hook (`decodeBeeperStatus()`, rule 1) for the drivers whose table has no such row: the active beeper only, 1-bit fields as on/off, the Legrand encoding.
+* `UsageMapIndex.h` and `CommandCatalog.h` are gone. The command logic of the rows is in `HidControl`, `applyDefaultDelays()` and `parseDelayParam()` in `NutTable.h`; the command catalog of the consumers is `UpsCommands::` (`UpsCommands.h`); `commandAllowList()` is gone with its last user.
+* The replay of every fixture with the driver of the registry did not change; replayed with `GenericDriver` (unknown brand), only format differences and `commfault`, listed in the v1.12.0 release notes. The golden files of both replays (`test/test_record_replay/golden/`) stay as the regression net of the tables.
 
 ## Consequences
 

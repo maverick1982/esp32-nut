@@ -24,7 +24,7 @@
  * devices to the other drivers. Deviations from liebert-hid.c (US-097, kept by US-106):
  * 1. beeper.toggle keeps the behavior of the project (reads ups.beeper.status and writes the
  *    opposite): liebert-hid.c always writes 1, "disabled" in the standard HID encoding.
- * 2. Standard HID usages without a liebert-hid row keep the generic mappings (ADR 0011 rule 2),
+ * 2. Standard HID usages without a liebert-hid row keep the genericHid2Nut() rows (ADR 0011 rule 2),
  *    for example ups.timer.shutdown and ups.realpower.
  * 3. shutdown.default is offered, as for every driver of the project (US-058).
  * Since US-106 PresentStatus.Good gives OFF and InternalFailure gives "Internal UPS fault!", as
@@ -32,7 +32,7 @@
  * (formatDeviceStrings) and the delays of US-066.
  */
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from
 // liebertHid2Nut(), copied character by character from that table (US-106)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of liebert_hid2nut set these internal ups.status.* keys
@@ -53,7 +53,7 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test",
     "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
     // output.voltage, output.voltage.nominal (UPS.Flow.[4].ConfigVoltage, input.voltage.nominal
-    // in the generic mappings), output.frequency
+    // in genericHid2Nut()), output.frequency
     "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
     "UPS.Flow.ConfigVoltage", "UPS.PowerConverter.Output.ConfigVoltage", "UPS.Output.ConfigVoltage",
     "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",

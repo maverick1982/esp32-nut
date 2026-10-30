@@ -1,0 +1,76 @@
+[snapshot]
+battery.charge.low=10
+battery.charge.warning=20
+battery.charge=100
+battery.runtime.low=300
+battery.runtime=5040
+battery.status=100%
+battery.voltage.nominal=12
+battery.voltage=13.9
+driver.name=CyberPowerDriver
+input.transfer.high=140
+input.transfer.low=90
+input.voltage.nominal=120
+input.voltage=123.0
+output.voltage=124.0
+ups.beeper.status=enabled
+ups.delay.shutdown=60
+ups.delay.start=120
+ups.load=0
+ups.mfr=CPS
+ups.model= CP 1350C
+ups.realpower.nominal=810
+ups.realpower=0
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.boost=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.timer.shutdown=2048
+ups.timer.start=851
+ups.status=OL
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default
+[rw]
+battery.charge.low:10 battery.runtime.low:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+battery.charge.low:10 battery.runtime.low:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge.warning=20
+battery.charge=100
+battery.runtime.low=300
+battery.runtime=5040
+battery.status=100%
+battery.voltage.nominal=12
+battery.voltage=13.9
+driver.name=CyberPowerDriver
+input.transfer.high=140
+input.transfer.low=90
+input.voltage.nominal=120
+input.voltage=123.0
+output.voltage=124.0
+ups.beeper.status=enabled
+ups.delay.shutdown=60
+ups.delay.start=120
+ups.load=0
+ups.mfr=CPS
+ups.model= CP 1350C
+ups.realpower.nominal=810
+ups.realpower=0
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.boost=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.timer.shutdown=2048
+ups.timer.start=851
+ups.status=OL
+[requests]
+ S4 1/3 2/3 3/3 5/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 S4 1/3 2/3 3/3 5/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3

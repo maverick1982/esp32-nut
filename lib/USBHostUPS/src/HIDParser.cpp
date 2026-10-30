@@ -318,7 +318,7 @@ bool HIDParser::toLogical(const HIDUsageDef& def, double physical, int32_t& logi
     // Declared logical range (Physical Min/Max are not parsed, neither when reading)
     if (def.logical_max > def.logical_min && (v < def.logical_min || v > def.logical_max)) return false;
 
-    // The value must fit the field's bits, as CommandCatalog::fitsField() for the delays:
+    // The value must fit the field's bits, as HidControl::fitsField() for the delays:
     // writeUsage() masks it to bit_size, so 300 in 8 bits would be written as 44. Signed
     // when the Logical Minimum is negative, as extractUsage() reads it.
     if (def.bit_size == 0) return false;

@@ -35,7 +35,7 @@ public:
     // Rows of apc_hid2nut (apc-hid.c), NutTable.h (US-066, US-076)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::apcHid2Nut(n); }
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::apcDelayPaths(); }
-    // Standard mappings whose keys come from apcHid2Nut() (US-076)
+    // genericHid2Nut() rows whose keys come from apcHid2Nut() (US-076)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of apc_hid2nut (US-076)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::apcHid2Nut(n); }

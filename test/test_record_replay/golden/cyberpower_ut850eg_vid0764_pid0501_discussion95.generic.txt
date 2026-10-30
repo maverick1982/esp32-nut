@@ -1,0 +1,64 @@
+[snapshot]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=8830
+battery.voltage.nominal=12
+battery.voltage=13.2
+driver.name=GenericDriver
+input.frequency=501.0
+input.voltage.nominal=230
+input.voltage=232.0
+output.voltage=233.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=CPS
+ups.model=UT850EG
+ups.realpower.nominal=425
+ups.realpower=0
+ups.serial=                
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.remaining_time_limit_expired=0
+ups.test.result=Done and passed
+ups.status=OL
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default
+[rw]
+ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=8830
+battery.voltage.nominal=12
+battery.voltage=13.2
+driver.name=GenericDriver
+input.frequency=501.0
+input.voltage.nominal=230
+input.voltage=232.0
+output.voltage=233.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=CPS
+ups.model=UT850EG
+ups.realpower.nominal=425
+ups.realpower=0
+ups.serial=                
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.remaining_time_limit_expired=0
+ups.test.result=Done and passed
+ups.status=OL
+[requests]
+ 29/3 31/3 3/3 4/3 30/3 61/3 41/3 6/3 7/3 32/3 33/3 130/3 63/3 34/3 128/3 35/3 38/3 39/3 42/3 131/3 132/3 136/3 37/3 40/3 62/3 133/3 134/3 135/3 137/3 27/3 28/3 120/3 140/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 29/3 31/3 3/3 4/3 30/3 61/3 41/3 6/3 7/3 32/3 33/3 130/3 63/3 34/3 128/3 35/3 38/3 39/3 42/3 131/3 132/3 136/3 37/3 40/3 62/3 133/3 134/3 135/3 137/3 27/3 28/3 120/3 140/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3

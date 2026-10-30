@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <unity.h>
 #include <string>
-#include "CommandCatalog.h"
+#include "HidControl.h"
+#include "NutTable.h"
 #include "DriverVarStore.h"
 #include "HIDParser.h"
 #include <fstream>
@@ -29,21 +30,61 @@ static std::string names(const std::vector<const UPSCommandInfo*>& cmds) {
     return out;
 }
 
+// --- Generic table (NutTable::genericHid2Nut, US-079) ---
+// The commands of a driver without a brand subdriver come from the HU_TYPE_CMD rows of the
+// generic table: these tests check that they behave as the former usage groups (US-058..US-097)
+
+static const NutTable::HidInfo* genericTable(size_t& n) {
+    return NutTable::genericHid2Nut(n);
+}
+
+static std::vector<const UPSCommandInfo*> buildGeneric(const std::vector<HIDUsageDef>& usages, bool beeper_available,
+                                                       bool shutdown_cmds = true, bool mute_allowed = true) {
+    size_t n;
+    const NutTable::HidInfo* t = genericTable(n);
+    return HidControl::buildCommands(usages, beeper_available, shutdown_cmds, mute_allowed, t, n);
+}
+
+static bool resolveGeneric(const char* name, const std::vector<HIDUsageDef>& usages, HIDUsageDef& def, uint32_t& value) {
+    size_t n;
+    const NutTable::HidInfo* t = genericTable(n);
+    return HidControl::resolveWrite(name, usages, def, value, t, n);
+}
+
+static HidControl::StepsResult stepsGeneric(const char* name, const char* param, const std::vector<HIDUsageDef>& usages,
+                                            int32_t off_delay, int32_t on_delay, std::vector<HidControl::WriteStep>& steps) {
+    size_t n;
+    const NutTable::HidInfo* t = genericTable(n);
+    return HidControl::resolveShutdownSteps(name, param, usages, off_delay, on_delay, steps, t, n);
+}
+
+// beeper.mute writes 3 on a multi-bit FEATURE beeper (mge-hid.c, apc-hid.c, cps-hid.c)
+static HIDUsageDef beeperField(uint16_t bits, uint8_t report_type, int32_t lmin, int32_t lmax) {
+    HIDUsageDef d = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, report_type);
+    d.bit_size = bits;
+    d.logical_min = lmin;
+    d.logical_max = lmax;
+    return d;
+}
+
 void test_empty_descriptor_has_no_commands() {
     std::vector<HIDUsageDef> usages;
-    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false).size());
+    TEST_ASSERT_EQUAL(0, buildGeneric(usages, false).size());
 }
 
 void test_beeper_available_gives_beeper_commands() {
-    std::vector<HIDUsageDef> usages;
+    // US-079: the beeper commands are HU_TYPE_CMD rows, bound only to an AudibleAlarmControl usage
+    std::vector<HIDUsageDef> usages = { beeperField(1, 0x03, 0, 1) };
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle",
-                             names(CommandCatalog::build(usages, true)).c_str());
+                             names(buildGeneric(usages, true)).c_str());
+    std::vector<HIDUsageDef> none;
+    TEST_ASSERT_EQUAL(0, buildGeneric(none, true).size());
 }
 
 void test_delay_before_shutdown_alone() {
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 0x03) };
     TEST_ASSERT_EQUAL_STRING("load.off load.off.delay shutdown.stop shutdown.default",
-                             names(CommandCatalog::build(usages, false)).c_str());
+                             names(buildGeneric(usages, false)).c_str());
 }
 
 void test_shutdown_and_startup_delays() {
@@ -53,7 +94,7 @@ void test_shutdown_and_startup_delays() {
     };
     TEST_ASSERT_EQUAL_STRING(
         "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default",
-        names(CommandCatalog::build(usages, false)).c_str());
+        names(buildGeneric(usages, false)).c_str());
 }
 
 void test_non_feature_usages_are_ignored() {
@@ -61,7 +102,7 @@ void test_non_feature_usages_are_ignored() {
         mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 0x01),
         mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x02),
     };
-    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false).size());
+    TEST_ASSERT_EQUAL(0, buildGeneric(usages, false).size());
 }
 
 void test_battery_test_paths() {
@@ -69,27 +110,29 @@ void test_battery_test_paths() {
     std::vector<HIDUsageDef> b = { mk("UPS.Output.Test", 0x00840058, 0x03) };
     std::vector<HIDUsageDef> c = { mk("UPS.Battery.Test", 0x00840058, 0x03) };
     const char* expected = "test.battery.start.quick test.battery.start.deep test.battery.stop";
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(a, false)).c_str());
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(b, false)).c_str());
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(c, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(a, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(b, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(c, false)).c_str());
 }
 
-void test_apc_vendor_codes_match_on_any_path() {
+// US-079: the generic rows match the APC fields by path, in the HIDParser notation of the
+// vendor usages, no longer by usage code on any path
+void test_apc_vendor_fields_match_by_path() {
     std::vector<HIDUsageDef> usages = {
-        mk("UPS.ff860005.ff86007d", 0xff86007d, 0x03),
-        mk("UPS.ff860005.ff86007e", 0xff86007e, 0x03),
-        mk("UPS.ff860005.ff86007c", 0xff86007c, 0x03),
-        mk("UPS.PowerSummary.ff860072", 0xff860072, 0x03),
+        mk("UPS.0xFF860005.0xFF86007D", 0xff86007d, 0x03),
+        mk("UPS.0xFF860005.0xFF86007E", 0xff86007e, 0x03),
+        mk("UPS.0xFF860005.0xFF86007C", 0xff86007c, 0x03),
+        mk("UPS.PowerSummary.0xFF860072", 0xff860072, 0x03),
     };
     TEST_ASSERT_EQUAL_STRING(
         "test.panel.start test.panel.stop load.off load.on load.off.delay load.on.delay "
         "shutdown.return shutdown.stayoff shutdown.stop shutdown.reboot shutdown.default",
-        names(CommandCatalog::build(usages, false)).c_str());
+        names(buildGeneric(usages, false)).c_str());
 }
 
 void test_delay_before_reboot() {
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.DelayBeforeReboot", 0x00840055, 0x03) };
-    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(CommandCatalog::build(usages, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(buildGeneric(usages, false)).c_str());
 }
 
 void test_destructive_flags() {
@@ -98,9 +141,10 @@ void test_destructive_flags() {
         mk("UPS.PowerSummary.DelayBeforeStartup", 0x00840056, 0x03),
         mk("UPS.PowerSummary.DelayBeforeReboot", 0x00840055, 0x03),
         mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03),
-        mk("UPS.PowerSummary.ff860072", 0xff860072, 0x03),
+        mk("UPS.PowerSummary.0xFF860072", 0xff860072, 0x03),
+        beeperField(1, 0x03, 0, 1),  // US-079: the beeper rows need the usage
     };
-    auto cmds = CommandCatalog::build(usages, true);
+    auto cmds = buildGeneric(usages, true);
     TEST_ASSERT_EQUAL(17, cmds.size());
     for (const auto* c : cmds) {
         bool destructive = strncmp(c->name, "load.", 5) == 0 || strncmp(c->name, "shutdown.", 9) == 0;
@@ -109,12 +153,12 @@ void test_destructive_flags() {
 }
 
 void test_find_known_and_unknown() {
-    const UPSCommandInfo* c = CommandCatalog::find("test.battery.start.quick");
+    const UPSCommandInfo* c = UpsCommands::find("test.battery.start.quick");
     TEST_ASSERT_NOT_NULL(c);
     TEST_ASSERT_EQUAL_STRING("Start a quick battery test", c->description);
     TEST_ASSERT_FALSE(c->destructive);
-    TEST_ASSERT_NULL(CommandCatalog::find("foo"));
-    TEST_ASSERT_NULL(CommandCatalog::find(nullptr));
+    TEST_ASSERT_NULL(UpsCommands::find("foo"));
+    TEST_ASSERT_NULL(UpsCommands::find(nullptr));
 }
 
 // US-057: usage and value written by the test commands
@@ -122,12 +166,12 @@ void test_resolve_battery_test_values() {
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
     HIDUsageDef def;
     uint32_t value = 99;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.battery.start.quick", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(1, value);
     TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", def.path);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.battery.start.deep", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(2, value);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.stop", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.battery.stop", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(3, value);
 }
 
@@ -140,7 +184,7 @@ void test_resolve_prefers_feature_usage() {
     std::vector<HIDUsageDef> usages = { in, feat };
     HIDUsageDef def;
     uint32_t value;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.battery.start.quick", usages, def, value));
     TEST_ASSERT_EQUAL_UINT8(0x03, def.report_type);
     TEST_ASSERT_EQUAL_UINT8(20, def.report_id);
 }
@@ -149,10 +193,10 @@ void test_resolve_panel_test_values() {
     std::vector<HIDUsageDef> usages = { mk("UPS.0xFF860072", 0xff860072, 0x03) };
     HIDUsageDef def;
     uint32_t value = 99;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.start", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.panel.start", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(1, value);
     TEST_ASSERT_EQUAL_UINT32(0xff860072, def.usage);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.stop", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("test.panel.stop", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(0, value);
 }
 
@@ -164,28 +208,19 @@ void test_resolve_rejects_other_commands() {
     };
     HIDUsageDef def;
     uint32_t value;
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("test.battery.start.quick", usages, def, value)); // no Test usage
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.enable", usages, def, value));
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("shutdown.return", usages, def, value));
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("foo", usages, def, value));
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite(nullptr, usages, def, value));
-}
-
-// beeper.mute writes 3 on a multi-bit FEATURE beeper (mge-hid.c, apc-hid.c, cps-hid.c)
-static HIDUsageDef beeperField(uint16_t bits, uint8_t report_type, int32_t lmin, int32_t lmax) {
-    HIDUsageDef d = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, report_type);
-    d.bit_size = bits;
-    d.logical_min = lmin;
-    d.logical_max = lmax;
-    return d;
+    TEST_ASSERT_FALSE(resolveGeneric("test.battery.start.quick", usages, def, value)); // no Test usage
+    TEST_ASSERT_FALSE(resolveGeneric("beeper.enable", usages, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric("shutdown.return", usages, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric("foo", usages, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric(nullptr, usages, def, value));
 }
 
 void test_mute_listed_for_multibit_feature_beeper() {
     std::vector<HIDUsageDef> usages = { beeperField(8, 0x03, 1, 3) };
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
-                             names(CommandCatalog::build(usages, true)).c_str());
+                             names(buildGeneric(usages, true)).c_str());
     // Not controllable (quirk, EcoFlow): no beeper command at all
-    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false).size());
+    TEST_ASSERT_EQUAL(0, buildGeneric(usages, false).size());
 }
 
 void test_mute_not_listed_when_field_cannot_hold_3() {
@@ -193,21 +228,21 @@ void test_mute_not_listed_when_field_cannot_hold_3() {
     std::vector<HIDUsageDef> output = { beeperField(8, 0x02, 1, 3) };
     std::vector<HIDUsageDef> range2 = { beeperField(8, 0x03, 1, 2) };
     const char* expected = "beeper.enable beeper.disable beeper.toggle";
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(one_bit, true)).c_str());
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(output, true)).c_str());
-    TEST_ASSERT_EQUAL_STRING(expected, names(CommandCatalog::build(range2, true)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(one_bit, true)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(output, true)).c_str());
+    TEST_ASSERT_EQUAL_STRING(expected, names(buildGeneric(range2, true)).c_str());
 }
 
 void test_resolve_mute_writes_3_on_active_beeper() {
     std::vector<HIDUsageDef> usages = { beeperField(8, 0x03, 0, 0) };  // no declared range
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("beeper.mute", usages, def, value));
     TEST_ASSERT_EQUAL_UINT32(3, value);
     TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", def.path);
 
     std::vector<HIDUsageDef> one_bit = { beeperField(1, 0x03, 0, 1) };
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", one_bit, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric("beeper.mute", one_bit, def, value));
 }
 
 // APC Smart-UPS (#78): the beeper path is declared as Input first, then as Feature.
@@ -221,21 +256,17 @@ void test_active_beeper_prefers_feature_over_input() {
     feature.bit_offset = 8;
     std::vector<HIDUsageDef> usages = { input, feature };
 
-    const HIDUsageDef* b = CommandCatalog::activeBeeper(usages);
-    TEST_ASSERT_NOT_NULL(b);
-    TEST_ASSERT_EQUAL_UINT8(0x03, b->report_type);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
-                             names(CommandCatalog::build(usages, true)).c_str());
+                             names(buildGeneric(usages, true)).c_str());
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", usages, def, value));
+    TEST_ASSERT_TRUE(resolveGeneric("beeper.mute", usages, def, value));
     TEST_ASSERT_EQUAL_UINT8(0x03, def.report_type);
     TEST_ASSERT_EQUAL_UINT16(8, def.bit_offset);
 
-    // Input only: still the active beeper (beeper status), but nothing to mute
+    // Input only: nothing to mute
     std::vector<HIDUsageDef> input_only = { input };
-    TEST_ASSERT_EQUAL_PTR(&input_only[0], CommandCatalog::activeBeeper(input_only));
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", input_only, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric("beeper.mute", input_only, def, value));
 }
 
 // --- US-058: load and shutdown sequences ---
@@ -257,7 +288,7 @@ static std::vector<HIDUsageDef> allDelays() {
 }
 
 // Steps as "path=value" joined by spaces
-static std::string stepsStr(const std::vector<CommandCatalog::WriteStep>& steps) {
+static std::string stepsStr(const std::vector<HidControl::WriteStep>& steps) {
     std::string out;
     for (const auto& s : steps) {
         if (!out.empty()) out += " ";
@@ -268,9 +299,9 @@ static std::string stepsStr(const std::vector<CommandCatalog::WriteStep>& steps)
 }
 
 static std::string resolve(const char* name, const char* param, const std::vector<HIDUsageDef>& usages,
-                           CommandCatalog::StepsResult expected = CommandCatalog::StepsResult::OK) {
-    std::vector<CommandCatalog::WriteStep> steps;
-    CommandCatalog::StepsResult r = CommandCatalog::resolveShutdownSteps(name, param, usages, 20, 30, steps);
+                           HidControl::StepsResult expected = HidControl::StepsResult::OK) {
+    std::vector<HidControl::WriteStep> steps;
+    HidControl::StepsResult r = stepsGeneric(name, param, usages, 20, 30, steps);
     TEST_ASSERT_EQUAL_MESSAGE((int)expected, (int)r, name);
     return stepsStr(steps);
 }
@@ -302,9 +333,9 @@ void test_steps_shutdown_commands() {
 
 void test_steps_use_given_delays() {
     auto u = allDelays();
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", nullptr, u, 60, 120, steps));
+    std::vector<HidControl::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)stepsGeneric("shutdown.return", nullptr, u, 60, 120, steps));
     TEST_ASSERT_EQUAL_STRING(ST "=120 " SD "=60", stepsStr(steps).c_str());
 }
 
@@ -339,26 +370,27 @@ void test_steps_output_and_apc_paths() {
 
     // INPUT-only fields are not written
     std::vector<HIDUsageDef> input = { mk(SD, 0x00840057, 0x01) };
-    TEST_ASSERT_EQUAL_STRING("", resolve("load.off", nullptr, input, CommandCatalog::StepsResult::NOT_SUPPORTED).c_str());
+    TEST_ASSERT_EQUAL_STRING("", resolve("load.off", nullptr, input, HidControl::StepsResult::NOT_SUPPORTED).c_str());
 }
 
 // apc-hid.c: Back-UPS CS, shutdown.return = 1 on UPS.Output.APCDelayBeforeReboot
 void test_steps_apc_cs_return_quirk() {
-    std::vector<HIDUsageDef> named = allDelays();
-    named.push_back(mk("UPS.Output.APCDelayBeforeReboot", 0xff86007c, 0x03));
-    TEST_ASSERT_EQUAL_STRING("UPS.Output.APCDelayBeforeReboot=1", resolve("shutdown.return", nullptr, named).c_str());
+    // The row of apc-hid.c:461 comes before the composite command, also with both delays
+    std::vector<HIDUsageDef> with_delays = allDelays();
+    with_delays.push_back(mk("UPS.Output.0xFF86007C", 0xff86007c, 0x03));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", resolve("shutdown.return", nullptr, with_delays).c_str());
 
-    // HIDParser names the vendor usage by code
+    // HIDParser names the vendor usage by code (NUTUsages.h has no APC names): the row's path
     std::vector<HIDUsageDef> by_code = { mk("UPS.Output.0xFF86007C", 0xff86007c, 0x03) };
     TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", resolve("shutdown.return", nullptr, by_code).c_str());
     // apc-hid.c uses that field for shutdown.return only: never for shutdown.reboot
-    resolve("shutdown.reboot", nullptr, by_code, CommandCatalog::StepsResult::NOT_SUPPORTED);
+    resolve("shutdown.reboot", nullptr, by_code, HidControl::StepsResult::NOT_SUPPORTED);
 
     // Deeper than Output, or INPUT: no quirk
     std::vector<HIDUsageDef> deeper = { mk("UPS.Output.0xFF860005.0xFF86007C", 0xff86007c, 0x03) };
-    resolve("shutdown.return", nullptr, deeper, CommandCatalog::StepsResult::NOT_SUPPORTED);
+    resolve("shutdown.return", nullptr, deeper, HidControl::StepsResult::NOT_SUPPORTED);
     std::vector<HIDUsageDef> input = { mk("UPS.Output.0xFF86007C", 0xff86007c, 0x01) };
-    resolve("shutdown.return", nullptr, input, CommandCatalog::StepsResult::NOT_SUPPORTED);
+    resolve("shutdown.return", nullptr, input, HidControl::StepsResult::NOT_SUPPORTED);
 }
 
 // apc-hid.c: UPS.Output.APCDelayBeforeReboot serves shutdown.return = 1 only; shutdown.reboot
@@ -366,11 +398,8 @@ void test_steps_apc_cs_return_quirk() {
 void test_reboot_group_excludes_apc_cs_field() {
     // CS field alone: no shutdown.reboot, neither in LIST CMD nor as a sequence
     std::vector<HIDUsageDef> cs_only = { mk("UPS.Output.0xFF86007C", 0xff86007c, 0x03) };
-    TEST_ASSERT_NULL(CommandCatalog::rebootField(cs_only));
-    TEST_ASSERT_EQUAL(std::string::npos, names(CommandCatalog::build(cs_only, false)).find("shutdown.reboot"));
-    std::vector<HIDUsageDef> named_cs = { mk("UPS.Output.APCDelayBeforeReboot", 0xff86007c, 0x03) };
-    TEST_ASSERT_NULL(CommandCatalog::rebootField(named_cs));
-    resolve("shutdown.reboot", nullptr, named_cs, CommandCatalog::StepsResult::NOT_SUPPORTED);
+    TEST_ASSERT_EQUAL(std::string::npos, names(buildGeneric(cs_only, false)).find("shutdown.reboot"));
+    resolve("shutdown.reboot", nullptr, cs_only, HidControl::StepsResult::NOT_SUPPORTED);
 
     // With the APCGeneralCollection field, that one is the reboot field even after the CS one
     std::vector<HIDUsageDef> both = {
@@ -379,7 +408,9 @@ void test_reboot_group_excludes_apc_cs_field() {
     };
     TEST_ASSERT_EQUAL_STRING("UPS.0xFF860005.0xFF86007C=10", resolve("shutdown.reboot", nullptr, both).c_str());
     TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", resolve("shutdown.return", nullptr, both).c_str());
-    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(CommandCatalog::build(both, false)).c_str());
+    // shutdown.return from the Back-UPS CS row of its own (apc-hid.c:461), as on APCDriver (US-076):
+    // before US-079 the generic groups offered it only with both delays
+    TEST_ASSERT_EQUAL_STRING("shutdown.return shutdown.reboot shutdown.default", names(buildGeneric(both, false)).c_str());
 
     // Standard DelayBeforeReboot next to the CS field (Back-UPS CS 500)
     std::vector<HIDUsageDef> standard = {
@@ -391,7 +422,7 @@ void test_reboot_group_excludes_apc_cs_field() {
 
 void test_steps_invalid_param() {
     auto u = allDelays();
-    const CommandCatalog::StepsResult inv = CommandCatalog::StepsResult::INVALID_ARGUMENT;
+    const HidControl::StepsResult inv = HidControl::StepsResult::INVALID_ARGUMENT;
     TEST_ASSERT_EQUAL_STRING("", resolve("load.off.delay", "abc", u, inv).c_str());
     TEST_ASSERT_EQUAL_STRING("", resolve("load.off.delay", "-5", u, inv).c_str());
     TEST_ASSERT_EQUAL_STRING("", resolve("load.off.delay", "12x", u, inv).c_str());
@@ -410,7 +441,7 @@ void test_steps_invalid_param() {
 
 void test_steps_missing_usage() {
     std::vector<HIDUsageDef> only_sd = { mk(SD, 0x00840057, 0x03) };
-    const CommandCatalog::StepsResult ns = CommandCatalog::StepsResult::NOT_SUPPORTED;
+    const HidControl::StepsResult ns = HidControl::StepsResult::NOT_SUPPORTED;
     resolve("load.on", nullptr, only_sd, ns);
     resolve("load.on.delay", "5", only_sd, ns);
     resolve("shutdown.return", nullptr, only_sd, ns);
@@ -424,7 +455,7 @@ void test_steps_missing_usage() {
 // A value that does not fit the field would be truncated by writeField: on 16 bits
 // 65536 would become 0 (immediate shutdown). Range not declared here.
 void test_steps_value_must_fit_field() {
-    const CommandCatalog::StepsResult inv = CommandCatalog::StepsResult::INVALID_ARGUMENT;
+    const HidControl::StepsResult inv = HidControl::StepsResult::INVALID_ARGUMENT;
     std::vector<HIDUsageDef> u16 = { field(SD, 0x00840057, 0, 0) };
     TEST_ASSERT_EQUAL_STRING(SD "=65535", resolve("load.off.delay", "65535", u16).c_str());
     TEST_ASSERT_EQUAL_STRING("", resolve("load.off.delay", "65536", u16, inv).c_str());
@@ -440,29 +471,29 @@ void test_steps_value_must_fit_field() {
 // an explicit parameter still works
 void test_steps_without_configured_delays() {
     auto u = allDelays();
-    const CommandCatalog::StepsResult ns = CommandCatalog::StepsResult::NOT_SUPPORTED;
-    const int32_t none = CommandCatalog::kNoDelay;
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)ns, (int)CommandCatalog::resolveShutdownSteps("load.off.delay", nullptr, u, none, none, steps));
-    TEST_ASSERT_EQUAL((int)ns, (int)CommandCatalog::resolveShutdownSteps("load.on.delay", nullptr, u, none, none, steps));
-    TEST_ASSERT_EQUAL((int)ns, (int)CommandCatalog::resolveShutdownSteps("shutdown.return", nullptr, u, none, none, steps));
-    TEST_ASSERT_EQUAL((int)ns, (int)CommandCatalog::resolveShutdownSteps("shutdown.stayoff", nullptr, u, none, none, steps));
+    const HidControl::StepsResult ns = HidControl::StepsResult::NOT_SUPPORTED;
+    const int32_t none = HidControl::kNoDelay;
+    std::vector<HidControl::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)ns, (int)stepsGeneric("load.off.delay", nullptr, u, none, none, steps));
+    TEST_ASSERT_EQUAL((int)ns, (int)stepsGeneric("load.on.delay", nullptr, u, none, none, steps));
+    TEST_ASSERT_EQUAL((int)ns, (int)stepsGeneric("shutdown.return", nullptr, u, none, none, steps));
+    TEST_ASSERT_EQUAL((int)ns, (int)stepsGeneric("shutdown.stayoff", nullptr, u, none, none, steps));
     TEST_ASSERT_EQUAL(0, steps.size());
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-                      (int)CommandCatalog::resolveShutdownSteps("load.off.delay", "45", u, none, none, steps));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+                      (int)stepsGeneric("load.off.delay", "45", u, none, none, steps));
     TEST_ASSERT_EQUAL_STRING(SD "=45", stepsStr(steps).c_str());
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-                      (int)CommandCatalog::resolveShutdownSteps("load.off", nullptr, u, none, none, steps));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+                      (int)stepsGeneric("load.off", nullptr, u, none, none, steps));
 }
 
 void test_shutdown_default_availability() {
     std::vector<HIDUsageDef> reboot_only = { mk(RB, 0x00840055, 0x03) };
     TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default",
-                             names(CommandCatalog::build(reboot_only, false)).c_str());
+                             names(buildGeneric(reboot_only, false)).c_str());
     std::vector<HIDUsageDef> none = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
     TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
-                             names(CommandCatalog::build(none, false)).c_str());
-    const UPSCommandInfo* c = CommandCatalog::find("shutdown.default");
+                             names(buildGeneric(none, false)).c_str());
+    const UPSCommandInfo* c = UpsCommands::find("shutdown.default");
     TEST_ASSERT_NOT_NULL(c);
     TEST_ASSERT_TRUE(c->destructive);
     TEST_ASSERT_EQUAL_STRING("Run the driver-defined UPS shutdown sequence (as opposed to user-configured 'sdcommands')",
@@ -472,76 +503,70 @@ void test_shutdown_default_availability() {
 void test_build_without_shutdown_commands() {
     std::vector<HIDUsageDef> usages = allDelays();
     usages.push_back(mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03));
-    usages.push_back(mk("UPS.PowerSummary.ff860072", 0xff860072, 0x03));
+    // The rows match the path, as HIDParser names an unnamed usage ("0x%08X"), not the code
+    usages.push_back(mk("UPS.PowerSummary.0xFF860072", 0xff860072, 0x03));
+    usages.push_back(beeperField(1, 0x03, 0, 1)); // US-079: the beeper rows need the usage
     TEST_ASSERT_EQUAL_STRING(
         "beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep "
         "test.battery.stop test.panel.start test.panel.stop",
-        names(CommandCatalog::build(usages, true, false)).c_str());
+        names(buildGeneric(usages, true, false)).c_str());
 }
 
-// US-097: commandAllowList() of the driver limits the catalog to its upstream subdriver
-void test_plain_battery_test_needs_allow_list() {
+// The plain test.battery.start is a row of liebert-hid.c only (US-097, US-106): the generic
+// table offers quick/deep/stop
+void test_plain_battery_test_only_from_its_row() {
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
     TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
-                             names(CommandCatalog::build(usages, false)).c_str());
-    const UPSCommandInfo* c = CommandCatalog::find("test.battery.start");
+                             names(buildGeneric(usages, false)).c_str());
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::liebertHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("test.battery.start", names(HidControl::buildCommands(usages, false, true, true, t, n)).c_str());
+    const UPSCommandInfo* c = UpsCommands::find("test.battery.start");
     TEST_ASSERT_NOT_NULL(c);
     TEST_ASSERT_EQUAL_STRING("Start a battery test", c->description);
     TEST_ASSERT_FALSE(c->destructive);
-}
-
-void test_allow_list_keeps_only_named_commands() {
-    std::vector<HIDUsageDef> usages = allDelays();
-    usages.push_back(mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03));
-    static const char* const allow[] = { "load.off", "test.battery.start", "beeper.toggle", nullptr };
-    TEST_ASSERT_EQUAL_STRING("beeper.toggle test.battery.start load.off",
-                             names(CommandCatalog::build(usages, true, true, true, allow)).c_str());
-}
-
-void test_allow_list_does_not_add_unsupported_commands() {
-    // Named but without a Test usage, a beeper or a shutdown delay in the descriptor
-    std::vector<HIDUsageDef> usages;
-    static const char* const allow[] = { "test.battery.start", "beeper.toggle", "load.off", nullptr };
-    TEST_ASSERT_EQUAL(0, CommandCatalog::build(usages, false, true, true, allow).size());
 }
 
 void test_resolve_plain_battery_test_writes_1() {
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x03) };
     HIDUsageDef def;
     uint32_t value = 99;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start", usages, def, value));
+    TEST_ASSERT_FALSE(resolveGeneric("test.battery.start", usages, def, value)); // no generic row
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::liebertHid2Nut(n); // liebert-hid.c:137
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start", usages, def, value, t, n));
     TEST_ASSERT_EQUAL_UINT32(1, value);
     TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.Test", def.path);
 }
 
 void test_apply_default_delays() {
     UPSData d;
-    CommandCatalog::applyDefaultDelays(d, allDelays(), 20, 30, true);
+    NutTable::applyDefaultDelays(d, allDelays(), 20, 30, true, NutTable::genericDelayPaths());
     TEST_ASSERT_EQUAL_STRING("20", d.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", d.get("ups.delay.start").c_str());
 
     UPSData cps;
-    CommandCatalog::applyDefaultDelays(cps, allDelays(), 60, 120, true);
+    NutTable::applyDefaultDelays(cps, allDelays(), 60, 120, true, NutTable::genericDelayPaths());
     TEST_ASSERT_EQUAL_STRING("60", cps.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("120", cps.get("ups.delay.start").c_str());
 
     UPSData only_sd;
-    CommandCatalog::applyDefaultDelays(only_sd, { mk(SD, 0x00840057, 0x03) }, 20, 30, true);
+    NutTable::applyDefaultDelays(only_sd, { mk(SD, 0x00840057, 0x03) }, 20, 30, true, NutTable::genericDelayPaths());
     TEST_ASSERT_TRUE(only_sd.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(only_sd.hasKey("ups.delay.start"));
 
     UPSData only_st;
-    CommandCatalog::applyDefaultDelays(only_st, { mk(ST, 0x00840056, 0x03) }, 20, 30, true);
+    NutTable::applyDefaultDelays(only_st, { mk(ST, 0x00840056, 0x03) }, 20, 30, true, NutTable::genericDelayPaths());
     TEST_ASSERT_FALSE(only_st.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_TRUE(only_st.hasKey("ups.delay.start"));
 
     UPSData disabled;
-    CommandCatalog::applyDefaultDelays(disabled, allDelays(), 20, 30, false);
+    NutTable::applyDefaultDelays(disabled, allDelays(), 20, 30, false, NutTable::genericDelayPaths());
     TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.start"));
 
     UPSData none;
-    CommandCatalog::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true);
+    NutTable::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true, NutTable::genericDelayPaths());
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.start"));
 
@@ -549,42 +574,44 @@ void test_apply_default_delays() {
     // HIDGetItemData(); the commands still need a FEATURE field to write
     UPSData input_only;
     std::vector<HIDUsageDef> input = { mk(SD, 0x00840057, 0x01) };
-    CommandCatalog::applyDefaultDelays(input_only, input, 20, 30, true);
+    NutTable::applyDefaultDelays(input_only, input, 20, 30, true, NutTable::genericDelayPaths());
     TEST_ASSERT_EQUAL_STRING("20", input_only.get("ups.delay.shutdown").c_str());
-    TEST_ASSERT_FALSE(CommandCatalog::hasFeature(input, CommandCatalog::kShutdown));
+    size_t n_generic;
+    const NutTable::HidInfo* generic = NutTable::genericHid2Nut(n_generic);
+    TEST_ASSERT_NULL(HidControl::cmdField(generic, n_generic, input, "load.off.delay"));
 
     // A vendor path for ups.delay.shutdown (Powercom PCMDelayBeforeShutdown, 0x00ff0057)
     UPSData vendor;
-    CommandCatalog::applyDefaultDelays(vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true,
+    NutTable::applyDefaultDelays(vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true,
                                        NutTable::powercomDelayPaths());
     TEST_ASSERT_EQUAL_STRING("20", vendor.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_FALSE(vendor.hasKey("ups.delay.start"));
     UPSData no_vendor;
-    CommandCatalog::applyDefaultDelays(no_vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true);
+    NutTable::applyDefaultDelays(no_vendor, { mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) }, 20, 60, true, NutTable::genericDelayPaths());
     TEST_ASSERT_FALSE(no_vendor.hasKey("ups.delay.shutdown"));
 
     // Each subdriver has its own paths, as usbhid-ups: cps-hid.c:386-387 declares only
     // UPS.Output.*, mge-hid.c:2066-2067 only UPS.PowerSummary.*
     std::vector<HIDUsageDef> summary = { mk(SD, 0x00840057, 0x03), mk(ST, 0x00840056, 0x03) };
     UPSData cps_summary;
-    CommandCatalog::applyDefaultDelays(cps_summary, summary, 60, 120, true, NutTable::cpsDelayPaths());
+    NutTable::applyDefaultDelays(cps_summary, summary, 60, 120, true, NutTable::cpsDelayPaths());
     TEST_ASSERT_FALSE(cps_summary.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(cps_summary.hasKey("ups.delay.start"));
     UPSData mge_summary;
-    CommandCatalog::applyDefaultDelays(mge_summary, summary, 20, 30, true, NutTable::mgeDelayPaths());
+    NutTable::applyDefaultDelays(mge_summary, summary, 20, 30, true, NutTable::mgeDelayPaths());
     TEST_ASSERT_EQUAL_STRING("20", mge_summary.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", mge_summary.get("ups.delay.start").c_str());
     std::vector<HIDUsageDef> output = { mk("UPS.Output.DelayBeforeShutdown", 0x00840057, 0x03) };
     UPSData mge_output;
-    CommandCatalog::applyDefaultDelays(mge_output, output, 20, 30, true, NutTable::mgeDelayPaths());
+    NutTable::applyDefaultDelays(mge_output, output, 20, 30, true, NutTable::mgeDelayPaths());
     TEST_ASSERT_FALSE(mge_output.hasKey("ups.delay.shutdown"));
     // apc-hid.c:367-368: the APC codes only under APCGeneralCollection (0xff860005)
     UPSData apc_general;
-    CommandCatalog::applyDefaultDelays(apc_general, { mk("UPS.0xFF860005.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
+    NutTable::applyDefaultDelays(apc_general, { mk("UPS.0xFF860005.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
                                        NutTable::apcDelayPaths());
     TEST_ASSERT_TRUE(apc_general.hasKey("ups.delay.shutdown"));
     UPSData apc_elsewhere;
-    CommandCatalog::applyDefaultDelays(apc_elsewhere, { mk("UPS.Output.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
+    NutTable::applyDefaultDelays(apc_elsewhere, { mk("UPS.Output.0xFF86007D", 0xff86007d, 0x03) }, 20, 30, true,
                                        NutTable::apcDelayPaths());
     TEST_ASSERT_FALSE(apc_elsewhere.hasKey("ups.delay.shutdown"));
 }
@@ -659,12 +686,12 @@ void test_apply_default_delays_with_saved_values() {
     SavedVars saved;
     saved.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
     UPSData d;
-    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
     TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", d.get("ups.delay.start").c_str());
 
     // Next string descriptor: the host calls it again, the saved value stays
-    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
     TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", d.get("ups.delay.start").c_str());
 
@@ -672,7 +699,7 @@ void test_apply_default_delays_with_saved_values() {
     SavedVars zero;
     zero.push_back(std::make_pair(String("ups.delay.start"), String("0")));
     UPSData z;
-    CommandCatalog::applyDefaultDelays(z, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &zero);
+    NutTable::applyDefaultDelays(z, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &zero);
     TEST_ASSERT_EQUAL_STRING("20", z.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("0", z.get("ups.delay.start").c_str());
 
@@ -682,7 +709,7 @@ void test_apply_default_delays_with_saved_values() {
         SavedVars bad;
         bad.push_back(std::make_pair(String("ups.delay.shutdown"), String(invalid[i])));
         UPSData b;
-        CommandCatalog::applyDefaultDelays(b, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &bad);
+        NutTable::applyDefaultDelays(b, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &bad);
         TEST_ASSERT_EQUAL_STRING_MESSAGE("20", b.get("ups.delay.shutdown").c_str(), invalid[i]);
         TEST_ASSERT_EQUAL_STRING_MESSAGE("30", b.get("ups.delay.start").c_str(), invalid[i]);
     }
@@ -692,7 +719,7 @@ void test_apply_default_delays_with_saved_values() {
     other.push_back(std::make_pair(String("outlet.1.desc"), String("90")));
     other.push_back(std::make_pair(String("UPS.DELAY.SHUTDOWN"), String("90")));
     UPSData o;
-    CommandCatalog::applyDefaultDelays(o, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &other);
+    NutTable::applyDefaultDelays(o, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &other);
     TEST_ASSERT_EQUAL_STRING("20", o.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", o.get("ups.delay.start").c_str());
     TEST_ASSERT_FALSE(o.hasKey("outlet.1.desc"));
@@ -705,27 +732,27 @@ void test_saved_delays_only_for_present_variables() {
 
     // Driver without delay variables (delay_vars false): no key at all
     UPSData disabled;
-    CommandCatalog::applyDefaultDelays(disabled, allDelays(), 20, 30, false, nullptr, &saved);
+    NutTable::applyDefaultDelays(disabled, allDelays(), 20, 30, false, NutTable::genericDelayPaths(), &saved);
     TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(disabled.hasKey("ups.delay.start"));
 
     // Device without DelayBeforeStartup: ups.delay.start does not exist for it
     UPSData only_sd;
-    CommandCatalog::applyDefaultDelays(only_sd, { mk(SD, 0x00840057, 0x03) }, 20, 30, true,
+    NutTable::applyDefaultDelays(only_sd, { mk(SD, 0x00840057, 0x03) }, 20, 30, true,
                                        NutTable::mgeDelayPaths(), &saved);
     TEST_ASSERT_EQUAL_STRING("60", only_sd.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_FALSE(only_sd.hasKey("ups.delay.start"));
 
     // No delay path at all
     UPSData none;
-    CommandCatalog::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true, nullptr, &saved);
+    NutTable::applyDefaultDelays(none, { mk(RB, 0x00840055, 0x03) }, 20, 30, true, NutTable::genericDelayPaths(), &saved);
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.shutdown"));
     TEST_ASSERT_FALSE(none.hasKey("ups.delay.start"));
 
     // Empty saved list: the driver defaults, as without the parameter
     SavedVars empty;
     UPSData dflt;
-    CommandCatalog::applyDefaultDelays(dflt, allDelays(), 20, 30, true, nullptr, &empty);
+    NutTable::applyDefaultDelays(dflt, allDelays(), 20, 30, true, NutTable::genericDelayPaths(), &empty);
     TEST_ASSERT_EQUAL_STRING("20", dflt.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("30", dflt.get("ups.delay.start").c_str());
 }
@@ -771,14 +798,14 @@ void test_default_delays_after_reset() {
     saved.push_back(std::make_pair(String("ups.delay.shutdown"), String("60")));
     saved.push_back(std::make_pair(String("ups.delay.start"), String("90")));
     UPSData d;
-    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
     TEST_ASSERT_EQUAL_STRING("60", d.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("90", d.get("ups.delay.start").c_str());
 
     // Reset of ups.delay.shutdown: the same UPSData gets the driver default again, the
     // other saved delay stays
     TEST_ASSERT_TRUE(DriverVarStore::remove(saved, "ups.delay.shutdown"));
-    CommandCatalog::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDefaultDelays(d, eaton, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
     TEST_ASSERT_EQUAL_STRING("20", d.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_EQUAL_STRING("90", d.get("ups.delay.start").c_str());
 }
@@ -804,15 +831,15 @@ static std::vector<HIDUsageDef> fixtureUsages(const char* file, HIDParser& parse
 
 // The commands, steps and values of a table (mgeHid2Nut by default) are those of the
 // catalog without a table, with the driver's configured delays
-static void checkSameCommandsAsCatalog(const char* file, const NutTable::HidInfo* (*table)(size_t&) = NutTable::mgeHid2Nut,
+static void checkSameCommandsAsGeneric(const char* file, const NutTable::HidInfo* (*table)(size_t&) = NutTable::mgeHid2Nut,
                                        int32_t off_delay = 20, int32_t on_delay = 30) {
     HIDParser parser;
     std::vector<HIDUsageDef> u = fixtureUsages(file, parser);
     size_t n;
     const NutTable::HidInfo* mge = table(n);
     for (bool beeper : { true, false }) {
-        TEST_ASSERT_EQUAL_STRING_MESSAGE(names(CommandCatalog::build(u, beeper)).c_str(),
-            names(CommandCatalog::build(u, beeper, true, true, nullptr, mge, n)).c_str(), file);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(names(buildGeneric(u, beeper)).c_str(),
+            names(HidControl::buildCommands(u, beeper, true, true, mge, n)).c_str(), file);
     }
     // Same writes for every load / shutdown command, with and without a parameter
     static const char* const cmds[] = { "load.off", "load.on", "load.off.delay", "load.on.delay", "shutdown.stop",
@@ -821,10 +848,10 @@ static void checkSameCommandsAsCatalog(const char* file, const NutTable::HidInfo
         for (const char* param : { (const char*)nullptr, "45" }) {
             // A shutdown.return row takes the parameter (instcmd(), US-076); the table-less
             // Back-UPS CS case ignored it: compared without a parameter only
-            if (param && strcmp(c, "shutdown.return") == 0 && CommandCatalog::cmdField(mge, n, u, c)) continue;
-            std::vector<CommandCatalog::WriteStep> legacy, table_steps;
-            auto r1 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, legacy);
-            auto r2 = CommandCatalog::resolveShutdownSteps(c, param, u, off_delay, on_delay, table_steps, mge, n);
+            if (param && strcmp(c, "shutdown.return") == 0 && HidControl::cmdField(mge, n, u, c)) continue;
+            std::vector<HidControl::WriteStep> legacy, table_steps;
+            auto r1 = stepsGeneric(c, param, u, off_delay, on_delay, legacy);
+            auto r2 = HidControl::resolveShutdownSteps(c, param, u, off_delay, on_delay, table_steps, mge, n);
             TEST_ASSERT_EQUAL_MESSAGE((int)r1, (int)r2, c);
             TEST_ASSERT_EQUAL_STRING_MESSAGE(stepsStr(legacy).c_str(), stepsStr(table_steps).c_str(), c);
         }
@@ -832,11 +859,11 @@ static void checkSameCommandsAsCatalog(const char* file, const NutTable::HidInfo
 }
 
 void test_mge_table_gives_same_commands_on_eaton_3s() {
-    checkSameCommandsAsCatalog("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json");
+    checkSameCommandsAsGeneric("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json");
 }
 
 void test_mge_table_gives_same_commands_on_eaton_5p() {
-    checkSameCommandsAsCatalog("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json");
+    checkSameCommandsAsGeneric("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json");
 }
 
 void test_mge_table_mute_on_first_row_field() {
@@ -847,17 +874,17 @@ void test_mge_table_mute_on_first_row_field() {
     const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, mge, n));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("beeper.mute", u, def, value, mge, n));
     TEST_ASSERT_EQUAL_STRING("UPS.BatterySystem.Battery.AudibleAlarmControl", def.path);
     TEST_ASSERT_EQUAL(3, value);
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.enable", u, def, value, mge, n)); // via setBeeperField
+    TEST_ASSERT_FALSE(HidControl::resolveWrite("beeper.enable", u, def, value, mge, n)); // via setBeeperField
 
     // A 1-bit beeper cannot hold 3: no beeper.mute
     HIDUsageDef bit = mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03);
     bit.bit_size = 1;
     std::vector<HIDUsageDef> one = { bit };
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle",
-                             names(CommandCatalog::build(one, true, true, true, nullptr, mge, n)).c_str());
+                             names(HidControl::buildCommands(one, true, true, true, mge, n)).c_str());
 }
 
 void test_mge_table_commands_outside_catalog_not_listed() {
@@ -874,9 +901,9 @@ void test_mge_table_commands_outside_catalog_not_listed() {
     size_t n;
     const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
-                             names(CommandCatalog::build(u, true, true, true, nullptr, mge, n)).c_str());
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(mge, n, u, "outlet.1.load.off"));
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(mge, n, u, "experimental.ecomode.start"));
+                             names(HidControl::buildCommands(u, true, true, true, mge, n)).c_str());
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(mge, n, u, "outlet.1.load.off"));
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(mge, n, u, "experimental.ecomode.start"));
 }
 
 void test_mge_table_reboot_from_row() {
@@ -885,13 +912,13 @@ void test_mge_table_reboot_from_row() {
     size_t n;
     const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default",
-                             names(CommandCatalog::build(u, false, true, true, nullptr, mge, n)).c_str());
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, mge, n));
+                             names(HidControl::buildCommands(u, false, true, true, mge, n)).c_str());
+    std::vector<HidControl::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, mge, n));
     TEST_ASSERT_EQUAL_STRING(RB "=10", stepsStr(steps).c_str());
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", "30", u, 20, 30, steps, mge, n));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.reboot", "30", u, 20, 30, steps, mge, n));
     TEST_ASSERT_EQUAL_STRING(RB "=30", stepsStr(steps).c_str());
 }
 
@@ -905,10 +932,10 @@ void test_mge_table_mute_respects_declared_range() {
     size_t n;
     const NutTable::HidInfo* mge = NutTable::mgeHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle",
-                             names(CommandCatalog::build(u, true, true, true, nullptr, mge, n)).c_str());
+                             names(HidControl::buildCommands(u, true, true, true, mge, n)).c_str());
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_FALSE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, mge, n));
+    TEST_ASSERT_FALSE(HidControl::resolveWrite("beeper.mute", u, def, value, mge, n));
 }
 
 // --- Commands from the cps-hid table (US-075) ---
@@ -923,7 +950,7 @@ void test_cps_table_gives_same_commands_on_fixtures() {
         "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
         "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     };
-    for (const char* f : files) checkSameCommandsAsCatalog(f, NutTable::cpsHid2Nut, 60, 120);
+    for (const char* f : files) checkSameCommandsAsGeneric(f, NutTable::cpsHid2Nut, 60, 120);
 }
 
 void test_cps_table_write_values() {
@@ -934,10 +961,10 @@ void test_cps_table_write_values() {
     const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", u, def, value, cps, n));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start.deep", u, def, value, cps, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.Test", def.path);
     TEST_ASSERT_EQUAL(2, value);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("beeper.mute", u, def, value, cps, n));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("beeper.mute", u, def, value, cps, n));
     TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", def.path);
     TEST_ASSERT_EQUAL(3, value);
 }
@@ -948,8 +975,8 @@ void test_cps_table_beeper_on_off_not_listed() {
     size_t n;
     const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
-                             names(CommandCatalog::build(u, true, true, true, nullptr, cps, n)).c_str());
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(cps, n, u, "beeper.on"));
+                             names(HidControl::buildCommands(u, true, true, true, cps, n)).c_str());
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(cps, n, u, "beeper.on"));
 }
 
 void test_cps_table_reboot_only_from_output() {
@@ -958,17 +985,17 @@ void test_cps_table_reboot_only_from_output() {
     size_t n;
     const NutTable::HidInfo* cps = NutTable::cpsHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default",
-                             names(CommandCatalog::build(out, false, true, true, nullptr, cps, n)).c_str());
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, out, 60, 120, steps, cps, n));
+                             names(HidControl::buildCommands(out, false, true, true, cps, n)).c_str());
+    std::vector<HidControl::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.reboot", nullptr, out, 60, 120, steps, cps, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.DelayBeforeReboot=10", stepsStr(steps).c_str());
     // Difference from the catalog without a table (US-075): cps-hid has no row on
     // PowerSummary.DelayBeforeReboot, so a CyberPower declaring only that one has no
     // shutdown.reboot, as with usbhid-ups (no CyberPower fixture has it)
     std::vector<HIDUsageDef> ps = { mk(RB, 0x00840055, 0x03) };
-    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(CommandCatalog::build(ps, false)).c_str());
-    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(ps, false, true, true, nullptr, cps, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("shutdown.reboot shutdown.default", names(buildGeneric(ps, false)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(HidControl::buildCommands(ps, false, true, true, cps, n)).c_str());
 }
 
 // --- Commands from the apc-hid table (US-076) ---
@@ -991,7 +1018,7 @@ static const char* const kApcFixtures[] = {
 
 // Same LIST CMD and same load / shutdown writes on every APC fixture (US-058 delays 20/30)
 void test_apc_table_gives_same_commands_on_fixtures() {
-    for (const char* f : kApcFixtures) checkSameCommandsAsCatalog(f, NutTable::apcHid2Nut, 20, 30);
+    for (const char* f : kApcFixtures) checkSameCommandsAsGeneric(f, NutTable::apcHid2Nut, 20, 30);
 }
 
 // LIST CMD from apc_hid2nut, written by hand from the FEATURE usages of each descriptor and the
@@ -1022,7 +1049,7 @@ void test_apc_table_commands_from_upstream_rows() {
     for (const auto& c : cases) {
         HIDParser parser;
         std::vector<HIDUsageDef> u = fixtureUsages(c.file, parser);
-        TEST_ASSERT_EQUAL_STRING_MESSAGE(c.expected, names(CommandCatalog::build(u, true, true, true, nullptr, apc, n)).c_str(), c.file);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(c.expected, names(HidControl::buildCommands(u, true, true, true, apc, n)).c_str(), c.file);
     }
 }
 
@@ -1034,23 +1061,23 @@ void test_apc_cs500_shutdown_return_from_row() {
     std::vector<HIDUsageDef> u = fixtureUsages("test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json", parser);
     size_t n;
     const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", nullptr, u, 20, 30, steps, apc, n));
+    std::vector<HidControl::WriteStep> steps;
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.return", nullptr, u, 20, 30, steps, apc, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=1", stepsStr(steps).c_str());
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", "0", u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.return", "0", u, 20, 30, steps, apc, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C=0", stepsStr(steps).c_str());
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::INVALID_ARGUMENT,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", "abc", u, 20, 30, steps, apc, n));
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::INVALID_ARGUMENT,
+        (int)HidControl::resolveShutdownSteps("shutdown.return", "abc", u, 20, 30, steps, apc, n));
+    TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+        (int)HidControl::resolveShutdownSteps("shutdown.reboot", nullptr, u, 20, 30, steps, apc, n));
     TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeReboot=10", stepsStr(steps).c_str());
 
     // The row alone lists shutdown.return, without the two delays
     std::vector<HIDUsageDef> only = { mk("UPS.Output.0xFF86007C", 0xff86007c, 0x03) };
     TEST_ASSERT_EQUAL_STRING("shutdown.return shutdown.default",
-                             names(CommandCatalog::build(only, false, true, true, nullptr, apc, n)).c_str());
+                             names(HidControl::buildCommands(only, false, true, true, apc, n)).c_str());
 }
 
 void test_apc_panel_test_rows() {
@@ -1062,11 +1089,11 @@ void test_apc_panel_test_rows() {
     for (const char* path : { "UPS.0xFF860072", "UPS.PowerSummary.0xFF860072" }) {
         std::vector<HIDUsageDef> u = { mk(path, 0xff860072, 0x03) };
         TEST_ASSERT_EQUAL_STRING_MESSAGE("test.panel.start test.panel.stop",
-                                         names(CommandCatalog::build(u, false, true, true, nullptr, apc, n)).c_str(), path);
-        TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.start", u, def, value, apc, n));
+                                         names(HidControl::buildCommands(u, false, true, true, apc, n)).c_str(), path);
+        TEST_ASSERT_TRUE(HidControl::resolveWrite("test.panel.start", u, def, value, apc, n));
         TEST_ASSERT_EQUAL_STRING(path, def.path);
         TEST_ASSERT_EQUAL(1, value);
-        TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.panel.stop", u, def, value, apc, n));
+        TEST_ASSERT_TRUE(HidControl::resolveWrite("test.panel.stop", u, def, value, apc, n));
         TEST_ASSERT_EQUAL(0, value);
     }
 }
@@ -1077,7 +1104,7 @@ void test_apc_beeper_on_off_not_listed() {
     size_t n;
     const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle beeper.mute",
-                             names(CommandCatalog::build(u, true, true, true, nullptr, apc, n)).c_str());
+                             names(HidControl::buildCommands(u, true, true, true, apc, n)).c_str());
 }
 
 // --- Commands from the powercom-hid table (US-077) ---
@@ -1093,9 +1120,9 @@ void test_powercom_spd750u_commands_from_table() {
     std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
     size_t n;
     const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
-    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick", names(CommandCatalog::build(u, false, false, true, nullptr, t, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick", names(HidControl::buildCommands(u, false, false, true, t, n)).c_str());
     TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
-                             names(CommandCatalog::build(u, false, false, true)).c_str());
+                             names(buildGeneric(u, false, false, true)).c_str());
 }
 
 void test_powercom_beeper_without_quirk() {
@@ -1106,7 +1133,7 @@ void test_powercom_beeper_without_quirk() {
     size_t n;
     const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle test.battery.start.quick",
-                             names(CommandCatalog::build(u, true, false, true, nullptr, t, n)).c_str());
+                             names(HidControl::buildCommands(u, true, false, true, t, n)).c_str());
 }
 
 void test_powercom_load_shutdown_never_listed() {
@@ -1119,11 +1146,11 @@ void test_powercom_load_shutdown_never_listed() {
                                      mk("UPS.PowerSummary.0x00FF0057", 0x00ff0057, 0x03) };
     size_t n;
     const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, u, "load.on.delay"));
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, u, "shutdown.return"));
-    TEST_ASSERT_NOT_NULL(CommandCatalog::cmdField(t, n, pcm, "load.off"));
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(t, n, u, "load.on.delay"));
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(t, n, u, "shutdown.return"));
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(t, n, pcm, "load.off"));
     for (const auto* usages : { &u, &pcm }) {
-        std::string list = names(CommandCatalog::build(*usages, true, false, true, nullptr, t, n));
+        std::string list = names(HidControl::buildCommands(*usages, true, false, true, t, n));
         TEST_ASSERT_TRUE_MESSAGE(list.find("load.") == std::string::npos, list.c_str());
         TEST_ASSERT_TRUE_MESSAGE(list.find("shutdown.") == std::string::npos, list.c_str());
     }
@@ -1137,7 +1164,7 @@ void test_powercom_quick_test_value() {
     const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", u, def, value, t, n));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start.quick", u, def, value, t, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Battery.Test", def.path);
     TEST_ASSERT_EQUAL(1, value);
 }
@@ -1154,9 +1181,9 @@ void test_ecoflow_commands_from_table() {
                                    mk("UPS.OutletSystem.Outlet.DelayBeforeReboot", 0x00840055, 0x03) };
     size_t n;
     const NutTable::HidInfo* t = NutTable::ecoflowHid2Nut(n);
-    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, false, false, true, nullptr, t, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(HidControl::buildCommands(u, false, false, true, t, n)).c_str());
     TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
-                             names(CommandCatalog::build(u, false, false, true)).c_str());
+                             names(buildGeneric(u, false, false, true)).c_str());
 }
 
 void test_openups_commands_from_table() {
@@ -1166,7 +1193,7 @@ void test_openups_commands_from_table() {
                                    mk("UPS.Battery.Test", 0x00840058, 0x03) };
     size_t n;
     const NutTable::HidInfo* t = NutTable::openupsHid2Nut(n);
-    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, true, false, true, nullptr, t, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(HidControl::buildCommands(u, true, false, true, t, n)).c_str());
 }
 
 // --- beeper.toggle from a row of its own (liebert-hid.c:141, US-106) ---
@@ -1176,12 +1203,12 @@ void test_beeper_toggle_from_its_own_row() {
         { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", NutTable::HU_TYPE_CMD, NutTable::Conv::Number, nullptr, 0 },
     };
     std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03) };
-    TEST_ASSERT_EQUAL_STRING("beeper.toggle", names(CommandCatalog::build(u, true, false, true, nullptr, toggleOnly, 1)).c_str());
+    TEST_ASSERT_EQUAL_STRING("beeper.toggle", names(HidControl::buildCommands(u, true, false, true, toggleOnly, 1)).c_str());
     // Not controllable: nothing
-    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, false, false, true, nullptr, toggleOnly, 1)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(HidControl::buildCommands(u, false, false, true, toggleOnly, 1)).c_str());
     // Without the usage the row is not bound
     std::vector<HIDUsageDef> none;
-    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(none, true, false, true, nullptr, toggleOnly, 1)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", names(HidControl::buildCommands(none, true, false, true, toggleOnly, 1)).c_str());
 }
 
 int main(int argc, char **argv) {
@@ -1192,7 +1219,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_shutdown_and_startup_delays);
     RUN_TEST(test_non_feature_usages_are_ignored);
     RUN_TEST(test_battery_test_paths);
-    RUN_TEST(test_apc_vendor_codes_match_on_any_path);
+    RUN_TEST(test_apc_vendor_fields_match_by_path);
     RUN_TEST(test_delay_before_reboot);
     RUN_TEST(test_destructive_flags);
     RUN_TEST(test_find_known_and_unknown);
@@ -1217,9 +1244,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_steps_without_configured_delays);
     RUN_TEST(test_shutdown_default_availability);
     RUN_TEST(test_build_without_shutdown_commands);
-    RUN_TEST(test_plain_battery_test_needs_allow_list);
-    RUN_TEST(test_allow_list_keeps_only_named_commands);
-    RUN_TEST(test_allow_list_does_not_add_unsupported_commands);
+    RUN_TEST(test_plain_battery_test_only_from_its_row);
     RUN_TEST(test_resolve_plain_battery_test_writes_1);
     RUN_TEST(test_apply_default_delays);
     RUN_TEST(test_driver_var_store_json_round_trip);

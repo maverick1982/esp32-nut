@@ -1156,8 +1156,134 @@ void test_ecoflow_and_openups_publish_only_upstream_names() {
     }
 }
 
+// --- genericHid2Nut() (US-079) ---
+
+// The first value row of genericHid2Nut() with this path
+static const HidInfo& genericRow(const char* path) {
+    size_t n;
+    const HidInfo* t = genericHid2Nut(n);
+    for (size_t i = 0; i < n; i++) {
+        if (!isCommandRow(t[i]) && strcmp(t[i].hidpath, path) == 0) return t[i];
+    }
+    TEST_FAIL_MESSAGE(path);
+    return t[0];
+}
+
+// No RW row (LIST RW of an unknown brand unchanged), no unmapped.*, supported formats, and every
+// published name in nut-names.txt (ADR 0011 rule 2: battery.capacity.full is gone)
+void test_generic_rows_publish_only_standard_names() {
+    size_t n;
+    const HidInfo* t = genericHid2Nut(n);
+    checkSupportedFormats(t, n);
+    std::vector<std::string> lines = readLines("nut_repo/docs/nut-names.txt");
+    for (size_t i = 0; i < n; i++) {
+        const HidInfo& r = t[i];
+        TEST_ASSERT_FALSE_MESSAGE(r.info_flags & ST_FLAG_RW, r.info_type);
+        TEST_ASSERT_TRUE_MESSAGE(strncmp(r.info_type, "unmapped.", 9) != 0, r.info_type);
+        if (isInternalRow(r) || isCommandRow(r)) continue;
+        std::string cell = std::string("| ") + r.info_type + " ";
+        bool found = false;
+        for (const auto& l : lines) {
+            if (l.compare(0, cell.size(), cell) == 0) { found = true; break; }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(found, r.info_type);
+    }
+}
+
+// Every row has its source in the comments right above it: an upstream line or "esp32-nut"
+void test_generic_rows_cite_their_source() {
+    std::vector<std::string> lines = readLines("lib/USBHostUPS/src/NutTable.h");
+    size_t start = 0;
+    while (start < lines.size() && lines[start].find("inline const HidInfo* genericHid2Nut(") == std::string::npos) start++;
+    TEST_ASSERT_TRUE_MESSAGE(start < lines.size(), "genericHid2Nut() not found");
+    int rows = 0;
+    for (size_t i = start + 1; i < lines.size() && lines[i].find("n = sizeof(t)") == std::string::npos; i++) {
+        size_t p = lines[i].find_first_not_of(" \t");
+        if (p == std::string::npos || lines[i].compare(p, 3, "{ \"") != 0) continue;
+        rows++;
+        bool cited = false;
+        for (size_t j = i; j-- > start;) {
+            size_t q = lines[j].find_first_not_of(" \t");
+            if (q == std::string::npos || lines[j].compare(q, 2, "//") != 0) break;
+            if (lines[j].find(".c:") != std::string::npos || lines[j].find("esp32-nut") != std::string::npos) cited = true;
+        }
+        TEST_ASSERT_TRUE_MESSAGE(cited, lines[i].c_str());
+    }
+    size_t n;
+    genericHid2Nut(n);
+    TEST_ASSERT_EQUAL_INT((int)n, rows);
+}
+
+// A standard PDC descriptor binds the expected rows; the first value decides between rows
+// with the same name, as the upstream INIT walk
+void test_generic_rows_bind_a_standard_pdc_descriptor() {
+    std::vector<HIDUsageDef> usages = {
+        mk("UPS.PowerSummary.PresentStatus.ACPresent", 0x008500d0, 1, 1),
+        mk("UPS.PowerSummary.PresentStatus.Charging", 0x00850044, 1, 1),
+        mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 3, 2),
+        mk("UPS.PowerSummary.RunTimeToEmpty", 0x00850068, 3, 2),
+        mk("UPS.Input.Voltage", 0x00840030, 3, 3),
+        mk("UPS.Output.Voltage", 0x00840030, 3, 4),
+        mk("UPS.Output.PercentLoad", 0x00840035, 3, 4),
+        mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 3, 5),
+        mk("UPS.PowerSummary.DelayBeforeStartup", 0x00840056, 3, 5),
+        mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 3, 6),
+        mk("UPS.Battery.Test", 0x00850058, 3, 7),
+    };
+    size_t n;
+    const HidInfo* t = genericHid2Nut(n);
+    std::vector<Bound> b = bind(t, n, usages);
+    std::set<std::string> names;
+    for (const auto& x : b) names.insert(x.info->info_type);
+    const char* const expected[] = {
+        "BOOL", "battery.charge", "battery.runtime", "input.voltage", "output.voltage", "ups.load",
+        "ups.timer.shutdown", "ups.test.result", "load.off.delay", "load.on.delay", "shutdown.stop",
+        "beeper.enable", "beeper.disable", "beeper.mute", "test.battery.start.quick", "test.battery.stop",
+    };
+    for (const char* e : expected) TEST_ASSERT_TRUE_MESSAGE(names.count(e) == 1, e);
+    TEST_ASSERT_EQUAL_INT(0, (int)names.count("ups.beeper.status")); // a hook, not a row
+    TEST_ASSERT_EQUAL_INT(0, (int)names.count("battery.capacity.full"));
+
+    Context ctx;
+    for (size_t i = 0; i < b.size(); i++) {
+        if (strcmp(b[i].info->info_type, "ups.load") == 0) onValue(b, i, 37.0, ctx);
+        if (strcmp(b[i].info->info_type, "BOOL") == 0) onValue(b, i, 1.0, ctx);
+    }
+    for (const auto& x : b) {
+        if (strcmp(x.info->info_type, "ups.load") == 0) {
+            TEST_ASSERT_EQUAL_INT((int)Bound::Role::ACTIVE, (int)x.role);
+            TEST_ASSERT_EQUAL_STRING("37", x.value.c_str());
+        }
+    }
+    TEST_ASSERT_TRUE(ctx.status.set & statusBit(ST_ONLINE));
+}
+
+// The formats of the upstream rows (US-079 differences from the hand-written mappings)
+void test_generic_row_formats() {
+    Context ctx;
+    String out;
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.PowerSummary.Voltage"), 13.65, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("13.7", out.c_str());  // "%.1f", was "%.2f"
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.PowerSummary.RunTimeToEmpty"), 299.6, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("300", out.c_str());   // "%.0f", was (int)
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.BatterySystem.Battery.DesignCapacity"), 25200, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("7.00", out.c_str());  // mge_battery_capacity
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.PowerSummary.RemainingCapacity"), 101, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("101", out.c_str());   // no cut at 100, as upstream
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.PowerSummary.Temperature"), 300.15, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("27.0", out.c_str());
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.PowerSummary.ManufacturerDate"), (double)((26 << 9) | (5 << 5) | 17), ctx, out));
+    TEST_ASSERT_EQUAL_STRING("2006/05/17", out.c_str());
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decode(genericRow("UPS.Output.Test"), 6, ctx, out));
+    TEST_ASSERT_EQUAL_STRING("No test initiated", out.c_str());
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_generic_rows_publish_only_standard_names);
+    RUN_TEST(test_generic_rows_cite_their_source);
+    RUN_TEST(test_generic_rows_bind_a_standard_pdc_descriptor);
+    RUN_TEST(test_generic_row_formats);
     RUN_TEST(test_number_follows_row_format);
     RUN_TEST(test_kelvin_celsius);
     RUN_TEST(test_battery_capacity_as_to_ah);

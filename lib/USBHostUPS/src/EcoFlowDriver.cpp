@@ -24,13 +24,13 @@
  *   (US-054, US-058);
  * - ecoflow_format_mfr (formatDeviceStrings): "EcoFlow" when the device has no manufacturer
  *   string, or an empty one.
- * Standard HID usages without an ecoflow-hid row keep the generic mappings of GenericDriver
+ * Standard HID usages without an ecoflow-hid row keep the genericHid2Nut() rows
  * (ADR 0011 rule 2), for example ups.realpower.nominal from UPS.Flow.ConfigActivePower.
  */
 
 #include "EcoFlowDriver.h"
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from
 // ecoflowHid2Nut(), copied character by character from that table (US-078)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of ecoflow_hid2nut set the internal ups.status.* keys

@@ -22,7 +22,6 @@
 
 #include "GenericDriver.h"
 #include "IHidTransport.h"
-#include "CommandCatalog.h"
 #include "HidControl.h"
 #include "HIDParser.h"
 #include "HIDUsages.h"
@@ -43,7 +42,9 @@
  */
 
 GenericDriver::GenericDriver() :
-    _batteryDateStringIndex(0),
+    _own_rows(0),
+    _beeper_row(false),
+    _beeper_indexed(false),
     _lists_built(false),
     _active_power_checked(false),
     _input_twin{},
@@ -69,7 +70,10 @@ const IUpsControl& GenericDriver::control() const {
 
 void GenericDriver::setup() {
     _active_beeper = "";
-    _generic_map.invalidate();
+    _own_rows = 0;
+    _beeper_row = false;
+    _beeper_usages.clear();
+    _beeper_indexed = false;
     _lists_built = false;
     _active_power_checked = false;
     _quick.clear();
@@ -144,7 +148,7 @@ bool GenericDriver::isQuickPollStatusUsage(const HIDUsageDef& u) const {
         const NutTable::HidInfo& row = table[i];
         if (!(row.hidflags & NutTable::HU_FLAG_QUICK_POLL)) continue;
         if (!NutTable::isInternalRow(row) && row.conv != NutTable::Conv::AbmStatus) continue;
-        if (NutTable::pathMatches(u, row.hidpath)) return true;
+        if (NutTable::rowMatches(u, row)) return true;
     }
     return false;
 }
@@ -158,7 +162,7 @@ void GenericDriver::pollSoon(const PollItem& item) {
 
 uint8_t GenericDriver::featureReportOf(const std::vector<HIDUsageDef>& usages, const NutTable::HidInfo& row) {
     for (const auto& u : usages) {
-        if (u.report_type == 3 && u.report_id != 0 && NutTable::pathMatches(u, row.hidpath)) return u.report_id;
+        if (u.report_type == 3 && u.report_id != 0 && NutTable::rowMatches(u, row)) return u.report_id;
     }
     return 0;
 }
@@ -284,13 +288,15 @@ void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& da
     if (!data.hasKey("ups.mfr") && host->_iManufacturer > 0) out.push_back(host->_iManufacturer);
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
-    if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
-    if (requestTableStrings(host)) collectTableStringRequests(out);
+    // requestTableStrings() is about the driver's own rows: the battery date of the generic
+    // tail is asked for anyway, as before US-079
+    collectTableStringRequests(out, requestTableStrings(host));
 }
 
 // Table rows with stringid_conversion still waiting for their text (US-073)
-void GenericDriver::collectTableStringRequests(std::vector<uint8_t>& out) const {
-    for (const auto& b : _nut_rows) {
+void GenericDriver::collectTableStringRequests(std::vector<uint8_t>& out, bool own_rows) const {
+    for (size_t i = own_rows ? 0 : _own_rows; i < _nut_rows.size(); i++) {
+        const NutTable::Bound& b = _nut_rows[i];
         if (b.info->conv == NutTable::Conv::StringId && b.string_index > 0 && !b.has &&
             b.role != NutTable::Bound::Role::DEAD) {
             out.push_back(b.string_index);
@@ -390,202 +396,45 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
     }
 }
 
-// ups.test.result text for a Test value, test_read_info in usbhid-ups.c; nullptr otherwise
-static const char* testResultText(int v) {
-    switch (v) {
-    case 1: return "Done and passed";
-    case 2: return "Done and warning";
-    case 3: return "Done and error";
-    case 4: return "Aborted";
-    case 5: return "In progress";
-    case 6: return "No test initiated";
-    case 7: return "Test scheduled";
-    default: return nullptr;
-    }
+// beeper_info of usbhid-ups (1 disabled, 2 enabled, 3 muted); a 1-bit field is on/off
+void GenericDriver::decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def) {
+    const char* status = nullptr;
+    if (def.bit_size == 1) status = (v != 0) ? "enabled" : "disabled";
+    else if (v == 1) status = "disabled";
+    else if (v == 2) status = "enabled";
+    else if (v == 3) status = "muted";
+    if (status && !data.valueEquals("ups.beeper.status", status)) data.set("ups.beeper.status", status);
 }
 
+// Every value comes from the rows (postDecode()); here only what is not a row: the decoded
+// report bitmap of the poll and ups.beeper.status of the active beeper (US-079)
 void GenericDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (length == 0 || data == NULL || !host) return;
     if (report_type == 1 || report_type == 3) {
         _decoded_report[typeSlot(report_type)][report_id / 32] |= 1u << (report_id % 32);
     }
 
-    typedef UsageMapIndex<GenericDriver>::Mapping Mapping;
-    static const Mapping mappings[] = {
-        { "UPS.PowerSummary.PresentStatus.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.ACPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.ac_present", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Discharging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.discharging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Discharging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.discharging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Charging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.charging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Charging", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.charging", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.battery_low", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.BelowRemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.battery_low", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.NeedReplacement", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.replace_battery", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.NeedReplacement", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.replace_battery", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.Overload", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.Overload", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.overload", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.ShutdownImminent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.shutdown_imminent", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.CommunicationLost", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.comm_lost", v != 0 ? "1" : "0"); } },
-        // Standard PresentStatus flags rendered by computeUPSStatusString().
-        // BatteryPresent is inverted, as upstream nobattery_info.
-        { "UPS.PowerSummary.PresentStatus.BatteryPresent", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.no_battery", v == 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.remaining_time_limit_expired", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.FullyCharged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.fully_charged", v != 0 ? "1" : "0"); } },
-        { "UPS.PowerSummary.PresentStatus.FullyDischarged", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.status.depleted", v != 0 ? "1" : "0"); } },
-        
-        { "UPS.PowerConverter.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Input.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        { "UPS.Flow.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Input.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        { "UPS.Flow.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.frequency", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
-        { "UPS.Output.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
-        { "UPS.Output.Frequency", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.frequency", String(v, 1)); } },
-        
-        { "UPS.PowerConverter.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.markRealPowerMeasured(); d.set("ups.realpower", String((int)v)); } },
-        { "UPS.Output.ActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.markRealPowerMeasured(); d.set("ups.realpower", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
-        { "UPS.Output.ApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power", String((int)v)); } },
-        
-        { "UPS.PowerSummary.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        { "UPS.BatterySystem.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        { "UPS.Battery.Voltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage", String(v, 2)); } },
-        
-        { "UPS.PowerSummary.RemainingCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge", String((int)(v > 100 ? 100 : v))); } },
-        { "UPS.PowerSummary.RemainingCapacityLimit", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge.low", String((int)v)); } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        { "UPS.Battery.RunTimeToEmpty", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        
-        { "UPS.PowerSummary.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.load", String((int)v));
-            d.updateRealPower();
-        }},
-        { "UPS.PowerSummary.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("ups.mfr.date", String(buf));
-        }},
-        { "UPS.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("ups.mfr.date", String(buf));
-        }},
-        { "UPS.Battery.ManufacturerDate", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            if (v <= 0) return;
-            long date = (long)v;
-            long year = 1980 + (date >> 9);
-            long month = (date >> 5) & 0x0F;
-            long day = date & 0x1F;
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%04ld/%02ld/%02ld", year, month, day);
-            d.set("battery.mfr.date", String(buf));
-        }},
-        { "UPS.BatterySystem.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
-        }},
-        { "UPS.Battery.Date", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            if (def && v > 0) drv->_batteryDateStringIndex = (uint8_t)v;
-        }},
-        { "UPS.PowerSummary.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
-        }},
-        { "UPS.Battery.Temperature", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.temperature", String((v > 200.0) ? (v - 273.15) : v, 1));
-        }},
-        
-        { "UPS.PowerConverter.Output.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            d.set("ups.load", String((int)v)); 
-            d.updateRealPower(); 
-        }},
-        { "UPS.Output.PercentLoad", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { 
-            d.set("ups.load", String((int)v)); 
-            d.updateRealPower(); 
-        }},
-        
-        { "UPS.BatterySystem.Battery.DesignCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.capacity", String((int)(v / 3600.0))); } },
-        { "UPS.BatterySystem.Battery.FullChargeCapacity", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.capacity.full", String((int)(v / 3600.0))); } },
-        
-        { "UPS.Flow.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        { "UPS.PowerConverter.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        { "UPS.Output.ConfigActivePower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.realpower.nominal", String((int)v)); d.updateRealPower(); } },
-        
-        { "UPS.Flow.ConfigApparentPower", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.power.nominal", String((int)v)); d.updateRealPower(); } },
-        
-        // Tensione nominale della batteria, non della rete: così in tutti i sottodriver NUT
-        // (apc-hid, cps-hid, mge-hid, ...). Issue 48: su un APC scriveva 12 in input.voltage.nominal.
-        // Arrotondata come il "%.0f" di mge-hid/cps-hid/powercom-hid (lrint: pari sui .5, come printf),
-        // non troncata (issue 67); i driver il cui sottodriver NUT usa "%.1f" la riscrivono con un decimale.
-        { "UPS.PowerSummary.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
-        { "UPS.Battery.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.voltage.nominal", String(lrint(v))); } },
-        { "UPS.Flow.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        { "UPS.Input.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.voltage.nominal", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
-        { "UPS.Output.ConfigVoltage", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("output.voltage.nominal", String((int)v)); } },
-        
-        { "UPS.PowerConverter.Output.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } },
-        { "UPS.PowerConverter.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        
-        { "UPS.PowerSummary.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
-            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
-        } },
-        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
-            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
-        } },
-        { "UPS.AudibleAlarmControl", [](GenericDriver* drv, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && strcmp(def->path, drv->_active_beeper.c_str()) != 0) return;
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if (v == 1) { d.set("ups.beeper.status", "disabled"); } 
-            else if (v == 2) { d.set("ups.beeper.status", "enabled"); }
-            else if (v == 3) { d.set("ups.beeper.status", "muted"); } // beeper_info in usbhid-ups
-        } },
-        
-        { "UPS.BatterySystem.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
-        { "UPS.Battery.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
-        { "UPS.Output.Test", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { if (const char* t = testResultText((int)v)) d.set("ups.test.result", t); } },
-        // Timer read from the device; ups.delay.* are the configured delays (US-058, applyDefaultDelays)
-        { "UPS.PowerSummary.DelayBeforeShutdown", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("ups.timer.shutdown", String((int)v)); } },
-        
-        { "UPS.Output.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        { "UPS.Input.LowVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.low", String((int)v)); } },
-        { "UPS.Output.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } },
-        { "UPS.Input.HighVoltageTransfer", [](GenericDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("input.transfer.high", String((int)v)); } }
-    };
-
     if (_active_beeper == "") {
         _active_beeper = host->getActiveBeeperPath();
         if (_active_beeper == "") _active_beeper = "none";
     }
+    bindNutTable(host);
+    if (_beeper_row) return;
 
-    size_t n_skip = 0;
-    const char* const* skip = supersededGenericPaths(n_skip);
-    _generic_map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data, skip, n_skip);
+    const auto& usages = host->getUsages();
+    if (!_beeper_indexed) {
+        _beeper_usages.clear();
+        for (size_t i = 0; i < usages.size(); i++) {
+            if (strcmp(usages[i].path, _active_beeper.c_str()) == 0) _beeper_usages.push_back(i);
+        }
+        _beeper_indexed = true;
+    }
+    for (size_t i : _beeper_usages) {
+        if (i >= usages.size()) continue;
+        const HIDUsageDef& u = usages[i];
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        decodeBeeperStatus(ups_data, HIDParser::extractUsage(&u, report_id, data, length), u);
+    }
 }
 
 void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -594,7 +443,6 @@ void GenericDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, co
     if (index == host->_iManufacturer) { ups_data.set("ups.mfr", str); }
     else if (index == host->_iProduct) { ups_data.set("ups.model", str); }
     else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) { ups_data.set("ups.serial", str); }
-    else if (_batteryDateStringIndex > 0 && index == _batteryDateStringIndex) { ups_data.set("battery.mfr.date", str); }
 
     // Table rows whose value is this string (stringid_conversion, US-073)
     bool any = false;
@@ -648,7 +496,9 @@ String GenericDriver::decodeStringDescriptor(IHidTransport* host, const uint8_t 
 }
 
 
-// Binds the driver's NUT table to the usages of the attached device (US-066). The usages
+// Binds the driver's NUT table to the usages of the attached device (US-066), then the rows
+// of genericHid2Nut() the driver does not supersede (US-079): the INIT rule of resolve()
+// gives the driver's rows the precedence over a generic row with the same name. The usages
 // only change with a new device, which also calls setup(); the count guards a list
 // replaced in place.
 void GenericDriver::bindNutTable(IHidTransport* host) {
@@ -656,7 +506,22 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
     if (_nut_bound && _nut_usage_count == usages.size()) return;
     size_t n = 0;
     const NutTable::HidInfo* table = hid2nut(n);
-    _nut_rows = NutTable::bind(table, n, usages);
+    _nut_rows.clear();
+    NutTable::bindRows(_nut_rows, table, n, usages);
+    _own_rows = _nut_rows.size();
+    size_t n_generic = 0;
+    const NutTable::HidInfo* generic = NutTable::genericHid2Nut(n_generic);
+    if (table != generic) {
+        size_t n_skip = 0;
+        const char* const* skip = supersededGenericPaths(n_skip);
+        NutTable::bindRows(_nut_rows, generic, n_generic, usages, skip, n_skip);
+    }
+    NutTable::resolve(_nut_rows);
+    _beeper_row = false;
+    for (size_t i = 0; i < _own_rows; i++) {
+        if (strcmp(_nut_rows[i].info->info_type, "ups.beeper.status") == 0) _beeper_row = true;
+    }
+    _beeper_indexed = false;
     _nut_bound = true;
     // A ups.realpower row owns the value only when its report is read (same rule as
     // readsActivePower()): rows bound in a report the driver never requests (CyberPower vendor
@@ -791,12 +656,11 @@ void GenericDriver::publishAlarms(UPSData& ups_data) {
     ups_data.applyAlarmVariables(vendor);
 }
 
-// The table has the final word over a hand-written mapping of the same key, but writes only
-// what differs from ups_data: read-only rows would otherwise allocate Strings at every
-// report (ADR 0007, US-073)
-// One row: its value when it differs from ups_data, or the removal of a CLEAR. As the generic
-// mappings, the estimate follows the load and the nominal powers unless a table row owns
-// ups.realpower (eaton_compute_realpower_info, US-074; Output.ActivePower, US-075).
+// One row: its value when it differs from ups_data, or the removal of a CLEAR. Each key has
+// one source, its row (US-079); the last value kept in the row (Bound::value) is what makes
+// the write happen only on a change, since read-only rows would otherwise allocate Strings at
+// every report (ADR 0007, US-073). The estimate follows the load and the nominal powers unless
+// a table row owns ups.realpower (eaton_compute_realpower_info, US-074; ActivePower, US-075).
 void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
     if (NutTable::isInternalRow(*b.info) || NutTable::isCommandRow(*b.info)) return;
     const char* name = b.info->info_type;
@@ -829,7 +693,8 @@ void GenericDriver::publishRow(NutTable::Bound& b, UPSData& ups_data) {
 }
 
 void GenericDriver::publishNutRows(UPSData& ups_data) {
-    // Rows that changed role since (INIT rule, strings) or that a mapping overwrote
+    // Rows that changed role since (INIT rule, strings) or whose key was written by the host
+    // (SET VAR read back, a key removed)
     for (auto& b : _nut_rows) publishRow(b, ups_data);
     // Internal ups.status.* keys from the BOOL rows; nothing for drivers without them
     NutTable::StatusBits status = _nut_ctx.status;
@@ -855,7 +720,7 @@ void GenericDriver::writableVariables(const UPSData& data, std::vector<NutTable:
                            strncmp(b.info->info_type, "ups.delay.", 10) == 0;
         out.push_back({ b.info->info_type, b.info->info_len, NutTable::enumValues(*b.info, _nut_ctx), driver_side });
     }
-    // ups.delay.*: driver-side variables set by CommandCatalog::applyDefaultDelays
+    // ups.delay.*: driver-side variables set by NutTable::applyDefaultDelays
     static const char* const delays[] = { "ups.delay.shutdown", "ups.delay.start" };
     for (const char* name : delays) {
         if (!data.hasKey(name)) continue;
@@ -893,7 +758,7 @@ NutTable::SetStatus GenericDriver::planSet(const UPSData& data, const std::vecto
         for (const char* d : delays) {
             if (!NutTable::equalsIgnoreCase(d, name) || !data.hasKey(d)) continue;
             int32_t v;
-            if (!CommandCatalog::parseDelayParam(value, v) || v < 0) return SetStatus::CONVERSION_FAILED;
+            if (!NutTable::parseDelayParam(value, v) || v < 0) return SetStatus::CONVERSION_FAILED;
             plan.kind = NutTable::SetPlan::Kind::DRIVER_SIDE;
             plan.name = d;
             plan.def = HIDUsageDef();

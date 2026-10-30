@@ -27,9 +27,6 @@
 #ifdef NUT_TABLE_H
 #error "IUpsControl.h must not include NutTable.h"
 #endif
-#ifdef COMMAND_CATALOG_H
-#error "IUpsControl.h must not include CommandCatalog.h"
-#endif
 
 using NutTable::SetStatus;
 
@@ -64,7 +61,7 @@ class QxLikeControl : public IUpsControl {
 public:
     std::vector<const UPSCommandInfo*> supportedCommands(const IUpsControlPort& port) const override {
         if (!port.isConnected()) return {};
-        return { CommandCatalog::find("beeper.enable") };
+        return { UpsCommands::find("beeper.enable") };
     }
     CommandResult executeCommand(IUpsControlPort& port, const char*, const char*) const override {
         return port.setBeeper(true) ? CommandResult::OK : CommandResult::FAILED;

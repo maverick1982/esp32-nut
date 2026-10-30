@@ -22,7 +22,7 @@
  * This sub-driver faithfully mirrors the official NUT behavior for CyberPower HID devices.
  * - Reference: nut_repo/drivers/cps-hid.c
  * - Every variable, the status and the instant commands come from cpsHid2Nut() (US-075,
- *   ADR 0011): the standard mappings of the same keys are superseded below, and the driver
+ *   ADR 0011): the genericHid2Nut() rows of the same keys are superseded below, and the driver
  *   keeps only hooks (poll quirks, delays, the PID 0x0501 scale hook, vendor layouts).
  * - String Inversion: cps-hid handles UTF-16 inversion (handled generically via QUIRK_INVERT_STRINGS).
  * - cps_fix_report_desc is not needed: extractUsage() does not clip values to the
@@ -43,7 +43,7 @@ bool CyberPowerDriver::hasVendorReports(IHidTransport* host) {
     return false;
 }
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from cpsHid2Nut(),
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from cpsHid2Nut(),
 // copied character by character from that table (US-075)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of cps_hid2nut set the internal ups.status.* keys

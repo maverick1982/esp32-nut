@@ -2,13 +2,16 @@
 #define GENERIC_DRIVER_H
 
 #include "IUPSDriver.h"
-#include "UsageMapIndex.h"
 #include <Arduino.h>
 #include <vector>
 #include <utility>
 
 /**
- * @brief Base of every driver: standard HID PDC mappings and the poll state machine.
+ * @brief Base of every driver: the NUT table engine, the hooks and the poll state machine.
+ *
+ * Every value comes from a row (ADR 0011, US-079): the driver's table (hid2nut()), then the
+ * rows of genericHid2Nut() it does not list in supersededGenericPaths(). GenericDriver itself,
+ * for the brands without a subdriver, has genericHid2Nut() as its table.
  *
  * Poll cycles (review S3, A6, like usbhid-ups and ADR 0006):
  * - quick poll every quickPollMs(): only the reports that carry status usages
@@ -47,12 +50,16 @@ public:
     // NutTable::finishInit() as postDecode() then would. Not called by the firmware.
     void completeInitialPoll();
 
-    // NUT table of the driver's upstream subdriver (US-066). Empty for drivers whose
-    // subdriver has no rows yet.
-    virtual const NutTable::HidInfo* hid2nut(size_t& n) const { n = 0; return nullptr; }
-    // Paths of the standard mappings of decodeReport() that a driver leaves to its NUT table
-    // (ADR 0011, US-073): their keys come only from the table rows. Empty by default.
+    // NUT table of the driver's upstream subdriver (US-066); genericHid2Nut() for the brands
+    // without one (US-079)
+    virtual const NutTable::HidInfo* hid2nut(size_t& n) const { return NutTable::genericHid2Nut(n); }
+    // Paths of the genericHid2Nut() rows that a driver leaves to its own table (ADR 0011,
+    // US-073, US-079): their keys come only from the driver's rows. Empty by default.
     virtual const char* const* supersededGenericPaths(size_t& n) const { n = 0; return nullptr; }
+    // Commands and ups.delay.* of the brands without a subdriver: the generic rows (US-079);
+    // the drivers of a subdriver return their own table and paths
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    const NutTable::DelayPaths* delayPaths() const override { return NutTable::genericDelayPaths(); }
     // Rows bound to the attached device; built on the first decoded report
     const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }
 
@@ -119,8 +126,9 @@ protected:
     virtual bool requestTableStrings(IHidTransport* host) const { return true; }
     // String descriptors fetched at the start of a full poll (only the missing ones)
     virtual void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const;
-    // The strings of the table's stringid_conversion rows still waiting for their text
-    void collectTableStringRequests(std::vector<uint8_t>& out) const;
+    // The strings of the table's stringid_conversion rows still waiting for their text;
+    // own_rows false: only those of the genericHid2Nut() tail (the battery date, US-079)
+    void collectTableStringRequests(std::vector<uint8_t>& out, bool own_rows = true) const;
     // Puts a report at the head of the pending requests, inside the running cycle or as a
     // cycle of its own; nothing when it is already pending (US-077). Same task as loop():
     // decodeReport() runs from it
@@ -137,9 +145,13 @@ protected:
     // The status bits of the BOOL rows as they become the internal ups.status.* keys: a driver
     // can drop a bit its device reports wrongly (US-078). The engine's bits are not changed.
     virtual void filterStatus(NutTable::StatusBits& status) const { (void)status; }
+    // ups.beeper.status from a value of the active beeper (_active_beeper), for the drivers
+    // whose own table has no ups.beeper.status row (US-079): a hook, not a row, since it
+    // depends on the field (1 bit: on/off) and on the brand's encoding (ADR 0011 rule 1).
+    // By default beeper_info of usbhid-ups (1 disabled, 2 enabled, 3 muted).
+    virtual void decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def);
 
     String _active_beeper;
-    uint8_t _batteryDateStringIndex;
     // Inputs of the model-dependent conversions (mge_type, country, nominal voltage
     // class); mutable because LIST ENUM evaluates them like the upstream functions do
     mutable NutTable::Context _nut_ctx;
@@ -155,6 +167,10 @@ private:
     void publishAlarms(UPSData& ups_data);
 
     std::vector<NutTable::Bound> _nut_rows;
+    size_t _own_rows;                     // _nut_rows from hid2nut(); the generic tail follows
+    bool _beeper_row;                     // one of them is ups.beeper.status: no decodeBeeperStatus()
+    std::vector<size_t> _beeper_usages;   // usages of the active beeper path
+    bool _beeper_indexed;
     bool _nut_bound;
     bool _nut_init_done;                  // finishInit() applied after the first full poll
     bool _nut_has_realpower;              // a table row owns ups.realpower: no estimate (US-074)
@@ -170,7 +186,6 @@ private:
     bool isStaticAndKnown(const PollItem& item) const;
     static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 
-    UsageMapIndex<GenericDriver> _generic_map;
     bool _lists_built;
     bool _active_power_checked;           // readsActivePower() looked at since setup()
     std::vector<PollItem> _quick;

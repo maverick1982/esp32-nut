@@ -37,8 +37,6 @@ public:
     virtual bool shutdownCommandsSupported() const { return true; }
     // False when the driver does not offer beeper.mute (US-087, Legrand)
     virtual bool beeperMuteSupported() const { return true; }
-    // Commands of the driver's upstream subdriver, nullptr for the whole catalog (US-097)
-    virtual const char* const* commandAllowList() const { return nullptr; }
 
     // Runs a command as an INSTCMD does, with its System Log line (shutdown.default attempts)
     virtual CommandResult executeCommand(const char* name, const char* param = nullptr) = 0;

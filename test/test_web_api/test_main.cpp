@@ -26,6 +26,9 @@ public:
     String getUPSStatusString() const override { return connected ? "OL" : "UNKNOWN"; }
     bool setBeeper(bool enable) override { return true; }
     bool supportsBeeperToggle() const override { return true; }
+    // As GenericDriver (US-079): the commands of the genericHid2Nut() rows
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    bool setBeeperField(const HIDUsageDef&, bool enable) override { return setBeeper(enable); }
 
     // New pure virtuals
     HIDParser _hid_parser;

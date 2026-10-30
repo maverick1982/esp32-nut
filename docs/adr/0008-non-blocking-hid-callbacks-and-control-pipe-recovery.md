@@ -97,7 +97,7 @@ Architecture from `docs/plans/usb-layer-review.md` (§4, phase 3).
 **Application changes:**
 * **A6 / S3.** One poll state machine in `GenericDriver`: quick poll of the status reports every 2 s, full poll (missing strings, then every report, then the strings found during the cycle) every 30 s, as `usbhid-ups` and ADR 0006. Drivers change the policy through hooks. `DriverRegistry` picks the driver by VID/PID.
 * **M1.** Parser: signed fields when Logical Minimum < 0, fields limited to 32 bits, long items, Usage Minimum/Maximum.
-* **S2.** `UsageMapIndex` precomputes the usage → mapping match.
+* **S2.** `UsageMapIndex` precomputes the usage → mapping match (removed with the hand-written mappings by US-079: the NUT table rows are bound once per device).
 
 ### Field validation (2026-09-26)
 Firmware `fix-issue-47-v3` (`dd2a740`) on the two CyberPower units of issue #47: 13.9 h and 19.6 h of continuous uptime without reboots, panics or control transfer timeouts, ~96,600 GET_REPORT with 0 failures, 11 UPS-initiated USB resets recovered in ~0.4 s. Details in `docs/plans/usb-layer-review.md` (phase 4). The same deadlock also explains issue #36 (Powercom) and #48 (CyberPower CP1600, APC Back-UPS CS 750).

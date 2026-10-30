@@ -169,9 +169,7 @@ public:
         if (flagSet(d, "ups.status.off")) status += "OFF ";
         // CommunicationLost is an internal fault bit upstream (commfault ->
         // ups.alarm), not a status token: COMM_LOST is not NUT vocabulary (issue #65).
-        // ups.status.comm_lost (and the internal_failure of the hand-written mappings)
-        // give no ups.alarm either: they become commfault with the table migration of
-        // their subdriver (US-107 planning).
+        // Every table reads it as commfault (US-079: genericHid2Nut() too).
 
         status.trim();
         // ALARM leads when ups.alarm is published, as status_commit() with alarm_active
@@ -185,10 +183,8 @@ public:
      * ups.alarm as usbhid-ups builds it (US-107): the texts of the vendor ups.alarm rows,
      * applied during hid_ups_walk() (usbhid-ups.c:3194), then those of ups_alarm_set()
      * (usbhid-ups.c:2606-2644) in its order, separated by a space as alarm_set()
-     * (dstate.c:2370). Empty when no alarm is active. ups.status.comm_lost and
-     * ups.status.internal_failure are left out on purpose: apc-hid and cps-hid do not read
-     * CommunicationLost, and the hand-written keys become commfault with the table
-     * migration of their subdriver.
+     * (dstate.c:2370). Empty when no alarm is active. CommunicationLost
+     * is ups.status.commfault in every table (US-079).
      */
     static void alarmText(const UPSData& d, const String& vendor, String& out) {
         static const struct { const char* key; const char* text; } bits[] = {

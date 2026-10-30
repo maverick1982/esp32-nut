@@ -468,7 +468,8 @@ void test_cyberpower_extensions_kept(void) {
     feed16(0x03, 3, 36000);
     TEST_ASSERT_EQUAL_STRING("2026/03/15", ups_data.get("ups.mfr.date").c_str());
     TEST_ASSERT_EQUAL_STRING("26.9", ups_data.get("battery.temperature").c_str());
-    TEST_ASSERT_EQUAL_STRING("10", ups_data.get("battery.capacity").c_str());
+    // mge_battery_capacity of the genericHid2Nut() row (mge-hid.c:2016, US-079): "%.2f"
+    TEST_ASSERT_EQUAL_STRING("10.00", ups_data.get("battery.capacity").c_str());
 }
 
 // The estimate follows the nominal apparent power when it arrives after the load

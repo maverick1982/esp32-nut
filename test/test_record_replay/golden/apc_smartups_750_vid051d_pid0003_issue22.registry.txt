@@ -1,0 +1,20 @@
+[snapshot]
+ups.delay.shutdown=20
+ups.firmware=UPS 09.3 / ID=18
+ups.mfr=American Power Conversion 
+ups.model=Smart-UPS 750
+ups.status=Unknown
+[cmd]
+load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+[rw]
+ups.delay.shutdown:10
+[rw.final]
+ups.delay.shutdown:10
+[snapshot.final]
+ups.delay.shutdown=20
+ups.firmware=UPS 09.3 / ID=18
+ups.mfr=American Power Conversion 
+ups.model=Smart-UPS 750
+ups.status=Unknown
+[requests]
+

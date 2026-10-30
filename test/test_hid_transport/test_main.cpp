@@ -154,7 +154,7 @@ void test_control_hook_is_protocol_neutral(void) {
     const char* neutral[] = { "lib/USBHostUPS/src/IUpsControl.h", "lib/USBHostUPS/src/IUpsControlPort.h" };
     const char* forbidden[] = { "#include \"IHidTransport.h\"", "#include \"IHidControlPort.h\"",
                                 "#include \"HidControl.h\"", "#include \"HIDUsages.h\"", "#include \"HIDParser.h\"",
-                                "#include \"NutTable.h\"", "#include \"CommandCatalog.h\"", "#include \"IUSBHostUPS.h\"",
+                                "#include \"NutTable.h\"", "#include \"IUSBHostUPS.h\"",
                                 "#include \"USBHostUPS.h\"", "#include \"IUpsSource.h\"" };
     for (const char* f : neutral) {
         std::string text = readSource(f);

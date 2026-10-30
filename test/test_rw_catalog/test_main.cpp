@@ -1055,7 +1055,7 @@ void test_check_set_value_invalid_enum() {
 
 void test_writable_variables_driver_side_flag() {
     // Eaton: battery.charge.low is a HID FEATURE row, outlet.desc is HU_FLAG_ABSENT
-    // (mge-hid.c:2247) and ups.delay.* is set by CommandCatalog::applyDefaultDelays
+    // (mge-hid.c:2247) and ups.delay.* is set by NutTable::applyDefaultDelays
     PlanHost host;
     EatonDriver drv;
     drv.setup();

@@ -1,0 +1,80 @@
+[snapshot]
+battery.charge.low=10
+battery.charge=97
+battery.mfr.date=2001/01/01
+battery.runtime.low=120
+battery.runtime=2362
+battery.voltage.nominal=12.0
+battery.voltage=13.6
+driver.name=APCDriver
+input.sensitivity=medium
+input.transfer.high=295
+input.transfer.low=145
+input.voltage.nominal=230
+input.voltage=245.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.load=14
+ups.mfr.date=2024/04/19
+ups.mfr=American Power Conversion
+ups.model=Back-UPS BX750MI
+ups.realpower.nominal=410
+ups.realpower=57
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.test.result=Done and passed
+ups.timer.reboot=0
+ups.timer.shutdown=-1
+ups.status=OL CHRG
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+[rw]
+battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10
+[rw.final]
+battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge=97
+battery.mfr.date=2001/01/01
+battery.runtime.low=120
+battery.runtime=2362
+battery.voltage.nominal=12.0
+battery.voltage=13.6
+driver.name=APCDriver
+input.sensitivity=medium
+input.transfer.high=295
+input.transfer.low=145
+input.voltage.nominal=230
+input.voltage=245.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.load=14
+ups.mfr.date=2024/04/19
+ups.mfr=American Power Conversion
+ups.model=Back-UPS BX750MI
+ups.realpower.nominal=410
+ups.realpower=57
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.test.result=Done and passed
+ups.timer.reboot=0
+ups.timer.shutdown=-1
+ups.status=OL CHRG
+[requests]
+ S4 12/3 14/3 15/3 19/3 20/3 21/3 24/3 22/3 33/3 34/3 35/3 38/3 49/3 80/3 122/3 120/3 12/3 15/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 12/3 15/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 S4 12/3 14/3 15/3 19/3 20/3 21/3 24/3 22/3 33/3 34/3 35/3 38/3 49/3 80/3 122/3 120/3
