@@ -2,6 +2,9 @@
 #include "EcoFlowDriver.h"
 #include "IHidTransport.h"
 #include "UPSData.h"
+#include <algorithm>
+#include <string>
+#include <vector>
 
 class MockEcoFlowHost : public IHidTransport {
 public:
@@ -59,82 +62,110 @@ void setUp(void) {
 
 void tearDown(void) {}
 
-// ecoflow-hid.c: RunTimeToEmpty is in minutes and is converted to seconds (x60)
+// As USBHostUPS: every report goes through decodeReport() and then postDecode(), where the
+// NUT table writes its rows (US-078: every EcoFlow value comes from ecoflowHid2Nut())
+static void decode(uint8_t type, const std::vector<uint8_t>& bytes) {
+    driver.decodeReport(&mockHost, bytes[0], type, bytes.data(), bytes.size(), ups_data);
+    driver.postDecode(&mockHost, bytes[0], type, bytes.data(), bytes.size(), ups_data);
+}
+
+struct SynthReport {
+    uint8_t type;
+    std::vector<uint8_t> bytes; // report ID first, values little endian
+};
+
+static void decodeAll(const std::vector<SynthReport>& reports) {
+    for (const auto& r : reports) decode(r.type, r.bytes);
+}
+
+// A USB string descriptor (UTF-16LE) passed to the driver, then formatDeviceStrings() as
+// USBHostUPS does after every string descriptor
+static void stringDescriptor(uint8_t index, const char* text) {
+    std::vector<uint8_t> desc = { (uint8_t)(2 + 2 * strlen(text)), 0x03 };
+    for (const char* c = text; *c; c++) {
+        desc.push_back((uint8_t)*c);
+        desc.push_back(0);
+    }
+    driver.parseStringDescriptor(&mockHost, index, desc.data(), desc.size(), ups_data);
+    driver.formatDeviceStrings(ups_data);
+}
+
+static std::string status() { return UPSData::computeUPSStatusString(ups_data).c_str(); }
+
+// ecoflow-hid.c:193: RunTimeToEmpty is in minutes, ecoflow_runtime_conversion_lkp gives seconds
 void test_ecoflow_runtime_minutes_to_seconds(void) {
     addUsage("UPS.PowerSummary.RunTimeToEmpty", 0x0D, 1, 0, 16);
 
-    // 1928 minutes = 0x0788
-    uint8_t report[] = { 0x0D, 0x88, 0x07 };
-    driver.decodeReport(&mockHost, 0x0D, 1, report, sizeof(report), ups_data);
+    decode(1, { 0x0D, 0x88, 0x07 }); // 1928 minutes
 
-    TEST_ASSERT_TRUE(ups_data.hasKey("battery.runtime"));
-    TEST_ASSERT_EQUAL_UINT32(115680, ups_data.getFloat("battery.runtime")); // 1928 * 60
+    TEST_ASSERT_EQUAL_STRING("115680", ups_data.get("battery.runtime").c_str()); // 1928 * 60
 }
 
+// ecoflow-hid.c:130, 133, 184, 200: DesignCapacity and FullChargeCapacity are percentages;
+// RemainingTimeLimit stays in minutes, as upstream (US-078 user decision of 2026-10-30)
 void test_ecoflow_capacity_and_warning_mappings(void) {
     addUsage("UPS.PowerSummary.DesignCapacity", 0x17, 3, 0, 8);
     addUsage("UPS.PowerSummary.FullChargeCapacity", 0x0E, 3, 0, 8);
     addUsage("UPS.PowerSummary.WarningCapacityLimit", 0x0F, 3, 0, 8);
     addUsage("UPS.PowerSummary.RemainingTimeLimit", 0x08, 3, 0, 16);
 
-    uint8_t design[] = { 0x17, 0x64 };        // 100 %
-    uint8_t full[] = { 0x0E, 0x64 };          // 100 %
-    uint8_t warning[] = { 0x0F, 0x0A };       // 10 %
-    uint8_t timeLimit[] = { 0x08, 0x58, 0x02 }; // 600 minutes
+    decode(3, { 0x17, 0x64 });       // 100 %
+    decode(3, { 0x0E, 0x62 });       // 98 %
+    decode(3, { 0x0F, 0x0A });       // 10 %
+    decode(3, { 0x08, 0x58, 0x02 }); // 600 minutes
 
-    driver.decodeReport(&mockHost, 0x17, 3, design, sizeof(design), ups_data);
-    driver.decodeReport(&mockHost, 0x0E, 3, full, sizeof(full), ups_data);
-    driver.decodeReport(&mockHost, 0x0F, 3, warning, sizeof(warning), ups_data);
-    driver.decodeReport(&mockHost, 0x08, 3, timeLimit, sizeof(timeLimit), ups_data);
-
-    TEST_ASSERT_EQUAL_UINT8(100, ups_data.getFloat("battery.capacity.nominal"));
-    TEST_ASSERT_EQUAL_UINT8(100, ups_data.getFloat("battery.capacity"));
-    TEST_ASSERT_EQUAL_UINT8(10, ups_data.getFloat("battery.charge.warning"));
-    TEST_ASSERT_EQUAL_UINT32(36000, ups_data.getFloat("battery.runtime.low")); // 600 min -> s
+    TEST_ASSERT_EQUAL_STRING("100", ups_data.get("battery.capacity.nominal").c_str());
+    TEST_ASSERT_EQUAL_STRING("98", ups_data.get("battery.capacity").c_str());
+    TEST_ASSERT_EQUAL_STRING("10", ups_data.get("battery.charge.warning").c_str());
+    TEST_ASSERT_EQUAL_STRING("600", ups_data.get("battery.runtime.low").c_str());
 }
 
-// Upstream maps UPS.Flow.[4].ConfigActivePower to ups.power.nominal; the base class
-// also maps the collapsed path to ups.realpower.nominal (mge-hid behavior).
+// ecoflow-hid.c:122 maps UPS.Flow.[4].ConfigActivePower to ups.power.nominal; the generic
+// mapping of the same usage to ups.realpower.nominal is kept (ADR 0011 rule 2)
 void test_ecoflow_config_active_power_keeps_generic_realpower_nominal(void) {
     addUsage("UPS.Flow.ConfigActivePower", 0x01, 3, 0, 16);
+    mockHost._usages.back().coll_index[1] = 5; // Flow is the collection [4]
 
-    uint8_t report[] = { 0x01, 0x04, 0x01 }; // 260
-    driver.decodeReport(&mockHost, 0x01, 3, report, sizeof(report), ups_data);
+    decode(3, { 0x01, 0x04, 0x01 }); // 260
 
-    TEST_ASSERT_EQUAL_UINT16(260, ups_data.getFloat("ups.power.nominal"));
-    TEST_ASSERT_EQUAL_UINT16(260, ups_data.getFloat("ups.realpower.nominal"));
+    TEST_ASSERT_EQUAL_STRING("260", ups_data.get("ups.power.nominal").c_str());
+    TEST_ASSERT_EQUAL_STRING("260", ups_data.get("ups.realpower.nominal").c_str());
 }
 
+// Without the [4] index the usage is not the one of ecoflow-hid.c:122
+void test_ecoflow_config_active_power_needs_flow_index(void) {
+    addUsage("UPS.Flow.ConfigActivePower", 0x01, 3, 0, 16);
+
+    decode(3, { 0x01, 0x04, 0x01 });
+
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.power.nominal"));
+    TEST_ASSERT_EQUAL_STRING("260", ups_data.get("ups.realpower.nominal").c_str());
+}
+
+// ecoflow-hid.c:126-127
 void test_ecoflow_outlet_timers(void) {
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeReboot", 0x13, 3, 0, 16);
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x12, 3, 0, 16);
 
-    uint8_t reboot[] = { 0x13, 0x1E, 0x00 };   // 30
-    uint8_t shutdown[] = { 0x12, 0x3C, 0x00 }; // 60
+    decode(3, { 0x13, 0x1E, 0x00 }); // 30
+    decode(3, { 0x12, 0x3C, 0x00 }); // 60
 
-    driver.decodeReport(&mockHost, 0x13, 3, reboot, sizeof(reboot), ups_data);
-    driver.decodeReport(&mockHost, 0x12, 3, shutdown, sizeof(shutdown), ups_data);
-
-    TEST_ASSERT_EQUAL_UINT8(30, ups_data.getFloat("ups.timer.reboot"));
-    TEST_ASSERT_EQUAL_UINT8(60, ups_data.getFloat("ups.timer.shutdown"));
+    TEST_ASSERT_EQUAL_STRING("30", ups_data.get("ups.timer.reboot").c_str());
+    TEST_ASSERT_EQUAL_STRING("60", ups_data.get("ups.timer.shutdown").c_str());
 }
 
-// ecoflow-hid.c: iDeviceChemistry via stringid_conversion -> battery.type
+// ecoflow-hid.c:135: iDeviceChemistry via stringid_conversion -> battery.type
 void test_ecoflow_chemistry_string_descriptor(void) {
     addUsage("UPS.PowerSummary.iDeviceChemistry", 0x1F, 3, 0, 8);
 
-    uint8_t report[] = { 0x1F, 0x02 }; // string index 2
-    driver.decodeReport(&mockHost, 0x1F, 3, report, sizeof(report), ups_data);
+    decode(3, { 0x1F, 0x02 }); // string index 2
 
     // The next full poll must request the chemistry string
     driver.loop(&mockHost, ups_data, 1000);
     TEST_ASSERT_EQUAL_UINT32(1, mockHost._requestedStrings.size());
     TEST_ASSERT_EQUAL_UINT8(2, mockHost._requestedStrings[0]);
 
-    // "Li" as a UTF-16LE USB string descriptor
-    uint8_t desc[] = { 6, 0x03, 'L', 0, 'i', 0 };
-    driver.parseStringDescriptor(&mockHost, 2, desc, sizeof(desc), ups_data);
-    TEST_ASSERT_TRUE(ups_data.hasKey("battery.type"));
+    stringDescriptor(2, "Li");
     TEST_ASSERT_EQUAL_STRING("Li", ups_data.get("battery.type").c_str());
 }
 
@@ -142,118 +173,124 @@ void test_ecoflow_present_status(void) {
     addUsage("UPS.PowerSummary.PresentStatus.Discharging", 0x07, 1, 1, 1);
     addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x07, 1, 2, 1);
 
-    uint8_t onBattery[] = { 0x07, 0x02 }; // Discharging=1, ACPresent=0
-    driver.decodeReport(&mockHost, 0x07, 1, onBattery, sizeof(onBattery), ups_data);
-    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", UPSData::computeUPSStatusString(ups_data).c_str());
+    decode(1, { 0x07, 0x02 }); // Discharging=1, ACPresent=0
+    TEST_ASSERT_EQUAL_STRING("OB DISCHRG", status().c_str());
 
-    uint8_t online[] = { 0x07, 0x04 }; // Discharging=0, ACPresent=1
-    driver.decodeReport(&mockHost, 0x07, 1, online, sizeof(online), ups_data);
-    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(ups_data).c_str());
+    decode(1, { 0x07, 0x04 }); // Discharging=0, ACPresent=1
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
 }
 
-// A negative RunTimeToEmpty means "no estimate" upstream; GenericDriver has already
-// stored the raw negative, so the EcoFlow handler must drop it instead of returning.
-void test_ecoflow_runtime_negative_is_dropped(void) {
+// ecoflow_battery_runtime_conversion returns NULL for a negative value: ups_infoval_set()
+// writes nothing, so the last value stays (before US-078 the key was removed)
+void test_ecoflow_runtime_negative_keeps_last_value(void) {
     addUsage("UPS.PowerSummary.RunTimeToEmpty", 0x0D, 1, 0, 16);
     mockHost._usages.back().logical_min = -32768;
 
-    uint8_t report[] = { 0x0D, 0xFF, 0xFF }; // -1
-    driver.decodeReport(&mockHost, 0x0D, 1, report, sizeof(report), ups_data);
+    decode(1, { 0x0D, 0x0A, 0x00 }); // 10 minutes
+    TEST_ASSERT_EQUAL_STRING("600", ups_data.get("battery.runtime").c_str());
+    decode(1, { 0x0D, 0xFF, 0xFF });
+    TEST_ASSERT_EQUAL_STRING("600", ups_data.get("battery.runtime").c_str());
+}
 
+// A negative first value publishes nothing (and, as a failed ups_infoval_set() in the INIT
+// walk, leaves the row out)
+void test_ecoflow_runtime_negative_first_publishes_nothing(void) {
+    addUsage("UPS.PowerSummary.RunTimeToEmpty", 0x0D, 1, 0, 16);
+    mockHost._usages.back().logical_min = -32768;
+
+    decode(1, { 0x0D, 0xFF, 0xFF });
     TEST_ASSERT_FALSE(ups_data.hasKey("battery.runtime"));
 }
 
-// ecoflow-hid.c: ecoflow_format_mfr() falls back to "EcoFlow" when the device
-// descriptor exposes no Vendor string.
+// ecoflow_format_mfr() falls back to "EcoFlow" when the device has no Vendor string
 void test_ecoflow_mfr_falls_back_when_no_manufacturer_string(void) {
-    mockHost._iManufacturer = 0;
+    driver.formatDeviceStrings(ups_data);
 
-    driver.loop(&mockHost, ups_data, 1000);
-
-    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr"));
     TEST_ASSERT_EQUAL_STRING("EcoFlow", ups_data.get("ups.mfr").c_str());
 }
 
-// A Vendor string that decodes to empty keeps the same "EcoFlow" fallback.
+// A Vendor string that decodes to empty keeps the same "EcoFlow" fallback
 void test_ecoflow_mfr_falls_back_when_manufacturer_string_empty(void) {
     mockHost._iManufacturer = 3;
 
-    uint8_t empty[] = { 2, 0x03 }; // bLength 2, STRING descriptor, no characters
-    driver.parseStringDescriptor(&mockHost, 3, empty, sizeof(empty), ups_data);
+    stringDescriptor(3, "");
 
-    TEST_ASSERT_TRUE(ups_data.hasKey("ups.mfr"));
     TEST_ASSERT_EQUAL_STRING("EcoFlow", ups_data.get("ups.mfr").c_str());
 }
 
-// A reported Vendor string is preserved, not overwritten by the fallback.
+// A reported Vendor string is kept, and replaces the fallback when it arrives later
 void test_ecoflow_mfr_keeps_reported_vendor(void) {
     mockHost._iManufacturer = 3;
+    driver.formatDeviceStrings(ups_data);
 
-    uint8_t desc[] = { 4, 0x03, 'A', 0 }; // "A" as UTF-16LE USB string descriptor
-    driver.parseStringDescriptor(&mockHost, 3, desc, sizeof(desc), ups_data);
+    stringDescriptor(3, "A");
 
     TEST_ASSERT_EQUAL_STRING("A", ups_data.get("ups.mfr").c_str());
 }
 
-// ecoflow-hid.c leaves the beeper commands commented out: the device ignores them.
+// ecoflow-hid.c leaves the beeper commands commented out: the device ignores them (US-054)
 void test_ecoflow_beeper_not_controllable(void) {
     TEST_ASSERT_FALSE(driver.beeperControllable());
 }
 
-// ecoflow-hid.c maps only UPS.OutletSystem.Outlet.DelayBeforeShutdown to
-// ups.timer.shutdown and exposes no ups.delay.shutdown; GenericDriver maps the
-// PowerSummary usage to both, so EcoFlowDriver must undo it. Outlet first.
+// ecoflow-hid.c:114: ups.beeper.status from beeper_info
+void test_ecoflow_beeper_status(void) {
+    addUsage("UPS.PowerSummary.AudibleAlarmControl", 0x02, 3, 0, 8);
+
+    decode(3, { 0x02, 0x02 });
+    TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
+    decode(3, { 0x02, 0x01 });
+    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
+    decode(3, { 0x02, 0x03 });
+    TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
+}
+
+// ecoflow-hid.c:127 maps only UPS.OutletSystem.Outlet.DelayBeforeShutdown to
+// ups.timer.shutdown; the PowerSummary usage is an unmapped row upstream, whatever the order
 void test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first(void) {
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x12, 3, 0, 16);
     addUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x20, 3, 0, 16);
 
-    uint8_t outlet[] = { 0x12, 0x3C, 0x00 }; // 60
-    uint8_t power[] = { 0x20, 0x1E, 0x00 };  // 30
-    driver.decodeReport(&mockHost, 0x12, 3, outlet, sizeof(outlet), ups_data);
-    driver.decodeReport(&mockHost, 0x20, 3, power, sizeof(power), ups_data);
+    decode(3, { 0x12, 0x3C, 0x00 }); // 60
+    decode(3, { 0x20, 0x1E, 0x00 }); // 30
 
-    TEST_ASSERT_EQUAL_UINT8(60, ups_data.getFloat("ups.timer.shutdown"));
+    TEST_ASSERT_EQUAL_STRING("60", ups_data.get("ups.timer.shutdown").c_str());
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
 }
 
-// Same, with the PowerSummary report decoded last (the base value must not win).
 void test_ecoflow_shutdown_timer_outlet_wins_when_powersummary_first(void) {
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x12, 3, 0, 16);
     addUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x20, 3, 0, 16);
 
-    uint8_t power[] = { 0x20, 0x1E, 0x00 };  // 30
-    uint8_t outlet[] = { 0x12, 0x3C, 0x00 }; // 60
-    driver.decodeReport(&mockHost, 0x20, 3, power, sizeof(power), ups_data);
-    driver.decodeReport(&mockHost, 0x12, 3, outlet, sizeof(outlet), ups_data);
+    decode(3, { 0x20, 0x1E, 0x00 }); // 30
+    decode(3, { 0x12, 0x3C, 0x00 }); // 60
 
-    TEST_ASSERT_EQUAL_UINT8(60, ups_data.getFloat("ups.timer.shutdown"));
+    TEST_ASSERT_EQUAL_STRING("60", ups_data.get("ups.timer.shutdown").c_str());
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
 }
 
-// Without the Outlet usage neither key is exposed (upstream leaves the PowerSummary
-// timer unmapped).
+// Without the Outlet usage neither key is exposed
 void test_ecoflow_shutdown_timer_absent_without_outlet(void) {
     addUsage("UPS.PowerSummary.DelayBeforeShutdown", 0x20, 3, 0, 16);
+    addUsage("UPS.PowerSummary.DelayBeforeReboot", 0x21, 3, 0, 16);
 
-    uint8_t power[] = { 0x20, 0x1E, 0x00 }; // 30
-    driver.decodeReport(&mockHost, 0x20, 3, power, sizeof(power), ups_data);
+    decode(3, { 0x20, 0x1E, 0x00 });
+    decode(3, { 0x21, 0x1E, 0x00 });
 
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.timer.shutdown"));
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.timer.reboot"));
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
 }
 
-// ecoflow-hid.c maps UPS.PowerSummary.ConfigVoltage with "%.1f"; GenericDriver
-// rounds it to a whole volt (issue 67).
+// ecoflow-hid.c:125 maps UPS.PowerSummary.ConfigVoltage with "%.1f" (issue 67)
 void test_ecoflow_battery_voltage_nominal_one_decimal(void) {
     addUsage("UPS.PowerSummary.ConfigVoltage", 0x08, 3, 0, 16);
     mockHost._usages.back().exponent = -2;
 
-    uint8_t r1200[] = { 0x08, 0xB0, 0x04 }; // 12.00 V
-    driver.decodeReport(&mockHost, 0x08, 3, r1200, sizeof(r1200), ups_data);
+    decode(3, { 0x08, 0xB0, 0x04 }); // 12.00 V
     TEST_ASSERT_EQUAL_STRING("12.0", ups_data.get("battery.voltage.nominal").c_str());
 
-    uint8_t r1360[] = { 0x08, 0x50, 0x05 }; // 13.60 V
-    driver.decodeReport(&mockHost, 0x08, 3, r1360, sizeof(r1360), ups_data);
+    decode(3, { 0x08, 0x50, 0x05 }); // 13.60 V
     TEST_ASSERT_EQUAL_STRING("13.6", ups_data.get("battery.voltage.nominal").c_str());
 }
 
@@ -262,47 +299,262 @@ void test_ecoflow_no_shutdown_commands(void) {
     TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
 }
 
+// The commands of ecoflow-hid.c are all commented out: the command table has none (US-078)
+void test_ecoflow_command_table_has_no_commands(void) {
+    size_t n = 0;
+    const NutTable::HidInfo* t = driver.commandTable(n);
+    TEST_ASSERT_TRUE(n > 0);
+    for (size_t i = 0; i < n; i++) TEST_ASSERT_FALSE_MESSAGE(NutTable::isCommandRow(t[i]), t[i].info_type);
+}
+
+// --- Synthetic EcoFlow layout (US-078): one usage for each path of ecoflow_hid2nut, as a
+// River 3+ / Delta 3+ could report them. No fixture exists (PR #66): byte values are chosen
+// to be told apart in the snapshot.
+
+static void ecoflowLayout() {
+    static const char* const status[] = {
+        "ACPresent", "BatteryPresent", "BelowRemainingCapacityLimit", "CommunicationLost",
+        "Charging", "Discharging", "FullyCharged", "FullyDischarged", "NeedReplacement",
+        "Overload", "RemainingTimeLimitExpired", "ShutdownImminent", "ShutdownRequested",
+        "VoltageNotRegulated",
+    };
+    for (uint16_t b = 0; b < sizeof(status) / sizeof(status[0]); b++) {
+        char path[80];
+        snprintf(path, sizeof(path), "UPS.PowerSummary.PresentStatus.%s", status[b]);
+        addUsage(path, 1, 3, b, 1);
+    }
+    addUsage("UPS.PowerSummary.AudibleAlarmControl", 2, 3, 0, 8);
+    // UPS.Flow.[4].ConfigActivePower: Flow is the collection at depth 1, index 4 -> 5
+    addUsage("UPS.Flow.ConfigActivePower", 3, 3, 0, 16);
+    mockHost._usages.back().coll_index[1] = 5;
+    addUsage("UPS.PowerSummary.ConfigVoltage", 4, 3, 0, 16);
+    addUsage("UPS.OutletSystem.Outlet.DelayBeforeReboot", 5, 3, 0, 16);
+    addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 6, 3, 0, 16);
+    addUsage("UPS.PowerSummary.DelayBeforeShutdown", 7, 3, 0, 16);
+    addUsage("UPS.PowerSummary.DelayBeforeReboot", 8, 3, 0, 16);
+    addUsage("UPS.PowerSummary.DesignCapacity", 9, 3, 0, 8);
+    addUsage("UPS.PowerSummary.FullChargeCapacity", 9, 3, 8, 8);
+    addUsage("UPS.PowerSummary.iDeviceChemistry", 10, 3, 0, 8);
+    addUsage("UPS.PowerSummary.iOEMInformation", 10, 3, 8, 8);
+    addUsage("UPS.PowerSummary.ManufacturerDate", 11, 3, 0, 16);
+    addUsage("UPS.PowerSummary.Rechargeable", 12, 3, 0, 8);
+    addUsage("UPS.PowerSummary.RemainingCapacity", 13, 3, 0, 8);
+    addUsage("UPS.PowerSummary.RemainingCapacityLimit", 13, 3, 8, 8);
+    addUsage("UPS.PowerSummary.RemainingTimeLimit", 14, 3, 0, 16);
+    addUsage("UPS.PowerSummary.RunTimeToEmpty", 15, 3, 0, 16);
+    addUsage("UPS.PowerSummary.Voltage", 16, 3, 0, 16);
+    addUsage("UPS.PowerSummary.WarningCapacityLimit", 17, 3, 0, 8);
+}
+
+// On mains, charging: ACPresent, BatteryPresent, Charging
+static std::vector<SynthReport> ecoflowReports() {
+    return {
+        { 3, { 1, 0x13, 0x00 } },
+        { 3, { 2, 2 } },                  // beeper enabled
+        { 3, { 3, 0x00, 0x04 } },         // 1024
+        { 3, { 4, 52, 0 } },
+        { 3, { 5, 30, 0 } },
+        { 3, { 6, 60, 0 } },
+        { 3, { 7, 90, 0 } },
+        { 3, { 8, 120, 0 } },
+        { 3, { 9, 100, 98 } },
+        { 3, { 10, 2, 3 } },              // string indices
+        { 3, { 11, 0x6F, 0x4E } },        // (39<<9)|(3<<5)|15: 2019/03/15
+        { 3, { 12, 1 } },
+        { 3, { 13, 87, 10 } },
+        { 3, { 14, 120, 0 } },            // minutes
+        { 3, { 15, 0x88, 0x07 } },        // 1928 minutes
+        { 3, { 16, 51, 0 } },
+        { 3, { 17, 5 } },
+    };
+}
+
+// Every key sorted, one "key=value" per line, then ups.status
+static std::string snapshotOf(const UPSData& data) {
+    std::vector<std::string> lines;
+    for (const auto& p : data.getAll()) lines.push_back(std::string(p.key.c_str()) + "=" + p.value.c_str());
+    std::sort(lines.begin(), lines.end());
+    std::string out;
+    for (const auto& l : lines) out += l + "\n";
+    out += "ups.status=" + std::string(UPSData::computeUPSStatusString(data).c_str()) + "\n";
+    return out;
+}
+
+// EcoFlowDriver with its poll hook public
+struct EcoflowPollProbe : EcoFlowDriver {
+    using EcoFlowDriver::buildPollLists;
+};
+
+static std::string pollListsOf() {
+    EcoflowPollProbe probe;
+    probe.setup();
+    std::vector<GenericDriver::PollItem> quick, full;
+    probe.buildPollLists(&mockHost, quick, full);
+    std::string out = "quick:";
+    for (const auto& i : quick) out += " " + std::to_string(i.id) + "/" + std::to_string(i.report_type);
+    out += " | full:";
+    for (const auto& i : full) out += " " + std::to_string(i.id) + "/" + std::to_string(i.report_type);
+    return out;
+}
+
+// Before US-078 (hand-written mappings), kept as the reference of the differences below
+static const char* const kEcoflowSnapshotBefore =
+    "battery.capacity.nominal=100\n"
+    "battery.capacity=98\n"
+    "battery.charge.low=10\n"
+    "battery.charge.warning=5\n"
+    "battery.charge=87\n"
+    "battery.runtime.low=7200\n"
+    "battery.runtime=115680\n"
+    "battery.type=LiFePO4\n"
+    "battery.voltage.nominal=52.0\n"
+    "battery.voltage=51.00\n"
+    "ups.mfr.date=2019/03/15\n"
+    "ups.mfr=EcoFlow\n"
+    "ups.power.nominal=1024\n"
+    "ups.realpower.nominal=1024\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.comm_lost=0\n"
+    "ups.status.depleted=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=0\n"
+    "ups.status.no_battery=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status.replace_battery=0\n"
+    "ups.status.shutdown_imminent=0\n"
+    "ups.timer.reboot=30\n"
+    "ups.timer.shutdown=60\n"
+    "ups.status=OL CHRG\n";
+static const char* const kEcoflowPollBefore =
+    "quick: 1/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3";
+
+// After US-078, every value from ecoflowHid2Nut(). Differences from kEcoflowSnapshotBefore:
+// - battery.runtime.low 7200 -> 120: RemainingTimeLimit in minutes, as ecoflow-hid.c:184
+//   (user decision of 2026-10-30);
+// - battery.voltage 51.00 -> 51.0: "%.1f" of ecoflow-hid.c:197;
+// - experimental.ups.powersummary.*: the active rows 136, 170, 172 and 173;
+// - ups.beeper.status: row 114 (beeper_info); the generic mapping did not publish it;
+// - ups.status.comm_lost -> ups.status.commfault: internal key of commfault_info (row 150),
+//   no change in ups.status.
+// Unchanged: ups.realpower.nominal from the generic mapping of Flow.ConfigActivePower (ADR
+// 0011 rule 2), ups.timer.shutdown from the Outlet only (row 127), not from report 7.
+static const char* const kEcoflowSnapshotAfter =
+    "battery.capacity.nominal=100\n"
+    "battery.capacity=98\n"
+    "battery.charge.low=10\n"
+    "battery.charge.warning=5\n"
+    "battery.charge=87\n"
+    "battery.runtime.low=120\n"
+    "battery.runtime=115680\n"
+    "battery.type=LiFePO4\n"
+    "battery.voltage.nominal=52.0\n"
+    "battery.voltage=51.0\n"
+    "experimental.ups.powersummary.ioeminformation=OEM\n"
+    "experimental.ups.powersummary.presentstatus.shutdownrequested=0\n"
+    "experimental.ups.powersummary.presentstatus.voltagenotregulated=0\n"
+    "experimental.ups.powersummary.rechargeable=1\n"
+    "ups.beeper.status=enabled\n"
+    "ups.mfr.date=2019/03/15\n"
+    "ups.mfr=EcoFlow\n"
+    "ups.power.nominal=1024\n"
+    "ups.realpower.nominal=1024\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.commfault=0\n"
+    "ups.status.depleted=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=0\n"
+    "ups.status.no_battery=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status.replace_battery=0\n"
+    "ups.status.shutdown_imminent=0\n"
+    "ups.timer.reboot=30\n"
+    "ups.timer.shutdown=60\n"
+    "ups.status=OL CHRG\n";
+// The poll is the generic one, unchanged
+static const char* const kEcoflowPollAfter = kEcoflowPollBefore;
+
+void test_ecoflow_snapshot_baseline(void) {
+    ecoflowLayout();
+    mockHost._iManufacturer = 1;
+    decodeAll(ecoflowReports());
+    stringDescriptor(1, "EcoFlow");
+    stringDescriptor(2, "LiFePO4");
+    stringDescriptor(3, "OEM");
+    TEST_ASSERT_EQUAL_STRING(kEcoflowSnapshotAfter, snapshotOf(ups_data).c_str());
+    TEST_ASSERT_EQUAL_STRING(kEcoflowPollAfter, pollListsOf().c_str());
+    TEST_ASSERT_TRUE(strcmp(kEcoflowSnapshotBefore, kEcoflowSnapshotAfter) != 0);
+}
+
+// Every BOOL row of ecoflow_hid2nut set at once, then cleared: the tokens of usbhid-ups
+void test_ecoflow_status_rows(void) {
+    ecoflowLayout();
+    // Every flag but ACPresent: on battery. As ups_status_set(): depleted hides DISCHRG,
+    // fullycharged hides CHRG, lowbatt / timelimitexp / shutdownimm give LB, commfault ALARM
+    decode(3, { 1, 0xFE, 0x0F });
+    TEST_ASSERT_EQUAL_STRING("ALARM OB LB OVER RB", status().c_str());
+    TEST_ASSERT_EQUAL_STRING("Replace battery! Shutdown imminent! Internal UPS fault!", ups_data.get("ups.alarm").c_str());
+
+    decode(3, { 1, 0x03, 0x00 }); // ACPresent and BatteryPresent only
+    TEST_ASSERT_EQUAL_STRING("OL", status().c_str());
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
+}
+
+// The experimental.* rows of ecoflow-hid.c:136, 170, 172, 173 are published as upstream
+void test_ecoflow_experimental_rows(void) {
+    ecoflowLayout();
+    decode(3, { 1, 0x00, 0x30 }); // ShutdownRequested, VoltageNotRegulated
+    decode(3, { 12, 1 });
+    decode(3, { 10, 2, 3 });
+    stringDescriptor(3, "OEM");
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("experimental.ups.powersummary.presentstatus.shutdownrequested").c_str());
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("experimental.ups.powersummary.presentstatus.voltagenotregulated").c_str());
+    TEST_ASSERT_EQUAL_STRING("1", ups_data.get("experimental.ups.powersummary.rechargeable").c_str());
+    TEST_ASSERT_EQUAL_STRING("OEM", ups_data.get("experimental.ups.powersummary.ioeminformation").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
-#ifndef ARDUINO
-int main(int argc, char **argv) {
-    UNITY_BEGIN();
+static void runAll() {
     RUN_TEST(test_ecoflow_runtime_minutes_to_seconds);
     RUN_TEST(test_ecoflow_capacity_and_warning_mappings);
     RUN_TEST(test_ecoflow_config_active_power_keeps_generic_realpower_nominal);
+    RUN_TEST(test_ecoflow_config_active_power_needs_flow_index);
     RUN_TEST(test_ecoflow_outlet_timers);
     RUN_TEST(test_ecoflow_chemistry_string_descriptor);
     RUN_TEST(test_ecoflow_present_status);
-    RUN_TEST(test_ecoflow_runtime_negative_is_dropped);
+    RUN_TEST(test_ecoflow_runtime_negative_keeps_last_value);
+    RUN_TEST(test_ecoflow_runtime_negative_first_publishes_nothing);
     RUN_TEST(test_ecoflow_mfr_falls_back_when_no_manufacturer_string);
     RUN_TEST(test_ecoflow_mfr_falls_back_when_manufacturer_string_empty);
     RUN_TEST(test_ecoflow_mfr_keeps_reported_vendor);
     RUN_TEST(test_ecoflow_beeper_not_controllable);
+    RUN_TEST(test_ecoflow_beeper_status);
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first);
     RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_powersummary_first);
     RUN_TEST(test_ecoflow_shutdown_timer_absent_without_outlet);
     RUN_TEST(test_ecoflow_no_shutdown_commands);
+    RUN_TEST(test_ecoflow_command_table_has_no_commands);
     RUN_TEST(test_ecoflow_battery_voltage_nominal_one_decimal);
+    RUN_TEST(test_ecoflow_snapshot_baseline);
+    RUN_TEST(test_ecoflow_status_rows);
+    RUN_TEST(test_ecoflow_experimental_rows);
+}
+
+#ifndef ARDUINO
+int main(int argc, char **argv) {
+    UNITY_BEGIN();
+    runAll();
     return UNITY_END();
 }
 #else
 void setup() {
     UNITY_BEGIN();
-    RUN_TEST(test_ecoflow_runtime_minutes_to_seconds);
-    RUN_TEST(test_ecoflow_capacity_and_warning_mappings);
-    RUN_TEST(test_ecoflow_config_active_power_keeps_generic_realpower_nominal);
-    RUN_TEST(test_ecoflow_outlet_timers);
-    RUN_TEST(test_ecoflow_chemistry_string_descriptor);
-    RUN_TEST(test_ecoflow_present_status);
-    RUN_TEST(test_ecoflow_runtime_negative_is_dropped);
-    RUN_TEST(test_ecoflow_mfr_falls_back_when_no_manufacturer_string);
-    RUN_TEST(test_ecoflow_mfr_falls_back_when_manufacturer_string_empty);
-    RUN_TEST(test_ecoflow_mfr_keeps_reported_vendor);
-    RUN_TEST(test_ecoflow_beeper_not_controllable);
-    RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first);
-    RUN_TEST(test_ecoflow_shutdown_timer_outlet_wins_when_powersummary_first);
-    RUN_TEST(test_ecoflow_shutdown_timer_absent_without_outlet);
-    RUN_TEST(test_ecoflow_no_shutdown_commands);
-    RUN_TEST(test_ecoflow_battery_voltage_nominal_one_decimal);
+    runAll();
     UNITY_END();
 }
 void loop() {}

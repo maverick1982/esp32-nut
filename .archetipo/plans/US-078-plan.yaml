@@ -1,0 +1,525 @@
+schema: archetipo/plan/v2
+spec_code: US-078
+body: |
+  # US-078: Tabelle uniche EcoFlow (ecoflow-hid) e OpenUPS (openups-hid) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-30
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 3 | **Bloccato da:** US-073 (DONE). Sono DONE anche US-074 (comandi da tabella), US-107 (`ups.alarm`, token di stato), US-075 (CyberPower), US-076 (APC) e US-077 (Powercom, a9286a2): motore, `formatDeviceStrings`, `collectTableStringRequests`, test di copertura e modello di migrazione ci sono già.
+
+  Oggi `ecoflowHid2Nut()` contiene solo la riga RW 181 (US-066) e OpenUPS non ha una tabella. Nascono `ecoflowHid2Nut()` completa e `openupsHid2Nut()`, con tutte le righe upstream nell'ordine originale. `EcoFlowDriver` e `OpenUPSDriver` perdono le mappature `UsageMapIndex` e tengono solo gli hook non tabellari (ADR 0011).
+
+  ---
+
+  ## Cosa dicono upstream e la fixture (pianificazione 2026-10-30)
+
+  - **ecoflow-hid.c:94-236.**
+    - Righe attive 114-200: `ups.beeper.status` (`beeper_info`), `ups.power.nominal` su `UPS.Flow.[4].ConfigActivePower`, `battery.voltage.nominal` `%.1f`, `ups.timer.reboot`/`shutdown` sull'Outlet, `battery.capacity.nominal`/`battery.capacity` (in %), `battery.type` e `experimental.ups.powersummary.ioeminformation` (StringId), `ups.mfr.date` (date_conversion), 12 righe BOOL, 3 `experimental.*` numeriche, `battery.charge`, `battery.charge.low` (RW, c'è già), `battery.runtime.low`, `battery.runtime` (`ecoflow_runtime_conversion_lkp`), `battery.voltage` `%.1f`, `battery.charge.warning`.
+    - Comandi 97-103 commentati upstream (beeper e shutdown non funzionano). Righe commentate 144, 153, 155, 165, 194.
+    - 19 righe `unmapped.*` (207-231) dentro `#if WITH_UNMAPPED_DATA_POINTS`.
+    - Nessuna fixture EcoFlow: valori verificati su descriptor sintetici (assunzione della spec; una fixture dai tester della PR #66 va aggiunta se arriva).
+  - **openups-hid.c:295-341.**
+    - Righe 296-337: `ups.serial`, `battery.type` e `battery.mfr.date` (StringId), `battery.voltage` `%.2f`, `battery.current` `%.3f`, `battery.capacity` (DesignCapacity), `battery.charge`, `.low`, `.warning`, `battery.runtime`, `battery.temperature` (termistore), `output.voltage`/`current` e `input.voltage`/`current` con le scale, 12 righe BOOL (4 con le funzioni `openups_*_fun`).
+    - Righe commentate 302 e 310-315. Nessun `unmapped.*`, nessun comando.
+    - Scale da PID (`get_voltage_multiplier`, 50-72): 0xD004 con le costanti `*_d004`, 0xD005 a 0.1, altrimenti 1.
+  - **Fixture W150** (`test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json`, #26): 3 report FEATURE, stringhe 3 (serial), 8 `LiFePO4`, 9 `OPEN`. Attese di oggi: `OL`, `battery.charge` 100, `battery.runtime` 12912, `output.voltage` `12.2`.
+
+  ---
+
+  ## Decisioni
+
+  ### Prese con l'utente (2026-10-30)
+
+  1. **BatteryPresent OpenUPS.** La riga 337 (`nobattery_info`) va in tabella. Un hook toglie il bit `nobattery` (US-055, #26: la W150 manda 0 con la batteria montata), quindi `ups.status` resta `OL` e non compare l'allarme. È una deviazione, dichiarata sulla riga e nelle note.
+  2. **`ups.load`, `ups.realpower.nominal`, `ups.realpower` OpenUPS.** Restano calcolati in un hook, dopo la tabella: è un'estensione con nomi standard (ADR 0011, regola 2).
+  3. **`battery.runtime.low` EcoFlow come upstream**, in minuti (riga 184, `%.0f`): la conversione in secondi di oggi sparisce. Il cambio (per esempio 7200 → 120) va nelle note.
+
+  ### Prese in pianificazione (da confermare in review)
+
+  4. **Formati come upstream.** OpenUPS: `input.voltage` e `output.voltage` `%.2f` dopo la scala (`12.2` → `12.20`); `input.current` e `output.current` `%.3f`; `battery.current` `%.3f`; `battery.temperature` `%d` agli estremi e sui punti esatti, `%.2f` interpolato. EcoFlow: `battery.voltage` `%.1f`. `formatNumber` accetta anche `%.3f`.
+  5. **Scale OpenUPS nel `Context`**, come le scale CPS di US-075. Vengono decise da `host->getPID()` al primo report (`get_voltage_multiplier`). Il default 1 è quello di upstream.
+  6. **Funzioni BOOL OpenUPS come `Conv` dedicate** (`OpenupsCharging`, `OpenupsDischarging`, `OpenupsOnline`, `OpenupsOff`), non lookup. Upstream considera vero qualunque valore non nullo, e `openups_online_fun` dà `!online`, non `offline`.
+  7. **`battery.runtime` EcoFlow negativo.** `ecoflow_battery_runtime_conversion` restituisce NULL e `ups_infoval_set` non scrive nulla, quindi resta il valore precedente. `Conv::EcoflowRuntime` dà lo stesso esito del motore per un NULL upstream (da verificare in `decode()`). Oggi la chiave si toglie: piccola differenza, nelle note.
+  8. **`ups.timer.shutdown` e `ups.timer.reboot` EcoFlow** solo dall'Outlet (righe 126-127). `UPS.PowerSummary.DelayBeforeShutdown` e `DelayBeforeReboot` sono `unmapped` upstream e diventano percorsi superati: sparisce la cache `_outletShutdown*`.
+  9. **`UPS.Flow.ConfigActivePower` su EcoFlow.** La riga 122 dà `ups.power.nominal`. La mappatura generica verso `ups.realpower.nominal` resta come estensione (regola 2: nome standard, significato giusto), come fissa oggi `test_ecoflow_config_active_power_keeps_generic_realpower_nominal`.
+  10. **`experimental.*` EcoFlow pubblicate**: sono righe attive upstream, pubblicate da usbhid-ups, come `experimental.ecomode.*` di mge-hid. I `unmapped.*` restano dentro `#if` (regola 3).
+  11. **Comandi.** `commandTable()` restituisce la tabella di ogni driver. Nessuna riga `HU_TYPE_CMD` è attiva, quindi i due driver non offrono comandi da tabella. Restano le scelte di US-054 (`beeperControllable()` false su EcoFlow) e US-058 (`shutdownCommandsSupported()` false su entrambi). Le differenze di LIST CMD rispetto al catalogo generico vanno nel replay e nelle note.
+  12. **Stringhe del dispositivo.** `formatDeviceStrings` applica `ecoflow_format_mfr` (`EcoFlow`) e `openups_format_mfr` (`openUPS`) quando manca la stringa del produttore. `ups.model` e `ups.serial` sono le stringhe USB. `battery.type`, `battery.mfr.date` e `ups.serial` OpenUPS vengono dalle righe StringId (`collectTableStringRequests`). Spariscono `_chemStrIdx`, l'override di `parseStringDescriptor` e l'uso di `_batteryDateStringIndex`.
+  13. **Poll invariato.** Si usa il poll generico: nessun problema noto come la #36, e la spec non chiede altro. Niente `pollStaticReportsOnce()`.
+  14. **Percorsi superati.** Per ogni chiave delle tabelle, i percorsi di `GenericDriver::decodeReport()` copiati carattere per carattere, più `battery.capacity.full` (regola 2). Su OpenUPS si aggiunge `UPS.PowerSummary.Temperature`: senza, il valore grezzo del termistore finirebbe in `ups.temperature`.
+  15. **Fuori scope:** `*_claim` (opzione `productid`), `fix_report_desc`, le tensioni di cella commentate upstream.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Motore (`NutTable.h`)
+  - **`Conv` nuove**, ognuna col nome della funzione upstream nel commento: `EcoflowRuntime` (`ecoflow_battery_runtime_conversion`, `%.0f` di `v*60`, nessun valore se `v < 0`), `OpenupsVin`, `OpenupsVout` (`%.2f`), `OpenupsCcharge`, `OpenupsCdischarge` (`%.3f`), `OpenupsTemperature` (`openups_temperature_fun` con `therm_tbl`, `unsigned int thermistor = value * 100`), e le funzioni BOOL `OpenupsCharging`, `OpenupsDischarging`, `OpenupsOnline`, `OpenupsOff`.
+  - **`statusToken()`:** le quattro funzioni BOOL (`value ? chrg : !chrg`, `dischrg`, `online`/`!online`, `!off`/`off`).
+  - **Lookup:** `kDepletedInfo` `{ {1,depleted}, {0,!depleted} }` (`depleted_info` di usbhid-ups.c), se non c'è già.
+  - **`Context`:** `struct OpenupsScale { double vin = 1, vout = 1, ccharge = 1, cdischarge = 1; } openups;`.
+  - **`formatNumber`:** accetta `%.3f`.
+  - **`therm_tbl`** si sposta da `OpenUPSDriver.cpp` a `NutTable.h`, `static constexpr` come gli altri lookup (GCC 5: niente variabili inline).
+
+  ### 2. Tabelle
+  - **`ecoflowHid2Nut()`:** righe 114-200 in ordine, ognuna con `// ecoflow-hid.c:N <path>`, `UPS.Flow.[4].ConfigActivePower` con l'indice. I comandi 97-103 e le righe commentate restano come commenti; 205-232 dentro `#if WITH_UNMAPPED_DATA_POINTS`. La riga 181 (RW) resta com'è.
+  - **`openupsHid2Nut()`:** nuova, dopo `ecoflowHid2Nut()`, righe 296-337. Le righe 302 e 310-315 diventano commenti. Commento sulla riga 337 per la decisione 1.
+  - Si aggiorna il commento sopra `mgeHid2Nut()` che elenca le tabelle complete.
+
+  ### 3. `GenericDriver`
+  - Hook `virtual void filterStatus(NutTable::StatusBits& s) const {}`, chiamato su una copia dei bit subito prima di `statusKeys()` in `publishNutRows()`. Il contesto resta quello di upstream, e nessun ups.status.* si scrive per poi essere tolto (ADR 0007). Per gli altri driver non cambia nulla.
+
+  ### 4. `EcoFlowDriver`
+  - **Override:** `hid2nut()`, `commandTable()`, `supersededGenericPaths()`, `formatDeviceStrings()`. Restano `beeperControllable()` false e `shutdownCommandsSupported()` false.
+  - **Si tolgono:** `decodeReport`, `parseStringDescriptor`, `collectStringRequests`, `onLoop` (il fallback `EcoFlow` passa a `formatDeviceStrings`), `setup`, `_map`, `_chemStrIdx`, `_outletShutdown*`.
+
+  ### 5. `OpenUPSDriver`
+  - **Override:** `hid2nut()`, `commandTable()`, `supersededGenericPaths()`, `formatDeviceStrings()`.
+  - **`decodeReport`:** al primo report imposta le scale nel `Context` dal PID (come `CyberPowerDriver.cpp:112`), poi chiama `GenericDriver::decodeReport`.
+  - **`filterStatus`:** azzera `nobattery` in `set` e in `known` (decisione 1).
+  - **`postDecode`:** chiama la base, poi l'hook di `ups.load`/`ups.realpower.nominal`/`ups.realpower` di oggi (decisione 2), scrivendo solo quando il valore cambia.
+  - **Si tolgono:** le mappature, `calculateTemperature`, `therm_tbl`, `_map` e la rimozione di `ups.status.no_battery`.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video. Prove sul campo affidate ai tester (EcoFlow PR #66, W150 #26).
+
+  - **Baseline prima del codice** (TASK-01): snapshot completo di `UPSData` dal replay della W150, snapshot dei report sintetici EcoFlow (descriptor stile River 3+/Delta 3+) e liste di poll di oggi. Dopo la migrazione ogni differenza va commentata con la riga upstream o con la decisione.
+  - **`test_nut_table`:** conversioni EcoFlow/OpenUPS (runtime negativo, scale d004/d005/default, termistore agli estremi, sui punti esatti e interpolato, funzioni BOOL con valori non nulli diversi da 1, `%.3f`), copertura di `ecoflow-hid.c` e `openups-hid.c` con `checkTableCoverage`, formati.
+  - **`test_ecoflow_driver`:** test di oggi riallineati alle decisioni (runtime.low in minuti, timer solo dall'Outlet, mfr da `formatDeviceStrings`, `experimental.*`, beeper non controllabile, nessun comando).
+  - **`test_openups_driver`** (suite nuova): scale per PID, `ups.status` OL con BatteryPresent 0, stati delle `openups_*_fun`, hook di `ups.load`, nessun `ups.temperature`.
+  - **`test_command_catalog` / `test_record_replay`:** righe legate della W150 ricavate a mano dal descriptor, LIST CMD/RW, snapshot e baseline `ups.status` (OL invariato), `expected_ups_data` della fixture aggiornato con commento.
+  - **Mutazioni** (ognuna fa fallire almeno un test): togliere una citazione da una delle due tabelle; invertire `OpenupsOff`; togliere `UPS.PowerSummary.Temperature` dai percorsi superati OpenUPS; togliere `filterStatus`.
+  - **Regressione:** suite nativa completa a blocchi, build `esp32-s3-standard`, OTA sull'Eaton 3S con l'ok dell'utente (`GenericDriver` cambia).
+
+  ---
+
+  ## Rischi e note
+
+  - **EcoFlow senza hardware né fixture:** solo descriptor sintetici. Va chiesta una prova ai tester della PR #66 prima del rilascio.
+  - **OpenUPS 0xD004:** le scale `*_d004` non sono mai state provate da noi; si copiano da upstream.
+  - **Formati visibili in Home Assistant** (`12.2` → `12.20`, temperatura, correnti, runtime.low): tutti nelle note di rilascio.
+  - **Note di rilascio** in `docs/releases/v1.12.0.md`.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-30_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: snapshot W150, snapshot EcoFlow sintetico e liste di poll di oggi'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima del codice, quello che il firmware pubblica e chiede oggi su OpenUPS ed EcoFlow.
+
+      **Leggi:**
+      - `test/test_ecoflow_driver/test_main.cpp` (MockHost, descriptor sintetico);
+      - `test/test_powercom_driver/test_powercom_driver.cpp` (helper `decodeAll`, `snapshotOf`, sonda delle liste di poll di US-077);
+      - `test/test_record_replay/test_main.cpp` (`checkSnapshots`, `test_replay_openups_wallecube_w150`, `kPowercomSnapshotSpd750u`).
+
+      **Modifica:**
+      1. In `test_ecoflow_driver`, gli helper `decodeAll` (decodeReport + postDecode, come `USBHostUPS`) e `snapshotOf` (`chiave=valore` ordinati).
+      2. Report sintetici EcoFlow sul descriptor del test, uno per usage delle righe 114-200, con valori distinti: per esempio RunTimeToEmpty 45, RemainingTimeLimit 120, ConfigVoltage 51.2, entrambi i DelayBeforeShutdown, iDeviceChemistry, ManufacturerDate, tutti i bit di PresentStatus. Se il descriptor non ha una usage, aggiungila al descriptor del test.
+      3. `test_ecoflow_snapshot_baseline` con la costante `kEcoflowSnapshotBefore` presa dal codice di oggi.
+      4. In `test_record_replay`, `test_openups_snapshot_baseline` (snapshot completo della W150, costante `kOpenupsSnapshotW150`) e liste quick/full di oggi (`FixtureReplayRunner::pollLists<OpenUPSDriver>`).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ecoflow_driver -f test_record_replay` verde sul codice di oggi.
+
+      **Fatto:** baseline deterministiche, nessun file di produzione modificato.
+
+      **Blocchi:** se un report sintetico non si decodifica, correggi i byte, non il parser.
+
+      ## File Coinvolti
+      - test/test_ecoflow_driver/test_main.cpp — helper, report sintetici, baseline
+      - test/test_record_replay/test_main.cpp — snapshot e poll della W150
+
+      ## Criteri di Completamento
+      - [ ] Baseline verdi sul codice attuale
+      - [ ] Nessun file in lib/ modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'NutTable: conversioni EcoFlow/OpenUPS, funzioni BOOL, scale nel contesto'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al motore le conversioni di ecoflow-hid e openups-hid.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/NutTable.h` (`Conv`, `Context` con `CpsScale`, `statusToken`, `decode`, `formatNumber`, le `Conv` Powercom come modello);
+      - `nut_repo/drivers/ecoflow-hid.c:66-87`, `nut_repo/drivers/openups-hid.c:36-265`;
+      - `lib/USBHostUPS/src/OpenUPSDriver.cpp` (`therm_tbl`, `calculateTemperature`).
+
+      **Modifica:**
+      1. `Conv` nuove, ognuna col commento della funzione upstream: `EcoflowRuntime`, `OpenupsVin`, `OpenupsVout`, `OpenupsCcharge`, `OpenupsCdischarge`, `OpenupsTemperature`, `OpenupsCharging`, `OpenupsDischarging`, `OpenupsOnline`, `OpenupsOff`.
+      2. `statusToken()`: le quattro funzioni BOOL OpenUPS, vere per ogni valore non nullo; `online`/`!online` (non `offline`), `!off` per valore vero.
+      3. `decode()`:
+         - `EcoflowRuntime`: `v >= 0` → `%.0f` di `v * 60.0`; altrimenti lo stesso esito di un NULL upstream (nessuna scrittura). Controlla come `decode()` tratta oggi FAIL/DEFER e scegli quello che lascia il valore precedente;
+         - scale: `%.2f` di `v * ctx.openups.vin` o `vout`, `%.3f` di `v * ccharge` o `cdischarge`;
+         - `OpenupsTemperature`: copia letterale di `openups_temperature_fun` (`%d` per -40, 125 e i punti esatti, `%.2f` interpolato);
+         - le funzioni BOOL nel gruppo che dà DEFER.
+      4. `Context`: `struct OpenupsScale { double vin = 1; double vout = 1; double ccharge = 1; double cdischarge = 1; } openups;` col commento (`get_voltage_multiplier`, impostato da `OpenUPSDriver`).
+      5. Costanti `*_d004` e `kOpenupsThermTbl` in `NutTable.h`, `static constexpr`.
+      6. `formatNumber`: accetta `%.3f`.
+      7. `kDepletedInfo` se manca (`depleted_info`).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_ecoflow_driver` verde.
+
+      **Fatto:** API pronta, compilata con GCC 5.
+
+      **Blocchi:** niente variabili inline (GCC 5).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — Conv, statusToken, decode, Context, formatNumber, lookup
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+      - [ ] Ogni Conv nuova ha il nome della funzione upstream nel commento
+    ref: TASK-02
+  - id: TASK-03
+    title: Test delle conversioni EcoFlow/OpenUPS
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il TASK-02 con attese ricavate a mano dal codice upstream.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (test delle Conv Powercom di US-077).
+
+      **Modifica:** test in `test_nut_table`:
+      - `EcoflowRuntime`: 45 → `2700`, 0 → `0`, -1 → nessun valore;
+      - scale con contesto di default (1), d005 (0.1: 122 → `12.20`, `%.3f` per le correnti) e d004 (costanti upstream);
+      - termistore: sotto 0x31 → `-40`, sopra 0x3CC → `125`, un punto esatto (`%d`), un valore interpolato (`%.2f`);
+      - funzioni BOOL con 0, 1 e un valore come 2: token attesi, `!online` per 0;
+      - `formatNumber` con `%.3f`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde.
+
+      **Fatto:** ogni Conv nuova ha almeno un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test delle conversioni
+
+      ## Criteri di Completamento
+      - [ ] Tutte le Conv nuove testate, casi limite inclusi
+      - [ ] Suite verde
+    ref: TASK-03
+  - id: TASK-04
+    title: 'ecoflowHid2Nut() e openupsHid2Nut(): tutte le righe upstream'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** copiare le due tabelle upstream nell'ordine originale.
+
+      **Leggi:** `nut_repo/drivers/ecoflow-hid.c:94-236`, `nut_repo/drivers/openups-hid.c:295-341`; `powercomHid2Nut()` e `cpsHid2Nut()` come modello (commenti, `#if`, righe escluse).
+
+      **Modifica:**
+      1. `ecoflowHid2Nut()`:
+         - righe 114-200, ognuna con `// ecoflow-hid.c:N <path>`; `UPS.Flow.[4].ConfigActivePower` con l'indice;
+         - comandi 97-103 come commento (commentati upstream, US-054/US-058); righe commentate 144, 153, 155, 165, 194 come commento;
+         - 205-232 dentro `#if WITH_UNMAPPED_DATA_POINTS`;
+         - riga 184 `%.0f` senza conversione (decisione 3); riga 193 `Conv::EcoflowRuntime`;
+         - la riga 181 RW resta invariata.
+      2. `openupsHid2Nut()` dopo `ecoflowHid2Nut()`:
+         - righe 296-337; 302 e 310-315 come commento;
+         - riga 337 con commento: il bit è filtrato da `OpenUPSDriver::filterStatus` (decisione 1, #26).
+      3. Aggiorna il commento sopra `mgeHid2Nut()` (tabelle complete) e l'intestazione di copyright con openups-hid.c.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog` verde.
+
+      **Fatto:** tabelle complete e compilate.
+
+      **Blocchi:** se una usage non ha nome in `NUTUsages.h`, usa il codice `0x%08X` come in `powercomHid2Nut()`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — ecoflowHid2Nut, openupsHid2Nut, commenti
+
+      ## Criteri di Completamento
+      - [ ] Ogni riga upstream presente in ordine con la citazione
+      - [ ] Esclusioni e righe commentate motivate
+    ref: TASK-04
+  - id: TASK-05
+    title: Copertura delle tabelle e formati
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che le due tabelle contengono tutte le righe upstream.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (`checkTableCoverage` e i test di copertura di US-075..077).
+
+      **Modifica:**
+      1. Test di copertura per `ecoflow-hid.c` e `openups-hid.c` con `checkTableCoverage` (righe commentate e `#if` comprese, come per powercom).
+      2. Test dei formati: ogni riga numerica ha un formato accettato da `formatNumber`.
+      3. Nessun `unmapped.*` legato senza la macro; tre `experimental.*` numeriche più la StringId presenti in EcoFlow.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde.
+
+      **Fatto:** copertura verificabile riga per riga.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — copertura e formati
+
+      ## Criteri di Completamento
+      - [ ] Copertura verde per entrambi i file upstream
+      - [ ] Togliere una citazione fa fallire il test
+    ref: TASK-05
+  - id: TASK-06
+    title: 'EcoFlowDriver: solo hook non tabellari'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere le mappature scritte a mano da EcoFlowDriver.
+
+      **Leggi:** `lib/USBHostUPS/src/EcoFlowDriver.{h,cpp}`; `PowercomDriver` e `CyberPowerDriver` (`supersededGenericPaths`, `formatDeviceStrings`, `commandTable`); `GenericDriver::decodeReport` (percorsi standard).
+
+      **Modifica:**
+      1. Override: `commandTable()` → `NutTable::ecoflowHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()` (`EcoFlow` se manca o è vuoto `ups.mfr`, come `ecoflow_format_mfr`).
+      2. `kSupersededGenericPaths`: i percorsi di `GenericDriver::decodeReport()` per ogni chiave della tabella (stati, `battery.*`, `ups.beeper.status`, `ups.mfr.date`, `ups.timer.*`), più `UPS.PowerSummary.DelayBeforeShutdown`/`DelayBeforeReboot` (decisione 8) e `battery.capacity.full`. NON `UPS.Flow.ConfigActivePower` (decisione 9).
+      3. Via: `decodeReport`, `parseStringDescriptor`, `collectStringRequests`, `onLoop`, `setup`, `_map`, `_chemStrIdx`, `_outletShutdown*`.
+      4. Restano `beeperControllable()` false e `shutdownCommandsSupported()` false.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ecoflow_driver` compila; i test fallisce dove le decisioni cambiano l'uscita (si allineano nel TASK-07).
+
+      **Fatto:** nessuna `Mapping` in EcoFlowDriver.
+
+      **Blocchi:** un valore che sparisce senza una decisione va segnalato prima di proseguire.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EcoFlowDriver.h — override, campi tolti
+      - lib/USBHostUPS/src/EcoFlowDriver.cpp — percorsi superati, formatDeviceStrings
+
+      ## Criteri di Completamento
+      - [ ] Nessuna mappatura scritta a mano
+      - [ ] Hook US-054/US-058 invariati
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di EcoFlowDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_ecoflow_driver` e confrontare lo snapshot con la baseline.
+
+      **Leggi:** `test/test_ecoflow_driver/test_main.cpp` (baseline del TASK-01).
+
+      **Modifica:**
+      1. `kEcoflowSnapshotAfter` accanto alla baseline, con un commento per ogni differenza (riga upstream o decisione): `battery.runtime.low` in minuti, `experimental.*`, `ups.mfr.date`, formati.
+      2. Test di oggi riallineati: `runtime_negative` (decisione 7), `shutdown_timer_*` (solo Outlet), `mfr_*` via `formatDeviceStrings`, `chemistry_string_descriptor` via riga StringId.
+      3. Test nuovi: 12 BOOL → `ups.status` attesi (OB, LB, CHRG, DISCHRG, RB, OVER, ALARM per commfault/nobattery), `ups.beeper.status` da `beeper_info`, beeper non controllabile, nessun comando.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ecoflow_driver` verde.
+
+      **Fatto:** ogni differenza dalla baseline è commentata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_ecoflow_driver/test_main.cpp — snapshot dopo, test riallineati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Differenze rispetto alla baseline commentate una per una
+    ref: TASK-07
+  - id: TASK-08
+    title: 'GenericDriver filterStatus e OpenUPSDriver: solo hook non tabellari'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** passare OpenUPS alla tabella, con i due hook decisi con l'utente.
+
+      **Leggi:** `lib/USBHostUPS/src/OpenUPSDriver.{h,cpp}`; `GenericDriver::postDecode`/`publishNutRows` (`GenericDriver.cpp`); `CyberPowerDriver.cpp:112` (scale dal PID).
+
+      **Modifica:**
+      1. `GenericDriver.h`: `virtual void filterStatus(NutTable::StatusBits& s) const {}` col commento. In `publishNutRows()` passa a `statusKeys()` una copia dei bit filtrata, mai `_nut_ctx.status` modificato.
+      2. `OpenUPSDriver`:
+         - override `hid2nut()`/`commandTable()` → `NutTable::openupsHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()` (`openUPS` senza produttore);
+         - `decodeReport`: prima del report, se le scale non sono decise, `get_voltage_multiplier` da `host->getPID()` in `_nut_ctx.openups`; poi `GenericDriver::decodeReport`;
+         - `filterStatus`: azzera `nobattery` in `set` e `known` (decisione 1, #26);
+         - `postDecode`: base, poi l'hook di oggi per `ups.realpower.nominal`, `ups.load` e `updateRealPower()`, scrivendo solo se il valore cambia (ADR 0007);
+         - `kSupersededGenericPaths`: i percorsi generici delle chiavi della tabella, più `UPS.PowerSummary.Temperature` e `battery.capacity.full`;
+         - via: mappature, `_map`, `calculateTemperature`, `therm_tbl`, la rimozione di `ups.status.no_battery`, `setup` se resta vuoto.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_record_replay` compila; le differenze si allineano nel TASK-10.
+
+      **Fatto:** nessuna mappatura scritta a mano in OpenUPSDriver; gli altri driver non cambiano.
+
+      **Blocchi:** se `ups.alarm` legge il bit dal contesto e non dalle chiavi, filtra anche lì.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — hook filterStatus
+      - lib/USBHostUPS/src/GenericDriver.cpp — publishNutRows con i bit filtrati
+      - lib/USBHostUPS/src/OpenUPSDriver.h — override
+      - lib/USBHostUPS/src/OpenUPSDriver.cpp — scale, filterStatus, postDecode, percorsi superati
+
+      ## Criteri di Completamento
+      - [ ] Nessuna mappatura scritta a mano
+      - [ ] ups.status della W150 resta OL
+      - [ ] Comportamento degli altri driver invariato
+    ref: TASK-08
+  - id: TASK-09
+    title: Test di OpenUPSDriver
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire scale, stati e hook di OpenUPS.
+
+      **Leggi:** `test/test_ecoflow_driver/test_main.cpp` (MockHost, helper del TASK-01), `test/test_generic_driver/test_main.cpp` (parti OpenUPS).
+
+      **Modifica:** suite nuova `test/test_openups_driver/test_main.cpp`, o i test esistenti spostati se `test_generic_driver` ha già un blocco OpenUPS:
+      - scale con PID 0xD004, 0xD005 e un altro PID (scala 1);
+      - BatteryPresent 0 → nessun `ups.status.no_battery`, `ups.status` OL, nessun allarme;
+      - `openups_*_fun` con valori 0/1/2: OL/OB, CHRG/DISCHRG, OFF;
+      - hook di `ups.load` e `ups.realpower.nominal` (dal modello, 150 di default);
+      - nessun `ups.temperature`; `battery.temperature` dal termistore;
+      - `ups.mfr` `openUPS` senza stringa del produttore.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_openups_driver -f test_generic_driver` verde.
+
+      **Fatto:** le decisioni 1, 2, 4, 5 e 14 hanno un test ciascuna.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_openups_driver/test_main.cpp — suite nuova
+      - test/test_generic_driver/test_main.cpp — solo se ci sono test OpenUPS da spostare
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Togliere filterStatus fa fallire un test
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Replay W150 e catalogo comandi: righe legate, LIST CMD/RW, snapshot'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare la migrazione sulla fixture W150 e sui comandi dei due driver.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (`test_replay_openups_wallecube_w150`, `NUT_ROWS_POWERCOM_SPD750U`, baseline del TASK-01); `test/test_command_catalog/test_main.cpp`.
+
+      **Modifica:**
+      1. `NUT_ROWS_OPENUPS_W150`: righe legate dal descriptor, ricavate a mano da `openups-hid.c`, passate a `runFixtureTest`.
+      2. LIST CMD e LIST RW della W150 (attese vuote, a meno che il catalogo di oggi offra qualcosa: differenza commentata).
+      3. `kOpenupsSnapshotW150After` con le differenze commentate (formati `%.2f`/`%.3f`, `ups.serial`, `battery.type`, `battery.mfr.date`, scala d005). Baseline `ups.status` OL invariata. `expected_ups_data` della fixture aggiornato (`output.voltage` `12.20`) con una nota.
+      4. `test_command_catalog`: EcoFlow e OpenUPS con `commandTable()` dalle tabelle → nessun comando da tabella, nessun beeper/load/shutdown. Le differenze rispetto al catalogo generico sono commentate.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_command_catalog` verde.
+
+      **Fatto:** l'elenco della Dimostrazione (variabili W150) è fissato in un test.
+
+      **Blocchi:** un cambio di `ups.status` senza riga upstream blocca il task.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — righe legate, snapshot, LIST
+      - test/test_command_catalog/test_main.cpp — EcoFlow e OpenUPS
+      - test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json — expected_ups_data
+
+      ## Criteri di Completamento
+      - [ ] Righe legate ricavate a mano e verdi
+      - [ ] ups.status OL invariato
+      - [ ] Differenze commentate
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Note di rilascio v1.12.0: sezioni EcoFlow e OpenUPS'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare per gli utenti EcoFlow e OpenUPS le differenze trovate nei TASK-07, 09 e 10.
+
+      **Leggi:** `docs/releases/v1.12.0.md` (sezioni Eaton, CyberPower, APC, Powercom); `data/www/bundle.js` (`NUT_DESCRIPTIONS`).
+
+      **Modifica:**
+      1. `docs/releases/v1.12.0.md`:
+         - intro e `description:`: anche EcoFlow (ecoflow-hid) e OpenUPS (openups-hid), US-078;
+         - Upgrade notes **EcoFlow:** `battery.runtime.low` in minuti come upstream, `experimental.*` nuove, `ups.mfr.date`, timer solo dall'Outlet, `battery.runtime` negativo non più cancellato, eventuali differenze di LIST CMD;
+         - Upgrade notes **OpenUPS:** formati (`12.20`, correnti `%.3f`, temperatura), `ups.serial`/`battery.type`/`battery.mfr.date` dalle stringhe, scale 0xD004, BatteryPresent ancora ignorato (#26), `ups.load` calcolato come estensione;
+         - Other changes: gli hook che restano nei due driver, `GenericDriver::filterStatus`.
+      2. Una chiave nuova senza descrizione: aggiungila a `NUT_DESCRIPTIONS` e lancia `python scripts/embed_web.py`.
+
+      **Verifica:** rilettura; con `bundle.js` toccato, anche `web_assets.h` nel diff.
+
+      **Fatto:** note coerenti con i test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — voci EcoFlow e OpenUPS
+      - data/www/bundle.js — solo per chiavi nuove
+
+      ## Criteri di Completamento
+      - [ ] Ogni differenza visibile dei test è nelle note
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build, mutazioni, OTA sul 3S e bozze per i tester
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con suite completa, build e verifica che l'Eaton non cambi (`GenericDriver` è cambiato).
+
+      **Leggi:** `scripts/nut_snapshot.py`; gli script OTA e log di US-076/US-077.
+
+      **Passi:**
+      1. Suite nativa completa in blocchi da circa 11 suite in foreground (`PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f ...`, limite 600 s). Annota il totale.
+      2. Build da PowerShell: `~\.platformio\penv\Scripts\pio.exe run -e esp32-s3-standard`. Annota flash e RAM.
+      3. Mutazioni del piano: togliere una citazione da una tabella; invertire `OpenupsOff`; togliere `UPS.PowerSummary.Temperature` dai percorsi superati OpenUPS; togliere `filterStatus`. Ognuna deve far fallire un test; poi ripristina.
+      4. Solo con l'ok esplicito dell'utente: OTA sull'Eaton 3S, `nut_snapshot.py` prima e dopo, System Log senza errori USB. Credenziali lette da script, mai stampate.
+      5. Bozze dei messaggi ai tester: EcoFlow (PR #66) e W150 (#26), con cosa confrontare (`upsc` prima/dopo), cosa allegare (`usb_diagnostics.json`, System Log). Niente zip né pubblicazione senza richiesta.
+
+      **Verifica:** passi 1-3 verdi; il passo 4 fatto o saltato su decisione dell'utente.
+
+      **Fatto:** numeri annotati per la review, bozze pronte.
+
+      **Blocchi:** una regressione Eaton blocca la chiusura.
+
+      ## File Coinvolti
+      - nessun file di produzione (esecuzione); bozze nello scratchpad
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde con totale annotato
+      - [ ] Build ok con flash/RAM annotati
+      - [ ] Mutazioni colte
+      - [ ] OTA fatta o saltata su decisione dell'utente
+    ref: TASK-12

@@ -590,12 +590,20 @@ void test_replay_phoenixtec_powerwalker_vi2200shl_issue96(void) {
         RW_DELAYS, RW_DELAYS);
 }
 
+// openupsHid2Nut() rows bound by the W150 descriptor (US-078), derived from its usages and
+// openups-hid.c:296-337: every row but battery.voltage.nominal and the cell voltages
+// (commented out upstream). "BOOL" stands for the 12 status rows 326-337.
+static const char* const NUT_ROWS_OPENUPS_W150 =
+    "BOOL battery.capacity battery.charge battery.charge.low battery.charge.warning battery.current "
+    "battery.mfr.date battery.runtime battery.temperature battery.type battery.voltage input.current "
+    "input.voltage output.current output.voltage ups.serial";
+
 // The W150 reports PresentStatus.BatteryPresent = 0 in its normal state, but
 // OpenUPSDriver ignores the unreliable flag, so ups.status stays OL; see the
 // fixture "notes" (US-055).
 void test_replay_openups_wallecube_w150(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json",
-        "", nullptr, /* NUT table rows (US-066) */ "",
+        "", nullptr, NUT_ROWS_OPENUPS_W150,
         /* openups-hid.c has no RW rows and no ups.delay.* */ {}, "", "");
 }
 
@@ -1375,6 +1383,96 @@ void test_powercom_snapshot_baseline(void) {
         FixtureReplayRunner::pollLists<PowercomDriver>("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json").c_str());
 }
 
+// US-078: the W150 fixture (issue #26) before the migration to openupsHid2Nut(), with the
+// hand-written mappings of OpenUPSDriver, kept as the reference of the differences below
+static const char* const kOpenupsSnapshotW150Before =
+    "battery.charge.low=10\n"
+    "battery.charge=100\n"
+    "battery.current=0.01\n"
+    "battery.runtime=12912\n"
+    "battery.temperature=29.5\n"
+    "battery.voltage=13.60\n"
+    "driver.name=OpenUPSDriver\n"
+    "input.current=1.24\n"
+    "input.voltage=12.3\n"
+    "output.current=1.34\n"
+    "output.voltage=12.2\n"
+    "ups.load=11\n"
+    "ups.mfr=WalleCube\n"
+    "ups.model=Smart UPS W150\n"
+    "ups.realpower.nominal=150\n"
+    "ups.realpower=16\n"
+    "ups.serial=E4B323491C40\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status.replace_battery=0\n"
+    "ups.status.shutdown_imminent=0\n"
+    "ups.temperature=5.5\n"
+    "ups.status=OL\n";
+static const char* const kOpenupsPollW150Before = "quick: 2/3 | full: 1/3 2/3 3/3";
+
+// After US-078, every value from openupsHid2Nut(). Differences from kOpenupsSnapshotW150Before:
+// - battery.capacity, battery.charge.warning: rows 304 and 307, not read before;
+// - battery.current 0.01 -> 0.008, input.current 1.24 -> 1.237, output.current 1.34 -> 1.340:
+//   "%.3f" of row 303 and of openups_scale_ccharge/cdischarge_fun;
+// - input.voltage 12.3 -> 12.33, output.voltage 12.2 -> 12.24: "%.2f" of
+//   openups_scale_vin/vout_fun (HID values 123.3 and 122.4, x 0.1 for PID 0xD005);
+// - battery.temperature 29.5 -> 29.47: "%.2f" of openups_temperature_fun;
+// - ups.temperature gone: UPS.PowerSummary.Temperature is the thermistor reading of row 309;
+// - ups.status.commfault, .off, .overheat: internal keys of rows 326, 327 and 329, no change
+//   in ups.status (OL; BatteryPresent = 0 still ignored, issue #26).
+// Unchanged: ups.load, ups.realpower(.nominal) (OpenUPSDriver hook, ADR 0011 rule 2). The
+// replay passes the strings before the reports, so battery.type and battery.mfr.date (rows 299
+// and 300, string indices 8 and 9) are not filled here: on the device the poll asks for them
+// (test_openups_driver covers them).
+static const char* const kOpenupsSnapshotW150After =
+    "battery.capacity=100\n"
+    "battery.charge.low=10\n"
+    "battery.charge.warning=5\n"
+    "battery.charge=100\n"
+    "battery.current=0.008\n"
+    "battery.runtime=12912\n"
+    "battery.temperature=29.47\n"
+    "battery.voltage=13.60\n"
+    "driver.name=OpenUPSDriver\n"
+    "input.current=1.237\n"
+    "input.voltage=12.33\n"
+    "output.current=1.340\n"
+    "output.voltage=12.24\n"
+    "ups.load=11\n"
+    "ups.mfr=WalleCube\n"
+    "ups.model=Smart UPS W150\n"
+    "ups.realpower.nominal=150\n"
+    "ups.realpower=16\n"
+    "ups.serial=E4B323491C40\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.commfault=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.off=0\n"
+    "ups.status.overheat=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status.replace_battery=0\n"
+    "ups.status.shutdown_imminent=0\n"
+    "ups.status=OL\n";
+// The poll is the generic one, unchanged
+static const char* const kOpenupsPollW150After = kOpenupsPollW150Before;
+
+void test_openups_snapshot_baseline(void) {
+    static const SnapshotCase cases[] = {
+        { "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json", kOpenupsSnapshotW150After },
+    };
+    checkSnapshots(cases, sizeof(cases) / sizeof(cases[0]));
+    TEST_ASSERT_EQUAL_STRING(kOpenupsPollW150After,
+        FixtureReplayRunner::pollLists<OpenUPSDriver>("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -1413,6 +1511,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
     RUN_TEST(test_powercom_snapshot_baseline);
+    RUN_TEST(test_openups_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);
@@ -1455,6 +1554,7 @@ void setup() {
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
     RUN_TEST(test_powercom_snapshot_baseline);
+    RUN_TEST(test_openups_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);

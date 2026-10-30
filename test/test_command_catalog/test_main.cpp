@@ -1142,6 +1142,33 @@ void test_powercom_quick_test_value() {
     TEST_ASSERT_EQUAL(1, value);
 }
 
+// --- Commands from the ecoflow-hid and openups-hid tables (US-078) ---
+
+void test_ecoflow_commands_from_table() {
+    // ecoflow-hid.c has its beeper.* and shutdown.* rows only in a comment: no command, whatever
+    // the device has. EcoFlowDriver also says beeper not controllable and no shutdown commands
+    // (US-054, US-058). Without a table the catalog offered the battery tests of UPS.Battery.Test
+    std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03),
+                                   mk("UPS.Battery.Test", 0x00840058, 0x03),
+                                   mk("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x00840057, 0x03),
+                                   mk("UPS.OutletSystem.Outlet.DelayBeforeReboot", 0x00840055, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::ecoflowHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, false, false, true, nullptr, t, n)).c_str());
+    TEST_ASSERT_EQUAL_STRING("test.battery.start.quick test.battery.start.deep test.battery.stop",
+                             names(CommandCatalog::build(u, false, false, true)).c_str());
+}
+
+void test_openups_commands_from_table() {
+    // openups-hid.c has no command rows: nothing, even on usages the generic catalog would
+    // use (the W150 replay checks its own empty LIST CMD)
+    std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03),
+                                   mk("UPS.Battery.Test", 0x00840058, 0x03) };
+    size_t n;
+    const NutTable::HidInfo* t = NutTable::openupsHid2Nut(n);
+    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, true, false, true, nullptr, t, n)).c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -1200,6 +1227,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_beeper_without_quirk);
     RUN_TEST(test_powercom_load_shutdown_never_listed);
     RUN_TEST(test_powercom_quick_test_value);
+    RUN_TEST(test_ecoflow_commands_from_table);
+    RUN_TEST(test_openups_commands_from_table);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

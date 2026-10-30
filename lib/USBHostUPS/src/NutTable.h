@@ -58,6 +58,12 @@
  *                 2007 Charles Lepple <clepple@gmail.com>
  *                 2018 Markus "Links2004" <help.markus+gitk@gmail.com>
  *                 2023 Blaž Zakrajšek <zakrajsek.blaz@gmail.com>
+ *
+ * drivers/openups-hid.c:
+ *   Copyright (C) 2003 - 2012 Arnaud Quette <ArnaudQuette@Eaton.com>
+ *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2008 - 2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *                 2012 Nicu Pavel <npavel@mini-box.com>
  */
 
 #ifndef NUT_TABLE_H
@@ -150,7 +156,18 @@ enum class Conv : uint8_t {
     PowercomLowbatt,      // powercom_lowbatt_conversion (powercom-hid.c)
     PowercomTrim,         // powercom_trim_conversion (powercom-hid.c)
     PowercomBoost,        // powercom_boost_conversion (powercom-hid.c)
-    PowercomOverload      // powercom_overload_conversion (powercom-hid.c)
+    PowercomOverload,     // powercom_overload_conversion (powercom-hid.c)
+    // US-078
+    EcoflowRuntime,       // ecoflow_runtime_conversion_lkp (ecoflow-hid.c): minutes to seconds
+    OpenupsVin,           // openups_vin_info (openups-hid.c)
+    OpenupsVout,          // openups_vout_info (openups-hid.c)
+    OpenupsCcharge,       // openups_ccharge_info (openups-hid.c)
+    OpenupsCdischarge,    // openups_cdischarge_info (openups-hid.c)
+    OpenupsTemperature,   // openups_temperature_info (openups-hid.c)
+    OpenupsCharging,      // openups_charging_info (openups-hid.c)
+    OpenupsDischarging,   // openups_discharging_info (openups-hid.c)
+    OpenupsOnline,        // openups_online_info (openups-hid.c)
+    OpenupsOff            // openups_off_info (openups-hid.c)
 };
 
 struct Lookup {
@@ -250,6 +267,7 @@ constexpr int ST_OFFLINE = 1;
 constexpr int ST_OFF = 14;
 constexpr int ST_FULLYCHARGED = 20;
 constexpr int ST_NOTFULLYCHARGED = 21;
+constexpr int ST_NOBATTERY = 24;
 constexpr uint32_t statusBit(int b) { return (uint32_t)1 << b; }
 
 // process_boolean_info() (usbhid-ups.c:2030), literally: online and offline, fullycharged
@@ -337,6 +355,7 @@ static constexpr Lookup kVrangeInfo[] = { { 0, "!vrange" }, { 1, "vrange" } };  
 static constexpr Lookup kFrangeInfo[] = { { 0, "!frange" }, { 1, "frange" } };               // frange_info
 static constexpr Lookup kMgeOnbattInfo[] = { { 1, "!online" }, { 0, "online" } };            // mge_onbatt_info
 static constexpr Lookup kFullychargedInfo[] = { { 1, "fullycharged" }, { 0, "notfullycharged" } }; // fullycharged_info
+static constexpr Lookup kDepletedInfo[] = { { 1, "depleted" }, { 0, "!depleted" } };         // depleted_info
 static constexpr Lookup kTimelimitexpiredInfo[] = { { 1, "timelimitexp" }, { 0, "!timelimitexp" } }; // timelimitexpired_info
 static constexpr Lookup kApcStatusFlag[] = { { 8, "!off" }, { 16, "!off" }, { 0, "off" } };     // apcstatusflag_info
 static constexpr Lookup kApcLineFailCauseVrange[] = {                                        // apc_linefailcause_vrange_info
@@ -396,6 +415,15 @@ struct Context {
     // last_valid of powercom_hack_voltage (powercom-hid.c, US-077): the text of the last
     // valid report 0xA4, written by PowercomDriver::decodeReport; empty ("0.0") until the first one
     char powercom_battery_voltage[32] = "";
+    // The scale factors of openups-hid.c (US-078), globals upstream (vin_scale, vout_scale,
+    // ccharge_scale, cdischarge_scale): 1 until OpenUPSDriver applies get_voltage_multiplier()
+    // for the product ID
+    struct OpenupsScale {
+        double vin = 1;
+        double vout = 1;
+        double ccharge = 1;
+        double cdischarge = 1;
+    } openups;
 };
 
 // CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
@@ -515,6 +543,15 @@ inline const char* statusToken(const HidInfo& info, double v, const Context& ctx
         return (((long)v & 0x0018) == 0x0018) ? "boost" : "!boost";
     case Conv::PowercomOverload:
         return ((long)v & 0x0020) ? "overload" : "!overload";
+    // openups-hid.c:180-198: any value but 0 is true, and online is cleared with "!online"
+    case Conv::OpenupsCharging:
+        return v ? "chrg" : "!chrg";
+    case Conv::OpenupsDischarging:
+        return v ? "dischrg" : "!dischrg";
+    case Conv::OpenupsOnline:
+        return v ? "online" : "!online";
+    case Conv::OpenupsOff:
+        return v ? "!off" : "off";
     default:
         return nullptr;
     }
@@ -754,7 +791,7 @@ inline bool formatNumber(const char* fmt, double v, String& out) {
         out = formatRounded(v);
         return true;
     }
-    if (strcmp(fmt, "%.1f") != 0 && strcmp(fmt, "%.2f") != 0) return false;
+    if (strcmp(fmt, "%.1f") != 0 && strcmp(fmt, "%.2f") != 0 && strcmp(fmt, "%.3f") != 0) return false;
     char buf[32];
     snprintf(buf, sizeof(buf), fmt, v);
     out = buf;
@@ -786,6 +823,49 @@ inline const char* staticText(const HidInfo& info, double v, const Context& ctx)
     }
     default:
         return nullptr;
+    }
+}
+
+// openups-hid.c:37-41: the scale factors of PID 0xD004 (get_voltage_multiplier)
+constexpr double kOpenupsVinScaleD004 = 0.03545 * 100;
+constexpr double kOpenupsVoutScaleD004 = 0.02571 * 100;
+constexpr double kOpenupsCchargeScaleD004 = 0.8274 / 10;
+constexpr double kOpenupsCdischargeScaleD004 = 16.113 / 10;
+
+// therm_tbl of openups-hid.c:88-124, the thermistor readings at -40, -35 ... 125 °C
+static constexpr unsigned int kOpenupsThermTbl[] = {
+    0x31, 0x40, 0x53, 0x68, 0x82, 0xA0, 0xC3, 0xE9, 0x113, 0x13F, 0x16E, 0x19F,
+    0x1CF, 0x200, 0x22F, 0x25C, 0x286, 0x2AE, 0x2D3, 0x2F4, 0x312, 0x32D, 0x345,
+    0x35A, 0x36D, 0x37E, 0x38C, 0x399, 0x3A5, 0x3AF, 0x3B7, 0x3BF, 0x3C6, 0x3CC,
+};
+
+// openups_temperature_fun (openups-hid.c:230-265), literally: "%d" at the ends and on a point
+// of the table, "%.2f" between two points
+inline void openupsTemperature(double value, char* buf, size_t len) {
+    const unsigned int size = sizeof(kOpenupsThermTbl) / sizeof(kOpenupsThermTbl[0]);
+    unsigned int thermistor = (unsigned int)(value * 100);
+    if (thermistor <= kOpenupsThermTbl[0]) {
+        snprintf(buf, len, "%d", -40);
+    } else if (thermistor >= kOpenupsThermTbl[size - 1]) {
+        snprintf(buf, len, "%d", 125);
+    } else {
+        int pos = 0;
+        for (int i = size - 1; i >= 0; i--) {
+            if (thermistor >= kOpenupsThermTbl[i]) {
+                pos = i;
+                break;
+            }
+        }
+        if (thermistor == kOpenupsThermTbl[pos]) {
+            snprintf(buf, len, "%d", pos * 5 - 40);
+        } else {
+            int t1 = pos * 5 - 40;
+            int t2 = (pos + 1) * 5 - 40;
+            unsigned int d1 = kOpenupsThermTbl[pos];
+            unsigned int d2 = kOpenupsThermTbl[pos + 1];
+            double temp = (double)(thermistor - d1) * (t2 - t1) / (d2 - d1) + t1;
+            snprintf(buf, len, "%.2f", temp);
+        }
     }
 }
 
@@ -908,6 +988,27 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
         out = buf;
         return DecodeResult::OK;
     }
+    case Conv::EcoflowRuntime: // ecoflow_battery_runtime_conversion
+        // NULL upstream for a negative value: ups_infoval_set() writes nothing
+        if (v < 0) return DecodeResult::FAIL;
+        snprintf(buf, sizeof(buf), "%.0f", v * 60.0);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::OpenupsVin:  // openups_scale_vin_fun
+    case Conv::OpenupsVout: // openups_scale_vout_fun
+        snprintf(buf, sizeof(buf), "%.2f", v * (info.conv == Conv::OpenupsVin ? ctx.openups.vin : ctx.openups.vout));
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::OpenupsCcharge:    // openups_scale_ccharge_fun
+    case Conv::OpenupsCdischarge: // openups_scale_cdischarge_fun
+        snprintf(buf, sizeof(buf), "%.3f",
+                 v * (info.conv == Conv::OpenupsCcharge ? ctx.openups.ccharge : ctx.openups.cdischarge));
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::OpenupsTemperature: // openups_temperature_fun
+        openupsTemperature(v, buf, sizeof(buf));
+        out = buf;
+        return DecodeResult::OK;
     case Conv::MgeBatteryCapacity:
         snprintf(buf, sizeof(buf), "%.2f", v / 3600); // As to Ah
         out = buf;
@@ -956,6 +1057,10 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
     case Conv::PowercomTrim:
     case Conv::PowercomBoost:
     case Conv::PowercomOverload:
+    case Conv::OpenupsCharging:
+    case Conv::OpenupsDischarging:
+    case Conv::OpenupsOnline:
+    case Conv::OpenupsOff:
         // Internal rows and BOOL functions: applyInternal() / statusToken()
         return DecodeResult::DEFER;
     case Conv::Lookup: {
@@ -1493,8 +1598,8 @@ inline const DelayPaths* legrandDelayPaths() {
 // Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
 // row of mge_hid2nut (US-066, US-073, US-074, US-107), instant commands and ups.alarm rows
 // included, but the rows of the stateful mge functions (US-070); apcHid2Nut() (US-076),
-// cpsHid2Nut() (US-075) and powercomHid2Nut() (US-077) every row of their upstream table.
-// ecoflowHid2Nut() still holds only its ST_FLAG_RW rows (US-066). ups.delay.* is left to
+// cpsHid2Nut() (US-075), powercomHid2Nut() (US-077), ecoflowHid2Nut() and openupsHid2Nut()
+// (US-078) every row of their upstream table. ups.delay.* is left to
 // CommandCatalog::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
@@ -2404,10 +2509,186 @@ inline const HidInfo* cpsHid2Nut(size_t& n) {
     return t;
 }
 
+// Every row of ecoflow_hid2nut (US-078, ADR 0011): values and status. The beeper.* and
+// shutdown.* commands are only in a comment above the upstream table (they do not work on the
+// River 3+ and Delta 3+): beeperControllable() and shutdownCommandsSupported() stay false
+// (US-054, US-058). battery.charge.low is the RW row of US-066.
 inline const HidInfo* ecoflowHid2Nut(size_t& n) {
     static const HidInfo t[] = {
+        // ecoflow-hid.c:114 UPS.PowerSummary.AudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // ecoflow-hid.c:122 UPS.Flow.[4].ConfigActivePower
+        { "ups.power.nominal", 0, 0, "UPS.Flow.[4].ConfigActivePower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:125 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.1f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:126 UPS.OutletSystem.Outlet.DelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:127 UPS.OutletSystem.Outlet.DelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:130 UPS.PowerSummary.DesignCapacity (unit %)
+        { "battery.capacity.nominal", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:133 UPS.PowerSummary.FullChargeCapacity (unit %)
+        { "battery.capacity", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:135 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // ecoflow-hid.c:136 UPS.PowerSummary.iOEMInformation
+        { "experimental.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // ecoflow-hid.c:137 UPS.PowerSummary.ManufacturerDate
+        { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", 0, Conv::BatteryDate, nullptr, 0 },
+        // ecoflow-hid.c:140 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // ecoflow-hid.c:143 UPS.PowerSummary.PresentStatus.BatteryPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // ecoflow-hid.c:144 experimental.ups.powersummary.presentstatus.batterypresent: commented out upstream
+        // ecoflow-hid.c:147 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // ecoflow-hid.c:150 UPS.PowerSummary.PresentStatus.CommunicationLost
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // ecoflow-hid.c:152 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // ecoflow-hid.c:153 UPS.PowerSummary.PresentStatus.Charging (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:154 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // ecoflow-hid.c:155 UPS.PowerSummary.PresentStatus.Discharging (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:156 UPS.PowerSummary.PresentStatus.FullyCharged
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
+        // ecoflow-hid.c:158 UPS.PowerSummary.PresentStatus.FullyDischarged
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDepletedInfo) },
+        // ecoflow-hid.c:160 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // ecoflow-hid.c:162 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // ecoflow-hid.c:164 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // ecoflow-hid.c:165 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:167 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // ecoflow-hid.c:170 UPS.PowerSummary.PresentStatus.ShutdownRequested
+        { "experimental.ups.powersummary.presentstatus.shutdownrequested", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownRequested", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:172 UPS.PowerSummary.PresentStatus.VoltageNotRegulated
+        { "experimental.ups.powersummary.presentstatus.voltagenotregulated", 0, 0, "UPS.PowerSummary.PresentStatus.VoltageNotRegulated", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:173 UPS.PowerSummary.Rechargeable
+        { "experimental.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:176 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // ecoflow-hid.c:181 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:184 UPS.PowerSummary.RemainingTimeLimit, in minutes as upstream (US-078)
+        { "battery.runtime.low", 0, 0, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:193 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", HU_FLAG_QUICK_POLL, Conv::EcoflowRuntime, nullptr, 0 },
+        // ecoflow-hid.c:194 battery.runtime without the minutes conversion: commented out upstream
+        // ecoflow-hid.c:197 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:200 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
+#if WITH_UNMAPPED_DATA_POINTS
+        // ecoflow-hid.c:207 UPS.PowerSummary.AverageTimeToEmpty
+        { "unmapped.ups.powersummary.averagetimetoempty", 0, 0, "UPS.PowerSummary.AverageTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:209 UPS.PowerSummary.AverageTimeToFull
+        { "unmapped.ups.powersummary.averagetimetofull", 0, 0, "UPS.PowerSummary.AverageTimeToFull", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:210 UPS.PowerSummary.CapacityGranularity1
+        { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:211 UPS.PowerSummary.CapacityGranularity2
+        { "unmapped.ups.powersummary.capacitygranularity2", 0, 0, "UPS.PowerSummary.CapacityGranularity2", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:212 UPS.PowerSummary.CapacityMode
+        { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:215 UPS.PowerSummary.DelayBeforeReboot
+        { "unmapped.ups.powersummary.delaybeforereboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:217 UPS.PowerSummary.DelayBeforeShutdown
+        { "unmapped.ups.powersummary.delaybeforeshutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:220 UPS.PowerSummary.iDeviceChemistry
+        { "unmapped.ups.powersummary.idevicechemistry", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:221 UPS.PowerSummary.iOEMInformation
+        { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:222 UPS.PowerSummary.PresentStatus.ACPresent
+        { "unmapped.ups.powersummary.presentstatus.acpresent", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:223 UPS.PowerSummary.PresentStatus.BatteryPresent
+        { "unmapped.ups.powersummary.presentstatus.batterypresent", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:224 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "unmapped.ups.powersummary.presentstatus.belowremainingcapacitylimit", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:225 UPS.PowerSummary.PresentStatus.Charging
+        { "unmapped.ups.powersummary.presentstatus.charging", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:226 UPS.PowerSummary.PresentStatus.Discharging
+        { "unmapped.ups.powersummary.presentstatus.discharging", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:227 UPS.PowerSummary.PresentStatus.FullyCharged
+        { "unmapped.ups.powersummary.presentstatus.fullycharged", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:228 UPS.PowerSummary.PresentStatus.FullyDischarged
+        { "unmapped.ups.powersummary.presentstatus.fullydischarged", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:229 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "unmapped.ups.powersummary.presentstatus.needreplacement", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:230 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "unmapped.ups.powersummary.presentstatus.remainingtimelimitexpired", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // ecoflow-hid.c:231 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "unmapped.ups.powersummary.presentstatus.shutdownimminent", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+// Every row of openups_hid2nut (US-078, ADR 0011): values and status, no commands. The scales of
+// the voltage and current rows come from the product ID (Context::openups, set by OpenUPSDriver).
+inline const HidInfo* openupsHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+        // openups-hid.c:296 UPS.PowerSummary.iSerialNumber
+        { "ups.serial", 0, 0, "UPS.PowerSummary.iSerialNumber", "%s", 0, Conv::StringId, nullptr, 0 },
+        // openups-hid.c:299 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // openups-hid.c:300 UPS.PowerSummary.iOEMInformation
+        { "battery.mfr.date", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
+        // openups-hid.c:301 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.2f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // openups-hid.c:302 battery.voltage.nominal (openups_vbat_info): commented out upstream
+        // openups-hid.c:303 UPS.PowerSummary.Current
+        { "battery.current", 0, 0, "UPS.PowerSummary.Current", "%.3f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // openups-hid.c:304 UPS.PowerSummary.DesignCapacity
+        { "battery.capacity", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
+        // openups-hid.c:305 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // openups-hid.c:306 UPS.PowerSummary.RemainingCapacityLimit
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // openups-hid.c:307 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // openups-hid.c:308 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // openups-hid.c:309 UPS.PowerSummary.Temperature
+        { "battery.temperature", 0, 0, "UPS.PowerSummary.Temperature", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsTemperature, nullptr, 0 },
+        // openups-hid.c:310-315 battery.cell1..6.voltage (openups_vbat_info): commented out upstream
+        // openups-hid.c:318 UPS.PowerSummary.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.PowerSummary.Output.Voltage", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsVout, nullptr, 0 },
+        // openups-hid.c:319 UPS.PowerSummary.Output.Current
+        { "output.current", 0, 0, "UPS.PowerSummary.Output.Current", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsCdischarge, nullptr, 0 },
+        // openups-hid.c:322 UPS.PowerSummary.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.PowerSummary.Input.Voltage", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsVin, nullptr, 0 },
+        // openups-hid.c:323 UPS.PowerSummary.Input.Current
+        { "input.current", 0, 0, "UPS.PowerSummary.Input.Current", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsCcharge, nullptr, 0 },
+        // openups-hid.c:326 UPS.PowerSummary.PresentStatus.Good
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Good", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsOff, nullptr, 0 },
+        // openups-hid.c:327 UPS.PowerSummary.PresentStatus.InternalFailure
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.InternalFailure", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // openups-hid.c:328 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // openups-hid.c:329 UPS.PowerSummary.PresentStatus.OverTemperature
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.OverTemperature", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverheatInfo) },
+        // openups-hid.c:330 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // openups-hid.c:331 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // openups-hid.c:332 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // openups-hid.c:333 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsCharging, nullptr, 0 },
+        // openups-hid.c:334 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsDischarging, nullptr, 0 },
+        // openups-hid.c:335 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // openups-hid.c:336 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::OpenupsOnline, nullptr, 0 },
+        // openups-hid.c:337 UPS.PowerSummary.PresentStatus.BatteryPresent. Deviation (US-055, US-078,
+        // issue #26): the flag is unreliable across WalleCube units and firmware, so
+        // OpenUPSDriver::filterStatus() drops its nobattery bit and ups.status never shows RB for it
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

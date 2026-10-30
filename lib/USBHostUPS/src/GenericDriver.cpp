@@ -832,7 +832,9 @@ void GenericDriver::publishNutRows(UPSData& ups_data) {
     // Rows that changed role since (INIT rule, strings) or that a mapping overwrote
     for (auto& b : _nut_rows) publishRow(b, ups_data);
     // Internal ups.status.* keys from the BOOL rows; nothing for drivers without them
-    NutTable::statusKeys(_nut_ctx.status, [&ups_data](const char* key, const char* value) {
+    NutTable::StatusBits status = _nut_ctx.status;
+    filterStatus(status);
+    NutTable::statusKeys(status, [&ups_data](const char* key, const char* value) {
         const String* current = ups_data.find(key);
         if (!value) {
             if (current) ups_data.remove(key);

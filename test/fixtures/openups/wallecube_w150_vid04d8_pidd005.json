@@ -4,7 +4,7 @@
   "pid": "0xD005",
   "manufacturer": "WalleCube",
   "product": "Smart UPS W150",
-  "notes": "The W150 reports PresentStatus.BatteryPresent = 0 even with the battery fitted and charged, but the flag is unreliable across OpenUPS/WalleCube units and firmware (this unit, from esp32-nut#26, reports 0; networkupstools/nut#3246 and #3582 report 1). OpenUPSDriver ignores it, so ups.status stays OL rather than gaining RB (US-055).",
+  "notes": "The W150 reports PresentStatus.BatteryPresent = 0 even with the battery fitted and charged, but the flag is unreliable across OpenUPS/WalleCube units and firmware (this unit, from esp32-nut#26, reports 0; networkupstools/nut#3246 and #3582 report 1). OpenUPSDriver ignores it, so ups.status stays OL rather than gaining RB (US-055). Since US-078 the values come from openups_hid2nut: output.voltage is openups_scale_vout_fun, \"%.2f\" of the HID value (122.4, exponent applied) x 0.1 for PID 0xD005, hence 12.24.",
   "report_descriptor_hex": [
     "05", "84", "09", "04", "a1", "01", "09", "24", "a1", "00",
     "05", "84", "85", "01", "09", "25", "09", "1f", "75", "04",
@@ -74,7 +74,7 @@
         "ups.status.discharging": "0",
         "battery.charge": "100",
         "battery.runtime": "12912",
-        "output.voltage": "12.2",
+        "output.voltage": "12.24",
         "ups.mfr": "WalleCube",
         "ups.model": "Smart UPS W150"
       }
