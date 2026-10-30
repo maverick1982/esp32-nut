@@ -28,15 +28,16 @@ public:
     // Starts the task, after the outputs have their settings
     bool start();
 
-    // From AppLogger, any task: never blocks
-    void submit(const char* level, const char* msg);
+    // From AppLogger, any task: never blocks. notice: a change of the remote logging
+    // itself, which skips the minimum level and the rate limit (LogRecord::notice)
+    void submit(const char* level, const char* msg, bool notice);
 
     // Lines lost because the queue was full
     uint32_t queueDrops() const { return _queue_drops; }
 
     // Adapter for AppLogger::setForwarder()
-    static void forward(void* self, const char* level, const char* msg) {
-        static_cast<LogDispatcher*>(self)->submit(level, msg);
+    static void forward(void* self, const char* level, const char* msg, bool notice) {
+        static_cast<LogDispatcher*>(self)->submit(level, msg, notice);
     }
 
 private:

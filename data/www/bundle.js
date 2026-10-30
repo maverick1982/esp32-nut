@@ -2128,6 +2128,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const RLOG_STATES = {
             disabled: { text: 'Disabled', cls: '' },
             waiting: { text: 'Waiting', cls: 'warning' },
+            ready: { text: 'Ready', cls: 'info' },
             active: { text: 'Sending', cls: 'success' },
             error: { text: 'Error', cls: 'danger' }
         };

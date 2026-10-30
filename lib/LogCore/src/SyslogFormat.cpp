@@ -63,10 +63,16 @@ static bool isTagChar(char c) {
 
 size_t formatSyslog(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, LogLevel level,
                     const char* hostname, const char* app, const char* msg) {
+    return formatSyslogSeverity(out, cap, protocol, facility, syslogSeverity(level), hostname, app, msg);
+}
+
+size_t formatSyslogSeverity(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, uint8_t severity,
+                            const char* hostname, const char* app, const char* msg) {
     if (!out || cap == 0) return 0;
     out[0] = '\0';
     if (facility > 23) facility = 1;  // user
-    unsigned pri = facility * 8u + syslogSeverity(level);
+    if (severity > 7) severity = 6;   // informational
+    unsigned pri = facility * 8u + severity;
 
     char host[64];
     char tag[49];

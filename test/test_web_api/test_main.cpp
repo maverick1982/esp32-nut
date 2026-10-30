@@ -1012,6 +1012,11 @@ void test_remote_log_json(void) {
     TEST_ASSERT_EQUAL(10, doc["options"]["facilities"].size());
     TEST_ASSERT_EQUAL_STRING("ERROR", doc["options"]["levels"][2].as<const char*>());
     TEST_ASSERT_EQUAL(100, doc["options"]["rate_max"].as<int>());
+
+    // Network up and server known, nothing sent yet
+    st.state = SyslogState::Ready;
+    deserializeJson(doc, WebApiJson::remoteLogJson(s, st).c_str());
+    TEST_ASSERT_EQUAL_STRING("ready", doc["status"]["syslog"]["state"].as<const char*>());
 }
 
 void test_remote_log_body_full_update(void) {

@@ -8,6 +8,7 @@
 #include "LogOutput.h"
 #include "SyslogSettings.h"
 #include "SyslogStatus.h"
+#include "SyslogChange.h"
 
 class AppNetworkManager;
 
@@ -19,7 +20,8 @@ class AppNetworkManager;
  * (loopTask): the new settings wait under a mutex and poll() applies them in the log
  * task. A host name is resolved in the log task too (DNS can take seconds), again
  * every 10 minutes, and after a failure every 30 seconds. State changes go to the
- * System Log; a failure is logged once, not for every line.
+ * System Log; a failure is logged once, not for every line. Changes of the settings
+ * are told to the syslog server too, whatever the minimum level (SyslogChange.h).
  */
 class SyslogOutput : public ILogOutput {
 public:
@@ -27,7 +29,8 @@ public:
 
     // The network service tells whether a link is up; hostname is the HOSTNAME of RFC 5424
     void begin(const AppNetworkManager* network, const String& hostname);
-    void configure(const SyslogSettings& settings);
+    // who: the Web UI user who changed the settings, empty for the saved ones at boot
+    void configure(const SyslogSettings& settings, const String& who = String());
     SyslogStatus status() const;
 
     const char* name() const override { return "syslog"; }
@@ -38,7 +41,9 @@ public:
 
 private:
     bool networkUp() const;
-    void apply(const SyslogSettings& s);
+    void apply(const SyslogSettings& s, const String& who);
+    // A notice straight to the current server, outside the queue (before a change)
+    bool sendNow(const char* msg);
     void resolve(uint32_t now);
     // Updates the Web UI copy only when something changed
     void setState(SyslogState state, const String& error);
@@ -49,6 +54,7 @@ private:
     // Written by configure(), read by poll(): guarded by _mutex
     mutable std::mutex _mutex;
     SyslogSettings _pending;
+    String _pending_who;
     bool _has_pending = false;
     // Copy for the Web UI: guarded by _mutex
     SyslogStatus _status;

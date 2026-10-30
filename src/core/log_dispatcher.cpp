@@ -21,11 +21,12 @@ bool LogDispatcher::start() {
     return true;
 }
 
-void LogDispatcher::submit(const char* level, const char* msg) {
+void LogDispatcher::submit(const char* level, const char* msg, bool notice) {
     if (!_queue) return;
     LogRecord r;
     r.uptime_ms = millis();
     r.level = logLevelOf(level);
+    r.notice = notice;
     strncpy(r.msg, msg ? msg : "", sizeof(r.msg) - 1);
     r.msg[sizeof(r.msg) - 1] = '\0';
     if (xQueueSend(_queue, &r, 0) != pdTRUE) {
@@ -49,13 +50,14 @@ void LogDispatcher::run() {
             LogRecord lost;
             lost.uptime_ms = now;
             lost.level = LogLevel::WARN;
+            lost.notice = false;
             snprintf(lost.msg, sizeof(lost.msg), "[LOG] %lu lines lost: log queue full",
                      (unsigned long)(drops - _reported_drops));
             _reported_drops = drops;
             _fanout.deliver(lost, now);
         }
 
-        // Boot: keep the lines while an enabled output waits for the network
+        // Boot or new settings: keep the lines while an enabled output is not ready yet
         if (_fanout.shouldHold(now)) {
             vTaskDelay(pdMS_TO_TICKS(250));
             continue;

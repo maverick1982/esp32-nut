@@ -50,4 +50,11 @@ bool parseSyslogProtocol(const char* name, SyslogProtocol& out);
 size_t formatSyslog(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, LogLevel level,
                     const char* hostname, const char* app, const char* msg);
 
+// RFC 5424 severity 5: the changes of the remote logging itself (LogRecord::notice)
+static const uint8_t SYSLOG_SEVERITY_NOTICE = 5;
+
+// Same, with the severity given directly (0-7)
+size_t formatSyslogSeverity(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, uint8_t severity,
+                            const char* hostname, const char* app, const char* msg);
+
 #endif // SYSLOG_FORMAT_H

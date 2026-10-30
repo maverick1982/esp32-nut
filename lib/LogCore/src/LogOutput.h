@@ -18,6 +18,9 @@ static const size_t LOG_RECORD_MSG = 240;
 struct LogRecord {
     uint32_t uptime_ms;
     LogLevel level;
+    // Change of the remote logging itself (enabled, level changed): it passes the
+    // minimum level and the rate limit, and syslog sends it with severity "notice"
+    bool notice;
     char msg[LOG_RECORD_MSG];
 };
 
@@ -43,6 +46,9 @@ public:
     virtual void poll(uint32_t now) = 0;
     // false while the output cannot deliver yet (network down, host not resolved)
     virtual bool ready() const = 0;
+    // millis() when the output was last enabled or reconfigured: the log task keeps the
+    // lines for a while after it, as after the boot (LogFanout::shouldHold)
+    uint32_t enabledAt() const { return _enabled_at; }
     // true when the transport accepted the line
     virtual bool deliver(const LogRecord& record) = 0;
 
@@ -53,6 +59,7 @@ public:
 protected:
     LogOutputFilter _filter;
     LogOutputStats _stats = { 0, 0, 0, 0 };
+    uint32_t _enabled_at = 0;
 };
 
 #endif // LOG_OUTPUT_H

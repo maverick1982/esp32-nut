@@ -19,6 +19,20 @@ void AppLogger::setForwarder(Forwarder fn, void* ctx) {
 }
 
 void AppLogger::log(const String& level, const String& msg) {
+    write(level, msg, false);
+}
+
+void AppLogger::logNotice(const char* level, const char* format, ...) {
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    write(String(level), String(buffer), true);
+}
+
+void AppLogger::write(const String& level, const String& msg, bool notice) {
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     // Print to serial
     Serial.printf("[%lu] [%s] %s\n", millis(), level.c_str(), msg.c_str());
@@ -35,7 +49,7 @@ void AppLogger::log(const String& level, const String& msg) {
     }
 
     // Remote outputs: a non-blocking copy into the log queue (issue #69)
-    if (forwarder) forwarder(forwarderCtx, level.c_str(), msg.c_str());
+    if (forwarder) forwarder(forwarderCtx, level.c_str(), msg.c_str(), notice);
 }
 
 void AppLogger::log(const char* level, const char* format, ...) {

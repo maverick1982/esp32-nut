@@ -300,9 +300,10 @@ void WebConfigServer::handleSetLogging() {
         server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
         return;
     }
-    // Applied by the log task within a second, no restart
-    syslog_output->configure(next);
-    AppLogger::log("INFO", String("[SYSLOG] Settings changed from the Web UI by '") + webUiUser() + "'");
+    // Applied by the log task within a second, no restart; the log task logs the change
+    // and tells the syslog server (SyslogChange.h)
+    String who = webUiUser();
+    syslog_output->configure(next, who.length() > 0 ? who : String("Web UI"));
     server.send(200, "application/json", "{\"success\":true}");
 }
 

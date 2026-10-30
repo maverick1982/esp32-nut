@@ -4,6 +4,7 @@
 #include "LogOutputFilter.h"
 #include "SyslogFormat.h"
 #include "SyslogSettings.h"
+#include "SyslogChange.h"
 
 // Logging core (issue #69): levels, syslog format, per-output filter, syslog settings
 
@@ -227,6 +228,99 @@ void test_settings_sanitize(void) {
     TEST_ASSERT_EQUAL_UINT16(50, same.rate);
 }
 
+// --- Notices and change log ---
+
+void test_notice_severity(void) {
+    char out[SYSLOG_MAX_MESSAGE];
+    // local0 (16) * 8 + notice (5) = 133
+    formatSyslogSeverity(out, sizeof(out), SyslogProtocol::RFC3164, 16, SYSLOG_SEVERITY_NOTICE, "h", "esp32-nut",
+                         "[SYSLOG] Remote logging disabled by 'admin'");
+    TEST_ASSERT_EQUAL_STRING("<133>esp32-nut: [SYSLOG] Remote logging disabled by 'admin'", out);
+    // Out of range severity: informational
+    formatSyslogSeverity(out, sizeof(out), SyslogProtocol::RFC3164, 16, 9, "h", "esp32-nut", "m");
+    TEST_ASSERT_EQUAL_STRING("<134>esp32-nut: m", out);
+}
+
+static SyslogSettings on(const char* host, LogLevel level) {
+    SyslogSettings s = { true, String(host), 514, SyslogProtocol::RFC3164, 16, level, 10 };
+    return s;
+}
+
+void test_change_boot(void) {
+    SyslogSettings off = syslogDefaults();
+    SyslogChangeLog c = planSyslogChange(off, on("10.0.0.5", LogLevel::WARN), String(""));
+    // Loading the saved settings is not a change: an ordinary line, no notice
+    TEST_ASSERT_EQUAL_STRING("", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.to_new.c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "[SYSLOG] Remote logging on: 10.0.0.5:514, RFC 3164, facility local0, WARN and above, max 10 lines/s",
+        c.local.c_str());
+    // Off at boot: nothing to say
+    c = planSyslogChange(off, off, String(""));
+    TEST_ASSERT_EQUAL_STRING("", c.local.c_str());
+}
+
+void test_change_enable(void) {
+    SyslogChangeLog c = planSyslogChange(syslogDefaults(), on("rsyslog.lan", LogLevel::ERROR), String("admin"));
+    TEST_ASSERT_EQUAL_STRING("", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Remote logging enabled by 'admin': rsyslog.lan:514, RFC 3164, facility local0, "
+                             "ERROR and above, max 10 lines/s",
+                             c.to_new.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.local.c_str());
+}
+
+void test_change_disable_goes_to_the_old_server(void) {
+    SyslogSettings off = on("10.0.0.5", LogLevel::INFO);
+    off.enabled = false;
+    SyslogChangeLog c = planSyslogChange(on("10.0.0.5", LogLevel::INFO), off, String("admin"));
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Remote logging disabled by 'admin'", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.to_new.c_str());
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Remote logging disabled by 'admin'", c.local.c_str());
+}
+
+void test_change_level(void) {
+    SyslogChangeLog c = planSyslogChange(on("10.0.0.5", LogLevel::INFO), on("10.0.0.5", LogLevel::ERROR), String("admin"));
+    TEST_ASSERT_EQUAL_STRING("", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Settings changed by 'admin': minimum level INFO -> ERROR", c.to_new.c_str());
+}
+
+void test_change_other_settings_and_no_change(void) {
+    SyslogSettings a = on("10.0.0.5", LogLevel::INFO);
+    SyslogSettings b = a;
+    b.protocol = SyslogProtocol::RFC5424;
+    b.facility = 3;
+    b.rate = 25;
+    SyslogChangeLog c = planSyslogChange(a, b, String("admin"));
+    TEST_ASSERT_EQUAL_STRING(
+        "[SYSLOG] Settings changed by 'admin': format rfc3164 -> rfc5424, facility local0 -> daemon, max lines/s 10 -> 25",
+        c.to_new.c_str());
+    // Saved without changes: nothing
+    c = planSyslogChange(a, a, String("admin"));
+    TEST_ASSERT_EQUAL_STRING("", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.to_new.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.local.c_str());
+}
+
+void test_change_server_moved(void) {
+    SyslogSettings b = on("rsyslog2.lan", LogLevel::INFO);
+    b.port = 1514;
+    SyslogChangeLog c = planSyslogChange(on("rsyslog1.lan", LogLevel::INFO), b, String("admin"));
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Remote logging moved to rsyslog2.lan:1514 by 'admin'", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Remote logging moved here from rsyslog1.lan:514 by 'admin': rsyslog2.lan:1514, "
+                             "RFC 3164, facility local0, INFO and above, max 10 lines/s",
+                             c.to_new.c_str());
+}
+
+void test_change_while_off_is_local_only(void) {
+    SyslogSettings a = syslogDefaults();
+    SyslogSettings b = a;
+    b.host = "10.0.0.5";
+    SyslogChangeLog c = planSyslogChange(a, b, String("admin"));
+    TEST_ASSERT_EQUAL_STRING("", c.to_old.c_str());
+    TEST_ASSERT_EQUAL_STRING("", c.to_new.c_str());
+    TEST_ASSERT_EQUAL_STRING("[SYSLOG] Settings saved by 'admin' (remote logging off)", c.local.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_levels_from_the_logger_strings);
@@ -247,5 +341,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_settings_defaults);
     RUN_TEST(test_settings_host_validation);
     RUN_TEST(test_settings_sanitize);
+    RUN_TEST(test_notice_severity);
+    RUN_TEST(test_change_boot);
+    RUN_TEST(test_change_enable);
+    RUN_TEST(test_change_disable_goes_to_the_old_server);
+    RUN_TEST(test_change_level);
+    RUN_TEST(test_change_other_settings_and_no_change);
+    RUN_TEST(test_change_server_moved);
+    RUN_TEST(test_change_while_off_is_local_only);
     return UNITY_END();
 }

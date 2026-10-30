@@ -151,6 +151,17 @@ test.describe('Remote Logging page (issue #69)', () => {
     expect(getHits).toBe(2);
   });
 
+  test('ready: network up and server known, nothing sent yet', async ({ page }) => {
+    data.syslog = { ...data.syslog, enabled: true, host: '10.0.0.5', min_level: 'ERROR' };
+    data.status.syslog = { state: 'ready', target: '10.0.0.5:514', error: '', sent: 0, failed: 0, rate_limited: 0, not_ready: 0 };
+    await openTab(page);
+    await expect(page.locator('#rlog-state')).toHaveText('Ready');
+    await expect(page.locator('#rlog-ind')).toHaveClass('status-indicator info');
+    await expect(page.locator('#rlog-target')).toHaveText('10.0.0.5:514');
+    await expect(page.locator('#rlog-counters')).toHaveText('0 sent');
+    await expect(page.locator('#rlog-problem')).toBeHidden();
+  });
+
   test('a failed read shows the error banner', async ({ page }) => {
     await page.route('**/api/logging', route => route.fulfill({ status: 500, body: '' }));
     await openTab(page);

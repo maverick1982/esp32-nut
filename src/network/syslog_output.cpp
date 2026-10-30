@@ -17,9 +17,10 @@ void SyslogOutput::begin(const AppNetworkManager* network, const String& hostnam
     _hostname = hostname;
 }
 
-void SyslogOutput::configure(const SyslogSettings& settings) {
+void SyslogOutput::configure(const SyslogSettings& settings, const String& who) {
     std::lock_guard<std::mutex> lock(_mutex);
     _pending = sanitize(settings);
+    _pending_who = who;
     _has_pending = true;
 }
 
@@ -41,8 +42,13 @@ void SyslogOutput::setState(SyslogState state, const String& error) {
     _status.error = error;
 }
 
-void SyslogOutput::apply(const SyslogSettings& s) {
+void SyslogOutput::apply(const SyslogSettings& s, const String& who) {
+    SyslogChangeLog change = planSyslogChange(_active, s, who);
+    // The previous server gets nothing after the change: tell it now, if it is reachable
+    if (change.to_old.length() > 0 && _active.enabled && ready()) sendNow(change.to_old.c_str());
+
     _active = s;
+    _enabled_at = millis();
     _filter.configure(s.min_level, s.rate);
     _resolved = false;
     _resolve_failing = false;
@@ -53,15 +59,25 @@ void SyslogOutput::apply(const SyslogSettings& s) {
         std::lock_guard<std::mutex> lock(_mutex);
         _status.target = s.enabled ? s.host + ":" + String(s.port) : String("");
     }
-    if (!s.enabled) {
-        setState(SyslogState::Disabled, "");
-        AppLogger::log("INFO", "[SYSLOG] Remote logging off");
-        return;
+    setState(s.enabled ? SyslogState::Waiting : SyslogState::Disabled, "");
+
+    // Notice: queued, so it waits until the new server is reachable (LogFanout::shouldHold)
+    if (change.to_new.length() > 0) AppLogger::logNotice("INFO", "%s", change.to_new.c_str());
+    if (change.local.length() > 0) AppLogger::log("INFO", "%s", change.local.c_str());
+}
+
+bool SyslogOutput::sendNow(const char* msg) {
+    char buf[SYSLOG_MAX_MESSAGE];
+    size_t n = formatSyslogSeverity(buf, sizeof(buf), _active.protocol, _active.facility, SYSLOG_SEVERITY_NOTICE,
+                                    _hostname.c_str(), kAppName, msg);
+    bool ok = n > 0 && _udp.beginPacket(_ip, _active.port) == 1 && _udp.write((const uint8_t*)buf, n) == n &&
+              _udp.endPacket() == 1;
+    if (ok) {
+        _stats.sent++;
+    } else {
+        _stats.failed++;
     }
-    setState(SyslogState::Waiting, "");
-    AppLogger::log("INFO", "[SYSLOG] Sending to %s:%u (%s, facility %s, %s and above, max %u lines/s)",
-                   s.host.c_str(), (unsigned)s.port, s.protocol == SyslogProtocol::RFC5424 ? "RFC 5424" : "RFC 3164",
-                   syslogFacilityName(s.facility), logLevelName(s.min_level), (unsigned)s.rate);
+    return ok;
 }
 
 void SyslogOutput::resolve(uint32_t now) {
@@ -94,29 +110,37 @@ void SyslogOutput::resolve(uint32_t now) {
 
 void SyslogOutput::poll(uint32_t now) {
     SyslogSettings next;
+    String who;
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_has_pending) {
             next = _pending;
+            who = _pending_who;
             _has_pending = false;
             changed = true;
         }
+    }
+    if (changed) apply(next, who);
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
         _status.stats = _stats;
     }
-    if (changed) apply(next);
     if (!_active.enabled) return;
     if (!networkUp()) {
         if (_shown_state != SyslogState::Error) setState(SyslogState::Waiting, "No network connection");
         return;
     }
     resolve(now);
+    // Network up and server address known, nothing sent since: "Ready", not "Waiting"
+    if (_resolved && _shown_state == SyslogState::Waiting) setState(SyslogState::Ready, "");
 }
 
 bool SyslogOutput::deliver(const LogRecord& record) {
     char buf[SYSLOG_MAX_MESSAGE];
-    size_t n = formatSyslog(buf, sizeof(buf), _active.protocol, _active.facility, record.level, _hostname.c_str(),
-                            kAppName, record.msg);
+    uint8_t severity = record.notice ? SYSLOG_SEVERITY_NOTICE : syslogSeverity(record.level);
+    size_t n = formatSyslogSeverity(buf, sizeof(buf), _active.protocol, _active.facility, severity,
+                                    _hostname.c_str(), kAppName, record.msg);
     bool ok = n > 0 && _udp.beginPacket(_ip, _active.port) == 1 && _udp.write((const uint8_t*)buf, n) == n &&
               _udp.endPacket() == 1;
     if (ok) {
