@@ -149,6 +149,20 @@ bool GenericDriver::isQuickPollStatusUsage(const HIDUsageDef& u) const {
     return false;
 }
 
+void GenericDriver::pollSoon(const PollItem& item) {
+    for (size_t i = _queue_pos; i < _queue.size(); i++) {
+        if (_queue[i].report_type == item.report_type && _queue[i].id == item.id) return;
+    }
+    _queue.insert(_queue.begin() + _queue_pos, item);
+}
+
+uint8_t GenericDriver::featureReportOf(const std::vector<HIDUsageDef>& usages, const NutTable::HidInfo& row) {
+    for (const auto& u : usages) {
+        if (u.report_type == 3 && u.report_id != 0 && NutTable::pathMatches(u, row.hidpath)) return u.report_id;
+    }
+    return 0;
+}
+
 void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick.clear();
     full.clear();
@@ -219,7 +233,7 @@ void GenericDriver::findStaticReports(IHidTransport* host) {
         if (u.report_type != 1 && u.report_type != 3) continue;
         uint32_t bit = 1u << (u.report_id % 32);
         uint8_t slot = typeSlot(u.report_type);
-        if (isDynamicUsage(u)) dynamic[slot][u.report_id / 32] |= bit;
+        if (!isStaticUsage(u)) dynamic[slot][u.report_id / 32] |= bit;
         else _static_report[slot][u.report_id / 32] |= bit;
     }
     for (int t = 0; t < 2; t++) {
@@ -271,8 +285,11 @@ void GenericDriver::collectStringRequests(IHidTransport* host, const UPSData& da
     if (!data.hasKey("ups.model") && host->_iProduct > 0) out.push_back(host->_iProduct);
     if (!data.hasKey("ups.serial") && host->_iSerialNumber > 0) out.push_back(host->_iSerialNumber);
     if (!data.hasKey("battery.mfr.date") && _batteryDateStringIndex > 0) out.push_back(_batteryDateStringIndex);
-    // Table rows with stringid_conversion still waiting for their text (US-073)
-    if (!requestTableStrings(host)) return;
+    if (requestTableStrings(host)) collectTableStringRequests(out);
+}
+
+// Table rows with stringid_conversion still waiting for their text (US-073)
+void GenericDriver::collectTableStringRequests(std::vector<uint8_t>& out) const {
     for (const auto& b : _nut_rows) {
         if (b.info->conv == NutTable::Conv::StringId && b.string_index > 0 && !b.has &&
             b.role != NutTable::Bound::Role::DEAD) {

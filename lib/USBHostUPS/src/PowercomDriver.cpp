@@ -14,73 +14,100 @@
 
 /**
  * @brief Powercom Driver Implementation
- * 
- * ADR 0003 COMPLIANCE:
- * This sub-driver faithfully mirrors the official NUT behavior for Powercom HID devices.
- * - Reference: nut_repo/drivers/powercom-hid.c
- * - Report 0xA4 / 0x0A Quirks: Uses powercom_poll_0xa4 and powercom_poll_0x0a structures.
- * - Standard Field Overrides: Reverts PDC mapped voltage/beeper fields as Powercom sends garbage values.
+ *
+ * Every value, status bit and instant command comes from NutTable::powercomHid2Nut(), the
+ * rows of powercom_hid2nut in nut_repo/drivers/powercom-hid.c (US-077, ADR 0011). What is
+ * left here are the hooks that are not table rows:
+ * - poll policy (issue #36): 800 ms between requests, the 0x0A keep-alive, the reports of
+ *   the bound rows (static ones once, the BOOL ones in the quick poll) and the legacy
+ *   report 0xA4, whose text battery.voltage serves (powercom_hack_voltage);
+ * - beeper encoding: the values of the beeper.enable / beeper.disable rows, 1 and 0
+ *   (powercom-hid.c:659-660), although powercom_beeper_info reads 2 as disabled;
+ * - powercom_format_mfr / powercom_format_model / powercom_format_serial
+ *   (formatDeviceStrings): the USB strings, "PowerCOM" when there is no manufacturer
+ *   string, no ups.model / ups.serial without theirs; the string descriptors are not
+ *   requested again by the poll;
+ * - QUIRK_NO_BEEPER_CONTROL of the SPD-750U (Quirks.h), the delays of US-066.
+ * Out of scope: powercom_claim (interrupt_only for PID 0x0001, PID 0x0002 rejected) and
+ * fix_report_desc.
  */
 
 #include "PowercomDriver.h"
 #include "IHidTransport.h"
 #include "HIDParser.h"
-#include "Quirks.h"
 #include <cctype>
 
-PowercomDriver::PowercomDriver() {}
+PowercomDriver::PowercomDriver() : _status_report_len(0) {}
 
 void PowercomDriver::setup() {
-    // Review M2: the base setup was skipped, and hidden copies of its members shadowed it
     GenericDriver::setup();
+    _status_report_len = 0;
 }
 
-void PowercomDriver::onLoop(IHidTransport* host, UPSData& data) {
-    if (!data.hasKey("ups.mfr")) {
-        data.set("ups.mfr", "POWERCOM Co.,LTD");
-    }
-    if (!data.hasKey("ups.model")) {
-        uint16_t pid = host->getPID();
-        switch (pid) {
-            case 0x00a2: data.set("ups.model", "IMPERIAL Series"); break;
-            case 0x00a3: data.set("ups.model", "Smart King Pro"); break;
-            case 0x00a4: data.set("ups.model", "WOW Series"); break;
-            case 0x00a5: data.set("ups.model", "Vanguard Series"); break;
-            case 0x00a6: data.set("ups.model", "Black Knight Pro"); break;
-            case 0x0004: data.set("ups.model", "SPD / Vanguard / BNT"); break;
-            case 0x0001: data.set("ups.model", "Powercom UPS"); break;
-            default:     data.set("ups.model", "Powercom HID UPS"); break;
-        }
-    }
+// powercom_format_mfr (powercom-hid.c:739): hd->Vendor, "PowerCOM" without it. ups.model and
+// ups.serial are hd->Product and hd->Serial (powercom_format_model/_serial): the USB strings
+// as they are, and no variable when the device has none (usbhid-ups.c:2179-2195)
+void PowercomDriver::formatDeviceStrings(UPSData& data) {
+    if (!data.hasKey("ups.mfr")) data.set("ups.mfr", "PowerCOM");
 }
 
-// FEATURE report that carries the usage (by path, or by code when path is null), 0 if none
-static uint8_t featureReportFor(IHidTransport* host, const char* path, uint32_t usage) {
-    for (const auto& u : host->getUsages()) {
-        if (u.report_type != 3 || u.report_id == 0) continue;
-        if (path ? strcmp(u.path, path) == 0 : u.usage == usage) return u.report_id;
+// The row has a usage on the attached device, in any report type
+static bool isBound(const std::vector<HIDUsageDef>& usages, const NutTable::HidInfo& row) {
+    for (const auto& u : usages) {
+        if (NutTable::pathMatches(u, row.hidpath)) return true;
     }
-    return 0;
+    return false;
 }
 
-// Quick poll: every 2 s the status keep-alive (report 0x0A).
-// Full poll: every 30 s also voltages and load (reports 0x1D, 0x21, 0x1F), as powercom-hid,
-// then battery temperature, beeper and the legacy 0xA4 battery voltage (issue #36).
-// Temperature and beeper report IDs change between models: they come from the descriptor.
+// Quick poll: every 2 s the status keep-alive (report 0x0A, 8 bytes, issue #36) and the
+// reports of the bound BOOL rows. The engine applies the BOOL rows again in table order after
+// each report, so a stale UPS.PresentStatus report (rows 557-568, after the PowerSummary ones)
+// would hide an OB from report 0x0A until its next read: it is read as often (US-077), and
+// right after report 0x0A changes, also in the middle of a full poll (decodeReport).
+// Full poll: the same, then the reports of the other bound rows in table order, then the
+// legacy report 0xA4 (8 bytes, powercom_hack_voltage). A row whose variable an earlier bound
+// row already provides is never read (upstream drops it at INIT); static reports are read
+// once (pollStaticReportsOnce). Input voltage, output voltage and load keep the 8-byte
+// requests of issue #36.
 void PowercomDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+    const auto& usages = host->getUsages();
     quick = { PollItem{3, 0x0A, 8} };
-    full = { PollItem{3, 0x0A, 8}, PollItem{3, 0x1D, 8}, PollItem{3, 0x21, 8}, PollItem{3, 0x1F, 8} };
+    appendTableReports(usages, quick, [](const NutTable::HidInfo& row, size_t) {
+        return strcmp(row.info_type, "BOOL") == 0;
+    });
 
-    uint8_t temp_id = featureReportFor(host, "UPS.Battery.Temperature", 0);
-    if (!temp_id) temp_id = featureReportFor(host, nullptr, 0x00020036); // PowercomTemperature
-    if (temp_id) full.push_back(PollItem{3, temp_id, 0});
-
-    String beeper = host->getActiveBeeperPath();
-    uint8_t beeper_id = beeper.length() ? featureReportFor(host, beeper.c_str(), 0) : 0;
-    if (beeper_id) full.push_back(PollItem{3, beeper_id, 0});
-
-    // Unmapped in NUT too: read as FEATURE of exactly 8 bytes (powercom-hid.c)
+    full = quick;
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    auto value_row = [](const NutTable::HidInfo& row) {
+        return !NutTable::isInternalRow(row) && !NutTable::isCommandRow(row) &&
+               !(row.hidflags & NutTable::HU_FLAG_ABSENT);
+    };
+    appendTableReports(usages, full, [&](const NutTable::HidInfo& row, size_t i) {
+        if (!value_row(row)) return false;
+        for (size_t j = 0; j < i; j++) {
+            if (value_row(table[j]) && strcmp(table[j].info_type, row.info_type) == 0 && isBound(usages, table[j]))
+                return false;
+        }
+        return true;
+    });
+    for (auto& item : full) {
+        if (item.id == 0x1D || item.id == 0x1F || item.id == 0x21) item.length = 8;
+    }
+    // Unmapped in NUT too: read as FEATURE of exactly 8 bytes (powercom-hid.c:457)
     full.push_back(PollItem{3, 0xA4, 8});
+}
+
+// Static when every value row on the usage is HU_FLAG_STATIC (a usage without rows is never
+// read by the table, so it does not make its report dynamic)
+bool PowercomDriver::isStaticUsage(const HIDUsageDef& u) const {
+    size_t n = 0;
+    const NutTable::HidInfo* table = hid2nut(n);
+    for (size_t i = 0; i < n; i++) {
+        if (NutTable::isCommandRow(table[i]) || !NutTable::pathMatches(u, table[i].hidpath)) continue;
+        if (!(table[i].hidflags & NutTable::HU_FLAG_STATIC)) return false;
+    }
+    return true;
 }
 
 void PowercomDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
@@ -99,151 +126,109 @@ void PowercomDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_
     }
 #endif
 
-    // Save fields before GenericDriver so Powercom custom mappings can handle them
-    String saved_voltage = ups_data.get("battery.voltage");
-    bool saved_has_voltage = ups_data.hasKey("battery.voltage");
-    String saved_beeper = ups_data.get("ups.beeper.status");
-    bool saved_has_beeper = ups_data.hasKey("ups.beeper.status");
-
-    // Run GenericDriver first for default PDC mappings
-    GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
-
-    // NUT completely ignores standard voltage fields for Powercom because they are often broken/garbage
-    if (saved_has_voltage) ups_data.set("battery.voltage", saved_voltage);
-    else ups_data.remove("battery.voltage");
-    if (saved_has_beeper) ups_data.set("ups.beeper.status", saved_beeper);
-    else ups_data.remove("ups.beeper.status");
-
     if (report_id == 0xA4 && report_type == 3) {
-        String msg = "";
-        // Check if report ID is prepended at data[0] or if payload starts directly at data[0]
-        size_t start_idx = (data[0] == 0xA4) ? 1 : 0;
-        for (size_t i = start_idx; i < length && i < 8; i++) {
-            msg += (char)data[i];
-        }
+        // powercom_hack_voltage (powercom-hid.c:432-493): " 13.7 2" -> "13.7", kept as the
+        // last valid reading only when it has a dot; Conv::PowercomHackVoltage serves it
+        char msg[9];
+        size_t j = 0;
+        size_t start_idx = (data[0] == 0xA4) ? 1 : 0; // the report ID, when the host keeps it
+        for (size_t i = start_idx; i < length && i < 8; i++) msg[j++] = (char)data[i];
+        msg[j] = '\0';
+        char* start = msg;
+        while (*start && !std::isdigit((unsigned char)*start) && *start != '.') start++;
+        char* end = start;
+        while (*end && (std::isdigit((unsigned char)*end) || *end == '.')) end++;
+        *end = '\0';
 #ifdef USBUPS_DEBUG_LOG
-        host->logDebug("[PowercomDriver] 0xA4 text: '" + msg + "'");
+        host->logDebug("[PowercomDriver] 0xA4 text: '" + String(msg) + "'");
 #endif
-
-        int start = -1;
-        for (int i = 0; i < msg.length(); i++) {
-            if (std::isdigit((unsigned char)msg[i]) || msg[i] == '.') {
-                start = i;
-                break;
-            }
-        }
-        if (start >= 0) {
-            String valStr = "";
-            for (int i = start; i < msg.length(); i++) {
-                if (std::isdigit((unsigned char)msg[i]) || msg[i] == '.') {
-                    valStr += msg[i];
-                } else {
-                    break;
-                }
-            }
-            if (valStr.length() > 0 && valStr.indexOf('.') != -1) {
-                ups_data.set("battery.voltage", String(valStr.toFloat(), 2));
-            }
+        if (*start && strchr(start, '.')) {
+            snprintf(_nut_ctx.powercom_battery_voltage, sizeof(_nut_ctx.powercom_battery_voltage), "%s", start);
         }
         return;
     }
 
-    struct Mapping {
-        const char* path;
-        void (*apply)(PowercomDriver*, UPSData&, double, const HIDUsageDef*);
-    };
-
-    static const Mapping mappings[] = {
-        { "UPS.PowerSummary.RemainingCapacity", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.charge", String((int)(v > 100 ? 100 : v))); } },
-        { "UPS.PowerSummary.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        { "UPS.Battery.RunTimeToEmpty", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef*) { d.set("battery.runtime", String((int)v)); } },
-        { "UPS.PowerSummary.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } // Powercom NUT: 1 = enabled
-            else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } // Powercom NUT: 2 = disabled
-            else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-        } },
-        { "UPS.AudibleAlarmControl", [](PowercomDriver*, UPSData& d, double v, const HIDUsageDef* def) { 
-            if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-            else if ((int)v == 1) { d.set("ups.beeper.status", "enabled"); } 
-            else if ((int)v == 2) { d.set("ups.beeper.status", "disabled"); } 
-            else { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); }
-        } }
-    };
-
-    for (const auto& u : host->getUsages()) {
-        if (u.report_id != report_id || u.report_type != report_type) continue;
-        double val = HIDParser::extractUsage(&u, report_id, data, length);
-        
-        for (const auto& m : mappings) {
-            if (strcmp(u.path, m.path) == 0) {
-                m.apply(this, ups_data, val, &u);
-                break; // handled by string mappings
+    // A new status in report 0x0A (INPUT, or the keep-alive) would stay hidden by the older
+    // UPS.PresentStatus report (rows 557-568 come later in the table and the BOOL rows are
+    // applied again in table order) until that report is read: during a full poll that can
+    // be 15 requests away. Read the other status reports next, as the quick poll would (US-077)
+    if (report_id == 0x0A) {
+        size_t n = length < sizeof(_status_report) ? length : sizeof(_status_report);
+        // The first value is no change: every status report is in the first poll anyway
+        bool changed = _status_report_len != 0 && (n != _status_report_len || memcmp(_status_report, data, n) != 0);
+        memcpy(_status_report, data, n);
+        _status_report_len = (uint8_t)n;
+        if (changed) {
+            std::vector<PollItem> status;
+            appendTableReports(host->getUsages(), status, [](const NutTable::HidInfo& row, size_t) {
+                return strcmp(row.info_type, "BOOL") == 0;
+            });
+            for (auto it = status.rbegin(); it != status.rend(); ++it) {
+                if (it->id != 0x0A) pollSoon(*it);
             }
         }
-        
-        // Match by usage instead of full path because Powercom uses non-standard Usage Page 0x0002
-        if (u.usage == 0x00020030) { // Voltage
-            if (strstr(u.path, "0x0002001A") != nullptr) { ups_data.set("input.voltage", String(val * 4.0f, 1)); } // Input
-            else if (strstr(u.path, "0x0002001C") != nullptr) { ups_data.set("output.voltage", String(val * 4.0f, 1)); } // Output
-        }
-        else if (u.usage == 0x00020035) { // PercentLoad
-            if (strstr(u.path, "0x0002001C") != nullptr) { ups_data.set("ups.load", String((int)val)); }
-        }
-        else if (u.usage == 0x00020081) { // InternalChargeController (Status bits 1)
-            uint32_t bitmask = (uint32_t)val;
-            ups_data.set("ups.status.internal_failure", (bitmask & 0x01) != 0 ? "1" : "0");
-            ups_data.set("ups.status.replace_battery", (bitmask & 0x02) != 0 ? "1" : "0");
-            ups_data.set("ups.status.shutdown_imminent", (bitmask & 0x10) != 0 ? "1" : "0");
-        }
-        else if (u.usage == 0x00020082) { // PrimaryBatterySupport (Status bits 2)
-            uint32_t bitmask = (uint32_t)val;
-            ups_data.set("ups.status.ac_present", (bitmask & 0x01) == 0 ? "1" : "0"); // 1 = line fail
-            ups_data.set("ups.status.discharging", (bitmask & 0x01) != 0 ? "1" : "0"); 
-            ups_data.set("ups.status.battery_low", (bitmask & 0x02) != 0 ? "1" : "0");
-            ups_data.set("ups.status.overload", (bitmask & 0x20) != 0 ? "1" : "0");
-        }
-        else if (u.usage == 0x00020032) { // Frequency
-            // Could map to input or output depending on collection
-        }
-        else if (u.usage == 0x00020057) { // DelayBeforeShutdown
-            uint16_t i = (uint16_t)val;
-            int32_t delay = 60 * (i >> 8) + (i & 0x00FF);
-            // Only the timer: ups.delay.* are configured delays, not device values (US-058)
-            ups_data.set("ups.timer.shutdown", String(delay));
-        }
-        else if (u.usage == 0x00020036) { // PowercomTemperature
-            ups_data.set("battery.temperature", String(val, 0));
-        }
-        else if (u.usage == 0x00020083) { // DesignCapacity
-            ups_data.set("battery.capacity", String((int)(val / 3600.0)));
-        }
     }
+
+    GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 }
 
-void PowercomDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length < 2 || data[1] != 0x03) return;
-    uint8_t str_len = data[0];
-    String str = "";
-    
-    bool invert = false;
-    if (host && (host->getQuirks() & QUIRK_INVERT_STRINGS)) {
-        invert = true;
-    }
-    
-    for (int i = 2; i < str_len && i < length; i += 2) {
-        if (data[i] != 0) {
-            char c = (char)data[i];
-            if (invert) c = ~c;
-            str += c;
-        }
-    }
-    if (index == host->_iManufacturer) ups_data.set("ups.mfr", str);
-    else if (index == host->_iProduct) ups_data.set("ups.model", str);
-    else if (host->_iSerialNumber > 0 && index == host->_iSerialNumber) ups_data.set("ups.serial", str);
+// The mappings of GenericDriver::decodeReport() whose keys powercomHid2Nut() owns (US-077,
+// ADR 0011), copied from there
+static const char* const kSupersededGenericPaths[] = {
+    // Status: only the BOOL rows of powercom_hid2nut set the internal ups.status.* keys
+    "UPS.PowerSummary.PresentStatus.ACPresent", "UPS.PowerSummary.ACPresent",
+    "UPS.PowerSummary.PresentStatus.Discharging", "UPS.PowerSummary.Discharging",
+    "UPS.PowerSummary.PresentStatus.Charging", "UPS.PowerSummary.Charging",
+    "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "UPS.PowerSummary.BelowRemainingCapacityLimit",
+    "UPS.PowerSummary.PresentStatus.NeedReplacement", "UPS.PowerSummary.NeedReplacement",
+    "UPS.PowerSummary.PresentStatus.Overload", "UPS.PowerSummary.Overload",
+    "UPS.PowerSummary.PresentStatus.ShutdownImminent", "UPS.PowerSummary.ShutdownImminent",
+    "UPS.PowerSummary.PresentStatus.CommunicationLost", "UPS.PowerSummary.CommunicationLost",
+    "UPS.PowerSummary.PresentStatus.BatteryPresent", "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired",
+    "UPS.PowerSummary.PresentStatus.FullyCharged", "UPS.PowerSummary.PresentStatus.FullyDischarged",
+    // input.voltage, input.frequency, output.voltage, output.frequency
+    "UPS.PowerConverter.Input.Voltage", "UPS.Input.Voltage", "UPS.Flow.Voltage",
+    "UPS.PowerConverter.Input.Frequency", "UPS.Input.Frequency", "UPS.Flow.Frequency",
+    "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
+    "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",
+    // battery.voltage: on PowerCOM these duplicate output.voltage (powercom-hid.c:574-581)
+    "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Voltage", "UPS.Battery.Voltage",
+    // battery.charge, battery.charge.low, battery.runtime
+    "UPS.PowerSummary.RemainingCapacity", "UPS.PowerSummary.RemainingCapacityLimit",
+    "UPS.PowerSummary.RunTimeToEmpty", "UPS.Battery.RunTimeToEmpty",
+    // ups.load
+    "UPS.PowerSummary.PercentLoad", "UPS.PowerConverter.Output.PercentLoad", "UPS.Output.PercentLoad",
+    // ups.mfr.date, battery.mfr.date
+    "UPS.PowerSummary.ManufacturerDate", "UPS.ManufacturerDate",
+    "UPS.Battery.ManufacturerDate", "UPS.BatterySystem.Battery.Date", "UPS.Battery.Date",
+    // battery.temperature
+    "UPS.Battery.Temperature",
+    // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
+    "UPS.BatterySystem.Battery.FullChargeCapacity",
+    // battery.voltage.nominal: the output nominal voltage on PowerCOM (powercom-hid.c:574-581)
+    "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
+    // input.voltage.nominal, output.voltage.nominal
+    "UPS.Flow.ConfigVoltage", "UPS.Input.ConfigVoltage",
+    "UPS.PowerConverter.Output.ConfigVoltage", "UPS.Output.ConfigVoltage",
+    // ups.beeper.status
+    "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
+    // ups.test.result
+    "UPS.BatterySystem.Battery.Test", "UPS.Battery.Test", "UPS.Output.Test",
+    // ups.timer.shutdown
+    "UPS.PowerSummary.DelayBeforeShutdown",
+    // Kept (ADR 0011 rule 2, standard names powercom-hid does not read): ups.realpower and
+    // ups.power, ups.realpower.nominal and ups.power.nominal, ups.temperature
+    // (PowerSummary.Temperature), battery.capacity, input.transfer.*, and the ups.realpower
+    // estimate. They appear only when their report is polled: on the SPD-750U none is.
+};
+
+const char* const* PowercomDriver::supersededGenericPaths(size_t& n) const {
+    n = sizeof(kSupersededGenericPaths) / sizeof(kSupersededGenericPaths[0]);
+    return kSupersededGenericPaths;
 }
 
+// The values of the beeper.enable / beeper.disable rows (powercom-hid.c:659-660)
 uint8_t PowercomDriver::encodeBeeperValue(bool enable, uint16_t bit_size) const {
-    if (bit_size == 1) return enable ? 1 : 0;
-    return enable ? 1 : 2; // Powercom protocol: 1 = enable, 2 = disable
+    (void)bit_size;
+    return enable ? 1 : 0;
 }
