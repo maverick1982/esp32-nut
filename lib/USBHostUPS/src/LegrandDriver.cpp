@@ -18,50 +18,77 @@
 #include "HIDParser.h"
 
 /**
- * ADR 0003 COMPLIANCE:
- * This sub-driver mirrors the official NUT behavior for Legrand USB HID devices.
- * - Reference: nut/drivers/legrand-hid.c (subdriver legrand_subdriver)
- * - Vendor ID 0x1CB0, products 0x0038 (Keor PDU) and 0x0032 (Keor SP), as
- *   legrand_usb_device_table
+ * @brief Legrand Driver Implementation
  *
- * Standard USB HID PDC fields are decoded by GenericDriver (ADR 0004); this sub-driver
- * only adds what is Legrand-specific. Deviations from legrand-hid.c (US-087, decided on
- * 2026-10-18):
- * 1. No legrand_times10/100k/1M/10M nor divide_by_10_conversion: on the Keor PDU 800 they
- *    give values off by a factor of 10 or more with NUT too (DDL report: battery.voltage
- *    1.4, battery.voltage.nominal 1.2, output.voltage 6). The volts come from the HID
- *    unit exponent, as libhid.c computes them.
+ * Every value, status bit and instant command comes from NutTable::legrandHid2Nut(), the rows
+ * of legrand_hid2nut in nut_repo/drivers/legrand-hid.c (US-106, ADR 0011), vendor ID 0x1CB0,
+ * products 0x0038 (Keor PDU) and 0x0032 (Keor SP). Deviations from legrand-hid.c (US-087,
+ * decided on 2026-10-18, kept by US-106):
+ * 1. No legrand_times10/100k/1M/10M nor divide_by_10_conversion: on the Keor PDU 800 they give
+ *    values off by a factor of 10 or more with NUT too. The rows keep the value of the HID unit
+ *    exponent, as libhid.c computes it, with the "%0.1f" of the excluded function.
  * 2. ups.beeper.status is published with the Legrand meaning of the field (2 = enabled,
- *    3 = disabled), while legrand-hid.c publishes no beeper status.
+ *    3 = disabled), while legrand-hid.c publishes no beeper status: the hook below.
  * 3. beeper.toggle is offered, as for every driver of the project.
- * 4. The variables GenericDriver decodes beyond legrand_hid2nut stay, as in the other
- *    drivers, until the EP-001 table migration.
- * 5. load.* and shutdown.* use the common catalog paths (PowerSummary, Output);
- *    UPS.OutletSystem.Outlet.DelayBefore* only counts for ups.delay.*.
- * 6. Other Legrand products stay with GenericDriver (DriverRegistry), where upstream
- *    rejects them unless the productid option is given.
+ * 4. Standard HID usages without a legrand-hid row keep the generic mappings (ADR 0011
+ *    rule 2), for example input.frequency and ups.power.nominal.
+ * 5. Other Legrand products stay with GenericDriver (DriverRegistry), where upstream rejects
+ *    them unless the productid option is given.
+ * Hooks that are not table rows: the beeper encoding (encodeBeeperValue, beeperMuteSupported,
+ * the status hook), legrand_format_mfr (formatDeviceStrings), the delays of US-066.
  */
+
+// The standard mappings of GenericDriver::decodeReport() whose keys come from
+// legrandHid2Nut(), copied character by character from that table (US-106)
+static const char* const kSupersededGenericPaths[] = {
+    // Status: only the BOOL rows of legrand_hid2nut set these internal ups.status.* keys
+    "UPS.PowerSummary.PresentStatus.ACPresent", "UPS.PowerSummary.ACPresent",
+    "UPS.PowerSummary.PresentStatus.Discharging", "UPS.PowerSummary.Discharging",
+    "UPS.PowerSummary.PresentStatus.Charging", "UPS.PowerSummary.Charging",
+    "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "UPS.PowerSummary.BelowRemainingCapacityLimit",
+    "UPS.PowerSummary.PresentStatus.Overload", "UPS.PowerSummary.Overload",
+    // input.voltage, input.transfer.*, input.voltage.nominal
+    "UPS.PowerConverter.Input.Voltage", "UPS.Input.Voltage", "UPS.Flow.Voltage",
+    "UPS.PowerConverter.Output.HighVoltageTransfer", "UPS.PowerConverter.Output.LowVoltageTransfer",
+    "UPS.Output.LowVoltageTransfer", "UPS.Input.LowVoltageTransfer",
+    "UPS.Output.HighVoltageTransfer", "UPS.Input.HighVoltageTransfer",
+    "UPS.Flow.ConfigVoltage", "UPS.Input.ConfigVoltage",
+    // battery.voltage, battery.voltage.nominal
+    "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Voltage", "UPS.Battery.Voltage",
+    "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
+    // battery.charge, battery.charge.low, battery.runtime
+    "UPS.PowerSummary.RemainingCapacity", "UPS.PowerSummary.RemainingCapacityLimit",
+    "UPS.PowerSummary.RunTimeToEmpty", "UPS.Battery.RunTimeToEmpty",
+    // output.voltage, output.frequency
+    "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
+    "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",
+    // ups.load
+    "UPS.PowerSummary.PercentLoad", "UPS.PowerConverter.Output.PercentLoad", "UPS.Output.PercentLoad",
+    // ups.realpower.nominal
+    "UPS.Flow.ConfigActivePower", "UPS.PowerConverter.ConfigActivePower", "UPS.Output.ConfigActivePower",
+    // ups.beeper.status: the Legrand hook below, not beeper_info
+    "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
+    // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
+    "UPS.BatterySystem.Battery.FullChargeCapacity",
+    // Kept (ADR 0011 rule 2, standard names legrand-hid does not read): input.frequency,
+    // ups.power.nominal from Flow.ConfigApparentPower, the FullyCharged and
+    // RemainingTimeLimitExpired flags, the dates, temperatures and timers
+};
+
+const char* const* LegrandDriver::supersededGenericPaths(size_t& n) const {
+    n = sizeof(kSupersededGenericPaths) / sizeof(kSupersededGenericPaths[0]);
+    return kSupersededGenericPaths;
+}
 
 void LegrandDriver::setup() {
     GenericDriver::setup();
     _map.invalidate();
 }
 
-void LegrandDriver::onLoop(IHidTransport* host, UPSData& data) {
-    GenericDriver::onLoop(host, data);
-    // legrand_format_mfr(): hd->Vendor, or "Legrand" when the device has no Vendor string
-    if (host && host->_iManufacturer == 0 && !data.hasKey("ups.mfr")) {
-        data.set("ups.mfr", "Legrand");
-    }
-}
-
-void LegrandDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {
-    GenericDriver::parseStringDescriptor(host, index, data, length, ups_data);
-    // A Vendor string that decodes to empty counts as a missing one for legrand_format_mfr()
-    if (host && host->_iManufacturer > 0 && index == host->_iManufacturer &&
-        ups_data.get("ups.mfr").length() == 0) {
-        ups_data.set("ups.mfr", "Legrand");
-    }
+// legrand_format_mfr() returns hd->Vendor, or "Legrand" without one. A manufacturer string
+// that decodes to empty counts as missing.
+void LegrandDriver::formatDeviceStrings(UPSData& data) {
+    if (data.get("ups.mfr").length() == 0) data.set("ups.mfr", "Legrand");
 }
 
 // Legrand meaning of AudibleAlarmControl (deviation 2): beeper.enable writes 2 and
@@ -79,7 +106,7 @@ void LegrandDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
     typedef UsageMapIndex<LegrandDriver>::Mapping Mapping;
-    // Applied after GenericDriver: these values override its standard beeper_info decoding
+    // The beeper status hook only (deviation 2): every other value is a row of legrandHid2Nut()
     static const Mapping mappings[] = {
         { "UPS.PowerSummary.AudibleAlarmControl", [](LegrandDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             legrandBeeperStatus(d, v, def, drv->_active_beeper);
@@ -89,32 +116,6 @@ void LegrandDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t
         } },
         { "UPS.AudibleAlarmControl", [](LegrandDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
             legrandBeeperStatus(d, v, def, drv->_active_beeper);
-        } },
-        // Rows of legrand_hid2nut that GenericDriver does not map, without the legrand_times*
-        // conversions (deviation 1)
-        { "UPS.PowerSummary.WarningCapacityLimit", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.charge.warning", String((int)v));
-        } },
-        { "UPS.BatterySystem.Battery.ConfigVoltage", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.voltage.nominal", String(lrint(v)));
-        } },
-        { "UPS.BatterySystem.Battery.Voltage", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("battery.voltage", String(v, 2));
-        } },
-        { "UPS.OutletSystem.Outlet.PercentLoad", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.load", String((int)v));
-            d.updateRealPower();
-        } },
-        // legrand-hid.c maps Flow.ConfigApparentPower to ups.realpower.nominal, as it is;
-        // GenericDriver also keeps it as ups.power.nominal (deviation 4)
-        { "UPS.Flow.ConfigApparentPower", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.realpower.nominal", String((int)v));
-            d.updateRealPower();
-        } },
-        // legrand-hid.c: { "BOOL", ..., "UPS.Output.Overload", ..., overload_info }.
-        // GenericDriver only knows the PowerSummary paths of Overload
-        { "UPS.Output.Overload", [](LegrandDriver*, UPSData& d, double v, const HIDUsageDef*) {
-            d.set("ups.status.overload", v != 0 ? "1" : "0");
         } },
     };
 

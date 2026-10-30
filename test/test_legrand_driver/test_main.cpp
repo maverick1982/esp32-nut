@@ -1,6 +1,7 @@
 #include <unity.h>
 #include <string.h>
 #include <memory>
+#include <vector>
 #include "LegrandDriver.h"
 #include "DriverRegistry.h"
 #include "CommandCatalog.h"
@@ -147,38 +148,69 @@ void test_battery_test_on_output_test(void) {
     TEST_ASSERT_EQUAL_UINT32(3, value);
 }
 
-// Deviation 1 of the plan: no divide_by_10 on PowerSummary.Voltage/ConfigVoltage; the
-// Keor PDU declares Volts with exponent 6 (raw 137 -> 13.7 V, raw 120 -> 12 V)
-void test_no_legrand_voltage_conversions(void) {
-    HIDUsageDef v = makeUsage("UPS.PowerSummary.Voltage", 0x0A, 3, 0, 16);
+// As USBHostUPS: decodeReport() and then postDecode(), where the NUT table writes its rows
+// (US-106: every Legrand value but the beeper status comes from legrandHid2Nut())
+static void decode(uint8_t type, const std::vector<uint8_t>& bytes) {
+    driver.decodeReport(&mockHost, bytes[0], type, bytes.data(), bytes.size(), ups_data);
+    driver.postDecode(&mockHost, bytes[0], type, bytes.data(), bytes.size(), ups_data);
+}
+
+// A Volts usage of the Keor PDU 800: unit exponent 6 (issue #90)
+static void addVolts(const char* path, uint8_t report_id) {
+    HIDUsageDef v = makeUsage(path, report_id, 3, 0, 16);
     v.exponent = 6;
     v.unit = 0x00F0D121;
     v.logical_max = 65535;
     mockHost._usages.push_back(v);
-    HIDUsageDef c = makeUsage("UPS.PowerSummary.ConfigVoltage", 0x09, 3, 0, 16);
-    c.exponent = 6;
-    c.unit = 0x00F0D121;
-    c.logical_max = 65535;
-    mockHost._usages.push_back(c);
-
-    uint8_t volt[] = { 0x0A, 137, 0 };
-    driver.decodeReport(&mockHost, 0x0A, 3, volt, sizeof(volt), ups_data);
-    uint8_t nominal[] = { 0x09, 120, 0 };
-    driver.decodeReport(&mockHost, 0x09, 3, nominal, sizeof(nominal), ups_data);
-
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 13.7f, ups_data.getFloat("battery.voltage"));
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 12.0f, ups_data.getFloat("battery.voltage.nominal"));
 }
 
-// legrand-hid.c: BOOL UPS.Output.Overload -> overload_info (Keor PDU: FEATURE 0x17 bit 1)
+// Deviation 1 (US-087): no divide_by_10 on PowerSummary.Voltage/ConfigVoltage (legrand-hid.c:139,
+// 141); the Keor PDU declares Volts with exponent 6 (raw 137 -> 13.7 V, raw 120 -> 12 V). The rows
+// keep the "%0.1f" of the excluded function (US-106, user decision of 2026-10-30)
+void test_no_legrand_voltage_conversions(void) {
+    addVolts("UPS.PowerSummary.Voltage", 0x0A);
+    addVolts("UPS.PowerSummary.ConfigVoltage", 0x09);
+
+    decode(3, { 0x0A, 137, 0 });
+    decode(3, { 0x09, 120, 0 });
+
+    TEST_ASSERT_EQUAL_STRING("13.7", ups_data.get("battery.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("12.0", ups_data.get("battery.voltage.nominal").c_str());
+}
+
+// legrand-hid.c:129 and 149: UPS.Input.Voltage and UPS.Output.Voltage with "%.0f" (no
+// conversion upstream): 230.2 V is published as 230, as usbhid-ups does
+void test_input_output_voltage_upstream_format(void) {
+    addVolts("UPS.Input.Voltage", 0x0F);
+    addVolts("UPS.Output.Voltage", 0x12);
+
+    decode(3, { 0x0F, 0xFE, 0x08 }); // 2302 -> 230.2 V
+    decode(3, { 0x12, 0xFE, 0x08 });
+
+    TEST_ASSERT_EQUAL_STRING("230", ups_data.get("input.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("230", ups_data.get("output.voltage").c_str());
+}
+
+// legrand-hid.c:144 writes UPS.PowerSummary.RuntimeToEmpty: usage names ignore case, as in
+// string_to_path(), so the RunTimeToEmpty usage of the Keor PDU binds
+void test_runtime_from_upstream_row(void) {
+    addUsage("UPS.PowerSummary.RunTimeToEmpty", 0x08, 3, 0, 16);
+
+    decode(3, { 0x08, 0x70, 0x08 }); // 2160 s
+
+    TEST_ASSERT_EQUAL_STRING("2160", ups_data.get("battery.runtime").c_str());
+}
+
+// legrand-hid.c:162: BOOL UPS.Output.Overload -> overload_info (Keor PDU: FEATURE 0x17 bit 1)
 void test_output_overload_sets_status(void) {
     addUsage("UPS.Output.Good", 0x17, 3, 0, 1);
     addUsage("UPS.Output.Overload", 0x17, 3, 1, 1);
-    uint8_t on[] = { 0x17, 0x03 };
-    driver.decodeReport(&mockHost, 0x17, 3, on, sizeof(on), ups_data);
+    addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x0B, 3, 0, 1);
+    decode(3, { 0x0B, 0x01 });
+    decode(3, { 0x17, 0x03 });
     TEST_ASSERT_EQUAL_STRING("1", ups_data.get("ups.status.overload").c_str());
-    uint8_t off[] = { 0x17, 0x01 };
-    driver.decodeReport(&mockHost, 0x17, 3, off, sizeof(off), ups_data);
+    TEST_ASSERT_EQUAL_STRING("OL OVER", UPSData::computeUPSStatusString(ups_data).c_str());
+    decode(3, { 0x17, 0x01 });
     TEST_ASSERT_EQUAL_STRING("0", ups_data.get("ups.status.overload").c_str());
 }
 
@@ -188,22 +220,50 @@ void test_legrand_only_rows(void) {
     addUsage("UPS.PowerSummary.WarningCapacityLimit", 0x07, 3, 0, 8);
     addUsage("UPS.OutletSystem.Outlet.PercentLoad", 0x30, 3, 0, 8);
     addUsage("UPS.BatterySystem.Battery.ConfigVoltage", 0x31, 3, 0, 8);
-    uint8_t warn[] = { 0x07, 20 };
-    driver.decodeReport(&mockHost, 0x07, 3, warn, sizeof(warn), ups_data);
-    uint8_t load[] = { 0x30, 42 };
-    driver.decodeReport(&mockHost, 0x30, 3, load, sizeof(load), ups_data);
-    uint8_t nominal[] = { 0x31, 12 };
-    driver.decodeReport(&mockHost, 0x31, 3, nominal, sizeof(nominal), ups_data);
+    decode(3, { 0x07, 20 });
+    decode(3, { 0x30, 42 });
+    decode(3, { 0x31, 12 });
     TEST_ASSERT_EQUAL_STRING("20", ups_data.get("battery.charge.warning").c_str());
     TEST_ASSERT_EQUAL_STRING("42", ups_data.get("ups.load").c_str());
     TEST_ASSERT_EQUAL_STRING("12", ups_data.get("battery.voltage.nominal").c_str());
 }
 
-// legrand_format_mfr(): "Legrand" when the device has no Vendor string
+// legrand_format_mfr(): "Legrand" when the device has no Vendor string, or an empty one
 void test_mfr_fallback_without_vendor_string(void) {
-    mockHost._iManufacturer = 0;
-    driver.loop(&mockHost, ups_data, 0);
+    driver.formatDeviceStrings(ups_data);
     TEST_ASSERT_EQUAL_STRING("Legrand", ups_data.get("ups.mfr").c_str());
+    ups_data.set("ups.mfr", "LEGRAND");
+    driver.formatDeviceStrings(ups_data);
+    TEST_ASSERT_EQUAL_STRING("LEGRAND", ups_data.get("ups.mfr").c_str());
+}
+
+// Commands from the HU_TYPE_CMD rows of legrand_hid2nut on the Keor PDU usages: beeper.enable /
+// disable (183-184) write 2 and 3, test.battery.* on UPS.Output.Test (178-180), load.*.delay on
+// UPS.Output.DelayBefore* (171-172) and what usbhid-ups derives from them. No shutdown.stop:
+// legrand-hid has no row for it (US-106)
+void test_commands_from_legrand_table(void) {
+    addKeorBeeper();
+    addUsage("UPS.Output.Test", 0x14, 3, 0, 8);
+    addUsage("UPS.Output.DelayBeforeShutdown", 0x15, 3, 0, 16);
+    addUsage("UPS.Output.DelayBeforeStartup", 0x16, 3, 0, 16);
+    size_t n = 0;
+    const NutTable::HidInfo* t = driver.commandTable(n);
+    auto cmds = CommandCatalog::build(mockHost._usages, true, driver.shutdownCommandsSupported(),
+                                      driver.beeperMuteSupported(), nullptr, t, n);
+    for (const char* name : { "beeper.enable", "beeper.disable", "beeper.toggle", "test.battery.start.quick",
+                              "test.battery.start.deep", "test.battery.stop", "load.off", "load.on",
+                              "load.off.delay", "load.on.delay", "shutdown.return", "shutdown.stayoff",
+                              "shutdown.default" }) {
+        TEST_ASSERT_TRUE_MESSAGE(hasCommand(cmds, name), name);
+    }
+    TEST_ASSERT_FALSE(hasCommand(cmds, "shutdown.stop"));
+    TEST_ASSERT_FALSE(hasCommand(cmds, "beeper.mute"));
+
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", mockHost._usages, def, value, t, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.Output.Test", def.path);
+    TEST_ASSERT_EQUAL_UINT32(2, value);
 }
 
 // ups.delay.* on the Outlet and Output paths of legrand_hid2nut
@@ -220,34 +280,32 @@ void test_delay_paths_follow_legrand_table(void) {
 }
 
 #ifdef PIO_UNIT_TESTING
-#ifndef ARDUINO
-int main(int argc, char **argv) {
-    UNITY_BEGIN();
+static void runAll() {
     RUN_TEST(test_registry_selects_legrand_for_keor_pdu_and_sp);
     RUN_TEST(test_beeper_encoding_uses_legrand_values);
     RUN_TEST(test_beeper_status_uses_legrand_meaning);
     RUN_TEST(test_catalog_has_no_beeper_mute);
     RUN_TEST(test_battery_test_on_output_test);
     RUN_TEST(test_no_legrand_voltage_conversions);
+    RUN_TEST(test_input_output_voltage_upstream_format);
+    RUN_TEST(test_runtime_from_upstream_row);
     RUN_TEST(test_output_overload_sets_status);
     RUN_TEST(test_legrand_only_rows);
     RUN_TEST(test_mfr_fallback_without_vendor_string);
+    RUN_TEST(test_commands_from_legrand_table);
     RUN_TEST(test_delay_paths_follow_legrand_table);
+}
+
+#ifndef ARDUINO
+int main(int argc, char **argv) {
+    UNITY_BEGIN();
+    runAll();
     return UNITY_END();
 }
 #else
 void setup() {
     UNITY_BEGIN();
-    RUN_TEST(test_registry_selects_legrand_for_keor_pdu_and_sp);
-    RUN_TEST(test_beeper_encoding_uses_legrand_values);
-    RUN_TEST(test_beeper_status_uses_legrand_meaning);
-    RUN_TEST(test_catalog_has_no_beeper_mute);
-    RUN_TEST(test_battery_test_on_output_test);
-    RUN_TEST(test_no_legrand_voltage_conversions);
-    RUN_TEST(test_output_overload_sets_status);
-    RUN_TEST(test_legrand_only_rows);
-    RUN_TEST(test_mfr_fallback_without_vendor_string);
-    RUN_TEST(test_delay_paths_follow_legrand_table);
+    runAll();
     UNITY_END();
 }
 void loop() {}

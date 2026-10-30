@@ -19,7 +19,7 @@
 #include "GenericDriver.h"
 #include <Arduino.h>
 
-// Legrand Keor PDU (1cb0:0038) and Keor SP (1cb0:0032), after legrand-hid.c (US-087)
+// Legrand Keor PDU (1cb0:0038) and Keor SP (1cb0:0032), after legrand-hid.c (US-087, US-106)
 class LegrandDriver : public GenericDriver {
 public:
     const char* getDriverName() const override { return "LegrandDriver"; }
@@ -34,21 +34,27 @@ public:
     // legrand-hid.c has no beeper.mute, and 3 means disabled here
     bool beeperMuteSupported() const override { return false; }
 
-    // ups.delay.* rows of legrand_hid2nut (NutTable.h). They are the only RW rows of the
-    // table: hid2nut() is not overridden, applyDefaultDelays() sets them.
+    // ups.delay.* rows of legrand_hid2nut (legrand-hid.c:165-168): applyDefaultDelays() sets
+    // them, legrandHid2Nut() cites them as excluded (US-066)
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::legrandDelayPaths(); }
+
+    // Rows of legrand_hid2nut (legrand-hid.c), NutTable.h (US-106)
+    const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::legrandHid2Nut(n); }
+    // Standard mappings whose keys come from legrandHid2Nut() (US-106)
+    const char* const* supersededGenericPaths(size_t& n) const override;
+    // Instant commands from the HU_TYPE_CMD rows of legrand_hid2nut (US-106)
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::legrandHid2Nut(n); }
+    // legrand_format_mfr: "Legrand" when the device has no manufacturer string (US-106)
+    void formatDeviceStrings(UPSData& data) override;
 
     LegrandDriver() = default;
     virtual ~LegrandDriver() = default;
 
     void setup() override;
     void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-    void parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) override;
-
-protected:
-    void onLoop(IHidTransport* host, UPSData& data) override;
 
 private:
+    // ups.beeper.status with the Legrand meaning of the field: not a row of legrand_hid2nut
     UsageMapIndex<LegrandDriver> _map;
 };
 

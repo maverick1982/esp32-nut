@@ -788,6 +788,26 @@ void test_openups_status_functions() {
     }
 }
 
+void test_path_names_ignore_case() {
+    // string_to_path() (libhid.c:1047) compares usage names with strcasecmp: legrand-hid.c:144
+    // writes UPS.PowerSummary.RuntimeToEmpty for the RunTimeToEmpty usage (US-106)
+    HIDUsageDef u = mk("UPS.PowerSummary.RunTimeToEmpty", 0x00850068, 3);
+    TEST_ASSERT_TRUE(pathMatches(u, "UPS.PowerSummary.RuntimeToEmpty"));
+    TEST_ASSERT_TRUE(pathMatches(u, "ups.powersummary.runtimetoempty"));
+    TEST_ASSERT_FALSE(pathMatches(u, "UPS.PowerSummary.RuntimeToEmptyX"));
+    TEST_ASSERT_FALSE(pathMatches(u, "UPS.PowerSummary.RunTimeToFull"));
+    // Vendor codes: the same hex digits in either case
+    HIDUsageDef v = mk("UPS.PowerConverter.Output.0xFFFF0057", 0xffff0057, 3);
+    TEST_ASSERT_TRUE(pathMatches(v, "UPS.PowerConverter.Output.0xFFFF0057"));
+    TEST_ASSERT_TRUE(pathMatches(v, "UPS.PowerConverter.Output.0xffff0057"));
+    // The [N] indices still have to match
+    HIDUsageDef w = mk("UPS.Flow.ConfigVoltage", 0x00840040, 3);
+    w.coll_index[1] = 5;
+    TEST_ASSERT_TRUE(pathMatches(w, "UPS.flow.[4].configvoltage"));
+    TEST_ASSERT_FALSE(pathMatches(w, "UPS.Flow.[3].ConfigVoltage"));
+    TEST_ASSERT_FALSE(pathMatches(w, "UPS.Flow.ConfigVoltage"));
+}
+
 void test_nobattery_bit_constant() {
     // ST_NOBATTERY (OpenUPSDriver::filterStatus, US-078) is the bit of the nobattery token
     StatusBits s;
@@ -946,6 +966,34 @@ void test_powercom_rows_have_supported_formats() {
     checkSupportedFormats(t, n);
 }
 
+void test_legrand_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = legrandHid2Nut(n);
+    checkSupportedFormats(t, n);
+    // legrand-hid.c:130, 132, 139, 141, 142, 150: conversion excluded, "%0.1f" of the function (US-106)
+    const char* const excluded[] = {
+        "UPS.PowerConverter.Input.Voltage", "UPS.PowerConverter.Output.HighVoltageTransfer",
+        "UPS.PowerSummary.ConfigVoltage", "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Battery.Voltage",
+        "UPS.PowerConverter.Output.Voltage",
+    };
+    int found = 0;
+    for (size_t i = 0; i < n; i++) {
+        for (const char* path : excluded) {
+            if (strcmp(t[i].hidpath, path) != 0 || isCommandRow(t[i])) continue;
+            TEST_ASSERT_EQUAL_STRING_MESSAGE("%.1f", t[i].dfl, path);
+            found++;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(6, found);
+}
+
+void test_liebert_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = liebertHid2Nut(n);
+    checkSupportedFormats(t, n);
+    for (size_t i = 0; i < n; i++) TEST_ASSERT_TRUE_MESSAGE(strncmp(t[i].info_type, "unmapped.", 9) != 0, t[i].info_type);
+}
+
 void test_ecoflow_rows_have_supported_formats() {
     size_t n;
     const HidInfo* t = ecoflowHid2Nut(n);
@@ -1078,6 +1126,18 @@ void test_openups_table_covers_every_upstream_row() {
                        "inline const HidInfo* openupsHid2Nut", "inline const HidInfo* powercomHid2Nut");
 }
 
+void test_legrand_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every legrand_hid2nut row is in legrandHid2Nut(), as a row or as a comment (US-106)
+    checkTableCoverage("nut_repo/drivers/legrand-hid.c", "static hid_info_t legrand_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* legrandHid2Nut", "inline const HidInfo* liebertHid2Nut");
+}
+
+void test_liebert_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every liebert_hid2nut row is in liebertHid2Nut(), as a row or as a comment (US-106)
+    checkTableCoverage("nut_repo/drivers/liebert-hid.c", "static hid_info_t liebert_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* liebertHid2Nut", "} // namespace NutTable");
+}
+
 void test_ecoflow_and_openups_publish_only_upstream_names() {
     // ADR 0011 rule 3: the unmapped.* rows of ecoflow-hid.c stay inside #if WITH_UNMAPPED_DATA_POINTS;
     // the experimental.* rows are active upstream and published (US-078)
@@ -1141,6 +1201,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_openups_status_functions);
     RUN_TEST(test_depleted_lookup);
     RUN_TEST(test_nobattery_bit_constant);
+    RUN_TEST(test_path_names_ignore_case);
     RUN_TEST(test_format_three_decimals);
     RUN_TEST(test_command_rows_never_published);
     RUN_TEST(test_mge_rows_have_supported_formats);
@@ -1152,6 +1213,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_powercom_rows_have_supported_formats);
     RUN_TEST(test_powercom_table_covers_every_upstream_row);
     RUN_TEST(test_ecoflow_rows_have_supported_formats);
+    RUN_TEST(test_legrand_rows_have_supported_formats);
+    RUN_TEST(test_liebert_rows_have_supported_formats);
+    RUN_TEST(test_legrand_table_covers_every_upstream_row);
+    RUN_TEST(test_liebert_table_covers_every_upstream_row);
     RUN_TEST(test_openups_rows_have_supported_formats);
     RUN_TEST(test_ecoflow_table_covers_every_upstream_row);
     RUN_TEST(test_openups_table_covers_every_upstream_row);

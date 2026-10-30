@@ -56,7 +56,7 @@ Il file sostituisce **tutto** il testo della release: niente "What's Changed" au
 ## Release
 
 <!-- Una riga per ogni vX.Y.Z.md, dalla più recente. -->
-- [v1.12.0](v1.12.0.md) - Valori e comandi Eaton, CyberPower, APC, Powercom, EcoFlow e OpenUPS presi dalle tabelle di NUT (US-073, US-074, US-075, US-076, US-077, US-078); `ups.alarm`, `input.transfer.reason` e token di `ups.status` come usbhid-ups, per tutti i driver (US-107).
+- [v1.12.0](v1.12.0.md) - Valori e comandi Eaton, CyberPower, APC, Powercom, EcoFlow, OpenUPS, Legrand e Liebert presi dalle tabelle di NUT (US-073, US-074, US-075, US-076, US-077, US-078, US-106); `ups.alarm`, `input.transfer.reason` e token di `ups.status` come usbhid-ups, per tutti i driver (US-107).
 - [v1.11.0](v1.11.0.md) - Supporto ESP32-P4 con Ethernet (#94, #103), tre immagini nella release e nel web installer, modulo per segnalare gli UPS provati (#83), driver separati dal trasporto USB.
 - [v1.10.0](v1.10.0.md) - Piattaforma ESP-IDF 5.5, pagina Board Settings (LED di stato e luminosità), export della diagnostica USB a pezzi, profili delle schede e rete come base per ESP32-P4 ed Ethernet (#94).
 - [v1.9.0](v1.9.0.md) - Driver Legrand Keor (#90) e Powerwalker/Phoenixtec (#96), variabili CyberPower come cps-hid (#43), APC BGM2200 senza valori a zero e OL DISCHRG (#98), retry del descriptor USB (#97), licenza GPL-3.0-or-later.

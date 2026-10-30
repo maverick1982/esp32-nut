@@ -1,0 +1,469 @@
+schema: archetipo/plan/v2
+spec_code: US-106
+body: |
+  # US-106: Tabelle uniche Legrand (legrand-hid) e Liebert/Phoenixtec (liebert-hid) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-30
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 3 | **Bloccato da:** US-073 (DONE). Sono DONE anche US-074..078 e US-107: motore, `formatDeviceStrings`, `filterStatus` (US-078), comandi da tabella, `ups.alarm`, copertura e modello di migrazione ci sono già (ultimo: US-078, 990ce61).
+
+  Oggi `LegrandDriver` (US-087) e `LiebertDriver` (US-097) sono GenericDriver più righe scritte a mano; in `NutTable.h` hanno solo `legrandDelayPaths()` e `liebertDelayPaths()`. Nascono `legrandHid2Nut()` e `liebertHid2Nut()` con tutte le righe upstream, e i due driver tengono solo gli hook non tabellari (ADR 0011).
+
+  ---
+
+  ## Cosa dicono upstream e le fixture (pianificazione 2026-10-30, sonda sul replay)
+
+  - **legrand-hid.c:127-188**, righe 129-184. Conversioni `legrand_times10/100k/1M/10M` (`%0.1f` di valore x 10^n) e `divide_by_10_conversion` (`%0.1f` di valore x 0.1, usbhid-ups.c:612) sulle righe 130, 132, 139, 141, 142, 150. Righe `ups.delay.*` 165-168 (`HU_FLAG_ABSENT`), comandi 169-184 (`load.*.delay` su OutletSystem e Output, `test.battery.*` su Battery e Output, `beeper.enable` 2 / `beeper.disable` 3). Riga 144: percorso `UPS.PowerSummary.RuntimeToEmpty`.
+  - **Upstream risolve i nomi delle usage con `strcasecmp`** (`libhid.c:1047`, `string_to_path`): `RuntimeToEmpty` si lega a `RunTimeToEmpty`. Il nostro `pathMatches` confronta con `strncmp`: va allineato, altrimenti la riga 144 non si lega mai.
+  - **Keor PDU 800 (#90)**: usage `UPS.Input.*` (Voltage, ConfigVoltage, Low/HighVoltageTransfer, Frequency), `UPS.Output.*` (Voltage, PercentLoad, Test, DelayBefore*, Overload/Boost/Buck, ConfigActivePower, Frequency, CommunicationLost), `UPS.PowerSummary.*` (ConfigVoltage e Voltage con esponente 6, RemainingCapacity, RunTimeToEmpty, WarningCapacityLimit, RemainingCapacityLimit, PresentStatus.*, AudibleAlarmControl), pagina vendor 0xFF4F e 0xFF01. Snapshot di oggi: `battery.voltage` 13.70, `battery.voltage.nominal` 12, `input.voltage` 230.2, `output.voltage` 230.2, `output.frequency` 50.0, `input.frequency` 50.0, `ups.realpower.nominal` 480, `ups.beeper.status` enabled, `ups.status` OL.
+  - **liebert-hid.c:70-145**, righe 87-141 più 11 `unmapped.*` (73-83) dentro `#if`. Percorsi vendor scritti `ffff0057` / `ffff0058` / `ffff00f9` / `ffff00f8` (string_to_path li legge in esadecimale): nella nostra notazione `0xFFFF0057` ecc. Righe con indice: `UPS.Flow.[4].*`, `UPS.PowerConverter.Input.[1].*`.
+  - **Powerwalker VI 2200 SHL (#96)**: Flow con indice [4] (coll_index 5), PowerConverter.Input con indice [1] (coll_index 2). Scena 1: PresentStatus.Good = 0 in rete; scena 2: Good = 1. Snapshot di oggi (fine replay): `ups.status` OL CHRG, `ups.status.good` 1, `ups.status.internal_failure` 0, `ups.timer.shutdown` -1 (dal mapping generico), `ups.test.result` No test initiated, `ups.beeper.status` disabled.
+  - **LIST CMD di oggi**: Legrand `beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default`; Liebert `beeper.toggle test.battery.start load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default`.
+
+  ---
+
+  ## Decisioni
+
+  ### Prese con l'utente (2026-10-30)
+
+  1. **Legrand, conversioni escluse (US-087).** Le righe 130, 132, 139, 141, 142 e 150 restano in tabella senza moltiplicazione, con il formato della funzione esclusa (`%.1f` al posto del `%.0f` della riga): `battery.voltage` 13.7, `battery.voltage.nominal` 12.0. Commento sulla riga con il motivo (DDL report della #90: valori sbagliati di un fattore 10 o più).
+  2. **Liebert, OFF come upstream.** La riga 126 (`off_info`) dà OFF quando PresentStatus.Good = 0: sulla scena 1 della #96 `ups.status` diventa `OL CHRG OFF`. La riga 127 (`commfault_info`) dà ALARM `Internal UPS fault!`. Spariscono le chiavi interne `ups.status.good` e `ups.status.internal_failure`.
+
+  ### Prese in pianificazione (da confermare in review)
+
+  3. **`pathMatches` senza distinzione di maiuscole** sui nomi dei segmenti (`strncasecmp`), come `string_to_path`. I percorsi esadecimali `0x...` restano esatti. Vale per tutte le tabelle: oggi nessuna riga differisce solo per maiuscole, quindi gli altri driver non cambiano (verifica con la suite completa e l'OTA sul 3S).
+  4. **`beeper.toggle` da una riga propria.** `buildFromTable` offre `beeper.toggle` anche quando la tabella ha una riga `beeper.toggle` (liebert-hid.c:141), non solo con enable/disable. La scrittura resta quella del progetto (legge `ups.beeper.status` e scrive l'opposto, deviazione 1 di US-097).
+  5. **`ups.delay.*`** (legrand 165-168, liebert 133-134): citate come esclusioni, gestite da `delayPaths()` / `applyDefaultDelays` (US-066), come powercom-hid 620/637. `legrandDelayPaths()` e `liebertDelayPaths()` restano.
+  6. **Comandi da tabella** (`commandTable()`). Legrand: LIST CMD perde `shutdown.stop` (legrand-hid non ha la riga; usbhid-ups non lo ricava): differenza motivata, nelle note. Liebert: `beeper.toggle` (decisione 4), `test.battery.start`, `load.*.delay`, `shutdown.stop` e i derivati; `commandAllowList()` resta solo se senza di esso LIST CMD cambia (per esempio `shutdown.default`), con il motivo in un commento.
+  7. **Legrand `ups.beeper.status`** con il significato Legrand (2 abilitato, 3 o 1 disabilitato, 1 bit on/off): resta un hook (codifica del beeper, ADR 0011 regola 1; legrand-hid non pubblica lo stato). Restano `encodeBeeperValue()` e `beeperMuteSupported()`.
+  8. **Liebert, ex hook che diventano righe**: `battery.type` (riga 92, StringId), `input.transfer.*` e `input.frequency.transfer.*` dalle usage vendor (115-118), `output.transfer.*` (108-109), `output.voltage.nominal`/`output.frequency.nominal` da `Flow.[4]` (104, 106). I percorsi generici con chiavi diverse da upstream (`UPS.Flow.ConfigVoltage` → input.voltage.nominal, `UPS.PowerConverter.Output.*VoltageTransfer` → input.transfer.*) diventano superati.
+  9. **Estensioni che restano (ADR 0011 regola 2)**: Legrand `input.frequency` (UPS.Input.Frequency), `ups.power.nominal` da Flow.ConfigApparentPower, stato FullyCharged / RemainingTimeLimitExpired dalle mappature generiche, la stima di `ups.realpower`; Liebert `ups.timer.shutdown` dal mapping generico, `ups.realpower`. Sparisce `battery.capacity.full` dove c'era.
+  10. **Stringhe**: `formatDeviceStrings` con `legrand_format_mfr` (`Legrand`) e `liebert_format_mfr` (`Liebert`); spariscono gli override di `onLoop`, `parseStringDescriptor`, `collectStringRequests` e `_chemStrIdx`.
+  11. **Poll invariato** (poll generico), come US-078.
+  12. **Fuori scope**: `*_claim`, `disable_interrupt_pipe` di legrand, `fix_report_desc`.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Motore
+  - `NutTable.h`, `pathMatches`: confronto dei segmenti con `strncasecmp` (commento: libhid.c:1047). Il resto della logica (indici `[N]`) invariato.
+  - `CommandCatalog.h`, `buildFromTable`: `beeper.toggle` disponibile se `beeper_available && (has(beeper.toggle) || (has(beeper.enable) && has(beeper.disable)))`.
+
+  ### 2. Tabelle (`NutTable.h`)
+  - `legrandHid2Nut()`: righe 129-184 in ordine, con `// legrand-hid.c:N <path>`; righe con conversione esclusa in `%.1f` e commento (decisione 1); `ups.delay.*` come commenti (decisione 5); comandi con `HU_TYPE_CMD` e i valori upstream (`DEFAULT_OFFDELAY` / `DEFAULT_ONDELAY` come negli altri comandi `*.delay`).
+  - `liebertHid2Nut()`: righe 73-141 in ordine, 73-83 dentro `#if WITH_UNMAPPED_DATA_POINTS`; vendor in notazione `0xFFFF0057`; `UPS.Flow.[4]`, `UPS.PowerConverter.Input.[1]`; lookup `kTestRead`, `kBeeperInfo`, `kOnlineInfo`, `kLowbattInfo`, `kChargingInfo`, `kDischargingInfo`, `kOverloadInfo`, `kOffInfo`, `kCommfaultInfo`, `kShutdownimmInfo`, `kTrimInfo`, `kBoostInfo`.
+  - Commento sopra `mgeHid2Nut()` aggiornato; intestazioni di copyright già presenti.
+
+  ### 3. `LegrandDriver`
+  - Override `hid2nut()` / `commandTable()` → `legrandHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()`; restano `encodeBeeperValue()`, `beeperMuteSupported()`, `delayPaths()` e l'hook di `ups.beeper.status` (decisione 7) in `decodeReport`, senza altre mappature.
+  - Percorsi superati: quelli generici delle chiavi di tabella (stati ACPresent/Below/Charging/Discharging, input.voltage, input.transfer.*, input.voltage.nominal, battery.voltage/.nominal, battery.charge/.low, battery.runtime, output.voltage, output.frequency, ups.load, ups.realpower.nominal, ups.beeper.status generico, battery.capacity.full).
+
+  ### 4. `LiebertDriver`
+  - Override `hid2nut()` / `commandTable()` → `liebertHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()`; `delayPaths()` resta; `commandAllowList()` secondo la decisione 6.
+  - Percorsi superati: stati, battery.voltage/charge/runtime, ups.load, ups.power.nominal (Flow.ConfigApparentPower), ups.test.result, ups.beeper.status, output.voltage/frequency, `UPS.Flow.ConfigVoltage`, `UPS.Flow.ConfigFrequency`, input.voltage/frequency, `UPS.PowerConverter.Output.Low/HighVoltageTransfer`, battery.capacity.full.
+  - Via: tutte le `Mapping`, `_map`, `_chemStrIdx`, `_vendorTransfer`, `setFlag`, gli override di `onLoop` / `parseStringDescriptor` / `collectStringRequests` / `setup`.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video. Prova sul campo affidata a Mickel4711 (#90, #96).
+
+  - **Baseline prima del codice** (TASK-01): snapshot completo e liste di poll delle due fixture in `test_record_replay`.
+  - **`test_nut_table`**: `pathMatches` senza maiuscole (RuntimeToEmpty / RunTimeToEmpty, indici invariati, hex esatto); copertura riga per riga di `legrand-hid.c` e `liebert-hid.c` con `checkTableCoverage`; formati.
+  - **`test_command_catalog`**: `beeper.toggle` da una riga toggle; LIST CMD da tabella sulle due fixture con le differenze motivate (Legrand senza `shutdown.stop`).
+  - **`test_legrand_driver` / `test_liebert_driver`**: test di oggi riallineati con decodeReport + postDecode; beeper Legrand; stati OFF / ALARM Liebert; transfer vendor; battery.type da StringId.
+  - **`test_record_replay`**: righe legate ricavate a mano, LIST CMD/RW, snapshot dopo con ogni differenza commentata, `expected_ups_data` delle fixture aggiornati con nota, baseline `ups.status` (OL e OL CHRG invariati a fine replay).
+  - **Mutazioni**: tornare a `strncmp` in `pathMatches`; togliere la riga toggle da `buildFromTable`; togliere una citazione da ciascuna tabella; togliere un percorso superato di Liebert.
+  - **Regressione**: suite nativa completa, build `esp32-s3-standard`, OTA sull'Eaton 3S con l'ok dell'utente (cambiano `pathMatches` e `buildFromTable`).
+
+  ---
+
+  ## Rischi e note
+
+  - **`pathMatches` comune a tutte le tabelle**: rischio basso (nessun percorso differisce solo per maiuscole) ma trasversale: suite completa e OTA sul 3S obbligatori.
+  - **Nessun Legrand né Powerwalker in sede**: prova di Mickel4711 prima del rilascio (bozza nello scratchpad, pubblicazione solo su richiesta).
+  - **Valori visibili in Home Assistant**: Legrand `input/output.voltage` senza decimali, `battery.voltage` con un decimale, `output.frequency` intera, LIST CMD senza `shutdown.stop`; Liebert OFF / ALARM come in NUT. Tutto nelle note v1.12.0.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-30_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: snapshot e liste di poll delle fixture #90 e #96'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima del codice, quello che il firmware pubblica e chiede oggi su Keor PDU 800 e VI 2200 SHL.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (`test_openups_snapshot_baseline` di US-078, `checkSnapshots`, `FixtureReplayRunner::pollLists`).
+
+      **Modifica:** in `test_record_replay`, `test_legrand_liebert_snapshot_baseline` con `kLegrandSnapshotKeorBefore`, `kLiebertSnapshotVi2200Before` e le liste di poll `kLegrandPollKeorBefore` / `kLiebertPollVi2200Before` (`pollLists<LegrandDriver>` / `<LiebertDriver>`; aggiungi gli include in `FixtureReplayRunner.h` se mancano), valori presi dal codice di oggi (lancia con attese vuote e copia l'uscita).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde sul codice di oggi.
+
+      **Fatto:** baseline deterministiche, nessun file di produzione modificato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — baseline snapshot e poll
+      - test/test_record_replay/FixtureReplayRunner.h — include dei driver, se servono
+
+      ## Criteri di Completamento
+      - [ ] Baseline verdi sul codice attuale
+      - [ ] Nessun file in lib/ modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Motore: pathMatches senza maiuscole, beeper.toggle da una riga propria'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i due cambi del motore che servono alle tabelle legrand e liebert.
+
+      **Leggi:** `lib/USBHostUPS/src/NutTable.h` (`pathMatches`); `lib/USBHostUPS/src/CommandCatalog.h` (`buildFromTable`); `nut_repo/drivers/libhid.c:1030-1060` (`string_to_path`, `strcasecmp`).
+
+      **Modifica:**
+      1. `pathMatches`: `strncasecmp` sui segmenti al posto di `strncmp`, commento con la riga di libhid.c. Gli indici `[N]` non cambiano.
+      2. `buildFromTable`: `beeper.toggle` disponibile con `beeper_available` e una riga `beeper.toggle` oppure le righe enable e disable; commento con liebert-hid.c:141.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_command_catalog -f test_record_replay` verde (nessun driver cambia ancora).
+
+      **Fatto:** API pronta, comportamento degli altri driver invariato.
+
+      **Blocchi:** se una tabella esistente cambia righe legate, fermati e segnala.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — pathMatches
+      - lib/USBHostUPS/src/CommandCatalog.h — buildFromTable
+
+      ## Criteri di Completamento
+      - [ ] Suite indicate verdi
+      - [ ] Commenti con il riferimento upstream
+    ref: TASK-02
+  - id: TASK-03
+    title: Test dei cambi del motore
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il TASK-02.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (test di `pathMatches` esistenti), `test/test_command_catalog/test_main.cpp` (sezione US-078).
+
+      **Modifica:**
+      - `test_nut_table`: `UPS.PowerSummary.RuntimeToEmpty` si lega a una usage `UPS.PowerSummary.RunTimeToEmpty`; un indice `[4]` diverso non si lega; `0xFFFF0057` contro `0xffff0057` (hex: stesso valore, accettato o rifiutato come oggi, documentato).
+      - `test_command_catalog`: tabella con la sola riga `beeper.toggle` → `beeper.toggle` offerto; senza beeper disponibile → non offerto; enable/disable senza toggle → toggle offerto come oggi.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_command_catalog` verde.
+
+      **Fatto:** tornare a `strncmp` o togliere la riga toggle fa fallire un test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — pathMatches
+      - test/test_command_catalog/test_main.cpp — beeper.toggle da riga
+
+      ## Criteri di Completamento
+      - [ ] Test nuovi verdi
+      - [ ] Le due mutazioni colte
+    ref: TASK-03
+  - id: TASK-04
+    title: 'legrandHid2Nut() e liebertHid2Nut(): tutte le righe upstream'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** copiare le due tabelle upstream nell'ordine originale.
+
+      **Leggi:** `nut_repo/drivers/legrand-hid.c:127-188`, `nut_repo/drivers/liebert-hid.c:70-145`, `nut_repo/drivers/usbhid-ups.c:612` (`divide_by_10`); `ecoflowHid2Nut()` e `powercomHid2Nut()` in `NutTable.h` come modello.
+
+      **Modifica:**
+      1. `legrandHid2Nut()` dopo `openupsHid2Nut()` (o dove l'ordine dei test di copertura lo richiede): righe 129-184, ognuna con `// legrand-hid.c:N <path>`.
+         - 130, 132, 139, 141, 142, 150: `Conv::Number` con `%.1f` e commento: conversione legrand_times* / divide_by_10 esclusa (US-087), formato della funzione (decisione utente 2026-10-30);
+         - 165-168 come commenti: `ups.delay.*` gestiti da `legrandDelayPaths()` / `applyDefaultDelays` (US-066);
+         - comandi 169-184 con `HU_TYPE_CMD` e i valori upstream.
+      2. `liebertHid2Nut()`: righe 73-83 dentro `#if WITH_UNMAPPED_DATA_POINTS`, poi 87-141; percorsi vendor in notazione `0xFFFF0057`, `0xFFFF0058`, `0xFFFF00F9`, `0xFFFF00F8`; 133-134 come commenti (`liebertDelayPaths()`); `shutdown.stop` con `-1`.
+      3. Commento sopra `mgeHid2Nut()` aggiornato.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_rw_catalog` verde (aggiorna `test_tables_hold_only_rw_rows_without_ups_delay` se elenca le tabelle).
+
+      **Fatto:** tabelle complete e compilate.
+
+      **Blocchi:** se `DEFAULT_OFFDELAY` / `DEFAULT_ONDELAY` non hanno un equivalente in `NutTable.h`, usa quello delle righe `load.*.delay` di mge/cps.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — legrandHid2Nut, liebertHid2Nut, commenti
+      - test/test_rw_catalog/test_main.cpp — solo se il conteggio delle tabelle lo richiede
+
+      ## Criteri di Completamento
+      - [ ] Ogni riga upstream presente in ordine con la citazione
+      - [ ] Esclusioni motivate in commento
+    ref: TASK-04
+  - id: TASK-05
+    title: Copertura delle tabelle e formati
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che le due tabelle contengono tutte le righe upstream.
+
+      **Leggi:** `test/test_nut_table/test_main.cpp` (`checkTableCoverage`, `checkSupportedFormats`, test di US-078).
+
+      **Modifica:** `test_legrand_table_covers_every_upstream_row`, `test_liebert_table_covers_every_upstream_row`, `test_legrand_rows_have_supported_formats`, `test_liebert_rows_have_supported_formats`; nessun `unmapped.*` fuori dal `#if`; le sei righe Legrand con conversione esclusa hanno `%.1f`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde.
+
+      **Fatto:** copertura verificabile riga per riga.
+
+      **Blocchi:** se il parser di `checkTableCoverage` non riconosce le righe con due spazi di rientro di liebert-hid.c, correggi il parser senza cambiare i risultati delle altre tabelle.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — copertura e formati
+
+      ## Criteri di Completamento
+      - [ ] Copertura verde per entrambi i file upstream
+      - [ ] Togliere una citazione fa fallire il test
+    ref: TASK-05
+  - id: TASK-06
+    title: 'LegrandDriver: solo hook non tabellari'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere le mappature scritte a mano da LegrandDriver.
+
+      **Leggi:** `lib/USBHostUPS/src/LegrandDriver.{h,cpp}`; `EcoFlowDriver.cpp` (US-078) come modello di percorsi superati e `formatDeviceStrings`; `GenericDriver::decodeReport` (mappature generiche).
+
+      **Modifica:**
+      1. Override `hid2nut()` e `commandTable()` → `NutTable::legrandHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()` (`Legrand` se `ups.mfr` manca o è vuoto).
+      2. `kSupersededGenericPaths` copiati carattere per carattere dalle mappature generiche delle chiavi di tabella (vedi piano, sezione 3); non superare `UPS.Input.Frequency`, `UPS.Flow.ConfigApparentPower` (ups.power.nominal), `PresentStatus.FullyCharged`, `PresentStatus.RemainingTimeLimitExpired` (estensioni, decisione 9).
+      3. `decodeReport`: base, poi solo l'hook di `ups.beeper.status` con il significato Legrand (funzione `legrandBeeperStatus`, senza `UsageMapIndex`), con il motivo in un commento (decisione 7). Superare i percorsi generici di AudibleAlarmControl.
+      4. Via: le altre mappature, `_map`, `onLoop`, `parseStringDescriptor`, `setup` se vuoto. Aggiorna il commento di testa (deviazioni di US-087 ancora valide).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_legrand_driver` compila; i test si allineano nel TASK-07.
+
+      **Fatto:** nessuna mappatura scritta a mano oltre all'hook del beeper.
+
+      **Blocchi:** un valore che sparisce senza una decisione va segnalato.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/LegrandDriver.h — override
+      - lib/USBHostUPS/src/LegrandDriver.cpp — percorsi superati, hook beeper, formatDeviceStrings
+
+      ## Criteri di Completamento
+      - [ ] Solo hook non tabellari, ognuno con il motivo
+      - [ ] encodeBeeperValue e beeperMuteSupported invariati
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di LegrandDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_legrand_driver` al flusso decodeReport + postDecode.
+
+      **Leggi:** `test/test_legrand_driver/test_main.cpp`; `test/test_ecoflow_driver/test_main.cpp` (helper `decode` di US-078).
+
+      **Modifica:**
+      - helper `decode()` con postDecode; test di oggi riallineati: `no_legrand_voltage_conversions` (13.7 e 12.0 con `%.1f`), `output_overload_sets_status` (riga 162), `legrand_only_rows`, `mfr_fallback` via `formatDeviceStrings`;
+      - test nuovi: `battery.runtime` dalla riga 144 (RuntimeToEmpty) su una usage RunTimeToEmpty; `input.voltage` / `output.voltage` `%.0f`; LIST CMD da tabella senza `shutdown.stop`; beeper enable/disable scrivono 2/3.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_legrand_driver` verde.
+
+      **Fatto:** ogni comportamento cambiato ha un test con il motivo.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_legrand_driver/test_main.cpp — test riallineati e nuovi
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] Differenze motivate in commento
+    ref: TASK-07
+  - id: TASK-08
+    title: 'LiebertDriver: solo hook non tabellari'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere le mappature scritte a mano da LiebertDriver.
+
+      **Leggi:** `lib/USBHostUPS/src/LiebertDriver.{h,cpp}`; `OpenUPSDriver.cpp` (US-078) come modello.
+
+      **Modifica:**
+      1. Override `hid2nut()` e `commandTable()` → `NutTable::liebertHid2Nut`, `supersededGenericPaths()`, `formatDeviceStrings()` (`Liebert`).
+      2. `kSupersededGenericPaths` (piano, sezione 4): stati, battery.voltage/charge/runtime, ups.load, `UPS.Flow.ConfigApparentPower`, test result, AudibleAlarmControl, output.voltage/frequency, `UPS.Flow.ConfigVoltage`, `UPS.Flow.ConfigFrequency`, input.voltage/frequency, `UPS.PowerConverter.Output.LowVoltageTransfer` / `HighVoltageTransfer`, `UPS.BatterySystem.Battery.FullChargeCapacity`. Non superare `UPS.PowerSummary.DelayBeforeShutdown` (ups.timer.shutdown, estensione).
+      3. `commandAllowList()`: toglilo se LIST CMD della #96 resta identica senza; altrimenti tienilo con il motivo.
+      4. Via: tutte le `Mapping`, `_map`, `_chemStrIdx`, `_vendorTransfer`, `setFlag`, `onLoop`, `parseStringDescriptor`, `collectStringRequests`, `setup`. Commento di testa aggiornato (deviazione 3 di US-097 superata dalla decisione 2).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_liebert_driver` compila; i test si allineano nel TASK-09.
+
+      **Fatto:** nessuna mappatura scritta a mano.
+
+      **Blocchi:** se `ups.status` della scena 2 cambia, fermati e segnala.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/LiebertDriver.h — override, campi tolti
+      - lib/USBHostUPS/src/LiebertDriver.cpp — percorsi superati, formatDeviceStrings
+
+      ## Criteri di Completamento
+      - [ ] Nessuna mappatura scritta a mano
+      - [ ] Ogni hook che resta ha il motivo
+    ref: TASK-08
+  - id: TASK-09
+    title: Test di LiebertDriver sulla tabella
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riallineare `test_liebert_driver`.
+
+      **Leggi:** `test/test_liebert_driver/test_main.cpp`.
+
+      **Modifica:**
+      - helper `decode()` con postDecode; test di oggi riallineati: `flow_nominal_values_are_output_ones` (con coll_index [4]), `powersummary_capacities_are_experimental`, `frequencies_use_upstream_format`, `voltage_transfer_rows` (righe 108-109 e 115-118, vendor `0xFFFF0057/58`), `battery_type_from_chemistry_string` (StringId, poll che chiede la stringa), `mfr_fallback`, `commands_follow_liebert_table`;
+      - `status_flags_are_internal_keys` diventa `status_flags_as_upstream`: Good 0 → OFF, InternalFailure 1 → ALARM con `Internal UPS fault!`, Buck/Boost `[1]` → TRIM/BOOST; nessuna chiave `ups.status.good` / `internal_failure`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_liebert_driver` verde.
+
+      **Fatto:** decisioni 2, 4, 8 coperte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_liebert_driver/test_main.cpp — test riallineati
+
+      ## Criteri di Completamento
+      - [ ] Suite verde
+      - [ ] OFF e ALARM verificati
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Replay #90 e #96: righe legate, LIST CMD/RW, snapshot, ups.status'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare la migrazione sulle due fixture.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (`test_replay_legrand_keor_pdu800_issue90`, `test_replay_phoenixtec_powerwalker_vi2200shl_issue96`, baseline del TASK-01, `NUT_ROWS_OPENUPS_W150` come modello).
+
+      **Modifica:**
+      1. `NUT_ROWS_LEGRAND_KEOR` e `NUT_ROWS_LIEBERT_VI2200`: righe legate ricavate a mano dai descriptor e dai file upstream.
+      2. LIST CMD: Legrand senza `shutdown.stop` (commento: nessuna riga legrand-hid), Liebert invariata; LIST RW invariata (`RW_DELAYS`).
+      3. Snapshot dopo con ogni differenza commentata (Legrand: input/output.voltage 230, battery.voltage 13.7, nominal 12.0, output.frequency 50; Liebert: niente ups.status.good / internal_failure, chiavi interne off/commfault).
+      4. `expected_ups_data` delle due fixture aggiornati, con una frase nelle note (Legrand: formati; #96 scena 1: `ups.status` `OL CHRG OFF`, senza `ups.status.good`).
+      5. Baseline `ups.status`: OL e OL CHRG a fine replay invariati.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_command_catalog` verde.
+
+      **Fatto:** l'elenco della Dimostrazione è fissato nei test.
+
+      **Blocchi:** un cambio di ups.status o LIST CMD senza riga upstream blocca il task.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — righe legate, snapshot, LIST
+      - test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json — expected_ups_data, note
+      - test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json — expected_ups_data, note
+
+      ## Criteri di Completamento
+      - [ ] Righe legate verdi
+      - [ ] Differenze commentate una per una
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Note di rilascio v1.12.0: sezioni Legrand e Liebert/Phoenixtec'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare per gli utenti Legrand e Powerwalker/Salicru le differenze dei TASK-07, 09 e 10.
+
+      **Leggi:** `docs/releases/v1.12.0.md` (sezioni EcoFlow e OpenUPS di US-078), `docs/releases/index.md`.
+
+      **Modifica:**
+      1. `description:`, intro e index: anche Legrand e Liebert (legrand-hid, liebert-hid, US-106).
+      2. Upgrade notes **Legrand**: formati di tensioni e frequenza, battery.voltage con un decimale, LIST CMD senza `shutdown.stop`, `battery.runtime` dalla riga upstream.
+      3. Upgrade notes **Liebert/Phoenixtec (Powerwalker, Salicru)**: OFF quando l'UPS segnala Good = 0, `Internal UPS fault!` con InternalFailure, come NUT.
+      4. Riga di `ups.alarm` della sezione comune: anche Liebert ora dà `Internal UPS fault!`.
+      5. Other changes: i due driver e i cambi del motore (`pathMatches` senza maiuscole, `beeper.toggle` da riga).
+
+      **Verifica:** rilettura.
+
+      **Fatto:** note coerenti con i test.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — voci Legrand e Liebert
+      - docs/releases/index.md — riga v1.12.0
+
+      ## Criteri di Completamento
+      - [ ] Ogni differenza visibile dei test è nelle note
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build, mutazioni, OTA sul 3S e bozza per Mickel4711
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con suite completa, build e verifica che l'Eaton non cambi (`pathMatches` e `buildFromTable` sono comuni).
+
+      **Leggi:** `scripts/nut_snapshot.py`; gli script `ota_upload.py` e `fetch_logs.py` (scratchpad delle sessioni precedenti, `hw/`).
+
+      **Passi:**
+      1. Suite nativa completa (`PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native`, in background). Annota il totale (US-078: 880).
+      2. Build da PowerShell: `~\.platformio\penv\Scripts\pio.exe run -e esp32-s3-standard`; annota flash e RAM (US-078: 48,9 %).
+      3. Mutazioni del piano (strategia di test): ognuna deve far fallire un test; ripristino verificato con `cmp`.
+      4. Solo con l'ok esplicito dell'utente: OTA sull'Eaton 3S, `nut_snapshot.py` prima e dopo (upsc, upscmd, upsrw identici), System Log senza errori USB. Credenziali lette da file, mai stampate.
+      5. Bozza per Mickel4711 (#90 Keor PDU 800, #96 VI 2200 SHL): cosa confrontare, cosa allegare. Niente pubblicazione senza richiesta.
+
+      **Verifica:** passi 1-3 verdi; il passo 4 fatto o saltato su decisione dell'utente.
+
+      **Fatto:** numeri annotati per la review, bozza pronta.
+
+      **Blocchi:** una regressione Eaton blocca la chiusura.
+
+      ## File Coinvolti
+      - nessun file di produzione (esecuzione); bozza nello scratchpad
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde con totale annotato
+      - [ ] Build ok con flash/RAM annotati
+      - [ ] Mutazioni colte
+      - [ ] OTA fatta o saltata su decisione dell'utente
+    ref: TASK-12

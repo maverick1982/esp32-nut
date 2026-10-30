@@ -1169,6 +1169,21 @@ void test_openups_commands_from_table() {
     TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, true, false, true, nullptr, t, n)).c_str());
 }
 
+// --- beeper.toggle from a row of its own (liebert-hid.c:141, US-106) ---
+
+void test_beeper_toggle_from_its_own_row() {
+    static const NutTable::HidInfo toggleOnly[] = {
+        { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", NutTable::HU_TYPE_CMD, NutTable::Conv::Number, nullptr, 0 },
+    };
+    std::vector<HIDUsageDef> u = { mk("UPS.PowerSummary.AudibleAlarmControl", 0x0084005a, 0x03) };
+    TEST_ASSERT_EQUAL_STRING("beeper.toggle", names(CommandCatalog::build(u, true, false, true, nullptr, toggleOnly, 1)).c_str());
+    // Not controllable: nothing
+    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(u, false, false, true, nullptr, toggleOnly, 1)).c_str());
+    // Without the usage the row is not bound
+    std::vector<HIDUsageDef> none;
+    TEST_ASSERT_EQUAL_STRING("", names(CommandCatalog::build(none, true, false, true, nullptr, toggleOnly, 1)).c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_descriptor_has_no_commands);
@@ -1229,6 +1244,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_powercom_quick_test_value);
     RUN_TEST(test_ecoflow_commands_from_table);
     RUN_TEST(test_openups_commands_from_table);
+    RUN_TEST(test_beeper_toggle_from_its_own_row);
     RUN_TEST(test_driver_var_store_corrupt_json);
     RUN_TEST(test_driver_var_store_upsert);
     RUN_TEST(test_apply_default_delays_with_saved_values);

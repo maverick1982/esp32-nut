@@ -423,15 +423,26 @@ void test_replay_apc_smartups750_issue78(void) {
         RW_APC_6 " " RW_DELAYS, RW_APC_6 " " RW_DELAYS);
 }
 
+// legrandHid2Nut() rows bound by the Keor PDU 800 descriptor (US-106), derived from its usages and
+// legrand-hid.c:129-184: the UPS.Input, UPS.Output and PowerSummary rows (battery.runtime through
+// RuntimeToEmpty, names ignore case), the commands on UPS.Output.Test / DelayBefore* and the
+// beeper. "BOOL" stands for rows 158-162.
+static const char* const NUT_ROWS_LEGRAND_KEOR =
+    "BOOL battery.charge battery.charge.low battery.charge.warning battery.runtime battery.voltage "
+    "battery.voltage.nominal beeper.disable beeper.enable input.transfer.high input.transfer.low input.voltage "
+    "input.voltage.nominal load.off.delay load.on.delay output.frequency output.voltage test.battery.start.deep "
+    "test.battery.start.quick test.battery.stop ups.load ups.realpower.nominal";
+
 // US-087: Legrand Keor PDU 800 from the #90 dump. legrand-hid.c: beeper.enable 2 /
 // beeper.disable 3 (no beeper.mute), test.battery.* on UPS.Output.Test, load.* and
 // shutdown.* on UPS.Output.DelayBefore*, no RW rows besides ups.delay.*
 void test_replay_legrand_keor_pdu800_issue90(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json",
+        // US-106: commands from legrandHid2Nut(); no shutdown.stop, which legrand-hid has no row for
         "beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep test.battery.stop "
-        "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default", nullptr, /* no NUT table rows */ "",
-        { { "ups.mfr", "Legrand" }, { "ups.beeper.status", "enabled" }, { "battery.voltage", "13.70" },
-          { "battery.voltage.nominal", "12" }, { "ups.delay.shutdown", "20" }, { "ups.delay.start", "30" },
+        "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.default", nullptr, NUT_ROWS_LEGRAND_KEOR,
+        { { "ups.mfr", "Legrand" }, { "ups.beeper.status", "enabled" }, { "battery.voltage", "13.7" },
+          { "battery.voltage.nominal", "12.0" }, { "ups.delay.shutdown", "20" }, { "ups.delay.start", "30" },
           /* FEATURE 0x17 [23, 0]: UPS.Output.Overload */ { "ups.status.overload", "0" },
           /* FEATURE 0x07 byte 4: PowerSummary.WarningCapacityLimit */ { "battery.charge.warning", "20" } },
         RW_DELAYS, RW_DELAYS);
@@ -577,6 +588,15 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
         "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS);
 }
 
+// liebertHid2Nut() rows bound by the VI 2200 SHL descriptor (US-106), derived from its usages and
+// liebert-hid.c:87-141: Flow.[4] and PowerConverter.Input.[1] rows included; no transfer usages.
+// "BOOL" stands for rows 121-130.
+static const char* const NUT_ROWS_LIEBERT_VI2200 =
+    "BOOL battery.charge battery.runtime battery.type battery.voltage beeper.toggle experimental.battery.capacity "
+    "experimental.battery.capacity.nominal input.voltage load.off.delay load.on.delay output.frequency "
+    "output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop test.battery.start "
+    "ups.beeper.status ups.load ups.power.nominal ups.test.result";
+
 // US-097: liebert-hid.c commands only (test.battery.start, beeper.toggle, load.*.delay,
 // shutdown.stop and what usbhid-ups derives), shutdown.default (US-058). liebert_hid2nut
 // has no RW row besides ups.delay.* (PowerSummary.DelayBefore*, aux 10)
@@ -584,7 +604,7 @@ void test_replay_phoenixtec_powerwalker_vi2200shl_issue96(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json",
         "beeper.toggle test.battery.start load.off load.on load.off.delay load.on.delay "
         "shutdown.return shutdown.stayoff shutdown.stop shutdown.default",
-        nullptr, /* no hid2nut() table: ups.delay.* only */ "",
+        nullptr, NUT_ROWS_LIEBERT_VI2200,
         // FEATURE 0x72 [114, 230] UPS.Flow.[4].ConfigVoltage, FEATURE 0x36 [54, 50] ConfigFrequency
         { { "output.voltage.nominal", "230" }, { "output.frequency.nominal", "50" } },
         RW_DELAYS, RW_DELAYS);
@@ -1473,6 +1493,173 @@ void test_openups_snapshot_baseline(void) {
         FixtureReplayRunner::pollLists<OpenUPSDriver>("test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json").c_str());
 }
 
+// US-106: the Keor PDU 800 (issue #90) and VI 2200 SHL (issue #96) fixtures before the migration to
+// legrandHid2Nut() / liebertHid2Nut(), with the hand-written mappings of LegrandDriver (US-087) and
+// LiebertDriver (US-097), kept as the reference of the differences below
+static const char* const kLegrandSnapshotKeorBefore =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime=2160\n"
+    "battery.voltage.nominal=12\n"
+    "battery.voltage=13.70\n"
+    "driver.name=LegrandDriver\n"
+    "input.frequency=50.0\n"
+    "input.transfer.high=270\n"
+    "input.transfer.low=180\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=230.2\n"
+    "output.frequency=50.0\n"
+    "output.voltage=230.2\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=20\n"
+    "ups.delay.start=30\n"
+    "ups.load=25\n"
+    "ups.mfr=Legrand\n"
+    "ups.model=KEOR PDU 800\n"
+    "ups.realpower.nominal=480\n"
+    "ups.realpower=120\n"
+    "ups.serial=                \n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status=OL\n";
+static const char* const kLiebertSnapshotVi2200Before =
+    "battery.charge=30\n"
+    "battery.runtime=1007\n"
+    "battery.voltage=27.60\n"
+    "driver.name=LiebertDriver\n"
+    "experimental.battery.capacity.nominal=100\n"
+    "experimental.battery.capacity=100\n"
+    "input.voltage=230.0\n"
+    "output.frequency.nominal=50\n"
+    "output.frequency=49.60\n"
+    "output.voltage.nominal=230\n"
+    "output.voltage=230.0\n"
+    "ups.beeper.status=disabled\n"
+    "ups.delay.shutdown=20\n"
+    "ups.delay.start=30\n"
+    "ups.load=0\n"
+    "ups.mfr=PPC\n"
+    "ups.model=Offline UPS\n"
+    "ups.power.nominal=9\n"
+    "ups.realpower=0\n"
+    "ups.serial=000000000\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.discharging=0\n"
+    "ups.status.good=1\n"
+    "ups.status.internal_failure=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.trim=0\n"
+    "ups.test.result=No test initiated\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.status=OL CHRG\n";
+// After US-106, every value from legrandHid2Nut() but the extensions. Differences from
+// kLegrandSnapshotKeorBefore:
+// - input.voltage 230.2 -> 230, output.voltage 230.2 -> 230, output.frequency 50.0 -> 50: "%.0f" of
+//   legrand-hid.c:129, 149 and 151 (no conversion upstream);
+// - battery.voltage 13.70 -> 13.7, battery.voltage.nominal 12 -> 12.0: rows 141 and 139 without
+//   divide_by_10_conversion, with its "%0.1f" (US-087, user decision of 2026-10-30).
+// Unchanged: ups.status OL, input.frequency (generic UPS.Input.Frequency, ADR 0011 rule 2), the
+// FullyCharged / RemainingTimeLimitExpired flags, ups.beeper.status (Legrand hook).
+static const char* const kLegrandSnapshotKeorAfter =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime=2160\n"
+    "battery.voltage.nominal=12.0\n"
+    "battery.voltage=13.7\n"
+    "driver.name=LegrandDriver\n"
+    "input.frequency=50.0\n"
+    "input.transfer.high=270\n"
+    "input.transfer.low=180\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=230\n"
+    "output.frequency=50\n"
+    "output.voltage=230\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=20\n"
+    "ups.delay.start=30\n"
+    "ups.load=25\n"
+    "ups.mfr=Legrand\n"
+    "ups.model=KEOR PDU 800\n"
+    "ups.realpower.nominal=480\n"
+    "ups.realpower=120\n"
+    "ups.serial=                \n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status=OL\n";
+// After US-106, every value from liebertHid2Nut() but the extensions. Differences from
+// kLiebertSnapshotVi2200Before (end of the second scenario, PresentStatus.Good = 1):
+// - ups.status.good -> ups.status.off, ups.status.internal_failure -> ups.status.commfault: internal
+//   keys of off_info and commfault_info (rows 126-127), no change in ups.status. On the first
+//   scenario (Good = 0 on mains) ups.status is OL CHRG OFF, as usbhid-ups (fixture expectations).
+// Unchanged: every value, ups.timer.shutdown (generic PowerSummary.DelayBeforeShutdown, ADR 0011
+// rule 2). The replay passes the strings before the reports: no battery.type here.
+static const char* const kLiebertSnapshotVi2200After =
+    "battery.charge=30\n"
+    "battery.runtime=1007\n"
+    "battery.voltage=27.60\n"
+    "driver.name=LiebertDriver\n"
+    "experimental.battery.capacity.nominal=100\n"
+    "experimental.battery.capacity=100\n"
+    "input.voltage=230.0\n"
+    "output.frequency.nominal=50\n"
+    "output.frequency=49.60\n"
+    "output.voltage.nominal=230\n"
+    "output.voltage=230.0\n"
+    "ups.beeper.status=disabled\n"
+    "ups.delay.shutdown=20\n"
+    "ups.delay.start=30\n"
+    "ups.load=0\n"
+    "ups.mfr=PPC\n"
+    "ups.model=Offline UPS\n"
+    "ups.power.nominal=9\n"
+    "ups.realpower=0\n"
+    "ups.serial=000000000\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=1\n"
+    "ups.status.commfault=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.off=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.trim=0\n"
+    "ups.test.result=No test initiated\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.status=OL CHRG\n";
+static const char* const kLegrandPollKeorBefore =
+    "quick: 8/3 11/3 19/3 23/3 27/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3 28/3 18/3 "
+    "19/3 20/3 21/3 22/3 23/3 24/3 29/3 27/3 25/3 26/3 50/3 51/3 52/3 53/3 54/3 55/3 56/3 57/3 58/3";
+static const char* const kLiebertPollVi2200Before =
+    "quick: 45/3 7/3 1/3 6/3 | full: 36/3 116/3 54/3 114/3 74/3 49/3 45/3 66/3 19/3 9/3 10/3 16/3 226/3 7/3 1/3 11/3 6/3";
+
+void test_legrand_liebert_snapshot_baseline(void) {
+    static const SnapshotCase cases[] = {
+        { "test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json", kLegrandSnapshotKeorAfter },
+        { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", kLiebertSnapshotVi2200After },
+    };
+    checkSnapshots(cases, sizeof(cases) / sizeof(cases[0]));
+    // The poll is the generic one: the lists are those of US-087 / US-097, unchanged
+    TEST_ASSERT_TRUE(strcmp(kLegrandSnapshotKeorBefore, kLegrandSnapshotKeorAfter) != 0);
+    TEST_ASSERT_TRUE(strcmp(kLiebertSnapshotVi2200Before, kLiebertSnapshotVi2200After) != 0);
+    TEST_ASSERT_EQUAL_STRING(kLegrandPollKeorBefore, FixtureReplayRunner::pollLists<LegrandDriver>("test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json").c_str());
+    TEST_ASSERT_EQUAL_STRING(kLiebertPollVi2200Before, FixtureReplayRunner::pollLists<LiebertDriver>("test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json").c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -1512,6 +1699,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_poll_baseline);
     RUN_TEST(test_powercom_snapshot_baseline);
     RUN_TEST(test_openups_snapshot_baseline);
+    RUN_TEST(test_legrand_liebert_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);
@@ -1555,6 +1743,7 @@ void setup() {
     RUN_TEST(test_apc_poll_baseline);
     RUN_TEST(test_powercom_snapshot_baseline);
     RUN_TEST(test_openups_snapshot_baseline);
+    RUN_TEST(test_legrand_liebert_snapshot_baseline);
     RUN_TEST(test_eaton_3s_need_replacement_alarm);
     RUN_TEST(test_eaton_3s_vendor_and_bit_alarms);
     RUN_TEST(test_eaton_3s_good_zero_is_off);

@@ -547,6 +547,24 @@ void test_table_beeper_writes_row_field(void) {
     for (const auto& w : port.io) TEST_ASSERT_EQUAL(0, w.depth);
 }
 
+void test_table_beeper_toggle_row_of_its_own(void) {
+    // liebert-hid.c:141: only a beeper.toggle row on PowerSummary.AudibleAlarmControl. The toggle
+    // writes on its field the opposite of ups.beeper.status (US-097 deviation 1, US-106);
+    // beeper.enable / beeper.disable have no row
+    FakePort port;
+    port.useTable = true;
+    port.tableFn = NutTable::liebertHid2Nut;
+    HIDUsageDef b = featureUsage(P_BEEPER, 0x0084005a);
+    b.bit_size = 8;
+    port.usages.push_back(b);
+    port.data.set("ups.beeper.status", "disabled");
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.toggle", nullptr));
+    port.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.toggle", nullptr));
+    TEST_ASSERT_EQUAL_STRING("beeperField:" P_BEEPER "=1 beeperField:" P_BEEPER "=0", ioStr(port).c_str());
+    TEST_ASSERT_EQUAL((int)CommandResult::NOT_SUPPORTED, (int)control().executeCommand(port, "beeper.enable", nullptr));
+}
+
 void test_table_shutdown_sets_start_auto_first(void) {
     // instcmd() of usbhid-ups: ups.start.auto first, then the sequence with the 125 ms pause
     FakePort port;
@@ -633,6 +651,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_hid_control_needs_the_hid_part);
     RUN_TEST(test_hid_port_is_its_hid_part);
     RUN_TEST(test_table_beeper_writes_row_field);
+    RUN_TEST(test_table_beeper_toggle_row_of_its_own);
     RUN_TEST(test_table_shutdown_sets_start_auto_first);
     RUN_TEST(test_table_return_row_leaves_start_auto);
     RUN_TEST(test_table_commands_listed_from_rows);
