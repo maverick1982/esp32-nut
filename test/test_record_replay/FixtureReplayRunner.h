@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <set>
 #include <ArduinoJson.h>
 
 #include "IHidTransport.h"
@@ -403,8 +404,11 @@ public:
     /**
      * Everything a fixture gives (US-079 baseline): the snapshot after the replay, LIST CMD,
      * LIST RW, then, after the end of the first full poll and the last report again (as
-     * runFixtureTest), LIST RW and the snapshot, then the control requests of the first 35 s
-     * of loop() (full poll, quick polls, second full poll): "S<index>" for a string,
+     * runFixtureTest), LIST RW and the snapshot, then the control requests of the first 60 s
+     * of loop() (two full polls and the quick polls between them, also with Powercom's 800 ms
+     * steps). The replay has already decoded the reports and ended the first full poll, so
+     * these are full polls at steady state, without the semi-static reports (US-072):
+     * "S<index>" for a string,
      * "<id>/<type>" for a report. forceGeneric: replayed with GenericDriver.
      */
     static std::string goldenText(const char* filePath, bool forceGeneric) {
@@ -426,7 +430,7 @@ public:
         // The mock records reports and strings apart: one loop() makes at most one request,
         // so a request is the one whose list grew in that call
         std::string requests;
-        for (uint32_t now = 1; now <= 35000; now += 25) {
+        for (uint32_t now = 1; now <= 60000; now += 25) {
             size_t nr = s.host._requestedReports.size(), ns = s.host._requestedStrings.size();
             s.driver->loop(&s.host, s.ups_data, now);
             if (s.host._requestedStrings.size() > ns) {
@@ -485,6 +489,90 @@ public:
             shown++;
         }
         TEST_FAIL_MESSAGE(msg.c_str());
+    }
+
+    // GenericDriver::buildPollLists() of any driver: a pointer to the protected member taken
+    // through a derived class calls it on a GenericDriver (US-072)
+    struct PollListAccess : GenericDriver {
+        static void lists(const GenericDriver& d, IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) {
+            (d.*(&PollListAccess::buildPollLists))(host, quick, full);
+        }
+    };
+
+    typedef std::set<std::pair<uint8_t, uint8_t>> ReportSet; // (type, id)
+
+    /**
+     * US-072: the reports the full poll leaves out once the semi-static reports are known,
+     * against AC 1 computed here from the bound rows and not from the driver's bitmap. A report
+     * (type, id) replayed by the fixture is semi-static when a row reads a field of it (the
+     * row's usage or its twin) and every such row has HU_FLAG_STATIC or HU_FLAG_SEMI_STATIC;
+     * command, HU_FLAG_ABSENT and DEAD rows do not count, an undecided row and the active
+     * beeper read outside the rows make their report dynamic. The loop runs 60 s as goldenText() (D0, no change), then
+     * 60 s after noteDataChanged() (D1). D1 - D0 must be the semi-static reports of D1 the
+     * quick poll does not read. Returns the size of D1 - D0.
+     */
+    static size_t checkSemiStaticReports(const char* filePath, bool forceGeneric) {
+        ReplaySession s;
+        if (!replay(filePath, s, forceGeneric)) return 0;
+        GenericDriver* drv = static_cast<GenericDriver*>(s.driver);
+        drv->completeInitialPoll();
+        std::string where = std::string(filePath) + (forceGeneric ? " (generic)" : "");
+
+        ReportSet decoded;
+        for (const auto& r : s.reports) decoded.insert({r.type, r.id});
+        const auto& usages = s.host.getUsages();
+        size_t n_own = 0;
+        const NutTable::HidInfo* own = drv->hid2nut(n_own);
+        ReportSet with_static, dynamic;
+        bool beeper_row = false;
+        for (const auto& b : drv->nutBindings()) {
+            if (b.info >= own && b.info < own + n_own && strcmp(b.info->info_type, "ups.beeper.status") == 0) beeper_row = true;
+            if (NutTable::isCommandRow(*b.info) || (b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+            if (b.role == NutTable::Bound::Role::DEAD) continue;
+            // An undecided row (deferred without a value yet, or PENDING behind one) needs another read
+            bool undecided = (b.deferred && !b.has) || b.role == NutTable::Bound::Role::PENDING;
+            bool is_static = !undecided && (b.info->hidflags & (NutTable::HU_FLAG_STATIC | NutTable::HU_FLAG_SEMI_STATIC)) != 0;
+            for (int idx : { b.idx, b.twin_idx }) {
+                if (idx < 0 || (size_t)idx >= usages.size()) continue;
+                (is_static ? with_static : dynamic).insert({usages[idx].report_type, usages[idx].report_id});
+            }
+        }
+        String beeper = s.host.getActiveBeeperPath();
+        if (!beeper_row && beeper.length() > 0) {
+            for (const auto& u : usages) {
+                if (strcmp(u.path, beeper.c_str()) == 0) dynamic.insert({u.report_type, u.report_id});
+            }
+        }
+        ReportSet semi;
+        for (const auto& r : with_static) {
+            if (!dynamic.count(r) && decoded.count(r)) semi.insert(r);
+        }
+
+        auto window = [&](uint32_t t0, uint32_t t1) {
+            s.host._requestedReports.clear();
+            for (uint32_t now = t0; now <= t1; now += 25) s.driver->loop(&s.host, s.ups_data, now);
+            ReportSet out;
+            for (const auto& r : s.host._requestedReports) out.insert({r.second, r.first});
+            return out;
+        };
+        ReportSet d0 = window(1, 60000);
+        s.driver->noteDataChanged();
+        ReportSet d1 = window(60025, 120000);
+
+        std::vector<GenericDriver::PollItem> quick, full;
+        PollListAccess::lists(*drv, &s.host, quick, full);
+        ReportSet quick_set;
+        for (const auto& q : quick) quick_set.insert({q.report_type, q.id});
+
+        std::string actual, expected;
+        size_t left_out = 0;
+        for (const auto& r : d1) {
+            std::string item = " " + std::to_string(r.second) + "/" + std::to_string(r.first);
+            if (!d0.count(r)) { actual += item; left_out++; }
+            if (semi.count(r) && !quick_set.count(r)) expected += item;
+        }
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected.c_str(), actual.c_str(), (where + ": reports read only after a change").c_str());
+        return left_out;
     }
 
     // A driver of class D with its poll hooks public (US-076)

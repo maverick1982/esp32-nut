@@ -115,6 +115,13 @@ public:
     virtual void invalidateReport(uint8_t report_type, uint8_t report_id) {}
 
     /**
+     * @brief A SET VAR or an INSTCMD wrote the UPS: the next poll reads the semi-static
+     * reports again (US-072), as data_has_changed in usbhid-ups.c:1157, 1239, 1534-1543.
+     * Not called for the driver-side values, which write nothing to the UPS.
+     */
+    virtual void noteDataChanged() {}
+
+    /**
      * @brief Parses a received String Descriptor
      * 
      * @param index The string index

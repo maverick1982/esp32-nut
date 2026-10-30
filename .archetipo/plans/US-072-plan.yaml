@@ -1,0 +1,287 @@
+schema: archetipo/plan/v2
+spec_code: US-072
+body: |
+  # US-072: Poll delle variabili semi-statiche come usbhid-ups: all'avvio e dopo SET/INSTCMD — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-30
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 5 | **Bloccato da:** US-079 (DONE, 9858a3e). Branch: `feature/us-072-us-108-poll`.
+
+  Dopo US-079 ogni valore viene da una riga legata (`_nut_rows`: tabella del driver più coda di `genericHid2Nut()`), con i flag `HU_FLAG_STATIC` / `HU_FLAG_SEMI_STATIC` di upstream. Oggi il full poll (30 s) rilegge tutti i report del descriptor; solo APC Back-UPS BX e Powercom saltano i report statici già letti (`pollStaticReportsOnce()`, euristica `isStaticUsage()`).
+
+  ---
+
+  ## Cosa fa upstream (usbhid-ups.c)
+
+  - `hid_ups_walk(HU_WALKMODE_FULL_UPDATE)`, righe 2343-2362: salta le righe `HU_FLAG_ABSENT` / `HU_TYPE_CMD`; le `HU_FLAG_STATIC` con l'interrupt pipe attiva; le `HU_FLAG_SEMI_STATIC` quando `data_has_changed == FALSE` (sempre con interrupt pipe).
+  - `data_has_changed = TRUE` dopo un `HIDSetDataValue()` riuscito in `instcmd()` (1157) e in `setvar()` (1239); un SET di una riga `HU_FLAG_ABSENT` (solo dstate) non lo imposta.
+  - `upsdrv_updateinfo()`, 1534-1543: con `data_has_changed` il poll successivo è un full update, anche prima di `pollfreq`; il flag si azzera a fine full update.
+  - Libhid chiede un report quando una riga letta lo richiede (`refresh_report_buffer()`): un report senza righe lette non viene chiesto.
+
+  ---
+
+  ## Decisioni (prese in pianificazione, da confermare in review)
+
+  1. **Classificazione per report, dalle righe legate.** Un report (tipo, ID) è semi-statico quando ha almeno un campo letto da una riga legata e tutti i suoi campi letti da righe hanno `HU_FLAG_STATIC` o `HU_FLAG_SEMI_STATIC` (AC 1). Contano le righe di `_nut_rows` (driver e coda generica) con `idx` o `twin_idx` su un campo del report; si ignorano le righe comando, quelle `HU_FLAG_ABSENT` e quelle `DEAD` (scartate dalla regola INIT, che upstream non legge). Le righe interne (BOOL, stato) senza flag rendono il report dinamico come le altre.
+  2. **Campi senza riga ignorati**, come upstream che non li legge; un report fatto solo di campi senza riga resta letto come oggi (AC 2: gli altri report invariati; tiene fresca l'esportazione diagnostica dei report vendor).
+  3. **Classificazione alla fine del primo full poll** (`_first_full_done`), quando i ruoli INIT sono decisi; prima non si salta nulla, e il primo full poll legge comunque tutto. Si ricalcola a ogni nuovo bind (nuovo device).
+  4. **STATIC e SEMI_STATIC trattati insieme** come dice l'AC: riletti dopo un cambio. Deviazione minima da upstream (che dopo un cambio non rilegge le STATIC): una lettura in più, solo dopo un SET o un INSTCMD.
+  5. **Filtro all'avvio del ciclo full** (`startCycle`): i report semi-statici già decodificati (`_decoded_report`) non entrano in coda, salvo dopo un cambio. Non si toccano `buildPollLists()` (le liste e il test `test_apc_poll_baseline` restano uguali), la quick poll, i report messi in testa con `pollSoon()` (Powercom) e il salto esistente di `pollStaticReportsOnce()`.
+  6. **Segnale di cambio**: nuovo `IUPSDriver::noteDataChanged()`, chiamato da `USBHostUPS` dopo una scrittura HID riuscita di SET VAR (`writePlannedValue`) e dopo un INSTCMD con esito OK (`executeCommand`); non dopo un SET driver-side (`ups.delay.*`, `HU_FLAG_ABSENT`), come upstream. In `GenericDriver` imposta `_data_changed`: il ciclo successivo è un full (anche prima dei 30 s, come upstream) con i report semi-statici; il flag si azzera all'avvio di quel ciclo. Il read back immediato di `writePlannedValue()` resta.
+  7. **Nessun nuovo stale**: `LinkMonitor` diventa stale solo dopo errori; meno richieste non cambiano la rilevazione (AC 4). CyberPower (`quickPollMs() == 0`) ha sempre report dinamici nel full poll (stato).
+  8. **Log**: a classificazione fatta, `host->logDebug()` con il numero di report semi-statici sul totale del full poll; il conteggio GET_REPORT/min esiste già nel log `[USB] Last 60 s`.
+  9. **APC BX (AC 3)**: i test del meccanismo BX (statici letti una volta, report invalidato riletto, durata 10 s della quick poll) restano invariati. `test_apc_back_ups_bx750mi_requests_per_minute` misura il totale delle richieste: US-072 lo può solo abbassare; il nuovo valore si scrive con il conteggio spiegato (cambio di attesa dichiarato).
+
+  ### Fuori scope
+  - Modalità pollonly / `use_interrupt_pipe` di upstream; cambi a `fullPollMs()` / `quickPollMs()`; lettura on demand dalla web UI.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### `IUPSDriver.h`
+  - `virtual void noteDataChanged() {}` con il riferimento a `data_has_changed` (usbhid-ups.c:1157, 1239, 1534-1543).
+
+  ### `GenericDriver`
+  - Membri: `uint32_t _semi_static[2][8]` (bitmap per tipo INPUT/FEATURE come `_static_report`), `bool _semi_classified`, `bool _data_changed`, `bool _cycle_rereads` (il ciclo in corso rilegge i semi-statici).
+  - `classifySemiStatic(IHidTransport*)`: dopo `_first_full_done` e con `_nut_bound`; per ogni riga legata non comando, non `HU_FLAG_ABSENT`, non `DEAD`, marca i report di `idx` e `twin_idx` come "con righe" e, se la riga non ha `HU_FLAG_STATIC | HU_FLAG_SEMI_STATIC`, come dinamici; semi-statico = con righe e non dinamico. Log del conteggio.
+  - `startCycle(full)`: `_cycle_rereads = _data_changed; _data_changed = false;` e, se `!_cycle_rereads`, salta in inserimento i report full semi-statici già decodificati.
+  - `loop()`: `full_due` vero anche con `_data_changed`.
+  - `noteDataChanged()` override: `_data_changed = true`.
+  - `setup()` e `bindNutTable()` azzerano la classificazione.
+
+  ### `USBHostUPS.cpp`
+  - `writePlannedValue()`: con scrittura riuscita, `_driver->noteDataChanged()` sotto `_mutex`.
+  - `executeCommand()`: con `CommandResult::OK`, `_driver->noteDataChanged()` sotto `_mutex` (anche `shutdown.default`, che passa da `executeCommand` dei sotto-comandi).
+
+  ### Documenti
+  - ADR 0006 (poll centralizzato): sezione sui report semi-statici; note di rilascio v1.12.0: meno richieste nel full poll, e un parametro cambiato dal pannello dell'UPS si vede al prossimo SET, INSTCMD o riconnessione.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video.
+
+  - **`test_poll_cycle`** (AC 5): primo full poll legge tutto; secondo full poll senza i report solo semi-statici; dopo `noteDataChanged()` il ciclo successivo è full e li rilegge, quello dopo no; report misto (dinamico + semi-statico) sempre letto; report senza righe sempre letto; `pollSoon()` di un report semi-statico non filtrato; quick poll invariata; test BX esistenti invariati, conteggio al minuto aggiornato e spiegato.
+  - **`test_record_replay` / golden**: rigenerati; le sezioni `[snapshot]`, `[cmd]`, `[rw]`, `[snapshot.final]` devono restare identiche per tutte le 48 (AC 4), cambia solo `[requests]` dal secondo full poll. Un test confronta il secondo full poll con la classificazione: mancano solo i report semi-statici.
+  - **Conteggio**: tabella GET_REPORT nel full poll a regime, prima e dopo, per ogni fixture (in `docs/test-results/US-072/`, locale) e riassunto nelle note di rilascio.
+  - **Mutazioni**: classificare dinamico come semi-statico (un valore dei golden si congela o la sezione `[requests]` perde report dinamici); non azzerare `_data_changed` (i full poll successivi rileggono sempre); filtrare anche `pollSoon`.
+  - **Campo (AC 6)**: 12 h sull'Eaton 3S in sede con il conteggio GET_REPORT/min prima e dopo (con l'ok dell'utente per l'OTA); l'APC BX nella campagna di prova con i tester, prima del merge su `main`.
+
+  ---
+
+  ## Rischi e note
+
+  - **Valore fermo**: un report classificato male congela un valore dinamico. Rete: i golden (snapshot dopo il primo full poll e dopo il replay dell'ultimo report) e il test di confronto con la classificazione.
+  - **Effetto visibile accettato**: un parametro semi-statico cambiato fuori da NUT (pannello, software del produttore) si vede solo dopo un SET, un INSTCMD o una riconnessione, come in usbhid-ups. Va scritto nella richiesta ai tester.
+  - **Powercom**: politica di poll propria (800 ms, keep-alive, `pollSoon`); il filtro tocca solo la coda del full poll.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-30_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: richieste del full poll a regime per ogni fixture'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima del codice, quante e quali richieste fa il full poll a regime su ogni fixture.
+
+      **Leggi:** `test/test_record_replay/FixtureReplayRunner.h` (`goldenText`, sezione `[requests]`), `test/test_record_replay/golden/`.
+
+      **Modifica:** script locale (scratchpad, non nel repo) che dai 24 golden `*.registry.txt` estrae le richieste del secondo full poll (da t=30001 ms) e scrive una tabella per fixture: report richiesti e numero. Salva la tabella in `docs/test-results/US-072/requests-before.md` (cartella locale, ignorata da git).
+
+      **Verifica:** la tabella ha 24 righe; i numeri coincidono con un conteggio a mano su 2 fixture (Eaton 3S, APC BX750MI).
+
+      **Fatto:** baseline scritta, nessun file del repo modificato.
+
+      **Blocchi:** se la finestra di 35 s dei golden non contiene un secondo full poll completo per qualche driver (CyberPower senza quick poll), segnalalo: TASK-04 allunga la finestra.
+
+      ## File Coinvolti
+      - docs/test-results/US-072/requests-before.md — baseline locale
+
+      ## Criteri di Completamento
+      - [ ] Tabella delle richieste a regime per le 24 fixture
+      - [ ] Nessun file tracciato modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Segnale di dati cambiati: IUPSDriver::noteDataChanged() da SET VAR e INSTCMD'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far sapere al driver che un SET VAR o un INSTCMD è riuscito, come `data_has_changed` di usbhid-ups.
+
+      **Leggi:** `lib/USBHostUPS/src/IUPSDriver.h` (`invalidateReport`), `lib/USBHostUPS/src/USBHostUPS.cpp` (`writePlannedValue`, `executeCommand`, `saveDriverSideValue`), `nut_repo/drivers/usbhid-ups.c:1150-1160, 1235-1241, 1530-1545`.
+
+      **Modifica:**
+      1. `IUPSDriver::noteDataChanged()` virtuale vuoto, commento con le righe upstream.
+      2. `USBHostUPS::writePlannedValue()`: dopo `writeUsageLocked` riuscito, sotto `_mutex`, `if (_driver) _driver->noteDataChanged();`.
+      3. `USBHostUPS::executeCommand()`: con `r == CommandResult::OK`, sotto `_mutex`, la stessa chiamata.
+      4. Nessuna chiamata in `saveDriverSideValue()` (righe `HU_FLAG_ABSENT`, `ups.delay.*`: upstream non imposta il flag).
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila; `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_poll_cycle -f test_record_replay` verde (nessun comportamento cambia ancora).
+
+      **Fatto:** hook chiamato nei due punti, default vuoto.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — noteDataChanged()
+      - lib/USBHostUPS/src/USBHostUPS.cpp — chiamate dopo SET HID e INSTCMD riusciti
+
+      ## Criteri di Completamento
+      - [ ] Hook aggiunto e chiamato solo dopo scritture HID riuscite
+      - [ ] Build S3 ok, test invariati
+    ref: TASK-02
+  - id: TASK-03
+    title: 'GenericDriver: report semi-statici classificati dalle righe e saltati nel full poll'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il full poll non rilegge i report fatti solo di righe STATIC/SEMI_STATIC, salvo dopo un cambio (decisioni 1-6, 8).
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.h/.cpp` (`findStaticReports`, `isStaticAndKnown`, `startCycle`, `loop`, `bindNutTable`, `pollSoon`, `_decoded_report`), `lib/USBHostUPS/src/NutTable.h` (`Bound`, `HU_FLAG_*`, `isCommandRow`).
+
+      **Modifica:**
+      1. Membri `_semi_static[2][8]`, `_semi_classified`, `_data_changed`, `_cycle_rereads`, azzerati in `setup()`; `bindNutTable()` rimette `_semi_classified = false`.
+      2. `classifySemiStatic(IHidTransport*)`: chiamato da `loop()` quando `_first_full_done && _nut_bound && !_semi_classified`. Per ogni riga di `_nut_rows`: salta comandi, `HU_FLAG_ABSENT`, `Role::DEAD`; per `idx` e `twin_idx` validi segna il report (tipo, ID) in `mapped`; se `!(hidflags & (HU_FLAG_STATIC | HU_FLAG_SEMI_STATIC))` anche in `dynamic`. `_semi_static = mapped & ~dynamic`. Log `host->logDebug()` con il conteggio.
+      3. `startCycle(full)`: `_cycle_rereads = _data_changed; _data_changed = false;`; se non `_cycle_rereads`, inserendo `_full` in coda salta i report con bit in `_semi_static` e in `_decoded_report`. Le stringhe e `pollSoon()` non passano dal filtro.
+      4. `loop()`: `full_due` anche con `_data_changed`.
+      5. `noteDataChanged()` override: `_data_changed = true`.
+      6. Commento di classe aggiornato (terzo caso oltre a quick e full).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay`: golden `[snapshot]`, `[cmd]`, `[rw]`, `[rw.final]`, `[snapshot.final]` identici; può cambiare solo `[requests]` (lo gestisce TASK-05).
+
+      **Fatto:** filtro attivo per tutti i driver, nessun valore pubblicato cambiato.
+
+      **Blocchi:** se cambia una sezione diversa da `[requests]` di un golden, fermati: un report dinamico è stato classificato semi-statico.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — membri, override, commento
+      - lib/USBHostUPS/src/GenericDriver.cpp — classificazione, filtro, full forzato
+
+      ## Criteri di Completamento
+      - [ ] Report semi-statici saltati dal secondo full poll
+      - [ ] Full poll forzato e rilettura dopo noteDataChanged()
+      - [ ] Snapshot dei golden invariati
+    ref: TASK-03
+  - id: TASK-04
+    title: 'test_poll_cycle: primo poll, regime, SET/INSTCMD, report misti e pollSoon'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire l'AC 5 e i casi limite delle decisioni.
+
+      **Leggi:** `test/test_poll_cycle/test_main.cpp` (`MockPollHost`, `standardDevice`, `runLoop`, test BX 453-571).
+
+      **Modifica:** un driver di prova con una tabella piccola (righe STATIC, SEMI_STATIC e senza flag su report distinti, un report misto, un report senza righe) e test:
+      1. primo full poll: tutti i report;
+      2. secondo full poll: mancano solo i report semi-statici;
+      3. `noteDataChanged()`: il ciclo successivo parte subito come full e li rilegge; quello dopo no;
+      4. report misto e report senza righe sempre letti;
+      5. `pollSoon()` di un report semi-statico: richiesto;
+      6. quick poll invariata;
+      7. righe `DEAD` e comando ignorate nella classificazione.
+      Test BX esistenti invariati; `test_apc_back_ups_bx750mi_requests_per_minute`: nuovo valore con il conteggio spiegato nel commento (decisione 9). Allunga la finestra di `goldenText` (`[requests]`) se TASK-01 ha segnalato un secondo full poll incompleto.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_poll_cycle` verde. Mutazioni: non azzerare `_data_changed` (fallisce 3), filtrare `pollSoon` (fallisce 5).
+
+      **Fatto:** test verdi, mutazioni rilevate.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_poll_cycle/test_main.cpp — nuovi test, conteggio BX
+
+      ## Criteri di Completamento
+      - [ ] Casi dell'AC 5 coperti
+      - [ ] Test BX del meccanismo invariati
+      - [ ] Mutazioni rilevate
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Golden e confronto: solo [requests] cambia, mancano solo i report semi-statici'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare sulle 24 fixture reali che US-072 cambia solo le richieste, e solo quelle previste.
+
+      **Leggi:** `test/test_record_replay/FixtureReplayRunner.h`, `test/test_record_replay/test_main.cpp` (test golden), baseline di TASK-01.
+
+      **Modifica:**
+      1. Prima di rigenerare: copia temporanea dei golden (scratchpad) e diff sezione per sezione: fuori da `[requests]` nessuna differenza.
+      2. Rigenera i golden (`ESP32NUT_WRITE_GOLDEN=1`).
+      3. Test `test_semi_static_reports_skipped_after_first_full_poll`: per ogni fixture, col driver del registro, i report del primo full poll meno quelli del secondo sono esattamente i report semi-statici della classificazione (esposta al test con un accessore o un probe come `PollListProbe`).
+      4. `docs/test-results/US-072/requests-after.md` (locale) con la tabella dopo e la differenza per fixture.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde; mutazione: segnare dinamica una riga STATIC fa fallire il test 3.
+
+      **Fatto:** golden aggiornati solo in `[requests]`, test di confronto verde.
+
+      **Blocchi:** una differenza fuori da `[requests]` va segnalata, non rigenerata.
+
+      ## File Coinvolti
+      - test/test_record_replay/golden/ — sezioni [requests] rigenerate
+      - test/test_record_replay/test_main.cpp — test di confronto
+      - test/test_record_replay/FixtureReplayRunner.h — accesso alla classificazione, se serve
+
+      ## Criteri di Completamento
+      - [ ] Nessuna differenza fuori da [requests]
+      - [ ] Test di confronto verde su 24 fixture
+      - [ ] Tabella prima/dopo
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Chiusura: ADR 0006, note di rilascio, suite completa, build e 12 h sull''Eaton 3S'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documenti allineati e prova sul campo in sede.
+
+      **Leggi:** `docs/adr/0006-centralized-hid-polling-lifecycle.md`, `docs/releases/v1.12.0.md`, tabelle di TASK-01 e TASK-05.
+
+      **Modifica:**
+      1. ADR 0006: sezione sui report semi-statici (criterio, rilettura dopo SET/INSTCMD, riferimenti usbhid-ups).
+      2. Note di rilascio v1.12.0: meno richieste nel full poll con i numeri riassunti; l'effetto accettato (parametro cambiato dal pannello visibile dopo SET, INSTCMD o riconnessione).
+      3. Suite nativa completa; build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+      4. Con l'ok dell'utente: OTA sull'Eaton 3S, 12 h di funzionamento, conteggio `[USB] Last 60 s ... GET_REPORT` prima (firmware attuale) e dopo, snapshot NUT invariata, un `upsrw -s battery.charge.low` e un `upscmd beeper.toggle` con la rilettura nel ciclo successivo visibile nel log.
+      5. APC BX: nella richiesta di prova ai tester, prima del merge su `main` (AC 6).
+
+      **Verifica:** suite verde, tre build ok, dati delle 12 h annotati in `docs/test-results/US-072/`.
+
+      **Fatto:** documenti aggiornati, prova in sede fatta o rimandata con motivo.
+
+      **Blocchi:** OTA solo con l'ok esplicito dell'utente.
+
+      ## File Coinvolti
+      - docs/adr/0006-centralized-hid-polling-lifecycle.md — report semi-statici
+      - docs/releases/v1.12.0.md — richieste e effetto visibile
+      - docs/test-results/US-072/ — misure locali
+
+      ## Criteri di Completamento
+      - [ ] ADR e note di rilascio aggiornati
+      - [ ] Suite e tre build verdi
+      - [ ] 12 h sull'Eaton 3S con conteggi prima/dopo
+    ref: TASK-06

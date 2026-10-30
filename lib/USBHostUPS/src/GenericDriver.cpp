@@ -50,6 +50,12 @@ GenericDriver::GenericDriver() :
     _input_twin{},
     _static_report{},
     _decoded_report{},
+    _semi_static{},
+    _semi_classified(false),
+    _semi_undecided(false),
+    _semi_count(0),
+    _data_changed(false),
+    _cycle_rereads(false),
     _queue_pos(0),
     _step_now(false),
     _cycle_full(false),
@@ -88,6 +94,12 @@ void GenericDriver::setup() {
     memset(_input_twin, 0, sizeof(_input_twin));
     memset(_static_report, 0, sizeof(_static_report));
     memset(_decoded_report, 0, sizeof(_decoded_report));
+    memset(_semi_static, 0, sizeof(_semi_static));
+    _semi_classified = false;
+    _semi_undecided = false;
+    _semi_count = 0;
+    _data_changed = false;
+    _cycle_rereads = false;
     _last_quick = 0;
     _last_full = 0;
     _last_step = 0;
@@ -253,6 +265,74 @@ bool GenericDriver::isStaticAndKnown(const PollItem& item) const {
     return (_static_report[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
 }
 
+// A semi-static report (US-072): every field a row reads in it (the row's usage or its twin)
+// belongs to a HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC row, as hid_ups_walk() of usbhid-ups.c:2343-2362
+// skips those rows in the full update. Command rows, HU_FLAG_ABSENT rows and the rows the INIT
+// rule dropped (DEAD) are not read upstream; fields without a row are not read either, so a
+// report made only of them stays read as before. The active beeper read outside the rows
+// (decodeBeeperStatus()) makes its report dynamic. STATIC and SEMI_STATIC rows go together:
+// both are read again after a change (deviation: upstream reads only the SEMI_STATIC ones).
+// A row still undecided (no value yet, deferred until the conversion inputs are known, as the
+// Eaton nominal values before mge_type, or PENDING behind such a row) makes its report
+// dynamic too: only another read decides it. Upstream knows mge_type before its INIT walk.
+// The full poll classifies again until no static row is undecided (_semi_undecided).
+void GenericDriver::classifySemiStatic(IHidTransport* host) {
+    memset(_semi_static, 0, sizeof(_semi_static));
+    uint32_t dynamic[2][8] = {};
+    const auto& usages = host->getUsages();
+    auto mark = [&](const HIDUsageDef& u, bool is_static) {
+        if (u.report_type != 1 && u.report_type != 3) return;
+        uint32_t bit = 1u << (u.report_id % 32);
+        uint8_t slot = typeSlot(u.report_type);
+        if (is_static) _semi_static[slot][u.report_id / 32] |= bit;
+        else dynamic[slot][u.report_id / 32] |= bit;
+    };
+    _semi_undecided = false;
+    for (const auto& b : _nut_rows) {
+        if (NutTable::isCommandRow(*b.info) || (b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+        if (b.role == NutTable::Bound::Role::DEAD) continue;
+        // A value already published stays decided: a StringId row defers at every read of
+        // its report until the string comes, which is requested without the report
+        bool undecided = (b.deferred && !b.has) || b.role == NutTable::Bound::Role::PENDING;
+        bool static_flag = (b.info->hidflags & (NutTable::HU_FLAG_STATIC | NutTable::HU_FLAG_SEMI_STATIC)) != 0;
+        // Only a static row can make its report semi-static once decided
+        if (undecided && static_flag) _semi_undecided = true;
+        bool is_static = !undecided && static_flag;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size()) mark(usages[idx], is_static);
+        }
+    }
+    if (!_beeper_row && _active_beeper != "" && _active_beeper != "none") {
+        for (const auto& u : usages) {
+            if (strcmp(u.path, _active_beeper.c_str()) == 0) mark(u, false);
+        }
+    }
+    for (int t = 0; t < 2; t++) {
+        for (int w = 0; w < 8; w++) _semi_static[t][w] &= ~dynamic[t][w];
+    }
+    bool first = !_semi_classified;
+    _semi_classified = true;
+
+    size_t semi = 0;
+    for (const auto& item : _full) {
+        if (item.report_type == 1 || item.report_type == 3) {
+            if (_semi_static[typeSlot(item.report_type)][item.id / 32] & (1u << (item.id % 32))) semi++;
+        }
+    }
+    if (!first && semi == _semi_count) return; // classified again with nothing new to say
+    _semi_count = semi;
+    host->logDebug("[" + String(getDriverName()) + "] Semi-static reports: " + String((int)semi) +
+                   " of " + String((int)_full.size()) + " in the full poll, read again after SET/INSTCMD");
+}
+
+bool GenericDriver::isSemiStaticAndKnown(const PollItem& item) const {
+    if (!_semi_classified) return false;
+    if (item.report_type != 1 && item.report_type != 3) return false;
+    uint8_t slot = typeSlot(item.report_type);
+    uint32_t bit = 1u << (item.id % 32);
+    return (_semi_static[slot][item.id / 32] & bit) && (_decoded_report[slot][item.id / 32] & bit);
+}
+
 void GenericDriver::invalidateReport(uint8_t report_type, uint8_t report_id) {
     if (report_type == 1 || report_type == 3) {
         _decoded_report[typeSlot(report_type)][report_id / 32] &= ~(1u << (report_id % 32));
@@ -322,10 +402,19 @@ void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool fu
     _strings_rechecked = false;
     _cycle_strings.clear();
     if (full) appendNewStrings(host, data);
+    if (full) {
+        // After a SET VAR or an INSTCMD the full poll reads the semi-static reports too (US-072)
+        _cycle_rereads = _data_changed.exchange(false);
+        // Rows decided since the last classification may make more reports semi-static
+        if (_semi_classified && _semi_undecided) classifySemiStatic(host);
+    }
     // Devices that reject GET_REPORT only send INPUT reports on the interrupt endpoint
     if (!(host->getQuirks() & QUIRK_NO_GET_REPORT)) {
         const auto& reports = full ? _full : _quick;
-        _queue.insert(_queue.end(), reports.begin(), reports.end());
+        for (const auto& r : reports) {
+            if (full && !_cycle_rereads && isSemiStaticAndKnown(r)) continue;
+            _queue.push_back(r);
+        }
     }
 
     uint32_t stamp = now != 0 ? now : 1;
@@ -365,9 +454,14 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
         appendNewStrings(host, data);
     }
     if (_queue_pos >= _queue.size() && _cycle_full && _strings_rechecked) _first_full_done = true;
+    // Once the INIT rule has dropped the rows never read (finishInit() at the first report
+    // after the first full poll), the semi-static reports are known
+    if (_first_full_done && _nut_bound && _nut_init_done && !_semi_classified) classifySemiStatic(host);
 
     if (_queue_pos >= _queue.size()) {
-        bool full_due= _last_full == 0 || (now - _last_full) >= fullPollMs();
+        // A change (noteDataChanged()) makes the next cycle a full poll right away, as
+        // upsdrv_updateinfo() of usbhid-ups.c:1534-1543
+        bool full_due = _last_full == 0 || (now - _last_full) >= fullPollMs() || _data_changed;
         bool quick_due = quickPollMs() > 0 && (now - _last_quick) >= quickPollMs();
         if (!full_due && !quick_due) return;
         startCycle(host, data, full_due, now);
@@ -523,6 +617,7 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
     }
     _beeper_indexed = false;
     _nut_bound = true;
+    _semi_classified = false; // other rows: classified again (US-072)
     // A ups.realpower row owns the value only when its report is read (same rule as
     // readsActivePower()): rows bound in a report the driver never requests (CyberPower vendor
     // layouts, issue #40) leave the estimate (US-075). eaton_compute_realpower_info ignores its

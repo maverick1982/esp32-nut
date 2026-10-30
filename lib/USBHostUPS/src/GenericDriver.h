@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <vector>
 #include <utility>
+#include <atomic>
 
 /**
  * @brief Base of every driver: the NUT table engine, the hooks and the poll state machine.
@@ -16,7 +17,11 @@
  * Poll cycles (review S3, A6, like usbhid-ups and ADR 0006):
  * - quick poll every quickPollMs(): only the reports that carry status usages
  *   (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad...);
- * - full poll every fullPollMs(): the missing string descriptors, then every report.
+ * - full poll every fullPollMs(): the missing string descriptors, then every report;
+ * - semi-static reports (US-072): a report whose fields read by rows all come from
+ *   HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC rows is read by the first full poll, then left out
+ *   of the full poll until a SET VAR or an INSTCMD (noteDataChanged()), which makes the next
+ *   cycle a full poll that reads it again: data_has_changed of usbhid-ups.c:2357-2362.
  * One control request per loop() call, stepSpacingMs() apart, and none while
  * isPollingPaused(). A report the UPS has just sent as an INPUT report is skipped
  * (maxReportAgeMs()), and with pollStaticReportsOnce() so is a static report already
@@ -45,6 +50,7 @@ public:
     void noteHostValue(const char* name, const char* value) override;
     bool resetDriverSideValue(const char* name, String& value) override;
     void invalidateReport(uint8_t report_type, uint8_t report_id) override;
+    void noteDataChanged() override { _data_changed = true; }
 
     // Hook of the replay runner (US-067): ends the first full poll as loop() does, and applies
     // NutTable::finishInit() as postDecode() then would. Not called by the firmware.
@@ -184,6 +190,8 @@ private:
     void findStaticReports(IHidTransport* host);
     bool isFreshFromInput(IHidTransport* host, const PollItem& item, uint32_t now) const;
     bool isStaticAndKnown(const PollItem& item) const;
+    void classifySemiStatic(IHidTransport* host);
+    bool isSemiStaticAndKnown(const PollItem& item) const;
     static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 
     bool _lists_built;
@@ -197,6 +205,15 @@ private:
     // reports decoded at least once since the enumeration
     uint32_t _static_report[2][8];
     uint32_t _decoded_report[2][8];
+    // Reports whose fields read by rows all come from STATIC / SEMI_STATIC rows (US-072),
+    // per report type as above; classified once the first full poll has bound the rows
+    uint32_t _semi_static[2][8];
+    bool _semi_classified;
+    bool _semi_undecided;                 // a static row was undecided at the last classification
+    size_t _semi_count;                   // semi-static reports of the full poll, last logged
+    // noteDataChanged() since the last full cycle started; set by the NUT and web tasks
+    std::atomic<bool> _data_changed;
+    bool _cycle_rereads;                  // the running full cycle reads the semi-static reports
     size_t _queue_pos;
     bool _step_now;
     bool _cycle_full;

@@ -971,6 +971,12 @@ bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
 
 CommandResult USBHostUPS::executeCommand(const char* name, const char* param) {
     CommandResult r = IUSBHostUPS::executeCommand(name, param);
+    if (r == CommandResult::OK) {
+        // data_has_changed of instcmd() (usbhid-ups.c:1157): the semi-static reports next.
+        // An atomic flag: no wait for the poll step (_driver is deleted under _mutex)
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_driver) _driver->noteDataChanged();
+    }
     // "load.off.delay 30": the parameter is part of what was asked
     String cmd = name ? name : "(null)";
     if (param && *param) {
@@ -1114,6 +1120,11 @@ NutTable::SetStatus USBHostUPS::writePlannedValue(const NutTable::SetPlan& plan)
     }
     bool ok = writeUsageLocked(plan.def, (uint32_t)plan.raw);
     if (ok) {
+        {
+            // data_has_changed of setvar() (usbhid-ups.c:1239): the semi-static reports next
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            if (_driver) _driver->noteDataChanged();
+        }
         // Read the report back and decode it as the poll does: LIST VAR shows what the UPS
         // kept. Upstream waits for the next poll (data_has_changed); a failed read back
         // leaves it to the next full poll, the write itself succeeded
