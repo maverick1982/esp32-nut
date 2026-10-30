@@ -60,7 +60,7 @@ Each module has one responsibility and one reason to change.
 | `board` | Board profile and capabilities (section 3) | — | new |
 | `net` | Network links (Wi-Fi STA/AP, Ethernet RMII or SPI) and the choice of the active link | link state | `src/network/network_manager.*`, AP logic in `main.cpp` |
 | `usb-transport` | USB host stack, `hid_host`, primitives (control, interrupt IN, string descriptors), link monitoring and the recovery ladder | the USB/poll task (ADR 0002, 0008) | part of `USBHostUPS.cpp`, `lib/usb_host_hid`, `LinkMonitor` |
-| `ups-protocol` | Drivers: turn transport bytes into UPS variables and commands. HID drivers today, Q* drivers later | driver state | `GenericDriver` and subclasses, `HIDParser`, `NutTable`, `CommandCatalog`, `DriverRegistry` |
+| `ups-protocol` | Drivers: turn transport bytes into UPS variables and commands. HID drivers today, Q* drivers later | driver state | `GenericDriver` and subclasses, `HIDParser`, `NutTable`, `HidControl`, `DriverRegistry` |
 | `ups-model` | UPS data and status computation, the consumer-facing UPS API (data, status, commands, writable variables) | the data lock | `UPSData`, parts of `USBHostUPS` and `IUSBHostUPS` |
 | `nut-server` | upsd protocol: client sessions, parser and dispatch | NUT sockets | `lib/NUTServer` |
 | `web` | HTTP routing, API handlers, OTA; uses `web-auth` | web sockets | `src/network/web_config_server.cpp`, `lib/WebApi` |
@@ -157,7 +157,7 @@ Decided on 2026-10-21 by @maverick1982:
 
 * Do not add target `#if` blocks (`NUT_NET_ETHERNET`, board names, chip names) outside `board` and the `net` adapters; query `board()` or a runtime capability instead.
 * New pins, capabilities and defaults go into the board profile, never as literals in the code that uses them.
-* Do not include HID types (`HIDUsageDef`, `HIDParser`, `NutTable`, `CommandCatalog`) in `nut-server`, `web`, `mqtt` or `app` code written after this ADR; go through the consumer-facing UPS interface (until step 4 exists, do not add new HID dependencies to those modules).
+* Do not include HID types (`HIDUsageDef`, `HIDParser`, `NutTable`, `HidControl`) in `nut-server`, `web`, `mqtt` or `app` code written after this ADR; go through the consumer-facing UPS interface (until step 4 exists, do not add new HID dependencies to those modules).
 * Do not create new globals; pass dependencies to constructors or `begin()`. Libraries log through a callback, not through `AppLogger`.
 * Put new decision logic in a hardware-free unit with native tests, with a thin adapter for the platform calls.
 * Refactoring steps must not change behavior: same NUT output, same web API, same native/replay/e2e results. Mixing a refactoring with a behavior change in the same commit is not allowed.

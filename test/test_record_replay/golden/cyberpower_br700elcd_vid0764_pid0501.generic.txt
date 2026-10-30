@@ -1,0 +1,20 @@
+[snapshot]
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.mfr=CPS
+ups.model=BR700ELCD
+ups.status=Unknown
+[cmd]
+test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default
+[rw]
+ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.mfr=CPS
+ups.model=BR700ELCD
+ups.status=Unknown
+[requests]
+ 29/3 3/3 4/3 30/3 61/3 41/3 6/3 7/3 32/3 33/3 130/3 63/3 34/3 128/3 35/3 131/3 132/3 136/3 37/3 40/3 62/3 133/3 134/3 135/3 137/3 27/3 28/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 29/3 3/3 4/3 30/3 61/3 41/3 6/3 7/3 32/3 33/3 130/3 63/3 34/3 128/3 35/3 131/3 132/3 136/3 37/3 40/3 62/3 133/3 134/3 135/3 137/3 27/3 28/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3

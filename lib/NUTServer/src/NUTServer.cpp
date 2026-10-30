@@ -910,7 +910,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 // (netget.c get_desc / get_cmddesc).
                 const char* desc = nullptr;
                 if (subcmd == "CMDDESC") {
-                    const UPSCommandInfo* info = CommandCatalog::find(varName.c_str());
+                    const UPSCommandInfo* info = UpsCommands::find(varName.c_str());
                     if (info) desc = info->description;
                 } else {
                     desc = NutTable::describe(varName.c_str());

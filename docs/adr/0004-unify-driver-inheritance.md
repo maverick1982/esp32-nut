@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Unify Sub-Driver Inheritance via GenericDriver
 
 * **ADR ID:** 0004
-* **Status:** Accepted (amended by [ADR 0010](0010-modular-architecture-and-board-profiles.md): the inheritance rule applies to the USB HID drivers)
+* **Status:** Accepted (amended by [ADR 0010](0010-modular-architecture-and-board-profiles.md): the inheritance rule applies to the USB HID drivers; amended by [ADR 0011](0011-single-hid-to-nut-table-per-subdriver.md) with US-079: `GenericDriver` keeps the poll state machine and the hooks, the standard PDC mappings are the rows of `genericHid2Nut()`)
 * **Date:** 2026-09-05
 * **Authors:** Antigravity / @maverick1982
 

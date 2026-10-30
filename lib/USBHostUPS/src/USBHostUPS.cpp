@@ -7,6 +7,27 @@
 #include <math.h>
 #include "esp_task_wdt.h"
 
+// Beeper field setBeeper() writes: the path getActiveBeeperPath() picks (first
+// AudibleAlarmControl in descriptor order), in its Feature or Output item. Some devices
+// (APC Smart-UPS, #78) declare the same path as Input first: writing that definition
+// would use the Input layout. The Input item is returned only when the path has no writable one.
+static const HIDUsageDef* activeBeeper(const std::vector<HIDUsageDef>& usages) {
+    const HIDUsageDef* first = nullptr;
+    for (const auto& u : usages) {
+        if (strcmp(u.path, "UPS.PowerSummary.AudibleAlarmControl") == 0 ||
+            strcmp(u.path, "UPS.BatterySystem.Battery.AudibleAlarmControl") == 0 ||
+            strcmp(u.path, "UPS.AudibleAlarmControl") == 0) {
+            first = &u;
+            break;
+        }
+    }
+    if (!first) return nullptr;
+    for (const auto& u : usages) {
+        if (strcmp(u.path, first->path) == 0 && (u.report_type == 0x03 || u.report_type == 0x02)) return &u;
+    }
+    return first;
+}
+
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
 #endif
@@ -807,7 +828,7 @@ bool USBHostUPS::setBeeperField(const HIDUsageDef& field, bool enable) {
 }
 
 const NutTable::HidInfo* USBHostUPS::commandTable(size_t& n) const {
-    // Same lock as commandAllowList(): _driver is deleted under _mutex. The table is static.
+    // Same lock as beeperMuteSupported(): _driver is deleted under _mutex. The table is static.
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     n = 0;
     return _driver ? _driver->commandTable(n) : nullptr;
@@ -836,7 +857,7 @@ bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
                 }
             }
         } else {
-            found = CommandCatalog::activeBeeper(_hid_parser.getUsages());
+            found = activeBeeper(_hid_parser.getUsages());
         }
         if (!found) {
             return false;
@@ -956,7 +977,7 @@ CommandResult USBHostUPS::executeCommand(const char* name, const char* param) {
         cmd += " ";
         cmd += param;
     }
-    const UPSCommandInfo* info = CommandCatalog::find(name);
+    const UPSCommandInfo* info = UpsCommands::find(name);
     const bool destructive = info && info->destructive;
     switch (r) {
     case CommandResult::OK:
@@ -1018,21 +1039,15 @@ bool USBHostUPS::beeperMuteSupported() const {
     return _driver ? _driver->beeperMuteSupported() : true;
 }
 
-const char* const* USBHostUPS::commandAllowList() const {
-    // The list is static data of the driver class: it outlives the lock
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    return _driver ? _driver->commandAllowList() : nullptr;
-}
-
 void USBHostUPS::applyDefaultDelays() {
     // ups.delay.* with NUT semantics: driver defaults set at connection, never read from
     // the device (US-058). Right after formatDeviceStrings(); _mutex is recursive and
     // the callers already hold it.
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (!_driver) return;
-    CommandCatalog::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
-                                       _driver->defaultOnDelay(), _driver->delayVariablesSupported(),
-                                       _driver->delayPaths(), &_saved_vars);
+    NutTable::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
+                                 _driver->defaultOnDelay(), _driver->delayVariablesSupported(),
+                                 _driver->delayPaths(), &_saved_vars);
 }
 
 void USBHostUPS::applySavedDriverValues() {

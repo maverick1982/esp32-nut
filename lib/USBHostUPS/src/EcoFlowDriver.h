@@ -19,7 +19,7 @@ public:
 
     // Rows of ecoflow_hid2nut (ecoflow-hid.c), NutTable.h (US-066, US-078)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::ecoflowHid2Nut(n); }
-    // Standard mappings whose keys come from ecoflowHid2Nut() (US-078)
+    // genericHid2Nut() rows whose keys come from ecoflowHid2Nut() (US-078)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of ecoflow_hid2nut: none, they are commented
     // out upstream (US-078)

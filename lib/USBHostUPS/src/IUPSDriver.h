@@ -164,20 +164,10 @@ public:
     virtual bool beeperMuteSupported() const { return true; }
 
     /**
-     * @brief NUT commands of the upstream subdriver, nullptr-terminated (US-097).
-     *
-     * nullptr offers the whole catalog, as before. A list limits LIST CMD and INSTCMD to the
-     * commands it names, among those the device supports: liebert-hid.c has test.battery.start
-     * and beeper.toggle only, where the catalog would also offer quick/deep/stop and
-     * enable/disable/mute. test.battery.start is offered only through such a list.
-     */
-    virtual const char* const* commandAllowList() const { return nullptr; }
-
-    /**
      * @brief NUT table whose HU_TYPE_CMD rows give the commands of the device (US-074).
      *
-     * nullptr keeps the command catalog built on the HID usages (CommandCatalog groups). The
-     * tables are static data: the pointer stays valid after the driver is deleted, so the
+     * Every HID driver has one since US-079 (GenericDriver: genericHid2Nut()); nullptr offers
+     * no command. The tables are static data: the pointer stays valid after the driver is deleted, so the
      * host can hand it to HidControl outside its lock.
      */
     virtual const NutTable::HidInfo* commandTable(size_t& n) const { n = 0; return nullptr; }

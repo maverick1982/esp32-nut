@@ -30,15 +30,15 @@
  * 2. ups.beeper.status is published with the Legrand meaning of the field (2 = enabled,
  *    3 = disabled), while legrand-hid.c publishes no beeper status: the hook below.
  * 3. beeper.toggle is offered, as for every driver of the project.
- * 4. Standard HID usages without a legrand-hid row keep the generic mappings (ADR 0011
+ * 4. Standard HID usages without a legrand-hid row keep the genericHid2Nut() rows (ADR 0011
  *    rule 2), for example input.frequency and ups.power.nominal.
  * 5. Other Legrand products stay with GenericDriver (DriverRegistry), where upstream rejects
  *    them unless the productid option is given.
  * Hooks that are not table rows: the beeper encoding (encodeBeeperValue, beeperMuteSupported,
- * the status hook), legrand_format_mfr (formatDeviceStrings), the delays of US-066.
+ * decodeBeeperStatus), legrand_format_mfr (formatDeviceStrings), the delays of US-066.
  */
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from
 // legrandHid2Nut(), copied character by character from that table (US-106)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of legrand_hid2nut set these internal ups.status.* keys
@@ -66,7 +66,7 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.PowerSummary.PercentLoad", "UPS.PowerConverter.Output.PercentLoad", "UPS.Output.PercentLoad",
     // ups.realpower.nominal
     "UPS.Flow.ConfigActivePower", "UPS.PowerConverter.ConfigActivePower", "UPS.Output.ConfigActivePower",
-    // ups.beeper.status: the Legrand hook below, not beeper_info
+    // ups.beeper.status: decodeBeeperStatus() below, not beeper_info
     "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
     // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
     "UPS.BatterySystem.Battery.FullChargeCapacity",
@@ -80,11 +80,6 @@ const char* const* LegrandDriver::supersededGenericPaths(size_t& n) const {
     return kSupersededGenericPaths;
 }
 
-void LegrandDriver::setup() {
-    GenericDriver::setup();
-    _map.invalidate();
-}
-
 // legrand_format_mfr() returns hd->Vendor, or "Legrand" without one. A manufacturer string
 // that decodes to empty counts as missing.
 void LegrandDriver::formatDeviceStrings(UPSData& data) {
@@ -92,32 +87,13 @@ void LegrandDriver::formatDeviceStrings(UPSData& data) {
 }
 
 // Legrand meaning of AudibleAlarmControl (deviation 2): beeper.enable writes 2 and
-// beeper.disable writes 3 in legrand-hid.c; 1 is the HID "disabled" as well
-static void legrandBeeperStatus(UPSData& d, double v, const HIDUsageDef* def, const String& active_beeper) {
-    if (def && strcmp(def->path, active_beeper.c_str()) != 0) return;
-    if (def && def->bit_size == 1) { d.set("ups.beeper.status", (v != 0) ? "enabled" : "disabled"); return; }
-    if (v == 2) d.set("ups.beeper.status", "enabled");
-    else if (v == 1 || v == 3) d.set("ups.beeper.status", "disabled");
-}
-
-void LegrandDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
-    if (length == 0 || data == NULL || !host) return;
-
-    GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
-
-    typedef UsageMapIndex<LegrandDriver>::Mapping Mapping;
-    // The beeper status hook only (deviation 2): every other value is a row of legrandHid2Nut()
-    static const Mapping mappings[] = {
-        { "UPS.PowerSummary.AudibleAlarmControl", [](LegrandDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            legrandBeeperStatus(d, v, def, drv->_active_beeper);
-        } },
-        { "UPS.BatterySystem.Battery.AudibleAlarmControl", [](LegrandDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            legrandBeeperStatus(d, v, def, drv->_active_beeper);
-        } },
-        { "UPS.AudibleAlarmControl", [](LegrandDriver* drv, UPSData& d, double v, const HIDUsageDef* def) {
-            legrandBeeperStatus(d, v, def, drv->_active_beeper);
-        } },
-    };
-
-    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
+// beeper.disable writes 3 in legrand-hid.c; 1 is the HID "disabled" as well. Called by
+// GenericDriver::decodeReport() for the active beeper only; every other value is a row of
+// legrandHid2Nut() or of its generic tail.
+void LegrandDriver::decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def) {
+    const char* status = nullptr;
+    if (def.bit_size == 1) status = (v != 0) ? "enabled" : "disabled";
+    else if (v == 2) status = "enabled";
+    else if (v == 1 || v == 3) status = "disabled";
+    if (status && !data.valueEquals("ups.beeper.status", status)) data.set("ups.beeper.status", status);
 }

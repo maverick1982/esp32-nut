@@ -25,16 +25,18 @@
  * - Reference: nut_repo/drivers/mge-hid.c
  * - Quirk 254/255: Mirrored from nut_repo/drivers/libhid.c (skip reports 254/255 to prevent freeze).
  * - Every variable, the status and the instant commands come from mgeHid2Nut() (US-073,
- *   US-074, ADR 0011): the standard mappings of the same keys are superseded below, and the
+ *   US-074, ADR 0011): the genericHid2Nut() rows of the same keys are superseded below, and the
  *   driver keeps only hooks (string descriptors, model and country context, quirks).
  */
 
-EatonDriver::EatonDriver() : _iModelIdx(0), _iModelIdxSeen(false), _iModelSeen(false),
+EatonDriver::EatonDriver() : _contextIndexed(false), _iModelIdx(0), _iModelIdxSeen(false), _iModelSeen(false),
     _apparentPowerSeen(false), _apparentPower(0) {}
 
 void EatonDriver::setup() {
     GenericDriver::setup();
-    _map.invalidate();
+    _iModelUsages.clear();
+    _apparentPowerUsages.clear();
+    _contextIndexed = false;
     _iModelIdx = 0;
     _iModelIdxSeen = false;
     _iModelSeen = false;
@@ -88,7 +90,7 @@ void EatonDriver::updateNutContext(IHidTransport* host, const UPSData& data) {
     }
 }
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from the US-073
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from the US-073
 // rows of mgeHid2Nut(), copied character by character from that table
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of mge_hid2nut set the internal ups.status.* keys
@@ -172,20 +174,30 @@ void EatonDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_t r
 
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 
-    typedef UsageMapIndex<EatonDriver>::Mapping Mapping;
-    static const Mapping mappings[] = {
-        // Context inputs, never published: iModel and Flow.[4].ConfigApparentPower give mge_type
-        // (NutTable::Context, US-066); the country is the device.country row
-        { kIModelPath, [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef*) { drv->_iModelIdx = (uint8_t)v; drv->_iModelIdxSeen = true; } },
-        { "UPS.Flow.ConfigApparentPower", [](EatonDriver* drv, UPSData&, double v, const HIDUsageDef* def) {
-            if (def && NutTable::pathMatches(*def, kApparentPowerPath)) {
-                drv->_apparentPower = (long)v;
-                drv->_apparentPowerSeen = true;
-            }
-        } }
-    };
-
-    _map.apply(this, mappings, host->getUsages(), report_id, report_type, data, length, ups_data);
+    // Context inputs, never published: iModel and Flow.[4].ConfigApparentPower give mge_type
+    // (NutTable::Context, US-066); the country is the device.country row
+    const auto& usages = host->getUsages();
+    if (!_contextIndexed) {
+        for (size_t i = 0; i < usages.size(); i++) {
+            if (strcmp(usages[i].path, kIModelPath) == 0) _iModelUsages.push_back(i);
+            if (NutTable::pathMatches(usages[i], kApparentPowerPath)) _apparentPowerUsages.push_back(i);
+        }
+        _contextIndexed = true;
+    }
+    for (size_t i : _iModelUsages) {
+        if (i >= usages.size()) continue;
+        const HIDUsageDef& u = usages[i];
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        _iModelIdx = (uint8_t)HIDParser::extractUsage(&u, report_id, data, length);
+        _iModelIdxSeen = true;
+    }
+    for (size_t i : _apparentPowerUsages) {
+        if (i >= usages.size()) continue;
+        const HIDUsageDef& u = usages[i];
+        if (u.report_id != report_id || u.report_type != report_type) continue;
+        _apparentPower = (long)HIDParser::extractUsage(&u, report_id, data, length);
+        _apparentPowerSeen = true;
+    }
 }
 
 void EatonDriver::parseStringDescriptor(IHidTransport* host, uint8_t index, const uint8_t *data, size_t length, UPSData& ups_data) {

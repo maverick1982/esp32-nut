@@ -4,7 +4,7 @@
 #include <vector>
 #include "LegrandDriver.h"
 #include "DriverRegistry.h"
-#include "CommandCatalog.h"
+#include "HidControl.h"
 #include "IHidTransport.h"
 #include "UPSData.h"
 
@@ -117,34 +117,40 @@ void test_beeper_status_uses_legrand_meaning(void) {
 // No beeper.mute (3 would disable the beeper); enable, disable and toggle stay
 void test_catalog_has_no_beeper_mute(void) {
     addKeorBeeper();
-    auto cmds = CommandCatalog::build(mockHost._usages, true, driver.shutdownCommandsSupported(),
-                                      driver.beeperMuteSupported());
+    size_t n = 0;
+    const NutTable::HidInfo* t = driver.commandTable(n);
+    auto cmds = HidControl::buildCommands(mockHost._usages, true, driver.shutdownCommandsSupported(),
+                                          driver.beeperMuteSupported(), t, n);
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.enable"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.disable"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.toggle"));
     TEST_ASSERT_FALSE(hasCommand(cmds, "beeper.mute"));
 
-    // Same field, driver that allows it: beeper.mute is offered (no regression)
-    auto generic = CommandCatalog::build(mockHost._usages, true, true, true);
+    // Same field, GenericDriver (genericHid2Nut(), which allows it): beeper.mute is offered
+    size_t ng = 0;
+    const NutTable::HidInfo* g = NutTable::genericHid2Nut(ng);
+    auto generic = HidControl::buildCommands(mockHost._usages, true, true, true, g, ng);
     TEST_ASSERT_TRUE(hasCommand(generic, "beeper.mute"));
 }
 
 // legrand-hid.c: test.battery.* on UPS.Output.Test with 1 / 2 / 3
 void test_battery_test_on_output_test(void) {
     addUsage("UPS.Output.Test", 0x14, 3, 0, 8);
-    auto cmds = CommandCatalog::build(mockHost._usages, false, true, false);
+    size_t n = 0;
+    const NutTable::HidInfo* t = driver.commandTable(n);
+    auto cmds = HidControl::buildCommands(mockHost._usages, false, true, false, t, n);
     TEST_ASSERT_TRUE(hasCommand(cmds, "test.battery.start.quick"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "test.battery.start.deep"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "test.battery.stop"));
 
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.quick", mockHost._usages, def, value));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start.quick", mockHost._usages, def, value, t, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.Test", def.path);
     TEST_ASSERT_EQUAL_UINT32(1, value);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", mockHost._usages, def, value));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start.deep", mockHost._usages, def, value, t, n));
     TEST_ASSERT_EQUAL_UINT32(2, value);
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.stop", mockHost._usages, def, value));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.stop", mockHost._usages, def, value, t, n));
     TEST_ASSERT_EQUAL_UINT32(3, value);
 }
 
@@ -248,8 +254,8 @@ void test_commands_from_legrand_table(void) {
     addUsage("UPS.Output.DelayBeforeStartup", 0x16, 3, 0, 16);
     size_t n = 0;
     const NutTable::HidInfo* t = driver.commandTable(n);
-    auto cmds = CommandCatalog::build(mockHost._usages, true, driver.shutdownCommandsSupported(),
-                                      driver.beeperMuteSupported(), nullptr, t, n);
+    auto cmds = HidControl::buildCommands(mockHost._usages, true, driver.shutdownCommandsSupported(),
+                                          driver.beeperMuteSupported(), t, n);
     for (const char* name : { "beeper.enable", "beeper.disable", "beeper.toggle", "test.battery.start.quick",
                               "test.battery.start.deep", "test.battery.stop", "load.off", "load.on",
                               "load.off.delay", "load.on.delay", "shutdown.return", "shutdown.stayoff",
@@ -261,7 +267,7 @@ void test_commands_from_legrand_table(void) {
 
     HIDUsageDef def;
     uint32_t value = 0;
-    TEST_ASSERT_TRUE(CommandCatalog::resolveWrite("test.battery.start.deep", mockHost._usages, def, value, t, n));
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("test.battery.start.deep", mockHost._usages, def, value, t, n));
     TEST_ASSERT_EQUAL_STRING("UPS.Output.Test", def.path);
     TEST_ASSERT_EQUAL_UINT32(2, value);
 }

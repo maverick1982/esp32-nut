@@ -1,7 +1,7 @@
 #include <unity.h>
 #include "PowercomDriver.h"
 #include "IHidTransport.h"
-#include "CommandCatalog.h"
+#include "NutTable.h"
 #include "HIDParser.h"
 #include "UPSData.h"
 #include <fstream>
@@ -350,8 +350,8 @@ void test_powercom_delay_variables_as_upstream(void) {
     usages[1].usage = 0x00840057;
     usages[1].report_type = 3;
     UPSData data;
-    CommandCatalog::applyDefaultDelays(data, usages, driver.defaultOffDelay(), driver.defaultOnDelay(),
-                                       driver.delayVariablesSupported(), driver.delayPaths());
+    NutTable::applyDefaultDelays(data, usages, driver.defaultOffDelay(), driver.defaultOnDelay(),
+                                 driver.delayVariablesSupported(), driver.delayPaths());
     TEST_ASSERT_EQUAL_STRING("60", data.get("ups.delay.start").c_str());
     TEST_ASSERT_EQUAL_STRING("20", data.get("ups.delay.shutdown").c_str());
 
@@ -369,8 +369,8 @@ void test_powercom_delay_variables_as_upstream(void) {
     pcm[0].usage = 0x00ff0057;
     pcm[0].report_type = 3;
     UPSData only_pcm;
-    CommandCatalog::applyDefaultDelays(only_pcm, pcm, driver.defaultOffDelay(), driver.defaultOnDelay(),
-                                       driver.delayVariablesSupported(), driver.delayPaths());
+    NutTable::applyDefaultDelays(only_pcm, pcm, driver.defaultOffDelay(), driver.defaultOnDelay(),
+                                 driver.delayVariablesSupported(), driver.delayPaths());
     TEST_ASSERT_EQUAL_STRING("20", only_pcm.get("ups.delay.shutdown").c_str());
     TEST_ASSERT_FALSE(only_pcm.hasKey("ups.delay.start"));
 }

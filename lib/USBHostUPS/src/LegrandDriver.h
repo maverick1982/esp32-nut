@@ -40,7 +40,7 @@ public:
 
     // Rows of legrand_hid2nut (legrand-hid.c), NutTable.h (US-106)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::legrandHid2Nut(n); }
-    // Standard mappings whose keys come from legrandHid2Nut() (US-106)
+    // genericHid2Nut() rows whose keys come from legrandHid2Nut() (US-106)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of legrand_hid2nut (US-106)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::legrandHid2Nut(n); }
@@ -50,12 +50,9 @@ public:
     LegrandDriver() = default;
     virtual ~LegrandDriver() = default;
 
-    void setup() override;
-    void decodeReport(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) override;
-
-private:
+protected:
     // ups.beeper.status with the Legrand meaning of the field: not a row of legrand_hid2nut
-    UsageMapIndex<LegrandDriver> _map;
+    void decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def) override;
 };
 
 #endif // LEGRAND_DRIVER_H

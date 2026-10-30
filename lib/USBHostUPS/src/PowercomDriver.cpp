@@ -172,7 +172,7 @@ void PowercomDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_
     GenericDriver::decodeReport(host, report_id, report_type, data, length, ups_data);
 }
 
-// The mappings of GenericDriver::decodeReport() whose keys powercomHid2Nut() owns (US-077,
+// The genericHid2Nut() rows whose keys powercomHid2Nut() owns (US-077,
 // ADR 0011), copied from there
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of powercom_hid2nut set the internal ups.status.* keys

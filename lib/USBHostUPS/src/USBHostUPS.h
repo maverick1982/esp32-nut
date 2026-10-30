@@ -70,7 +70,6 @@ public:
     bool supportsBeeperToggle() const override;
     bool shutdownCommandsSupported() const override;
     bool beeperMuteSupported() const override;
-    const char* const* commandAllowList() const override;
     const NutTable::HidInfo* commandTable(size_t& n) const override;
     bool setBeeperField(const HIDUsageDef& field, bool enable) override;
 
@@ -123,7 +122,7 @@ private:
     NutTable::SetStatus writePlannedValue(const NutTable::SetPlan& plan) override;
     NutTable::SetStatus resetDriverSideValue(const char* name, String& value) override;
 
-    // ups.delay.* defaults of the driver (CommandCatalog::applyDefaultDelays, US-058)
+    // ups.delay.* defaults of the driver (NutTable::applyDefaultDelays, US-058)
     void applyDefaultDelays();
     // Saved driver-side values other than ups.delay.* (outlet.*.desc), after each _driver->setup()
     void applySavedDriverValues();

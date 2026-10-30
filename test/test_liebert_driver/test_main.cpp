@@ -3,7 +3,7 @@
 #include <memory>
 #include "LiebertDriver.h"
 #include "DriverRegistry.h"
-#include "CommandCatalog.h"
+#include "HidControl.h"
 #include "IHidTransport.h"
 #include "UPSData.h"
 
@@ -234,13 +234,12 @@ void test_commands_follow_liebert_table(void) {
     addUsage("UPS.PowerSummary.DelayBeforeStartup", 0x0A, 3, 0, 32);
     size_t n = 0;
     const NutTable::HidInfo* t = driver.commandTable(n);
-    auto cmds = CommandCatalog::build(mockHost._usages, true, driver.shutdownCommandsSupported(),
-                                      driver.beeperMuteSupported(), driver.commandAllowList(), t, n);
+    auto cmds = HidControl::buildCommands(mockHost._usages, true, driver.shutdownCommandsSupported(),
+                                          driver.beeperMuteSupported(), t, n);
     TEST_ASSERT_EQUAL_STRING(
         "beeper.toggle test.battery.start load.off load.on load.off.delay load.on.delay "
         "shutdown.return shutdown.stayoff shutdown.stop shutdown.default",
         names(cmds).c_str());
-    TEST_ASSERT_NULL(driver.commandAllowList());
 }
 
 // ups.delay.* on the PowerSummary paths of liebert_hid2nut

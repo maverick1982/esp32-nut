@@ -29,7 +29,6 @@ public:
     bool beeperToggle = true;
     bool shutdownCmds = true;
     bool muteAllowed = true;
-    const char* const* allowList = nullptr;
 
     mutable int depth = 0;
     mutable int lockCalls = 0;
@@ -52,12 +51,13 @@ public:
         io.push_back({ "beeper", enable ? 1 : 0, depth });
         return beeperOk;
     }
-    // US-074: the driver's command rows (mgeHid2Nut) and the beeper write on a row's field
+    // US-074: the driver's command rows (mgeHid2Nut) and the beeper write on a row's field;
+    // without a brand table, the rows of GenericDriver (genericHid2Nut(), US-079)
     bool useTable = false;
     const NutTable::HidInfo* (*tableFn)(size_t&) = NutTable::mgeHid2Nut;
     const NutTable::HidInfo* commandTable(size_t& n) const override {
         n = 0;
-        return useTable ? tableFn(n) : nullptr;
+        return useTable ? tableFn(n) : NutTable::genericHid2Nut(n);
     }
     bool setBeeperField(const HIDUsageDef& field, bool enable) override {
         io.push_back({ std::string("beeperField:") + field.path, enable ? 1 : 0, depth });
@@ -116,7 +116,6 @@ public:
     bool supportsBeeperToggle() const override { return beeperToggle; }
     bool shutdownCommandsSupported() const override { return shutdownCmds; }
     bool beeperMuteSupported() const override { return muteAllowed; }
-    const char* const* commandAllowList() const override { return allowList; }
     const std::vector<HIDUsageDef>& getUsages() const override {
         TEST_ASSERT_TRUE_MESSAGE(depth > 0, "getUsages() without the lock");
         return usages;
@@ -157,7 +156,7 @@ static void addDelayUsages(FakePort& port, bool shutdown, bool startup, bool reb
     if (shutdown) add(P_SD, 0x00840057);
     if (startup) add(P_ST, 0x00840056);
     if (reboot) add(P_RB, 0x00840055);
-    CommandCatalog::applyDefaultDelays(port.data, port.usages, 20, 30, true);
+    NutTable::applyDefaultDelays(port.data, port.usages, 20, 30, true, NutTable::genericDelayPaths());
 }
 
 static void addBeeper(FakePort& port, const char* status) {
@@ -187,28 +186,27 @@ static std::string ioStr(const FakePort& port) {
 void setUp(void) { mock_delay_total_ms() = 0; }
 void tearDown(void) {}
 
-// The list is CommandCatalog::build() with the flags of the port
+// The list is HidControl::buildCommands() with the flags and the command table of the port
 void test_supported_commands_match_catalog(void) {
     FakePort port;
     addDelayUsages(port, true, true, true);
     addBeeper(port, "enabled");
     port.usages.push_back(featureUsage(P_TEST, 0x00840058));
+    size_t n = 0;
+    const NutTable::HidInfo* table = NutTable::genericHid2Nut(n);
 
-    auto expected = names(CommandCatalog::build(port.usages, true, true, true, nullptr));
+    auto expected = names(HidControl::buildCommands(port.usages, true, true, true, table, n));
     TEST_ASSERT_TRUE(expected.size() > 5);
     TEST_ASSERT_TRUE(expected == names(control().supportedCommands(port)));
 
-    static const char* const allow[] = { "test.battery.start", "beeper.toggle", nullptr };
     port.muteAllowed = false;
     port.shutdownCmds = false;
-    port.allowList = allow;
-    expected = names(CommandCatalog::build(port.usages, true, false, false, allow));
+    expected = names(HidControl::buildCommands(port.usages, true, false, false, table, n));
     TEST_ASSERT_TRUE(expected == names(control().supportedCommands(port)));
 
     // No beeper toggle, or no ups.beeper.status: no beeper commands
-    port.allowList = nullptr;
     port.beeperToggle = false;
-    expected = names(CommandCatalog::build(port.usages, false, false, false, nullptr));
+    expected = names(HidControl::buildCommands(port.usages, false, false, false, table, n));
     TEST_ASSERT_TRUE(expected == names(control().supportedCommands(port)));
     TEST_ASSERT_EQUAL(0, port.depth);
 }
@@ -230,7 +228,8 @@ void test_beeper_toggle_reads_status(void) {
         FakePort port;
         addBeeper(port, c.status);
         TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.toggle", nullptr));
-        TEST_ASSERT_EQUAL_STRING_MESSAGE((std::string("beeper=") + std::to_string(c.enable)).c_str(),
+        // The field of the beeper.enable / beeper.disable row (US-079: every driver has rows)
+        TEST_ASSERT_EQUAL_STRING_MESSAGE((std::string("beeperField:" P_BEEPER "=") + std::to_string(c.enable)).c_str(),
                                          ioStr(port).c_str(), c.status);
     }
 
@@ -238,7 +237,7 @@ void test_beeper_toggle_reads_status(void) {
     addBeeper(port, "enabled");
     TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.disable", nullptr));
     TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.enable", nullptr));
-    TEST_ASSERT_EQUAL_STRING("beeper=0 beeper=1", ioStr(port).c_str());
+    TEST_ASSERT_EQUAL_STRING("beeperField:" P_BEEPER "=0 beeperField:" P_BEEPER "=1", ioStr(port).c_str());
     port.beeperOk = false;
     TEST_ASSERT_EQUAL((int)CommandResult::FAILED, (int)control().executeCommand(port, "beeper.toggle", nullptr));
     // beeper.mute writes 3 on the beeper field
@@ -419,7 +418,7 @@ public:
     mutable std::vector<std::string> calls;
     std::vector<const UPSCommandInfo*> supportedCommands(const IUpsControlPort&) const override {
         calls.push_back("list");
-        return { CommandCatalog::find("beeper.toggle") };
+        return { UpsCommands::find("beeper.toggle") };
     }
     CommandResult executeCommand(IUpsControlPort&, const char* name, const char* param) const override {
         calls.push_back(std::string("cmd ") + name + (param ? std::string(" ") + param : ""));

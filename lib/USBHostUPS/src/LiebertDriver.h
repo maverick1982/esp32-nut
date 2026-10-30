@@ -30,7 +30,7 @@ public:
 
     // Rows of liebert_hid2nut (liebert-hid.c), NutTable.h (US-106)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::liebertHid2Nut(n); }
-    // Standard mappings whose keys come from liebertHid2Nut() (US-106)
+    // genericHid2Nut() rows whose keys come from liebertHid2Nut() (US-106)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of liebert_hid2nut (US-106)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::liebertHid2Nut(n); }

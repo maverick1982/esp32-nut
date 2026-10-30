@@ -81,7 +81,7 @@ La maggior parte dei bridge Q* si presenta come dispositivo di **classe HID** co
    - string descriptor "di comando" con langid esplicito e senza la blacklist degli indici falliti di `requestStringDescriptor()`.
    Gli interrupt IN arrivano già al driver tramite `decodeReport()`: le risposte vanno riassemblate fino al `\r`.
 3. **Nuovo `QxDriver`**, che implementa `IUPSDriver` direttamente (non eredita da `GenericDriver`): ciclo di poll con `Q1`/`F`/`I`, motore a tabelle, flag di stato.
-4. **Comandi e beeper**: `executeCommand`, `CommandCatalog` e il beeper oggi sono costruiti sugli usage HID. Serve un hook per delegarli al driver (`Q` beeper, `T`/`TL` test, `S..R..` e `C` spegnimento). È la modifica più invasiva, ma resta un'estensione.
+4. **Comandi e beeper**: `executeCommand`, i comandi (righe `HU_TYPE_CMD` lette da `HidControl`, US-079) e il beeper oggi sono costruiti sugli usage HID. Serve un hook per delegarli al driver (`Q` beeper, `T`/`TL` test, `S..R..` e `C` spegnimento). È la modifica più invasiva, ma resta un'estensione.
 5. **Riconoscimento del sottodriver**: VID/PID 0001:0000 è condiviso da fabula, hunnox, fuji, krauler e snr. NUT sceglie in base alle stringhe produttore/prodotto (`nutdrv_qx.c:2721-2725`); va fatto lo stesso.
 
 **Limiti:**

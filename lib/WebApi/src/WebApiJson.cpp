@@ -97,7 +97,7 @@ int WebApiJson::runUpsCommand(IUpsSource* usb_ups, const String& body, String& r
 
     // Un comando sconosciuto al catalogo viene rifiutato prima di qualsiasi chiamata
     // all'host. I distruttivi non hanno blocchi: in AP come in STA (US-068)
-    const UPSCommandInfo* info = CommandCatalog::find(name);
+    const UPSCommandInfo* info = UpsCommands::find(name);
     if (!info) {
         response = "{\"error\":\"Command not supported\"}";
         return 400;

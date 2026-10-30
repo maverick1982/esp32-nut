@@ -511,7 +511,8 @@ void test_apc_extensions_kept(void) {
     feed16(0x1A, 3, 36000);
     feed16(0x1B, 3, 36000);
     TEST_ASSERT_EQUAL_STRING("50.0", ups_data.get("input.frequency").c_str());
-    TEST_ASSERT_EQUAL_STRING("10", ups_data.get("battery.capacity").c_str());
+    // mge_battery_capacity of the genericHid2Nut() row (mge-hid.c:2016, US-079): "%.2f"
+    TEST_ASSERT_EQUAL_STRING("10.00", ups_data.get("battery.capacity").c_str());
     TEST_ASSERT_FALSE(ups_data.hasKey("battery.capacity.full"));
 }
 

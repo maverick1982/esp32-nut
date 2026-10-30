@@ -1,0 +1,476 @@
+schema: archetipo/plan/v2
+spec_code: US-079
+body: |
+  # US-079: Tabella generica per le marche sconosciute e rimozione delle mappature a mano e di CommandCatalog — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-30
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** LOW | **Punti:** 8 | **Bloccato da:** US-074, US-075, US-076, US-077, US-078, US-106 — tutte DONE (ultimo commit d203e1b).
+
+  Ultima spec della convergenza (ADR 0011). Restano scritti a mano: le circa 70 `Mapping` di `GenericDriver::decodeReport()` (unica fonte per le marche sconosciute, estensioni per i driver di marca filtrate da `supersededGenericPaths()`), le 2 mappature di contesto di `EatonDriver` (iModel, `Flow.[4].ConfigApparentPower`) e le 3 del beeper di `LegrandDriver`. I comandi del `GenericDriver` vengono ancora dai gruppi di `CommandCatalog.h` (`build()` senza tabella, `findFeature`, `kTest`/`kShutdown`/`kStartup`/`kReboot`/`kPanel`, `apcCsReturnField`, `rebootField`, `muteField`).
+
+  ---
+
+  ## Stato attuale (sonda di pianificazione, 2026-10-30)
+
+  - `UsageMapIndex` è usato da `GenericDriver` (`_generic_map`), `EatonDriver` (`_map`, contesto mge_type) e `LegrandDriver` (`_map`, hook `ups.beeper.status`). Gli altri driver hanno solo `supersededGenericPaths()`.
+  - Tutti i driver di marca hanno `hid2nut()` e `commandTable()`; nessuno sovrascrive più `commandAllowList()`.
+  - `CommandCatalog.h` è incluso da `GenericDriver.cpp`, `HidControl.h`, `USBHostUPS.cpp` (`activeBeeper`, `applyDefaultDelays`) e da 9 cartelle di test. `UpsCommands.h` dichiara `namespace CommandCatalog` (`find`, `table`), usato da `NUTServer.cpp`, `WebApiJson.cpp`, `src/network/web_config_server.cpp`, `USBHostUPS.cpp` e dai test strutturali.
+  - `test/fixtures/generic/` è vuota: nessuna fixture passa oggi dal `GenericDriver`.
+  - Upstream non ha un sottodriver generico (usbhid-ups rifiuta i VID sconosciuti): `genericHid2Nut()` è una tabella del progetto con la forma di `hid_info_t`, che per ogni riga prende percorso e formato di una riga upstream quando coincidono.
+
+  ---
+
+  ## Decisioni (prese in pianificazione, da confermare in review)
+
+  1. **Estensioni come righe di coda.** `GenericDriver` lega `hid2nut()` del driver e poi le righe di `genericHid2Nut()` il cui `hidpath` non è in `supersededGenericPaths()` (stesse liste di oggi, confronto `strcmp` con la stringa della riga). Per il `GenericDriver` puro `hid2nut()` è `genericHid2Nut()` e non c'è coda. La regola INIT di `NutTable::resolve()` (vince la prima riga che converte) dà la precedenza alla tabella del driver; le estensioni della regola 2 di ADR 0011 (date, temperature, `input.frequency` di Legrand, ecc.) restano senza mappature.
+  2. **Righe di `genericHid2Nut()`**: una per mappatura di oggi, nello stesso ordine; percorso e formato/conversione della riga upstream citata (`// mge-hid.c:2012`) quando il percorso coincide, altrimenti formato NUT standard e commento `// esp32-nut: <motivo>`. Nessuna riga `ST_FLAG_RW` (LIST RW del generico invariato), nessuna `unmapped.*`.
+  3. **Differenze dichiarate per le marche sconosciute** (ADR 0011 regola 5): `battery.voltage` da `%.2f` a `%.1f`; valori interi da troncamento `(int)v` a `%.0f` arrotondato; `battery.charge` senza il taglio a 100; `battery.capacity` con `mge_battery_capacity` (`%.2f`); `battery.capacity.full` sparisce (regola 2); `CommunicationLost` passa da `ups.status.comm_lost` a `commfault_info` (ecoflow-hid.c:150, idowell-hid.c:101), cioè `ups.status.commfault` e ALARM `Internal UPS fault!`, come già previsto dal commento in `UPSData.h`. I driver di marca non cambiano.
+  4. **`ups.beeper.status` resta un hook** (ADR 0011 regola 1, codifica del beeper): `virtual void decodeBeeperStatus(UPSData&, double v, const HIDUsageDef& def)` in `GenericDriver`, solo sul beeper attivo (`_active_beeper`), con le regole di oggi (1 bit: enabled/disabled; altrimenti 1/2/3 di `beeper_info`). Gira solo se nessuna riga legata della tabella del driver ha `ups.beeper.status`. Legrand lo sovrascrive (decisione 7 di US-106). È l'unica fonte della chiave.
+  5. **Eaton senza `UsageMapIndex`**: iModel (`UPS.PowerSummary.0xFFFF00F0`) e `UPS.Flow.[4].ConfigApparentPower` letti in `decodeReport()` con gli indici delle usage trovati una volta per enumerazione con `NutTable::pathMatches`. Poi `UsageMapIndex.h` si cancella.
+  6. **Comandi del generico come righe `HU_TYPE_CMD`** copiate da mge-hid, apc-hid e cps-hid (come in `mgeHid2Nut()` e `apcHid2Nut()`): `test.battery.start.quick`/`.deep`/`.stop` (1/2/3) sui tre percorsi Test; `load.off.delay`, `load.on.delay`, `shutdown.stop` (-1), `shutdown.reboot` (10) su PowerSummary, Output e i campi APC vendor in notazione `apcHid2Nut()` (`UPS.0xFF860005.0xFF86007D` ecc.); `test.panel.start`/`.stop` su `UPS.0xFF860072` e `UPS.PowerSummary.0xFF860072`; `beeper.enable` (2), `beeper.disable` (1), `beeper.mute` (3) sui tre percorsi AudibleAlarmControl. `GenericDriver::commandTable()` restituisce `genericHid2Nut()`; i driver di marca tengono la loro.
+  7. **Dove va la logica che resta di `CommandCatalog.h`**:
+     - `HidControl.h`, funzioni statiche pubbliche di `HidControl` (testabili): `buildCommands` (ex `buildFromTable`, senza `allow`), `cmdField`, `cmdDefault`, `cmdValueFits`, `fitsField`, `WriteStep`, `StepsResult`, `kNoDelay`, `resolveShutdownSteps` e `resolveWrite` (solo il ramo con tabella);
+     - `NutTable.h`: `parseDelayParam`, `applyDefaultDelays` (con `DelayPaths` obbligatorio) e `genericDelayPaths()` (i percorsi di `kShutdown`/`kStartup` di oggi, con i campi APC in notazione `apcDelayPaths()`); `GenericDriver::delayPaths()` restituisce `genericDelayPaths()`;
+     - `USBHostUPS.cpp`, statica privata: `activeBeeper`, per `getActiveBeeperPath()`;
+     - eliminati: `UsageGroup`, `findFeature`, `hasFeature`, `hasPath`, `apcCsReturnField`, `rebootField`, `muteField`, `allowed`, `build()` senza tabella.
+  8. **`commandAllowList()` rimossa** da `IUPSDriver`, `IUpsControlPort`, `USBHostUPS` e dai mock: nessun driver la usa. `HidControl` senza tabella non offre comandi; il beeper si scrive sempre con `setBeeperField()` (sparisce il ramo `port.setBeeper()` in `executeCommand`; `IUpsControlPort::setBeeper` resta se ha altri chiamanti).
+  9. **`namespace CommandCatalog` di `UpsCommands.h` diventa `UpsCommands`** (`UpsCommands::find`, `UpsCommands::table`): cambio meccanico sui consumatori; `UpsCommands.h` resta senza dipendenze HID (ADR 0010).
+  10. **La cache dei valori (`Bound::value`) resta**: non serve più a ridare l'ultima parola sulle mappature, ma serve alla scrittura solo-se-cambia (ADR 0011 regola 1, ADR 0007), ai cambi di ruolo INIT, a `noteHostValue()` e ai CLEAR. Si riscrivono i commenti di `postDecode()`, `publishRow()` e `publishNutRows()` che parlano di final word e di mapping overwrote.
+  11. **Stringhe**: le righe `StringId` della coda generica (data della batteria) si chiedono anche quando `requestTableStrings()` è falso (CyberPower, #40), come oggi `_batteryDateStringIndex`, che sparisce con i suoi rami in `collectStringRequests()` e `parseStringDescriptor()`. Liste di poll e di stringhe uguali alla baseline.
+
+  ### Fuori scope
+  - Righe RW per le marche sconosciute, nuove variabili, `outlet.*`, cambi alla policy di poll.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. `NutTable.h`: `genericHid2Nut()`
+  Dopo `liebertHid2Nut()`, con un'intestazione che dice che non è la copia di un file upstream (decisione 2). Righe BOOL con `HU_FLAG_QUICK_POLL` per `PresentStatus.X` e `PowerSummary.X`: ACPresent (`kOnlineInfo`), Discharging, Charging, BelowRemainingCapacityLimit (`kLowbattInfo`), NeedReplacement (`kReplacebattInfo`), Overload, ShutdownImminent (`kShutdownimmInfo`), CommunicationLost (`kCommfaultInfo`); solo `PresentStatus.X`: BatteryPresent (`kNobatteryInfo`), RemainingTimeLimitExpired (`kTimelimitexpiredInfo`), FullyCharged (`kFullychargedInfo`), FullyDischarged (`kDepletedInfo`).
+
+  | Chiave | Percorsi (in ordine) | Formato / conversione | Fonte |
+  |---|---|---|---|
+  | input.voltage | PowerConverter.Input.Voltage, Input.Voltage, Flow.Voltage | %.1f | apc-hid.c:407, esp32-nut |
+  | input.frequency | PowerConverter.Input.Frequency, Input.Frequency, Flow.Frequency | %.1f | mge-hid.c:2176 senza indice, esp32-nut |
+  | output.voltage | PowerConverter.Output.Voltage, Output.Voltage | %.1f | mge-hid.c:2225, apc-hid.c:417 |
+  | output.frequency | PowerConverter.Output.Frequency, Output.Frequency | %.1f | mge-hid.c:2238, apc-hid.c:420 |
+  | ups.realpower | PowerConverter.Output.ActivePower, Output.ActivePower | %.0f | mge-hid.c:2084, cps-hid.c:384 |
+  | ups.power | PowerConverter.Output.ApparentPower, Output.ApparentPower | %.0f | mge-hid.c:2079, cps-hid.c:382 |
+  | battery.voltage | PowerSummary.Voltage, BatterySystem.Voltage, Battery.Voltage | %.1f | apc-hid.c:342, mge-hid.c:2023, apc-hid.c:341 |
+  | battery.charge, battery.charge.low | PowerSummary.RemainingCapacity, PowerSummary.RemainingCapacityLimit | %.0f, RO | mge-hid.c:2012, 2014 |
+  | battery.runtime | PowerSummary.RunTimeToEmpty, Battery.RunTimeToEmpty | %.0f | mge-hid.c:2017, apc-hid.c:337 |
+  | ups.load | PowerSummary.PercentLoad, PowerConverter.Output.PercentLoad, Output.PercentLoad | %.0f | mge-hid.c:2064, esp32-nut, cps-hid.c:379 |
+  | ups.mfr.date | PowerSummary.ManufacturerDate, ManufacturerDate | date_conversion | apc-hid.c:375, 374 |
+  | battery.mfr.date | Battery.ManufacturerDate; BatterySystem.Battery.Date, Battery.Date | date_conversion; stringid_conversion | apc-hid.c:347 (RO); esp32-nut |
+  | ups.temperature, battery.temperature | PowerSummary.Temperature, Battery.Temperature | kelvin_celsius_conversion | mge-hid.c:2078, apc-hid.c:345 |
+  | battery.capacity | BatterySystem.Battery.DesignCapacity | mge_battery_capacity | mge-hid.c:2016 |
+  | ups.realpower.nominal | Flow.ConfigActivePower, PowerConverter.ConfigActivePower, Output.ConfigActivePower | %.0f | esp32-nut, apc-hid.c:376, 377 |
+  | ups.power.nominal | Flow.ConfigApparentPower | %.0f | tripplite-hid.c:377 |
+  | battery.voltage.nominal | PowerSummary.ConfigVoltage, Battery.ConfigVoltage | %.0f | cps-hid.c:374, esp32-nut |
+  | input.voltage.nominal | Flow.ConfigVoltage, Input.ConfigVoltage | %.0f | belkin-hid.c:519, apc-hid.c:408 |
+  | output.voltage.nominal | PowerConverter.Output.ConfigVoltage, Output.ConfigVoltage | %.0f | esp32-nut, cps-hid.c:423 |
+  | input.transfer.high, .low | PowerConverter.Output.*VoltageTransfer, Output.*, Input.* (ordine di oggi) | %.0f, RO | idowell-hid.c:132-133, apc-hid.c:409-413, cps-hid.c:411-415 |
+  | ups.test.result | BatterySystem.Battery.Test, Battery.Test, Output.Test | test_read_info | mge-hid.c:2071, apc-hid.c:372, cps-hid.c:381 |
+  | ups.timer.shutdown | PowerSummary.DelayBeforeShutdown | %.0f, HU_FLAG_QUICK_POLL | mge-hid.c:2069 |
+
+  I numeri di riga vanno ricontrollati su `nut_repo/drivers/` al momento della copia. `battery.capacity.full` e `ups.beeper.status` restano come commento col motivo (decisioni 3 e 4). Seguono le righe comando (decisione 6) e `genericDelayPaths()`. I commenti che citano `CommandCatalog::applyDefaultDelays` diventano `NutTable::applyDefaultDelays`; quello di powercom-hid.c:658 cita `HidControl::buildCommands`.
+
+  ### 2. `GenericDriver`
+  - `hid2nut()` di default restituisce `genericHid2Nut()`; `commandTable()` e `delayPaths()` sovrascritti in `GenericDriver` con `genericHid2Nut()` e `genericDelayPaths()`.
+  - `bindNutTable()`: righe del driver, poi, se la tabella non è `genericHid2Nut()`, righe generiche non superate in coda, poi un solo `resolve()` (nuova `NutTable::bindAppend(binds, table, n, usages, skip, n_skip)` o parametro skip in `bind()`).
+  - `decodeReport()`: restano `_decoded_report`, `_active_beeper` e l'hook del beeper; via `mappings`, `_generic_map`, `testResultText`, `_batteryDateStringIndex`.
+  - Commenti di `supersededGenericPaths()` nei driver: da mappings of GenericDriver::decodeReport() a rows of genericHid2Nut(); liste invariate.
+
+  ### 3. `EatonDriver`, `LegrandDriver`
+  - Eaton: via `_map` e `mappings`, contesto letto in `decodeReport()` (decisione 5).
+  - Legrand: via `_map` e le tre mappature; override di `decodeBeeperStatus()` con `legrandBeeperStatus`.
+  - `UsageMapIndex.h` cancellato.
+
+  ### 4. Comandi
+  - `HidControl.h` riceve la logica (decisione 7); `supportedCommands()` chiama `buildCommands(usages, beeper, shutdown_cmds, mute_allowed, table, n)`; `executeCommand()` senza i rami senza tabella.
+  - `CommandCatalog.h` cancellato; `UpsCommands.h` con `namespace UpsCommands`; `commandAllowList()` tolta; commenti di `IHidControlPort.h` e `IUPSDriver.h` aggiornati.
+  - `USBHostUPS.cpp`: `activeBeeper` statico, `NutTable::applyDefaultDelays(..., _driver->delayPaths(), &_saved_vars)`.
+
+  ### 5. Documenti
+  - ADR 0011: US-079 fatta, emendamento di ADR 0004 in vigore; riferimenti a `CommandCatalog`/`UsageMapIndex` in ADR 0008, 0010, 0011, `docs/plans/usb-layer-review.md`, `docs/plans/nutdrv-qx-support.md`.
+  - Note di rilascio v1.12.0: differenze per le marche sconosciute (decisione 3); nessuna per le marche note; impatto RAM/flash.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI: niente mockup, e2e o video. La dimostrazione è il replay forzato sul `GenericDriver` dei descriptor PDC reali delle fixture.
+
+  - **Baseline prima del codice (TASK-01)**: per ognuna delle 24 fixture, replay col driver del registro e replay forzato su `GenericDriver` (marca sconosciuta simulata). Per ciascuno: snapshot completo, LIST CMD, LIST RW, liste di poll quick/full con le stringhe. Salvati come golden in `test/test_record_replay/golden/`, generati dal codice di oggi. RAM e flash delle tre immagini (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`).
+  - **Dopo**: i golden del registro restano identici byte per byte; quelli generici cambiano solo per le voci della decisione 3, elencate nel test (`kGenericDifferences`) col motivo. LIST CMD identico su tutte le fixture in entrambi i modi, salvo differenze motivate e dichiarate.
+  - **`test_nut_table`**: forma di `genericHid2Nut()` (nessuna RW, nessuna `unmapped.*`, ogni chiave in `docs/nut-names.txt` salvo BOOL e comandi, ogni riga con commento di fonte), bind su un descriptor PDC standard sintetico, coda filtrata da `supersededGenericPaths`.
+  - **`test_generic_driver`**: test di oggi su decodeReport + postDecode; commfault; beeper 1 bit e multibit; data batteria da stringa; formati nuovi.
+  - **`test_hid_commands`** (ex `test_command_catalog`, `git mv`): logica con tabella; i test dei gruppi diventano test sulle righe di `genericHid2Nut()` con le stesse attese.
+  - **Strutturali EP-006** (`test_hid_transport`, `test_ups_source`, `test_ups_control_port`) verdi.
+  - **Mutazioni**: togliere un percorso da un `supersededGenericPaths` (rompe il golden del registro); mettere la coda generica prima della tabella del driver (rompe); togliere la riga generica `shutdown.stop` (rompe LIST CMD forzato); far girare l'hook del beeper anche con una riga del driver (rompe Eaton).
+  - **Regressione**: suite nativa completa, build delle tre immagini con RAM/flash prima e dopo, OTA sull'Eaton 3S con l'ok dell'utente.
+
+  ---
+
+  ## Rischi e note
+
+  - **Cambio trasversale**: tocca il binding di tutti i driver; la rete di sicurezza sono i golden di tutte le fixture col driver del registro.
+  - **Chiavi con più percorsi**: oggi vince l'ultima usage decodificata, domani la prima riga che converte (regola INIT di upstream). Un device con due percorsi per la stessa chiave può cambiare valore: lo mostrano i golden generici.
+  - **Durante INIT** una riga del driver ancora PENDING blocca la coda generica della stessa chiave fino al primo full poll; prima la mappatura scriveva subito. Accettato: upstream fa lo stesso.
+  - **Quick poll del generico**: le righe BOOL `HU_FLAG_QUICK_POLL` entrano in `isQuickPollStatusUsage()`; sono tutte usage di stato già note a `isStatusUsage()`, la baseline lo verifica.
+  - **Marche sconosciute sul campo**: nessuna in sede; le differenze sono di formato e `commfault`, scritte nelle note di rilascio.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-30_
+tasks:
+  - id: TASK-01
+    title: 'Baseline: golden di tutte le fixture, col driver del registro e forzate su GenericDriver, e misure RAM/flash'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare, prima di toccare il codice, quello che il firmware pubblica, offre e chiede oggi su tutte le 24 fixture, sia con il driver scelto dal registro sia simulando una marca sconosciuta (GenericDriver forzato).
+
+      **Leggi:** `test/test_record_replay/FixtureReplayRunner.h` (`replay`, `snapshot`, `listRW`, `pollLists`, la costruzione di LIST CMD intorno alla riga 323), `test/test_record_replay/test_main.cpp` (`test_status_baseline_all_fixtures`, le baseline snapshot di US-075/076/106).
+
+      **Modifica:**
+      1. In `FixtureReplayRunner`, opzione per forzare `GenericDriver` al posto di `DriverRegistry::create()` (parametro di `replay()` o `ReplaySession`).
+      2. Funzione `goldenText(path, forceGeneric)` che concatena, in sezioni con intestazione: snapshot completo, LIST CMD, LIST RW, liste di poll quick e full con le stringhe.
+      3. `checkGolden(path, forceGeneric)`: confronta con `test/test_record_replay/golden/<nome fixture>.<registry|generic>.txt`; se la variabile d'ambiente `ESP32NUT_WRITE_GOLDEN` è impostata scrive il file invece di confrontare.
+      4. Test `test_golden_registry_all_fixtures` e `test_golden_generic_all_fixtures` sulle 24 fixture (stessa lista di `test_status_baseline_all_fixtures`, controllo del conteggio).
+      5. Genera i 48 file sul codice di oggi.
+      6. Compila le tre immagini e annota RAM e flash nella nota del task (o in `docs/test-results/US-079-baseline.md`).
+
+      **Verifica:** `ESP32NUT_WRITE_GOLDEN=1 PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay`, poi di nuovo senza la variabile: verde. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`.
+
+      **Fatto:** golden deterministici (due esecuzioni uguali), nessun file di `lib/` modificato, misure annotate.
+
+      **Blocchi:** se un golden non è deterministico (ordine di mappe, timestamp), fermati e segnala.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — GenericDriver forzato, golden
+      - test/test_record_replay/test_main.cpp — test golden
+      - test/test_record_replay/golden/ — 48 file nuovi
+      - docs/test-results/US-079-baseline.md — RAM e flash prima
+
+      ## Criteri di Completamento
+      - [ ] 48 golden generati dal codice attuale e verdi
+      - [ ] Misure RAM/flash delle tre immagini annotate
+      - [ ] Nessun file in lib/ modificato
+    ref: TASK-01
+  - id: TASK-02
+    title: 'genericHid2Nut(): righe valori, BOOL e comandi, e genericDelayPaths()'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** scrivere la tabella generica senza ancora usarla.
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.cpp:413-579` (mappature da tradurre, nell'ordine); `lib/USBHostUPS/src/NutTable.h` (`HidInfo`, `Conv`, lookup `k*Info`, `mgeHid2Nut()` per lo stile dei commenti, righe comando di `apcHid2Nut()` intorno a 2319-2361, `apcDelayPaths()`); `lib/USBHostUPS/src/CommandCatalog.h:68-85` (gruppi da tradurre); le righe upstream citate nella tabella del piano in `nut_repo/drivers/`.
+
+      **Modifica:**
+      1. `inline const HidInfo* genericHid2Nut(size_t& n)` dopo `liebertHid2Nut()`, con intestazione: tabella del progetto per le marche sconosciute, ogni riga cita la riga upstream da cui prende percorso e formato oppure `// esp32-nut: <motivo>`.
+      2. Righe BOOL e valori come nella tabella Soluzione Tecnica §1 del piano, nell'ordine delle mappature di oggi; nessuna `ST_FLAG_RW`.
+      3. Commenti al posto di `battery.capacity.full` (ADR 0011 regola 2) e di `ups.beeper.status` (hook, decisione 4).
+      4. Righe `HU_TYPE_CMD` della decisione 6, con i valori upstream (`20`/`30` per i ritardi, `-1`, `10`, `1/2/3`, `2/1/3` per il beeper).
+      5. `genericDelayPaths()` accanto a `apcDelayPaths()`: PowerSummary e Output `DelayBeforeShutdown`/`DelayBeforeStartup` più i campi APC vendor in notazione `apcDelayPaths()`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table -f test_record_replay` verde (nessun comportamento cambia).
+
+      **Fatto:** tabella compilata, nessun chiamante ancora.
+
+      **Blocchi:** se una riga upstream citata ha un percorso o un formato diverso da quello del piano, usa quello upstream e annota la differenza.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — genericHid2Nut(), genericDelayPaths()
+
+      ## Criteri di Completamento
+      - [ ] Una riga per ogni mappatura di oggi, con commento di fonte
+      - [ ] Righe comando equivalenti ai gruppi di CommandCatalog
+      - [ ] Golden di TASK-01 invariati
+    ref: TASK-02
+  - id: TASK-03
+    title: Test della forma di genericHid2Nut() in test_nut_table
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** blindare la tabella generica prima di collegarla.
+
+      **Leggi:** `test/test_nut_table/` (test di copertura delle tabelle di marca, `checkTableCoverage`); `docs/nut-names.txt`.
+
+      **Modifica:** test nuovi:
+      1. nessuna riga `ST_FLAG_RW`, nessun `info_type` che inizia con `unmapped.`;
+      2. ogni `info_type` che non è `BOOL` né comando è in `docs/nut-names.txt` (lettura del file come fanno gli altri test, o lista copiata);
+      3. bind su un insieme sintetico di usage PDC standard (PowerSummary.PresentStatus.*, Input/Output.Voltage, PowerSummary.RemainingCapacity, Battery.Test, PowerSummary.DelayBeforeShutdown/Startup, PowerSummary.AudibleAlarmControl): righe attese legate, ACTIVE dopo il primo valore;
+      4. formati: `battery.voltage` 13.65 diventa `13.7`, `battery.runtime` 299.6 diventa `300`, `battery.capacity` 25200 diventa `7.00`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_table` verde; mutazione: aggiungere `ST_FLAG_RW` a una riga deve far fallire il test 1.
+
+      **Fatto:** test verdi, mutazione rilevata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_table/test_main.cpp — test di genericHid2Nut()
+
+      ## Criteri di Completamento
+      - [ ] Forma, nomi, bind e formati coperti
+      - [ ] Mutazione RW rilevata
+    ref: TASK-03
+  - id: TASK-04
+    title: 'GenericDriver: tabella generica e coda delle estensioni al posto delle mappature'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** una sola fonte per ogni valore: le righe; via le mappature di `GenericDriver`.
+
+      **Leggi:** `lib/USBHostUPS/src/GenericDriver.h`, `GenericDriver.cpp` (`bindNutTable`, `decodeReport`, `parseStringDescriptor`, `collectStringRequests`, `postDecode`, `publishRow`, `publishNutRows`); `NutTable.h` (`bind`, `resolve`); `supersededGenericPaths()` di ogni driver.
+
+      **Modifica:**
+      1. `hid2nut()` di default: `genericHid2Nut()`.
+      2. `NutTable::bind()` con parametri opzionali `skip`/`n_skip` (o `bindAppend`) per accodare le righe generiche non superate; `bindNutTable()` lega tabella del driver, poi coda (solo se la tabella non è `genericHid2Nut()`), poi un solo `resolve()`.
+      3. `decodeReport()`: restano `_decoded_report` e `_active_beeper`; nuovo `virtual void decodeBeeperStatus(UPSData& d, double v, const HIDUsageDef& def)` con le regole di oggi, chiamato per le usage AudibleAlarmControl del report sul solo percorso attivo, e solo se nessuna riga legata con `info_type` `ups.beeper.status` viene dalla tabella del driver (decisione 4).
+      4. Via `mappings`, `_generic_map`, `testResultText`, `_batteryDateStringIndex` e i loro rami; `collectStringRequests()` chiede le righe `StringId` della coda anche quando `requestTableStrings()` è falso (decisione 11).
+      5. Commenti di `postDecode()`, `publishRow()`, `publishNutRows()` riscritti (decisione 10); commenti delle liste `kSupersededGenericPaths` dei driver da mappings a rows of genericHid2Nut().
+      6. Include di `UsageMapIndex.h` tolto da `GenericDriver.h`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay`: `test_golden_registry_all_fixtures` verde senza toccare i golden; `test_golden_generic_all_fixtures` può fallire solo per le voci della decisione 3 (le dichiara TASK-06).
+
+      **Fatto:** nessuna mappatura in GenericDriver; golden del registro identici.
+
+      **Blocchi:** se un golden del registro cambia, non toccare il golden: trova la causa (ordine, precedenza, stringhe) e segnala se non si risolve senza cambiare la regola INIT.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — hook beeper, via UsageMapIndex
+      - lib/USBHostUPS/src/GenericDriver.cpp — binding con coda, via mappature
+      - lib/USBHostUPS/src/NutTable.h — bind con skip
+      - lib/USBHostUPS/src/*Driver.cpp — commenti di supersededGenericPaths
+
+      ## Criteri di Completamento
+      - [ ] Nessuna Mapping in GenericDriver
+      - [ ] Golden del registro invariati
+      - [ ] Liste di poll e stringhe invariate
+    ref: TASK-04
+  - id: TASK-05
+    title: Eaton e Legrand senza UsageMapIndex; cancellare UsageMapIndex.h
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** togliere le ultime mappature scritte a mano e `UsageMapIndex`.
+
+      **Leggi:** `lib/USBHostUPS/src/EatonDriver.h/.cpp` (`_map`, `decodeReport`, `updateNutContext`, `kIModelPath`, `kApparentPowerPath`); `lib/USBHostUPS/src/LegrandDriver.h/.cpp` (`_map`, `legrandBeeperStatus`, `decodeReport`).
+
+      **Modifica:**
+      1. Eaton: in `decodeReport()` cerca (una volta per enumerazione, indici azzerati in `setup()`) le usage di `kIModelPath` e di `kApparentPowerPath` con `NutTable::pathMatches`, ed estrai il valore con `HIDParser::extractUsage` quando arriva il loro report; stesso effetto delle due lambda di oggi.
+      2. Legrand: override di `decodeBeeperStatus()` che chiama `legrandBeeperStatus`; via `decodeReport()`, `setup()` se resta vuoto, `_map`.
+      3. Cancella `lib/USBHostUPS/src/UsageMapIndex.h`; grep di `UsageMapIndex` in lib, src e test: zero risultati.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_eaton_driver -f test_legrand_driver -f test_record_replay`: golden del registro identici.
+
+      **Fatto:** UsageMapIndex.h non esiste; Eaton e Legrand senza Mapping.
+
+      **Blocchi:** se `mge_type` del 3S cambia (snapshot di `ups.type`/righe modello), fermati.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EatonDriver.h, EatonDriver.cpp — contesto senza mappature
+      - lib/USBHostUPS/src/LegrandDriver.h, LegrandDriver.cpp — hook beeper
+      - lib/USBHostUPS/src/UsageMapIndex.h — cancellato
+
+      ## Criteri di Completamento
+      - [ ] Nessun uso di UsageMapIndex
+      - [ ] Golden Eaton e Legrand invariati
+    ref: TASK-05
+  - id: TASK-06
+    title: Test dei driver riallineati e differenze del generico dichiarate nei golden
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** test unitari sul nuovo percorso e differenze per le marche sconosciute scritte e motivate.
+
+      **Leggi:** `test/test_generic_driver/test_main.cpp`, `test/test_eaton_driver/`, `test/test_legrand_driver/`; uscita di `test_golden_generic_all_fixtures`.
+
+      **Modifica:**
+      1. `test_generic_driver`: ogni test chiama `decodeReport` e `postDecode`; `test_communication_lost_gives_no_alarm` diventa commfault con ALARM `Internal UPS fault!`; test nuovi: beeper 1 bit e multibit tramite hook, nessun hook quando la tabella del driver ha `ups.beeper.status`, data batteria da stringa, `battery.capacity.full` assente, formati della decisione 3; `test_engine_superseded_mapping_does_not_write` riscritto sulla coda.
+      2. `test_eaton_driver`, `test_legrand_driver`: allineati se dipendono da `_map`.
+      3. Golden generici: rigenera solo i file generici e scrivi in `test_main.cpp` la lista `kGenericDifferences` (fixture, chiave, prima, dopo, motivo) con un test che controlla che ogni differenza tra il golden vecchio (copiato in `golden/before/`) e il nuovo sia elencata.
+      4. `UPSData.h`: commento su `ups.status.comm_lost` aggiornato (la chiave non esiste più).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_eaton_driver -f test_legrand_driver -f test_record_replay` verde. Mutazioni: togliere un percorso da `kSupersededGenericPaths` di Eaton (rompe il golden del registro); hook del beeper sempre attivo (rompe Eaton).
+
+      **Fatto:** ogni differenza del generico motivata; golden del registro intatti.
+
+      **Blocchi:** una differenza non spiegata dalla decisione 3 va segnalata, non dichiarata.
+
+      ## File Coinvolti
+      - test/test_generic_driver/test_main.cpp — test riallineati
+      - test/test_eaton_driver/, test/test_legrand_driver/ — se servono
+      - test/test_record_replay/test_main.cpp, golden/ — differenze dichiarate
+      - lib/USBHostUPS/src/UPSData.h — commento
+
+      ## Criteri di Completamento
+      - [ ] Differenze del generico elencate con motivo
+      - [ ] Mutazioni rilevate
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Comandi solo da tabella: logica in HidControl e NutTable, CommandCatalog.h cancellato'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** tutti i comandi dalle righe `HU_TYPE_CMD`, via la logica di presenza e di passi a gruppi.
+
+      **Leggi:** `lib/USBHostUPS/src/CommandCatalog.h`, `HidControl.h`, `IHidControlPort.h`, `IUpsControlPort.h`, `IUPSDriver.h:170-220`, `USBHostUPS.cpp` intorno alle righe 801-1040, `GenericDriver.cpp` (`planSet`, `writableVariables`).
+
+      **Modifica:**
+      1. `GenericDriver`: override `commandTable()` restituisce `genericHid2Nut()`, `delayPaths()` restituisce `genericDelayPaths()`.
+      2. `NutTable.h`: `parseDelayParam` e `applyDefaultDelays(data, usages, off, on, delay_vars, const DelayPaths& paths, saved)` spostate da CommandCatalog; `GenericDriver::planSet` e `USBHostUPS.cpp` le usano.
+      3. `HidControl.h`: funzioni statiche pubbliche `buildCommands` (ex `buildFromTable` senza `allow`), `cmdField`, `cmdDefault`, `cmdValueFits`, `fitsField`, `WriteStep`, `StepsResult`, `kNoDelay`, `resolveShutdownSteps` e `resolveWrite` solo con tabella; `supportedCommands()` senza tabella restituisce lista vuota; in `executeCommand()` il beeper si scrive sempre con `setBeeperField()`.
+      4. `USBHostUPS.cpp`: `activeBeeper` come funzione statica privata usata da `getActiveBeeperPath()`.
+      5. `commandAllowList()` tolta da `IUPSDriver`, `IUpsControlPort`, `USBHostUPS` (decisione 8); `port.setBeeper` lasciato solo se ha altri chiamanti (grep).
+      6. Cancella `lib/USBHostUPS/src/CommandCatalog.h`; aggiorna commenti in `NutTable.h`, `IHidControlPort.h`, `IUPSDriver.h`, `HIDParser.cpp`, `USBHostUPS.h`.
+
+      **Verifica:** build nativa dei test che compilano ancora; `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_hid_control`: LIST CMD dei golden registro e generico invariati (salvo differenze già dichiarate). I test che includono CommandCatalog.h si sistemano in TASK-09.
+
+      **Fatto:** `CommandCatalog.h` non esiste; nessun ramo senza tabella in HidControl.
+
+      **Blocchi:** se LIST CMD cambia su una fixture col driver del registro, fermati.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/HidControl.h — logica comandi
+      - lib/USBHostUPS/src/NutTable.h — parseDelayParam, applyDefaultDelays
+      - lib/USBHostUPS/src/GenericDriver.h, GenericDriver.cpp — commandTable, delayPaths
+      - lib/USBHostUPS/src/USBHostUPS.h, USBHostUPS.cpp — activeBeeper, applyDefaultDelays, via commandAllowList
+      - lib/USBHostUPS/src/IUPSDriver.h, IUpsControlPort.h, IHidControlPort.h — via commandAllowList, commenti
+      - lib/USBHostUPS/src/CommandCatalog.h — cancellato
+
+      ## Criteri di Completamento
+      - [ ] CommandCatalog.h rimosso
+      - [ ] LIST CMD invariato sulle fixture
+      - [ ] Nessun commandAllowList nel codice
+    ref: TASK-07
+  - id: TASK-08
+    title: 'UpsCommands.h: namespace CommandCatalog rinominato UpsCommands'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessun nome CommandCatalog nel codice (decisione 9).
+
+      **Leggi:** `lib/USBHostUPS/src/UpsCommands.h`; chiamanti di `CommandCatalog::find` e `CommandCatalog::table`.
+
+      **Modifica:**
+      1. `namespace UpsCommands` in `UpsCommands.h`, commento di testa senza riferimento a CommandCatalog.h.
+      2. `lib/NUTServer/src/NUTServer.cpp`, `lib/WebApi/src/WebApiJson.cpp`, `src/network/web_config_server.cpp`, `lib/USBHostUPS/src/USBHostUPS.cpp`, `HidControl.h`: `UpsCommands::find`/`UpsCommands::table`.
+      3. Grep di `CommandCatalog` in lib/ e src/: zero risultati.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila; `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_server -f test_web_api` verde dopo TASK-09 se i test usano ancora il nome vecchio.
+
+      **Fatto:** nessun CommandCatalog in lib/ e src/.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UpsCommands.h — namespace
+      - lib/NUTServer/src/NUTServer.cpp, lib/WebApi/src/WebApiJson.cpp, src/network/web_config_server.cpp, lib/USBHostUPS/src/USBHostUPS.cpp, lib/USBHostUPS/src/HidControl.h — chiamanti
+
+      ## Criteri di Completamento
+      - [ ] Zero occorrenze di CommandCatalog in lib/ e src/
+      - [ ] Build S3 ok
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Test dei comandi: test_hid_commands, test esistenti e strutturali EP-006 aggiornati'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** suite dei comandi sul nuovo codice, controlli strutturali verdi.
+
+      **Leggi:** `test/test_command_catalog/test_main.cpp`; i test che citano CommandCatalog: `test_hid_control`, `test_hid_transport`, `test_legrand_driver`, `test_liebert_driver`, `test_nut_server`, `test_powercom_driver`, `test_record_replay`, `test_rw_catalog`, `test_ups_control_port`, `test_ups_source`.
+
+      **Modifica:**
+      1. `git mv test/test_command_catalog test/test_hid_commands`: test con tabella su `HidControl::*`; i test dei gruppi senza tabella diventano test su `genericHid2Nut()` con le stesse attese (LIST CMD, valori scritti, passi di shutdown, beeper.mute solo se 3 sta nel campo); via i test di `apcCsReturnField`/`rebootField` sul ramo senza tabella.
+      2. `test_record_replay/test_main.cpp:300-320`: il test del Back-UPS CS usa `HidControl::resolveShutdownSteps` con `apcHid2Nut()`.
+      3. Altri test: `NutTable::applyDefaultDelays` con `genericDelayPaths()` dove passavano nullptr; `UpsCommands::find`; mock senza `commandAllowList`.
+      4. Strutturali (`test_hid_transport`, `test_ups_source`, `test_ups_control_port`): la lista degli include vietati tiene `HidControl.h`, `NutTable.h` e il nome del vecchio file solo se serve ancora come guardia; nessun header HID nei consumatori.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native` (suite completa) verde. Mutazione: togliere la riga generica `shutdown.stop` deve rompere LIST CMD dei golden generici e un test di test_hid_commands.
+
+      **Fatto:** suite nativa verde, strutturali verdi.
+
+      **Blocchi:** se un test strutturale richiede di includere un header HID in un consumatore, fermati.
+
+      ## File Coinvolti
+      - test/test_hid_commands/test_main.cpp — ex test_command_catalog
+      - test/test_hid_control/, test_hid_transport/, test_legrand_driver/, test_liebert_driver/, test_nut_server/, test_powercom_driver/, test_record_replay/, test_rw_catalog/, test_ups_control_port/, test_ups_source/ — riferimenti aggiornati
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] Strutturali EP-006 verdi
+      - [ ] Mutazione shutdown.stop rilevata
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Chiusura: documenti, note di rilascio, build delle tre immagini con RAM/flash e OTA sul 3S'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la convergenza con documenti allineati e misure.
+
+      **Leggi:** `docs/adr/0011-single-hid-to-nut-table-per-subdriver.md`, `docs/adr/0004-*.md`, `docs/adr/0008-*.md`, `docs/adr/0010-*.md`, `docs/plans/usb-layer-review.md`, `docs/plans/nutdrv-qx-support.md`; note di rilascio v1.12.0 (dove le hanno messe US-106 e US-078); misure di TASK-01.
+
+      **Modifica:**
+      1. ADR 0011: US-079 fatta, emendamento di ADR 0004 in vigore, riferimenti a `CommandCatalog`/`UsageMapIndex` sostituiti con `HidControl`, `genericHid2Nut()`, `NutTable::applyDefaultDelays`; ADR 0004 con la nota dell'emendamento; ADR 0008/0010 e i due piani in docs/plans aggiornati dove nominano i file rimossi.
+      2. Note di rilascio v1.12.0: differenze per le marche sconosciute (da `kGenericDifferences`), nessuna per le marche note, impatto RAM/flash.
+      3. Build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`: RAM e flash dopo, confronto con TASK-01 in `docs/test-results/US-079-baseline.md`.
+      4. Con l'ok dell'utente: OTA sull'Eaton 3S (credenziali nel file JSON della scheda di test, mai stampate), controllo di `upsc` e `upscmd -l` uguali a prima.
+
+      **Verifica:** suite nativa completa verde; tre build ok; grep `CommandCatalog|UsageMapIndex` in lib, src, test: zero (salvo le guardie dei test strutturali, se tenute).
+
+      **Fatto:** documenti aggiornati, misure riportate, OTA fatta o rimandata con motivo.
+
+      **Blocchi:** OTA solo con l'ok esplicito dell'utente.
+
+      ## File Coinvolti
+      - docs/adr/0011-single-hid-to-nut-table-per-subdriver.md, docs/adr/0004-*.md, docs/adr/0008-*.md, docs/adr/0010-*.md — riferimenti
+      - docs/plans/usb-layer-review.md, docs/plans/nutdrv-qx-support.md — riferimenti
+      - note di rilascio v1.12.0 — differenze e misure
+      - docs/test-results/US-079-baseline.md — RAM/flash prima e dopo
+
+      ## Criteri di Completamento
+      - [ ] ADR e piani senza riferimenti ai file rimossi
+      - [ ] Note di rilascio con differenze e RAM/flash
+      - [ ] Tre build ok
+    ref: TASK-10

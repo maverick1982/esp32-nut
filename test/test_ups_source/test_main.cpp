@@ -20,8 +20,8 @@
 #ifdef NUT_TABLE_H
 #error "NutTable.h included by the consumer headers (US-103)"
 #endif
-#ifdef COMMAND_CATALOG_H
-#error "CommandCatalog.h included by the consumer headers (US-103)"
+#ifdef HID_CONTROL_H
+#error "HidControl.h included by the consumer headers (US-103, US-079)"
 #endif
 #ifdef I_USB_HOST_UPS_H
 #error "IUSBHostUPS.h included by the consumer headers (US-103)"
@@ -59,7 +59,7 @@ public:
     bool isConnected() const override { return true; }
 
     std::vector<const UPSCommandInfo*> getSupportedCommands() const override {
-        return { CommandCatalog::find("beeper.enable"), CommandCatalog::find("shutdown.stop") };
+        return { UpsCommands::find("beeper.enable"), UpsCommands::find("shutdown.stop") };
     }
     CommandResult executeCommand(const char* name, const char* param = nullptr) override {
         for (const auto* c : getSupportedCommands()) {
@@ -222,7 +222,7 @@ void test_consumer_sources_include_no_hid_header(void) {
     };
     const char* forbidden[] = {
         "#include \"IUSBHostUPS.h\"", "#include \"HIDParser.h\"", "#include \"HIDUsages.h\"",
-        "#include \"NutTable.h\"", "#include \"CommandCatalog.h\"",
+        "#include \"NutTable.h\"",
         // The HID side of commands and SET VAR (US-105)
         "#include \"HidControl.h\"", "#include \"IHidControlPort.h\"",
     };

@@ -23,7 +23,7 @@
 #include "LegrandDriver.h"
 #include "LiebertDriver.h"
 #include "DriverRegistry.h"
-#include "CommandCatalog.h"
+#include "HidControl.h"
 #include "BeeperLogic.h"
 
 class ReplayMockHost : public IHidTransport {
@@ -105,6 +105,21 @@ public:
         return desc;
     }
 
+    // LIST CMD of the replayed device, space separated: same inputs as
+    // IUSBHostUPS::getSupportedCommands(), with the replayed data
+    static std::string listCmd(ReplaySession& s) {
+        bool beeper = s.host.supportsBeeperToggle() && s.ups_data.hasKey("ups.beeper.status");
+        std::string actual;
+        size_t n_cmd = 0;
+        const NutTable::HidInfo* cmd_table = s.driver->commandTable(n_cmd); // US-074: the driver's command rows
+        for (const auto* c : HidControl::buildCommands(s.host.getUsages(), beeper, s.driver->shutdownCommandsSupported(),
+                                                       s.driver->beeperMuteSupported(), cmd_table, n_cmd)) {
+            if (!actual.empty()) actual += " ";
+            actual += c->name;
+        }
+        return actual;
+    }
+
     // LIST RW as the NUT server builds it: "name:aux" in the order of writableVariables()
     // (strcasecmp, as upsd), space separated (US-067)
     static std::string listRW(const IUPSDriver* driver, const UPSData& data) {
@@ -124,7 +139,10 @@ public:
 
     // Loads the fixture, dispatches the driver and replays every scenario, checking the
     // fixture's own expectations. False (test already failed) when the fixture is unusable.
-    static bool replay(const char* filePath, ReplaySession& s) {
+    // forceGeneric: GenericDriver instead of the registry's driver, as for a brand the
+    // registry does not know (US-079); the fixture's expectations, written for its own
+    // driver, are not checked then.
+    static bool replay(const char* filePath, ReplaySession& s, bool forceGeneric = false) {
         std::ifstream f(filePath);
         if (!f.is_open()) {
             std::string msg = "Cannot open fixture file: ";
@@ -197,7 +215,8 @@ public:
 
         // 3. Dispatch Driver
         // The strings tell apart the subdrivers of a shared VID/PID, as on the device (US-097)
-        s.driver = DriverRegistry::create(vid, pid, doc["manufacturer"] | "", doc["product"] | "");
+        s.driver = forceGeneric ? new GenericDriver()
+                                : DriverRegistry::create(vid, pid, doc["manufacturer"] | "", doc["product"] | "");
         IUPSDriver* driver = s.driver;
 
         // Match quirks
@@ -229,9 +248,9 @@ public:
         // As USBHostUPS after the strings are read (issue #76)
         driver->formatDeviceStrings(ups_data);
         // ups.delay.* defaults, as USBHostUPS right after formatDeviceStrings() (US-058)
-        CommandCatalog::applyDefaultDelays(ups_data, host._parser.getUsages(), driver->defaultOffDelay(),
-                                           driver->defaultOnDelay(), driver->delayVariablesSupported(),
-                                           driver->delayPaths());
+        NutTable::applyDefaultDelays(ups_data, host._parser.getUsages(), driver->defaultOffDelay(),
+                                     driver->defaultOnDelay(), driver->delayVariablesSupported(),
+                                     driver->delayPaths());
 
         // 5. Replay Scenarios
         JsonArray scenarios = doc["scenarios"].as<JsonArray>();
@@ -262,6 +281,8 @@ public:
 
             // Set driver.name directly since loop() isn't called in the replay runner
             ups_data.set("driver.name", driver->getDriverName());
+
+            if (forceGeneric) continue;
 
             // Assert Expectations
             JsonObject exp = sc["expected_ups_data"].as<JsonObject>();
@@ -315,18 +336,7 @@ public:
         IUPSDriver* driver = s.driver;
 
         if (expectedCommands) {
-            // Same inputs as IUSBHostUPS::getSupportedCommands(); ups_data is the replayed data
-            bool beeper = host.supportsBeeperToggle() && ups_data.hasKey("ups.beeper.status");
-            std::string actual;
-            size_t n_cmd = 0;
-            const NutTable::HidInfo* cmd_table = driver->commandTable(n_cmd); // US-074: the driver's command rows
-            for (const auto* c : CommandCatalog::build(host.getUsages(), beeper, driver->shutdownCommandsSupported(),
-                                                               driver->beeperMuteSupported(), driver->commandAllowList(),
-                                                               cmd_table, n_cmd)) {
-                if (!actual.empty()) actual += " ";
-                actual += c->name;
-            }
-            TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, actual.c_str(), "supported NUT commands");
+            TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, listCmd(s).c_str(), "supported NUT commands");
         }
         if (checkUsages) checkUsages(host.getUsages());
         if (expectedRW) {
@@ -377,13 +387,104 @@ public:
     static std::string snapshot(const char* filePath) {
         ReplaySession s;
         if (!replay(filePath, s)) return "";
+        return snapshotOf(s.ups_data);
+    }
+
+    static std::string snapshotOf(const UPSData& data) {
         std::vector<std::string> lines;
-        for (const auto& p : s.ups_data.getAll()) lines.push_back(std::string(p.key.c_str()) + "=" + p.value.c_str());
+        for (const auto& p : data.getAll()) lines.push_back(std::string(p.key.c_str()) + "=" + p.value.c_str());
         std::sort(lines.begin(), lines.end());
         std::string out;
         for (const auto& l : lines) out += l + "\n";
-        out += "ups.status=" + std::string(UPSData::computeUPSStatusString(s.ups_data).c_str()) + "\n";
+        out += "ups.status=" + std::string(UPSData::computeUPSStatusString(data).c_str()) + "\n";
         return out;
+    }
+
+    /**
+     * Everything a fixture gives (US-079 baseline): the snapshot after the replay, LIST CMD,
+     * LIST RW, then, after the end of the first full poll and the last report again (as
+     * runFixtureTest), LIST RW and the snapshot, then the control requests of the first 35 s
+     * of loop() (full poll, quick polls, second full poll): "S<index>" for a string,
+     * "<id>/<type>" for a report. forceGeneric: replayed with GenericDriver.
+     */
+    static std::string goldenText(const char* filePath, bool forceGeneric) {
+        ReplaySession s;
+        if (!replay(filePath, s, forceGeneric)) return "";
+        std::string out = "[snapshot]\n" + snapshotOf(s.ups_data);
+        out += "[cmd]\n" + listCmd(s) + "\n";
+        out += "[rw]\n" + listRW(s.driver, s.ups_data) + "\n";
+        static_cast<GenericDriver*>(s.driver)->completeInitialPoll();
+        if (!s.reports.empty()) {
+            const ReplayedReport& r = s.reports.back();
+            s.driver->decodeReport(&s.host, r.id, r.type, r.data.data(), r.data.size(), s.ups_data);
+            s.driver->postDecode(&s.host, r.id, r.type, r.data.data(), r.data.size(), s.ups_data);
+        }
+        out += "[rw.final]\n" + listRW(s.driver, s.ups_data) + "\n";
+        out += "[snapshot.final]\n" + snapshotOf(s.ups_data);
+        s.host._requestedReports.clear();
+        s.host._requestedStrings.clear();
+        // The mock records reports and strings apart: one loop() makes at most one request,
+        // so a request is the one whose list grew in that call
+        std::string requests;
+        for (uint32_t now = 1; now <= 35000; now += 25) {
+            size_t nr = s.host._requestedReports.size(), ns = s.host._requestedStrings.size();
+            s.driver->loop(&s.host, s.ups_data, now);
+            if (s.host._requestedStrings.size() > ns) {
+                requests += " S" + std::to_string(s.host._requestedStrings.back());
+            } else if (s.host._requestedReports.size() > nr) {
+                const auto& r = s.host._requestedReports.back();
+                requests += " " + std::to_string(r.first) + "/" + std::to_string(r.second);
+            }
+        }
+        out += "[requests]\n" + requests + "\n";
+        return out;
+    }
+
+    // The golden file of a fixture: test/test_record_replay/golden/<fixture>.<registry|generic>.txt
+    static std::string goldenPath(const char* filePath, bool forceGeneric) {
+        std::string name = filePath;
+        size_t slash = name.find_last_of('/');
+        if (slash != std::string::npos) name = name.substr(slash + 1);
+        size_t dot = name.rfind(".json");
+        if (dot != std::string::npos) name = name.substr(0, dot);
+        return "test/test_record_replay/golden/" + name + (forceGeneric ? ".generic.txt" : ".registry.txt");
+    }
+
+    /**
+     * goldenText() against its golden file (US-079). With the environment variable
+     * ESP32NUT_WRITE_GOLDEN set the file is written instead. A difference fails with the
+     * first differing lines.
+     */
+    static void checkGolden(const char* filePath, bool forceGeneric) {
+        std::string actual = goldenText(filePath, forceGeneric);
+        std::string path = goldenPath(filePath, forceGeneric);
+        if (getenv("ESP32NUT_WRITE_GOLDEN")) {
+            std::ofstream o(path, std::ios::binary);
+            TEST_ASSERT_TRUE_MESSAGE(o.is_open(), path.c_str());
+            o << actual;
+            return;
+        }
+        std::ifstream f(path, std::ios::binary);
+        if (!f.is_open()) {
+            TEST_FAIL_MESSAGE(("missing golden file " + path).c_str());
+            return;
+        }
+        std::stringstream buffer;
+        buffer << f.rdbuf();
+        std::string expected = buffer.str();
+        if (expected == actual) return;
+        std::istringstream e(expected), a(actual);
+        std::string le, la, msg = path + ":";
+        int line = 0, shown = 0;
+        while (shown < 6) {
+            bool he = (bool)std::getline(e, le), ha = (bool)std::getline(a, la);
+            if (!he && !ha) break;
+            line++;
+            if (he && ha && le == la) continue;
+            msg += " [line " + std::to_string(line) + "] -" + (he ? le : "<eof>") + " +" + (ha ? la : "<eof>");
+            shown++;
+        }
+        TEST_FAIL_MESSAGE(msg.c_str());
     }
 
     // A driver of class D with its poll hooks public (US-076)

@@ -59,6 +59,10 @@ public:
         data.set("ups.beeper.status", enable ? "enabled" : "disabled");
         return true;
     }
+    // As GenericDriver (US-079): the commands of the genericHid2Nut() rows, the beeper written
+    // on the field of the beeper.enable / beeper.disable row
+    const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    bool setBeeperField(const HIDUsageDef&, bool enable) override { return setBeeper(enable); }
 
     // Writes requested by executeCommand(): {path, value}, failed ones included.
     // failPaths: fields whose write fails (US-058)
@@ -140,6 +144,18 @@ void setUp(void) {
     mockHost.connected = true;
     mockHost.stale = false;
     mockHost._mockUsages.clear();
+    // The beeper field of getActiveBeeperPath(): the beeper commands come from the rows of
+    // genericHid2Nut(), which need the field in the descriptor (US-079)
+    HIDUsageDef beeper;
+    beeper.usage = 0x0084005a;
+    beeper.report_type = 0x03;
+    beeper.report_id = 0x20;
+    beeper.bit_size = 8;
+    beeper.logical_min = 1;
+    beeper.logical_max = 3;
+    beeper.found = true;
+    strncpy(beeper.path, "UPS.PowerSummary.AudibleAlarmControl", sizeof(beeper.path) - 1);
+    mockHost._mockUsages.push_back(beeper);
     mockHost.setBeeperOk = true;
     mockHost.writeOk = true;
     mockHost.writes.clear();
@@ -626,7 +642,7 @@ static void addDelayUsages(bool shutdown, bool startup, bool reboot) {
     if (startup) add(P_ST, 0x00840056);
     if (reboot) add(P_RB, 0x00840055);
     // As USBHostUPS at connection: ups.delay.* with the NUT defaults
-    CommandCatalog::applyDefaultDelays(mockHost.data, mockHost._mockUsages, 20, 30, true);
+    NutTable::applyDefaultDelays(mockHost.data, mockHost._mockUsages, 20, 30, true, NutTable::genericDelayPaths());
 }
 
 // Writes recorded by the mock as "path=value" joined by spaces, values as signed

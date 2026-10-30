@@ -21,7 +21,7 @@ public:
     // Rows of cps_hid2nut (cps-hid.c), NutTable.h (US-066, US-075)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::cpsHid2Nut(n); }
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::cpsDelayPaths(); }
-    // Standard mappings whose keys come from cpsHid2Nut() (US-075)
+    // genericHid2Nut() rows whose keys come from cpsHid2Nut() (US-075)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of cps_hid2nut (US-075)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::cpsHid2Nut(n); }

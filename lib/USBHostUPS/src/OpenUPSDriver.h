@@ -16,7 +16,7 @@ public:
 
     // Rows of openups_hid2nut (openups-hid.c), NutTable.h (US-078)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::openupsHid2Nut(n); }
-    // Standard mappings whose keys come from openupsHid2Nut() (US-078)
+    // genericHid2Nut() rows whose keys come from openupsHid2Nut() (US-078)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of openups_hid2nut: none (US-078)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::openupsHid2Nut(n); }

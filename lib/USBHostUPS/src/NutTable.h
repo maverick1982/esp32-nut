@@ -74,7 +74,10 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <vector>
+#include <utility>
 #include <Arduino.h>
 #include "HIDUsages.h"
 #include "UPSData.h"
@@ -84,10 +87,10 @@
  * HID -> NUT table of a subdriver, shaped like hid_info_t of usbhid-ups (US-066).
  *
  * This is the single table of each driver (approach C, ADR 0011), in the original upstream
- * order. The engine handles writable, read-only, BOOL status and HU_FLAG_ABSENT rows; the
- * migrations (US-073..US-079, US-106) fill the tables one subdriver at a time, so most
- * tables still hold only their ST_FLAG_RW rows (US-066). Nothing here assumes that a row
- * is RW except the helpers that build the LIST RW answer.
+ * order. The engine handles writable, read-only, BOOL status, HU_FLAG_ABSENT and command rows;
+ * since US-079 every value and every command of the HID drivers comes from these tables, the
+ * brands without a subdriver from genericHid2Nut(). Nothing here assumes that a row is RW
+ * except the helpers that build the LIST RW answer.
  *
  * Paths use the notation of HIDUsageDef::path (names from NUTUsages.h, unnamed usages as
  * "0x%08X") plus "[N]" after an indexed collection (HIDUsageDef::coll_index). Each row
@@ -105,6 +108,10 @@ constexpr uint16_t HU_FLAG_QUICK_POLL = 16;
 constexpr uint16_t HU_TYPE_CMD = 64;
 constexpr uint16_t HU_FLAG_ENUM = 128;
 constexpr uint16_t HU_FLAG_PARAM_REQUIRED = 256;
+// esp32-nut, not upstream: the row's path matches a usage by its names whatever the collection
+// indices, as the hand-written mappings of GenericDriver did (strcmp on the path). Only the
+// rows of genericHid2Nut() have it (US-079)
+constexpr uint16_t HU_FLAG_ANY_INDEX = 0x8000;
 
 // How a HID value becomes the NUT value (the info_lkp_t of the upstream row)
 enum class Conv : uint8_t {
@@ -298,7 +305,7 @@ inline void applyStatusToken(StatusBits& s, const char* token) {
  * known so far: f(key, value) with value nullptr when the key must not exist.
  * online/offline make ups.status.ac_present ("1", "0", or no key when neither is set: no
  * power state, as ups_status_set() sees it), fullycharged/notfullycharged make
- * ups.status.fully_charged; the other bits keep the names the generic mappings already use,
+ * ups.status.fully_charged; the other bits keep the names the generic mappings used,
  * or ups.status.<token> for the bits no ups.status token is rendered from yet.
  */
 template <typename F>
@@ -430,7 +437,7 @@ struct Context {
 enum class DecodeResult { OK, FAIL, DEFER, CLEAR };
 
 // Instant command rows (HU_TYPE_CMD, US-074): bound to the device, never read, published or
-// resolved; CommandCatalog takes their path and value (find_nut_info / instcmd upstream)
+// resolved; HidControl takes their path and value (find_nut_info / instcmd upstream)
 inline bool isCommandRow(const HidInfo& info) {
     return (info.hidflags & HU_TYPE_CMD) != 0;
 }
@@ -1319,6 +1326,13 @@ inline bool pathMatches(const HIDUsageDef& u, const char* path) {
     }
 }
 
+// A usage with the path of a row: pathMatches(), or the names only for HU_FLAG_ANY_INDEX rows
+inline bool rowMatches(const HIDUsageDef& u, const HidInfo& row) {
+    if (!row.hidpath) return false;
+    if (row.hidflags & HU_FLAG_ANY_INDEX) return equalsIgnoreCase(u.path, row.hidpath);
+    return pathMatches(u, row.hidpath);
+}
+
 // A table row bound to the attached device, as an hid_info_t with its hiddata
 struct Bound {
     const HidInfo* info;
@@ -1368,17 +1382,27 @@ inline void resolve(std::vector<Bound>& binds) {
     }
 }
 
+inline bool pathListed(const char* path, const char* const* list, size_t n) {
+    for (size_t k = 0; k < n; k++) {
+        if (strcmp(path, list[k]) == 0) return true;
+    }
+    return false;
+}
+
 /**
- * Binds the rows of a table to the usages of the attached device. HU_FLAG_ABSENT rows
- * need their path too and take dfl right away, as in hid_ups_walk().
+ * Binds the rows of a table to the usages of the attached device, appending them to binds.
+ * HU_FLAG_ABSENT rows need their path too and take dfl right away, as in hid_ups_walk().
+ * Rows whose path is in skip are left out (US-079: the genericHid2Nut() rows a driver leaves
+ * to its own table); the caller applies resolve() once every table is appended.
  */
-inline std::vector<Bound> bind(const HidInfo* table, size_t n, const std::vector<HIDUsageDef>& usages) {
-    std::vector<Bound> binds;
-    if (!table) return binds;
+inline void bindRows(std::vector<Bound>& binds, const HidInfo* table, size_t n, const std::vector<HIDUsageDef>& usages,
+                     const char* const* skip = nullptr, size_t n_skip = 0) {
+    if (!table) return;
     for (size_t r = 0; r < n; r++) {
+        if (pathListed(table[r].hidpath, skip, n_skip)) continue;
         int idx = -1;
         for (size_t u = 0; u < usages.size(); u++) {
-            if (pathMatches(usages[u], table[r].hidpath)) { idx = (int)u; break; }
+            if (rowMatches(usages[u], table[r])) { idx = (int)u; break; }
         }
         if (idx < 0) continue;
         int twin = -1;
@@ -1403,6 +1427,11 @@ inline std::vector<Bound> bind(const HidInfo* table, size_t n, const std::vector
         if (isInternalRow(table[r])) b.role = Bound::Role::ACTIVE;
         binds.push_back(b);
     }
+}
+
+inline std::vector<Bound> bind(const HidInfo* table, size_t n, const std::vector<HIDUsageDef>& usages) {
+    std::vector<Bound> binds;
+    bindRows(binds, table, n, usages);
     resolve(binds);
     return binds;
 }
@@ -1529,18 +1558,20 @@ struct SetPlan {
 
 // Paths of the HU_FLAG_ABSENT ups.delay.shutdown / ups.delay.start rows of a subdriver,
 // in the notation of this table. The variables exist when one of the paths is in the
-// descriptor, whatever the report type (CommandCatalog::applyDefaultDelays).
+// descriptor, whatever the report type (applyDefaultDelays).
 struct DelayPaths {
     const char* const* shutdown;
     size_t n_shutdown;
     const char* const* startup;
     size_t n_startup;
+    bool any_index;     // matched as the HU_FLAG_ANY_INDEX rows (genericDelayPaths(), US-079)
 };
 
-inline bool hasAnyPath(const std::vector<HIDUsageDef>& usages, const char* const* paths, size_t n) {
+inline bool hasAnyPath(const std::vector<HIDUsageDef>& usages, const char* const* paths, size_t n,
+                       bool any_index = false) {
     for (size_t i = 0; i < n; i++) {
         for (const auto& u : usages) {
-            if (pathMatches(u, paths[i])) return true;
+            if (any_index ? equalsIgnoreCase(u.path, paths[i]) : pathMatches(u, paths[i])) return true;
         }
     }
     return false;
@@ -1597,12 +1628,69 @@ inline const DelayPaths* legrandDelayPaths() {
     return &p;
 }
 
+// genericHid2Nut() (US-079): the paths of every subdriver, PowerSummary, Output and the APC
+// APCGeneralCollection fields in the notation of apcDelayPaths() (US-058)
+inline const DelayPaths* genericDelayPaths() {
+    static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown", "UPS.Output.DelayBeforeShutdown",
+                                      "UPS.0xFF860005.0xFF86007D" };
+    static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup", "UPS.Output.DelayBeforeStartup",
+                                      "UPS.0xFF860005.0xFF86007E" };
+    static const DelayPaths p = { sd, 3, st, 3, true };
+    return &p;
+}
+
+// Delay given as INSTCMD parameter or SET VAR value: decimal integer, optional '-', >= -1.
+// usbhid-ups uses atol(), which turns "abc" into 0 (immediate shutdown): rejected here on purpose.
+inline bool parseDelayParam(const char* text, int32_t& out) {
+    if (!text || !*text) return false;
+    const char* p = text;
+    if (*p == '-') p++;
+    if (*p < '0' || *p > '9') return false;
+    char* end = nullptr;
+    long long v = strtoll(text, &end, 10);
+    if (*end != ' ' || v < -1 || v > INT32_MAX) return false;
+    out = (int32_t)v;
+    return true;
+}
+
+/**
+ * ups.delay.shutdown and ups.delay.start with NUT semantics: configured delays, never read
+ * from the device (HU_FLAG_ABSENT in mge-hid.c, apc-hid.c, cps-hid.c, powercom-hid.c), set
+ * by the host at connection with the driver defaults (IUPSDriver::defaultOffDelay /
+ * defaultOnDelay). Only when the driver's subdriver declares them (delay_vars, see
+ * IUPSDriver::delayVariablesSupported) and the device has one of their paths in any report
+ * type, as upstream; what the device reports in DelayBeforeShutdown/Startup is ups.timer.*.
+ * paths: the subdriver's own paths (IUPSDriver::delayPaths, US-066), genericDelayPaths() for
+ * the brands without one (US-079); nullptr sets nothing.
+ * saved: the values written with SET VAR (IDriverVarStore, US-067). A saved value replaces
+ * the default only for a variable set by this call, and only while it is still an integer
+ * >= 0; the host calls this again after each string descriptor, so it never falls back.
+ */
+inline void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& usages,
+                               int32_t off_delay, int32_t on_delay, bool delay_vars,
+                               const DelayPaths* paths,
+                               const std::vector<std::pair<String, String>>* saved = nullptr) {
+    if (!delay_vars || !paths) return;
+    bool sd = hasAnyPath(usages, paths->shutdown, paths->n_shutdown, paths->any_index);
+    bool st = hasAnyPath(usages, paths->startup, paths->n_startup, paths->any_index);
+    if (saved) {
+        for (const auto& kv : *saved) {
+            int32_t v = 0;
+            if (!parseDelayParam(kv.second.c_str(), v) || v < 0) continue;
+            if (sd && strcmp(kv.first.c_str(), "ups.delay.shutdown") == 0) off_delay = v;
+            if (st && strcmp(kv.first.c_str(), "ups.delay.start") == 0) on_delay = v;
+        }
+    }
+    if (sd) data.set("ups.delay.shutdown", String((int)off_delay));
+    if (st) data.set("ups.delay.start", String((int)on_delay));
+}
+
 // Subdriver tables, rows in upstream order with their source line. mgeHid2Nut() holds every
 // row of mge_hid2nut (US-066, US-073, US-074, US-107), instant commands and ups.alarm rows
 // included, but the rows of the stateful mge functions (US-070); apcHid2Nut() (US-076),
 // cpsHid2Nut() (US-075), powercomHid2Nut() (US-077), ecoflowHid2Nut(), openupsHid2Nut() (US-078),
 // legrandHid2Nut() and liebertHid2Nut() (US-106) every row of their upstream table. ups.delay.* is left to
-// CommandCatalog::applyDefaultDelays.
+// NutTable::applyDefaultDelays.
 
 inline const HidInfo* mgeHid2Nut(size_t& n) {
     static const HidInfo t[] = {
@@ -1682,8 +1770,8 @@ inline const HidInfo* mgeHid2Nut(size_t& n) {
         { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
         // mge-hid.c:2065 UPS.Flow.[4].ConfigPercentLoad
         { "ups.load.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.Flow.[4].ConfigPercentLoad", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ups.delay.start (mge-hid.c:2066) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
-        // ups.delay.shutdown (mge-hid.c:2067) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // ups.delay.start (mge-hid.c:2066) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (mge-hid.c:2067) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
         // mge-hid.c:2068 UPS.PowerSummary.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // mge-hid.c:2069 UPS.PowerSummary.DelayBeforeShutdown
@@ -2196,24 +2284,24 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
         { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.1f", 0, Conv::Number, nullptr, 0 },
         // apc-hid.c:353 UPS.PowerConverter.PercentLoad
         { "ups.load", 0, 0, "UPS.PowerConverter.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ups.delay.start (apc-hid.c:355) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
-        // ups.delay.shutdown (apc-hid.c:356) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // ups.delay.start (apc-hid.c:355) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (apc-hid.c:356) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
         // apc-hid.c:357 UPS.PowerSummary.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // apc-hid.c:358 UPS.PowerSummary.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // apc-hid.c:359 UPS.PowerSummary.DelayBeforeReboot
         { "ups.timer.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ups.delay.start (apc-hid.c:361) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
-        // ups.delay.shutdown (apc-hid.c:362) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // ups.delay.start (apc-hid.c:361) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (apc-hid.c:362) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
         // apc-hid.c:363 UPS.Output.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.Output.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // apc-hid.c:364 UPS.Output.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.Output.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // apc-hid.c:365 UPS.Output.DelayBeforeReboot
         { "ups.timer.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ups.delay.start (apc-hid.c:367) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
-        // ups.delay.shutdown (apc-hid.c:368) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // ups.delay.start (apc-hid.c:367) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (apc-hid.c:368) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
         // apc-hid.c:369 UPS.APCGeneralCollection.APCDelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.0xFF860005.0xFF86007E", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // apc-hid.c:370 UPS.APCGeneralCollection.APCDelayBeforeShutdown
@@ -2302,7 +2390,7 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
         { "ambient.humidity", 0, 0, "UPS.0xFF860006.0xFF860007.Humidity", "%.1f", 0, Conv::Number, nullptr, 0 },
         // ambient.temperature / ambient.humidity of APCProbe2 (apc-hid.c:426-427) are commented out upstream
 
-        // Instant commands (read by CommandCatalog, US-074)
+        // Instant commands (read by HidControl, US-074)
         // apc-hid.c:434 UPS.BatterySystem.Battery.Test
         { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
         // apc-hid.c:435 UPS.Battery.Test
@@ -2421,8 +2509,8 @@ inline const HidInfo* cpsHid2Nut(size_t& n) {
         { "ups.realpower", 0, 0, "UPS.Output.ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
         // cps-hid.c:385 UPS.Output.ConfigActivePower
         { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ups.delay.start (cps-hid.c:386) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
-        // ups.delay.shutdown (cps-hid.c:387) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays
+        // ups.delay.start (cps-hid.c:386) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (cps-hid.c:387) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
         // cps-hid.c:388 UPS.Output.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.Output.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
         // cps-hid.c:389 UPS.Output.DelayBeforeShutdown
@@ -2480,7 +2568,7 @@ inline const HidInfo* cpsHid2Nut(size_t& n) {
         // cps-hid.c:423 UPS.Output.ConfigVoltage
         { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
 
-        // Instant commands (read by CommandCatalog since US-074): beeper.on/off are not in
+        // Instant commands (read by HidControl since US-074): beeper.on/off are not in
         // UpsCommands.h, never listed
         // cps-hid.c:426 UPS.Output.Test
         { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
@@ -2808,13 +2896,13 @@ inline const HidInfo* powercomHid2Nut(size_t& n) {
         // powercom-hid.c:611 UPS.PowerSummary.iOEMInformation
         { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
 #endif
-        // ups.delay.start (powercom-hid.c:620) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // ups.delay.start (powercom-hid.c:620) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
         // powercom-hid.c:621 UPS.PowerSummary.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", 0, Conv::PowercomStartup, nullptr, 0 },
-        // ups.delay.shutdown (powercom-hid.c:637) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // ups.delay.shutdown (powercom-hid.c:637) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
         // powercom-hid.c:638 UPS.PowerSummary.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
-        // ups.delay.shutdown (powercom-hid.c:639) excluded: ups.delay.* comes from CommandCatalog::applyDefaultDelays (delayPaths(), US-066)
+        // ups.delay.shutdown (powercom-hid.c:639) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
         // powercom-hid.c:640 UPS.PowerSummary.PCMDelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.0x00FF0057", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
         // powercom-hid.c:642 UPS.Input.Voltage
@@ -2839,7 +2927,7 @@ inline const HidInfo* powercomHid2Nut(size_t& n) {
         // powercom-hid.c:654 UPS.ShutdownImminent
         { "unmapped.ups.shutdownimminent", 0, 0, "UPS.ShutdownImminent", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:658 UPS.PowerSummary.AudibleAlarmControl, not used: CommandCatalog builds beeper.toggle from beeper.enable and beeper.disable
+        // powercom-hid.c:658 UPS.PowerSummary.AudibleAlarmControl, not used: HidControl::buildCommands builds beeper.toggle from beeper.enable and beeper.disable
         { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
         // powercom-hid.c:659 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 1)
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
@@ -3135,6 +3223,257 @@ inline const HidInfo* liebertHid2Nut(size_t& n) {
         // liebert-hid.c:141 UPS.PowerSummary.AudibleAlarmControl: the project toggles from
         // ups.beeper.status instead of writing 1 (US-097 deviation 1)
         { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+/**
+ * Table of the UPS of unknown brands (US-079), and the tail of the other tables: the rows a
+ * driver does not list in supersededGenericPaths() follow its own table (ADR 0011 rule 2).
+ * Upstream has no generic subdriver (usbhid-ups refuses unknown vendors), so this is not the
+ * copy of an upstream file: these are the standard mappings GenericDriver had by hand, in
+ * their order, each with the path, format and conversion of the upstream row it cites, or
+ * "esp32-nut" and the reason when no upstream row has that path. No RW row: LIST RW of an
+ * unknown brand holds the ups.delay.* variables only, as before.
+ */
+inline const HidInfo* genericHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+        // Status
+        // apc-hid.c:384 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // apc-hid.c:396 UPS.PowerSummary.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ACPresent", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kOnlineInfo) },
+        // apc-hid.c:385 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // apc-hid.c:395 UPS.PowerSummary.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Discharging", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kDischargingInfo) },
+        // apc-hid.c:386 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // apc-hid.c:394 UPS.PowerSummary.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Charging", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kChargingInfo) },
+        // apc-hid.c:388 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // apc-hid.c:397 UPS.PowerSummary.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kLowbattInfo) },
+        // apc-hid.c:390 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // esp32-nut: PowerSummary.NeedReplacement outside PresentStatus, as the Back-UPS 500 flags of apc-hid.c:394-398
+        { "BOOL", 0, 0, "UPS.PowerSummary.NeedReplacement", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
+        // apc-hid.c:389 UPS.PowerSummary.PresentStatus.Overload
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // esp32-nut: PowerSummary.Overload outside PresentStatus, as the Back-UPS 500 flags of apc-hid.c:394-398
+        { "BOOL", 0, 0, "UPS.PowerSummary.Overload", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kOverloadInfo) },
+        // apc-hid.c:387 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // apc-hid.c:398 UPS.PowerSummary.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ShutdownImminent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
+        // ecoflow-hid.c:150 UPS.PowerSummary.PresentStatus.CommunicationLost (idowell-hid.c:101):
+        // commfault, no longer the ups.status.comm_lost key of the hand-written mapping
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // esp32-nut: PowerSummary.CommunicationLost outside PresentStatus, as the Back-UPS 500 flags of apc-hid.c:394-398
+        { "BOOL", 0, 0, "UPS.PowerSummary.CommunicationLost", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
+        // apc-hid.c:392 UPS.PowerSummary.PresentStatus.BatteryPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
+        // apc-hid.c:391 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
+        // cps-hid.c:399 UPS.PowerSummary.PresentStatus.FullyCharged
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
+        // ecoflow-hid.c:158 UPS.PowerSummary.PresentStatus.FullyDischarged
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kDepletedInfo) },
+
+        // Input and output
+        // esp32-nut: PowerConverter.Input.Voltage without the [1] of mge-hid.c:2163
+        { "input.voltage", 0, 0, "UPS.PowerConverter.Input.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:407 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: UPS.Flow.Voltage, as the line voltage of a device without Input collection
+        { "input.voltage", 0, 0, "UPS.Flow.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: PowerConverter.Input.Frequency without the [1] of mge-hid.c:2176
+        { "input.frequency", 0, 0, "UPS.PowerConverter.Input.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: UPS.Input.Frequency, the path of cps-hid.c:408 without cps_input_freq
+        { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: UPS.Flow.Frequency, as UPS.Flow.Voltage
+        { "input.frequency", 0, 0, "UPS.Flow.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2225 UPS.PowerConverter.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:417 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2238 UPS.PowerConverter.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:420 UPS.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2084 UPS.PowerConverter.Output.ActivePower
+        { "ups.realpower", 0, 0, "UPS.PowerConverter.Output.ActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:384 UPS.Output.ActivePower
+        { "ups.realpower", 0, 0, "UPS.Output.ActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2079 UPS.PowerConverter.Output.ApparentPower
+        { "ups.power", 0, 0, "UPS.PowerConverter.Output.ApparentPower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:382 UPS.Output.ApparentPower
+        { "ups.power", 0, 0, "UPS.Output.ApparentPower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+
+        // Battery
+        // apc-hid.c:342 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2023 UPS.BatterySystem.Voltage
+        { "battery.voltage", 0, 0, "UPS.BatterySystem.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:341 UPS.Battery.Voltage
+        { "battery.voltage", 0, 0, "UPS.Battery.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2012 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2014 UPS.PowerSummary.RemainingCapacityLimit (read only)
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2017 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:337 UPS.Battery.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.Battery.RunTimeToEmpty", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2064 UPS.PowerSummary.PercentLoad
+        { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:375 UPS.PowerSummary.ManufacturerDate
+        { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", HU_FLAG_ANY_INDEX, Conv::BatteryDate, nullptr, 0 },
+        // apc-hid.c:374 UPS.ManufacturerDate
+        { "ups.mfr.date", 0, 0, "UPS.ManufacturerDate", "%s", HU_FLAG_ANY_INDEX, Conv::BatteryDate, nullptr, 0 },
+        // apc-hid.c:347 UPS.Battery.ManufacturerDate, read only here
+        { "battery.mfr.date", 0, 0, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_ANY_INDEX, Conv::BatteryDate, nullptr, 0 },
+        // esp32-nut: the Date string of the battery (HID Power Device Class: an iString)
+        { "battery.mfr.date", 0, 0, "UPS.BatterySystem.Battery.Date", "%s", HU_FLAG_ANY_INDEX, Conv::StringId, nullptr, 0 },
+        // esp32-nut: as above, Battery collection directly under UPS
+        { "battery.mfr.date", 0, 0, "UPS.Battery.Date", "%s", HU_FLAG_ANY_INDEX, Conv::StringId, nullptr, 0 },
+        // mge-hid.c:2078 UPS.PowerSummary.Temperature
+        { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", HU_FLAG_ANY_INDEX, Conv::KelvinCelsius, nullptr, 0 },
+        // apc-hid.c:345 UPS.Battery.Temperature
+        { "battery.temperature", 0, 0, "UPS.Battery.Temperature", "%s", HU_FLAG_ANY_INDEX, Conv::KelvinCelsius, nullptr, 0 },
+        // esp32-nut: PowerConverter.Output.PercentLoad, the load of a PowerConverter collection
+        { "ups.load", 0, 0, "UPS.PowerConverter.Output.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:379 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2016 UPS.BatterySystem.Battery.DesignCapacity
+        { "battery.capacity", 0, 0, "UPS.BatterySystem.Battery.DesignCapacity", "%s", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::MgeBatteryCapacity, nullptr, 0 },
+        // battery.capacity.full (UPS.BatterySystem.Battery.FullChargeCapacity) removed: not in
+        // docs/nut-names.txt (ADR 0011 rule 2)
+
+        // Nominal values
+        // esp32-nut: UPS.Flow.ConfigActivePower, Flow without the [4] of mge-hid.c:2091
+        { "ups.realpower.nominal", 0, 0, "UPS.Flow.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:376 UPS.PowerConverter.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.PowerConverter.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:377 UPS.Output.ConfigActivePower
+        { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // tripplite-hid.c:377 UPS.Flow.ConfigApparentPower
+        { "ups.power.nominal", 0, 0, "UPS.Flow.ConfigApparentPower", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:374 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: UPS.Battery.ConfigVoltage, the path of apc-hid.c:343 with "%.0f" as cps-hid.c:374
+        { "battery.voltage.nominal", 0, 0, "UPS.Battery.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:519 UPS.Flow.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Flow.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:408 UPS.Input.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: PowerConverter.Output.ConfigVoltage, as PowerConverter.Output.Voltage
+        { "output.voltage.nominal", 0, 0, "UPS.PowerConverter.Output.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:423 UPS.Output.ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // idowell-hid.c:132 UPS.PowerConverter.Output.HighVoltageTransfer
+        { "input.transfer.high", 0, 0, "UPS.PowerConverter.Output.HighVoltageTransfer", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // idowell-hid.c:133 UPS.PowerConverter.Output.LowVoltageTransfer
+        { "input.transfer.low", 0, 0, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+
+        // ups.beeper.status (beeper_info on UPS.PowerSummary.AudibleAlarmControl,
+        // UPS.BatterySystem.Battery.AudibleAlarmControl and UPS.AudibleAlarmControl, mge-hid.c:2075-2077)
+        // is not a row: GenericDriver::decodeBeeperStatus() reads the active beeper only, with the
+        // 1-bit fields as on/off (ADR 0011 rule 1, beeper encoding)
+
+        // Tests and timers
+        // mge-hid.c:2071 UPS.BatterySystem.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
+        // apc-hid.c:372 UPS.Battery.Test
+        { "ups.test.result", 0, 0, "UPS.Battery.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
+        // cps-hid.c:381 UPS.Output.Test
+        { "ups.test.result", 0, 0, "UPS.Output.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
+        // mge-hid.c:2069 UPS.PowerSummary.DelayBeforeShutdown; ups.delay.* are the configured
+        // delays (genericDelayPaths(), applyDefaultDelays)
+        { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:409 UPS.Output.LowVoltageTransfer, read only here
+        { "input.transfer.low", 0, 0, "UPS.Output.LowVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:411 UPS.Input.LowVoltageTransfer, read only here
+        { "input.transfer.low", 0, 0, "UPS.Input.LowVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:410 UPS.Output.HighVoltageTransfer, read only here
+        { "input.transfer.high", 0, 0, "UPS.Output.HighVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:412 UPS.Input.HighVoltageTransfer, read only here
+        { "input.transfer.high", 0, 0, "UPS.Input.HighVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+
+        // Instant commands (HidControl): the rows of the subdrivers that have each path
+        // mge-hid.c:2326 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2327 UPS.BatterySystem.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2328 UPS.BatterySystem.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:435 UPS.Battery.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Battery.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:437 UPS.Battery.Test
+        { "test.battery.start.deep", 0, 0, "UPS.Battery.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:439 UPS.Battery.Test
+        { "test.battery.stop", 0, 0, "UPS.Battery.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:426 UPS.Output.Test
+        { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:427 UPS.Output.Test
+        { "test.battery.start.deep", 0, 0, "UPS.Output.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // cps-hid.c:428 UPS.Output.Test
+        { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:440 UPS.APCPanelTest
+        { "test.panel.start", 0, 0, "UPS.0xFF860072", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:441 UPS.APCPanelTest
+        { "test.panel.stop", 0, 0, "UPS.0xFF860072", "0", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:442 UPS.PowerSummary.APCPanelTest
+        { "test.panel.start", 0, 0, "UPS.PowerSummary.0xFF860072", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:443 UPS.PowerSummary.APCPanelTest
+        { "test.panel.stop", 0, 0, "UPS.PowerSummary.0xFF860072", "0", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:446 UPS.PowerSummary.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "20", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:447 UPS.PowerSummary.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "30", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:448 UPS.PowerSummary.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:449 UPS.PowerSummary.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "10", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:451 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.Output.DelayBeforeShutdown", "20", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:452 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.Output.DelayBeforeStartup", "30", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:453 UPS.Output.DelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.Output.DelayBeforeShutdown", "-1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:454 UPS.Output.DelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "10", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:456 UPS.APCGeneralCollection.APCDelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.0xFF860005.0xFF86007D", "20", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:457 UPS.APCGeneralCollection.APCDelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.0xFF860005.0xFF86007E", "30", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:458 UPS.APCGeneralCollection.APCDelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.0xFF860005.0xFF86007D", "-1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:459 UPS.APCGeneralCollection.APCDelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.0xFF860005.0xFF86007C", "10", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // apc-hid.c:461 UPS.Output.APCDelayBeforeReboot (Back-UPS CS)
+        { "shutdown.return", 0, 0, "UPS.Output.0xFF86007C", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2337 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2338 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2339 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2340 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2341 UPS.BatterySystem.Battery.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2342 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2343 UPS.AudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // mge-hid.c:2344 UPS.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
+        // esp32-nut: beeper.mute on UPS.AudibleAlarmControl as on the other two paths (mge-hid.c has
+        // no row; before US-079 the beeper commands used the active beeper, any of the three)
+        { "beeper.mute", 0, 0, "UPS.AudibleAlarmControl", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

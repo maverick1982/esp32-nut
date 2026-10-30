@@ -297,28 +297,28 @@ void test_replay_eaton_5p(void) {
     "beeper.enable beeper.mute beeper.off beeper.on load.off.delay shutdown.reboot shutdown.stop " \
     "ups.beeper.status ups.mfr.date ups.timer.reboot ups.timer.shutdown"
 
-// The CS500 declares the APC Back-UPS CS field UPS.Output.0xFF86007C: apc-hid.c writes
+// The CS500 declares the APC Back-UPS CS field UPS.Output.0xFF86007C: apc-hid.c:461 writes
 // 1 there for shutdown.return only. shutdown.reboot comes from the standard
-// DelayBeforeReboot and must never resolve to that field (US-058).
+// DelayBeforeReboot and must never resolve to that field (US-058). Same with the rows of
+// apcHid2Nut() and of genericHid2Nut(), which copies the apc-hid.c command rows (US-079).
 static void checkCs500ShutdownFields(const std::vector<HIDUsageDef>& usages) {
-    const HIDUsageDef* cs = CommandCatalog::apcCsReturnField(usages);
-    TEST_ASSERT_NOT_NULL(cs);
-    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C", cs->path);
-    const HIDUsageDef* reboot = CommandCatalog::rebootField(usages);
-    TEST_ASSERT_NOT_NULL(reboot);
-    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeReboot", reboot->path);
-
-    std::vector<CommandCatalog::WriteStep> steps;
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.return", nullptr, usages, 20, 30, steps));
-    TEST_ASSERT_EQUAL(1, steps.size());
-    TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C", steps[0].def.path);
-    TEST_ASSERT_EQUAL(1, steps[0].value);
-    TEST_ASSERT_EQUAL((int)CommandCatalog::StepsResult::OK,
-        (int)CommandCatalog::resolveShutdownSteps("shutdown.reboot", nullptr, usages, 20, 30, steps));
-    TEST_ASSERT_EQUAL(1, steps.size());
-    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeReboot", steps[0].def.path);
-    TEST_ASSERT_EQUAL(10, steps[0].value);
+    size_t n_apc = 0, n_generic = 0;
+    const NutTable::HidInfo* apc = NutTable::apcHid2Nut(n_apc);
+    const NutTable::HidInfo* generic = NutTable::genericHid2Nut(n_generic);
+    const struct { const NutTable::HidInfo* table; size_t n; } tables[] = { { apc, n_apc }, { generic, n_generic } };
+    for (const auto& t : tables) {
+        std::vector<HidControl::WriteStep> steps;
+        TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+            (int)HidControl::resolveShutdownSteps("shutdown.return", nullptr, usages, 20, 30, steps, t.table, t.n));
+        TEST_ASSERT_EQUAL(1, steps.size());
+        TEST_ASSERT_EQUAL_STRING("UPS.Output.0xFF86007C", steps[0].def.path);
+        TEST_ASSERT_EQUAL(1, steps[0].value);
+        TEST_ASSERT_EQUAL((int)HidControl::StepsResult::OK,
+            (int)HidControl::resolveShutdownSteps("shutdown.reboot", nullptr, usages, 20, 30, steps, t.table, t.n));
+        TEST_ASSERT_EQUAL(1, steps.size());
+        TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.DelayBeforeReboot", steps[0].def.path);
+        TEST_ASSERT_EQUAL(10, steps[0].value);
+    }
 }
 
 void test_replay_apc_cs500(void) {
@@ -733,6 +733,49 @@ void test_status_baseline_all_fixtures(void) {
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
+// Every fixture of test/fixtures, for the golden files of US-079
+static const char* const kAllFixtures[] = {
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json",
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_onbattery.json",
+    "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json",
+    "test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
+    "test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json",
+    "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
+    "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
+    "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
+    "test/fixtures/apc/apc_smartups_750_vid051d_pid0003_issue22.json",
+    "test/fixtures/cyberpower/cyberpower_br700elcd_vid0764_pid0501.json",
+    "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
+    "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
+    "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
+    "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
+    "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
+    "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
+    "test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json",
+    "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json",
+    "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json",
+    "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
+};
+
+// US-079: what every fixture gives with the driver the registry picks (golden/*.registry.txt,
+// FixtureReplayRunner::goldenText). Taken before the removal of the hand-written mappings and
+// of the command groups, which changed no known brand. A deliberate change regenerates them
+// (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
+void test_golden_registry_all_fixtures(void) {
+    TEST_ASSERT_EQUAL_MESSAGE(24, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
+}
+
+// US-079: the same with GenericDriver, as a brand the registry does not know
+// (golden/*.generic.txt): the real PDC descriptors of the fixtures stand for an unknown UPS.
+// The differences from the hand-written mappings are in the v1.12.0 release notes.
+void test_golden_generic_all_fixtures(void) {
+    for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, true);
+}
 
 // US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
 // the firmware before the cps_hid2nut migration. After the migration (every value, status
@@ -1694,6 +1737,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
     RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_golden_registry_all_fixtures);
+    RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
@@ -1738,6 +1783,8 @@ void setup() {
     RUN_TEST(test_set_cycle_cp1600_transfer_low);
     RUN_TEST(test_set_cycle_apc_bx750mi_sensitivity);
     RUN_TEST(test_status_baseline_all_fixtures);
+    RUN_TEST(test_golden_registry_all_fixtures);
+    RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);

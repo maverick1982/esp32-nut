@@ -23,7 +23,7 @@
  * This sub-driver faithfully mirrors the official NUT behavior for APC HID devices.
  * - Reference: nut_repo/drivers/apc-hid.c
  * - Every variable, the status and the instant commands come from apcHid2Nut() (US-076,
- *   ADR 0011): the standard mappings of the same keys are superseded below, and the driver
+ *   ADR 0011): the genericHid2Nut() rows of the same keys are superseded below, and the driver
  *   keeps only hooks: apc_format_model() (splitProduct, issue #76) and the Back-UPS BX poll
  *   and request length (issue #60).
  * - apc_fix_report_desc is not needed: it widens LogMin/LogMax of UPS.Input.Voltage on the
@@ -73,7 +73,7 @@ void APCDriver::onLoop(IHidTransport* host, UPSData& data) {
     _back_ups_bx = isBackUpsBX(data.get("ups.model"));
 }
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from apcHid2Nut(),
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from apcHid2Nut(),
 // copied character by character from that table (US-076)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of apc_hid2nut set the internal ups.status.* keys

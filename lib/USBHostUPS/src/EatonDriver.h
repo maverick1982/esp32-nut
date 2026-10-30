@@ -18,7 +18,7 @@ public:
     // Rows of mge_hid2nut (mge-hid.c), NutTable.h (US-066)
     const NutTable::HidInfo* hid2nut(size_t& n) const override { return NutTable::mgeHid2Nut(n); }
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::mgeDelayPaths(); }
-    // Standard mappings whose keys come from mgeHid2Nut() (US-073)
+    // genericHid2Nut() rows whose keys come from mgeHid2Nut() (US-073)
     const char* const* supersededGenericPaths(size_t& n) const override;
     // Instant commands from the HU_TYPE_CMD rows of mge_hid2nut (US-074)
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::mgeHid2Nut(n); }
@@ -31,7 +31,10 @@ protected:
     void onLoop(IHidTransport* host, UPSData& data) override;
 
 private:
-    UsageMapIndex<EatonDriver> _map;
+    // Usages of the context inputs, found once per device (US-079: no hand-written mappings)
+    std::vector<size_t> _iModelUsages;
+    std::vector<size_t> _apparentPowerUsages;
+    bool _contextIndexed;
 
     // Inputs of mge_type (mge_format_model): the UPS.PowerSummary.iModel string, or
     // UPS.Flow.[4].ConfigApparentPower when it is empty; the country comes from the

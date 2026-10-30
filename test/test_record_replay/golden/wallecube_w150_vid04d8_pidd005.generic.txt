@@ -1,0 +1,50 @@
+[snapshot]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=12912
+battery.voltage=13.6
+driver.name=GenericDriver
+ups.alarm=No battery installed!
+ups.mfr=WalleCube
+ups.model=Smart UPS W150
+ups.serial=E4B323491C40
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.no_battery=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.temperature=5.5
+ups.status=ALARM OL RB
+[cmd]
+
+[rw]
+
+[rw.final]
+
+[snapshot.final]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=12912
+battery.voltage=13.6
+driver.name=GenericDriver
+ups.alarm=No battery installed!
+ups.mfr=WalleCube
+ups.model=Smart UPS W150
+ups.serial=E4B323491C40
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.no_battery=1
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.temperature=5.5
+ups.status=ALARM OL RB
+[requests]
+ 1/3 2/3 3/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 2/3 1/3 2/3 3/3 2/3 2/3

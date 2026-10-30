@@ -32,7 +32,7 @@
 #include "OpenUPSDriver.h"
 #include "IHidTransport.h"
 
-// The standard mappings of GenericDriver::decodeReport() whose keys come from
+// The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from
 // openupsHid2Nut(), copied character by character from that table (US-078)
 static const char* const kSupersededGenericPaths[] = {
     // Status: only the BOOL rows of openups_hid2nut set the internal ups.status.* keys
