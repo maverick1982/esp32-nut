@@ -22,6 +22,8 @@
  *   HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC rows is read by the first full poll, then left out
  *   of the full poll until a SET VAR or an INSTCMD (noteDataChanged()), which makes the next
  *   cycle a full poll that reads it again: data_has_changed of usbhid-ups.c:2357-2362.
+ *   Not without the interrupt pipe (QUIRK_NO_INTERRUPT_PIPE, "pollonly", US-108): there every
+ *   full poll reads them, as usbhid-ups.c:2352, 2360.
  * One control request per loop() call, stepSpacingMs() apart, and none while
  * isPollingPaused(). A report the UPS has just sent as an INPUT report is skipped
  * (maxReportAgeMs()), and with pollStaticReportsOnce() so is a static report already
@@ -139,8 +141,9 @@ protected:
     // cycle of its own; nothing when it is already pending (US-077). Same task as loop():
     // decodeReport() runs from it
     void pollSoon(const PollItem& item);
-    // True when the driver reads the report of u: INPUT, or a FEATURE report acceptPollReport() takes
-    bool isReportRead(const HIDUsageDef& u) const;
+    // True when the driver reads the report of u: INPUT (not with QUIRK_NO_INTERRUPT_PIPE), or a
+    // FEATURE report acceptPollReport() takes
+    bool isReportRead(IHidTransport* host, const HIDUsageDef& u) const;
     // True when the device measures ups.realpower in a report this driver reads
     bool readsActivePower(IHidTransport* host) const;
     // Text of a string descriptor (bLength, bDescriptorType 0x03, UTF-16LE), with the

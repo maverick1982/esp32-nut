@@ -7,7 +7,7 @@ tags: [adr, decision]
 # Dynamic Polling and Quirks for USB STALL Mitigation
 
 * **ADR ID:** 0005
-* **Status:** Partially superseded by ADR 0007 (report lengths, `QUIRK_MAX_REPORT_SIZE_1`); `QUIRK_NO_GET_REPORT` is still in force. The freeze root cause was the deadlock addressed by ADR 0008.
+* **Status:** Partially superseded by ADR 0007 (report lengths, `QUIRK_MAX_REPORT_SIZE_1`) and by US-108 (`QUIRK_NO_GET_REPORT` replaced by `QUIRK_NO_INTERRUPT_PIPE`, see "Correction"). The freeze root cause was the deadlock addressed by ADR 0008.
 * **Date:** 2026-09-11
 * **Authors:** Antigravity (on behalf of Maverick1982)
 
@@ -35,6 +35,13 @@ Chosen option: "**Option 2: Dynamic Packet Sizing & Targeted Quirks (Align with 
 ### Negative
 * Additional computational overhead at runtime parsing the usage vector bounds per report during polling.
 * Developer maintenance overhead: future unsupported UPS models that still freeze might require the manual introduction of new Product IDs to the `UPS_QUIRKS` table.
+
+## Correction (US-108, 2026-10-31)
+`QUIRK_NO_GET_REPORT` on 051d:0003 and 051d:0004 (issue #39, v1.5.0) was the opposite of upstream. `apc-hid.c` does not stop GET_REPORT on these PIDs: `disable_interrupt_pipe()` (apc-hid.c:51-62) sets `use_interrupt_pipe = FALSE`, because on the APC 5G the interrupt pipe carries a proprietary protocol, and usbhid-ups reads every value with a FEATURE GET_REPORT ("pollonly"). With the quirk the firmware read only the INPUT reports and missed the voltages, the load and the thresholds, and `battery.charge.low` / `battery.runtime.low` could not be set.
+
+* `QUIRK_NO_GET_REPORT` is replaced by `QUIRK_NO_INTERRUPT_PIPE` (same bit) on both PIDs. `USBHostUPS::processInputReport()` drops the INPUT reports before the statistics and the InputWatchdog, which is never fed and never acts; `GenericDriver::buildPollLists()` leaves out the reports that are only INPUT (the 0x89 of the proprietary protocol, libusb1.c:1079); the full poll reads the semi-static reports every time, as usbhid-ups.c:2352, 2360 without the interrupt pipe (see ADR 0006).
+* `LinkMonitor::setCarriesData()` is gone with `QUIRK_NO_GET_REPORT`: every device now carries its data on the control pipe.
+* The freeze of #39 (GET_REPORT waiting forever after a STALL) is left to the timeouts, the interface recovery and the controlled restart of ADR 0008. Field proof on the Smart-UPS of #39 / #100 is pending before the release.
 
 ## Impact on Agent Implementation
 * Agents modifying or implementing polling logic MUST NOT hardcode USB packet lengths for Control Transfers. They must parse the `HIDParser` structures. Known exception: the fixed Powercom poll lists use 8 bytes (see ADR 0007).

@@ -203,9 +203,12 @@ void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& q
         if (!found) reports.push_back(Report{u.report_type, u.report_id, status});
     }
 
+    // QUIRK_NO_INTERRUPT_PIPE (APC 5G, US-108): upstream reads every value with a FEATURE
+    // GET_REPORT (libusb1.c:1079), so a report that is only INPUT is never requested
+    bool no_interrupt_pipe = (host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE) != 0;
     for (const auto& r : reports) {
         if (r.type == 1) {
-            if (!pollInputReports()) continue;
+            if (!pollInputReports() || no_interrupt_pipe) continue;
             // The FEATURE report with the same ID carries the same values
             bool has_feature = false;
             for (const auto& f : reports) {
@@ -348,9 +351,10 @@ bool GenericDriver::isFreshFromInput(IHidTransport* host, const PollItem& item, 
     return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
 }
 
-// An INPUT report arrives on the interrupt endpoint, a FEATURE report only if it is polled
-bool GenericDriver::isReportRead(const HIDUsageDef& u) const {
-    if (u.report_type == 1) return true;
+// An INPUT report arrives on the interrupt endpoint (never with QUIRK_NO_INTERRUPT_PIPE,
+// US-108), a FEATURE report only if it is polled
+bool GenericDriver::isReportRead(IHidTransport* host, const HIDUsageDef& u) const {
+    if (u.report_type == 1) return !(host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE);
     return u.report_type == 3 && acceptPollReport(u.report_type, u.report_id);
 }
 
@@ -359,7 +363,7 @@ bool GenericDriver::readsActivePower(IHidTransport* host) const {
     for (const auto& u : host->getUsages()) {
         if (strcmp(u.path, "UPS.Output.ActivePower") != 0 &&
             strcmp(u.path, "UPS.PowerConverter.Output.ActivePower") != 0) continue;
-        if (isReportRead(u)) return true;
+        if (isReportRead(host, u)) return true;
     }
     return false;
 }
@@ -408,13 +412,14 @@ void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool fu
         // Rows decided since the last classification may make more reports semi-static
         if (_semi_classified && _semi_undecided) classifySemiStatic(host);
     }
-    // Devices that reject GET_REPORT only send INPUT reports on the interrupt endpoint
-    if (!(host->getQuirks() & QUIRK_NO_GET_REPORT)) {
-        const auto& reports = full ? _full : _quick;
-        for (const auto& r : reports) {
-            if (full && !_cycle_rereads && isSemiStaticAndKnown(r)) continue;
-            _queue.push_back(r);
-        }
+    // Without the interrupt pipe (QUIRK_NO_INTERRUPT_PIPE, "pollonly") every full poll reads the
+    // semi-static reports too: usbhid-ups.c:2352, 2360 skip the STATIC / SEMI_STATIC rows only
+    // with use_interrupt_pipe, and use their reads to detect stale data otherwise
+    bool skip_semi_static = full && !_cycle_rereads && !(host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE);
+    const auto& reports = full ? _full : _quick;
+    for (const auto& r : reports) {
+        if (skip_semi_static && isSemiStaticAndKnown(r)) continue;
+        _queue.push_back(r);
     }
 
     uint32_t stamp = now != 0 ? now : 1;
@@ -627,7 +632,7 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
         if (strcmp(b.info->info_type, "ups.realpower") != 0) continue;
         if (b.info->conv == NutTable::Conv::EatonComputeRealpower) _nut_has_realpower = true;
         for (int idx : { b.idx, b.twin_idx }) {
-            if (idx >= 0 && (size_t)idx < usages.size() && isReportRead(usages[idx])) _nut_has_realpower = true;
+            if (idx >= 0 && (size_t)idx < usages.size() && isReportRead(host, usages[idx])) _nut_has_realpower = true;
         }
     }
     _nut_init_done = false;

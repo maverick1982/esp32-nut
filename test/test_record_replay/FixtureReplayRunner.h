@@ -61,8 +61,21 @@ public:
         if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
         return _parser.hasFeatureBeeperControl();
     }
+    // US-108: every GET_REPORT is answered with zeros of the declared length (ID first),
+    // decoded by _answer_driver into *_answer_data as USBHostUPS does, for fixtures with only
+    // the descriptor
+    bool _answer_all = false;
+    IUPSDriver* _answer_driver = nullptr;
+    UPSData* _answer_data = nullptr;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
+        if (_answer_all && _answer_driver && _answer_data) {
+            std::vector<uint8_t> buf(_parser.getExpectedLength(report_id, report_type), 0);
+            if (buf.empty()) buf.resize(2, 0);
+            buf[0] = report_id;
+            _answer_driver->decodeReport(this, report_id, report_type, buf.data(), buf.size(), *_answer_data);
+            _answer_driver->postDecode(this, report_id, report_type, buf.data(), buf.size(), *_answer_data);
+        }
         return true;
     }
     bool requestStringDescriptor(uint8_t index) override {
@@ -136,6 +149,17 @@ public:
             out += aux;
         }
         return out;
+    }
+
+    // One report of the fixture, decoded as USBHostUPS does. With QUIRK_NO_INTERRUPT_PIPE an
+    // INPUT report is dropped, as USBHostUPS::processInputReport() (US-108). True when decoded.
+    static bool replayReport(ReplaySession& s, uint8_t id, uint8_t type, const std::vector<uint8_t>& data) {
+        if (type == 1 && (s.host._quirks & QUIRK_NO_INTERRUPT_PIPE)) return false;
+        s.driver->decodeReport(&s.host, id, type, data.data(), data.size(), s.ups_data);
+        // As USBHostUPS: the NUT table writes its variables last (US-066)
+        s.driver->postDecode(&s.host, id, type, data.data(), data.size(), s.ups_data);
+        s.reports.push_back({ id, type, data });
+        return true;
     }
 
     // Loads the fixture, dispatches the driver and replays every scenario, checking the
@@ -272,12 +296,7 @@ public:
                     }
                 }
 
-                if (!rData.empty()) {
-                    driver->decodeReport(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
-                    // As USBHostUPS: the NUT table writes its variables last (US-066)
-                    driver->postDecode(&host, r_id, r_type, rData.data(), rData.size(), ups_data);
-                    s.reports.push_back({ r_id, r_type, rData });
-                }
+                if (!rData.empty()) replayReport(s, r_id, r_type, rData);
             }
 
             // Set driver.name directly since loop() isn't called in the replay runner

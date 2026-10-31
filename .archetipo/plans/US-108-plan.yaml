@@ -1,0 +1,245 @@
+schema: archetipo/plan/v2
+spec_code: US-108
+body: |
+  # US-108: APC Smart-UPS 5G (051d:0003/0004): letture con GET_REPORT come apc-hid — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-10-31
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 2 | **Bloccato da:** US-079 (DONE). Branch: `feature/us-072-us-108-poll`, sopra US-072 (8a44250, in REVIEW).
+
+  Oggi 051d:0003/0004 hanno `QUIRK_NO_GET_REPORT` (issue #39, v1.5.0): niente GET_REPORT, valori solo dagli INPUT. Upstream fa l'opposto: `disable_interrupt_pipe()` (apc-hid.c:51-62, 96, 100) mette `use_interrupt_pipe = FALSE` perché sui 5G l'interrupt pipe porta un protocollo proprietario, e i valori si leggono tutti con GET_REPORT.
+
+  ---
+
+  ## Cosa fa upstream senza interrupt pipe (usbhid-ups.c)
+
+  - `upsdrv_updateinfo()` 1432: con `use_interrupt_pipe == FALSE` l'interrupt pipe non si legge mai.
+  - `hid_ups_walk(HU_WALKMODE_FULL_UPDATE)` 2352, 2360: le righe `HU_FLAG_STATIC` e `HU_FLAG_SEMI_STATIC` si saltano **solo** con l'interrupt pipe: in pollonly ogni full update le rilegge tutte (servono anche a rilevare i dati stale). Il filtro dei report semi-statici di US-072 quindi non vale su questi PID.
+  - libusb1.c:1079, 1129: ogni GET_REPORT è di tipo FEATURE, sull'ID del report della riga. Un report solo INPUT (sul 5G il 0x89 vendor, 63 byte, il protocollo proprietario) non ha righe e non viene mai chiesto.
+  - Quick update (1548-1553): le righe `HU_FLAG_QUICK_POLL` con GET_REPORT, come la nostra quick poll.
+
+  ---
+
+  ## Decisioni
+
+  1. **Nuovo quirk `QUIRK_NO_INTERRUPT_PIPE`** (Quirks.h) al posto di `QUIRK_NO_GET_REPORT` per 051d:0003 e 051d:0004: è `disable_interrupt_pipe` di apc-hid.
+  2. **`QUIRK_NO_GET_REPORT` rimosso** con i suoi rami: nessun dispositivo lo usa più. Vanno via il salto della coda in `GenericDriver::startCycle()`, `_link.setCarriesData()` in `USBHostUPS`, `LinkMonitor::setCarriesData()/carriesData()` e i loro test; restano i commenti di LinkMonitor/InputWatchdog aggiornati. Se in review si preferisce tenerlo per dispositivi futuri, si ripristina senza toccare il resto.
+  3. **INPUT ignorati nel firmware**: `USBHostUPS::processInputReport()` esce subito con il quirk (niente decodifica, niente `_input_ts`, niente `_in_wd.onInput()`, niente statistiche INPUT). L'InputWatchdog, mai alimentato, non diventa periodico e non agisce: l'assenza di INPUT non è un guasto (AC 2). Un log INFO alla connessione, come `upslogx(LOG_INFO, "interrupt pipe disabled ...")`. L'interrupt pipe resta aperto (hid_host vendorizzato): le sue trasferte arrivano e si scartano.
+  4. **Poll**: con il quirk `GenericDriver::buildPollLists()` non mette nelle liste i report solo INPUT (sul 5G: 0x89); i FEATURE si leggono come sugli altri APC. `startCycle()` non applica il filtro semi-statico di US-072 (`isSemiStaticAndKnown`) con il quirk, come le righe 2352/2360. `isFreshFromInput()` non scatta da solo (nessun INPUT registrato).
+  5. **Replay**: `FixtureReplayRunner::replay()` applica già i quirk; in più, come `USBHostUPS`, salta i report di tipo 1 dei fixture quando il quirk è attivo. `ReplayMockHost` ottiene un'opzione `_answer_all` (come `MockPollHost`): ogni GET_REPORT del loop riceve un report di zeri della lunghezza dichiarata, decodificato dal driver, per verificare righe legate e LIST RW sul fixture #22, che ha solo il descriptor.
+  6. **Scrittura e comandi** (AC 3): `writeUsageLocked()` non ha eccezioni per PID; con il quirk tolto il read-modify-write fa la GET_REPORT come sugli altri APC. Nessun cambio di codice previsto; il test del fixture #22 controlla LIST RW e LIST CMD dopo il poll. Se LIST CMD resta vuota, si confronta con le righe comando di apc-hid sul descriptor e si annota (non si aggiungono comandi fuori tabella).
+  7. **Rischio #39** (GET_REPORT appeso su uno STALL, v1.5.0): coperto dai timeout e dal ripristino di ADR 0008; la prova di Sr-psycho (#100) prima del rilascio è nell'AC.
+
+  ### Fuori scope
+  - Spegnimento automatico dalla scheda (#100); chiusura dell'interrupt pipe nel layer hid_host; `pollonly` configurabile per altri dispositivi.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  - `Quirks.h`: `QUIRK_NO_INTERRUPT_PIPE` (riuso del bit 4), righe 0x0003/0x0004 aggiornate con commento apc-hid.c:51-62.
+  - `GenericDriver.cpp`: `buildPollLists()` salta i report INPUT senza gemello FEATURE con il quirk; `startCycle()` senza ramo `QUIRK_NO_GET_REPORT` e con il filtro semi-statico spento sotto quirk; commento di classe e di `classifySemiStatic()` aggiornati.
+  - `USBHostUPS.cpp`: `processInputReport()` esce con il quirk; log INFO alla claim; niente `setCarriesData`.
+  - `LinkMonitor.h`: via `setCarriesData()/carriesData()/_carriesData`, commenti aggiornati.
+  - `APCDriver.cpp`: commento "Not replicated: disable_interrupt_pipe()" → replicato come quirk.
+  - `FixtureReplayRunner.h`: report INPUT saltati con il quirk; `_answer_all` nel mock.
+  - Documenti: ADR 0005 (correzione: il quirk della #39 era l'opposto di upstream), ADR 0006 (pollonly: niente filtro semi-statico), note v1.12.0.
+
+  ---
+
+  ## Strategia di Test
+
+  Nessuna superficie UI nuova (UPS Settings elenca le variabili da LIST RW): niente mockup né e2e; nessuna demo filmabile, la dimostrazione è sul campo (Sr-psycho, #100).
+
+  - **`test_poll_cycle`**: `test_no_get_report_quirk_skips_reports` sostituito: con `QUIRK_NO_INTERRUPT_PIPE` le liste contengono i FEATURE e non i report solo INPUT; il secondo full poll di `SemiStaticDriver` con il quirk legge anche i semi-statici; senza quirk invariato.
+  - **`test_link_monitor`**: via i test di `setCarriesData`; un test che un `InputWatchdog` mai alimentato non diventa periodico né chiede recuperi (se non c'è già).
+  - **`test_record_replay`**: test del fixture #22 (`apc_smartups_750_vid051d_pid0003_issue22`): liste di poll (`pollLists<APCDriver>`: solo FEATURE, 0x89 assente), righe legate con `battery.charge.low` e `battery.runtime.low`, LIST RW dopo un poll con `_answer_all` (`battery.charge.low`, `battery.runtime.low`, `ups.delay.shutdown`), LIST CMD annotata; un report INPUT sintetico passato al replay con il quirk non cambia nulla. Golden: cambia solo `[requests]` del fixture #22 (prima vuota); gli altri 23 identici.
+  - **Mutazioni**: togliere il quirk dalla tabella (fallisce il test #22: INPUT decodificati / filtro), lasciare il filtro semi-statico sotto quirk (fallisce il test di poll).
+  - **Campo**: build di test sul Smart-UPS 750L di Sr-psycho (#100): UPS Settings con le due soglie, scrittura e rilettura, nessun blocco EP0 per 12 h.
+
+  ---
+
+  ## Rischi e note
+
+  - **Blocchi EP0 come nella #39**: ora ci sono timeout, ripristino e riavvio controllato (ADR 0008); restano da provare sul campo.
+  - **Più richieste sui 5G**: da zero GET_REPORT a un poll completo ogni 30 s e quick ogni 2 s, come upstream.
+  - **0x0004 senza fixture**: stesso trattamento di upstream, verificato solo con il fixture 0x0003.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-10-31_
+tasks:
+  - id: TASK-01
+    title: QUIRK_NO_INTERRUPT_PIPE al posto di QUIRK_NO_GET_REPORT; poll senza INPUT e senza filtro semi-statico
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i 5G si leggono con GET_REPORT FEATURE come apc-hid in pollonly (decisioni 1, 2, 4).
+
+      **Leggi:** `lib/USBHostUPS/src/Quirks.h`, `lib/USBHostUPS/src/GenericDriver.cpp` (`buildPollLists`, `startCycle`, `classifySemiStatic` commento), `lib/USBHostUPS/src/GenericDriver.h` (commento di classe), `lib/USBHostUPS/src/APCDriver.cpp:20-34`, `nut_repo/drivers/apc-hid.c:51-62`, `nut_repo/drivers/usbhid-ups.c:2343-2362`.
+
+      **Modifica:**
+      1. `Quirks.h`: `#define QUIRK_NO_INTERRUPT_PIPE (1 << 4)` al posto di `QUIRK_NO_GET_REPORT`; righe 051d:0003 e 051d:0004 con il nuovo quirk e commento "disable_interrupt_pipe, apc-hid.c:51-62: the interrupt pipe carries a proprietary protocol".
+      2. `GenericDriver::buildPollLists()`: un report INPUT senza gemello FEATURE non entra nelle liste se `host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE` (upstream chiede solo FEATURE, libusb1.c:1079).
+      3. `GenericDriver::startCycle()`: tolto il ramo `QUIRK_NO_GET_REPORT` (la coda si riempie sempre); il salto `isSemiStaticAndKnown` vale solo senza `QUIRK_NO_INTERRUPT_PIPE` (usbhid-ups.c:2352, 2360: in pollonly le righe STATIC/SEMI_STATIC si rileggono a ogni full update). Commento con le righe upstream.
+      4. Commenti: classe GenericDriver (terzo caso US-072: non in pollonly), `APCDriver.cpp` (disable_interrupt_pipe ora replicato come quirk).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde salvo i golden del fixture #22 (`[requests]`), che TASK-04 rigenera. `test_poll_cycle` può fallire solo su `test_no_get_report_quirk_skips_reports` (TASK-02).
+
+      **Fatto:** quirk nuovo applicato, nessun riferimento a `QUIRK_NO_GET_REPORT` in GenericDriver/Quirks/APCDriver.
+
+      **Blocchi:** se cambia una sezione golden diversa da `[requests]` del fixture #22, fermati.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/Quirks.h — nuovo quirk, righe 0003/0004
+      - lib/USBHostUPS/src/GenericDriver.cpp — liste di poll e filtro semi-statico sotto quirk
+      - lib/USBHostUPS/src/GenericDriver.h — commento di classe
+      - lib/USBHostUPS/src/APCDriver.cpp — commento disable_interrupt_pipe
+
+      ## Criteri di Completamento
+      - [ ] 051d:0003/0004 con QUIRK_NO_INTERRUPT_PIPE
+      - [ ] Report solo INPUT fuori dalle liste sotto quirk
+      - [ ] Filtro semi-statico spento sotto quirk
+    ref: TASK-01
+  - id: TASK-02
+    title: 'test_poll_cycle: liste e filtro semi-statico con QUIRK_NO_INTERRUPT_PIPE'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire le decisioni 2 e 4 nel poll.
+
+      **Leggi:** `test/test_poll_cycle/test_main.cpp` (`test_no_get_report_quirk_skips_reports` ~183, `standardDevice`, `SemiStaticDriver`, `semiStaticDevice`).
+
+      **Modifica:**
+      1. `test_no_get_report_quirk_skips_reports` → `test_no_interrupt_pipe_quirk_reads_feature_reports_only`: con `standardDevice()` e il quirk, il primo full poll chiede i FEATURE 1 e 2 e non l'INPUT 3 (solo INPUT); senza quirk chiede anche il 3 (comportamento di `test_first_cycle_is_full`).
+      2. `test_semi_static_no_interrupt_pipe_reads_every_full_poll`: `SemiStaticDriver` con `host._quirks = QUIRK_NO_INTERRUPT_PIPE`, secondo full poll "1 2 3 4 5 6".
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_poll_cycle` verde. Mutazione: filtro semi-statico attivo anche sotto quirk → fallisce il test 2.
+
+      **Fatto:** test verdi, mutazione rilevata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_poll_cycle/test_main.cpp — test del quirk
+
+      ## Criteri di Completamento
+      - [ ] Liste con il quirk: solo FEATURE
+      - [ ] Semi-statici riletti sotto quirk
+      - [ ] Mutazione rilevata
+    ref: TASK-02
+  - id: TASK-03
+    title: USBHostUPS ignora gli INPUT con il quirk; via setCarriesData
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'interrupt pipe dei 5G non porta dati né fa scattare il watchdog (decisioni 2, 3; AC 2).
+
+      **Leggi:** `lib/USBHostUPS/src/USBHostUPS.cpp` (`processInputReport` ~522, claim ~440-470 con `_quirks` e `_link.setCarriesData`), `lib/USBHostUPS/src/LinkMonitor.h` (`setCarriesData`, `carriesData`, `isStale`, `tick`, commento InputWatchdog), `test/test_link_monitor/test_main.cpp:20-30, 150-180`.
+
+      **Modifica:**
+      1. `processInputReport()`: `if (_quirks & QUIRK_NO_INTERRUPT_PIPE) return;` subito dopo il controllo di handle/driver, prima di statistiche, `_in_wd.onInput()`, riassemblaggio, `_input_ts` e decodifica. Commento apc-hid.c:51-62.
+      2. Alla claim, con il quirk: `log("INFO", "[USB] Interrupt pipe disabled: values read with GET_REPORT (APC 5G, apc-hid)")`; tolto `_link.setCarriesData(...)`.
+      3. `LinkMonitor.h`: via `setCarriesData()`, `carriesData()`, `_carriesData` e i rami che li usano; commenti di LinkMonitor e InputWatchdog senza `QUIRK_NO_GET_REPORT`.
+      4. `test_link_monitor`: via i test di `setCarriesData` (righe ~150-180) e il commento a riga 26; se manca, test che un InputWatchdog mai alimentato non sia periodico né stale dopo 10 min e `tick()` dia `NONE`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_link_monitor` verde; `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (da PowerShell) compila.
+
+      **Fatto:** nessun riferimento a `QUIRK_NO_GET_REPORT`/`carriesData` nel repo (`grep -rn`), build S3 ok.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — INPUT ignorati, log, niente setCarriesData
+      - lib/USBHostUPS/src/LinkMonitor.h — rimozione carriesData
+      - test/test_link_monitor/test_main.cpp — test aggiornati
+
+      ## Criteri di Completamento
+      - [ ] INPUT scartati prima di watchdog e decodifica
+      - [ ] carriesData rimosso con i suoi test
+      - [ ] Build S3 ok
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Replay: quirk applicato agli INPUT, poll con risposte e test del fixture #22'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** AC 4 sul fixture `apc_smartups_750_vid051d_pid0003_issue22` (decisioni 5, 6).
+
+      **Leggi:** `test/test_record_replay/FixtureReplayRunner.h` (`ReplayMockHost`, `replay()` ~220-275, `listRW`, `listCmd`, `pollLists`, `goldenText`), `test/test_record_replay/test_main.cpp` (test APC esistenti, `kAllFixtures`).
+
+      **Modifica:**
+      1. `replay()`: con `host._quirks & QUIRK_NO_INTERRUPT_PIPE` i report di tipo 1 del fixture non si decodificano (commento: come USBHostUPS::processInputReport).
+      2. `ReplayMockHost::_answer_all`: `requestReport()` decodifica (decodeReport + postDecode) un report di zeri lungo `getExpectedLength(id, type)` con l'ID in testa, sul driver e UPSData della sessione (campi del mock da impostare nel test).
+      3. Test `test_apc_5g_reads_feature_reports_issue22`: `pollLists<APCDriver>` senza 0x89 e solo report tipo 3; righe legate (`nutBindings`) con `battery.charge.low` e `battery.runtime.low`; loop 35 s con `_answer_all` e LIST RW che contiene `battery.charge.low`, `battery.runtime.low`, `ups.delay.shutdown`; LIST CMD registrata nel test con commento (confronto con le righe comando di apcHid2Nut sul descriptor; se vuota, spiegare perché).
+      4. Test che un report INPUT sintetico (ID 0x0C, RemainingCapacity) passato a una replay del fixture #22 non pubblica `battery.charge`.
+      5. Golden: copia in scratchpad, `ESP32NUT_WRITE_GOLDEN=1`, diff per sezioni: cambia solo `[requests]` del fixture #22 (registry e generic).
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde. Mutazione: togliere il quirk dalle righe 0003/0004 di Quirks.h fa fallire i test 3 o 4.
+
+      **Fatto:** test verdi, golden aggiornati solo in `[requests]` del #22.
+
+      **Blocchi:** differenze golden fuori dal #22 o fuori da `[requests]`: fermati e segnala.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — quirk sugli INPUT, _answer_all
+      - test/test_record_replay/test_main.cpp — test del fixture #22
+      - test/test_record_replay/golden/apc_smartups_750_vid051d_pid0003_issue22.*.txt — [requests]
+
+      ## Criteri di Completamento
+      - [ ] Liste, righe legate e LIST RW del #22 verificate
+      - [ ] INPUT ignorati in replay con il quirk
+      - [ ] Golden cambiati solo dove previsto
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Chiusura: ADR 0005/0006, note v1.12.0, suite completa e tre build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documenti allineati e verifica finale (AC 5, 6).
+
+      **Leggi:** `docs/adr/0005-dynamic-polling-and-quirks-for-usb-stall-mitigation.md`, `docs/adr/0006-centralized-hid-polling-lifecycle.md` (sezione "Semi-static reports"), `docs/releases/v1.12.0.md`.
+
+      **Modifica:**
+      1. ADR 0005: stato e sezione di correzione: `QUIRK_NO_GET_REPORT` della #39 era l'opposto di upstream (`disable_interrupt_pipe`), sostituito da `QUIRK_NO_INTERRUPT_PIPE` (US-108); il blocco della #39 è affidato a ADR 0008; prova sul campo pendente.
+      2. ADR 0006: nei report semi-statici, nota che in pollonly (5G) si rileggono a ogni full poll come usbhid-ups.c:2352, 2360.
+      3. Note v1.12.0: APC Smart-UPS 5G (051d:0003/0004) letti con GET_REPORT come NUT: tutte le variabili, `battery.charge.low` e `battery.runtime.low` impostabili da UPS Settings; chiedere segnalazioni se l'UPS smette di rispondere.
+      4. Suite nativa completa; build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` (da PowerShell).
+
+      **Verifica:** suite verde, tre build ok, `grep -rn QUIRK_NO_GET_REPORT lib src test docs/adr/0008*` vuoto (salvo citazioni storiche nell'ADR 0005).
+
+      **Fatto:** documenti aggiornati, suite e build verdi.
+
+      **Blocchi:** nessuno. La prova di Sr-psycho si fa con lo zip di test insieme a US-072, fuori da questo task.
+
+      ## File Coinvolti
+      - docs/adr/0005-dynamic-polling-and-quirks-for-usb-stall-mitigation.md — correzione
+      - docs/adr/0006-centralized-hid-polling-lifecycle.md — pollonly
+      - docs/releases/v1.12.0.md — APC 5G
+
+      ## Criteri di Completamento
+      - [ ] ADR e note aggiornati
+      - [ ] Suite nativa verde
+      - [ ] Tre build ok
+    ref: TASK-05

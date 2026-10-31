@@ -23,7 +23,7 @@ void test_healthy_link_never_acts(void) {
 }
 
 void test_quiet_link_without_failures_never_acts(void) {
-    // Devices with QUIRK_NO_GET_REPORT never issue control requests
+    // A device that issues no control request never fails
     LinkMonitor m(testConfig());
     m.reset(0);
     TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000));
@@ -152,33 +152,6 @@ void test_unstuck_pipe_uses_recovery_ladder(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == m.tick(60000, false));
 }
 
-// A device without data on the control pipe is never restarted, stuck or not
-void test_stuck_pipe_without_data_never_restarts(void) {
-    LinkMonitor m(testConfig());
-    m.setCarriesData(false);
-    m.reset(0);
-    m.onLinkFailure(1000);
-    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(3600000, true));
-}
-
-// QUIRK_NO_GET_REPORT: the data comes only from INPUT reports. A string request that
-// times out must not make it stale nor restart the board.
-void test_control_pipe_without_data_never_escalates(void) {
-    LinkMonitor m(testConfig());
-    m.setCarriesData(false);
-    m.reset(0);
-    m.onLinkFailure(1000);
-    TEST_ASSERT_FALSE(m.canPoll(1500)); // still backs off the remaining requests
-    TEST_ASSERT_FALSE(m.isStale(1000 + 3600000));
-    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == m.tick(1000 + 3600000));
-    // A reset (new device) keeps the setting
-    m.reset(5000);
-    TEST_ASSERT_FALSE(m.carriesData());
-    m.setCarriesData(true);
-    m.onLinkFailure(6000);
-    TEST_ASSERT_TRUE(m.isStale(6000 + 20000));
-}
-
 // Review A2: watchdog on the INPUT pipe
 
 // CyberPower-like: reports 8 and 11 together every 3 s. Returns the last report time.
@@ -267,6 +240,17 @@ void test_input_not_enough_samples_never_acts(void) {
     TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + 3600000));
 }
 
+// US-108: a watchdog never fed is never periodic and never acts, the case of QUIRK_NO_INTERRUPT_PIPE
+// (APC 5G), where USBHostUPS drops the INPUT reports before onInput()
+void test_input_never_fed_never_acts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_FALSE(wd.isStale(600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(3600000));
+}
+
 void test_input_jitter_tolerated(void) {
     InputWatchdog wd;
     wd.reset(0);
@@ -295,13 +279,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_stuck_control_transfer_restarts_directly);
     RUN_TEST(test_stuck_flag_without_failures_never_acts);
     RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
-    RUN_TEST(test_stuck_pipe_without_data_never_restarts);
-    RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);
     RUN_TEST(test_input_change_driven_device_never_acts);
     RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
     return UNITY_END();
 }
@@ -319,13 +302,12 @@ void setup() {
     RUN_TEST(test_stuck_control_transfer_restarts_directly);
     RUN_TEST(test_stuck_flag_without_failures_never_acts);
     RUN_TEST(test_unstuck_pipe_uses_recovery_ladder);
-    RUN_TEST(test_stuck_pipe_without_data_never_restarts);
-    RUN_TEST(test_control_pipe_without_data_never_escalates);
     RUN_TEST(test_input_periodic_silence_recovers_then_restarts);
     RUN_TEST(test_input_resume_clears_stale_and_keeps_period);
     RUN_TEST(test_input_long_period_scales_threshold);
     RUN_TEST(test_input_change_driven_device_never_acts);
     RUN_TEST(test_input_not_enough_samples_never_acts);
+    RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
     UNITY_END();
 }

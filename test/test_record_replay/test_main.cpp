@@ -348,6 +348,62 @@ void test_replay_apc_smartups750(void) {
         /* descriptor only, no DelayBeforeStartup path */ {}, RW_DELAY_OFF, RW_DELAY_OFF);
 }
 
+// US-108: the APC 5G (051d:0003, issue #22) has QUIRK_NO_INTERRUPT_PIPE, disable_interrupt_pipe of
+// apc-hid.c:51-62: every value is read with a FEATURE GET_REPORT, the INPUT reports are dropped
+static const char* const kIssue22 = "test/fixtures/apc/apc_smartups_750_vid051d_pid0003_issue22.json";
+
+void test_apc_5g_reads_feature_reports_issue22(void) {
+    // Poll lists: FEATURE reports only, the INPUT report 0x89 (proprietary protocol) left out
+    std::string lists = FixtureReplayRunner::pollLists<APCDriver>(kIssue22);
+    TEST_ASSERT_TRUE_MESSAGE(lists.find("/1") == std::string::npos, lists.c_str());
+
+    ReplaySession s;
+    if (!FixtureReplayRunner::replay(kIssue22, s)) return;
+    TEST_ASSERT_TRUE(s.host._quirks & QUIRK_NO_INTERRUPT_PIPE);
+    GenericDriver* drv = static_cast<GenericDriver*>(s.driver);
+    // The fixture has only the descriptor: every GET_REPORT is answered with zeros
+    s.host._answer_all = true;
+    s.host._answer_driver = s.driver;
+    s.host._answer_data = &s.ups_data;
+    for (uint32_t now = 1; now <= 35000; now += 25) s.driver->loop(&s.host, s.ups_data, now);
+
+    // Bound rows of the thresholds UPS Settings writes
+    bool charge_low = false, runtime_low = false;
+    for (const auto& b : drv->nutBindings()) {
+        if (strcmp(b.info->info_type, "battery.charge.low") == 0) charge_low = true;
+        if (strcmp(b.info->info_type, "battery.runtime.low") == 0) runtime_low = true;
+    }
+    TEST_ASSERT_TRUE(charge_low);
+    TEST_ASSERT_TRUE(runtime_low);
+    for (const auto& r : s.host._requestedReports) TEST_ASSERT_EQUAL_UINT8(3, r.second);
+
+    std::string rw = FixtureReplayRunner::listRW(s.driver, s.ups_data);
+    TEST_ASSERT_TRUE_MESSAGE(rw.find("battery.charge.low:") != std::string::npos, rw.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(rw.find("battery.runtime.low:") != std::string::npos, rw.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(rw.find("ups.delay.shutdown:") != std::string::npos, rw.c_str());
+    // LIST CMD: the command rows of apcHid2Nut() the descriptor has (no beeper report, no
+    // battery test usage on this Smart-UPS), as test_replay_apc_smartups750
+    TEST_ASSERT_EQUAL_STRING(CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, FixtureReplayRunner::listCmd(s).c_str());
+}
+
+// An INPUT report reaching the replay of a 5G (RemainingCapacity, report 0x0C) is dropped by the
+// runner's quirk check, the same as USBHostUPS::processInputReport(): the replay applies the quirk
+void test_apc_5g_input_report_ignored_issue22(void) {
+    ReplaySession s;
+    if (!FixtureReplayRunner::replay(kIssue22, s)) return;
+    const HIDUsageDef* charge = nullptr;
+    for (const auto& u : s.host.getUsages()) {
+        if (u.report_type == 1 && strcmp(u.path, "UPS.PowerSummary.RemainingCapacity") == 0) charge = &u;
+    }
+    TEST_ASSERT_NOT_NULL(charge);
+    TEST_ASSERT_EQUAL_UINT8(0x0C, charge->report_id);
+    std::vector<uint8_t> report(s.host._parser.getExpectedLength(0x0C, 1), 0x50);
+    TEST_ASSERT_TRUE(report.size() >= 2);
+    report[0] = 0x0C;
+    TEST_ASSERT_FALSE(FixtureReplayRunner::replayReport(s, 0x0C, 1, report));
+    TEST_ASSERT_FALSE(s.ups_data.hasKey("battery.charge"));
+}
+
 void test_replay_apc_bx1500g_issue55(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
         /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BX1500G_PID0002_ISSUE55,
@@ -1411,8 +1467,9 @@ static const char* const kApcPollSmartups750Pid0002Issue13 =
     "quick: 12/3 13/3 7/3 24/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 22/3 23/3 27/3 28/3 21/3 24/3 26/3";
 static const char* const kApcPollSmartups750Pid0002Issue78 =
     "quick: 12/3 13/3 7/3 24/3 25/3 44/3 51/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 22/3 23/3 27/3 28/3 21/3 24/3 26/3 25/3 30/3 31/3 29/3 32/3 33/3 34/3 44/3 66/3 64/3 42/3 43/3 45/3 35/3 36/3 37/3 38/3 39/3 40/3 41/3 46/3 47/3 48/3 49/3 52/3 55/3 50/3 53/3 62/3 63/3 54/3 51/3";
+// US-108: QUIRK_NO_INTERRUPT_PIPE leaves out the INPUT report 0x89 (137/1), the proprietary protocol
 static const char* const kApcPollSmartups750Pid0003Issue22 =
-    "quick: 12/3 13/3 7/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 137/1 144/3 150/3 141/3 142/3 147/3 148/3 146/3";
+    "quick: 12/3 13/3 7/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 144/3 150/3 141/3 142/3 147/3 148/3 146/3";
 
 void test_apc_poll_baseline(void) {
     static const SnapshotCase cases[] = {
@@ -1728,6 +1785,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_rs900mi);
     RUN_TEST(test_replay_apc_xs700u);
     RUN_TEST(test_replay_apc_smartups750);
+    RUN_TEST(test_apc_5g_reads_feature_reports_issue22);
+    RUN_TEST(test_apc_5g_input_report_ignored_issue22);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
@@ -1775,6 +1834,8 @@ void setup() {
     RUN_TEST(test_replay_apc_rs900mi);
     RUN_TEST(test_replay_apc_xs700u);
     RUN_TEST(test_replay_apc_smartups750);
+    RUN_TEST(test_apc_5g_reads_feature_reports_issue22);
+    RUN_TEST(test_apc_5g_input_report_ignored_issue22);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
