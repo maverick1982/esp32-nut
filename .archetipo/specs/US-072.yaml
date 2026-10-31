@@ -31,6 +31,7 @@ body: |-
   - [ ] Restano invariati `LIST CMD`, i valori pubblicati nelle fixture di replay e la rilevazione dei dati stale.
   - [ ] I test nativi del poll (`test_poll_cycle`) coprono: primo poll, poll successivi senza modifiche, rilettura dopo SET e dopo INSTCMD, report misti (dinamici + semi-statici) sempre letti.
   - [ ] Prima del merge, prova sul campo di almeno 12 h su un APC BX e su un Eaton, con il conteggio delle richieste prima e dopo.
+    - Eaton 3S fatto (2026-10-31, 4fda772, 12 h): GET_REPORT/min 244 -> 224, 0 falliti, nessun riavvio né WARN/ERROR; rilettura visibile dopo SET (235) e INSTCMD (248, 241); snapshot NUT invariati. APC BX: da chiedere ai tester.
 
   **Assunzioni**
   - Da fare a migrazione delle tabelle completata (US-079): i flag `HU_FLAG_SEMI_STATIC`/`HU_FLAG_STATIC` di ogni campo vengono dalle tabelle uniche. Va fatta anche dopo US-067 (EP-003), che introduce SET VAR e il segnale "dati cambiati" dopo una scrittura. La dipendenza è tra epic diversi, quindi non è nel campo "Bloccato da".
