@@ -362,7 +362,11 @@ void USBHostUPS::processEvents() {
             handleDisconnected(ev.handle);
             break;
         case HidEvent::TRANSFER_ERROR:
-            if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending && !_restart_requested) {
+            if (ev.handle == _hid_dev_handle && (_quirks & QUIRK_NO_INTERRUPT_PIPE)) {
+                // US-108: upstream never reads this pipe (usbhid-ups.c:1432), so its errors
+                // are not a fault and must not climb to a restart
+                logDebug("[USB] INPUT transfer error ignored: interrupt pipe disabled");
+            } else if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending && !_restart_requested) {
                 if (++_in_recoveries > MAX_IN_RECOVERIES) {
                     requestRestart("INPUT transfer keeps failing");
                 } else {
@@ -464,7 +468,10 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     }
 
     _link.reset(millis());
-    _link.setCarriesData(!(_quirks & QUIRK_NO_GET_REPORT));
+    if (_quirks & QUIRK_NO_INTERRUPT_PIPE) {
+        // upslogx(LOG_INFO, "interrupt pipe disabled ...") of apc-hid.c:51-62 (US-108)
+        log("INFO", "[USB] Interrupt pipe disabled: values read with GET_REPORT (APC 5G, apc-hid)");
+    }
     _in_wd.reset(millis());
     _in_reasm.reset();
     _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
@@ -522,6 +529,10 @@ void USBHostUPS::clearDeferredClaim(hid_host_device_handle_t handle) {
 
 void USBHostUPS::processInputReport(const HidEvent& ev) {
     if (ev.handle != _hid_dev_handle || !_driver) return;
+    // disable_interrupt_pipe of apc-hid.c:51-62 (US-108): on the APC 5G the interrupt pipe
+    // carries a proprietary protocol. Its transfers are dropped before the statistics and the
+    // InputWatchdog, which is never fed and never acts: no INPUT is not a failure here.
+    if (_quirks & QUIRK_NO_INTERRUPT_PIPE) return;
 
     _in_recoveries = 0;
     _stat_in_packets++;

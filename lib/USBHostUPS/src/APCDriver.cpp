@@ -28,9 +28,10 @@
  *   and request length (issue #60).
  * - apc_fix_report_desc is not needed: it widens LogMin/LogMax of UPS.Input.Voltage on the
  *   Back-UPS XS 1400U, and extractUsage() never clips a value to the Logical Maximum.
+ * - disable_interrupt_pipe() of PID 0x0003/0x0004 is QUIRK_NO_INTERRUPT_PIPE in Quirks.h
+ *   (US-108): INPUT reports ignored, every value read with GET_REPORT.
  * - Not replicated: general_apc_check() (max_report_size for "Back-UPS ES 525" and "CS"
- *   firmwares, here only requestLength() of the BX) and disable_interrupt_pipe() of PID
- *   0x0003/0x0004.
+ *   firmwares, here only requestLength() of the BX).
  */
 
 APCDriver::APCDriver() : _back_ups_bx(false) {}

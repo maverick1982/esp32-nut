@@ -178,13 +178,29 @@ void test_missing_strings_first_in_full_cycle(void) {
     TEST_ASSERT_EQUAL(3, host._reports.size());
 }
 
-void test_no_get_report_quirk_skips_reports(void) {
+// US-108: without the interrupt pipe (APC 5G, disable_interrupt_pipe of apc-hid) every value is
+// read with a FEATURE GET_REPORT, and a report that is only INPUT is never requested
+void test_no_interrupt_pipe_quirk_reads_feature_reports_only(void) {
     standardDevice();
-    host._quirks = QUIRK_NO_GET_REPORT;
+    host._quirks = QUIRK_NO_INTERRUPT_PIPE;
     GenericDriver drv;
     drv.setup();
-    runLoop(drv, 1000, 40000);
-    TEST_ASSERT_EQUAL(0, host._reports.size());
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(1, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(3, host._reports[0].second);
+    TEST_ASSERT_EQUAL_UINT8(2, host._reports[1].first);
+    TEST_ASSERT_EQUAL_UINT8(3, host._reports[1].second);
+
+    // Without the quirk the INPUT report 3 is read too (test_first_cycle_is_full)
+    setUp();
+    standardDevice();
+    GenericDriver plain;
+    plain.setup();
+    runLoop(plain, 1000, 1500);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(3, host._reports[2].first);
+    TEST_ASSERT_EQUAL_UINT8(1, host._reports[2].second);
 }
 
 void test_report_id_zero_polled(void) {
@@ -655,6 +671,21 @@ void test_semi_static_reports_left_out_of_later_full_polls(void) {
     TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
 }
 
+// US-108: in "pollonly" (QUIRK_NO_INTERRUPT_PIPE) every full poll reads the semi-static reports
+// too, as usbhid-ups.c:2352, 2360 skip the STATIC / SEMI_STATIC rows only with the interrupt pipe
+void test_semi_static_no_interrupt_pipe_reads_every_full_poll(void) {
+    semiStaticDevice();
+    host._quirks = QUIRK_NO_INTERRUPT_PIPE;
+    SemiStaticDriver drv;
+    runFirstMinuteHalf(drv);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    host._reports.clear();
+    runLoop(drv, 61000, 61500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+}
+
 // SET VAR or INSTCMD: the next cycle is a full poll right away, with the semi-static reports;
 // the one after leaves them out again
 void test_semi_static_reports_read_again_after_data_change(void) {
@@ -790,7 +821,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_requests_are_spaced);
     RUN_TEST(test_paused_polling_resumes_where_it_stopped);
     RUN_TEST(test_missing_strings_first_in_full_cycle);
-    RUN_TEST(test_no_get_report_quirk_skips_reports);
+    RUN_TEST(test_no_interrupt_pipe_quirk_reads_feature_reports_only);
     RUN_TEST(test_report_id_zero_polled);
     RUN_TEST(test_cyberpower_policy);
     RUN_TEST(test_eaton_skips_reports_254_255);
@@ -813,6 +844,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_initial_poll_done_after_first_full_cycle);
     RUN_TEST(test_semi_static_first_full_poll_reads_every_report);
     RUN_TEST(test_semi_static_reports_left_out_of_later_full_polls);
+    RUN_TEST(test_semi_static_no_interrupt_pipe_reads_every_full_poll);
     RUN_TEST(test_semi_static_reports_read_again_after_data_change);
     RUN_TEST(test_semi_static_change_during_full_poll_reads_next_cycle);
     RUN_TEST(test_semi_static_report_requested_by_poll_soon);

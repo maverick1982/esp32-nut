@@ -41,17 +41,7 @@ public:
     }
 
     LinkMonitor() : LinkMonitor(defaultConfig()) {}
-    explicit LinkMonitor(const Config& cfg) : _cfg(cfg), _carriesData(true) { reset(0); }
-
-    /**
-     * False when the control pipe carries no UPS data (QUIRK_NO_GET_REPORT: values only
-     * come from INPUT reports, guarded by InputWatchdog). Its failures then still back off
-     * the remaining requests (strings, beeper) but never make the data stale nor climb the
-     * recovery ladder: a string request timing out on such a device used to restart the
-     * board while INPUT data kept flowing.
-     */
-    void setCarriesData(bool carriesData) { _carriesData = carriesData; }
-    bool carriesData() const { return _carriesData; }
+    explicit LinkMonitor(const Config& cfg) : _cfg(cfg) { reset(0); }
 
     void reset(uint32_t now) {
         _failures = 0;
@@ -86,11 +76,10 @@ public:
     }
 
     bool isStale(uint32_t now) const {
-        return _carriesData && _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
+        return _failures > 0 && (now - _lastAliveMs) >= _cfg.staleAfterMs;
     }
 
     Action tick(uint32_t now, bool ctrlStuck = false) {
-        if (!_carriesData) return Action::NONE;
         if (_failures == 0) return Action::NONE;
         // Only the bus reset of a restart gives EP0 back (ADR 0008)
         if (ctrlStuck && (now - _firstFailureMs) >= _cfg.stuckRestartMs) return Action::RESTART;
@@ -109,7 +98,6 @@ public:
 
 private:
     Config _cfg;
-    bool _carriesData;
     uint8_t _failures;
     uint8_t _recoveries;
     uint32_t _firstFailureMs; // first failure since the device last answered
@@ -123,8 +111,9 @@ private:
  * @brief Liveness check of the interrupt IN pipe (review A2).
  *
  * LinkMonitor only sees EP0. If INPUT reports stop without any error, the values they
- * carry stay frozen and never become stale: the worst case is QUIRK_NO_GET_REPORT
- * (APC 5G, Smart-UPS), where INPUT reports are the only source of data.
+ * carry stay frozen and never become stale. With QUIRK_NO_INTERRUPT_PIPE (APC 5G, US-108)
+ * INPUT reports are dropped before onInput(): the watchdog is never fed, never periodic,
+ * and never acts.
  *
  * The watchdog learns the period of the device. Reports closer than burstGapMs form one
  * burst (a device sends several report IDs at once), and the intervals between bursts
