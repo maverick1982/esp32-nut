@@ -5,6 +5,8 @@
 #include <ArduinoJson.h>
 #include "IUpsSource.h"
 #include "board/board_settings.h"
+#include "SyslogSettings.h"
+#include "SyslogStatus.h"
 
 class WebApiJson {
 public:
@@ -67,6 +69,17 @@ public:
     static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
                                       const BoardSettings& current, BoardSettings& next,
                                       bool& restart, String& response);
+
+    // GET /api/logging (issue #69): {"syslog":{enabled,host,port,protocol,facility,
+    // min_level,rate},"status":{"syslog":{state,target,error,sent,failed,rate_limited,
+    // not_ready}},"options":{protocols,facilities,levels,rate_min,rate_max}}
+    static String remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status);
+    // POST /api/logging: {"syslog":{...}} with any of the fields above; the others keep
+    // their value. 0 with next filled, otherwise 400 {"error"}: "Invalid request",
+    // "Invalid server", "Invalid port", "Invalid protocol", "Invalid facility",
+    // "Invalid level", "Invalid rate", "Server required to enable syslog"
+    static int checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& current, SyslogSettings& next,
+                                  String& response);
 };
 
 #endif

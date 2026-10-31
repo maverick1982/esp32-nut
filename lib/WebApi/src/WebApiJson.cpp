@@ -412,3 +412,104 @@ int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig&
     }
     return 0;
 }
+
+// --- Remote logging (issue #69) ---
+
+String WebApiJson::remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status) {
+    JsonDocument doc;
+    JsonObject sl = doc["syslog"].to<JsonObject>();
+    sl["enabled"] = syslog.enabled;
+    sl["host"] = syslog.host.c_str();
+    sl["port"] = syslog.port;
+    sl["protocol"] = syslogProtocolName(syslog.protocol);
+    const char* fac = syslogFacilityName(syslog.facility);
+    sl["facility"] = fac ? fac : "local0";
+    sl["min_level"] = logLevelName(syslog.min_level);
+    sl["rate"] = syslog.rate;
+
+    JsonObject st = doc["status"]["syslog"].to<JsonObject>();
+    st["state"] = syslogStateName(status.state);
+    st["target"] = status.target.c_str();
+    st["error"] = status.error.c_str();
+    st["sent"] = status.stats.sent;
+    st["failed"] = status.stats.failed;
+    st["rate_limited"] = status.stats.rate_limited;
+    st["not_ready"] = status.stats.not_ready;
+
+    JsonObject opt = doc["options"].to<JsonObject>();
+    JsonArray protocols = opt["protocols"].to<JsonArray>();
+    protocols.add(syslogProtocolName(SyslogProtocol::RFC3164));
+    protocols.add(syslogProtocolName(SyslogProtocol::RFC5424));
+    JsonArray facilities = opt["facilities"].to<JsonArray>();
+    for (uint8_t i = 0; i < SYSLOG_FACILITY_COUNT; i++) facilities.add(SYSLOG_FACILITIES[i].name);
+    JsonArray levels = opt["levels"].to<JsonArray>();
+    for (uint8_t i = 0; i < LOG_LEVEL_COUNT; i++) levels.add(logLevelName((LogLevel)i));
+    opt["rate_min"] = LogOutputFilter::MIN_RATE;
+    opt["rate_max"] = LogOutputFilter::MAX_RATE;
+
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& current, SyslogSettings& next,
+                                   String& response) {
+    next = current;
+    if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonVariantConst sl = body["syslog"];
+    if (!sl.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonObjectConst obj = sl.as<JsonObjectConst>();
+
+    JsonVariantConst v = obj["enabled"];
+    if (!v.isUnbound()) {
+        if (!v.is<bool>()) return sendError(response, 400, "Invalid request");
+        next.enabled = v.as<bool>();
+    }
+    v = obj["host"];
+    if (!v.isUnbound()) {
+        if (!v.is<const char*>()) return sendError(response, 400, "Invalid server");
+        String host = v.as<const char*>();
+        host.trim();
+        if (host.length() > 0 && !validSyslogHost(host)) return sendError(response, 400, "Invalid server");
+        next.host = host;
+    }
+    v = obj["port"];
+    if (!v.isUnbound()) {
+        // An integer only: true, 514.5 or "514" are rejected
+        if (!v.is<int>() || v.as<int>() < 1 || v.as<int>() > 65535) return sendError(response, 400, "Invalid port");
+        next.port = (uint16_t)v.as<int>();
+    }
+    v = obj["protocol"];
+    if (!v.isUnbound()) {
+        SyslogProtocol p;
+        if (!v.is<const char*>() || !parseSyslogProtocol(v.as<const char*>(), p)) {
+            return sendError(response, 400, "Invalid protocol");
+        }
+        next.protocol = p;
+    }
+    v = obj["facility"];
+    if (!v.isUnbound()) {
+        uint8_t code;
+        if (!v.is<const char*>() || !parseSyslogFacility(v.as<const char*>(), code)) {
+            return sendError(response, 400, "Invalid facility");
+        }
+        next.facility = code;
+    }
+    v = obj["min_level"];
+    if (!v.isUnbound()) {
+        LogLevel l;
+        if (!v.is<const char*>() || !parseLogLevel(v.as<const char*>(), l)) {
+            return sendError(response, 400, "Invalid level");
+        }
+        next.min_level = l;
+    }
+    v = obj["rate"];
+    if (!v.isUnbound()) {
+        if (!v.is<int>() || v.as<int>() < LogOutputFilter::MIN_RATE || v.as<int>() > LogOutputFilter::MAX_RATE) {
+            return sendError(response, 400, "Invalid rate");
+        }
+        next.rate = (uint16_t)v.as<int>();
+    }
+    if (next.enabled && next.host.length() == 0) return sendError(response, 400, "Server required to enable syslog");
+    return 0;
+}

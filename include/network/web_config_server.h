@@ -17,6 +17,8 @@
 #include "core/board_settings_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
+#include "network/syslog_output.h"
+#include "core/log_settings_store.h"
 
 class WebConfigServer {
 public:
@@ -32,6 +34,8 @@ public:
     // Board page (US-094): settings loaded at boot, and the LED to apply changes at once
     void setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings);
     void setStatusLed(DiagnosticLED* led);
+    // Remote logging page (issue #69): settings in NVS, applied live to the syslog output
+    void setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog);
 
 private:
     WebServer server;
@@ -53,6 +57,10 @@ private:
     BoardSettingsStore* board_store = nullptr;
     BoardSettings board_settings = {};
     DiagnosticLED* status_led = nullptr;
+    LogSettingsStore* log_store = nullptr;
+    SyslogOutput* syslog_output = nullptr;
+    void handleGetLogging();
+    void handleSetLogging();
 
     void handleConnect();
     void handleLogs();

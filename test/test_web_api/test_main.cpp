@@ -981,6 +981,94 @@ void test_board_body_no_led(void) {
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
 }
 
+// --- Remote logging (issue #69) ---
+
+static int checkLog(const char* json, const SyslogSettings& cur, SyslogSettings& next, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkRemoteLogBody(doc, cur, next, out);
+}
+
+void test_remote_log_json(void) {
+    SyslogSettings s = { true, String("10.0.0.5"), 514, SyslogProtocol::RFC3164, 16, LogLevel::WARN, 10 };
+    SyslogStatus st;
+    st.state = SyslogState::Active;
+    st.target = "10.0.0.5:514";
+    st.error = "";
+    st.stats = { 12, 1, 3, 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::remoteLogJson(s, st).c_str());
+    TEST_ASSERT_TRUE(doc["syslog"]["enabled"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("10.0.0.5", doc["syslog"]["host"].as<const char*>());
+    TEST_ASSERT_EQUAL(514, doc["syslog"]["port"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("rfc3164", doc["syslog"]["protocol"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("local0", doc["syslog"]["facility"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("WARN", doc["syslog"]["min_level"].as<const char*>());
+    TEST_ASSERT_EQUAL(10, doc["syslog"]["rate"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("active", doc["status"]["syslog"]["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(12, doc["status"]["syslog"]["sent"].as<int>());
+    TEST_ASSERT_EQUAL(3, doc["status"]["syslog"]["rate_limited"].as<int>());
+    TEST_ASSERT_EQUAL(2, doc["options"]["protocols"].size());
+    TEST_ASSERT_EQUAL(10, doc["options"]["facilities"].size());
+    TEST_ASSERT_EQUAL_STRING("ERROR", doc["options"]["levels"][2].as<const char*>());
+    TEST_ASSERT_EQUAL(100, doc["options"]["rate_max"].as<int>());
+
+    // Network up and server known, nothing sent yet
+    st.state = SyslogState::Ready;
+    deserializeJson(doc, WebApiJson::remoteLogJson(s, st).c_str());
+    TEST_ASSERT_EQUAL_STRING("ready", doc["status"]["syslog"]["state"].as<const char*>());
+}
+
+void test_remote_log_body_full_update(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    int st = checkLog("{\"syslog\":{\"enabled\":true,\"host\":\" rsyslog.lan \",\"port\":1514,"
+                      "\"protocol\":\"rfc5424\",\"facility\":\"daemon\",\"min_level\":\"error\",\"rate\":25}}",
+                      cur, next, out);
+    TEST_ASSERT_EQUAL(0, st);
+    TEST_ASSERT_TRUE(next.enabled);
+    TEST_ASSERT_EQUAL_STRING("rsyslog.lan", next.host.c_str());  // trimmed
+    TEST_ASSERT_EQUAL_UINT16(1514, next.port);
+    TEST_ASSERT_TRUE(next.protocol == SyslogProtocol::RFC5424);
+    TEST_ASSERT_EQUAL_UINT8(3, next.facility);
+    TEST_ASSERT_TRUE(next.min_level == LogLevel::ERROR);
+    TEST_ASSERT_EQUAL_UINT16(25, next.rate);
+}
+
+void test_remote_log_body_partial_keeps_the_rest(void) {
+    SyslogSettings cur = { true, String("10.0.0.5"), 514, SyslogProtocol::RFC3164, 16, LogLevel::INFO, 10 }, next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkLog("{\"syslog\":{\"enabled\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.enabled);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.5", next.host.c_str());
+    TEST_ASSERT_EQUAL_UINT16(514, next.port);
+}
+
+void test_remote_log_body_errors(void) {
+    SyslogSettings cur = syslogDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkLog("[]", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"enabled\":true}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"host\":\"udp://x\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":65536}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"port\":\"514\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid port\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"protocol\":\"tcp\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"facility\":\"kern\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"min_level\":\"DEBUG\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":0}}", cur, next, out));
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"rate\":101}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid rate\"}", out.c_str());
+    // Enabling without a server would only fail
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":true}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable syslog\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkLog("{\"syslog\":{\"enabled\":true,\"host\":\"  \"}}", cur, next, out));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_api_null_host);
@@ -1049,5 +1137,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_board_body_invalid_level);
     RUN_TEST(test_board_body_usb_port);
     RUN_TEST(test_board_body_no_led);
+    RUN_TEST(test_remote_log_json);
+    RUN_TEST(test_remote_log_body_full_update);
+    RUN_TEST(test_remote_log_body_partial_keeps_the_rest);
+    RUN_TEST(test_remote_log_body_errors);
     return UNITY_END();
 }
