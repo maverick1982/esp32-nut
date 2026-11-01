@@ -130,6 +130,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 - **Scheda ESP32-S3 o ESP32-P4**: È **obbligatorio** utilizzare una scheda di sviluppo ESP32-S3, oppure una scheda ESP32-P4 con Ethernet tra quelle supportate (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), perché questi chip supportano l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.
 - **Cavo USB OTG**: Un adattatore per collegare il cavo USB dell'UPS all'ESP32.
+- **Hub USB e prolunghe attive**: un cavo USB lungo con amplificatore integrato contiene un hub USB. Sulla porta High-Speed dell'ESP32-P4 un hub High-Speed nasconde l'UPS (un dispositivo Full-Speed): lo stack USB host di ESP-IDF non raggiunge un dispositivo Full-Speed dietro un hub High-Speed. Usa un cavo passivo, oppure metti un isolatore USB solo Full-Speed (basato su ADuM3160) tra la scheda e il cavo. Sull'ESP32-S3, la cui porta USB è solo Full-Speed, un cavo del genere dovrebbe funzionare senza isolatore (non provato). ([#113](https://github.com/maverick1982/esp32-nut/issues/113))
 
 ### Configurazione su Board generiche con doppia USB-C (es. Generic ESP32-S3 DevKit)
 Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (solder pads) sul retro per abilitare la modalità Host. Per ottenere un'installazione pulita senza saldare manualmente fili ai pin GPIO:
@@ -148,7 +149,7 @@ Al posto dell'ESP32-S3 si può usare una scheda ESP32-P4 con porta Ethernet:
 
 | Immagine | Revisione del chip | Test su hardware |
 | :--- | :--- | :--- |
-| ESP32-P4 v3.1 or later | v3.1 e successive (produzione attuale) | **Non ancora provata su hardware** |
+| ESP32-P4 v3.1 or later | v3.1 e successive (produzione attuale) | Provata da [rtadams89](https://github.com/rtadams89) su una scheda v3.2, con un UPS ([#94](https://github.com/maverick1982/esp32-nut/issues/94)) |
 | ESP32-P4 before v3 | v1.x (prime schede) | Provata da [rtadams89](https://github.com/rtadams89) su una scheda v1.3, con un UPS |
 
 Per conoscere la revisione, esegui `esptool chip-id` (`esptool.py chip_id` con esptool v4; l'output riporta `Chip is ESP32-P4 (revision v1.3)`) oppure cerca `chip revision: v1.3` nel log di avvio sulla seriale. Le revisioni v2.x e v3.0 non sono supportate da nessuna delle due immagini. Un'immagine per la revisione sbagliata viene rifiutata, dal bootloader in un'installazione completa e dalla scheda in un aggiornamento OTA, quindi basta installare l'altra.
