@@ -67,6 +67,7 @@ public:
     // Commands and ups.delay.* of the brands without a subdriver: the generic rows (US-079);
     // the drivers of a subdriver return their own table and paths
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
+    bool beeperFieldRead(const IHidTransport* host) const override;
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::genericDelayPaths(); }
     // Rows bound to the attached device; built on the first decoded report
     const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }

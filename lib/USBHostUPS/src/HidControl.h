@@ -50,11 +50,14 @@ public:
         if (!hid) return {};
         // The data lock guards the parsed usages too
         PortLock lk(port);
-        bool beeper = port.supportsBeeperToggle() && port.upsData().hasKey("ups.beeper.status");
+        // US-109: a beeper value outside the table (SPD-750U: 3, #36) leaves ups.beeper.status
+        // missing, as in NUT; the field was read, so beeper.enable / beeper.disable stay offered
+        bool known = port.upsData().hasKey("ups.beeper.status");
+        bool beeper = port.supportsBeeperToggle() && (known || hid->beeperFieldRead());
         size_t n_table = 0;
         const NutTable::HidInfo* table = hid->commandTable(n_table); // US-074: the driver's command rows
         return buildCommands(hid->getUsages(), beeper, port.shutdownCommandsSupported(), port.beeperMuteSupported(),
-                             table, n_table);
+                             table, n_table, known);
     }
 
     /**
@@ -181,11 +184,13 @@ public:
 
     /**
      * Field of an instant command row (US-074): the first HU_TYPE_CMD row with this name whose
-     * path has a FEATURE usage, as find_nut_info() in instcmd() (the first row with hiddata).
-     * Deviation: a row whose path exists only as INPUT is skipped, since it could not be
-     * written. beeper.enable, beeper.disable and beeper.toggle take an OUTPUT field too:
-     * setBeeperField() writes it, as the beeper commands always did. dfl receives the row's
-     * default value (the value written without a parameter, atol() upstream).
+     * path has a FEATURE usage, as find_nut_info() in instcmd() (the first row with hiddata;
+     * HIDGetItemData() finds FEATURE items only, libhid.c:502). Deviation: a row whose path
+     * exists only as INPUT is skipped, since it could not be written. beeper.enable,
+     * beeper.disable and beeper.toggle take an OUTPUT field too: setBeeperField() writes it
+     * with its own report type, as the beeper commands always did (OUTPUT items are typed
+     * OUTPUT since US-109). dfl receives the row's default value (the value written without a
+     * parameter, atol() upstream).
      */
     static const HIDUsageDef* cmdField(const NutTable::HidInfo* table, size_t n, const std::vector<HIDUsageDef>& usages,
                                        const char* name, const char** dfl = nullptr) {
@@ -239,16 +244,19 @@ public:
      * load.off.delay, load.on from load.on.delay, shutdown.return and shutdown.stayoff from both.
      * Only names of the UpsCommands.h catalog, in its order: beeper.on/off (aliases upstream),
      * outlet.N.load.*, bypass.* and experimental.* stay out. Project rules kept: beeper commands
-     * only with beeper_available (supportsBeeperToggle() and a reported ups.beeper.status),
-     * beeper.toggle from beeper.enable and beeper.disable or from a row of its own, beeper.mute
-     * only when 3 fits the field and mute_allowed (IUPSDriver::beeperMuteSupported, US-087),
+     * only with beeper_available (supportsBeeperToggle(), and ups.beeper.status reported or the
+     * beeper field read, US-109); beeper.toggle also needs beeper_state_known (ups.beeper.status
+     * reported: it writes from the current state); beeper.toggle from
+     * beeper.enable and beeper.disable or from a row of its own, beeper.mute only when 3 fits the
+     * field and mute_allowed (IUPSDriver::beeperMuteSupported, US-087),
      * shutdown.default when one of the commands upsdrv_shutdown() tries is available, and
      * shutdown_cmds (IUPSDriver::shutdownCommandsSupported, US-058): false hides every load.*
      * and shutdown.* command. Without a table, no command.
      */
     static std::vector<const UPSCommandInfo*> buildCommands(const std::vector<HIDUsageDef>& usages, bool beeper_available,
                                                             bool shutdown_cmds, bool mute_allowed,
-                                                            const NutTable::HidInfo* cmd_table, size_t n_cmd_table) {
+                                                            const NutTable::HidInfo* cmd_table, size_t n_cmd_table,
+                                                            bool beeper_state_known = true) {
         std::vector<const UPSCommandInfo*> result;
         if (!cmd_table) return result;
         auto has = [&](const char* name) { return cmdField(cmd_table, n_cmd_table, usages, name) != nullptr; };
@@ -270,7 +278,8 @@ public:
                 available = mute_allowed && beeper_available && f && cmdValueFits(*f, cmdDefault(dfl));
             } else if (strcmp(n, "beeper.toggle") == 0) {
                 // A beeper.toggle row of its own (liebert-hid.c:141, US-106), or the enable/disable pair
-                available = beeper_available && (has("beeper.toggle") || (has("beeper.enable") && has("beeper.disable")));
+                available = beeper_available && beeper_state_known &&
+                            (has("beeper.toggle") || (has("beeper.enable") && has("beeper.disable")));
             } else if (strncmp(n, "beeper.", 7) == 0) {
                 available = beeper_available && has(n);
             } else if (strncmp(n, "test.", 5) == 0) {

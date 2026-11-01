@@ -1,0 +1,350 @@
+schema: archetipo/plan/v2
+spec_code: US-109
+body: |
+  # US-109: Correzioni dalla prova rc1: report OUTPUT, valori mancanti e comandi del cicalino (#100, #36) — Piano di Implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-01
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3 | Branch: `feature/us-072-us-108-poll` (US-072 e US-108 DONE). Blocca il rilascio della v1.12.0.
+
+  Tre correzioni emerse dalla v1.12.0-rc1:
+  - **#100** (Smart-UPS 750L, 051d:0003): `HIDParser.cpp:103` assegna `(bTag == 8) ? 0x01 : 0x03`, quindi gli item Output diventano FEATURE. Il report OUTPUT 0x90 (144) finisce nel full poll come 144/3 e ogni GET_REPORT fallisce con `ESP_ERR_INVALID_RESPONSE`, 2 righe ERROR al minuto.
+  - **#100**: il riquadro UPS LOAD mostra `0 %` senza `ups.load` (`data/www/bundle.js:571`, `|| 0`), e la riga `[DIAG] UPS Info` mostra `Input = 0.0 V` senza tensioni (`src/core/main.cpp:300-307`).
+  - **#36** (Powercom SPD-750U): dopo `beeper.toggle` l'UPS riporta `AudibleAlarmControl = 3`, valore che `powercom_beeper_info` (powercom-hid.c:291-295) non conosce. `ups.beeper.status` sparisce, come in NUT, ma `HidControl::supportedCommands()` (`HidControl.h:53`) nasconde allora tutti i comandi `beeper.*`, mentre NUT li elenca in base alle righe. La situazione resta anche dopo un riavvio, perché l'UPS resta a 3.
+
+  ---
+
+  ## Soluzione Tecnica
+
+  ### 1. Tipo degli item Output (parser)
+  - `HIDParser.cpp:103`: tipo per item. bTag 8 → 0x01, 9 → 0x02, 11 → 0x03. Offset e lunghezze usano già le mappe separate (`_input_lengths`, `_output_lengths`, `_feature_lengths`), quindi l'offset di un campo Output non cambia; cambia solo il tipo.
+  - Effetti già previsti nel codice: `GenericDriver::buildPollLists()` salta i report che non sono INPUT o FEATURE ("OUTPUT reports are not read"); `USBHostUPS.cpp:877, 882` usa `HID_REPORT_TYPE_OUTPUT` quando `report_type == 2`; `hasFeatureBeeperControl()` e `activeBeeper()` accettano già 0x02.
+  - `HidControl::cmdField()`: oggi accetta 0x02 solo per i comandi del cicalino, un ramo mai usato finché il parser non produceva 0x02. Diventa: FEATURE o OUTPUT per ogni riga comando, come `find_nut_info()` + `HIDSetDataValue()` di NUT, che scrivono l'item con il suo tipo. Così nessun comando sparisce per il cambio di tipo.
+  - Impatto sulle fixture: tre descriptor hanno item Output, tutti con usage vendor:
+    - #22 report 0x90, solo OUTPUT: esce dal poll;
+    - CP1600 #48 report 41 e Keor #90 report 55, FEATURE + OUTPUT: il report FEATURE resta letto, i campi Output non vengono più decodificati dalla risposta FEATURE.
+
+    Le golden attese cambiano solo in `[requests]` della #22. Si verifica che nessuna riga delle tabelle sia legata a usage OUTPUT; se lo fosse, va riportato in review.
+  - SET VAR: se `planSet()` / `writableVariables()` considerano solo il tipo 0x03, si lascia così e lo si annota. Nessuna fixture ha righe RW su usage OUTPUT.
+
+  ### 2. Comandi del cicalino con stato sconosciuto
+  - Nuovo hook `IUPSDriver::beeperFieldRead(IHidTransport*) const`, che per default restituisce `false`. `GenericDriver` lo implementa: vale `true` se un report (INPUT o FEATURE) che contiene il percorso del cicalino attivo (`host->getActiveBeeperPath()`) risulta già decodificato (`_decoded_report`). Si azzera a ogni `setup()`, cioè a ogni nuovo dispositivo.
+  - `IHidControlPort::beeperFieldRead()`, che per default restituisce `false`. `USBHostUPS` lo implementa sotto `_mutex` delegando al driver; il mock di replay delega al driver della sessione.
+  - `HidControl::buildCommands()` riceve un parametro in più, `beeper_state_known`, in fondo con default `true` così le chiamate esistenti dei test restano valide:
+    - `beeper.enable` e `beeper.disable`: disponibili se `beeper_available` (`supportsBeeperToggle()` e `ups.beeper.status` presente oppure `beeperFieldRead()`) e se la riga esiste;
+    - `beeper.toggle` e `beeper.mute`: anche `beeper_state_known` (`ups.beeper.status` presente), perché il toggle calcola il valore da scrivere dallo stato attuale (`HidControl.h:88`).
+  - `supportedCommands()` calcola i due flag. `FixtureReplayRunner::listCmd()` fa lo stesso.
+  - **Decisione su `QUIRK_NO_BEEPER_CONTROL`: si toglie** da `Quirks.h`, da `ReplayMockHost::supportsBeeperToggle()` e dalla verifica del runner (`FixtureReplayRunner.h:255-260`).
+    - `USBHostUPS` non lo usa più dalla e14b3d2: sul campo l'SPD-750U offre già i comandi del cicalino, sia con la v1.11.0 sia con la rc1 (#36).
+    - NUT non ha un quirk così e offre `beeper.enable`/`disable`/`toggle` su Powercom.
+    - Rimetterlo in uso toglierebbe ai possessori di SPD-750U comandi che oggi usano.
+
+    I commenti dei test che lo citano (`test_hid_commands` ~1115, `test_record_replay` ~535) si correggono. Il replay della fixture SPD-750U, che contiene solo il descriptor, resta con il solo `test.battery.start.quick`, perché il report del cicalino non viene mai letto.
+
+  ### 3. Valori mancanti mostrati come assenti
+  - `bundle.js` (`renderTelemetry`, ~571): senza `ups.load` il riquadro mostra `--` e la barra resta a larghezza 0, come REAL POWER (`??`). Il valore `0` resta `0`. Poi `python scripts/embed_web.py`.
+  - `main.cpp:300-307`: se non esistono né `output.voltage` né `input.voltage`, la riga termina con `Voltage = --` invece di `Input = 0.0 V`. Commento in italiano, come il codice intorno.
+
+  ### Fuori scope
+  - Limitare il poll ai report delle righe legate, come upstream; `battery.charge` mostrato come 0 quando manca (non segnalato).
+  - La disconnessione USB dell'SPD-750U a batteria e il riavvio "INPUT transfer keeps failing" (#36): in attesa di dati.
+  - La nota nel README su hub e cavi con amplificatore (#113).
+
+  ---
+
+  ## Strategia di Test
+
+  - **`test_hid_parser`**:
+    - un descriptor sintetico con un item Output dà `report_type == 2`, `getExpectedLength(id, 2)` corretto e nessun FEATURE con quell'ID;
+    - un report con FEATURE e OUTPUT sullo stesso ID mantiene i campi FEATURE con offset e lunghezza invariati;
+    - fixture #22: 0x90 (144) è OUTPUT.
+  - **`test_record_replay`**:
+    - baseline delle liste di poll della #22 senza `144/3`, con `test_apc_5g_reads_feature_reports_issue22` aggiornato;
+    - golden rigenerate e confrontate per sezione: `[requests]` della #22 senza 144; ogni altra differenza si spiega o ci si ferma;
+    - CP1600 #48 e Keor #90: liste di poll e snapshot invariati;
+    - SPD-750U: replay più un report sintetico 19 (AudibleAlarmControl) a 3 → `ups.beeper.status` assente, LIST CMD con `beeper.enable beeper.disable` e senza `beeper.toggle`; con il valore 2 → `disabled` e anche `beeper.toggle`.
+  - **`test_hid_commands`**:
+    - `buildCommands` con `beeper_available` vero e `beeper_state_known` falso → enable e disable sì, toggle e mute no;
+    - una riga comando la cui usage è solo OUTPUT è disponibile;
+    - SPD-750U senza quirk.
+  - **`test_generic_driver`** (o `test_poll_cycle`): `beeperFieldRead()` è falso prima della lettura, vero dopo il decode del report del cicalino, di nuovo falso dopo `setup()`.
+  - **`test_hid_control` / `test_ups_control_port`**: i mock implementano `beeperFieldRead()`; un comando `beeper.enable` con stato sconosciuto viene eseguito.
+  - **Mutazioni**:
+    - parser con `(bTag == 8) ? 1 : 3` → fallisce il test del parser e la baseline della #22;
+    - `beeper_available` di nuovo legato a `ups.beeper.status` → fallisce il test SPD-750U a 3.
+  - Suite nativa completa ed e2e completi, più le build `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1`.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/`, API simulate con `page.route`)
+  **Video demo:** no. Il cambiamento visibile è un `--` in un riquadro, verificato dall'e2e; `archetipo-review` decide.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | UPS senza carico | L'utente apre UPS Telemetry con dati senza `ups.load` (come lo Smart-UPS 750L della #100): il riquadro UPS LOAD mostra `--`, REAL POWER `--` |
+  | UPS con carico 0 | Con `ups.load: "0"` il riquadro mostra `0`, perché il valore esiste |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-01_
+tasks:
+  - id: TASK-01
+    title: 'Parser: item Output con tipo 0x02; cmdField accetta OUTPUT per ogni riga comando'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il parser tipizza gli item per quello che sono e i report solo OUTPUT escono dal poll (AC 1-3).
+
+      **Leggi:** `lib/USBHostUPS/src/HIDParser.cpp:74-115` (main item), `:198-216` (`getExpectedLength`), `lib/USBHostUPS/src/HidControl.h:180-205` (`cmdField`), `lib/USBHostUPS/src/USBHostUPS.cpp:855-890` (scrittura con `HID_REPORT_TYPE_OUTPUT`), `lib/USBHostUPS/src/GenericDriver.cpp:182-225` (`buildPollLists`), `nut_repo/drivers/libhid.c` (tipo dell'item in `HIDSetDataValue`).
+
+      **Modifica:**
+      1. `HIDParser.cpp:103`: `def.report_type = (bTag == 8) ? 0x01 : (bTag == 9) ? 0x02 : 0x03;`. Commento: Output items are type 2 (US-109); they used to be FEATURE, so the APC 5G OUTPUT report 0x90 was polled.
+      2. `HidControl::cmdField()`: accetta `u.report_type == 0x03 || u.report_type == 0x02` per ogni comando. Togliere `output_ok` e aggiornare il commento: come NUT, che scrive l'item con il suo tipo; la deviazione resta solo per le usage solo INPUT.
+      3. Cercare altri punti che assumono "non INPUT = FEATURE" (`grep -rn "report_type" lib/USBHostUPS/src`). Lasciare invariati i controlli `!= 1 && != 3` già presenti. Se `planSet()` o `writableVariables()` accettano solo 0x03, non toccarli e annotarlo nel commit.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_parser -f test_hid_commands -f test_poll_cycle` verde. `test_record_replay` può fallire solo su `test_apc_poll_baseline`, sui test della #22 e sulle golden della #22, che TASK-02 aggiorna.
+
+      **Fatto:** item Output a 0x02; un report solo OUTPUT non entra nelle liste di poll.
+
+      **Blocchi:** se cambiano liste di poll o snapshot di fixture diverse dalla #22, fermati e riporta.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/HIDParser.cpp — tipo dell'item Output
+      - lib/USBHostUPS/src/HidControl.h — cmdField con OUTPUT per ogni comando
+
+      ## Criteri di Completamento
+      - [ ] Item Output con report_type 0x02
+      - [ ] cmdField accetta FEATURE e OUTPUT per tutte le righe comando
+      - [ ] Nessuna lista di poll cambiata fuori dalla #22
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test del parser e replay della #22 senza report 144; golden'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire AC 1, 2 e 4.
+
+      **Leggi:** `test/test_hid_parser/test_main.cpp` (stile dei descriptor sintetici), `test/test_record_replay/test_main.cpp` (`kApcPollSmartups750Pid0003Issue22`, `test_apc_5g_reads_feature_reports_issue22`, `test_apc_poll_baseline`), `test/test_record_replay/FixtureReplayRunner.h` (`checkGolden`, `ESP32NUT_WRITE_GOLDEN`), `test/test_hid_commands/test_main.cpp`.
+
+      **Modifica:**
+      1. `test_hid_parser`:
+         - `test_output_items_are_output_reports`: descriptor sintetico con un Feature (ID 1) e un Output (ID 2) → tipi 3 e 2, `getExpectedLength(2, 2)` corretto, nessuna usage FEATURE con ID 2;
+         - `test_feature_and_output_same_id_keep_feature_layout`: stesso ID con Feature e Output → bit_offset e lunghezza dei campi FEATURE invariati;
+         - fixture #22: l'usage 0xFF8600FC del report 0x90 ha tipo 2.
+      2. `test_record_replay`:
+         - `kApcPollSmartups750Pid0003Issue22` senza ` 144/3`, con il commento US-109;
+         - in `test_apc_5g_reads_feature_reports_issue22`, verificare che 144 non sia nelle liste;
+         - CP1600 #48 e Keor #90: le baseline esistenti restano invariate.
+      3. `test_hid_commands`: una riga comando sintetica la cui usage esiste solo come OUTPUT → `buildCommands` la offre.
+      4. Golden: copia in scratchpad, `ESP32NUT_WRITE_GOLDEN=1`, diff per sezioni. Atteso: solo `[requests]` della #22 (registry e generic), senza `144/3`.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_parser -f test_record_replay -f test_hid_commands` verde. Mutazione: rimettere `(bTag == 8) ? 0x01 : 0x03` deve far fallire il test del parser e la baseline della #22.
+
+      **Fatto:** test verdi, mutazione rilevata, golden cambiate solo dove previsto.
+
+      **Blocchi:** differenze di golden fuori da `[requests]` della #22: fermati e riporta.
+
+      ## File Coinvolti
+      - test/test_hid_parser/test_main.cpp — item Output
+      - test/test_record_replay/test_main.cpp — baseline e test della #22
+      - test/test_record_replay/golden/apc_smartups_750_vid051d_pid0003_issue22.*.txt — [requests]
+      - test/test_hid_commands/test_main.cpp — comando su usage OUTPUT
+
+      ## Criteri di Completamento
+      - [ ] Parser coperto per Output e per ID misti
+      - [ ] Report 144 fuori dalle liste della #22
+      - [ ] Golden cambiate solo in [requests] della #22
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Cicalino: enable/disable con stato sconosciuto (beeperFieldRead); via QUIRK_NO_BEEPER_CONTROL'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** AC 5-6. Comandi del cicalino offerti come in NUT quando il valore non è nella tabella; il quirk inutilizzato viene tolto.
+
+      **Leggi:** `lib/USBHostUPS/src/HidControl.h:47-100` (`supportedCommands`, `executeCommand` per i beeper), `:236-285` (`buildCommands`), `lib/USBHostUPS/src/IHidControlPort.h`, `lib/USBHostUPS/src/IUPSDriver.h`, `lib/USBHostUPS/src/GenericDriver.h/.cpp` (`_decoded_report`, `typeSlot`), `lib/USBHostUPS/src/USBHostUPS.cpp:1027-1050` (`getActiveBeeperPath`, `supportsBeeperToggle`), `lib/USBHostUPS/src/Quirks.h`, `test/test_record_replay/FixtureReplayRunner.h:55-70, 120-130, 250-262`, `nut_repo/drivers/powercom-hid.c:291-295, 658-660`.
+
+      **Modifica:**
+      1. `IUPSDriver`: `virtual bool beeperFieldRead(IHidTransport* host) const { return false; }`, con commento: the beeper report has been decoded at least once, even if its value is not in the table (US-109).
+      2. `GenericDriver::beeperFieldRead()`: per ogni usage di tipo 1 o 3 con il percorso `host->getActiveBeeperPath()`, `true` se il report è in `_decoded_report`.
+      3. `IHidControlPort`: `virtual bool beeperFieldRead() const { return false; }`. `USBHostUPS` lo implementa sotto `_mutex` con `_driver && _driver->beeperFieldRead(this)`.
+      4. `HidControl`:
+         - `buildCommands(..., size_t n_cmd_table, bool beeper_state_known = true)`: `beeper.toggle` e `beeper.mute` richiedono anche `beeper_state_known`; `beeper.enable` e `beeper.disable` solo `beeper_available`. Aggiornare il commento "Project rules kept";
+         - `supportedCommands()`: `bool known = hasKey("ups.beeper.status"); bool beeper = port.supportsBeeperToggle() && (known || hid->beeperFieldRead());`, e passare `known`.
+      5. `QUIRK_NO_BEEPER_CONTROL`: togliere la define e il flag della riga 0x0D9F/0x0004 da `Quirks.h`. La riga resta nella tabella con 0 e un commento: the SPD-750U offers the beeper commands as NUT does (US-109; the quirk was unused since e14b3d2).
+      6. `FixtureReplayRunner.h`:
+         - `ReplayMockHost::supportsBeeperToggle()` → `_parser.hasFeatureBeeperControl()`;
+         - togliere il ramo Powercom della verifica (`:255-258`), lasciando solo l'asserzione generale;
+         - `listCmd()` replica `supportedCommands()` usando `s.driver->beeperFieldRead(&s.host)`.
+      7. Correggere i commenti che citano il quirk: `test/test_hid_commands/test_main.cpp` ~1115, `test/test_record_replay/test_main.cpp` ~535. Il risultato atteso del replay SPD-750U resta `test.battery.start.quick`, perché il report del cicalino non viene letto.
+
+      **Verifica:** `grep -rn QUIRK_NO_BEEPER_CONTROL lib src test` vuoto. `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_commands -f test_hid_control -f test_ups_control_port -f test_record_replay -f test_nut_server` verde, salvo i test che TASK-04 aggiunge.
+
+      **Fatto:** comandi `beeper.enable` e `beeper.disable` disponibili a stato sconosciuto, toggle no; quirk rimosso.
+
+      **Blocchi:**
+      - se le golden `[cmd]` cambiano in fixture dove il report del cicalino è letto con un valore fuori tabella, è atteso: elencale nel commit;
+      - se cambiano in altre fixture, fermati.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — hook beeperFieldRead
+      - lib/USBHostUPS/src/GenericDriver.h, GenericDriver.cpp — implementazione
+      - lib/USBHostUPS/src/IHidControlPort.h, USBHostUPS.h, USBHostUPS.cpp — port
+      - lib/USBHostUPS/src/HidControl.h — regole dei comandi del cicalino
+      - lib/USBHostUPS/src/Quirks.h — via il quirk
+      - test/test_record_replay/FixtureReplayRunner.h — mock e listCmd
+
+      ## Criteri di Completamento
+      - [ ] enable/disable con il report letto anche senza ups.beeper.status
+      - [ ] toggle/mute solo con stato noto
+      - [ ] QUIRK_NO_BEEPER_CONTROL rimosso ovunque
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test del cicalino: SPD-750U a 3, buildCommands, beeperFieldRead'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire AC 5-6 con i casi della #36.
+
+      **Leggi:** `test/test_record_replay/test_main.cpp` (`test_replay_powercom_spd750u`, `test_apc_5g_input_report_ignored_issue22` come modello di report sintetico), `FixtureReplayRunner::replayReport`, `test/test_hid_commands/test_main.cpp:75, 1113-1140`, `test/test_generic_driver/test_main.cpp`, `test/test_hid_control/test_main.cpp:100-130`, `test/test_ups_control_port/test_main.cpp`.
+
+      **Modifica:**
+      1. `test_record_replay`: `test_spd750u_beeper_value_outside_table_keeps_commands_issue36`:
+         - replay della fixture SPD-750U, poi `replayReport` del report FEATURE 19 (AudibleAlarmControl, lunghezza da `getExpectedLength(19, 3)`) a 3 → `ups.beeper.status` assente, `listCmd` contiene `beeper.enable beeper.disable` e non `beeper.toggle`;
+         - con il valore 2 → `ups.beeper.status` `disabled` e anche `beeper.toggle`.
+         - Verificare prima con il descriptor che il report 19 contenga il percorso del cicalino attivo; se l'ID è diverso, usare quello vero.
+      2. `test_hid_commands`: `buildCommands(u, true, false, true, t, n, false)` sulla tabella Powercom → enable e disable, niente toggle; con `true` anche toggle.
+      3. `test_generic_driver` (o `test_poll_cycle` se il mock è lì): `beeperFieldRead()` è falso prima del decode del report del cicalino, vero dopo, falso dopo `setup()`.
+      4. Mock dei port (`test_hid_control`, `test_ups_control_port`, `test_nut_server` se serve): aggiungere `beeperFieldRead()` e un test in cui `beeper.enable` viene eseguito con lo stato assente.
+
+      **Verifica:** `PATH=$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay -f test_hid_commands -f test_generic_driver -f test_hid_control -f test_ups_control_port` verde. Mutazione: in `supportedCommands()` togliere `|| hid->beeperFieldRead()` deve far fallire il test SPD-750U a 3.
+
+      **Fatto:** test verdi, mutazione rilevata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_record_replay/test_main.cpp — SPD-750U con valore 3 e 2
+      - test/test_hid_commands/test_main.cpp — beeper_state_known
+      - test/test_generic_driver/test_main.cpp — beeperFieldRead
+      - test/test_hid_control/test_main.cpp, test/test_ups_control_port/test_main.cpp — mock e comando con stato assente
+
+      ## Criteri di Completamento
+      - [ ] Caso #36 coperto (3 → enable/disable, niente toggle)
+      - [ ] beeperFieldRead coperto
+      - [ ] Mutazione rilevata
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Web UI: UPS LOAD a -- senza ups.load; riga DIAG senza tensione'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** AC 7-8. I valori assenti non compaiono come 0.
+
+      **Leggi:** `data/www/bundle.js:555-590` (`renderTelemetry`: `elLoad`, `barLoad`, `elRealPower`), `src/core/main.cpp:296-308`, `scripts/embed_web.py` (si lancia a mano: il pre-script PlatformIO non rigenera).
+
+      **Modifica:**
+      1. `bundle.js`: `const load = data['ups.load'];`. Se `load === undefined`, il testo è `'--'` e la barra ha `width = '0%'` con il colore normale; altrimenti si comporta come oggi. Commento come quello di REAL POWER: a missing ups.load is not 0 % (US-109, #100).
+      2. `python scripts/embed_web.py` → rigenera `data/www/index_inlined.html` e `include/network/web_assets.h`.
+      3. `main.cpp`: se `usb_ups.getUPSData()` non ha né `output.voltage` né `input.voltage`, la riga termina con `| Voltage = --`; altrimenti resta com'è. Commento in italiano, come quello delle righe precedenti.
+
+      **Verifica:** `npx playwright test e2e/ups-parameters.spec.ts` verde (i test esistenti con `ups.load` restano invariati); build `esp32-s3-standard` (da PowerShell: `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard`) ok.
+
+      **Fatto:** riquadro a `--` senza `ups.load`; riga DIAG senza `0.0 V` inventato.
+
+      **Blocchi:** se `embed_web.py` cambia `web_assets.h` oltre al contenuto modificato (gzip diverso), è atteso; il contenuto decompresso deve differire solo nella modifica.
+
+      ## File Coinvolti
+      - data/www/bundle.js — riquadro UPS LOAD
+      - data/www/index_inlined.html, include/network/web_assets.h — rigenerati
+      - src/core/main.cpp — riga [DIAG]
+
+      ## Criteri di Completamento
+      - [ ] UPS LOAD a -- senza ups.load, 0 resta 0
+      - [ ] Asset incorporati rigenerati
+      - [ ] Riga DIAG senza tensione inventata
+    ref: TASK-05
+  - id: TASK-06
+    title: 'E2E: riquadro UPS LOAD senza ups.load e con carico 0'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire AC 7 con la web UI vera.
+
+      **Leggi:** `e2e/ups-parameters.spec.ts` (struttura dei dati simulati e locator `#ups-load`, `#ups-realpower`), `e2e/support/webui.ts`, `e2e/README.md`.
+
+      **Modifica:**
+      1. In `e2e/ups-parameters.spec.ts`:
+         - test "shows -- for UPS load when the UPS does not report it (#100)": dati come lo Smart-UPS 750L, senza `ups.load` né `ups.realpower` → `#ups-load` ha il testo `--` e `#ups-realpower` `--`;
+         - test "shows 0 for UPS load 0": `ups.load: "0"` → `#ups-load` ha il testo `0`.
+      2. Se esiste un locator per la barra del carico, verificare che la larghezza sia `0%` nel primo caso; altrimenti non aggiungerne.
+
+      **Verifica:** `npx playwright test e2e/ups-parameters.spec.ts` verde, poi `npm run e2e` verde. Mutazione: rimettere `|| 0` in `bundle.js` deve far fallire il primo test.
+
+      **Fatto:** e2e verdi, mutazione rilevata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/ups-parameters.spec.ts — due scenari
+
+      ## Criteri di Completamento
+      - [ ] Scenario senza ups.load
+      - [ ] Scenario con carico 0
+      - [ ] Suite e2e verde
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Chiusura: note v1.12.0, suite nativa ed e2e, tre build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** AC 9, documentazione e verifica finale.
+
+      **Leggi:** `docs/releases/v1.12.0.md` (voci APC Smart-UPS 5G e Powercom, sezione Other changes).
+
+      **Modifica:**
+      1. Note v1.12.0:
+         - nella voce APC Smart-UPS 5G: i report riservati al protocollo APC non vengono più letti, quindi niente errori `requestReport FAILED ... id=144` nel System Log;
+         - nella voce Powercom: se il cicalino riporta un valore che NUT non conosce (SPD-750U dopo `beeper.toggle`), `ups.beeper.status` manca, come in NUT, ma `beeper.enable` e `beeper.disable` restano disponibili;
+         - in Other changes: il riquadro UPS LOAD mostra `--` quando l'UPS non riporta il carico.
+      2. Suite nativa completa, e2e completi, build `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1` (da PowerShell).
+
+      **Verifica:** suite verde, e2e verdi, tre build ok, `grep -rn QUIRK_NO_BEEPER_CONTROL lib src test` vuoto.
+
+      **Fatto:** note aggiornate, tutto verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/releases/v1.12.0.md — tre correzioni
+
+      ## Criteri di Completamento
+      - [ ] Note aggiornate
+      - [ ] Suite nativa ed e2e verdi
+      - [ ] Tre build ok
+    ref: TASK-07

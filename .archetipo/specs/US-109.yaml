@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-109: Correzioni dalla prova rc1: report OUTPUT, valori mancanti e comandi del cicalino (#100, #36)
 
@@ -40,3 +40,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-01T16:56:30Z"
+  - status: PLANNED
+    at: "2026-11-01T19:29:34Z"
+  - status: IN PROGRESS
+    at: "2026-11-01T19:31:41Z"
+  - status: REVIEW
+    at: "2026-11-01T20:05:12Z"
+  - status: DONE
+    at: "2026-11-01T20:39:49Z"

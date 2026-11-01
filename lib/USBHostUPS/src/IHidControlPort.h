@@ -41,6 +41,8 @@ public:
     // setBeeper() on a given field, the one of the command row (US-074): same checks, writes
     // and log lines as setBeeper() on the active beeper. No lock may be held around it.
     virtual bool setBeeperField(const HIDUsageDef& field, bool enable) { return false; }
+    // IUPSDriver::beeperFieldRead() of the attached driver (US-109)
+    virtual bool beeperFieldRead() const { return false; }
 };
 
 #endif // I_HID_CONTROL_PORT_H

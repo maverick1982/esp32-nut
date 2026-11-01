@@ -100,7 +100,9 @@ bool HIDParser::parseReportDescriptor(const uint8_t* desc, size_t len) {
                         HIDUsageDef def;
                         def.usage = usage;
                         def.report_id = current_report_id;
-                        def.report_type = (bTag == 8) ? 0x01 : 0x03;
+                        // Input 1, Output 2, Feature 3 (US-109): Output items used to be typed
+                        // FEATURE, so the OUTPUT report 0x90 of the APC 5G was polled and failed
+                        def.report_type = (bTag == 8) ? 0x01 : (bTag == 9) ? 0x02 : 0x03;
                         def.bit_offset = (*offsets_map)[current_report_id];
                         def.bit_size = size_bits;
                         def.found = true;

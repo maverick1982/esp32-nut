@@ -356,10 +356,20 @@ void test_apc_5g_reads_feature_reports_issue22(void) {
     // Poll lists: FEATURE reports only, the INPUT report 0x89 (proprietary protocol) left out
     std::string lists = FixtureReplayRunner::pollLists<APCDriver>(kIssue22);
     TEST_ASSERT_TRUE_MESSAGE(lists.find("/1") == std::string::npos, lists.c_str());
+    // US-109: 0x90 (144) is the OUTPUT report of the proprietary protocol, typed 2 and not polled
+    TEST_ASSERT_TRUE_MESSAGE(lists.find(" 144/") == std::string::npos, lists.c_str());
 
     ReplaySession s;
     if (!FixtureReplayRunner::replay(kIssue22, s)) return;
     TEST_ASSERT_TRUE(s.host._quirks & QUIRK_NO_INTERRUPT_PIPE);
+    bool output_144 = false;
+    for (const auto& u : s.host.getUsages()) {
+        if (u.report_id == 0x90) {
+            TEST_ASSERT_EQUAL_UINT8(2, u.report_type);
+            output_144 = true;
+        }
+    }
+    TEST_ASSERT_TRUE(output_144);
     GenericDriver* drv = static_cast<GenericDriver*>(s.driver);
     // The fixture has only the descriptor: every GET_REPORT is answered with zeros
     s.host._answer_all = true;
@@ -381,9 +391,13 @@ void test_apc_5g_reads_feature_reports_issue22(void) {
     TEST_ASSERT_TRUE_MESSAGE(rw.find("battery.charge.low:") != std::string::npos, rw.c_str());
     TEST_ASSERT_TRUE_MESSAGE(rw.find("battery.runtime.low:") != std::string::npos, rw.c_str());
     TEST_ASSERT_TRUE_MESSAGE(rw.find("ups.delay.shutdown:") != std::string::npos, rw.c_str());
-    // LIST CMD: the command rows of apcHid2Nut() the descriptor has (no beeper report, no
-    // battery test usage on this Smart-UPS), as test_replay_apc_smartups750
-    TEST_ASSERT_EQUAL_STRING(CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, FixtureReplayRunner::listCmd(s).c_str());
+    // LIST CMD: the command rows of apcHid2Nut() the descriptor has (no battery test usage on
+    // this Smart-UPS). The zeros answered give AudibleAlarmControl 0, outside beeper_info:
+    // ups.beeper.status is missing, but the field was read, so beeper.enable / beeper.disable /
+    // beeper.mute are offered and beeper.toggle, which writes from the state, is not (US-109)
+    TEST_ASSERT_FALSE(s.ups_data.hasKey("ups.beeper.status"));
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.mute " CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT,
+                             FixtureReplayRunner::listCmd(s).c_str());
 }
 
 // An INPUT report reaching the replay of a 5G (RemainingCapacity, report 0x0C) is dropped by the
@@ -402,6 +416,49 @@ void test_apc_5g_input_report_ignored_issue22(void) {
     report[0] = 0x0C;
     TEST_ASSERT_FALSE(FixtureReplayRunner::replayReport(s, 0x0C, 1, report));
     TEST_ASSERT_FALSE(s.ups_data.hasKey("battery.charge"));
+}
+
+// US-109 (#36): the SPD-750U reports AudibleAlarmControl 3 after beeper.toggle, outside
+// powercom_beeper_info (1 enabled, 2 disabled). ups.beeper.status is missing, as in NUT, but the
+// field was read: beeper.enable / beeper.disable stay offered, beeper.toggle needs the state
+static const char* const kSpd750u = "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json";
+
+static std::string spd750uBeeperCommands(uint8_t value, bool& status, bool& read_before, bool& read_after_setup) {
+    ReplaySession s;
+    if (!FixtureReplayRunner::replay(kSpd750u, s)) return "";
+    read_before = s.driver->beeperFieldRead(&s.host);
+    const HIDUsageDef* beeper = nullptr;
+    String path = s.host.getActiveBeeperPath();
+    for (const auto& u : s.host.getUsages()) {
+        if (u.report_type == 3 && path == u.path) { beeper = &u; break; }
+    }
+    TEST_ASSERT_NOT_NULL(beeper);
+    TEST_ASSERT_EQUAL(0, beeper->bit_offset % 8);
+    std::vector<uint8_t> report(s.host._parser.getExpectedLength(beeper->report_id, 3), 0);
+    report[0] = beeper->report_id;
+    report[1 + beeper->bit_offset / 8] = value;
+    TEST_ASSERT_TRUE(FixtureReplayRunner::replayReport(s, beeper->report_id, 3, report));
+    status = s.ups_data.hasKey("ups.beeper.status");
+    std::string cmds = FixtureReplayRunner::listCmd(s);
+    s.driver->setup();
+    read_after_setup = s.driver->beeperFieldRead(&s.host);
+    return cmds;
+}
+
+void test_spd750u_beeper_value_outside_table_keeps_commands_issue36(void) {
+    bool status = true, before = true, after = true;
+    std::string cmds = spd750uBeeperCommands(3, status, before, after);
+    TEST_ASSERT_FALSE(before);
+    TEST_ASSERT_FALSE(status);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable test.battery.start.quick", cmds.c_str());
+    TEST_ASSERT_FALSE(after); // a new device forgets the read
+}
+
+void test_spd750u_beeper_disabled_offers_toggle(void) {
+    bool status = false, before = true, after = true;
+    std::string cmds = spd750uBeeperCommands(2, status, before, after);
+    TEST_ASSERT_TRUE(status);
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle test.battery.start.quick", cmds.c_str());
 }
 
 void test_replay_apc_bx1500g_issue55(void) {
@@ -532,7 +589,8 @@ void test_replay_powercom_spd750u(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
         // US-077: commands from powercomHid2Nut(). Only test.battery.start.quick (661):
         // test.battery.start.deep and test.battery.stop came from the catalog without a table,
-        // powercom-hid has no row for them. No beeper (QUIRK_NO_BEEPER_CONTROL), no load or
+        // powercom-hid has no row for them. No beeper command: the replay never reads the beeper
+        // report (US-109: no quirk hides them any more, see test_spd750u_beeper_*), no load or
         // shutdown command (shutdownCommandsSupported() false, US-058) although 662-664 bind
         "test.battery.start.quick", nullptr, NUT_ROWS_POWERCOM_SPD750U,
         /* powercom-hid.c:620-637: ups.delay.start "60", ups.delay.shutdown DEFAULT_OFFDELAY */
@@ -1467,9 +1525,10 @@ static const char* const kApcPollSmartups750Pid0002Issue13 =
     "quick: 12/3 13/3 7/3 24/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 22/3 23/3 27/3 28/3 21/3 24/3 26/3";
 static const char* const kApcPollSmartups750Pid0002Issue78 =
     "quick: 12/3 13/3 7/3 24/3 25/3 44/3 51/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 22/3 23/3 27/3 28/3 21/3 24/3 26/3 25/3 30/3 31/3 29/3 32/3 33/3 34/3 44/3 66/3 64/3 42/3 43/3 45/3 35/3 36/3 37/3 38/3 39/3 40/3 41/3 46/3 47/3 48/3 49/3 52/3 55/3 50/3 53/3 62/3 63/3 54/3 51/3";
-// US-108: QUIRK_NO_INTERRUPT_PIPE leaves out the INPUT report 0x89 (137/1), the proprietary protocol
+// US-108: QUIRK_NO_INTERRUPT_PIPE leaves out the INPUT report 0x89 (137/1), the proprietary protocol.
+// US-109: 0x90 (144) is an OUTPUT report, never read (it was polled as 144/3 and failed, #100)
 static const char* const kApcPollSmartups750Pid0003Issue22 =
-    "quick: 12/3 13/3 7/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 144/3 150/3 141/3 142/3 147/3 148/3 146/3";
+    "quick: 12/3 13/3 7/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 14/3 12/3 16/3 15/3 17/3 9/3 13/3 18/3 19/3 8/3 10/3 11/3 20/3 7/3 150/3 141/3 142/3 147/3 148/3 146/3";
 
 void test_apc_poll_baseline(void) {
     static const SnapshotCase cases[] = {
@@ -1787,6 +1846,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_apc_5g_reads_feature_reports_issue22);
     RUN_TEST(test_apc_5g_input_report_ignored_issue22);
+    RUN_TEST(test_spd750u_beeper_value_outside_table_keeps_commands_issue36);
+    RUN_TEST(test_spd750u_beeper_disabled_offers_toggle);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
@@ -1836,6 +1897,8 @@ void setup() {
     RUN_TEST(test_replay_apc_smartups750);
     RUN_TEST(test_apc_5g_reads_feature_reports_issue22);
     RUN_TEST(test_apc_5g_input_report_ignored_issue22);
+    RUN_TEST(test_spd750u_beeper_value_outside_table_keeps_commands_issue36);
+    RUN_TEST(test_spd750u_beeper_disabled_offers_toggle);
     RUN_TEST(test_replay_apc_smartups750_issue13);
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);

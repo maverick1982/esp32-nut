@@ -58,7 +58,6 @@ public:
     uint16_t getPID() const override { return _pid; }
     bool isPollingPaused() const override { return false; }
     bool supportsBeeperToggle() const {
-        if (_quirks & QUIRK_NO_BEEPER_CONTROL) return false;
         return _parser.hasFeatureBeeperControl();
     }
     // US-108: every GET_REPORT is answered with zeros of the declared length (ID first),
@@ -122,12 +121,15 @@ public:
     // LIST CMD of the replayed device, space separated: same inputs as
     // IUSBHostUPS::getSupportedCommands(), with the replayed data
     static std::string listCmd(ReplaySession& s) {
-        bool beeper = s.host.supportsBeeperToggle() && s.ups_data.hasKey("ups.beeper.status");
+        // As HidControl::supportedCommands() (US-109): the beeper field read keeps
+        // beeper.enable / beeper.disable when ups.beeper.status is missing
+        bool known = s.ups_data.hasKey("ups.beeper.status");
+        bool beeper = s.host.supportsBeeperToggle() && (known || s.driver->beeperFieldRead(&s.host));
         std::string actual;
         size_t n_cmd = 0;
         const NutTable::HidInfo* cmd_table = s.driver->commandTable(n_cmd); // US-074: the driver's command rows
         for (const auto* c : HidControl::buildCommands(s.host.getUsages(), beeper, s.driver->shutdownCommandsSupported(),
-                                                       s.driver->beeperMuteSupported(), cmd_table, n_cmd)) {
+                                                       s.driver->beeperMuteSupported(), cmd_table, n_cmd, known)) {
             if (!actual.empty()) actual += " ";
             actual += c->name;
         }
@@ -250,13 +252,6 @@ public:
             if (UPS_QUIRKS[q].vid == vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == pid)) {
                 host._quirks |= UPS_QUIRKS[q].flags;
             }
-        }
-
-        // Validate supportsBeeperToggle: if Powercom (VID 0x0D9F, PID 0x0004), quirk suppresses toggle
-        if (vid == 0x0D9F && pid == 0x0004) {
-            TEST_ASSERT_FALSE_MESSAGE(host.supportsBeeperToggle(), "Powercom SPD-750U must have supportsBeeperToggle == false due to quirk");
-        } else if (host._parser.hasFeatureBeeperControl()) {
-            TEST_ASSERT_TRUE_MESSAGE(host.supportsBeeperToggle(), "Device with Feature beeper and no quirk must have supportsBeeperToggle == true");
         }
 
         TEST_ASSERT_NOT_NULL_MESSAGE(driver, "Failed to instantiate driver for fixture");

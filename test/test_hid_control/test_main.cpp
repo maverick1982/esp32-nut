@@ -114,6 +114,8 @@ public:
         return data;
     }
     bool supportsBeeperToggle() const override { return beeperToggle; }
+    bool fieldRead = false;
+    bool beeperFieldRead() const override { return fieldRead; }
     bool shutdownCommandsSupported() const override { return shutdownCmds; }
     bool beeperMuteSupported() const override { return muteAllowed; }
     const std::vector<HIDUsageDef>& getUsages() const override {
@@ -244,6 +246,30 @@ void test_beeper_toggle_reads_status(void) {
     port.io.clear();
     TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.mute", nullptr));
     TEST_ASSERT_EQUAL_STRING(P_BEEPER "=3", ioStr(port).c_str());
+}
+
+// US-109: a beeper value outside the table (SPD-750U: 3, #36) leaves ups.beeper.status missing;
+// once the field was read, beeper.enable / beeper.disable / beeper.mute are listed and run,
+// beeper.toggle (which writes from the current state) is not
+void test_beeper_commands_with_unknown_state(void) {
+    FakePort port;
+    addBeeper(port, "disabled");
+    port.data.remove("ups.beeper.status");
+    bool listed = false;
+    for (const auto* c : control().supportedCommands(port)) listed = listed || strncmp(c->name, "beeper.", 7) == 0;
+    TEST_ASSERT_FALSE(listed); // never read: no beeper command, as before
+    port.fieldRead = true;
+    std::vector<std::string> beeper;
+    for (const auto* c : control().supportedCommands(port)) {
+        if (strncmp(c->name, "beeper.", 7) == 0) beeper.push_back(c->name);
+    }
+    TEST_ASSERT_EQUAL(3, beeper.size());
+    TEST_ASSERT_EQUAL_STRING("beeper.enable", beeper[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("beeper.disable", beeper[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("beeper.mute", beeper[2].c_str());
+    TEST_ASSERT_EQUAL((int)CommandResult::OK, (int)control().executeCommand(port, "beeper.enable", nullptr));
+    TEST_ASSERT_EQUAL_STRING("beeperField:" P_BEEPER "=1", ioStr(port).c_str());
+    TEST_ASSERT_EQUAL((int)CommandResult::NOT_SUPPORTED, (int)control().executeCommand(port, "beeper.toggle", nullptr));
 }
 
 // usbhid-ups order of the writes, with 125 ms between two writes of a sequence
@@ -639,6 +665,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_supported_commands_match_catalog);
     RUN_TEST(test_no_commands_when_disconnected);
     RUN_TEST(test_beeper_toggle_reads_status);
+    RUN_TEST(test_beeper_commands_with_unknown_state);
     RUN_TEST(test_shutdown_sequences_and_pause);
     RUN_TEST(test_shutdown_default_fallback);
     RUN_TEST(test_invalid_and_unsupported_commands);

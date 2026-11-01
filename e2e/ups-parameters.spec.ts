@@ -98,6 +98,50 @@ test.describe('UPS Parameters UI', () => {
     await expect(page.locator('#generic-ups-banner')).toBeHidden({ timeout: 3500 });
   });
 
+  test('shows -- for UPS load when the UPS does not report it (#100)', async ({ page }) => {
+    // Like the APC Smart-UPS 750L of #100: no ups.load, no ups.realpower, no input.voltage
+    const mockData = {
+      "ups.status": "OL",
+      "ups.mfr": "American Power Conversion",
+      "ups.model": "Smart-UPS 750",
+      "battery.charge": "100",
+      "battery.runtime": "2520",
+      "output.voltage": "230.0"
+    };
+
+    await page.route('**/api/ups-vars', async route => {
+      await route.fulfill({ json: mockData });
+    });
+
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target="ups"]');
+
+    await expect(page.locator('#ups-status')).toHaveText('OL');
+    await expect(page.locator('#ups-load')).toHaveText('--');
+    await expect(page.locator('#ups-realpower')).toHaveText('--');
+
+    const loadWidth = await page.locator('#bar-load').evaluate((el) => el.style.width);
+    expect(loadWidth).toBe('0%');
+  });
+
+  test('shows 0 for UPS load 0', async ({ page }) => {
+    const mockData = {
+      "ups.status": "OL",
+      "battery.charge": "100",
+      "ups.load": "0"
+    };
+
+    await page.route('**/api/ups-vars', async route => {
+      await route.fulfill({ json: mockData });
+    });
+
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target="ups"]');
+
+    await expect(page.locator('#ups-status')).toHaveText('OL');
+    await expect(page.locator('#ups-load')).toHaveText('0');
+  });
+
   test('sorts table rows alphabetically by parameter name', async ({ page }) => {
     const mockData = {
       "ups.status": "OL",

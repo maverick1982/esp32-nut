@@ -351,6 +351,18 @@ bool GenericDriver::isFreshFromInput(IHidTransport* host, const PollItem& item, 
     return host->inputReportAgeMs(item.id, now) < maxReportAgeMs();
 }
 
+// The report of the active beeper field (INPUT or FEATURE) has been decoded (US-109)
+bool GenericDriver::beeperFieldRead(const IHidTransport* host) const {
+    if (!host) return false;
+    String path = host->getActiveBeeperPath();
+    if (path.length() == 0) return false;
+    for (const auto& u : host->getUsages()) {
+        if ((u.report_type != 1 && u.report_type != 3) || strcmp(u.path, path.c_str()) != 0) continue;
+        if (_decoded_report[typeSlot(u.report_type)][u.report_id / 32] & (1u << (u.report_id % 32))) return true;
+    }
+    return false;
+}
+
 // An INPUT report arrives on the interrupt endpoint (never with QUIRK_NO_INTERRUPT_PIPE,
 // US-108), a FEATURE report only if it is polled
 bool GenericDriver::isReportRead(IHidTransport* host, const HIDUsageDef& u) const {

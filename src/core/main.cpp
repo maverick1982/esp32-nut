@@ -300,11 +300,19 @@ void loop() {
         // Molti Back-UPS non hanno output.voltage (issue 60: "Voltage = 0.0 V"): si
         // ripiega su input.voltage, indicando quale delle due
         const char* volt_key = usb_ups.getUPSData()->hasKey("output.voltage") ? "output.voltage" : "input.voltage";
-        AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | %s = %.1f V",
-                      (int)usb_ups.getUPSData()->getFloat("battery.charge"),
-                      usb_ups.getUPSStatusString().c_str(),
-                      volt_key[0] == 'o' ? "Output" : "Input",
-                      usb_ups.getUPSData()->getFloat(volt_key));
+        // Senza né output.voltage né input.voltage si scrive "--", non un 0.0 V
+        // inventato (US-109, issue 100)
+        if (!usb_ups.getUPSData()->hasKey(volt_key)) {
+            AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | Voltage = --",
+                          (int)usb_ups.getUPSData()->getFloat("battery.charge"),
+                          usb_ups.getUPSStatusString().c_str());
+        } else {
+            AppLogger::log("INFO", "[DIAG] UPS Info: Battery = %d%% | Status = %s | %s = %.1f V",
+                          (int)usb_ups.getUPSData()->getFloat("battery.charge"),
+                          usb_ups.getUPSStatusString().c_str(),
+                          volt_key[0] == 'o' ? "Output" : "Input",
+                          usb_ups.getUPSData()->getFloat(volt_key));
+        }
     }
 
     // Monitoraggio diagnostico stack (ogni 60 secondi)
