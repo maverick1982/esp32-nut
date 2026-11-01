@@ -71,6 +71,7 @@ public:
     bool shutdownCommandsSupported() const override;
     bool beeperMuteSupported() const override;
     const NutTable::HidInfo* commandTable(size_t& n) const override;
+    bool beeperFieldRead() const override;
     bool setBeeperField(const HIDUsageDef& field, bool enable) override;
 
     void setLogCallback(LogCallback cb);

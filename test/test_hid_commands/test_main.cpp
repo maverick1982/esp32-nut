@@ -98,6 +98,8 @@ void test_shutdown_and_startup_delays() {
 }
 
 void test_non_feature_usages_are_ignored() {
+    // INPUT and OUTPUT usages give no command, as HIDGetItemData() finds FEATURE items only
+    // (libhid.c:502); the OUTPUT one is typed OUTPUT since US-109
     std::vector<HIDUsageDef> usages = {
         mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 0x01),
         mk("UPS.BatterySystem.Battery.Test", 0x00840058, 0x02),
@@ -1112,7 +1114,7 @@ void test_apc_beeper_on_off_not_listed() {
 static const char* const kSpd750u = "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json";
 
 void test_powercom_spd750u_commands_from_table() {
-    // SPD-750U: QUIRK_NO_BEEPER_CONTROL (no beeper) and shutdownCommandsSupported() false.
+    // SPD-750U without a beeper read (beeper_available false) and shutdownCommandsSupported() false.
     // Only test.battery.start.quick (powercom-hid.c:661): powercom-hid has no
     // test.battery.start.deep / test.battery.stop rows, which the catalog without a table
     // offered from UPS.Battery.Test
@@ -1126,14 +1128,17 @@ void test_powercom_spd750u_commands_from_table() {
 }
 
 void test_powercom_beeper_without_quirk() {
-    // The same descriptor on a Powercom without the quirk: beeper.enable/disable (659-660) and
-    // toggle; no beeper.mute, which powercom-hid has no row for
+    // The SPD-750U descriptor with the beeper read (no quirk hides it since US-109):
+    // beeper.enable/disable (659-660) and toggle; no beeper.mute, which powercom-hid has no row for
     HIDParser parser;
     std::vector<HIDUsageDef> u = fixtureUsages(kSpd750u, parser);
     size_t n;
     const NutTable::HidInfo* t = NutTable::powercomHid2Nut(n);
     TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable beeper.toggle test.battery.start.quick",
                              names(HidControl::buildCommands(u, true, false, true, t, n)).c_str());
+    // US-109: field read but state unknown (3 after beeper.toggle, #36): no beeper.toggle
+    TEST_ASSERT_EQUAL_STRING("beeper.enable beeper.disable test.battery.start.quick",
+                             names(HidControl::buildCommands(u, true, false, true, t, n, false)).c_str());
 }
 
 void test_powercom_load_shutdown_never_listed() {

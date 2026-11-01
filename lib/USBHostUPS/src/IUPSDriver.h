@@ -171,6 +171,16 @@ public:
     virtual bool beeperMuteSupported() const { return true; }
 
     /**
+     * @brief True when the report of the active beeper field has been decoded, even if its
+     * value is not in the table (US-109): since setup(), and again after invalidateReport()
+     * of that report once the poll reads it back.
+     *
+     * A value outside beeper_info (Powercom SPD-750U: 3 after beeper.toggle, #36) leaves
+     * ups.beeper.status missing, as in NUT; beeper.enable and beeper.disable must stay offered.
+     */
+    virtual bool beeperFieldRead(const IHidTransport* host) const { return false; }
+
+    /**
      * @brief NUT table whose HU_TYPE_CMD rows give the commands of the device (US-074).
      *
      * Every HID driver has one since US-079 (GenericDriver: genericHid2Nut()); nullptr offers

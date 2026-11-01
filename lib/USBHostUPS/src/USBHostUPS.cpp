@@ -845,6 +845,12 @@ const NutTable::HidInfo* USBHostUPS::commandTable(size_t& n) const {
     return _driver ? _driver->commandTable(n) : nullptr;
 }
 
+bool USBHostUPS::beeperFieldRead() const {
+    // Same lock as commandTable(): _driver is deleted under _mutex
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver && _driver->beeperFieldRead(this);
+}
+
 bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     // Devices that ignore the beeper commands must not be written to at all
@@ -860,9 +866,14 @@ bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
         // command row's field (US-074)
         const HIDUsageDef* found = nullptr;
         if (field) {
-            for (const auto& u : _hid_parser.getUsages()) {
-                if (strcmp(u.path, field->path) == 0 && memcmp(u.coll_index, field->coll_index, sizeof(u.coll_index)) == 0 &&
-                    (u.report_type == 0x03 || u.report_type == 0x02)) {
+            // The item cmdField() picked first (same report type and ID), then any Feature/Output
+            // item of the path: a path declared as both FEATURE and OUTPUT is written where the
+            // command row found it (US-109)
+            for (int pass = 0; pass < 2 && !found; pass++) {
+                for (const auto& u : _hid_parser.getUsages()) {
+                    if (strcmp(u.path, field->path) != 0 || memcmp(u.coll_index, field->coll_index, sizeof(u.coll_index)) != 0) continue;
+                    if (u.report_type != 0x03 && u.report_type != 0x02) continue;
+                    if (pass == 0 && (u.report_type != field->report_type || u.report_id != field->report_id)) continue;
                     found = &u;
                     break;
                 }

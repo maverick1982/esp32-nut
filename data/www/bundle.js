@@ -568,10 +568,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (elLoad) {
-            const load = data['ups.load'] || 0;
-            elLoad.innerText = load;
+            // undefined and not ||: a missing ups.load is not 0 % (US-109, #100)
+            const load = data['ups.load'];
+            elLoad.innerText = load === undefined ? '--' : load;
             if (barLoad) {
-                barLoad.style.width = `${load}%`;
+                barLoad.style.width = `${load === undefined ? 0 : load}%`;
                 if (parseInt(load) > 80) {
                     barLoad.style.background = 'var(--danger)';
                     barLoad.style.boxShadow = '0 0 10px var(--danger)';

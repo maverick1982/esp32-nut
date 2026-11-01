@@ -27,7 +27,7 @@
  *   (formatDeviceStrings): the USB strings, "PowerCOM" when there is no manufacturer
  *   string, no ups.model / ups.serial without theirs; the string descriptors are not
  *   requested again by the poll;
- * - QUIRK_NO_BEEPER_CONTROL of the SPD-750U (Quirks.h), the delays of US-066.
+ * - the delays of US-066. The SPD-750U offers the beeper commands as in NUT (US-109).
  * Out of scope: powercom_claim (interrupt_only for PID 0x0001, PID 0x0002 rejected) and
  * fix_report_desc.
  */

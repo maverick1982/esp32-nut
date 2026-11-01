@@ -1278,6 +1278,32 @@ void test_generic_row_formats() {
     TEST_ASSERT_EQUAL_STRING("No test initiated", out.c_str());
 }
 
+// US-109: OUTPUT usages are never read, so a row binds to its FEATURE item (and its INPUT twin)
+// even when the descriptor declares the OUTPUT item first, and a path only OUTPUT binds no row
+void test_rows_never_bind_output_usages(void) {
+    size_t n;
+    const HidInfo* t = mgeHid2Nut(n);
+    std::vector<HIDUsageDef> usages = {
+        mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 2, 5),
+        mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 3, 6),
+        mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 1, 6),
+    };
+    std::vector<Bound> b = bind(t, n, usages);
+    bool found = false;
+    for (const auto& x : b) {
+        if (strcmp(x.info->info_type, "battery.charge") != 0) continue;
+        found = true;
+        TEST_ASSERT_EQUAL(1, x.idx);
+        TEST_ASSERT_EQUAL(2, x.twin_idx);
+    }
+    TEST_ASSERT_TRUE(found);
+
+    std::vector<HIDUsageDef> output_only = { mk("UPS.PowerSummary.RemainingCapacity", 0x00850066, 2, 5) };
+    for (const auto& x : bind(t, n, output_only)) {
+        TEST_ASSERT_TRUE(strcmp(x.info->info_type, "battery.charge") != 0);
+    }
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_generic_rows_publish_only_standard_names);
@@ -1349,5 +1375,6 @@ int main(int argc, char** argv) {
     RUN_TEST(test_ecoflow_and_openups_publish_only_upstream_names);
     RUN_TEST(test_alarm_rows_of_mge_table);
     RUN_TEST(test_vendor_alarms_in_table_order);
+    RUN_TEST(test_rows_never_bind_output_usages);
     return UNITY_END();
 }

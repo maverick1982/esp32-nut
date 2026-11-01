@@ -15,9 +15,9 @@ public:
         return (def.report_id != 0 ? 1 : 0) + (def.bit_offset + def.bit_size + 7) / 8;
     }
 
-    // True when the beeper report also carries other usages. The parser records OUTPUT
-    // usages with the FEATURE type, so both reports with the same id count: when in
-    // doubt, the report is treated as shared.
+    // True when the beeper report also carries other usages of the same report type: a
+    // FEATURE and an OUTPUT report with the same id are two reports (OUTPUT items are typed
+    // OUTPUT since US-109).
     static bool reportHasOtherFields(const std::vector<HIDUsageDef>& usages, const HIDUsageDef& def) {
         for (const auto& u : usages) {
             if (u.report_id != def.report_id || u.report_type != def.report_type) continue;

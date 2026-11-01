@@ -1400,16 +1400,18 @@ inline void bindRows(std::vector<Bound>& binds, const HidInfo* table, size_t n, 
     if (!table) return;
     for (size_t r = 0; r < n; r++) {
         if (pathListed(table[r].hidpath, skip, n_skip)) continue;
+        // OUTPUT usages are never read (US-109): a row binds to its INPUT or FEATURE item, as
+        // HIDGetItemData() finds only those
         int idx = -1;
         for (size_t u = 0; u < usages.size(); u++) {
-            if (rowMatches(usages[u], table[r])) { idx = (int)u; break; }
+            if (usages[u].report_type != 0x02 && rowMatches(usages[u], table[r])) { idx = (int)u; break; }
         }
         if (idx < 0) continue;
         int twin = -1;
         const HIDUsageDef& a = usages[idx];
         for (size_t u = 0; u < usages.size(); u++) {
             const HIDUsageDef& b = usages[u];
-            if ((int)u != idx && b.report_id == a.report_id && b.report_type != a.report_type &&
+            if ((int)u != idx && b.report_type != 0x02 && b.report_id == a.report_id && b.report_type != a.report_type &&
                 strcmp(b.path, a.path) == 0 && memcmp(b.coll_index, a.coll_index, sizeof(a.coll_index)) == 0) {
                 twin = (int)u;
                 break;

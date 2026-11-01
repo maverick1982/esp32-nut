@@ -702,6 +702,57 @@ void test_repeated_last_of_explicit_usages(void) {
     TEST_ASSERT_EQUAL_UINT16(2, parser.getInputLength(0x16)); // report ID + 4 bits
 }
 
+// US-109: an Output item is an OUTPUT report (type 2), not a FEATURE one: the APC 5G
+// OUTPUT report 0x90 was typed FEATURE and polled
+void test_output_items_are_output_reports(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,             // UPS application collection
+        0x85, 0x01, 0x09, 0x56, 0x75, 0x08, 0x95, 0x01, // ID 1: DelayBeforeStartup, 8 bits
+        0x15, 0x00, 0x26, 0xFF, 0x00, 0xB1, 0x02,       // Feature
+        0x85, 0x02, 0x09, 0x57, 0x75, 0x10, 0x95, 0x01, // ID 2: DelayBeforeShutdown, 16 bits
+        0x91, 0x02,                                     // Output
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    const HIDUsageDef* feature = parser.getUsageDef(0x00840056);
+    const HIDUsageDef* output = parser.getUsageDef(0x00840057);
+    TEST_ASSERT_NOT_NULL(feature);
+    TEST_ASSERT_NOT_NULL(output);
+    TEST_ASSERT_EQUAL_UINT8(3, feature->report_type);
+    TEST_ASSERT_EQUAL_UINT8(2, output->report_type);
+    TEST_ASSERT_EQUAL_UINT8(2, output->report_id);
+    TEST_ASSERT_EQUAL_UINT16(3, parser.getExpectedLength(2, 2)); // ID + 16 bits
+    for (const auto& u : parser.getUsages()) {
+        TEST_ASSERT_FALSE(u.report_id == 2 && u.report_type == 3);
+    }
+}
+
+// US-109: Feature and Output items in the same report ID keep their own layouts (CyberPower
+// CP1600 report 41, Legrand Keor PDU 800 report 55)
+void test_feature_and_output_same_id_keep_feature_layout(void) {
+    const uint8_t desc[] = {
+        0x05, 0x84, 0x09, 0x04, 0xA1, 0x01,
+        0x85, 0x01, 0x75, 0x08, 0x95, 0x01, 0x15, 0x00, 0x26, 0xFF, 0x00,
+        0x09, 0x56, 0xB1, 0x02, // Feature, bits 0-7
+        0x09, 0x57, 0x91, 0x02, // Output, bits 0-7 of the OUTPUT report
+        0x09, 0x58, 0xB1, 0x02, // Feature, bits 8-15
+        0xC0
+    };
+    HIDParser parser;
+    TEST_ASSERT_TRUE(parser.parseReportDescriptor(desc, sizeof(desc)));
+    const HIDUsageDef* second = parser.getUsageDef(0x00840058);
+    const HIDUsageDef* output = parser.getUsageDef(0x00840057);
+    TEST_ASSERT_NOT_NULL(second);
+    TEST_ASSERT_NOT_NULL(output);
+    TEST_ASSERT_EQUAL_UINT8(3, second->report_type);
+    TEST_ASSERT_EQUAL_UINT16(8, second->bit_offset);
+    TEST_ASSERT_EQUAL_UINT8(2, output->report_type);
+    TEST_ASSERT_EQUAL_UINT16(0, output->bit_offset);
+    TEST_ASSERT_EQUAL_UINT16(3, parser.getExpectedLength(1, 3)); // ID + 16 bits
+    TEST_ASSERT_EQUAL_UINT16(2, parser.getExpectedLength(1, 2)); // ID + 8 bits
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -739,6 +790,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_encode_then_to_logical_truncates_first);
     RUN_TEST(test_repeated_usage_kept_once);
     RUN_TEST(test_repeated_last_of_explicit_usages);
+    RUN_TEST(test_output_items_are_output_reports);
+    RUN_TEST(test_feature_and_output_same_id_keep_feature_layout);
     return UNITY_END();
 }
 #else
@@ -777,6 +830,8 @@ void setup() {
     RUN_TEST(test_encode_then_to_logical_truncates_first);
     RUN_TEST(test_repeated_usage_kept_once);
     RUN_TEST(test_repeated_last_of_explicit_usages);
+    RUN_TEST(test_output_items_are_output_reports);
+    RUN_TEST(test_feature_and_output_same_id_keep_feature_layout);
     UNITY_END();
 }
 void loop() {}
