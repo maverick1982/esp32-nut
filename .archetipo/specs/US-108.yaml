@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 2
-status: REVIEW
+status: DONE
 blocked_by:
   - US-079
 body: |
@@ -44,3 +44,5 @@ history:
     at: "2026-10-31T12:16:18Z"
   - status: REVIEW
     at: "2026-10-31T12:48:01Z"
+  - status: DONE
+    at: "2026-11-01T19:23:57Z"
