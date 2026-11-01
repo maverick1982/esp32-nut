@@ -44,7 +44,7 @@ BOARDS = {
         "zip_suffix": "-esp32-p4-eth",
         "label": "ESP32-P4 v3.1 or later (Ethernet)",
         "button": "the \"ESP32-P4 v3.1 or later\" button",
-        "tested": "not yet tested on hardware",
+        "tested": "tested on a v3.2 board",
     },
     "esp32-p4-eth-v1": {
         "chip_family": "ESP32-P4",

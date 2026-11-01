@@ -39,7 +39,7 @@ test.describe('ESP Web Installer', () => {
     await expect(v3).toHaveCount(1);
     await expect(v1).toHaveCount(1);
     await expect(v3).toContainText('ESP32-P4 v3.1 or later');
-    await expect(v3).toContainText('Not yet tested on hardware');
+    await expect(v3).toContainText('Tested on a v3.2 board');
     await expect(v1).toContainText('ESP32-P4 before v3 (v1.x)');
     await expect(v1).toContainText('Tested on a v1.3 board');
     await expect(page.locator('esp-web-install-button')).toHaveCount(3);

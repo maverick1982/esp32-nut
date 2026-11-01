@@ -130,6 +130,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - **ESP32-S3 or ESP32-P4 Board**: An ESP32-S3 development board, or a supported ESP32-P4 board with Ethernet (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), is **required** because these chips have native USB OTG Host capabilities. Standard ESP32 or ESP32-C3 will not work.
 - **USB OTG Cable**: An adapter to plug the UPS USB cable into the ESP32.
+- **USB hubs and active extension cables**: a long USB cable with a built-in booster contains a USB hub. On the ESP32-P4 High-Speed port, a high-speed hub hides the UPS (a full-speed device): the ESP-IDF USB host stack cannot reach a full-speed device behind a high-speed hub. Use a passive cable, or put a full-speed-only USB isolator (ADuM3160-based) between the board and the cable. On the ESP32-S3, whose USB port is full-speed only, such a cable should work without the isolator (not tested). ([#113](https://github.com/maverick1982/esp32-nut/issues/113))
 
 ### Typical Dual USB-C Board Setup (e.g., Generic ESP32-S3 DevKit)
 Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the back to enable Host mode. To achieve a clean setup without manually soldering wires to GPIOs:
@@ -148,7 +149,7 @@ An ESP32-P4 board with a wired Ethernet port can take the place of the ESP32-S3:
 
 | Image | Chip revision | Hardware tests |
 | :--- | :--- | :--- |
-| ESP32-P4 v3.1 or later | v3.1 and later (current production) | **Not yet tested on hardware** |
+| ESP32-P4 v3.1 or later | v3.1 and later (current production) | Tested by [rtadams89](https://github.com/rtadams89) on a v3.2 board, with a UPS ([#94](https://github.com/maverick1982/esp32-nut/issues/94)) |
 | ESP32-P4 before v3 | v1.x (early boards) | Tested by [rtadams89](https://github.com/rtadams89) on a v1.3 board, with a UPS |
 
 To find the revision, run `esptool chip-id` (`esptool.py chip_id` with esptool v4; the output says `Chip is ESP32-P4 (revision v1.3)`) or look for `chip revision: v1.3` in the serial boot log. Revisions v2.x and v3.0 are not supported by either image. An image for the wrong revision is refused, by the bootloader on a full install and by the board on an OTA update, so you can simply install the other one.
