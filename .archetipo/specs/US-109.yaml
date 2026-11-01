@@ -1,0 +1,42 @@
+schema: archetipo/spec/v2
+code: US-109
+title: 'Correzioni dalla prova rc1: report OUTPUT, valori mancanti e comandi del cicalino (#100, #36)'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: TODO
+body: |
+  #### US-109: Correzioni dalla prova rc1: report OUTPUT, valori mancanti e comandi del cicalino (#100, #36)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS il cui descriptor ha report OUTPUT, che non fornisce carico e tensione di ingresso (APC Smart-UPS 750L, #100) o che riporta uno stato del cicalino non previsto dalla tabella NUT (Powercom SPD-750U, #36),
+  voglio che il firmware non provi a leggere i report OUTPUT, che i valori assenti non compaiano come 0 e che i comandi del cicalino restino disponibili,
+  in modo che il System Log non si riempia di errori inutili, la dashboard e il log non mostrino misure false e io possa sempre riportare il cicalino allo stato voluto.
+
+  **Dimostrazione**
+  Nel replay della fixture #22 (051d:0003) le liste di poll non contengono più il report 144 e il full poll non lo chiede. Sulla web UI di un UPS senza `ups.load` il riquadro UPS LOAD mostra `--`, come REAL POWER. Nel System Log la riga `[DIAG] UPS Info` di un UPS senza `input.voltage` indica che il valore manca, invece di `0.0 V`. Su un Powercom che riporta `AudibleAlarmControl = 3` (valore assente da `powercom_beeper_info`), `ups.beeper.status` manca come in NUT, ma LIST CMD continua a offrire `beeper.enable` e `beeper.disable`.
+
+  **Criteri di Accettazione**
+  - [ ] Il parser assegna il tipo OUTPUT (0x02) agli item Output del descriptor, come Input (0x01) e Feature (0x03): i report solo OUTPUT (0x90 della #22) escono dalle liste di poll, senza GET_REPORT e senza righe ERROR.
+  - [ ] I report che hanno sia FEATURE sia OUTPUT (CyberPower CP1600 #48, report 41; Legrand Keor PDU 800 #90, report 55) restano letti come FEATURE. Offset e lunghezze dei loro campi FEATURE sono invariati.
+  - [ ] Le scritture (SET VAR, comandi) usano il tipo report dell'usage scritta, come NUT. Nessuna riga delle tabelle legata a un'usage OUTPUT cambia comportamento senza essere annotata nella spec.
+  - [ ] Le golden cambiano solo nei fixture con item Output; ogni differenza è spiegata.
+  - [ ] Web UI: il riquadro UPS LOAD mostra `--` quando `ups.load` non esiste. Gli asset incorporati sono rigenerati (`scripts/embed_web.py`) e gli e2e coprono il caso.
+  - [ ] La riga `[DIAG] UPS Info` non mostra `0.0 V` quando la tensione non esiste.
+  - [ ] Cicalino: i comandi `beeper.enable` e `beeper.disable` delle righe della tabella restano in LIST CMD e nella web UI anche quando `ups.beeper.status` manca perché l'UPS riporta un valore non previsto dalla tabella (SPD-750U, #36: 3 dopo `beeper.toggle`), come fa NUT, che elenca i comandi in base alle righe e non allo stato. `beeper.toggle`, che deve conoscere lo stato attuale, resta offerto solo quando lo stato è noto.
+  - [ ] `QUIRK_NO_BEEPER_CONTROL` dell'SPD-750U (`Quirks.h`), inutilizzato dal firmware dalla migrazione dello stack USB (e14b3d2), viene rimosso o rimesso in uso; la scelta è motivata nel piano.
+  - [ ] Note di rilascio v1.12.0 aggiornate. Suite nativa ed e2e verdi, tre build ok.
+
+  **Assunzioni**
+  - È emerso dalla prova della v1.12.0-rc1 sulla #100. La correzione è promessa pubblicamente (issuecomment-6560956735) e blocca il rilascio della v1.12.0.
+  - Le usage negli item Output dei tre fixture sono vendor e senza righe nelle tabelle NUT. Se una lo fosse, la scelta va riportata in review.
+  - Il cicalino è emerso dalla prova della rc1 sulla #36 (fox1047, issuecomment-6555673773 e 6557007805): dopo `beeper.toggle` (la scheda scrive 1, come la riga di NUT) l'UPS riporta 3 e `upscmd -l` resta con il solo `test.battery.start.quick`. Non è una regressione della rc1: il collegamento tra comandi e `ups.beeper.status` c'era già.
+  - Fuori scope: limitare il poll ai soli report delle righe legate, come fa upstream; la perdita del collegamento dell'SPD-750U a batteria e il riavvio "INPUT transfer keeps failing" della #36, in attesa di dati.
+history:
+  - status: TODO
+    at: "2026-11-01T16:56:30Z"
