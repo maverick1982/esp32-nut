@@ -868,6 +868,18 @@ void test_mge_table_gives_same_commands_on_eaton_5p() {
     checkSameCommandsAsGeneric("test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json");
 }
 
+void test_mge_table_gives_same_commands_on_eaton_ellipse_pro_650() {
+    checkSameCommandsAsGeneric("test/fixtures/eaton/eaton_ellipse_pro_650_vid0463_pidffff_issue110.json");
+}
+
+void test_mge_table_gives_same_commands_on_mge_protection_center() {
+    checkSameCommandsAsGeneric("test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json");
+}
+
+void test_mge_table_gives_same_commands_on_eaton_ellipse_eco_650() {
+    checkSameCommandsAsGeneric("test/fixtures/eaton/eaton_ellipse_eco_650_vid0463_pidffff_issue112.json");
+}
+
 void test_mge_table_mute_on_first_row_field() {
     // mge-hid.c:2337: beeper.mute on UPS.BatterySystem.Battery.AudibleAlarmControl, 3
     HIDParser parser;
@@ -1012,6 +1024,7 @@ static const char* const kApcFixtures[] = {
     "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
     "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
     "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json",
     "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
     "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json",
     "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
@@ -1255,6 +1268,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_driver_var_store_json_round_trip);
     RUN_TEST(test_mge_table_gives_same_commands_on_eaton_3s);
     RUN_TEST(test_mge_table_gives_same_commands_on_eaton_5p);
+    RUN_TEST(test_mge_table_gives_same_commands_on_eaton_ellipse_pro_650);
+    RUN_TEST(test_mge_table_gives_same_commands_on_mge_protection_center);
+    RUN_TEST(test_mge_table_gives_same_commands_on_eaton_ellipse_eco_650);
     RUN_TEST(test_mge_table_mute_on_first_row_field);
     RUN_TEST(test_mge_table_commands_outside_catalog_not_listed);
     RUN_TEST(test_mge_table_reboot_from_row);

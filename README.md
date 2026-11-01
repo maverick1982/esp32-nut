@@ -37,6 +37,8 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - Eaton 3S series
 - Eaton 5P 1U
+- Eaton Ellipse PRO 650, Ellipse ECO 650
+- MGE Protection Center
 </details>
 
 <details>

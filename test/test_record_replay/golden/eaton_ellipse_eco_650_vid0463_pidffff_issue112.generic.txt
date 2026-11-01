@@ -1,0 +1,64 @@
+[snapshot]
+battery.charge.low=20
+battery.charge=80
+battery.runtime=1725
+driver.name=GenericDriver
+input.transfer.high=284
+input.transfer.low=161
+input.voltage.nominal=230
+output.voltage=230.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=EATON
+ups.model=Ellipse ECO
+ups.power.nominal=650
+ups.realpower=0
+ups.serial=000000000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.commfault=0
+ups.status.discharging=0
+ups.status.overload=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.timer.shutdown=-1
+ups.status=OL CHRG
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default
+[rw]
+ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+battery.charge.low=20
+battery.charge=80
+battery.runtime=1725
+driver.name=GenericDriver
+input.transfer.high=284
+input.transfer.low=161
+input.voltage.nominal=230
+output.voltage=230.0
+ups.beeper.status=enabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=EATON
+ups.model=Ellipse ECO
+ups.power.nominal=650
+ups.realpower=0
+ups.serial=000000000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=1
+ups.status.commfault=0
+ups.status.discharging=0
+ups.status.overload=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.timer.shutdown=-1
+ups.status=OL CHRG
+[requests]
+ 32/3 3/3 18/3 11/3 24/3 23/3 17/3 12/3 15/3 2/3 25/3 22/3 14/3 31/3 21/3 9/3 10/3 16/3 7/3 1/3 6/3 34/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 32/3 3/3 18/3 11/3 24/3 23/3 17/3 12/3 15/3 2/3 25/3 22/3 14/3 31/3 21/3 9/3 10/3 16/3 7/3 1/3 6/3 34/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3 3/3 12/3 2/3 25/3 22/3 7/3 1/3 6/3

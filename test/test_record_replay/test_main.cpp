@@ -155,6 +155,106 @@ void test_replay_eaton_5p(void) {
         /* descriptor only: PowerSummary.DelayBeforeShutdown/Startup */ {}, RW_DELAYS, RW_DELAYS);
 }
 
+// mgeHid2Nut() rows bound by the Eaton Ellipse PRO 650 descriptor (issue #110), derived the same
+// way: the 3S rows but device.usb.version, battery.charger.*, outlet.1.protect.status and ups.type,
+// plus battery.voltage (2024, PowerSummary.Voltage: mge_battery_voltage, published only for the
+// Evolution, Pulsar M, 5P and 9E series), input.voltage / input.frequency (PowerConverter.Input.[1]),
+// input.voltage.extended (0xFFFF004B), output.frequency, ups.power / ups.realpower
+// (PowerConverter.Output.ApparentPower / ActivePower), outlet.power (2252, pegasus_threshold_info)
+// and the outlet.2.* / outlet.3.* rows of Outlet.[3] / Outlet.[4]. No UPS.Flow.[1]: no
+// input.voltage.nominal / input.frequency.nominal (v1.11.0 published the Flow.[4] values).
+#define NUT_ROWS_EATON_ELLIPSE_PRO_650 "BOOL battery.charge battery.charge.low battery.runtime battery.type " \
+    "battery.voltage beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country input.frequency " \
+    "input.transfer.high input.transfer.low input.voltage input.voltage.extended load.off.delay load.on.delay " \
+    "outlet.1.desc outlet.1.id outlet.1.status outlet.1.switchable outlet.2.desc outlet.2.ecocontrol outlet.2.id " \
+    "outlet.2.status outlet.2.switchable outlet.3.desc outlet.3.ecocontrol outlet.3.id outlet.3.status " \
+    "outlet.3.switchable outlet.desc outlet.id outlet.power outlet.switchable output.frequency " \
+    "output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop ups.alarm ups.beeper.status " \
+    "ups.firmware ups.load ups.power ups.power.nominal ups.realpower ups.timer.shutdown ups.timer.start"
+
+// mge-hid.c RW rows of the Ellipse PRO: the 3S ones plus input.voltage.extended (2197, aux 5,
+// FEATURE 0x1A [26, 0] = no) and outlet.2.desc / outlet.3.desc (2282, 2303, HU_FLAG_ABSENT, aux 20;
+// outlet.3.desc defaults to "PowerShare Outlet 2" upstream too)
+#define RW_EATON_ELLIPSE_PRO "battery.charge.low:5 input.transfer.high:5 input.transfer.low:5 input.voltage.extended:5 " \
+    "outlet.1.desc:20 outlet.2.desc:20 outlet.3.desc:20 outlet.desc:20 " RW_DELAYS
+
+// Live dump of v1.11.0 attached to issue #110. Differences from the dump, all v1.12.0 changes (see
+// the fixture "notes"): outlet.1.switch / outlet.2.switch become outlet.N.status (outlet.1 on
+// ACPresent, 2268; outlet.2 / outlet.3 on Outlet.[3] / [4] SwitchOn/Off, FEATURE 0x02 [2, 1, 1, 0, 0]);
+// input.*.nominal gone; battery.voltage gone (MGE_DEFAULT: "Ellipse PRO" 650 is not in
+// mge_model_names, mge-hid.c:714-730); ups.status.charging 0 (eaton_abm_check_chrg_fun,
+// mge-hid.c:556-576: Charging 1 but battery.charge 100, no ABM usage); ups.timer.start and the
+// outlet ids / switchable / ecocontrol rows added. battery.type (string), output.voltage.nominal
+// and outlet.2.switchable / outlet.3.switchable (mge_type) are decided on the device only.
+void test_replay_eaton_ellipse_pro_650_issue110(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_ellipse_pro_650_vid0463_pidffff_issue110.json",
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074, US-107) */ NUT_ROWS_EATON_ELLIPSE_PRO_650,
+        { { "ups.status.charging", "0" }, { "ups.status.off", "0" }, { "ups.status.commfault", "0" },
+          { "ups.timer.start", "-1" }, { "outlet.1.status", "on" }, { "outlet.2.status", "on" }, { "outlet.3.status", "off" },
+          { "outlet.id", "1" }, { "outlet.switchable", "no" }, { "outlet.1.id", "2" }, { "outlet.1.switchable", "no" },
+          { "outlet.2.id", "3" }, { "outlet.3.id", "4" }, { "outlet.2.ecocontrol", "The outlet is ECO controlled" },
+          { "outlet.3.ecocontrol", "The outlet is not ECO controlled" } },
+        RW_EATON_ELLIPSE_PRO, RW_EATON_ELLIPSE_PRO);
+}
+
+// mgeHid2Nut() rows bound by the MGE Protection Center descriptor (issue #111): the 3S rows but
+// device.country, device.usb.version, battery.charger.*, outlet.1.protect.status, ups.alarm,
+// ups.firmware and ups.type. No UPS.Flow.[1]: no input.*.nominal. LIST RW is the 3S one.
+#define NUT_ROWS_MGE_PROTECTION_CENTER "BOOL battery.charge battery.charge.low battery.runtime battery.type " \
+    "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.transfer.high input.transfer.low " \
+    "load.off.delay load.on.delay outlet.1.desc outlet.1.id outlet.1.status outlet.1.switchable outlet.desc " \
+    "outlet.id outlet.switchable output.frequency.nominal output.voltage output.voltage.nominal shutdown.stop " \
+    "ups.beeper.status ups.load ups.power.nominal ups.realpower ups.timer.shutdown ups.timer.start"
+
+// Live dump of v1.11.0 attached to issue #111. Differences from the dump: ups.beeper.status
+// "disabled": mge-hid.c:2075 UPS.BatterySystem.Battery.AudibleAlarmControl (FEATURE 0x20 [32, 1])
+// comes before 2076 PowerSummary.AudibleAlarmControl (FEATURE 0x1F [31, 2], "enabled", what
+// v1.11.0 served) and the first row wins (usbhid-ups.c:2327-2334), as on the 3S, whose reports are
+// the same; ups.status.charging 0 (eaton_abm_check_chrg_fun at 100 %); input.*.nominal gone.
+// DelayBeforeStartup (FEATURE 0x0A [10, 255, 255, 255, 255]) has Unit Exponent 1 in this
+// descriptor: ups.timer.start is -10, as libhid.c:544 gives it (DelayBeforeShutdown has exponent 0)
+void test_replay_mge_protection_center_issue111(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json",
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074, US-107) */ NUT_ROWS_MGE_PROTECTION_CENTER,
+        { { "ups.beeper.status", "disabled" }, { "ups.status.charging", "0" }, { "ups.status.off", "0" },
+          { "ups.status.commfault", "0" }, { "ups.timer.start", "-10" }, { "outlet.1.status", "on" },
+          { "outlet.id", "1" }, { "outlet.switchable", "no" }, { "outlet.1.id", "2" }, { "outlet.1.switchable", "no" } },
+        RW_EATON_3S, RW_EATON_3S);
+}
+
+// mgeHid2Nut() rows bound by the Eaton Ellipse ECO 650 descriptor (issue #112): the 3S rows but
+// device.usb.version, battery.charger.*, outlet.1.protect.status and ups.type, plus outlet.power
+// (2252), outlet.1.ecocontrol and the outlet.2.* rows of Outlet.[3]. No UPS.Flow.[1].
+#define NUT_ROWS_EATON_ELLIPSE_ECO_650 "BOOL battery.charge battery.charge.low battery.runtime battery.type " \
+    "beeper.disable beeper.enable beeper.mute beeper.off beeper.on device.country input.transfer.high " \
+    "input.transfer.low load.off.delay load.on.delay outlet.1.desc outlet.1.ecocontrol outlet.1.id outlet.1.status " \
+    "outlet.1.switchable outlet.2.desc outlet.2.ecocontrol outlet.2.id outlet.2.status outlet.2.switchable " \
+    "outlet.desc outlet.id outlet.power outlet.switchable output.frequency.nominal output.voltage " \
+    "output.voltage.nominal shutdown.stop ups.alarm ups.beeper.status ups.firmware ups.load ups.power.nominal " \
+    "ups.realpower ups.timer.shutdown ups.timer.start"
+
+// The 3S RW rows plus outlet.2.desc (2282, HU_FLAG_ABSENT, aux 20). On the device, where mge_type
+// is MGE_PEGASUS ("Ellipse ECO" 650), outlet.power (2252, aux 6) and outlet.2.switchable (2285,
+// aux 3) are RW too: the replay never learns mge_type, so they stay undecided
+#define RW_EATON_ELLIPSE_ECO "battery.charge.low:5 input.transfer.high:5 input.transfer.low:5 outlet.1.desc:20 " \
+    "outlet.2.desc:20 outlet.desc:20 " RW_DELAYS
+
+// Live dump of v1.11.0 attached to issue #112. Differences from the dump: outlet.N.switch become
+// outlet.N.status (Outlet.[2] / [3] SwitchOn/Off, FEATURE 0x02 [2, 1, 1, 0, 1]); input.*.nominal
+// gone; outlet.desc / outlet.1.desc / outlet.2.desc are the mge-hid defaults (2247, 2261, 2282),
+// the dump had names the user set; outlet.power and outlet.2.switchable wait for mge_type.
+// ups.status OL CHRG: charge 80 %, so eaton_abm_check_chrg_fun keeps "chrg"
+void test_replay_eaton_ellipse_eco_650_issue112(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/eaton/eaton_ellipse_eco_650_vid0463_pidffff_issue112.json",
+        CMD_BEEPER CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-073, US-074, US-107) */ NUT_ROWS_EATON_ELLIPSE_ECO_650,
+        { { "battery.runtime", "1725" }, { "ups.status.charging", "1" }, { "ups.status.off", "0" },
+          { "ups.status.commfault", "0" }, { "ups.timer.start", "-1" }, { "outlet.1.status", "on" },
+          { "outlet.2.status", "on" }, { "outlet.id", "1" }, { "outlet.switchable", "no" }, { "outlet.1.id", "2" },
+          { "outlet.1.switchable", "no" }, { "outlet.2.id", "3" },
+          { "outlet.1.ecocontrol", "The outlet is ECO controlled" }, { "outlet.2.ecocontrol", "The outlet is not ECO controlled" } },
+        RW_EATON_ELLIPSE_ECO, RW_EATON_ELLIPSE_ECO);
+}
+
 // The six apc-hid.c rows bound by the Back-UPS descriptors, all read from the replay
 #define RW_APC_6 "battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10"
 // The five cps-hid.c rows of the CP1500/CP1600 descriptors, all read from the replay
@@ -253,6 +353,17 @@ void test_replay_eaton_5p(void) {
 // 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
 // 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
 #define NUT_ROWS_APC_BACKUPS_RS900MI_PID0002_ISSUE18 \
+    "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
+    "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
+    "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
+    "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
+    "shutdown.reboot shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "test.battery.stop test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date " \
+    "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
+// apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
+// 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
+// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
+#define NUT_ROWS_APC_BACKUPS_XS1500M_PID0002_ISSUE94 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
@@ -490,6 +601,20 @@ void test_replay_apc_bx750mi_issue60(void) {
         /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } },
         // apc-hid.c rows, aux 10: FEATURE 0x11 [17, 10]; 0x20 [32, 33, 42] = 2001/01/01; 0x24
         // [36, 120, 0]; 0x35 [53, 1]; 0x33 [51, 39, 1] = 295; 0x32 [50, 145, 0] = 145
+        RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
+}
+
+// Live dump of v1.12.0-rc1 attached to issue #94: every value of the dump but the string ones
+// (battery.type) is the same on main
+void test_replay_apc_xs1500m_issue94(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_XS1500M_PID0002_ISSUE94,
+        /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" },
+          // apc-hid.c:337 UPS.Battery.RunTimeToEmpty, FEATURE 0x23 [35, 162, 6], before the
+          // PowerSummary one (338, INPUT/FEATURE 0x0C); ups.realpower estimated, 24 % of 900 W
+          { "battery.runtime", "1698" }, { "ups.realpower", "216" }, { "battery.voltage", "27.3" } },
+        // apc-hid.c rows, aux 10: FEATURE 0x11 [17, 10]; 0x20 [32, 129, 91] = 2025/12/01; 0x24
+        // [36, 120, 0]; 0x35 [53, 1]; 0x33 [51, 139, 0] = 139; 0x32 [50, 88, 0] = 88
         RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
 }
 
@@ -827,6 +952,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json", "OL", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json", "Unknown", nullptr, nullptr },
+        { "test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json", "OL", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json", "Unknown", nullptr, nullptr },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json", "Unknown", nullptr, nullptr },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json", "OL", nullptr, nullptr },
@@ -838,12 +964,17 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json", "Unknown", nullptr, nullptr },
+        // Charging 1 at 80 %: eaton_abm_check_chrg_fun keeps CHRG (mge-hid.c:556-576)
+        { "test/fixtures/eaton/eaton_ellipse_eco_650_vid0463_pidffff_issue112.json", "OL CHRG", nullptr, nullptr },
+        // Charging 1 at 100 %, ABM unknown: "!chrg" (mge-hid.c:556-576), OL as on the 3S
+        { "test/fixtures/eaton/eaton_ellipse_pro_650_vid0463_pidffff_issue110.json", "OL", nullptr, nullptr },
+        { "test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json", "OL", nullptr, nullptr },
         { "test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json", "OL", nullptr, nullptr },
         { "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json", "OL", nullptr, nullptr },
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(24, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(28, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -858,6 +989,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
     "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
     "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
+    "test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json",
     "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json",
     "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json",
     "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json",
@@ -869,6 +1001,9 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
     "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
+    "test/fixtures/eaton/eaton_ellipse_eco_650_vid0463_pidffff_issue112.json",
+    "test/fixtures/eaton/eaton_ellipse_pro_650_vid0463_pidffff_issue110.json",
+    "test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json",
     "test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json",
     "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json",
     "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json",
@@ -880,7 +1015,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(24, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(28, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -1402,6 +1537,50 @@ static const char* const kApcSnapshotBackupsRs900miPid0002Issue18 =
     "ups.model=Back-UPS RS  900MI\n"
     "ups.status=Unknown\n";
 
+// Added after the apc_hid2nut migration (issue #94, dump of v1.12.0-rc1): taken from main, the
+// same as the dump but battery.type (a string the dump does not have) and the serial (anonymized)
+static const char* const kApcSnapshotBackupsXs1500mPid0002Issue94 =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=50\n"
+    "battery.charge=100\n"
+    "battery.date=2001/09/25\n"
+    "battery.mfr.date=2025/12/01\n"
+    "battery.runtime.low=120\n"
+    "battery.runtime=1698\n"
+    "battery.voltage.nominal=24.0\n"
+    "battery.voltage=27.3\n"
+    "driver.name=APCDriver\n"
+    "input.sensitivity=medium\n"
+    "input.transfer.high=139\n"
+    "input.transfer.low=88\n"
+    "input.voltage.nominal=120\n"
+    "input.voltage=121.0\n"
+    "ups.beeper.status=disabled\n"
+    "ups.delay.shutdown=20\n"
+    "ups.firmware.aux=d11\n"
+    "ups.firmware=947.d11 .D\n"
+    "ups.load=24\n"
+    "ups.mfr.date=2022/03/05\n"
+    "ups.mfr=American Power Conversion\n"
+    "ups.model=Back-UPS XS 1500M\n"
+    "ups.realpower.nominal=900\n"
+    "ups.realpower=216\n"
+    "ups.serial=TEST0000\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.no_battery=0\n"
+    "ups.status.off=0\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.status.replace_battery=0\n"
+    "ups.status.shutdown_imminent=0\n"
+    "ups.test.result=No test initiated\n"
+    "ups.timer.reboot=0\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.status=OL\n";
+
 static const char* const kApcSnapshotBackupsXs700uPid0002Issue20 =
     "ups.delay.shutdown=20\n"
     "ups.mfr=Back-UPS XS 700U   FW:924.Z3 .I USB FW:Z3 \n"
@@ -1489,6 +1668,7 @@ void test_apc_snapshot_baseline(void) {
         { "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json", kApcSnapshotBackupsCs750rsPid0002Issue48 },
         { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json", kApcSnapshotBackupsEs700gPid0002Issue71 },
         { "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json", kApcSnapshotBackupsRs900miPid0002Issue18 },
+        { "test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json", kApcSnapshotBackupsXs1500mPid0002Issue94 },
         { "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json", kApcSnapshotBackupsXs700uPid0002Issue20 },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json", kApcSnapshotSmartups750Pid0002Issue13 },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json", kApcSnapshotSmartups750Pid0002Issue78 },
@@ -1519,6 +1699,9 @@ static const char* const kApcPollBackupsEs700gPid0002Issue71 =
     "quick: 6/3 12/3 22/3 34/3 35/3 80/3 122/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3 18/3 22/3 23/3 24/3 28/3 32/3 34/3 35/3 36/3 37/3 38/3 39/3 40/3 48/3 49/3 50/3 51/3 52/3 53/3 54/3 64/3 65/3 80/3 81/3 96/3 97/3 98/3 127/3 126/3 125/3 124/3 123/3 122/3 121/3 120/3 140/3 141/3 142/3 143/3 144/3 145/3 146/3";
 static const char* const kApcPollBackupsRs900miPid0002Issue18 =
     "quick: 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 28/3 32/3 33/3 34/3 35/3 36/3 37/3 38/3 39/3 40/3 48/3 49/3 50/3 51/3 52/3 53/3 54/3 64/3 65/3 66/3 80/3 81/3 82/3 96/3 97/3 98/3 127/3 126/3 125/3 124/3 123/3 122/3 121/3 120/3 117/3";
+// Issue #94, added after the apc_hid2nut migration: the BX1500G lists without its reports 140-146
+static const char* const kApcPollBackupsXs1500mPid0002Issue94 =
+    "quick: 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 28/3 32/3 33/3 34/3 35/3 36/3 37/3 38/3 39/3 40/3 48/3 49/3 50/3 51/3 52/3 53/3 54/3 64/3 65/3 66/3 80/3 81/3 82/3 96/3 97/3 98/3 127/3 126/3 125/3 124/3 123/3 122/3 121/3 120/3 117/3 116/3 128/3";
 static const char* const kApcPollBackupsXs700uPid0002Issue20 =
     "quick: 6/3 12/3 19/3 20/3 22/3 34/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 28/3 32/3 33/3 34/3";
 static const char* const kApcPollSmartups750Pid0002Issue13 =
@@ -1541,6 +1724,7 @@ void test_apc_poll_baseline(void) {
         { "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json", kApcPollBackupsCs750rsPid0002Issue48 },
         { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json", kApcPollBackupsEs700gPid0002Issue71 },
         { "test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json", kApcPollBackupsRs900miPid0002Issue18 },
+        { "test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json", kApcPollBackupsXs1500mPid0002Issue94 },
         { "test/fixtures/apc/apc_backups_xs700u_vid051d_pid0002_issue20.json", kApcPollBackupsXs700uPid0002Issue20 },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue13.json", kApcPollSmartups750Pid0002Issue13 },
         { "test/fixtures/apc/apc_smartups_750_vid051d_pid0002_issue78.json", kApcPollSmartups750Pid0002Issue78 },
@@ -1840,6 +2024,9 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_replay_eaton_3s);
     RUN_TEST(test_replay_eaton_5p);
+    RUN_TEST(test_replay_eaton_ellipse_pro_650_issue110);
+    RUN_TEST(test_replay_mge_protection_center_issue111);
+    RUN_TEST(test_replay_eaton_ellipse_eco_650_issue112);
     RUN_TEST(test_replay_apc_cs500);
     RUN_TEST(test_replay_apc_rs900mi);
     RUN_TEST(test_replay_apc_xs700u);
@@ -1852,6 +2039,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
+    RUN_TEST(test_replay_apc_xs1500m_issue94);
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_bgm2200_issue98);
     RUN_TEST(test_replay_apc_bgm2200_issue98_online);
@@ -1891,6 +2079,9 @@ void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_replay_eaton_3s);
     RUN_TEST(test_replay_eaton_5p);
+    RUN_TEST(test_replay_eaton_ellipse_pro_650_issue110);
+    RUN_TEST(test_replay_mge_protection_center_issue111);
+    RUN_TEST(test_replay_eaton_ellipse_eco_650_issue112);
     RUN_TEST(test_replay_apc_cs500);
     RUN_TEST(test_replay_apc_rs900mi);
     RUN_TEST(test_replay_apc_xs700u);
@@ -1903,6 +2094,7 @@ void setup() {
     RUN_TEST(test_replay_apc_cs750rs_issue48);
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
+    RUN_TEST(test_replay_apc_xs1500m_issue94);
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_bgm2200_issue98);
     RUN_TEST(test_replay_apc_bgm2200_issue98_online);

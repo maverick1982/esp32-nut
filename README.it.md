@@ -37,6 +37,8 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 - Serie Eaton 3S
 - Eaton 5P 1U
+- Eaton Ellipse PRO 650, Ellipse ECO 650
+- MGE Protection Center
 </details>
 
 <details>

@@ -1,0 +1,90 @@
+[snapshot]
+battery.charge.low=10
+battery.charge.warning=50
+battery.charge=100
+battery.date=2001/09/25
+battery.mfr.date=2025/12/01
+battery.runtime.low=120
+battery.runtime=1698
+battery.voltage.nominal=24.0
+battery.voltage=27.3
+driver.name=APCDriver
+input.sensitivity=medium
+input.transfer.high=139
+input.transfer.low=88
+input.voltage.nominal=120
+input.voltage=121.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.firmware.aux=d11
+ups.firmware=947.d11 .D
+ups.load=24
+ups.mfr.date=2022/03/05
+ups.mfr=American Power Conversion
+ups.model=Back-UPS XS 1500M
+ups.realpower.nominal=900
+ups.realpower=216
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.off=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.test.result=No test initiated
+ups.timer.reboot=0
+ups.timer.shutdown=-1
+ups.status=OL
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop test.panel.start test.panel.stop load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+[rw]
+battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10
+[rw.final]
+battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge.warning=50
+battery.charge=100
+battery.date=2001/09/25
+battery.mfr.date=2025/12/01
+battery.runtime.low=120
+battery.runtime=1698
+battery.voltage.nominal=24.0
+battery.voltage=27.3
+driver.name=APCDriver
+input.sensitivity=medium
+input.transfer.high=139
+input.transfer.low=88
+input.voltage.nominal=120
+input.voltage=121.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.firmware.aux=d11
+ups.firmware=947.d11 .D
+ups.load=24
+ups.mfr.date=2022/03/05
+ups.mfr=American Power Conversion
+ups.model=Back-UPS XS 1500M
+ups.realpower.nominal=900
+ups.realpower=216
+ups.serial=TEST0000
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.no_battery=0
+ups.status.off=0
+ups.status.overload=0
+ups.status.remaining_time_limit_expired=0
+ups.status.replace_battery=0
+ups.status.shutdown_imminent=0
+ups.test.result=No test initiated
+ups.timer.reboot=0
+ups.timer.shutdown=-1
+ups.status=OL
+[requests]
+ S4 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 28/3 33/3 34/3 35/3 37/3 38/3 39/3 40/3 48/3 49/3 52/3 54/3 64/3 65/3 66/3 80/3 81/3 82/3 96/3 97/3 98/3 127/3 126/3 125/3 124/3 123/3 122/3 121/3 120/3 117/3 116/3 128/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 S4 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 18/3 19/3 20/3 21/3 22/3 23/3 24/3 28/3 33/3 34/3 35/3 37/3 38/3 39/3 40/3 48/3 49/3 52/3 54/3 64/3 65/3 66/3 80/3 81/3 82/3 96/3 97/3 98/3 127/3 126/3 125/3 124/3 123/3 122/3 121/3 120/3 117/3 116/3 128/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3 6/3 12/3 19/3 20/3 22/3 34/3 35/3 80/3 122/3
