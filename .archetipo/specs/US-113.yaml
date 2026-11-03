@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-113
+title: Nome host configurabile nella pagina Network (#116)
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+blocked_by:
+  - US-112
+body: |
+  #### US-113: Nome host configurabile nella pagina Network (#116)
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-112
+
+  **User Story**
+  Come utente con più schede esp32-nut sulla stessa rete,
+  voglio scegliere il nome host di ogni scheda nella pagina Network,
+  in modo da riconoscerla nella tabella DHCP del router e raggiungerla per nome, invece di ricordare `ESP32-S3-56D784`.
+
+  **Dimostrazione**
+  L'utente apre la pagina Network, scrive `espnut-network` nel campo Hostname e salva. Dopo il riavvio della connessione il router mostra la scheda come `espnut-network` nella tabella DHCP, sia su Wi-Fi (ESP32-S3) sia su Ethernet (ESP32-P4).
+
+  **Criteri di Accettazione**
+  - [ ] La pagina Network ha una sezione "Hostname", sempre visibile, con il valore in uso. Il nome è salvato in NVS come le altre impostazioni e resta dopo un aggiornamento OTA.
+  - [ ] Il nome si applica sia al link Wi-Fi sia al link Ethernet. Senza un nome scelto resta il predefinito: `esp32-nut-xxxxxx` su Ethernet come oggi, e lo stesso schema su Wi-Fi.
+  - [ ] Un nome non valido viene rifiutato con un messaggio chiaro, sia dalla web UI sia dall'API: solo lettere, cifre e trattino, senza trattino iniziale o finale, al massimo 32 caratteri.
+  - [ ] Il System Log riporta il nome host usato all'avvio della connessione.
+  - [ ] Test nativi per la validazione ed e2e per il campo. Tre build ok, note di rilascio aggiornate.
+
+  **Assunzioni**
+  - Promesso sulla #116 (issuecomment-6599302497). Oggi solo `eth_link.cpp:25` imposta un nome host; il Wi-Fi usa quello del core Arduino.
+  - Fuori scope: mDNS (`.local`).
+history:
+  - status: TODO
+    at: "2026-11-03T09:45:43Z"

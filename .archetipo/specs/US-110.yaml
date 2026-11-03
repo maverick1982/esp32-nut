@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-110
+title: Nome dei task bloccati dopo un riavvio del watchdog (TASK_WDT)
+epic:
+  code: EP-000
+  title: Fondamenta del Progetto
+priority: HIGH
+points: 2
+status: TODO
+body: |
+  #### US-110: Nome dei task bloccati dopo un riavvio del watchdog (TASK_WDT)
+
+  **Epic:** EP-000 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come manutentore che riceve il System Log di una scheda riavviata dal watchdog dei task,
+  voglio che dopo il riavvio il log indichi quali task non hanno resettato il watchdog in tempo,
+  in modo da capire quale parte del firmware si è bloccata senza bisogno di un log della seriale.
+
+  **Dimostrazione**
+  Su una build che blocca di proposito il task di poll USB per più del timeout del watchdog, dopo il riavvio il System Log riporta `Reset reason: TASK_WDT` e una riga con il nome del task bloccato (per esempio `[DIAG] Watchdog: tasks not responding: usb_poll (CPU 1)`), oltre a `Last crash` e `Backtrace` come oggi. Con un riavvio normale o un crash di altro tipo la riga non compare.
+
+  **Criteri di Accettazione**
+  - [ ] Quando scatta il task watchdog, i nomi dei task sotto watchdog che non l'hanno resettato in tempo, con la CPU su cui girano, vengono salvati in memoria che sopravvive al riavvio (RTC), prima del panic.
+  - [ ] Al riavvio successivo con reset `TASK_WDT`, il System Log riporta quei nomi in una riga `[DIAG]`, accanto alle righe `Last crash` e `Backtrace` già presenti. Le stesse informazioni compaiono nell'export della diagnostica USB, se lì c'è già la sezione sul crash.
+  - [ ] Il dato salvato vale per un solo riavvio. Dopo un riavvio di altro tipo (OTA, comando, corrente, panic diverso) la riga non compare e non vengono mostrati nomi di un watchdog precedente.
+  - [ ] Il salvataggio avviene nel contesto dell'interrupt del watchdog: non alloca memoria, non prende lock e ha una dimensione massima fissa (i nomi oltre il limite vengono troncati, senza errori).
+  - [ ] Il comportamento di oggi non cambia: stesso timeout, il panic resta attivo (`trigger_panic`), il core dump e le righe `Last crash` / `Backtrace` restano identiche. Suite nativa verde e le tre build ok.
+  - [ ] Note di rilascio aggiornate.
+
+  **Assunzioni**
+  - Nasce dalla #112 / #111 (Eric-IOT, MGE Protection Center, v1.12.0-rc1): il log dice `Reset reason: TASK_WDT` e `Last crash: task 'IDLE1'`. Il backtrace salvato è quello del task idle della CPU interrotta, non quello del task bloccato, e ESP-IDF scrive i task colpevoli solo sulla seriale. Promesso pubblicamente sulla #112 (issuecomment-6599056060).
+  - Task sotto watchdog oggi: `loopTask` (`src/core/main.cpp`, `LOOP_WDT_TIMEOUT_MS`) e il task di poll USB (`USBHostUPS::poll_task`, che aspetta `_op_mutex` senza limite di tempo).
+  - ESP-IDF 5.x permette di agganciarsi all'interrupt del watchdog prima del panic e di elencare i task che non hanno risposto. Va verificato che funzioni con il core Arduino precompilato, sia su S3 sia su P4.
+  - Fuori scope: correggere la causa del blocco dell'MGE, che si affronta dopo, con i dati raccolti da questa spec.
+history:
+  - status: TODO
+    at: "2026-11-03T08:41:46Z"

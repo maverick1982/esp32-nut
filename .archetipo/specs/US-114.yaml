@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-114
+title: Spegnimento automatico dalla scheda a batteria bassa, in Board Settings (#100)
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-114: Spegnimento automatico dalla scheda a batteria bassa, in Board Settings (#100)
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente con un UPS che alimenta dispositivi senza client NUT (TV, impianto audio),
+  voglio che la scheda spenga l'UPS da sola quando la batteria è scarica,
+  in modo da non scaricare a fondo la batteria quando nessun `upsmon` è collegato.
+
+  **Dimostrazione**
+  Con l'opzione attiva nella pagina Board Settings e l'UPS staccato dalla rete, quando lo stato diventa `OB LB` la scheda manda `shutdown.default` all'UPS una sola volta e lo scrive nel System Log. Quando la rete torna e l'UPS si riaccende, l'opzione è di nuovo pronta per il prossimo evento.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina Board Settings ha una sezione "Automatic shutdown" con un interruttore, spento per impostazione predefinita e salvato in NVS. Una riga spiega il comportamento, con un collegamento a UPS Settings per la soglia (`battery.charge.low` / `battery.runtime.low`).
+  - [ ] L'opzione è un'impostazione della scheda: non compare in `upsrw` né in LIST RW, e i client NUT non la possono cambiare.
+  - [ ] Con l'opzione attiva, quando lo stato contiene sia `OB` sia `LB` la scheda manda `shutdown.default` una sola volta per evento. Non lo ripete finché lo stato non torna `OL`.
+  - [ ] Il comando è registrato nel System Log come gli altri, indicando che viene dallo spegnimento automatico.
+  - [ ] Se l'UPS non offre nessun comando di spegnimento, l'interruttore è disattivato e la pagina dice perché.
+  - [ ] I client NUT e `upsmon` funzionano come prima; non c'è una soglia separata da quella dell'UPS.
+  - [ ] Test nativi per la logica (attivazione, una volta per evento, riarmo) ed e2e per la sezione. Tre build ok, note di rilascio aggiornate.
+
+  **Assunzioni**
+  - Concordato nella #23 e promesso sulla #100 (issuecomment-6544399944 e 6599302978). Con US-108 la soglia del 5G si può impostare.
+  - Fuori scope: un ritardo configurabile prima del comando e le notifiche.
+history:
+  - status: TODO
+    at: "2026-11-03T09:45:43Z"

@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-112
+title: Pagina "Network" al posto di "Wi-Fi Config", con sezioni Wi-Fi ed Ethernet secondo la scheda
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+body: |
+  #### US-112: Pagina "Network" al posto di "Wi-Fi Config", con sezioni Wi-Fi ed Ethernet secondo la scheda
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di una scheda ESP32-S3 (Wi-Fi) o ESP32-P4 (Ethernet),
+  voglio una sola pagina "Network" che mostri, per ogni link della scheda, le impostazioni e lo stato della connessione,
+  in modo da trovare tutto ciò che riguarda la rete in un posto solo, anche sulla P4, che oggi non ha nessuna pagina di rete.
+
+  **Dimostrazione**
+  - Su una ESP32-S3 la voce di menu "Network" apre la pagina con la sezione Wi-Fi. In alto c'è lo stato della connessione in sola lettura: rete collegata (SSID), intensità del segnale, IP, gateway, MAC e DHCP. Sotto ci sono SSID, password e salvataggio, che funzionano come nella pagina "Wi-Fi Config" di oggi.
+  - Su una ESP32-P4 la stessa voce mostra la sezione Ethernet con lo stato nella stessa forma: IP, gateway, velocità del link, MAC e DHCP. La sezione Wi-Fi non c'è.
+
+  **Criteri di Accettazione**
+  - [ ] La voce di menu "Wi-Fi Config" diventa "Network" e la pagina ha una sezione per ogni link della scheda. Le sezioni si mostrano o si nascondono in base a ciò che la scheda supporta (profilo e `network.type` / capacità in `/api/config`), senza `#if` di scheda nel codice web.
+  - [ ] Ogni sezione di link mostra lo stato della connessione in sola lettura e nello stesso formato: IP, gateway, MAC e DHCP. Per il Wi-Fi in più la rete collegata (SSID) e l'intensità del segnale; per l'Ethernet in più la velocità del link. Lo stato si aggiorna come la barra di stato. Se il link è giù, o la scheda è in modalità access point, la sezione lo dice.
+  - [ ] Le impostazioni Wi-Fi funzionano come la pagina di oggi: stessi campi, stesse API, stesso comportamento in modalità access point e nella prima configurazione.
+  - [ ] La struttura permette di aggiungere altre sezioni (per esempio il nome host, US-113) senza rifare la pagina.
+  - [ ] Nessun cambio della configurazione salvata. Gli e2e esistenti della pagina Wi-Fi passano, con i soli selettori aggiornati. Nuovi e2e per la scheda solo Wi-Fi e per la scheda solo Ethernet. Asset rigenerati (`scripts/embed_web.py`), tre build ok.
+
+  **Assunzioni**
+  - Oggi esiste solo la pagina Wi-Fi, nascosta sulle schede Ethernet (`bundle.js:525`). Una pagina Ethernet non c'è.
+  - Lo stato può richiedere qualche campo in più in un'API esistente, per esempio gateway, MAC e RSSI in `/api/system-status`. Le impostazioni salvate non cambiano.
+  - Il piano include un mockup della pagina nuova.
+  - Fuori scope: impostazioni Ethernet (IP statico), la scelta del link sulle schede con entrambi (ADR 0010), il W5500 (#64).
+history:
+  - status: TODO
+    at: "2026-11-03T09:45:43Z"

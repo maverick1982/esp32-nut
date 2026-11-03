@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-111
+title: 'CyberPower: leggere il report 4 come NUT per pubblicare battery.mfr.date (#108)'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 2
+status: TODO
+body: |
+  #### US-111: CyberPower: leggere il report 4 come NUT per pubblicare battery.mfr.date (#108)
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS CyberPower (per esempio il CP2000EIPFCRM2U della #108),
+  voglio che il firmware legga il report 4 come fa NUT,
+  in modo da vedere `battery.mfr.date`, la data della batteria che il componente NUT di Home Assistant mostra già.
+
+  **Dimostrazione**
+  Nel replay della fixture CP2000EIPFCRM2U (#108), il full poll chiede il report 4 (`4/3`), legge l'indice della stringa `UPS.PowerSummary.iOEMInformation` e chiede la stringa: `battery.mfr.date` viene pubblicata come in `cps-hid.c:368`. Con la build di prova sul CP2000 di kobbybest la data compare in `upsc` e nella dashboard.
+
+  **Criteri di Accettazione**
+  - [ ] `CyberPowerDriver::acceptPollReport()` non esclude più il report 4. Il report 6 e i report vendor dal 130 in su restano esclusi.
+  - [ ] `battery.mfr.date` arriva dalla stringa di `iOEMInformation`, come nella riga `cps-hid.c:368`, troncata a 19 caratteri come le altre stringhe CyberPower (note v1.12.0).
+  - [ ] Il piano decide, con una motivazione, se riabilitare il report 4 su tutti i CyberPower o solo su `0x0601`. Se un UPS non risponde al report 4, il canale di controllo si ripristina con i timeout e il ripristino dell'ADR 0008, senza bloccare la scheda.
+  - [ ] Fixture: nel CP2000 (#108) e nel CP1600 (#48) le golden `[requests]` contengono `4/3`. Nelle fixture CyberPower `0x0501` cambiano solo se il piano estende la regola anche a loro. Ogni altra differenza va spiegata.
+  - [ ] Note di rilascio aggiornate. Suite nativa verde e tre build ok.
+
+  **Assunzioni**
+  - L'esclusione dei report 4 e 6 viene da `73fe02b` (17 settembre, #40, BR700ELCD `0764:0501`), da prima dei timeout e del ripristino dell'ADR 0008. È lo stesso caso della #39 corretto con US-108.
+  - Promesso pubblicamente sulla #108 (issuecomment-6599487772), con una build di prova per kobbybest prima del rilascio.
+  - Il replay delle fixture non contiene i descrittori delle stringhe: il valore della data si verifica solo sul campo. Il test verifica la richiesta del report e della stringa.
+  - Fuori scope: il report 6 e i report vendor.
+history:
+  - status: TODO
+    at: "2026-11-03T09:27:04Z"
