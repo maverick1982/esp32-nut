@@ -962,6 +962,7 @@ void test_cps_table_gives_same_commands_on_fixtures() {
         "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
         "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
         "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
+        "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
         "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     };
     for (const char* f : files) checkSameCommandsAsGeneric(f, NutTable::cpsHid2Nut, 60, 120);

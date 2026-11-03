@@ -760,6 +760,10 @@ void test_replay_powercom_spd750u(void) {
 #define NUT_ROWS_CPS_CP1600EPFCLCD NUT_ROWS_CPS_COMMON_1 "input.sensitivity " NUT_ROWS_CPS_COMMON_2 \
     "ups.firmware ups.load ups.power ups.power.nominal ups.realpower ups.realpower.nominal ups.test.result " \
     "ups.timer.shutdown ups.timer.start"
+// CP2000EIPFCRM2U: the CP1600EPFCLCD rows. Its descriptor differs only in report 0x17, FEATURE
+// only with Output.Overload and Output.Boost (402-403), without the three Output flags cps-hid
+// does not read
+#define NUT_ROWS_CPS_CP2000EIPFCRM2U NUT_ROWS_CPS_CP1600EPFCLCD
 // UT850EG: the BR700ELCD rows plus input.frequency (408, Input.Frequency FEATURE 42). Its
 // 0xFF010043 is under UPS.0xFF0100BA, not UPS.Output: no input.sensitivity row
 #define NUT_ROWS_CPS_UT850EG NUT_ROWS_CPS_COMMON_1 "input.frequency " NUT_ROWS_CPS_COMMON_2 \
@@ -825,6 +829,26 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
         // Input.*VoltageTransfer (FEATURE 0x83/0x84) is bound but not in the dump: not listed
         "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS,
         "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS);
+}
+
+// Live dump of v1.11.0 attached to issue #108 (ESP32-P4): every value of the dump is the same on
+// main but the strings (battery.type, ups.firmware: no string descriptors in the dump) and the
+// serial (anonymized). battery.mfr.date (cps-hid.c:368, PowerSummary.iOEMInformation, FEATURE
+// 0x04) is bound but never published, on v1.11.0 too: CyberPowerDriver::acceptPollReport() never
+// reads reports 4 and 6. A future spec will read report 4
+void test_replay_cyberpower_cp2000eipfcrm2u_issue108(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP2000EIPFCRM2U,
+        /* replayed FEATURE 0x1A, CPSInputSensitivity = 1 -> cps_sensitivity_info */ { { "input.sensitivity", "normal" },
+          // Output.ConfigApparentPower (FEATURE 0x18 [24, 176, 4, 208, 7] = 2000), and ups.realpower
+          // measured by Output.ActivePower (INPUT 0x19 [25, 106, 0], the last replayed: FEATURE
+          // 0x19 has 107), never replaced by the estimate (10% of 1200 W = 120)
+          { "ups.power.nominal", "2000" }, { "ups.realpower", "106" }, { "battery.voltage", "27.4" },
+          { "battery.charge.warning", "20" }, { "ups.timer.shutdown", "-1" }, { "ups.timer.start", "-1" } },
+        // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x08 bytes 4-5 [.., 44, 1] = 300;
+        // FEATURE 0x10 [16, 195, 0, 1, 1] = 195 / 257 (Output.*VoltageTransfer, 414-415, as on the
+        // CP1600EPFCLCD); FEATURE 0x1A [26, 1]
+        RW_CPS_5 " " RW_DELAYS, RW_CPS_5 " " RW_DELAYS);
 }
 
 // liebertHid2Nut() rows bound by the VI 2200 SHL descriptor (US-106), derived from its usages and
@@ -961,6 +985,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json", "Unknown", nullptr, nullptr },
@@ -974,7 +999,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(28, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(29, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -998,6 +1023,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json",
     "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
     "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
+    "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
     "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
     "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
@@ -1015,7 +1041,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(28, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(29, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -1178,6 +1204,49 @@ static const char* const kCpsSnapshotCp1600epfclcd =
     "ups.timer.start=-1\n"
     "ups.status=OL\n";
 
+// Added after the cps_hid2nut migration (issue #108, dump of v1.11.0): taken from main, the same
+// as the dump but battery.type and ups.firmware (strings the dump does not have) and the serial
+// (anonymized). No battery.mfr.date: report 4 is never read (acceptPollReport)
+static const char* const kCpsSnapshotCp2000eipfcrm2u =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=4250\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=24\n"
+    "battery.voltage=27.4\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.sensitivity=normal\n"
+    "input.transfer.high=257\n"
+    "input.transfer.low=195\n"
+    "input.voltage.nominal=230\n"
+    "input.voltage=232.0\n"
+    "output.voltage=232.0\n"
+    "ups.beeper.status=enabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=10\n"
+    "ups.mfr=CPS\n"
+    "ups.model=CP2000EIPFCRM2U\n"
+    "ups.power.nominal=2000\n"
+    "ups.power=213\n"
+    "ups.realpower.nominal=1200\n"
+    "ups.realpower=106\n"
+    "ups.serial=TEST0000\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.boost=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.test.result=Done and passed\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.timer.start=-1\n"
+    "ups.status=OL\n";
+
 static const char* const kCpsSnapshotUt850eg =
     "battery.charge.low=10\n"
     "battery.charge.warning=20\n"
@@ -1231,6 +1300,7 @@ void test_cyberpower_snapshot_baseline(void) {
         { "test/fixtures/cyberpower/cyberpower_cp1350c_vid0764_pid0501.json", kCpsSnapshotCp1350c },
         { "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", kCpsSnapshotCp1500epfclcd },
         { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", kCpsSnapshotCp1600epfclcd },
+        { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json", kCpsSnapshotCp2000eipfcrm2u },
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", kCpsSnapshotUt850eg },
     };
     checkSnapshots(fixtures, sizeof(fixtures) / sizeof(fixtures[0]));
@@ -2051,6 +2121,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
+    RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
@@ -2106,6 +2177,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp1350c);
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
+    RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);

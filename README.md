@@ -62,6 +62,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
 - CyberPower CP1500EPFCLCD, CP1600EPFCLCD
+- CyberPower CP2000EIPFCRM2U
 - CyberPower CP1500PFCLCDa
 - CyberPower CP1500PFCRM2U
 - CyberPower SL700U
@@ -144,7 +145,7 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 ### ESP32-P4 (Ethernet)
 
 An ESP32-P4 board with a wired Ethernet port can take the place of the ESP32-S3:
-- **Supported boards**: Waveshare ESP32-P4-ETH (also the PoE version) and boards that follow the Espressif reference design (IP101 PHY). A board wired differently needs its own profile: open an issue.
+- **Supported boards**: Waveshare ESP32-P4-ETH (also the PoE version), Waveshare ESP32-P4-WIFI6-POE-ETH (tested, [#108](https://github.com/maverick1982/esp32-nut/issues/108); its ESP32-C6 Wi-Fi chip is not used, the board runs on Ethernet) and boards that follow the Espressif reference design (IP101 PHY). A board wired differently needs its own profile: open an issue.
 - **UPS**: on the USB 2.0 High-Speed port (the 4-pin header J3 on the Waveshare ESP32-P4-ETH).
 - **Network**: cable only. The address comes from DHCP and the host name is `esp32-nut-xxxxxx` (last 3 bytes of the MAC address). There is no Wi-Fi and no access point.
 - **Two images, one per chip revision**:

@@ -62,6 +62,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - CyberPower CP 1350C / CP1350AVRLCD
 - CyberPower CP1500AVRLCDa
 - CyberPower CP1500EPFCLCD, CP1600EPFCLCD
+- CyberPower CP2000EIPFCRM2U
 - CyberPower CP1500PFCLCDa
 - CyberPower CP1500PFCRM2U
 - CyberPower SL700U
@@ -144,7 +145,7 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 ### ESP32-P4 (Ethernet)
 
 Al posto dell'ESP32-S3 si può usare una scheda ESP32-P4 con porta Ethernet:
-- **Schede supportate**: Waveshare ESP32-P4-ETH (anche la versione PoE) e le schede che seguono il design di riferimento Espressif (PHY IP101). Una scheda cablata in modo diverso richiede un suo profilo: apri una issue.
+- **Schede supportate**: Waveshare ESP32-P4-ETH (anche la versione PoE), Waveshare ESP32-P4-WIFI6-POE-ETH (provata, [#108](https://github.com/maverick1982/esp32-nut/issues/108); il chip Wi-Fi ESP32-C6 non viene usato, la scheda funziona via Ethernet) e le schede che seguono il design di riferimento Espressif (PHY IP101). Una scheda cablata in modo diverso richiede un suo profilo: apri una issue.
 - **UPS**: sulla porta USB 2.0 High-Speed (l'header a 4 pin J3 sulla Waveshare ESP32-P4-ETH).
 - **Rete**: solo via cavo. L'indirizzo arriva via DHCP e il nome host è `esp32-nut-xxxxxx` (ultimi 3 byte del MAC). Non ci sono Wi-Fi né access point.
 - **Due immagini, una per revisione del chip**:
