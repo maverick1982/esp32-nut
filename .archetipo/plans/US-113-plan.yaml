@@ -1,0 +1,366 @@
+schema: archetipo/plan/v2
+spec_code: US-113
+body: |-
+  ## Soluzione tecnica
+
+  ### Stato attuale
+  - Solo `EthLink::begin()` (`src/network/eth_link.cpp:22-61`) imposta un nome host: `esp32-nut-%02x%02x%02x` dagli ultimi 3 byte del MAC Ethernet (eFuse), con `ETH.setHostname()` dopo `ETH.begin()` e un log INFO `Ethernet started, hostname %s`.
+  - `WifiStaLink::begin()` (`src/network/wifi_links.cpp:11-22`) non imposta niente: il core (arduino-esp32 3.3.12, pioarduino 55.03.312) usa `NetworkManager::getHostname()`, cioè `esp32s3-XXXXXX` dal MAC base, e lo scrive sulla netif STA dentro `WiFi.mode()` (`WiFiGeneric.cpp:643`).
+  - Attenzione: `WiFi.setHostname()` / `NetworkManager::setHostname()` copiano il nome in un buffer di 32 byte, quindi tengono al massimo **31** caratteri. `NetworkInterface::setHostname()` (`WiFi.STA.setHostname()`, `ETH.setHostname()`) chiama direttamente `esp_netif_set_hostname()`, che accetta fino a 32 caratteri. Per rispettare il limite di 32 della spec si usa la chiamata per interfaccia.
+  - Le impostazioni della scheda stanno in NVS con `Preferences` (`BoardSettingsStore`, namespace `board`; `ConfigManager`, namespace `nutos`, chiave `config_json`). NVS non viene cancellata da un aggiornamento OTA.
+  - La pagina Network di US-112 (`data/www/index.html:161-273`) è un contenitore di `.net-section`. `showNetworkSections()` (`bundle.js:534`) tocca solo le sezioni con `data-link`, quindi una sezione senza `data-link` resta sempre visibile. Il mockup di US-112 riserva già questo posto (`docs/mockups/US-112/index.html:305`): titolo "Hostname" + una `.panel.config-panel` con il suo form.
+
+  ### Decisioni
+  1. **Archiviazione separata** in un namespace NVS nuovo `net`, chiave `hostname` (stringa; chiave assente = nome predefinito). Non in `config_json`: su una S3 al primo avvio (AP, nessuna configurazione) `ConfigManager::save()` scriverebbe una configurazione Wi-Fi vuota ma "valida" e al riavvio la scheda tenterebbe la station con SSID vuoto. Un namespace a parte non tocca la logica di boot (`planNetwork`) ed è indipendente dalla configurazione Wi-Fi/NUT.
+  2. **Logica pura** in `lib/NetCore/src/NetHostname.h` (header-only, testabile in nativo come `NetBootPlan.h`): `isValid()`, `defaultFor(mac)`, `effective(saved, mac)`. Regola: 1-32 caratteri, solo `A-Z a-z 0-9 -`, niente trattino iniziale o finale. Il nome si salva com'è scritto (le maiuscole restano; DHCP e DNS non distinguono).
+  3. **Predefinito uguale su entrambi i link:** `esp32-nut-` + ultimi 3 byte del MAC **del link** in esadecimale minuscolo (Ethernet: MAC ETH da eFuse, invariato rispetto ad oggi; Wi-Fi: MAC della station). La stringa vuota salvata o un valore salvato non valido danno il predefinito (il secondo con un WARN nel log).
+  4. **Applicazione:** il nome salvato arriva ai link dal costruttore. `WifiStaLink::begin()` chiama `WiFi.mode(WIFI_STA)`, poi calcola il nome effettivo dal MAC e chiama `WiFi.STA.setHostname()` **prima** di `WiFi.begin()`, così la prima richiesta DHCP porta già il nome; le riconnessioni (`WiFi.disconnect()` + `WiFi.begin()`) non cambiano modo e non lo perdono. `EthLink::begin()` usa `NetHostname::effective()` al posto dello `snprintf` attuale, nello stesso punto (dopo `ETH.begin()`). L'access point non fa DHCP client: niente nome host.
+  5. **Nome in uso esposto:** `INetLink` riceve `virtual String hostname() const { return String(); }` (non pura: AP e mock di test non cambiano). `WifiStaLink` ed `EthLink` restituiscono il nome impostato in `begin()`. `AppNetworkManager::hostname()` restituisce quello del link attivo; se è vuoto (AP, nessun link) restituisce `NetHostname::effective(saved, mac del link attivo)`: in AP il MAC è quello della station (`wifi_links.cpp:120`), quindi è il nome che la station userà dopo la configurazione. `AppNetworkManager::defaultHostname()` restituisce `NetHostname::defaultFor(mac)` con lo stesso MAC.
+  6. **Applicare un nome = riavvio della scheda**, come per Wi-Fi, NUT e porta USB (`should_restart` + `restart_request_time`). Rinnovare il DHCP a caldo richiederebbe di fermare e riavviare la netif senza vantaggi per l'utente. Se il nome inviato è uguale a quello salvato: 200 con `restart:false`, niente scrittura.
+
+  ### Firmware
+  - `lib/NetCore/src/NetHostname.h` (nuovo): `namespace NetHostname { constexpr size_t kMaxLength = 32; bool isValid(const char* name); String defaultFor(const uint8_t mac[6]); String effective(const String& saved, const uint8_t mac[6]); }`. Nessuna chiamata di piattaforma.
+  - `src/core/hostname_store.h/.cpp` (nuovo): `class HostnameStore { String load(); bool save(const String& name); }`. `load()` apre `net` in sola lettura (begin fallito = mai salvato → ""), legge `hostname`, e restituisce "" se il valore non è valido (con WARN `[NETWORK] Saved hostname "%s" not valid: using the default`). `save("")` rimuove la chiave (`prefs.remove`), `save(nome)` fa `putString` e controlla il risultato.
+  - `AppNetworkManager::begin(board, plan, ssid, password, saved_hostname)`: il nome salvato va ai costruttori `WifiStaLink(ssid, password, saved_hostname)` ed `EthLink(cfg, saved_hostname)`; il manager lo conserva in `m_savedHostname` per `hostname()` e `defaultHostname()`.
+  - `src/core/main.cpp`: `static HostnameStore hostname_store;` caricato in `setup()` accanto a `board_settings_store.load()`; il nome va a entrambe le chiamate `network_mgr.begin(...)` (AP e normale) e a `web_server.setHostnameStore(&hostname_store, saved_hostname)`.
+  - **Log di sistema** (criterio 4): Wi-Fi `[NETWORK] Wi-Fi hostname %s` (INFO, prima di `Connecting to SSID`), oppure `[NETWORK] Could not set the Wi-Fi hostname %s` (WARN) se `setHostname()` fallisce. Ethernet: i log attuali con il nome effettivo.
+
+  ### API (`lib/WebApi/src/WebApiJson.*`, `src/network/web_config_server.cpp`)
+  - **GET `/api/config`**: nuovo oggetto `network.hostname` = `{ "name": <nome in uso>, "custom": <nome salvato, "" se predefinito>, "default": <nome predefinito> }`, scritto da `WebApiJson::hostnameJson(JsonObject out, const String& in_use, const String& saved, const String& def)`. `network.type` e `network.links` non cambiano.
+  - **POST `/api/network/hostname`** con `{"hostname":"espnut-network"}`; `""` torna al predefinito. Registrata per tutte le schede (anche senza Wi-Fi), non pubblica in `AuthPolicy` (protetta dal login come `/api/board`; in AP tutto aperto, come oggi). `requireJson()` come le altre rotte POST.
+    - `WebApiJson::checkHostnameBody(JsonVariantConst body, String& next, String& response)`: campo assente o non stringa → 400 `{"error":"Invalid request"}`; stringa non vuota non valida → 400 `{"error":"Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters"}`; altrimenti 0 con `next` riempito.
+    - Handler: stesso valore del salvato → 200 `{"success":true,"restart":false}`; altrimenti `HostnameStore::save()` (errore → 500 `{"error":"Failed to save the hostname"}`), 200 `{"success":true,"restart":true}`, log INFO `[NETWORK] Hostname set to %s: restarting` (o `reset to the default %s`) e riavvio asincrono.
+
+  ### Web UI (seguire `docs/mockups/US-113/`: `index.html`, `hostname.css`, `app.js`; `mock.css` è solo la barra del mockup)
+  - La sezione segue il mockup, che parte dalla pagina Network di US-112 e mette la sezione al posto del box "futuro" riservato da US-112.
+  - Dopo la sezione Ethernet: `<section class="net-section" data-section="hostname">` **senza** `data-link` e senza `hidden`, titolo `.net-section-title` "Hostname" con l'icona tag di Feather, e una `.panel.config-panel.net-panel` con:
+    - riga "In use" come blocco nello stile di `.link-kv.lead`, con il nome in uso e a destra l'etichetta `#hostname-origin` "Default"/"Custom" (`.host-origin`, `.custom` in ciano), ricavata da `network.hostname.custom`;
+    - form `#hostname-form` (`novalidate`) dentro `.form-container`: campo `#hostname` (`maxlength="32"`, `autocomplete="off" autocapitalize="off" spellcheck="false"`, `aria-describedby="hostname-help"`, `aria-invalid` con errore, classe `invalid` già esistente), placeholder = predefinito, valore = nome scelto; pulsante `#btn-hostname` "Save Hostname" (`.btn.btn-primary`, `min-width: 12.5rem` per non cambiare larghezza fra Save Hostname / Saving... / No changes / Saved). Su desktop campo nelle colonne 1-2 e pulsante nella 3, avvisi a tutta larghezza sotto; sotto 768 px una colonna (campo, avviso, pulsante a tutta larghezza);
+    - `#hostname-error` (`.auth-alert`, `role="alert"`, `hidden`) con il testo dell'errore; `#hostname-success` (`.auth-alert.success`, `role="status"`, `hidden`): "Saved. The board is restarting as `<name>`, this page reloads in N s." con lo stesso conto alla rovescia di Board Settings › USB port (`.countdown`, 15 s come `BOARD_RESTART_S`);
+    - nota `#hostname-help` (`.auth-fineprint`): "The name your router shows for this board. Letters, digits and hyphens, up to 32 characters. Leave it empty to use the default, <code id="hostname-default">esp32-nut-xxxxxx</code>. The board restarts to apply it."
+  - JS: il valore viene ripulito dagli spazi iniziali e finali (`trim`) prima del controllo e dell'invio. `validateHostname(value)` uguale alla regola del firmware (stringa vuota ammessa = predefinito), con lo stesso testo d'errore dell'API. Valore uguale al nome scelto salvato → "No changes" per 2 s senza richiesta (il firmware risponde comunque `restart:false` se arriva). Al submit valido: pulsante "Saving..." con spinner e campo bloccato durante la POST; `restart:true` → pulsante verde "Saved", campo bloccato, riga della rete nella barra laterale ("Wi-Fi:" o "Ethernet:") a "Restarting..." con spia gialla (non la riga UPS), `#hostname-success` col conto alla rovescia e poi `location.reload()` (con DHCP l'IP di solito resta lo stesso); `restart:false` → "No changes"; risposta non ok → testo di `error` dell'API in `#hostname-error`, pulsante di nuovo attivo. L'errore sparisce quando l'utente modifica il campo. Niente `alert()`.
+  - Precompilazione dal `fetch('/api/config')` già esistente (`bundle.js:745`): `network.hostname.name` in "In use", `custom` nel campo e nell'etichetta Default/Custom, `default` come placeholder e in `#hostname-default`. Senza `network.hostname` (mock vecchi) la sezione resta visibile con `—`.
+  - Stili nuovi da `docs/mockups/US-113/hostname.css` in `bundle.css` (`.host-current`, `.host-origin`, layout di `.hostname-form`, `.btn-primary.is-saved`, regole mobile). Aggiornare in `bundle.css` i commenti che citano Hostname come sezione futura.
+  - Asset rigenerati a mano con `python scripts/embed_web.py` (`index_inlined.html`, `include/network/web_assets.h`, `.web_assets.hash`).
+
+  ## Strategia di test
+  - **Unit nativi, nuovo `test/test_net_hostname`:** validi `espnut-network`, `a`, `A1`, `ESP32-NUT`, 32 caratteri; non validi "" (per `isValid`), 33 caratteri, `-abc`, `abc-`, `-`, `a_b`, `a b`, `a.b`, byte non ASCII, `nullptr`. `defaultFor({..,0x56,0xD7,0x84})` = `esp32-nut-56d784`. `effective("", mac)` e `effective("bad-", mac)` danno il predefinito, `effective("espnut-network", mac)` il nome salvato.
+  - **Unit nativi, `test/test_web_api`:** `checkHostnameBody` (valido, vuoto → next "", assente, numero, null, non valido con il testo d'errore esatto, 33 caratteri); `hostnameJson` (chiavi `name`, `custom`, `default`).
+  - **E2E (Playwright, nuovo `e2e/hostname.spec.ts`, `serveIndex` di `e2e/support/webui.ts` + `page.route` sulle API come `network-page.spec.ts`):**
+    1. scheda solo Wi-Fi: sezione Hostname visibile con nome in uso, etichetta Default, placeholder predefinito, campo vuoto; scrivere `espnut-network` e salvare → POST con `{"hostname":"espnut-network"}`, pulsante Saved, avviso di riavvio con conto alla rovescia;
+    2. scheda solo Ethernet (`links: ["ethernet"]`): la sezione c'è anche senza la sezione Wi-Fi;
+    3. nome personalizzato già salvato: il campo è precompilato;
+    4. nomi non validi (`-bad`, `bad-`, `has space`, `a_b`, 33 caratteri): messaggio chiaro e nessuna POST;
+    5. errore dall'API (route che risponde 400 con `error`): il testo dell'API compare;
+    6. campo svuotato e salvato → POST con `""` (ritorno al predefinito);
+    7. stesso nome già salvato → "No changes", nessuna POST; spazi iniziali e finali tolti prima dell'invio.
+    - `screenshot.spec.ts`: aggiungere `network.hostname` al mock di `/api/config` in modo che `docs/images/ui-network.png`, rigenerato da `npm run e2e:screenshots`, mostri un nome e non `—`.
+    - Demo: la dimostrazione è visibile in parte nella UI (campo e salvataggio); la tabella DHCP del router è fuori dalla web UI. La decisione su registrarla spetta ad `archetipo-review`.
+  - **Finale:** suite nativa completa, `npm run e2e` completa, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`. Prova sulla scheda S3 di test (OTA, nome salvato, log, tabella DHCP del router controllata dall'utente) solo con il consenso dell'utente; esiti in `docs/test-results/US-113/`.
+
+  ## Note
+  - Criterio "note di rilascio aggiornate": **rimandato** a prima della release (decisione dell'utente). I dati utili (limite di 32 caratteri, nome predefinito Wi-Fi cambiato da `esp32s3-XXXXXX` a `esp32-nut-xxxxxx`: il router mostrerà un nome nuovo dopo l'aggiornamento anche senza nome scelto) vanno nei risultati dei test.
+  - Il cambio del predefinito sul Wi-Fi è voluto dalla spec ("lo stesso schema su Wi-Fi"), ma una prenotazione DHCP basata sul nome (rara; di solito è sul MAC) andrebbe aggiornata: da citare nelle note.
+  - Salvare il nome da una S3 in AP (primo avvio) riavvia la scheda, che torna in AP finché il Wi-Fi non è configurato; il nome verrà usato dalla station.
+  - Fuori scope: mDNS (`.local`), nome dell'access point.
+  - Comandi: test nativi da Git Bash con `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native ...`; e2e con `npm run e2e`; build da PowerShell con `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e <env>`.
+  - Branch: `feature/us-113` (worktree ARchetipo disattivato). Commit solo con conferma dell'utente.
+tasks:
+  - id: TASK-01
+    title: 'NetHostname: validazione, nome predefinito e nome effettivo (logica pura)'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** una sola regola per il nome host, usata da firmware, API e test nativi.
+
+      **Read:** `lib/NetCore/src/NetBootPlan.h` (stile header-only), `lib/NetCore/src/NetLinkInfo.h`, `src/network/eth_link.cpp:22-25` (formato attuale del nome), `test/mocks` (mock di `String`).
+
+      **Change:** nuovo `lib/NetCore/src/NetHostname.h`, header-only, senza chiamate di piattaforma (solo `Arduino.h`/`String` e `snprintf`):
+      1. `namespace NetHostname { constexpr size_t kMaxLength = 32; }`
+      2. `inline bool isValid(const char* name)`: false per `nullptr`, stringa vuota o più di 32 caratteri; ogni carattere in `A-Z`, `a-z`, `0-9` o `-` (confronto per intervalli ASCII, non `isalnum`, così i byte non ASCII sono rifiutati); primo e ultimo carattere diversi da `-`.
+      3. `inline String defaultFor(const uint8_t mac[6])`: `esp32-nut-%02x%02x%02x` con `mac[3]`, `mac[4]`, `mac[5]` (minuscolo, come oggi su Ethernet).
+      4. `inline String effective(const String& saved, const uint8_t mac[6])`: `saved` se `isValid(saved.c_str())`, altrimenti `defaultFor(mac)`.
+      5. Commento in testa: regola della spec US-113, limite 32 = `esp_netif_set_hostname`, e perché non usare `WiFi.setHostname()` (buffer di 32 byte → 31 caratteri).
+
+      **Steps:** header → compilazione con un test vuoto di TASK-02.
+
+      **Verify:** compila nel test nativo di TASK-02.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se il mock nativo di `String` non ha un costruttore da `const char*` adatto, usare quello esistente usato da `NetLinkInfo` e segnalarlo; non aggiungere dipendenze.
+
+      ## File Coinvolti
+      - lib/NetCore/src/NetHostname.h — nuovo, logica pura
+
+      ## Criteri di Completamento
+      - [ ] `isValid`, `defaultFor`, `effective` in un header senza chiamate WiFi/ETH/NVS
+      - [ ] Limite di 32 caratteri e regola dei trattini come nella spec
+      - [ ] Predefinito `esp32-nut-xxxxxx` minuscolo dagli ultimi 3 byte del MAC
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di NetHostname
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** la regola del nome host è coperta da test nativi (criterio 5).
+
+      **Read:** `test/test_net_boot_plan/test_main.cpp` (struttura Unity e include di NetCore), `platformio.ini` sezione `[env:native]`.
+
+      **Change:** nuovo `test/test_net_hostname/test_main.cpp` con:
+      1. validi: `espnut-network`, `a`, `A1`, `ESP32-NUT`, `a-b-c`, 32 caratteri esatti;
+      2. non validi: `nullptr`, "", 33 caratteri, `-abc`, `abc-`, `-`, `a_b`, `a b`, `a.b`, una stringa con un byte `0xC3 0xA8` (è);
+      3. `defaultFor` con MAC `{0x24,0x6F,0x28,0x56,0xD7,0x84}` = `esp32-nut-56d784`;
+      4. `effective("", mac)` e `effective("bad-", mac)` = predefinito, `effective("espnut-network", mac)` = `espnut-network`.
+
+      **Steps:** test → esecuzione → correzioni in TASK-01 se servono.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_net_hostname` verde.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se il test non trova l'header, aggiungere l'include path di NetCore come fanno i test NetCore esistenti, non toccare gli altri env.
+
+      ## File Coinvolti
+      - test/test_net_hostname/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti
+      - [ ] `pio test -e native -f test_net_hostname` verde
+    ref: TASK-02
+  - id: TASK-03
+    title: HostnameStore in NVS e nome host applicato ai link Wi-Fi ed Ethernet
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** il nome salvato (o il predefinito) arriva al DHCP su station Wi-Fi ed Ethernet e finisce nel System Log; il manager sa dire il nome in uso.
+
+      **Read:** `src/core/board_settings_store.h/.cpp` (stile Preferences), `src/core/main.cpp:85-160`, `include/network/network_manager.h`, `src/network/network_manager.cpp`, `src/network/wifi_links.h/.cpp`, `src/network/eth_link.h/.cpp`, `lib/NetCore/src/INetLink.h`, `test/test_net_link_selector/test_main.cpp` (mock di INetLink).
+
+      **Change:**
+      1. Nuovi `src/core/hostname_store.h/.cpp`: `class HostnameStore { public: String load(); bool save(const String& name); };`, namespace `net`, chiave `hostname`. `load()`: `prefs.begin("net", true)` fallito → ""; `getString("hostname", "")`; valore non vuoto e non `NetHostname::isValid` → WARN `[NETWORK] Saved hostname "%s" not valid: using the default` e "". `save("")` → `prefs.remove("hostname")` (ok anche se la chiave non c'è); `save(nome)` → `putString(...) > 0`.
+      2. `INetLink`: `virtual String hostname() const { return String(); }` con commento (nome mandato al DHCP; vuoto per l'AP). Non pura: i mock non cambiano.
+      3. `WifiStaLink(const String& ssid, const String& password, const String& saved_hostname)`, membro `m_savedHostname`, `m_hostname`. In `begin()`: dopo `WiFi.mode(WIFI_STA)` e `setAutoReconnect`, `uint8_t mac[6]; WiFi.macAddress(mac); m_hostname = NetHostname::effective(m_savedHostname, mac);` poi `WiFi.STA.setHostname(m_hostname.c_str())` → INFO `[NETWORK] Wi-Fi hostname %s` oppure WARN `[NETWORK] Could not set the Wi-Fi hostname %s`; tutto prima di `WiFi.begin()`. `hostname()` restituisce `m_hostname`.
+      4. `EthLink(const EthConfig& cfg, const String& saved_hostname)`: in `begin()` sostituire lo `snprintf` con `m_hostname = NetHostname::effective(m_savedHostname, mac)`; i log esistenti usano `m_hostname.c_str()`. `hostname()` restituisce `m_hostname` (vuoto se `ETH.begin()` è fallito prima di impostarlo è accettabile).
+      5. `AppNetworkManager::begin(board, plan, ssid, password, const String& saved_hostname)`: salva `m_savedHostname`, lo passa ai costruttori. Nuovi `String hostname() const` (nome del link attivo se non vuoto, altrimenti `NetHostname::effective(m_savedHostname, mac del link attivo)`; senza link "") e `String defaultHostname() const` (`NetHostname::defaultFor(mac del link attivo)`; senza link "").
+      6. `main.cpp`: `#include "core/hostname_store.h"`, `static HostnameStore hostname_store;`, `String saved_hostname = hostname_store.load();` dopo il caricamento delle impostazioni della scheda, passato a entrambe le chiamate `network_mgr.begin(...)`. (Il wiring verso il web server è in TASK-04.)
+
+      **Steps:** store → INetLink → link → manager → main → build S3 e P4.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_net_link_selector -f test_net_boot_plan -f test_net_hostname` verde; da PowerShell `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` e `-e esp32-p4-eth` compilano.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `WiFi.STA.setHostname()` non esiste nel core o fallisce sempre dopo `WiFi.mode()`, ripiegare su `WiFi.setHostname()` **prima** di `WiFi.mode()` e segnalare che quel percorso tronca a 31 caratteri (da decidere con l'utente: limite 31 o altra soluzione). Non chiamare ESP-IDF fuori dagli adattatori (ADR 0010).
+
+      ## File Coinvolti
+      - src/core/hostname_store.h, src/core/hostname_store.cpp — nuovi, NVS `net`/`hostname`
+      - lib/NetCore/src/INetLink.h — `hostname()` virtuale con default
+      - src/network/wifi_links.h, src/network/wifi_links.cpp — nome sulla station prima di `WiFi.begin()`
+      - src/network/eth_link.h, src/network/eth_link.cpp — nome salvato o predefinito
+      - include/network/network_manager.h, src/network/network_manager.cpp — parametro e `hostname()` / `defaultHostname()`
+      - src/core/main.cpp — caricamento e passaggio del nome
+
+      ## Criteri di Completamento
+      - [ ] Senza nome salvato: `esp32-nut-xxxxxx` su Ethernet (come oggi) e su Wi-Fi (MAC della station)
+      - [ ] Con nome salvato: lo stesso nome su entrambi i link, impostato prima del DHCP
+      - [ ] System Log: riga INFO con il nome su Wi-Fi ed Ethernet, WARN se l'impostazione fallisce o il valore salvato non è valido
+      - [ ] Build S3 e P4 ok, test NetCore verdi
+    ref: TASK-03
+  - id: TASK-04
+    title: 'API: POST /api/network/hostname e network.hostname in /api/config'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** la web UI e i client possono leggere e cambiare il nome host, con rifiuto chiaro dei nomi non validi (criterio 3).
+
+      **Read:** `lib/WebApi/src/WebApiJson.h/.cpp` (`checkNutConfigBody`, `sendError`, `networkLinksJson`), `src/network/web_config_server.cpp` (`begin()` 75-140, `handleSetBoard` 227-262, `handleGetConfig` 356-373), `include/network/web_config_server.h`, `lib/WebAuth/src/AuthPolicy.h/.cpp` (la rotta NON va tra le pubbliche).
+
+      **Change:**
+      1. `WebApiJson::checkHostnameBody(JsonVariantConst body, String& next, String& response)`: `body["hostname"]` non `const char*` → `sendError(response, 400, "Invalid request")`; stringa vuota → `next = ""`, 0; non vuota e non `NetHostname::isValid` → `sendError(response, 400, "Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters")`; altrimenti `next` = valore, 0. Commento in `WebApiJson.h` come per le altre funzioni.
+      2. `WebApiJson::hostnameJson(JsonObject out, const String& in_use, const String& saved, const String& def)`: `out["name"] = in_use; out["custom"] = saved; out["default"] = def;`.
+      3. `WebConfigServer::setHostnameStore(HostnameStore* store, const String& saved)` con membri `hostname_store`, `saved_hostname`.
+      4. `handleGetConfig()`: `WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(), saved_hostname, network ? network->defaultHostname() : String());`. Il resto invariato.
+      5. Nuova rotta `server.on("/api/network/hostname", HTTP_POST, guarded(...handleSetHostname...))` registrata per tutte le schede. `handleSetHostname()`: `requireJson()`, parse (errore → 400 `Invalid request`), `checkHostnameBody`; `next == saved_hostname` → 200 `{"success":true,"restart":false}`; `!hostname_store || !hostname_store->save(next)` → 500 `{"error":"Failed to save the hostname"}`; poi `saved_hostname = next`, 200 `{"success":true,"restart":true}`, log INFO `[NETWORK] Hostname set to %s: restarting` (oppure `[NETWORK] Hostname reset to the default %s: restarting` con `network->defaultHostname()`), `should_restart = true; restart_request_time = millis();`.
+      6. `main.cpp`: `web_server.setHostnameStore(&hostname_store, saved_hostname);` accanto a `setBoardSettings`.
+
+      **Steps:** funzioni pure → server → main → build.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api -f test_web_auth` compila e resta verde; build `esp32-s3-standard` ok.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `test_web_auth` elenca le rotte protette e fallisce per la rotta nuova, aggiungerla tra le protette nel test, mai tra le pubbliche.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h, lib/WebApi/src/WebApiJson.cpp — `checkHostnameBody`, `hostnameJson`
+      - include/network/web_config_server.h, src/network/web_config_server.cpp — rotta, handler, `/api/config`
+      - src/core/main.cpp — `setHostnameStore`
+
+      ## Criteri di Completamento
+      - [ ] POST valido salva e riavvia; stesso nome → nessun riavvio; "" → predefinito
+      - [ ] Nome non valido → 400 con il messaggio esatto, nulla salvato
+      - [ ] `/api/config` ha `network.hostname` con `name`, `custom`, `default`; `type` e `links` invariati
+      - [ ] Rotta protetta dal login fuori dall'AP
+    ref: TASK-04
+  - id: TASK-05
+    title: Test nativi di checkHostnameBody e hostnameJson
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Objective:** il rifiuto dei nomi non validi dall'API è coperto da test nativi.
+
+      **Read:** `test/test_web_api/test_main.cpp` (test di `checkNutConfigBody` e `checkBoardSettingsBody`, registrazione `RUN_TEST`).
+
+      **Change:** in `test/test_web_api/test_main.cpp`:
+      1. `checkHostnameBody`: `{"hostname":"espnut-network"}` → 0 e `next` uguale; `{"hostname":""}` → 0 e `next` vuoto; `{}`, `{"hostname":5}`, `{"hostname":null}` → 400 `Invalid request`; `{"hostname":"-bad"}` e 33 caratteri → 400 con il messaggio esatto di TASK-04 (confrontare il JSON di `response`).
+      2. `hostnameJson`: le tre chiavi con i valori passati, anche con `custom` vuoto.
+
+      **Steps:** test → esecuzione.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` verde.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Casi validi, vuoto, tipo errato e non validi coperti
+      - [ ] `pio test -e native -f test_web_api` verde
+    ref: TASK-05
+  - id: TASK-06
+    title: Sezione Hostname nella pagina Network, dal mockup US-113
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Objective:** la pagina Network mostra sempre una sezione Hostname con il nome in uso e un campo per cambiarlo (criteri 1 e 3), come nel mockup `docs/mockups/US-113/`.
+
+      **Read:** `docs/mockups/US-113/index.html` (sezione `#sec-hostname`), `docs/mockups/US-113/hostname.css`, `docs/mockups/US-113/app.js` (flusso: validazione, Saving, No changes, Saved, conto alla rovescia; i dati finti e la barra degli scenari NON vanno copiati), `data/www/index.html:161-273` (sezioni di US-112), `data/www/bundle.js` (submit di `wifi-form` 283-320, `/api/config` 745-765, flusso di riavvio di Board Settings › USB port ~2239-2270 con `BOARD_RESTART_S`), `data/www/bundle.css`, `scripts/embed_web.py`.
+
+      **Change:**
+      1. `index.html`, dopo la sezione Ethernet dentro `#content-network`: la sezione `<section class="net-section" data-section="hostname">` del mockup (senza `data-link`, senza `hidden`), con gli stessi id: `#hostname-origin`, `#hostname-form`, `#hostname`, `#btn-hostname`, `#hostname-error`, `#hostname-success`, `#hostname-help`, `#hostname-default`, e il blocco "In use". Togliere ciò che nel mockup è solo dimostrativo. Aggiornare il commento di US-112 sopra il contenitore.
+      2. `bundle.css`: aggiungere le regole di `docs/mockups/US-113/hostname.css` (non `mock.css`), riusando le variabili esistenti; aggiornare i commenti che citano Hostname come sezione futura.
+      3. `bundle.js`: `const HOSTNAME_ERROR = 'Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters';`, `HOSTNAME_RESTART_S = 15` (o riusare `BOARD_RESTART_S` se è nello stesso scope) e `function validateHostname(v)` (`v === ''` → ok; altrimenti `/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,30}[A-Za-z0-9])?$/`). Submit: `v = input.value.trim()`; non valido → `#hostname-error` visibile, classe `invalid` e `aria-invalid` sul campo, nessuna richiesta; uguale al nome scelto salvato → pulsante "No changes" per 2 s, nessuna richiesta; altrimenti pulsante "Saving..." con spinner e campo bloccato, `apiFetch('/api/network/hostname', {method:'POST', headers JSON, body: JSON.stringify({hostname: v})})`. Risposta non ok → testo di `error` (fallback "Could not save the hostname.") in `#hostname-error`, pulsante e campo di nuovo attivi. `restart:false` → "No changes" per 2 s. `restart:true` → pulsante `.is-saved` "Saved", campo bloccato, riga della rete nella barra laterale a "Restarting..." con spia gialla, `#hostname-success` col nome e il conto alla rovescia (`.countdown`), allo zero `location.reload()`. Evento `input` sul campo: nasconde l'errore e toglie `invalid`/`aria-invalid`. Niente `alert()`.
+      4. Nel `.then` di `/api/config`: se `data.network && data.network.hostname`: "In use" = `name` (o `—`), `#hostname-origin` = "Custom" con classe `custom` se `custom` non è vuoto, altrimenti "Default"; `#hostname.placeholder` e `#hostname-default` = `default`; `#hostname.value` = `custom` se il campo è vuoto. Conservare il nome scelto salvato per il confronto "No changes".
+      5. `python scripts/embed_web.py` per rigenerare `data/www/index_inlined.html`, `include/network/web_assets.h`, `.web_assets.hash`.
+
+      **Steps:** markup → stili → JS → embed → confronto a occhio con il mockup (desktop e 375 px) → test e2e esistenti.
+
+      **Verify:** `npm run e2e -- network-page wifi-config ethernet` verde; `git status` mostra gli asset rigenerati; la pagina servita dagli e2e assomiglia al mockup negli stati default, invalid e restarting.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se un test e2e esistente conta le `.net-section` visibili e fallisce per la sezione nuova, aggiornare il selettore a `[data-link]` in quel test (è il comportamento voluto), senza cambiare cosa verifica. Se il flusso di riavvio di Board Settings non si può riusare senza toccarlo, duplicare la parte minima e segnalarlo.
+
+      ## File Coinvolti
+      - data/www/index.html — sezione Hostname dal mockup
+      - data/www/bundle.js — validazione, invio, riavvio con conto alla rovescia, precompilazione
+      - data/www/bundle.css — stili da docs/mockups/US-113/hostname.css
+      - data/www/index_inlined.html, include/network/web_assets.h, .web_assets.hash — rigenerati
+      - docs/mockups/US-113/ — riferimento, da non modificare
+
+      ## Criteri di Completamento
+      - [ ] Sezione visibile su schede Wi-Fi ed Ethernet, senza codice per scheda, uguale al mockup
+      - [ ] Nome in uso con etichetta Default/Custom, campo precompilato col nome scelto, placeholder e nota col predefinito
+      - [ ] Nome non valido rifiutato nella UI con lo stesso messaggio dell'API; errore dell'API mostrato
+      - [ ] Stati Saving, No changes, Saved con avviso e conto alla rovescia; layout a una colonna sotto 768 px
+      - [ ] Asset rigenerati e test e2e esistenti verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: E2E del campo Hostname e screenshot della pagina Network
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Objective:** il campo Hostname è coperto da test e2e (criterio 5) e lo screenshot del README lo mostra con un valore.
+
+      **Read:** `e2e/network-page.spec.ts` e `e2e/support/webui.ts` (`serveIndex`, mock di `/api/config` e `/api/system-status`), `e2e/screenshot.spec.ts`, `e2e/README.md`.
+
+      **Change:**
+      1. Nuovo `e2e/hostname.spec.ts` con `serveIndex` + `page.route`; mock di `/api/config` con `network: { type, links, hostname: { name, custom, default } }`. Scenari:
+         - scheda solo Wi-Fi: sezione visibile, "In use" = `esp32-nut-56d784` con etichetta "Default", placeholder uguale, campo vuoto; scrivere `espnut-network`, salvare → la route intercetta una POST con body `{"hostname":"espnut-network"}` e risponde `{"success":true,"restart":true}`; pulsante "Saved", `#hostname-success` visibile con il nome, barra laterale `Restarting...` (con `page.clock` per non attendere il conto alla rovescia e intercettare il reload);
+         - scheda solo Ethernet (`links: ["ethernet"]`): sezione Hostname visibile, sezione Wi-Fi nascosta;
+         - nome già scelto (`custom: "espnut-network"`): il campo è precompilato, etichetta "Custom"; salvare lo stesso nome → "No changes" e nessuna POST;
+         - nomi non validi `-bad`, `bad-`, `has space`, `a_b`, 33 caratteri: messaggio visibile con il testo atteso e nessuna POST (contatore di richieste a 0);
+         - risposta 400 con `{"error":"Invalid hostname: ..."}` forzata dalla route per un nome valido lato client: il testo compare e il pulsante torna attivo;
+         - campo svuotato e salvato: POST con `{"hostname":""}`;
+         - `  espnut-network  ` con spazi: POST con il nome senza spazi.
+      2. `e2e/screenshot.spec.ts`: aggiungere `network.hostname` al mock di `/api/config`; rigenerare `docs/images/ui-network.png` con `npm run e2e:screenshots`.
+
+      **Steps:** spec → esecuzione → screenshot.
+
+      **Verify:** `npm run e2e -- hostname` verde; `npm run e2e:screenshots` aggiorna `docs/images/ui-network.png`.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `serveIndex` non permette di sovrascrivere il mock di `/api/config`, registrare la `page.route` specifica prima di `serveIndex` come fanno gli spec esistenti.
+
+      ## File Coinvolti
+      - e2e/hostname.spec.ts — nuovo
+      - e2e/screenshot.spec.ts — mock con hostname
+      - docs/images/ui-network.png — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari presenti e verdi
+      - [ ] Nessuna POST per i nomi non validi
+      - [ ] Screenshot aggiornato con la sezione Hostname
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Verifica finale: suite complete, tre build e prova sulla scheda'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Objective:** chiudere il criterio 5 (test e tre build) e verificare i criteri 1, 2 e 4 su hardware, con il consenso dell'utente.
+
+      **Read:** `docs/test-results/` (formato dei risultati di US-112 o US-110), memoria del progetto per scheda di test, COM5 e OTA.
+
+      **Change:**
+      1. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`.
+      2. `npm run e2e` completa.
+      3. Da PowerShell: `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`.
+      4. **Solo con il consenso dell'utente**, sulla S3 di test (OTA): prima dell'aggiornamento annotare il nome nella tabella DHCP del router (lo controlla l'utente); dopo l'OTA verificare nel System Log `Wi-Fi hostname esp32-nut-xxxxxx`; salvare `espnut-network` dalla pagina Network, attendere il riavvio, verificare log e `/api/config` e chiedere all'utente la tabella DHCP; provare un nome non valido dalla UI e con `curl` sull'API (400); un secondo OTA conserva il nome; svuotare il campo riporta al predefinito. La P4 la provano i tester, se l'utente non ne ha una.
+      5. Scrivere `docs/test-results/US-113/README.md` con esiti, comandi e i dati per le note di rilascio (limite 32, predefinito Wi-Fi cambiato da `esp32s3-XXXXXX` a `esp32-nut-xxxxxx`).
+
+      **Steps:** test → build → prova su scheda (se consentita) → risultati.
+
+      **Verify:** tutti i comandi sopra verdi; file dei risultati presente.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** niente OTA né flash senza conferma esplicita; non stampare il file delle credenziali OTA. Note di rilascio: rimandate a prima della release, non scriverle qui.
+
+      ## File Coinvolti
+      - docs/test-results/US-113/README.md — nuovo, esiti delle prove
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa ed e2e complete verdi
+      - [ ] Tre build ok
+      - [ ] Prova su scheda fatta o dichiarata non eseguita, con il motivo
+      - [ ] Risultati e dati per le note di rilascio in docs/test-results/US-113/
+    ref: TASK-08

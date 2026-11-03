@@ -1,0 +1,100 @@
+/* US-113 mockup: mockup-only chrome (state switcher, notes, phone frames). Not part of the product.
+   Same as the chrome section of docs/mockups/US-112/network.css. */
+body.mock-page {
+    display: flex;
+    flex-direction: column;
+}
+body.mock-page .app-container {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+}
+body.mock-embed .mock-bar { display: none; }
+
+.mock-bar {
+    flex-shrink: 0;
+    padding: 10px 16px 8px;
+    background: rgba(4, 6, 10, 0.92);
+    border-bottom: 1px dashed rgba(255, 184, 0, 0.45);
+    z-index: 50;
+}
+.mock-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+.mock-switcher > span {
+    color: var(--warning);
+    padding: 0 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.mock-switcher .sep {
+    width: 1px;
+    height: 18px;
+    margin: 0 0.3rem;
+    background: rgba(255, 184, 0, 0.35);
+}
+.mock-switcher button {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    padding: 0.35rem 0.6rem;
+    cursor: pointer;
+    border-radius: 2px;
+}
+.mock-switcher button:hover { color: var(--text-primary); }
+.mock-switcher button.on { color: var(--accent); border-color: rgba(0, 240, 255, 0.4); }
+
+.mock-note {
+    max-width: 1100px;
+    margin: 0.4rem auto 0;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-align: center;
+    line-height: 1.5;
+}
+.mock-note b { color: var(--warning); font-weight: 400; }
+.mock-note code { color: var(--accent); }
+
+.phone-stage {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 2.5rem;
+    padding: 1.5rem 16px 2.5rem;
+}
+.phone-stage[hidden] { display: none; }
+.phone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+}
+.phone figcaption {
+    color: var(--warning);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.phone iframe {
+    width: 375px;
+    max-width: calc(100vw - 32px);
+    height: 812px;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 18px;
+    background: var(--bg-base);
+    box-shadow: 0 0 0 6px rgba(8, 12, 18, 0.9), 0 0 0 7px rgba(45, 60, 90, 0.6), 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.app-container[hidden] { display: none; }

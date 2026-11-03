@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 blocked_by:
   - US-112
 body: |
@@ -36,3 +36,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-03T09:45:43Z"
+  - status: PLANNED
+    at: "2026-11-03T15:20:34Z"
+  - status: IN PROGRESS
+    at: "2026-11-03T15:37:07Z"
+  - status: REVIEW
+    at: "2026-11-03T16:01:43Z"
+  - status: DONE
+    at: "2026-11-03T16:21:04Z"

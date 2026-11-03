@@ -1,5 +1,6 @@
 #include "WebApiJson.h"
 #include "NUTServer.h"
+#include "NetHostname.h"
 #include <string.h>
 
 String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
@@ -454,4 +455,21 @@ void WebApiJson::networkStatusJson(JsonObject net, const NetLinkInfo& info) {
 void WebApiJson::networkLinksJson(JsonArray links, const BoardConfig& board) {
     if (board.has_wifi) links.add("wifi");
     if (board.has_ethernet) links.add("ethernet");
+}
+
+int WebApiJson::checkHostnameBody(JsonVariantConst body, String& next, String& response) {
+    JsonVariantConst value = body["hostname"];
+    if (!value.is<const char*>()) return sendError(response, 400, "Invalid request");
+    const char* name = value.as<const char*>();
+    if (name[0] != '\0' && !NetHostname::isValid(name)) {
+        return sendError(response, 400, INVALID_HOSTNAME_ERROR);
+    }
+    next = String(name);
+    return 0;
+}
+
+void WebApiJson::hostnameJson(JsonObject out, const String& in_use, const String& saved, const String& def) {
+    out["name"] = in_use;
+    out["custom"] = saved;
+    out["default"] = def;
 }

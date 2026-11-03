@@ -1,9 +1,12 @@
 #include "network/wifi_links.h"
 #include "core/app_logger.h"
+#include "NetHostname.h"
+#include <esp_mac.h>
 
-WifiStaLink::WifiStaLink(const String& ssid, const String& password)
+WifiStaLink::WifiStaLink(const String& ssid, const String& password, const String& saved_hostname)
     : m_ssid(ssid),
       m_password(password),
+      m_savedHostname(saved_hostname),
       m_lastStatus(WL_IDLE_STATUS),
       m_lastConnectionAttempt(0),
       m_lastDisconnectTime(0) {}
@@ -14,6 +17,21 @@ void WifiStaLink::begin() {
     AppLogger::log("INFO", "[NETWORK] Initializing Wi-Fi...");
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true); // Consente all'ESP32 di gestire le riconnessioni a basso livello
+
+    // US-113: on the STA netif, after WiFi.mode() (which writes the core default name) and
+    // before WiFi.begin(), so the first DHCP request carries it. WiFi.STA.setHostname()
+    // takes up to 32 characters, WiFi.setHostname() only 31 (NetHostname.h)
+    // MAC from eFuse: right after WiFi.mode() the STA netif has not started yet and
+    // WiFi.macAddress() gives 00:00:00:00:00:00 (seen on the S3, core 3.3.12). Same value
+    // as WiFi.macAddress() once the station runs, so name and device ID match
+    uint8_t mac[6];
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) WiFi.macAddress(mac);
+    m_hostname = NetHostname::effective(m_savedHostname, mac);
+    if (WiFi.STA.setHostname(m_hostname.c_str())) {
+        AppLogger::log("INFO", "[NETWORK] Wi-Fi hostname %s", m_hostname.c_str());
+    } else {
+        AppLogger::log("WARN", "[NETWORK] Could not set the Wi-Fi hostname %s", m_hostname.c_str());
+    }
 
     AppLogger::log("INFO", "[NETWORK] Connecting to SSID: %s...\n", m_ssid.c_str());
     WiFi.begin(m_ssid.c_str(), m_password.c_str());

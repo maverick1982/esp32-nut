@@ -100,6 +100,8 @@ void WebConfigServer::begin(bool isAPMode) {
     // Board page (US-094): not public in AuthPolicy, so protected by the login
     server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
     server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
+    // Hostname (US-113), on every board; not public in AuthPolicy, so protected by the login
+    server.on("/api/network/hostname", HTTP_POST, guarded([this]() { handleSetHostname(); }));
     server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
@@ -261,6 +263,44 @@ void WebConfigServer::handleSetBoard() {
     }
 }
 
+void WebConfigServer::setHostnameStore(HostnameStore* store, const String& saved) {
+    hostname_store = store;
+    saved_hostname = saved;
+}
+
+void WebConfigServer::handleSetHostname() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    String next;
+    String rejected;
+    if (int status = WebApiJson::checkHostnameBody(doc, next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (next == saved_hostname) {
+        server.send(200, "application/json", "{\"success\":true,\"restart\":false}");
+        return;
+    }
+    if (!hostname_store || !hostname_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the hostname\"}");
+        return;
+    }
+    saved_hostname = next;
+    server.send(200, "application/json", "{\"success\":true,\"restart\":true}");
+    if (next.length() > 0) {
+        AppLogger::log("INFO", "[NETWORK] Hostname set to %s: restarting", next.c_str());
+    } else {
+        String def = network ? network->defaultHostname() : String();
+        AppLogger::log("INFO", "[NETWORK] Hostname reset to the default %s: restarting", def.c_str());
+    }
+    should_restart = true;
+    restart_request_time = millis();
+}
+
 void WebConfigServer::openRecoveryWindow(uint32_t now) {
     recovery.open(now);
     AppLogger::log("INFO", "[AUTH] Recovery window open for %u min: new web credentials can be created "
@@ -362,6 +402,9 @@ void WebConfigServer::handleGetConfig() {
     // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
     doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
     WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board());
+    // Name in use, saved name and default (US-113)
+    WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),
+                             saved_hostname, network ? network->defaultHostname() : String());
     
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;

@@ -38,7 +38,11 @@ test.describe('Generate Screenshots', () => {
     await page.route('**/api/config', route => route.fulfill({
       json: {
         wifi: { mode: 'STA', ssid: 'MyHomeNetwork' },
-        network: { type: 'wifi', links: ['wifi'] },
+        network: {
+          type: 'wifi', links: ['wifi'],
+          // US-113: a name chosen in the Hostname section
+          hostname: { name: 'espnut-network', custom: 'espnut-network', default: 'esp32-nut-a1b2c3' },
+        },
         nut: { username: 'homeassistant', ups_name: 'ups' },
       },
     }));
@@ -124,6 +128,7 @@ test.describe('Generate Screenshots', () => {
     await expect(page.locator('#content-network')).toHaveClass(/active/);
     await expect(page.locator('#content-network input').first()).toHaveValue('MyHomeNetwork');
     await expect(page.locator('[data-net-field="ip"]').first()).toHaveText('192.168.1.100');
+    await expect(page.locator('#hostname-current')).toHaveText('espnut-network');
     await page.screenshot({ path: 'docs/images/ui-network.png', animations: 'disabled' });
 
     // 5. NUT Server

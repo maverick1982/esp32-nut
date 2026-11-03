@@ -736,12 +736,150 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setInterval(updateNetworkLive, 1000);
 
+    // --- Hostname section of the Network page (US-113, docs/mockups/US-113) ---
+    // Same rule as NetHostname::isValid() in the firmware; "" goes back to the default name
+    const HOSTNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,30}[A-Za-z0-9])?$/;
+    const HOSTNAME_ERROR = 'Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters';
+    const HOSTNAME_RESTART_S = 15;   // as Board Settings > USB port
+    const HOSTNAME_NO_CHANGE_MS = 2000;
+    const hostnameInput = document.getElementById('hostname');
+    const btnHostname = document.getElementById('btn-hostname');
+    const HOSTNAME_BTN_IDLE = btnHostname ? btnHostname.innerHTML : '';
+    let hostnameSaved = { name: '', custom: '', default: '' };   // network.hostname of /api/config
+    let hostnameNoChangeTimer = null;
+    // While the board restarts the status bar keeps "Restarting...", not "Offline"
+    let netRestarting = false;
+
+    const validateHostname = (v) => v === '' || HOSTNAME_RE.test(v);
+
+    function renderHostname(h) {
+        if (!hostnameInput || !h) return;
+        hostnameSaved = {
+            name: typeof h.name === 'string' ? h.name : '',
+            custom: typeof h.custom === 'string' ? h.custom : '',
+            default: typeof h.default === 'string' ? h.default : ''
+        };
+        document.getElementById('hostname-current').textContent = hostnameSaved.name || '—';
+        const origin = document.getElementById('hostname-origin');
+        origin.textContent = hostnameSaved.custom ? 'Custom' : 'Default';
+        origin.classList.toggle('custom', !!hostnameSaved.custom);
+        if (hostnameSaved.default) {
+            hostnameInput.placeholder = hostnameSaved.default;
+            document.getElementById('hostname-default').textContent = hostnameSaved.default;
+        }
+        if (!hostnameInput.value) hostnameInput.value = hostnameSaved.custom;
+    }
+
+    function showHostnameError(text) {
+        document.getElementById('hostname-error-text').textContent = text;
+        document.getElementById('hostname-error').hidden = false;
+        hostnameInput.classList.add('invalid');
+        hostnameInput.setAttribute('aria-invalid', 'true');
+    }
+
+    function hideHostnameError() {
+        document.getElementById('hostname-error').hidden = true;
+        hostnameInput.classList.remove('invalid');
+        hostnameInput.removeAttribute('aria-invalid');
+    }
+
+    function showHostnameNoChanges() {
+        btnHostname.disabled = false;
+        hostnameInput.disabled = false;
+        btnHostname.innerHTML = 'No changes';
+        clearTimeout(hostnameNoChangeTimer);
+        hostnameNoChangeTimer = setTimeout(() => { btnHostname.innerHTML = HOSTNAME_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startHostnameRestart(custom) {
+        netRestarting = true;
+        btnHostname.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnHostname.classList.add('is-saved');
+        btnHostname.disabled = true;
+        hostnameInput.disabled = true;
+        document.getElementById('hostname-new').textContent = custom || hostnameSaved.default;
+        document.getElementById('hostname-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('hostname-countdown');
+        let left = HOSTNAME_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (hostnameInput && btnHostname) {
+        hostnameInput.addEventListener('input', () => {
+            hideHostnameError();
+            if (!btnHostname.disabled) {
+                clearTimeout(hostnameNoChangeTimer);
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+            }
+        });
+
+        document.getElementById('hostname-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnHostname.disabled) return;
+            const v = hostnameInput.value.trim();
+            hostnameInput.value = v;
+            if (!validateHostname(v)) {
+                showHostnameError(HOSTNAME_ERROR);
+                hostnameInput.focus();
+                return;
+            }
+            hideHostnameError();
+            if (v === hostnameSaved.custom) {
+                showHostnameNoChanges();
+                return;
+            }
+            btnHostname.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnHostname.disabled = true;
+            hostnameInput.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/hostname', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hostname: v })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Hostname save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+                btnHostname.disabled = false;
+                hostnameInput.disabled = false;
+                showHostnameError(data && typeof data.error === 'string' ? data.error : 'Could not save the hostname.');
+                return;
+            }
+            if (data.restart) {
+                startHostnameRestart(v);
+            } else {
+                hostnameSaved.custom = v;
+                showHostnameNoChanges();
+            }
+        });
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
             // Sections of the Network page from the links of the board (US-112)
             showNetworkSections(data.network);
+            // Hostname in use, saved and default (US-113)
+            if (data.network && data.network.hostname) renderHostname(data.network.hostname);
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -1591,7 +1729,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const lblUps = document.getElementById('lbl-ups');
 
             if (data.network && data.network.type === 'ethernet') networkLabel = 'Ethernet';
-            if (lblWifi && data.wifi) {
+            if (lblWifi && data.wifi && !netRestarting) {
                 lblWifi.textContent = networkLabel + ': ' + data.wifi.status;
                 if (data.wifi.status === 'AP Mode Active') {
                     indWifi.className = 'status-indicator info';
@@ -1636,8 +1774,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
             
-            if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
-            if (indWifi) indWifi.className = 'status-indicator danger';
+            if (!netRestarting) {
+                if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
+                if (indWifi) indWifi.className = 'status-indicator danger';
+            }
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
             renderNetworkOffline();

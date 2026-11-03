@@ -1,5 +1,6 @@
 #include "network/eth_link.h"
 #include "core/app_logger.h"
+#include "NetHostname.h"
 #include <esp_mac.h>
 #include <ETH.h>
 
@@ -11,8 +12,8 @@
 #define NUT_HAS_EMAC 0
 #endif
 
-EthLink::EthLink(const EthConfig& cfg)
-    : m_cfg(cfg), m_started(false), m_lastConnected(false), m_lastLinkUp(false) {}
+EthLink::EthLink(const EthConfig& cfg, const String& saved_hostname)
+    : m_cfg(cfg), m_savedHostname(saved_hostname), m_started(false), m_lastConnected(false), m_lastLinkUp(false) {}
 
 void EthLink::begin() {
     m_lastConnected = false;
@@ -21,8 +22,9 @@ void EthLink::begin() {
 
     uint8_t mac[6];
     macAddress(mac);
-    char hostname[24];
-    snprintf(hostname, sizeof(hostname), "esp32-nut-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    // The saved name (US-113) or esp32-nut-xxxxxx from the Ethernet MAC
+    m_hostname = NetHostname::effective(m_savedHostname, mac);
+    const char* hostname = m_hostname.c_str();
 
     if (m_cfg.type != EthType::RMII) {
         AppLogger::log("ERROR", "[NETWORK] Ethernet type of this board profile not supported yet");

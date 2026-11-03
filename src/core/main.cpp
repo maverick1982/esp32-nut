@@ -11,6 +11,7 @@
 #include "ApIdleTimeout.h"
 #include "board/board.h"
 #include "core/board_settings_store.h"
+#include "core/hostname_store.h"
 #include "NetBootPlan.h"
 
 USBHostUPS usb_ups;
@@ -25,6 +26,7 @@ static NvsDriverVarStore driver_var_store;
 
 // Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
 static BoardSettingsStore board_settings_store;
+static HostnameStore hostname_store;
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -95,6 +97,8 @@ void setup() {
     BoardSettings board_settings = board_settings_store.load(board());
     diagnostic_led.setBrightness(ledBrightness(board_settings.led_level));
     diagnostic_led.setUserEnabled(board_settings.led_on);
+    // Hostname of the Network page, "" for the default of the link (US-113)
+    String saved_hostname = hostname_store.load();
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -125,12 +129,13 @@ void setup() {
     }
     web_server.setNetwork(&network_mgr);
     web_server.setBoardSettings(&board_settings_store, board_settings);
+    web_server.setHostnameStore(&hostname_store, saved_hostname);
     web_server.setStatusLed(&diagnostic_led);
 
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
-        network_mgr.begin(board(), net_plan, "", "");
+        network_mgr.begin(board(), net_plan, "", "", saved_hostname);
         // Only the double reset with a valid config has a normal mode to go back to;
         // manual_ap is already cleared, so the restart boots in STA (PDR 0001 D7)
         ap_timeout = ApIdleTimeout(net_plan.ap_idle_timeout);
@@ -151,7 +156,7 @@ void setup() {
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
         // Inizializzazione di AppNetworkManager
-        network_mgr.begin(board(), net_plan, wifi.ssid, wifi.password);
+        network_mgr.begin(board(), net_plan, wifi.ssid, wifi.password, saved_hostname);
         web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }

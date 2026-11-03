@@ -15,6 +15,7 @@
 #include "RecoveryWindow.h"
 #include "DiagnosticLED.h"
 #include "core/board_settings_store.h"
+#include "core/hostname_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
 
@@ -32,6 +33,8 @@ public:
     // Board page (US-094): settings loaded at boot, and the LED to apply changes at once
     void setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings);
     void setStatusLed(DiagnosticLED* led);
+    // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
+    void setHostnameStore(HostnameStore* store, const String& saved);
 
 private:
     WebServer server;
@@ -53,12 +56,15 @@ private:
     BoardSettingsStore* board_store = nullptr;
     BoardSettings board_settings = {};
     DiagnosticLED* status_led = nullptr;
+    HostnameStore* hostname_store = nullptr;
+    String saved_hostname;
 
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
     void handleGetBoard();
     void handleSetBoard();
+    void handleSetHostname();
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
