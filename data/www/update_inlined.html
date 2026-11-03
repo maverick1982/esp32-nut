@@ -2725,6 +2725,10 @@ body.auth-page {
 }
 .link-kv.lead dd { font-size: 1.1rem; }
 .link-kv dd .main { white-space: nowrap; }
+/* An SSID may contain repeated spaces ("My  Net"): show them as they are, like the form field */
+[data-net-field="ssid"],
+[data-net-notice-text],
+#lbl-wifi { white-space: pre-wrap; }
 .link-kv dd .sub {
     color: var(--text-secondary);
     font-size: 0.78rem;
