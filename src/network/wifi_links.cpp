@@ -80,6 +80,24 @@ void WifiStaLink::macAddress(uint8_t mac[6]) const {
     WiFi.macAddress(mac);
 }
 
+void WifiStaLink::linkInfo(NetLinkInfo& out) const {
+    out = NetLinkInfo();
+    out.type = typeName();
+    macAddress(out.mac);
+    if (!isConnected()) {
+        out.state = NetLinkState::CONNECTING;
+        out.ssid = m_ssid; // the network it is joining
+        return;
+    }
+    out.state = NetLinkState::CONNECTED;
+    out.ip = WiFi.localIP().toString();
+    out.gateway = WiFi.gatewayIP().toString();
+    out.dhcp = true; // no static address on the station
+    out.ssid = WiFi.SSID();
+    out.rssi = WiFi.RSSI();
+    out.has_rssi = true;
+}
+
 WifiApLink::WifiApLink(const String& ssid, const String& password)
     : m_ssid(ssid), m_password(password) {}
 
@@ -101,6 +119,15 @@ String WifiApLink::localIP() const {
 void WifiApLink::macAddress(uint8_t mac[6]) const {
     // Same MAC as before US-090: the device ID was always built from the station MAC
     WiFi.macAddress(mac);
+}
+
+void WifiApLink::linkInfo(NetLinkInfo& out) const {
+    out = NetLinkInfo();
+    out.type = typeName();
+    out.state = NetLinkState::ACCESS_POINT;
+    out.ssid = m_ssid; // the board's own network
+    out.ip = localIP();
+    macAddress(out.mac);
 }
 
 uint32_t WifiApLink::stationCount() const {

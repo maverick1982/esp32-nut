@@ -14,6 +14,7 @@ public:
     String statusText() const override { return "fake"; }
     String localIP() const override { return "0.0.0.0"; }
     void macAddress(uint8_t mac[6]) const override { for (int i = 0; i < 6; i++) mac[i] = 0; }
+    void linkInfo(NetLinkInfo& out) const override { out = NetLinkInfo(); }
 
     NetLinkKind k;
     int begins = 0, ends = 0, loops = 0;

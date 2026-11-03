@@ -3,7 +3,7 @@ import { serveIndex } from './support/webui';
 
 // US-083 — the left menu is identical on every page. Before the fix the flex row
 // squeezed the sidebar whenever the active page had wide content (UPS Commands,
-// UPS Settings, and Wi-Fi/NUT/Logs at 1024 px): logo and title shrank and Log out
+// UPS Settings, and Network/NUT/Logs at 1024 px): logo and title shrank and Log out
 // moved. Serves the real data/www sources (support/webui.ts) and mocks the APIs
 // with deliberately long descriptions and values.
 
@@ -50,7 +50,7 @@ const TELEMETRY_VARS: Record<string, string> = {
 const ELEMENTS = ['.sidebar', '.brand-icon', '.brand-name', 'nav.tabs button.tab', '#lbl-wifi', '#session-username', '#btn-logout', '#btn-logout-all'];
 
 // Pages compared with UPS Telemetry (the reference); OTA opens /update, which has no sidebar
-const PAGES = ['commands', 'settings', 'wifi', 'nut', 'board', 'weblogin', 'logs'];
+const PAGES = ['commands', 'settings', 'network', 'nut', 'board', 'weblogin', 'logs'];
 
 type Box = { x: number; y: number; width: number; height: number };
 

@@ -117,9 +117,9 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 | :---: | :---: |
 | [![Telemetria UPS](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![Comandi UPS](docs/images/ui-commands.png)](docs/images/ui-commands.png) |
 
-| Parametri UPS | Configurazione Wi-Fi |
+| Parametri UPS | Rete |
 | :---: | :---: |
-| [![Parametri UPS](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Configurazione Wi-Fi](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
+| [![Parametri UPS](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Rete](docs/images/ui-network.png)](docs/images/ui-network.png) |
 
 | Server NUT | Login Web |
 | :---: | :---: |

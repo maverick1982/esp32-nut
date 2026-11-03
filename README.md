@@ -117,9 +117,9 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 | :---: | :---: |
 | [![UPS Telemetry](docs/images/ui-ups.png)](docs/images/ui-ups.png) | [![UPS Commands](docs/images/ui-commands.png)](docs/images/ui-commands.png) |
 
-| UPS Settings | Wi-Fi Config |
+| UPS Settings | Network |
 | :---: | :---: |
-| [![UPS Settings](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Wi-Fi Config](docs/images/ui-wifi.png)](docs/images/ui-wifi.png) |
+| [![UPS Settings](docs/images/ui-settings.png)](docs/images/ui-settings.png) | [![Network](docs/images/ui-network.png)](docs/images/ui-network.png) |
 
 | NUT Server | Web Login |
 | :---: | :---: |

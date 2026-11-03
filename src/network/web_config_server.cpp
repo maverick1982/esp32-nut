@@ -359,8 +359,9 @@ void WebConfigServer::handleGetConfig() {
     JsonObject wifiObj = doc["wifi"].to<JsonObject>();
     wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
-    // "ethernet" on boards without Wi-Fi: the UI hides the Wi-Fi tab (US-092)
+    // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
     doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board());
     
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
@@ -394,8 +395,11 @@ void WebConfigServer::handleSystemStatus() {
     
     // Status of the active link: "AP Mode Active", the SSID or "Connecting" on Wi-Fi
     doc["wifi"]["status"] = network ? network->statusText() : String("Disconnected");
-    // Type of the active link, new in US-090 (the existing fields are unchanged)
-    doc["network"]["type"] = network ? network->typeName() : "none";
+    // Type of the active link, new in US-090 (the existing fields are unchanged), and its
+    // status for the Network page (US-112)
+    NetLinkInfo link_info;
+    if (network) network->linkInfo(link_info);
+    WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), link_info);
     
     // UPS status
     String ups_status_str = "Disconnected";

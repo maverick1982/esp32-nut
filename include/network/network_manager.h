@@ -32,6 +32,8 @@ public:
     const char* typeName() const;
     String localIP() const;
     void macAddress(uint8_t mac[6]) const;
+    // Status of the active link for the Network page; type "none" without a link (US-112)
+    void linkInfo(NetLinkInfo& out) const;
     // Stations connected to the configuration access point, 0 outside AP mode
     uint32_t apStationCount() const;
 

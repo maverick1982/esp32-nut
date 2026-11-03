@@ -412,3 +412,46 @@ int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig&
     }
     return 0;
 }
+
+static const char* netStateName(NetLinkState state) {
+    switch (state) {
+        case NetLinkState::CONNECTED: return "connected";
+        case NetLinkState::CONNECTING: return "connecting";
+        case NetLinkState::ACCESS_POINT: return "ap";
+        default: return "disconnected";
+    }
+}
+
+// An address the link does not have: empty, or 0.0.0.0 from an IPAddress without a value
+static bool hasAddress(const String& a) {
+    return a.length() > 0 && a != "0.0.0.0";
+}
+
+void WebApiJson::networkStatusJson(JsonObject net, const NetLinkInfo& info) {
+    net["type"] = info.type;
+    net["state"] = netStateName(info.state);
+    if (hasAddress(info.ip)) net["ip"] = info.ip;
+    if (hasAddress(info.gateway)) net["gateway"] = info.gateway;
+    bool mac_set = false;
+    for (int i = 0; i < 6; i++) mac_set = mac_set || info.mac[i] != 0;
+    if (mac_set) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X", info.mac[0], info.mac[1],
+                 info.mac[2], info.mac[3], info.mac[4], info.mac[5]);
+        net["mac"] = mac;
+    }
+    // The access point is the DHCP server, not a client
+    if (info.state != NetLinkState::ACCESS_POINT) net["dhcp"] = info.dhcp;
+    if (strcmp(info.type, "wifi") == 0) {
+        if (info.ssid.length() > 0) net["ssid"] = info.ssid;
+        if (info.has_rssi) net["rssi"] = info.rssi;
+    } else if (strcmp(info.type, "ethernet") == 0 && info.link_speed_mbps > 0) {
+        net["link_speed"] = info.link_speed_mbps;
+        net["full_duplex"] = info.full_duplex;
+    }
+}
+
+void WebApiJson::networkLinksJson(JsonArray links, const BoardConfig& board) {
+    if (board.has_wifi) links.add("wifi");
+    if (board.has_ethernet) links.add("ethernet");
+}

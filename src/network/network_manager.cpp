@@ -74,6 +74,15 @@ void AppNetworkManager::macAddress(uint8_t mac[6]) const {
     }
 }
 
+void AppNetworkManager::linkInfo(NetLinkInfo& out) const {
+    const INetLink* link = m_selector.active();
+    if (link) {
+        link->linkInfo(out);
+    } else {
+        out = NetLinkInfo();
+    }
+}
+
 uint32_t AppNetworkManager::apStationCount() const {
     return isApMode() ? m_ap->stationCount() : 0;
 }

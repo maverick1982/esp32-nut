@@ -107,6 +107,26 @@ String EthLink::localIP() const {
     return m_started ? ETH.localIP().toString() : String("0.0.0.0");
 }
 
+void EthLink::linkInfo(NetLinkInfo& out) const {
+    out = NetLinkInfo();
+    out.type = typeName();
+    macAddress(out.mac);
+    if (!m_started || !ETH.linkUp()) {
+        out.state = NetLinkState::DISCONNECTED;
+        return;
+    }
+    out.link_speed_mbps = (uint16_t)ETH.linkSpeed();
+    out.full_duplex = ETH.fullDuplex();
+    out.dhcp = true; // address by DHCP only
+    if (!ETH.hasIP()) {
+        out.state = NetLinkState::CONNECTING;
+        return;
+    }
+    out.state = NetLinkState::CONNECTED;
+    out.ip = ETH.localIP().toString();
+    out.gateway = ETH.gatewayIP().toString();
+}
+
 void EthLink::macAddress(uint8_t mac[6]) const {
     // From eFuse: valid before ETH.begin() too, so the hostname and the device id match
     if (esp_read_mac(mac, ESP_MAC_ETH) != ESP_OK) memset(mac, 0, 6);

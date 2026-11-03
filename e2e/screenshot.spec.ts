@@ -38,6 +38,7 @@ test.describe('Generate Screenshots', () => {
     await page.route('**/api/config', route => route.fulfill({
       json: {
         wifi: { mode: 'STA', ssid: 'MyHomeNetwork' },
+        network: { type: 'wifi', links: ['wifi'] },
         nut: { username: 'homeassistant', ups_name: 'ups' },
       },
     }));
@@ -45,6 +46,10 @@ test.describe('Generate Screenshots', () => {
     await page.route('**/api/system-status', route => route.fulfill({
       json: {
         wifi: { status: 'Connected', ssid: 'MyHomeNetwork', ip: '192.168.1.100' },
+        network: {
+          type: 'wifi', state: 'connected', ip: '192.168.1.100', gateway: '192.168.1.1',
+          mac: '3C:84:27:A1:B2:C3', dhcp: true, ssid: 'MyHomeNetwork', rssi: -58,
+        },
         ups: { status: 'Connected' },
         version: 'v1.8.0',
         device_id: 'ESP32-S3-A1B2C3',
@@ -114,11 +119,12 @@ test.describe('Generate Screenshots', () => {
     await expect(page.locator('.cmd-row.set-row')).toHaveCount(EATON_3S_VARIABLES.length);
     await page.screenshot({ path: 'docs/images/ui-settings.png', animations: 'disabled' });
 
-    // 4. Wi-Fi
-    await page.locator('.tab[data-target="wifi"]').click();
-    await expect(page.locator('#content-wifi')).toHaveClass(/active/);
-    await expect(page.locator('#content-wifi input').first()).toHaveValue('MyHomeNetwork');
-    await page.screenshot({ path: 'docs/images/ui-wifi.png', animations: 'disabled' });
+    // 4. Network (US-112)
+    await page.locator('.tab[data-target="network"]').click();
+    await expect(page.locator('#content-network')).toHaveClass(/active/);
+    await expect(page.locator('#content-network input').first()).toHaveValue('MyHomeNetwork');
+    await expect(page.locator('[data-net-field="ip"]').first()).toHaveText('192.168.1.100');
+    await page.screenshot({ path: 'docs/images/ui-network.png', animations: 'disabled' });
 
     // 5. NUT Server
     await page.locator('.tab[data-target="nut"]').click();

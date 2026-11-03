@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include "IUpsSource.h"
 #include "board/board_settings.h"
+#include "NetLinkInfo.h"
 
 class WebApiJson {
 public:
@@ -67,6 +68,15 @@ public:
     static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
                                       const BoardSettings& current, BoardSettings& next,
                                       bool& restart, String& response);
+
+    // "network" of GET /api/system-status (US-112): type, state ("connected", "connecting",
+    // "disconnected", "ap"), ip, gateway, mac ("AA:BB:CC:DD:EE:FF"), dhcp; Wi-Fi also ssid and
+    // rssi, Ethernet also link_speed and full_duplex. Fields the link does not have now are
+    // left out (no gateway in AP mode, no rssi while connecting, ...)
+    static void networkStatusJson(JsonObject net, const NetLinkInfo& info);
+    // "network.links" of GET /api/config (US-112): the links of the board profile, "wifi"
+    // then "ethernet"
+    static void networkLinksJson(JsonArray links, const BoardConfig& board);
 };
 
 #endif

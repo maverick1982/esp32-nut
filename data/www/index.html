@@ -53,12 +53,15 @@
                     </svg>
                     UPS Settings
                 </button>
-                <button class="tab" data-target="wifi">
+                <!-- US-112: one page for every link of the board (was "Wi-Fi Config") -->
+                <button class="tab" data-target="network">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path
-                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
                     </svg>
-                    Wi-Fi Config
+                    Network
                 </button>
                 <button class="tab" data-target="nut">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -155,36 +158,116 @@
 
             <div class="diag-banner" id="diag-banner" hidden></div>
 
-            <div class="tab-content" id="content-wifi">
-                <div class="panel config-panel">
-                    <div class="panel-header">
-                        <h2>Connection Setup</h2>
-                    </div>
-                    <form id="wifi-form" class="form-container">
-                        <div class="form-group">
-                            <label for="ssid">Network Name (SSID)</label>
-                            <input type="text" id="ssid" placeholder="Type network name here..." required>
-                        </div>
-                        <div class="form-group">
-                            <label for="password">Security Key</label>
-                            <div class="input-wrapper">
-                                <input type="password" id="password" placeholder="••••••••••••" required>
-                                <button type="button" class="btn-icon" id="toggle-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                        <circle cx="12" cy="12" r="3" />
-                                    </svg>
-                                </button>
+            <!-- US-112: one .net-section per link, shown from /api/config network.links (no per-board
+                 code). A section that is not about a link (e.g. Hostname, US-113) is one more
+                 .net-section with data-section and no data-link. -->
+            <div class="tab-content net-page" id="content-network">
+                <section class="net-section" data-section="wifi" data-link="wifi" hidden>
+                    <h2 class="net-section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                        </svg>
+                        Wi-Fi
+                    </h2>
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" data-net-live hidden></span>
+                                <span class="link-badge" data-net-badge role="status">
+                                    <span class="status-indicator"></span><span class="badge-text">--</span>
+                                </span>
                             </div>
                         </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="btn-connect">
-                                <span class="glow"></span>
-                                Initialize Connection
-                            </button>
+                        <div class="link-status">
+                            <dl class="link-grid">
+                                <div class="link-kv wide lead"><dt data-net-ssid-label>Network (SSID)</dt><dd data-net-field="ssid">—</dd></div>
+                                <div class="link-kv wide lead"><dt>Signal</dt><dd data-net-field="signal">—</dd></div>
+                                <div class="link-kv"><dt>IP address</dt><dd data-net-field="ip">—</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd data-net-field="gateway">—</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd data-net-field="mac">—</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd data-net-field="dhcp">—</dd></div>
+                            </dl>
+                            <div class="auth-alert" data-net-notice role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span data-net-notice-text></span>
+                            </div>
                         </div>
-                    </form>
-                </div>
+                    </div>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Setup</h2>
+                        </div>
+                        <form id="wifi-form" class="form-container">
+                            <div class="form-group">
+                                <label for="ssid">Network Name (SSID)</label>
+                                <input type="text" id="ssid" placeholder="Type network name here..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="password">Security Key</label>
+                                <div class="input-wrapper">
+                                    <input type="password" id="password" placeholder="••••••••••••" required>
+                                    <button type="button" class="btn-icon" id="toggle-pwd">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-connect">
+                                    <span class="glow"></span>
+                                    Initialize Connection
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+
+                <section class="net-section" data-section="ethernet" data-link="ethernet" hidden>
+                    <h2 class="net-section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="5" y="3" width="14" height="13" rx="1.5" />
+                            <path d="M9 16v5h6v-5M9 7v3M12 7v3M15 7v3" />
+                        </svg>
+                        Ethernet
+                    </h2>
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" data-net-live hidden></span>
+                                <span class="link-badge" data-net-badge role="status">
+                                    <span class="status-indicator"></span><span class="badge-text">--</span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="link-status">
+                            <dl class="link-grid">
+                                <div class="link-kv wide lead"><dt>Link speed</dt><dd data-net-field="speed">—</dd></div>
+                                <div class="link-kv wide lead"><dt>Cable</dt><dd data-net-field="cable">—</dd></div>
+                                <div class="link-kv"><dt>IP address</dt><dd data-net-field="ip">—</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd data-net-field="gateway">—</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd data-net-field="mac">—</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd data-net-field="dhcp">—</dd></div>
+                            </dl>
+                            <div class="auth-alert" data-net-notice role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span data-net-notice-text></span>
+                            </div>
+                        </div>
+                        <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
+                            the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
             </div>
 
             <div class="tab-content" id="content-nut">

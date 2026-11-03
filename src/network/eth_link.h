@@ -22,6 +22,7 @@ public:
     String statusText() const override;
     String localIP() const override;
     void macAddress(uint8_t mac[6]) const override;
+    void linkInfo(NetLinkInfo& out) const override;
 
 private:
     EthConfig m_cfg;
