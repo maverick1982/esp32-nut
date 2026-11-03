@@ -1650,7 +1650,7 @@ inline bool parseDelayParam(const char* text, int32_t& out) {
     if (*p < '0' || *p > '9') return false;
     char* end = nullptr;
     long long v = strtoll(text, &end, 10);
-    if (*end != ' ' || v < -1 || v > INT32_MAX) return false;
+    if (*end != '\0' || v < -1 || v > INT32_MAX) return false;
     out = (int32_t)v;
     return true;
 }
