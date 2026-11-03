@@ -2600,7 +2600,7 @@ body.auth-page {
    state badge and signal indicator (docs/mockups/US-112)
    ===================================================================== */
 
-/* --- Page: one .net-section per link (and later per topic, e.g. Hostname) --- */
+/* --- Page: one .net-section per link, plus one per topic (Hostname, US-113) --- */
 /* display comes from .tab-content.active */
 .tab-content.net-page { gap: 2.25rem; }
 .net-section {
@@ -2810,6 +2810,91 @@ body.auth-page {
     .link-kv.lead dd { font-size: 0.95rem; }
     .net-panel .form-actions .btn-primary { width: 100%; justify-content: center; }
 }
+
+/* ==========================================================================
+   Hostname section of the Network page (US-113, docs/mockups/US-113): the name in
+   use with its Default/Custom tag, one field + button, error / restart alert
+   ========================================================================== */
+
+/* --- "In use" line: the name the board uses right now (read-only) ---
+   Same dark cell + hairline as the US-112 status grid (.link-kv.lead), on one row. */
+.host-current {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
+    margin-bottom: 1.5rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(10, 16, 25, 0.95);
+    font-family: var(--font-mono);
+}
+.host-current-label {
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.host-current code {
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    overflow-wrap: anywhere;
+}
+/* Default / Custom tag, same shape as .link-badge but neutral (it is not a state) */
+.host-origin {
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+.host-origin.custom {
+    color: var(--accent);
+    border-color: rgba(0, 240, 255, 0.4);
+    background: rgba(0, 240, 255, 0.05);
+}
+
+/* --- Form: one field + button on the same row (the .form-container grid is 1fr 1fr auto),
+       error / success alert on a full-width row under them --- */
+.hostname-form .form-group { grid-column: 1 / 3; grid-row: 1; }
+.hostname-form .form-actions { grid-column: 3; grid-row: 1; }
+.hostname-form .auth-alert { grid-column: 1 / -1; grid-row: 2; }
+.hostname-form input { letter-spacing: 0.5px; }
+.hostname-form .auth-alert code,
+.net-section .auth-fineprint code {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+.hostname-form .auth-alert strong { color: var(--text-primary); font-weight: 400; }
+
+/* Same width in every state (Save Hostname / Saving... / No changes / Saved): the field does not jump */
+#btn-hostname { min-width: 12.5rem; justify-content: center; }
+
+/* Button "Saved" (green) while the board restarts: same look as the Wi-Fi "Saved & Connecting" */
+.btn-primary.is-saved,
+.btn-primary.is-saved:disabled {
+    background: var(--success);
+    border-color: var(--success);
+    color: #000;
+    box-shadow: 0 0 20px rgba(0, 255, 157, 0.4);
+    opacity: 1;
+}
+.btn-primary svg { width: 16px; height: 16px; }
+
+@media (max-width: 768px) {
+    .hostname-form .form-group,
+    .hostname-form .form-actions,
+    .hostname-form .auth-alert { grid-column: auto; grid-row: auto; }
+    .host-current { margin-bottom: 1.1rem; padding: 0.7rem 0.85rem; }
+    .host-current code { font-size: 0.95rem; }
+}
 </style>
 </head>
 
@@ -2959,8 +3044,8 @@ body.auth-page {
             <div class="diag-banner" id="diag-banner" hidden></div>
 
             <!-- US-112: one .net-section per link, shown from /api/config network.links (no per-board
-                 code). A section that is not about a link (e.g. Hostname, US-113) is one more
-                 .net-section with data-section and no data-link. -->
+                 code). A section that is not about a link (Hostname, US-113) is one more
+                 .net-section with data-section and no data-link: always visible. -->
             <div class="tab-content net-page" id="content-network">
                 <section class="net-section" data-section="wifi" data-link="wifi" hidden>
                     <h2 class="net-section-title">
@@ -3066,6 +3151,72 @@ body.auth-page {
                         </div>
                         <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
                             the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
+
+                <section class="net-section" id="sec-hostname" data-section="hostname" aria-labelledby="ttl-hostname">
+                    <h2 class="net-section-title" id="ttl-hostname">
+                        <!-- Tag icon: the label the router puts on the board -->
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+                            <path d="M7 7h.01" />
+                        </svg>
+                        Hostname
+                    </h2>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Board Name</h2>
+                        </div>
+
+                        <!-- Read-only: network.hostname.name (what DHCP sends right now) -->
+                        <div class="host-current">
+                            <span class="host-current-label">In use</span>
+                            <code id="hostname-current">—</code>
+                            <!-- "Default" when network.hostname.custom is empty, "Custom" otherwise -->
+                            <span class="host-origin" id="hostname-origin">Default</span>
+                        </div>
+
+                        <form id="hostname-form" class="form-container hostname-form" novalidate>
+                            <div class="form-group">
+                                <label for="hostname">Hostname</label>
+                                <!-- placeholder = network.hostname.default, value = network.hostname.custom (empty = default) -->
+                                <input type="text" id="hostname" maxlength="32" placeholder="esp32-nut-xxxxxx"
+                                    autocomplete="off" autocapitalize="off" spellcheck="false"
+                                    aria-describedby="hostname-help" aria-errormessage="hostname-error">
+                            </div>
+
+                            <!-- Client-side check and 400 {"error"} from POST /api/network/hostname. Hidden on input. -->
+                            <div class="auth-alert" id="hostname-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="hostname-error-text">Invalid hostname: use only letters, digits and hyphens,
+                                    no hyphen at the start or end, at most 32 characters</span>
+                            </div>
+
+                            <!-- {"success":true,"restart":true}: same pattern as Board Settings > USB port -->
+                            <div class="auth-alert success" id="hostname-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>Saved. The board is restarting as <code id="hostname-new"></code>,
+                                    this page reloads in <span class="countdown" id="hostname-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-hostname">
+                                    <span class="glow"></span>
+                                    Save Hostname
+                                </button>
+                            </div>
+                        </form>
+
+                        <p class="auth-fineprint" id="hostname-help">The name your router shows for this board.
+                            Letters, digits and hyphens, up to 32 characters. Leave it empty to use the default,
+                            <code id="hostname-default">esp32-nut-xxxxxx</code>. The board restarts to apply it.</p>
                     </div>
                 </section>
             </div>
@@ -4307,12 +4458,150 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setInterval(updateNetworkLive, 1000);
 
+    // --- Hostname section of the Network page (US-113, docs/mockups/US-113) ---
+    // Same rule as NetHostname::isValid() in the firmware; "" goes back to the default name
+    const HOSTNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,30}[A-Za-z0-9])?$/;
+    const HOSTNAME_ERROR = 'Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at most 32 characters';
+    const HOSTNAME_RESTART_S = 15;   // as Board Settings > USB port
+    const HOSTNAME_NO_CHANGE_MS = 2000;
+    const hostnameInput = document.getElementById('hostname');
+    const btnHostname = document.getElementById('btn-hostname');
+    const HOSTNAME_BTN_IDLE = btnHostname ? btnHostname.innerHTML : '';
+    let hostnameSaved = { name: '', custom: '', default: '' };   // network.hostname of /api/config
+    let hostnameNoChangeTimer = null;
+    // While the board restarts the status bar keeps "Restarting...", not "Offline"
+    let netRestarting = false;
+
+    const validateHostname = (v) => v === '' || HOSTNAME_RE.test(v);
+
+    function renderHostname(h) {
+        if (!hostnameInput || !h) return;
+        hostnameSaved = {
+            name: typeof h.name === 'string' ? h.name : '',
+            custom: typeof h.custom === 'string' ? h.custom : '',
+            default: typeof h.default === 'string' ? h.default : ''
+        };
+        document.getElementById('hostname-current').textContent = hostnameSaved.name || '—';
+        const origin = document.getElementById('hostname-origin');
+        origin.textContent = hostnameSaved.custom ? 'Custom' : 'Default';
+        origin.classList.toggle('custom', !!hostnameSaved.custom);
+        if (hostnameSaved.default) {
+            hostnameInput.placeholder = hostnameSaved.default;
+            document.getElementById('hostname-default').textContent = hostnameSaved.default;
+        }
+        if (!hostnameInput.value) hostnameInput.value = hostnameSaved.custom;
+    }
+
+    function showHostnameError(text) {
+        document.getElementById('hostname-error-text').textContent = text;
+        document.getElementById('hostname-error').hidden = false;
+        hostnameInput.classList.add('invalid');
+        hostnameInput.setAttribute('aria-invalid', 'true');
+    }
+
+    function hideHostnameError() {
+        document.getElementById('hostname-error').hidden = true;
+        hostnameInput.classList.remove('invalid');
+        hostnameInput.removeAttribute('aria-invalid');
+    }
+
+    function showHostnameNoChanges() {
+        btnHostname.disabled = false;
+        hostnameInput.disabled = false;
+        btnHostname.innerHTML = 'No changes';
+        clearTimeout(hostnameNoChangeTimer);
+        hostnameNoChangeTimer = setTimeout(() => { btnHostname.innerHTML = HOSTNAME_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startHostnameRestart(custom) {
+        netRestarting = true;
+        btnHostname.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnHostname.classList.add('is-saved');
+        btnHostname.disabled = true;
+        hostnameInput.disabled = true;
+        document.getElementById('hostname-new').textContent = custom || hostnameSaved.default;
+        document.getElementById('hostname-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('hostname-countdown');
+        let left = HOSTNAME_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (hostnameInput && btnHostname) {
+        hostnameInput.addEventListener('input', () => {
+            hideHostnameError();
+            if (!btnHostname.disabled) {
+                clearTimeout(hostnameNoChangeTimer);
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+            }
+        });
+
+        document.getElementById('hostname-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnHostname.disabled) return;
+            const v = hostnameInput.value.trim();
+            hostnameInput.value = v;
+            if (!validateHostname(v)) {
+                showHostnameError(HOSTNAME_ERROR);
+                hostnameInput.focus();
+                return;
+            }
+            hideHostnameError();
+            if (v === hostnameSaved.custom) {
+                showHostnameNoChanges();
+                return;
+            }
+            btnHostname.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnHostname.disabled = true;
+            hostnameInput.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/hostname', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hostname: v })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Hostname save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnHostname.innerHTML = HOSTNAME_BTN_IDLE;
+                btnHostname.disabled = false;
+                hostnameInput.disabled = false;
+                showHostnameError(data && typeof data.error === 'string' ? data.error : 'Could not save the hostname.');
+                return;
+            }
+            if (data.restart) {
+                startHostnameRestart(v);
+            } else {
+                hostnameSaved.custom = v;
+                showHostnameNoChanges();
+            }
+        });
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
             // Sections of the Network page from the links of the board (US-112)
             showNetworkSections(data.network);
+            // Hostname in use, saved and default (US-113)
+            if (data.network && data.network.hostname) renderHostname(data.network.hostname);
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -5162,7 +5451,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const lblUps = document.getElementById('lbl-ups');
 
             if (data.network && data.network.type === 'ethernet') networkLabel = 'Ethernet';
-            if (lblWifi && data.wifi) {
+            if (lblWifi && data.wifi && !netRestarting) {
                 lblWifi.textContent = networkLabel + ': ' + data.wifi.status;
                 if (data.wifi.status === 'AP Mode Active') {
                     indWifi.className = 'status-indicator info';
@@ -5207,8 +5496,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const indUps = document.getElementById('ind-ups');
             const lblUps = document.getElementById('lbl-ups');
             
-            if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
-            if (indWifi) indWifi.className = 'status-indicator danger';
+            if (!netRestarting) {
+                if (lblWifi) lblWifi.textContent = networkLabel + ': Offline';
+                if (indWifi) indWifi.className = 'status-indicator danger';
+            }
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
             renderNetworkOffline();

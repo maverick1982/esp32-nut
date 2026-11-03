@@ -159,8 +159,8 @@
             <div class="diag-banner" id="diag-banner" hidden></div>
 
             <!-- US-112: one .net-section per link, shown from /api/config network.links (no per-board
-                 code). A section that is not about a link (e.g. Hostname, US-113) is one more
-                 .net-section with data-section and no data-link. -->
+                 code). A section that is not about a link (Hostname, US-113) is one more
+                 .net-section with data-section and no data-link: always visible. -->
             <div class="tab-content net-page" id="content-network">
                 <section class="net-section" data-section="wifi" data-link="wifi" hidden>
                     <h2 class="net-section-title">
@@ -266,6 +266,72 @@
                         </div>
                         <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
                             the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
+
+                <section class="net-section" id="sec-hostname" data-section="hostname" aria-labelledby="ttl-hostname">
+                    <h2 class="net-section-title" id="ttl-hostname">
+                        <!-- Tag icon: the label the router puts on the board -->
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+                            <path d="M7 7h.01" />
+                        </svg>
+                        Hostname
+                    </h2>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Board Name</h2>
+                        </div>
+
+                        <!-- Read-only: network.hostname.name (what DHCP sends right now) -->
+                        <div class="host-current">
+                            <span class="host-current-label">In use</span>
+                            <code id="hostname-current">—</code>
+                            <!-- "Default" when network.hostname.custom is empty, "Custom" otherwise -->
+                            <span class="host-origin" id="hostname-origin">Default</span>
+                        </div>
+
+                        <form id="hostname-form" class="form-container hostname-form" novalidate>
+                            <div class="form-group">
+                                <label for="hostname">Hostname</label>
+                                <!-- placeholder = network.hostname.default, value = network.hostname.custom (empty = default) -->
+                                <input type="text" id="hostname" maxlength="32" placeholder="esp32-nut-xxxxxx"
+                                    autocomplete="off" autocapitalize="off" spellcheck="false"
+                                    aria-describedby="hostname-help" aria-errormessage="hostname-error">
+                            </div>
+
+                            <!-- Client-side check and 400 {"error"} from POST /api/network/hostname. Hidden on input. -->
+                            <div class="auth-alert" id="hostname-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="hostname-error-text">Invalid hostname: use only letters, digits and hyphens,
+                                    no hyphen at the start or end, at most 32 characters</span>
+                            </div>
+
+                            <!-- {"success":true,"restart":true}: same pattern as Board Settings > USB port -->
+                            <div class="auth-alert success" id="hostname-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>Saved. The board is restarting as <code id="hostname-new"></code>,
+                                    this page reloads in <span class="countdown" id="hostname-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-hostname">
+                                    <span class="glow"></span>
+                                    Save Hostname
+                                </button>
+                            </div>
+                        </form>
+
+                        <p class="auth-fineprint" id="hostname-help">The name your router shows for this board.
+                            Letters, digits and hyphens, up to 32 characters. Leave it empty to use the default,
+                            <code id="hostname-default">esp32-nut-xxxxxx</code>. The board restarts to apply it.</p>
                     </div>
                 </section>
             </div>

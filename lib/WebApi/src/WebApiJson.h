@@ -77,6 +77,18 @@ public:
     // "network.links" of GET /api/config (US-112): the links of the board profile, "wifi"
     // then "ethernet"
     static void networkLinksJson(JsonArray links, const BoardConfig& board);
+
+    // Error of POST /api/network/hostname for a name outside NetHostname::isValid (US-113)
+    static constexpr const char* INVALID_HOSTNAME_ERROR =
+        "Invalid hostname: use only letters, digits and hyphens, no hyphen at the start or end, at "
+        "most 32 characters";
+    // POST /api/network/hostname (US-113): {"hostname": "<name>"}, "" back to the default.
+    // 0 with next filled; "hostname" missing or not a string → 400 {"error":"Invalid request"};
+    // a name outside NetHostname::isValid → 400 {"error": INVALID_HOSTNAME_ERROR}
+    static int checkHostnameBody(JsonVariantConst body, String& next, String& response);
+    // "network.hostname" of GET /api/config (US-113): {"name": in use, "custom": saved name
+    // ("" for the default), "default": default name of the link}
+    static void hostnameJson(JsonObject out, const String& in_use, const String& saved, const String& def);
 };
 
 #endif

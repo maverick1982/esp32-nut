@@ -1,0 +1,85 @@
+/* US-113 mockup: NEW product classes for the Hostname section of the Network page.
+   Everything else comes from bundle.css (local copy of data/www/bundle.css, which already holds the
+   US-112 Network classes): .net-page, .net-section, .net-section-title, .net-panel, .panel,
+   .config-panel, .panel-header, .form-container, .form-group, .form-actions, .btn-primary,
+   .auth-alert (+ .success, .countdown), .auth-fineprint, input.invalid. */
+
+/* --- "In use" line: the name the board uses right now (read-only) ---
+   Same dark cell + hairline as the US-112 status grid (.link-kv.lead), on one row. */
+.host-current {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
+    margin-bottom: 1.5rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(10, 16, 25, 0.95);
+    font-family: var(--font-mono);
+}
+.host-current-label {
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.host-current code {
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    overflow-wrap: anywhere;
+}
+/* Default / Custom tag, same shape as .link-badge but neutral (it is not a state) */
+.host-origin {
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+.host-origin.custom {
+    color: var(--accent);
+    border-color: rgba(0, 240, 255, 0.4);
+    background: rgba(0, 240, 255, 0.05);
+}
+
+/* --- Form: one field + button on the same row (the .form-container grid is 1fr 1fr auto),
+       error / success alert on a full-width row under them --- */
+.hostname-form .form-group { grid-column: 1 / 3; grid-row: 1; }
+.hostname-form .form-actions { grid-column: 3; grid-row: 1; }
+.hostname-form .auth-alert { grid-column: 1 / -1; grid-row: 2; }
+.hostname-form input { letter-spacing: 0.5px; }
+.hostname-form .auth-alert code,
+.net-section .auth-fineprint code {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+.hostname-form .auth-alert strong { color: var(--text-primary); font-weight: 400; }
+
+/* Same width in every state (Save Hostname / Saving... / No changes / Saved): the field does not jump */
+#btn-hostname { min-width: 12.5rem; justify-content: center; }
+
+/* Button "Saved" (green) while the board restarts: same look as the Wi-Fi "Saved & Connecting" */
+.btn-primary.is-saved,
+.btn-primary.is-saved:disabled {
+    background: var(--success);
+    border-color: var(--success);
+    color: #000;
+    box-shadow: 0 0 20px rgba(0, 255, 157, 0.4);
+    opacity: 1;
+}
+.btn-primary svg { width: 16px; height: 16px; }
+
+@media (max-width: 768px) {
+    .hostname-form .form-group,
+    .hostname-form .form-actions,
+    .hostname-form .auth-alert { grid-column: auto; grid-row: auto; }
+    .host-current { margin-bottom: 1.1rem; padding: 0.7rem 0.85rem; }
+    .host-current code { font-size: 0.95rem; }
+}

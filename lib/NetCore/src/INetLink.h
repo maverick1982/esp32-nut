@@ -31,6 +31,9 @@ public:
     virtual void macAddress(uint8_t mac[6]) const = 0;
     // Status of the link for the Network page (US-112)
     virtual void linkInfo(NetLinkInfo& out) const = 0;
+    // Name sent to the DHCP server, set by begin() (US-113). Empty for the access
+    // point, which is not a DHCP client
+    virtual String hostname() const { return String(); }
 };
 
 #endif // I_NET_LINK_H

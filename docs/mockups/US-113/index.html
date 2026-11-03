@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Network (US-113 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css as of US-112 (tokens, fonts, sidebar, panels, forms,
+         .auth-alert, and the Network page classes .net-section / .net-section-title / .link-*) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-113 (Hostname section) -->
+    <link rel="stylesheet" href="hostname.css">
+    <!-- Mockup-only chrome: switcher, notes, phone frames -->
+    <link rel="stylesheet" href="mock.css">
+</head>
+
+<body class="mock-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-bar" id="mock-bar">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>US-113</span>
+            <button type="button" data-state="s3-default" class="on">S3 &middot; Wi-Fi, default name</button>
+            <button type="button" data-state="p4-default">P4 &middot; Ethernet, default name</button>
+            <button type="button" data-state="s3-custom">Custom name saved</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="invalid">Invalid name</button>
+            <button type="button" data-state="unchanged">No changes</button>
+            <button type="button" data-state="restarting">Saved &middot; restarting</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="mobile">Mobile 375px</button>
+        </div>
+        <p class="mock-note" id="mock-note"></p>
+    </div>
+
+    <!-- ===================== Mockup-only: phone frames (Mobile 375px state) ===================== -->
+    <div class="phone-stage" id="phone-stage" hidden>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; S3, default name</figcaption>
+            <iframe title="Hostname section at 375px, default name" data-src="index.html?embed=1&amp;state=s3-default&amp;scroll=hostname"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; invalid name</figcaption>
+            <iframe title="Hostname section at 375px, invalid name" data-src="index.html?embed=1&amp;state=invalid&amp;scroll=hostname"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; P4, saved, restarting</figcaption>
+            <iframe title="Hostname section at 375px, saved and restarting" data-src="index.html?embed=1&amp;state=restarting-p4&amp;scroll=hostname"></iframe>
+        </figure>
+    </div>
+
+    <div class="app-container" id="app">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.13.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <button class="tab" data-target="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
+                <button class="tab active" data-target="network">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+                    </svg>
+                    Network
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="board">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
+                </button>
+                <button class="tab" data-target="weblogin">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                    </svg>
+                    Web Login
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: Connected</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: Connected</span>
+                </div>
+            </div>
+
+            <!-- Session row: hidden in AP mode, as today -->
+            <div class="sidebar-session" id="sidebar-session">
+                <div class="session-user" title="Signed in user">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span>admin</span>
+                </div>
+                <button type="button" class="btn btn-outline btn-logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Log out
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                                <h1 class="page-title">Network</h1>
+                <div class="device-id">ID: <span>3C842756D784</span></div>
+            </header>
+
+            <!-- Network page as delivered by US-112, unchanged: link sections shown/hidden from
+                 /api/config network.links (data-link). US-113 only adds the Hostname section at the end. -->
+            <div class="tab-content active net-page" id="content-network">
+
+                <!-- ================= Wi-Fi link ================= -->
+                <section class="net-section" id="sec-wifi" data-link="wifi" aria-labelledby="ttl-wifi">
+                    <h2 class="net-section-title" id="ttl-wifi">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                        </svg>
+                        Wi-Fi
+                    </h2>
+
+                    <!-- Status (read-only), refreshed with /api/system-status like the sidebar -->
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" id="wifi-live" hidden></span>
+                                <span class="link-badge connected" id="wifi-badge" role="status">
+                                    <span class="status-indicator success"></span><span class="badge-text">Connected</span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="link-status">
+                            <dl class="link-grid" id="wifi-grid">
+                                <!-- Row 1: Wi-Fi specific -->
+                                <div class="link-kv wide lead">
+                                    <dt id="wifi-ssid-label">Network (SSID)</dt>
+                                    <dd id="wifi-ssid">HomeNetwork</dd>
+                                </div>
+                                <div class="link-kv wide lead">
+                                    <dt>Signal</dt>
+                                    <dd id="wifi-signal"></dd>
+                                </div>
+                                <!-- Row 2: common to every link, same order -->
+                                <div class="link-kv"><dt>IP address</dt><dd id="wifi-ip">192.168.1.126</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd id="wifi-gw">192.168.1.1</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd id="wifi-mac">3C:84:27:56:D7:84</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd id="wifi-dhcp">On</dd></div>
+                            </dl>
+                            <div class="auth-alert" id="wifi-notice" role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span id="wifi-notice-text"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings: the existing Connection Setup panel, unchanged (same fields, same behaviour) -->
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Setup</h2>
+                        </div>
+                        <form id="wifi-form" class="form-container">
+                            <div class="form-group">
+                                <label for="ssid">Network Name (SSID)</label>
+                                <input type="text" id="ssid" placeholder="Type network name here..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="password">Security Key</label>
+                                <div class="input-wrapper">
+                                    <input type="password" id="password" placeholder="••••••••••••" required>
+                                    <button type="button" class="btn-icon" id="toggle-pwd" aria-label="Show password">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-connect">
+                                    <span class="glow"></span>
+                                    Initialize Connection
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- ================= Ethernet link (status only, no settings in US-112) ================= -->
+                <section class="net-section" id="sec-eth" data-link="ethernet" aria-labelledby="ttl-eth" hidden>
+                    <h2 class="net-section-title" id="ttl-eth">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="5" y="3" width="14" height="13" rx="1.5" />
+                            <path d="M9 16v5h6v-5M9 7v3M12 7v3M15 7v3" />
+                        </svg>
+                        Ethernet
+                    </h2>
+
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" id="eth-live" hidden></span>
+                                <span class="link-badge connected" id="eth-badge" role="status">
+                                    <span class="status-indicator success"></span><span class="badge-text">Connected</span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="link-status">
+                            <dl class="link-grid" id="eth-grid">
+                                <!-- Row 1: Ethernet specific -->
+                                <div class="link-kv wide lead"><dt>Link speed</dt><dd id="eth-speed">100 Mbps</dd></div>
+                                <div class="link-kv wide lead"><dt>Cable</dt><dd id="eth-cable">Plugged in</dd></div>
+                                <!-- Row 2: common to every link, same order -->
+                                <div class="link-kv"><dt>IP address</dt><dd id="eth-ip">192.168.1.50</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd id="eth-gw">192.168.1.1</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd id="eth-mac">30:ED:A0:E1:4B:7C</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd id="eth-dhcp">On</dd></div>
+                            </dl>
+                            <div class="auth-alert" id="eth-notice" role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="eth-notice-text"></span>
+                            </div>
+                        </div>
+                        <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
+                            the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
+
+                <!-- ================= NEW (US-113): Hostname =================
+                     Not about a link: data-section, NO data-link, never hidden. Same on every board
+                     (S3 Wi-Fi only, P4 Ethernet only): the name applies to whichever link the board has.
+                     Data: GET /api/config -> network.hostname = { name, custom, default } -->
+                <section class="net-section" id="sec-hostname" data-section="hostname" aria-labelledby="ttl-hostname">
+                    <h2 class="net-section-title" id="ttl-hostname">
+                        <!-- Tag icon: the label the router puts on the board -->
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+                            <path d="M7 7h.01" />
+                        </svg>
+                        Hostname
+                    </h2>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Board Name</h2>
+                        </div>
+
+                        <!-- Read-only: network.hostname.name (what DHCP sends right now) -->
+                        <div class="host-current">
+                            <span class="host-current-label">In use</span>
+                            <code id="hostname-current">esp32-nut-56d784</code>
+                            <!-- "Default" when network.hostname.custom is empty, "Custom" otherwise -->
+                            <span class="host-origin" id="hostname-origin">Default</span>
+                        </div>
+
+                        <form id="hostname-form" class="form-container hostname-form" novalidate>
+                            <div class="form-group">
+                                <label for="hostname">Hostname</label>
+                                <!-- placeholder = network.hostname.default, value = network.hostname.custom (empty = default) -->
+                                <input type="text" id="hostname" maxlength="32" placeholder="esp32-nut-56d784"
+                                    autocomplete="off" autocapitalize="off" spellcheck="false"
+                                    aria-describedby="hostname-help" aria-errormessage="hostname-error">
+                            </div>
+
+                            <!-- Client-side check and 400 {"error"} from POST /api/network/hostname. Hidden on input. -->
+                            <div class="auth-alert" id="hostname-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="hostname-error-text">Invalid hostname: use only letters, digits and hyphens,
+                                    no hyphen at the start or end, at most 32 characters</span>
+                            </div>
+
+                            <!-- {"success":true,"restart":true}: same pattern as Board Settings > USB port -->
+                            <div class="auth-alert success" id="hostname-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>Saved. The board is restarting as <code id="hostname-new">espnut-network</code>,
+                                    this page reloads in <span class="countdown" id="hostname-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-hostname">
+                                    <span class="glow"></span>
+                                    Save Hostname
+                                </button>
+                            </div>
+                        </form>
+
+                        <p class="auth-fineprint" id="hostname-help">The name your router shows for this board.
+                            Letters, digits and hyphens, up to 32 characters. Leave it empty to use the default,
+                            <code id="hostname-default">esp32-nut-56d784</code>. The board restarts to apply it.</p>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

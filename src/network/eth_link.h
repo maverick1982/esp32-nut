@@ -10,7 +10,8 @@
 // DHCP client reconnect by themselves, the link only reports and logs the changes.
 class EthLink : public INetLink {
 public:
-    explicit EthLink(const EthConfig& cfg);
+    // saved_hostname: the name chosen in the Network page, "" for the default (US-113)
+    EthLink(const EthConfig& cfg, const String& saved_hostname);
 
     NetLinkKind kind() const override { return NetLinkKind::ETHERNET; }
     void begin() override;
@@ -23,9 +24,12 @@ public:
     String localIP() const override;
     void macAddress(uint8_t mac[6]) const override;
     void linkInfo(NetLinkInfo& out) const override;
+    String hostname() const override { return m_hostname; }
 
 private:
     EthConfig m_cfg;
+    String m_savedHostname;
+    String m_hostname;
     bool m_started;
     bool m_lastConnected;
     bool m_lastLinkUp;

@@ -1118,6 +1118,69 @@ void test_network_links_from_board_profile(void) {
     TEST_ASSERT_EQUAL_STRING("[\"wifi\",\"ethernet\"]", netLinks(both).c_str());
 }
 
+// --- US-113: POST /api/network/hostname and network.hostname of GET /api/config ---
+
+static int hostnameStatus(const char* json, String& next, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    next = "unchanged";
+    out = "";
+    return WebApiJson::checkHostnameBody(doc, next, out);
+}
+
+void test_hostname_body_valid_name(void) {
+    String next, out;
+    TEST_ASSERT_EQUAL(0, hostnameStatus("{\"hostname\":\"espnut-network\"}", next, out));
+    TEST_ASSERT_EQUAL_STRING("espnut-network", next.c_str());
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+}
+
+void test_hostname_body_empty_means_default(void) {
+    String next, out;
+    TEST_ASSERT_EQUAL(0, hostnameStatus("{\"hostname\":\"\"}", next, out));
+    TEST_ASSERT_EQUAL_STRING("", next.c_str());
+}
+
+void test_hostname_body_missing_or_not_a_string(void) {
+    const char* bodies[] = { "{}", "{\"hostname\":5}", "{\"hostname\":null}", "{\"hostname\":true}",
+                             "{\"hostname\":[\"a\"]}" };
+    for (const char* json : bodies) {
+        String next, out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, hostnameStatus(json, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("unchanged", next.c_str(), json);
+    }
+}
+
+void test_hostname_body_invalid_name(void) {
+    std::string expected = std::string("{\"error\":\"") + WebApiJson::INVALID_HOSTNAME_ERROR + "\"}";
+    std::string name33 = "{\"hostname\":\"" + std::string(33, 'a') + "\"}";
+    const char* bodies[] = { "{\"hostname\":\"-bad\"}", "{\"hostname\":\"bad-\"}", "{\"hostname\":\"has space\"}",
+                             "{\"hostname\":\"a_b\"}", name33.c_str() };
+    for (const char* json : bodies) {
+        String next, out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, hostnameStatus(json, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected.c_str(), out.c_str(), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("unchanged", next.c_str(), json);
+    }
+}
+
+void test_hostname_json(void) {
+    JsonDocument doc;
+    WebApiJson::hostnameJson(doc["hostname"].to<JsonObject>(), String("espnut-network"), String("espnut-network"),
+                             String("esp32-nut-56d784"));
+    std::string out;
+    serializeJson(doc["hostname"], out);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"name\":\"espnut-network\",\"custom\":\"espnut-network\",\"default\":\"esp32-nut-56d784\"}", out.c_str());
+
+    JsonDocument def;
+    WebApiJson::hostnameJson(def["hostname"].to<JsonObject>(), String("esp32-nut-56d784"), String(""),
+                             String("esp32-nut-56d784"));
+    TEST_ASSERT_EQUAL_STRING("", def["hostname"]["custom"]);
+    TEST_ASSERT_EQUAL_STRING("esp32-nut-56d784", def["hostname"]["name"]);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_api_null_host);
@@ -1193,5 +1256,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_network_status_ethernet_down);
     RUN_TEST(test_network_status_no_link);
     RUN_TEST(test_network_links_from_board_profile);
+    RUN_TEST(test_hostname_body_valid_name);
+    RUN_TEST(test_hostname_body_empty_means_default);
+    RUN_TEST(test_hostname_body_missing_or_not_a_string);
+    RUN_TEST(test_hostname_body_invalid_name);
+    RUN_TEST(test_hostname_json);
     return UNITY_END();
 }

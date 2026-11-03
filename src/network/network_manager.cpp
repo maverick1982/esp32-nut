@@ -2,6 +2,7 @@
 #include "network/wifi_links.h"
 #include "network/eth_link.h"
 #include "core/app_logger.h"
+#include "NetHostname.h"
 
 AppNetworkManager::AppNetworkManager() : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr) {}
 
@@ -13,10 +14,11 @@ AppNetworkManager::~AppNetworkManager() {
 }
 
 void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid,
-                              const String& password) {
+                              const String& password, const String& saved_hostname) {
+    m_savedHostname = saved_hostname;
     switch (plan.link) {
     case BootLink::WIFI_STATION:
-        if (!m_sta) m_sta = new WifiStaLink(ssid, password);
+        if (!m_sta) m_sta = new WifiStaLink(ssid, password, saved_hostname);
         m_selector.activate(m_sta);
         break;
     case BootLink::WIFI_ACCESS_POINT:
@@ -25,7 +27,7 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         break;
     case BootLink::ETHERNET:
         if (board.eth.type != EthType::NONE) {
-            if (!m_eth) m_eth = new EthLink(board.eth);
+            if (!m_eth) m_eth = new EthLink(board.eth, saved_hostname);
             m_selector.activate(m_eth);
             break;
         }
@@ -81,6 +83,24 @@ void AppNetworkManager::linkInfo(NetLinkInfo& out) const {
     } else {
         out = NetLinkInfo();
     }
+}
+
+String AppNetworkManager::hostname() const {
+    const INetLink* link = m_selector.active();
+    if (!link) return String();
+    String name = link->hostname();
+    if (name.length() > 0) return name;
+    uint8_t mac[6];
+    link->macAddress(mac);
+    return NetHostname::effective(m_savedHostname, mac);
+}
+
+String AppNetworkManager::defaultHostname() const {
+    const INetLink* link = m_selector.active();
+    if (!link) return String();
+    uint8_t mac[6];
+    link->macAddress(mac);
+    return NetHostname::defaultFor(mac);
 }
 
 uint32_t AppNetworkManager::apStationCount() const {
