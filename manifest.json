@@ -1,6 +1,6 @@
 {
   "name": "ESP32 NUT Server",
-  "version": "v1.12.0",
+  "version": "v1.13.0",
   "new_install_prompt_erase": true,
   "builds": [
     {
