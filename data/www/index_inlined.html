@@ -2594,6 +2594,218 @@ body.auth-page {
     .port-options { grid-template-columns: 1fr; }
     .board-usb-form .form-actions .btn-primary { width: 100%; justify-content: center; }
 }
+
+/* =====================================================================
+   Network page (US-112): one .net-section per link, read-only status grid,
+   state badge and signal indicator (docs/mockups/US-112)
+   ===================================================================== */
+
+/* --- Page: one .net-section per link (and later per topic, e.g. Hostname) --- */
+/* display comes from .tab-content.active */
+.tab-content.net-page { gap: 2.25rem; }
+.net-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.net-section[hidden] { display: none; }
+
+/* Section title: link icon + name, a step above the panel headers */
+.net-section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--text-primary);
+    font-family: var(--font-heading);
+    font-size: 0.95rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+.net-section-title svg {
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+    filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.net-section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--bg-panel-border), transparent);
+}
+
+/* --- Panel header right side: refresh hint + state badge --- */
+.link-head-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+}
+.link-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--warning);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.link-live::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+/* Shown only while the board does not answer ("No answer for N s") */
+.link-live[hidden] { display: none; }
+
+/* State badge: same colours and dot as the sidebar indicators (.status-indicator) */
+.link-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.65rem 0.25rem 0.55rem;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+.link-badge .status-indicator { flex-shrink: 0; }
+.link-badge.connected  { color: var(--success); background: rgba(0, 255, 157, 0.06);  border-color: rgba(0, 255, 157, 0.4); }
+.link-badge.connecting { color: var(--warning); background: rgba(255, 184, 0, 0.06);  border-color: rgba(255, 184, 0, 0.4); }
+.link-badge.down       { color: var(--danger);  background: rgba(255, 51, 102, 0.06); border-color: rgba(255, 51, 102, 0.4); }
+.link-badge.ap         { color: var(--info);    background: rgba(0, 191, 255, 0.06);  border-color: rgba(0, 191, 255, 0.4); }
+.link-badge.idle       { color: var(--text-secondary); background: transparent; border-color: rgba(138, 155, 179, 0.35); }
+
+/* --- Status block: the SAME key/value grid for every link ---
+   Row 1: link-specific cells (Wi-Fi: Network, Signal | Ethernet: Link speed, Cable)
+   Row 2: common cells, same order on every link (IP address, Gateway, MAC address, DHCP) */
+.link-status {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.link-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    margin: 0;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(255, 255, 255, 0.05); /* hairlines between cells */
+    overflow: hidden;
+}
+.link-kv {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 0;
+    padding: 0.85rem 1rem;
+    background: rgba(6, 9, 14, 0.92);
+}
+.link-kv.wide { grid-column: span 2; }
+.link-kv.lead { background: rgba(10, 16, 25, 0.95); }
+.link-kv dt {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.link-kv dd {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    overflow-wrap: anywhere;
+    transition: color 0.3s;
+}
+.link-kv.lead dd { font-size: 1.1rem; }
+.link-kv dd .main { white-space: nowrap; }
+.link-kv dd .sub {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+/* Field without a value (link down, waiting for DHCP, not applicable in AP mode) */
+.link-kv dd.na { color: rgba(138, 155, 179, 0.55); }
+.link-kv dd.wait { color: var(--warning); }
+
+/* --- Signal indicator: 4 bars + dBm + word --- */
+.signal {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 16px;
+    flex-shrink: 0;
+}
+.signal i {
+    width: 4px;
+    border-radius: 1px;
+    background: rgba(138, 155, 179, 0.22);
+    transition: background 0.3s, box-shadow 0.3s;
+}
+.signal i:nth-child(1) { height: 25%; }
+.signal i:nth-child(2) { height: 50%; }
+.signal i:nth-child(3) { height: 75%; }
+.signal i:nth-child(4) { height: 100%; }
+.signal[data-level="4"] i:nth-child(-n+4),
+.signal[data-level="3"] i:nth-child(-n+3),
+.signal[data-level="2"] i:nth-child(-n+2),
+.signal[data-level="1"] i:nth-child(-n+1) { background: currentColor; box-shadow: 0 0 6px currentColor; }
+/* Same colour scale as the legacy .signal-excellent / .signal-good / .signal-weak */
+.sig-excellent { color: var(--success); }
+.sig-good      { color: var(--accent); }
+.sig-fair      { color: var(--warning); }
+.sig-weak      { color: var(--danger); }
+.signal-word {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Notice under the grid (AP mode, connecting, link down): reuses .auth-alert */
+.link-status .auth-alert strong { color: var(--text-primary); font-weight: 400; }
+.link-status .auth-alert.warn {
+    border-color: rgba(255, 184, 0, 0.45);
+    border-left-color: var(--warning);
+    background: rgba(255, 184, 0, 0.07);
+}
+.link-status .auth-alert.warn svg { color: var(--warning); }
+
+.net-section .auth-fineprint { margin-top: 0.25rem; }
+
+@media (max-width: 1000px) {
+    .link-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 768px) {
+    .tab-content.net-page { gap: 1.75rem; }
+    .net-panel { padding: 1.25rem; }
+    .net-panel .panel-header { flex-wrap: wrap; gap: 0.6rem; }
+    .link-head-meta { width: 100%; justify-content: space-between; flex-direction: row-reverse; }
+    /* Phone: one row per field, label left, value right */
+    .link-grid { grid-template-columns: 1fr; }
+    .link-kv.wide { grid-column: auto; }
+    .link-kv {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.7rem 0.85rem;
+    }
+    .link-kv dt { flex-shrink: 0; }
+    .link-kv dd { justify-content: flex-end; text-align: right; font-size: 0.88rem; }
+    .link-kv.lead dd { font-size: 0.95rem; }
+    .net-panel .form-actions .btn-primary { width: 100%; justify-content: center; }
+}
 </style>
 </head>
 
@@ -2637,12 +2849,15 @@ body.auth-page {
                     </svg>
                     UPS Settings
                 </button>
-                <button class="tab" data-target="wifi">
+                <!-- US-112: one page for every link of the board (was "Wi-Fi Config") -->
+                <button class="tab" data-target="network">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path
-                            d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
                     </svg>
-                    Wi-Fi Config
+                    Network
                 </button>
                 <button class="tab" data-target="nut">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2739,36 +2954,116 @@ body.auth-page {
 
             <div class="diag-banner" id="diag-banner" hidden></div>
 
-            <div class="tab-content" id="content-wifi">
-                <div class="panel config-panel">
-                    <div class="panel-header">
-                        <h2>Connection Setup</h2>
-                    </div>
-                    <form id="wifi-form" class="form-container">
-                        <div class="form-group">
-                            <label for="ssid">Network Name (SSID)</label>
-                            <input type="text" id="ssid" placeholder="Type network name here..." required>
-                        </div>
-                        <div class="form-group">
-                            <label for="password">Security Key</label>
-                            <div class="input-wrapper">
-                                <input type="password" id="password" placeholder="••••••••••••" required>
-                                <button type="button" class="btn-icon" id="toggle-pwd">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                        <circle cx="12" cy="12" r="3" />
-                                    </svg>
-                                </button>
+            <!-- US-112: one .net-section per link, shown from /api/config network.links (no per-board
+                 code). A section that is not about a link (e.g. Hostname, US-113) is one more
+                 .net-section with data-section and no data-link. -->
+            <div class="tab-content net-page" id="content-network">
+                <section class="net-section" data-section="wifi" data-link="wifi" hidden>
+                    <h2 class="net-section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12.55a11 11 0 0114.08 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01" />
+                        </svg>
+                        Wi-Fi
+                    </h2>
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" data-net-live hidden></span>
+                                <span class="link-badge" data-net-badge role="status">
+                                    <span class="status-indicator"></span><span class="badge-text">--</span>
+                                </span>
                             </div>
                         </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="btn-connect">
-                                <span class="glow"></span>
-                                Initialize Connection
-                            </button>
+                        <div class="link-status">
+                            <dl class="link-grid">
+                                <div class="link-kv wide lead"><dt data-net-ssid-label>Network (SSID)</dt><dd data-net-field="ssid">—</dd></div>
+                                <div class="link-kv wide lead"><dt>Signal</dt><dd data-net-field="signal">—</dd></div>
+                                <div class="link-kv"><dt>IP address</dt><dd data-net-field="ip">—</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd data-net-field="gateway">—</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd data-net-field="mac">—</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd data-net-field="dhcp">—</dd></div>
+                            </dl>
+                            <div class="auth-alert" data-net-notice role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span data-net-notice-text></span>
+                            </div>
                         </div>
-                    </form>
-                </div>
+                    </div>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Setup</h2>
+                        </div>
+                        <form id="wifi-form" class="form-container">
+                            <div class="form-group">
+                                <label for="ssid">Network Name (SSID)</label>
+                                <input type="text" id="ssid" placeholder="Type network name here..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="password">Security Key</label>
+                                <div class="input-wrapper">
+                                    <input type="password" id="password" placeholder="••••••••••••" required>
+                                    <button type="button" class="btn-icon" id="toggle-pwd">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-connect">
+                                    <span class="glow"></span>
+                                    Initialize Connection
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+
+                <section class="net-section" data-section="ethernet" data-link="ethernet" hidden>
+                    <h2 class="net-section-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="5" y="3" width="14" height="13" rx="1.5" />
+                            <path d="M9 16v5h6v-5M9 7v3M12 7v3M15 7v3" />
+                        </svg>
+                        Ethernet
+                    </h2>
+                    <div class="panel net-panel">
+                        <div class="panel-header">
+                            <h2>Connection Status</h2>
+                            <div class="link-head-meta">
+                                <span class="link-live" data-net-live hidden></span>
+                                <span class="link-badge" data-net-badge role="status">
+                                    <span class="status-indicator"></span><span class="badge-text">--</span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="link-status">
+                            <dl class="link-grid">
+                                <div class="link-kv wide lead"><dt>Link speed</dt><dd data-net-field="speed">—</dd></div>
+                                <div class="link-kv wide lead"><dt>Cable</dt><dd data-net-field="cable">—</dd></div>
+                                <div class="link-kv"><dt>IP address</dt><dd data-net-field="ip">—</dd></div>
+                                <div class="link-kv"><dt>Gateway</dt><dd data-net-field="gateway">—</dd></div>
+                                <div class="link-kv"><dt>MAC address</dt><dd data-net-field="mac">—</dd></div>
+                                <div class="link-kv"><dt>DHCP</dt><dd data-net-field="dhcp">—</dd></div>
+                            </dl>
+                            <div class="auth-alert" data-net-notice role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span data-net-notice-text></span>
+                            </div>
+                        </div>
+                        <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
+                            the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
             </div>
 
             <div class="tab-content" id="content-nut">
@@ -3789,15 +4084,231 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Network page (US-112): one section per link of the board, status from /api/system-status ---
+    const netSections = document.querySelectorAll('#content-network .net-section[data-link]');
+    const NET_BADGE = {
+        connected: { cls: 'connected', ind: 'success', text: 'Connected' },
+        connecting: { cls: 'connecting', ind: 'warning', text: 'Connecting' },
+        disconnected: { cls: 'down', ind: 'danger', text: 'Disconnected' },
+        ap: { cls: 'ap', ind: 'info', text: 'Access point mode' },
+        inactive: { cls: 'idle', ind: '', text: 'Not active' }
+    };
+    let netLast = null;          // last "network" object received
+    const netLastUp = {};        // last connected "network" per link type: kept, greyed, when the link drops
+    let netLastOkAt = 0;         // Date.now() of the last answer
+    let netOffline = false;      // the last /api/system-status request failed
+
+    // Sections from /api/config: network.links, else network.type, else Wi-Fi (as before US-112)
+    function showNetworkSections(network) {
+        let links = network && Array.isArray(network.links) ? network.links : null;
+        if (!links) links = [network && network.type === 'ethernet' ? 'ethernet' : 'wifi'];
+        netSections.forEach(sec => { sec.hidden = !links.includes(sec.dataset.link); });
+    }
+
+    const NET_NONE = '—';
+    const netText = (x) => (x === undefined || x === null || x === '') ? NET_NONE : String(x);
+
+    function netField(sec, name, text, kind) {
+        const el = sec.querySelector(`[data-net-field="${name}"]`);
+        if (!el) return null;
+        el.textContent = text;
+        el.className = kind || '';
+        return el;
+    }
+
+    // Value + a smaller note ("100 Mbps" "full duplex"); the value in its own span so it never wraps
+    function netSub(el, text) {
+        const main = document.createElement('span');
+        main.className = 'main';
+        main.textContent = el.textContent;
+        const sub = document.createElement('span');
+        sub.className = 'sub';
+        sub.textContent = text;
+        el.textContent = '';
+        el.append(main, ' ', sub);
+    }
+
+    // 4 bars + dBm + word (docs/mockups/US-112)
+    function netSignal(el, rssi) {
+        const s = rssi >= -55 ? [4, 'Excellent', 'sig-excellent'] : rssi >= -67 ? [3, 'Good', 'sig-good']
+            : rssi >= -75 ? [2, 'Fair', 'sig-fair'] : [1, 'Weak', 'sig-weak'];
+        el.textContent = '';
+        el.className = '';
+        const bars = document.createElement('span');
+        bars.className = 'signal ' + s[2];
+        bars.dataset.level = s[0];
+        bars.setAttribute('aria-hidden', 'true');
+        for (let i = 0; i < 4; i++) bars.appendChild(document.createElement('i'));
+        const value = document.createElement('span');
+        value.textContent = rssi + ' dBm';
+        const word = document.createElement('span');
+        word.className = 'signal-word ' + s[2];
+        word.textContent = s[1];
+        el.append(bars, value, word);
+    }
+
+    function netBadge(sec, key) {
+        const b = NET_BADGE[key];
+        const el = sec.querySelector('[data-net-badge]');
+        el.className = 'link-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    // parts: strings and {b: text} for bold, built as text nodes (SSIDs are not markup)
+    function netNotice(sec, kind, parts) {
+        const n = sec.querySelector('[data-net-notice]');
+        if (!kind) { n.hidden = true; return; }
+        n.hidden = false;
+        n.className = 'auth-alert' + (kind === 'danger' ? '' : ' ' + kind);
+        n.querySelector('path').setAttribute('d', kind === 'info' ? 'M12 16v-4M12 8h.01' : 'M12 8v4M12 16h.01');
+        const t = n.querySelector('[data-net-notice-text]');
+        t.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { t.append(p); return; }
+            const b = document.createElement('strong');
+            b.textContent = p.b;
+            t.append(b);
+        });
+    }
+
+    // IP address, Gateway, MAC address, DHCP: the same cells on every link
+    function netCommon(sec, n, kind) {
+        netField(sec, 'ip', netText(n.ip), kind);
+        netField(sec, 'gateway', netText(n.gateway), kind || (n.gateway ? '' : 'na'));
+        netField(sec, 'mac', netText(n.mac), kind);
+        netField(sec, 'dhcp', n.dhcp === undefined ? NET_NONE : (n.dhcp ? 'On' : 'Off'), kind);
+    }
+
+    function renderWifiSection(sec, n) {
+        const label = sec.querySelector('[data-net-ssid-label]');
+        if (label) label.textContent = n.state === 'ap' ? 'Network (SSID) · this board' : 'Network (SSID)';
+        netBadge(sec, n.state);
+        if (n.state === 'connected') {
+            netField(sec, 'ssid', netText(n.ssid));
+            const sig = netField(sec, 'signal', NET_NONE);
+            if (sig && typeof n.rssi === 'number') netSignal(sig, n.rssi);
+            netCommon(sec, n, '');
+            netNotice(sec, null);
+        } else if (n.state === 'ap') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Not applicable in AP mode', 'na');
+            netField(sec, 'ip', netText(n.ip));
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            const dhcp = netField(sec, 'dhcp', 'Server');
+            if (dhcp) netSub(dhcp, 'for joining devices');
+            netNotice(sec, 'info', [{ b: 'The board is not on your home network yet.' }, ' It runs its own Wi-Fi network ',
+                { b: netText(n.ssid) }, ' and you are connected to it at ', { b: netText(n.ip) },
+                '. Enter your home network below and press Initialize Connection.']);
+        } else if (n.state === 'connecting') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Waiting…', 'wait');
+            netField(sec, 'ip', 'Waiting for address…', 'wait');
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+            netNotice(sec, 'warn', [{ b: 'Connecting to ' + netText(n.ssid) + '…' },
+                ' This usually takes a few seconds. If it does not connect, check the network name and security key below.']);
+        } else {
+            netField(sec, 'ssid', netText(n.ssid), 'na');
+            netField(sec, 'signal', 'No signal', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'Wi-Fi disconnected.' }, ' The board is not answering on ' + netText(n.ssid) +
+                ': router off, board out of range or the network changed. It keeps retrying and this page updates' +
+                ' by itself when it is back. Values below are the last known ones.']);
+        }
+    }
+
+    function renderEthernetSection(sec, n) {
+        netBadge(sec, n.state === 'ap' ? 'disconnected' : n.state);
+        if (n.state === 'connected' || n.state === 'connecting') {
+            const speed = netField(sec, 'speed', n.link_speed ? n.link_speed + ' Mbps' : NET_NONE);
+            if (speed && n.link_speed) netSub(speed, n.full_duplex ? 'full duplex' : 'half duplex');
+            netField(sec, 'cable', 'Plugged in');
+            if (n.state === 'connected') {
+                netCommon(sec, n, '');
+                netNotice(sec, null);
+            } else {
+                netField(sec, 'ip', 'Waiting for address…', 'wait');
+                netField(sec, 'gateway', NET_NONE, 'na');
+                netField(sec, 'mac', netText(n.mac));
+                netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+                netNotice(sec, 'warn', [{ b: 'Waiting for an address…' },
+                    ' The cable is plugged in and the board is asking your router for an address (DHCP).']);
+            }
+        } else {
+            netField(sec, 'speed', 'No link', 'na');
+            netField(sec, 'cable', 'Unplugged', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'No Ethernet link.' }, ' Check that the cable is plugged in at both ends and' +
+                ' that the switch or router port is on. This page updates by itself when the link is back.' +
+                ' Values below are the last known ones.']);
+        }
+    }
+
+    // A link of the board that is not the one in use (boards with both links)
+    function renderInactiveSection(sec) {
+        netBadge(sec, 'inactive');
+        sec.querySelectorAll('[data-net-field]').forEach(el => { el.textContent = NET_NONE; el.className = 'na'; });
+        netNotice(sec, 'info', [{ b: 'Not the active link.' }, ' The board is connected through another link.']);
+    }
+
+    function renderNetworkSections(n) {
+        netSections.forEach(sec => {
+            if (sec.hidden) return;
+            const active = n.type === sec.dataset.link || n.type === 'none';
+            if (!active) { renderInactiveSection(sec); return; }
+            // A link that dropped keeps its last known values, greyed
+            const shown = n.state === 'disconnected'
+                ? Object.assign({}, netLastUp[sec.dataset.link] || {}, n, { state: 'disconnected' }) : n;
+            if (sec.dataset.link === 'wifi') renderWifiSection(sec, shown);
+            else renderEthernetSection(sec, shown);
+        });
+    }
+
+    // Shown only while the board does not answer: how old the greyed values are. While the
+    // answers arrive every 3 s the badge is enough, a "N s ago" counter would only flicker
+    function updateNetworkLive() {
+        const show = netOffline && netLastOkAt > 0;
+        const secs = show ? Math.max(0, Math.round((Date.now() - netLastOkAt) / 1000)) : 0;
+        document.querySelectorAll('#content-network [data-net-live]').forEach(el => {
+            el.hidden = !show;
+            el.textContent = show ? `No answer for ${secs} s` : '';
+        });
+    }
+
+    // Called by fetchSystemStatus() with data.network, at the pace of the status bar
+    function renderNetworkStatus(network) {
+        if (!network || !network.state) return; // firmware before US-112: no status data
+        netLast = network;
+        netOffline = false;
+        netLastOkAt = Date.now();
+        if (network.state === 'connected' && network.type) netLastUp[network.type] = network;
+        renderNetworkSections(network);
+        updateNetworkLive();
+    }
+
+    // The board does not answer: on a board with one link this is how a dropped link shows,
+    // the same moment the status bar says "Offline"
+    function renderNetworkOffline() {
+        netOffline = true;
+        if (netLast) {
+            renderNetworkSections(Object.assign({}, netLast, { state: 'disconnected' }));
+        } else {
+            netSections.forEach(sec => { if (!sec.hidden) netBadge(sec, 'disconnected'); });
+        }
+        updateNetworkLive();
+    }
+
+    setInterval(updateNetworkLive, 1000);
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
-            // Boards without Wi-Fi: no Wi-Fi settings to show (US-092)
-            if (data.network && data.network.type === 'ethernet') {
-                const wifiTab = document.querySelector('.tab[data-target="wifi"]');
-                if (wifiTab) wifiTab.style.display = 'none';
-            }
+            // Sections of the Network page from the links of the board (US-112)
+            showNetworkSections(data.network);
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -3812,7 +4323,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         })
-        .catch(err => console.error('Failed to fetch config:', err));
+        .catch(err => {
+            console.error('Failed to fetch config:', err);
+            showNetworkSections(null);
+        });
 
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
@@ -4658,6 +5172,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderDiagnostics(data);
+            renderNetworkStatus(data.network);
 
             if (lblUps && data.ups) {
                 lblUps.textContent = 'UPS: ' + data.ups.status + (data.ups.stale ? ' (stale)' : '');
@@ -4692,6 +5207,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (indWifi) indWifi.className = 'status-indicator danger';
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
+            renderNetworkOffline();
         } finally {
             statusInFlight = false;
         }

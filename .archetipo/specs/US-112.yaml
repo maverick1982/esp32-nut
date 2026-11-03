@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |
   #### US-112: Pagina "Network" al posto di "Wi-Fi Config", con sezioni Wi-Fi ed Ethernet secondo la scheda
 
@@ -37,3 +37,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-03T09:45:43Z"
+  - status: PLANNED
+    at: "2026-11-03T13:45:01Z"
+  - status: IN PROGRESS
+    at: "2026-11-03T13:50:00Z"
+  - status: REVIEW
+    at: "2026-11-03T14:25:19Z"
+  - status: DONE
+    at: "2026-11-03T14:46:02Z"

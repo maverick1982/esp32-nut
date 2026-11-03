@@ -517,15 +517,231 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Network page (US-112): one section per link of the board, status from /api/system-status ---
+    const netSections = document.querySelectorAll('#content-network .net-section[data-link]');
+    const NET_BADGE = {
+        connected: { cls: 'connected', ind: 'success', text: 'Connected' },
+        connecting: { cls: 'connecting', ind: 'warning', text: 'Connecting' },
+        disconnected: { cls: 'down', ind: 'danger', text: 'Disconnected' },
+        ap: { cls: 'ap', ind: 'info', text: 'Access point mode' },
+        inactive: { cls: 'idle', ind: '', text: 'Not active' }
+    };
+    let netLast = null;          // last "network" object received
+    const netLastUp = {};        // last connected "network" per link type: kept, greyed, when the link drops
+    let netLastOkAt = 0;         // Date.now() of the last answer
+    let netOffline = false;      // the last /api/system-status request failed
+
+    // Sections from /api/config: network.links, else network.type, else Wi-Fi (as before US-112)
+    function showNetworkSections(network) {
+        let links = network && Array.isArray(network.links) ? network.links : null;
+        if (!links) links = [network && network.type === 'ethernet' ? 'ethernet' : 'wifi'];
+        netSections.forEach(sec => { sec.hidden = !links.includes(sec.dataset.link); });
+    }
+
+    const NET_NONE = '—';
+    const netText = (x) => (x === undefined || x === null || x === '') ? NET_NONE : String(x);
+
+    function netField(sec, name, text, kind) {
+        const el = sec.querySelector(`[data-net-field="${name}"]`);
+        if (!el) return null;
+        el.textContent = text;
+        el.className = kind || '';
+        return el;
+    }
+
+    // Value + a smaller note ("100 Mbps" "full duplex"); the value in its own span so it never wraps
+    function netSub(el, text) {
+        const main = document.createElement('span');
+        main.className = 'main';
+        main.textContent = el.textContent;
+        const sub = document.createElement('span');
+        sub.className = 'sub';
+        sub.textContent = text;
+        el.textContent = '';
+        el.append(main, ' ', sub);
+    }
+
+    // 4 bars + dBm + word (docs/mockups/US-112)
+    function netSignal(el, rssi) {
+        const s = rssi >= -55 ? [4, 'Excellent', 'sig-excellent'] : rssi >= -67 ? [3, 'Good', 'sig-good']
+            : rssi >= -75 ? [2, 'Fair', 'sig-fair'] : [1, 'Weak', 'sig-weak'];
+        el.textContent = '';
+        el.className = '';
+        const bars = document.createElement('span');
+        bars.className = 'signal ' + s[2];
+        bars.dataset.level = s[0];
+        bars.setAttribute('aria-hidden', 'true');
+        for (let i = 0; i < 4; i++) bars.appendChild(document.createElement('i'));
+        const value = document.createElement('span');
+        value.textContent = rssi + ' dBm';
+        const word = document.createElement('span');
+        word.className = 'signal-word ' + s[2];
+        word.textContent = s[1];
+        el.append(bars, value, word);
+    }
+
+    function netBadge(sec, key) {
+        const b = NET_BADGE[key];
+        const el = sec.querySelector('[data-net-badge]');
+        el.className = 'link-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    // parts: strings and {b: text} for bold, built as text nodes (SSIDs are not markup)
+    function netNotice(sec, kind, parts) {
+        const n = sec.querySelector('[data-net-notice]');
+        if (!kind) { n.hidden = true; return; }
+        n.hidden = false;
+        n.className = 'auth-alert' + (kind === 'danger' ? '' : ' ' + kind);
+        n.querySelector('path').setAttribute('d', kind === 'info' ? 'M12 16v-4M12 8h.01' : 'M12 8v4M12 16h.01');
+        const t = n.querySelector('[data-net-notice-text]');
+        t.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { t.append(p); return; }
+            const b = document.createElement('strong');
+            b.textContent = p.b;
+            t.append(b);
+        });
+    }
+
+    // IP address, Gateway, MAC address, DHCP: the same cells on every link
+    function netCommon(sec, n, kind) {
+        netField(sec, 'ip', netText(n.ip), kind);
+        netField(sec, 'gateway', netText(n.gateway), kind || (n.gateway ? '' : 'na'));
+        netField(sec, 'mac', netText(n.mac), kind);
+        netField(sec, 'dhcp', n.dhcp === undefined ? NET_NONE : (n.dhcp ? 'On' : 'Off'), kind);
+    }
+
+    function renderWifiSection(sec, n) {
+        const label = sec.querySelector('[data-net-ssid-label]');
+        if (label) label.textContent = n.state === 'ap' ? 'Network (SSID) · this board' : 'Network (SSID)';
+        netBadge(sec, n.state);
+        if (n.state === 'connected') {
+            netField(sec, 'ssid', netText(n.ssid));
+            const sig = netField(sec, 'signal', NET_NONE);
+            if (sig && typeof n.rssi === 'number') netSignal(sig, n.rssi);
+            netCommon(sec, n, '');
+            netNotice(sec, null);
+        } else if (n.state === 'ap') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Not applicable in AP mode', 'na');
+            netField(sec, 'ip', netText(n.ip));
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            const dhcp = netField(sec, 'dhcp', 'Server');
+            if (dhcp) netSub(dhcp, 'for joining devices');
+            netNotice(sec, 'info', [{ b: 'The board is not on your home network yet.' }, ' It runs its own Wi-Fi network ',
+                { b: netText(n.ssid) }, ' and you are connected to it at ', { b: netText(n.ip) },
+                '. Enter your home network below and press Initialize Connection.']);
+        } else if (n.state === 'connecting') {
+            netField(sec, 'ssid', netText(n.ssid));
+            netField(sec, 'signal', 'Waiting…', 'wait');
+            netField(sec, 'ip', 'Waiting for address…', 'wait');
+            netField(sec, 'gateway', NET_NONE, 'na');
+            netField(sec, 'mac', netText(n.mac));
+            netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+            netNotice(sec, 'warn', [{ b: 'Connecting to ' + netText(n.ssid) + '…' },
+                ' This usually takes a few seconds. If it does not connect, check the network name and security key below.']);
+        } else {
+            netField(sec, 'ssid', netText(n.ssid), 'na');
+            netField(sec, 'signal', 'No signal', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'Wi-Fi disconnected.' }, ' The board is not answering on ' + netText(n.ssid) +
+                ': router off, board out of range or the network changed. It keeps retrying and this page updates' +
+                ' by itself when it is back. Values below are the last known ones.']);
+        }
+    }
+
+    function renderEthernetSection(sec, n) {
+        netBadge(sec, n.state === 'ap' ? 'disconnected' : n.state);
+        if (n.state === 'connected' || n.state === 'connecting') {
+            const speed = netField(sec, 'speed', n.link_speed ? n.link_speed + ' Mbps' : NET_NONE);
+            if (speed && n.link_speed) netSub(speed, n.full_duplex ? 'full duplex' : 'half duplex');
+            netField(sec, 'cable', 'Plugged in');
+            if (n.state === 'connected') {
+                netCommon(sec, n, '');
+                netNotice(sec, null);
+            } else {
+                netField(sec, 'ip', 'Waiting for address…', 'wait');
+                netField(sec, 'gateway', NET_NONE, 'na');
+                netField(sec, 'mac', netText(n.mac));
+                netField(sec, 'dhcp', n.dhcp ? 'On' : NET_NONE);
+                netNotice(sec, 'warn', [{ b: 'Waiting for an address…' },
+                    ' The cable is plugged in and the board is asking your router for an address (DHCP).']);
+            }
+        } else {
+            netField(sec, 'speed', 'No link', 'na');
+            netField(sec, 'cable', 'Unplugged', 'na');
+            netCommon(sec, n, 'na');
+            netNotice(sec, 'danger', [{ b: 'No Ethernet link.' }, ' Check that the cable is plugged in at both ends and' +
+                ' that the switch or router port is on. This page updates by itself when the link is back.' +
+                ' Values below are the last known ones.']);
+        }
+    }
+
+    // A link of the board that is not the one in use (boards with both links)
+    function renderInactiveSection(sec) {
+        netBadge(sec, 'inactive');
+        sec.querySelectorAll('[data-net-field]').forEach(el => { el.textContent = NET_NONE; el.className = 'na'; });
+        netNotice(sec, 'info', [{ b: 'Not the active link.' }, ' The board is connected through another link.']);
+    }
+
+    function renderNetworkSections(n) {
+        netSections.forEach(sec => {
+            if (sec.hidden) return;
+            const active = n.type === sec.dataset.link || n.type === 'none';
+            if (!active) { renderInactiveSection(sec); return; }
+            // A link that dropped keeps its last known values, greyed
+            const shown = n.state === 'disconnected'
+                ? Object.assign({}, netLastUp[sec.dataset.link] || {}, n, { state: 'disconnected' }) : n;
+            if (sec.dataset.link === 'wifi') renderWifiSection(sec, shown);
+            else renderEthernetSection(sec, shown);
+        });
+    }
+
+    // Shown only while the board does not answer: how old the greyed values are. While the
+    // answers arrive every 3 s the badge is enough, a "N s ago" counter would only flicker
+    function updateNetworkLive() {
+        const show = netOffline && netLastOkAt > 0;
+        const secs = show ? Math.max(0, Math.round((Date.now() - netLastOkAt) / 1000)) : 0;
+        document.querySelectorAll('#content-network [data-net-live]').forEach(el => {
+            el.hidden = !show;
+            el.textContent = show ? `No answer for ${secs} s` : '';
+        });
+    }
+
+    // Called by fetchSystemStatus() with data.network, at the pace of the status bar
+    function renderNetworkStatus(network) {
+        if (!network || !network.state) return; // firmware before US-112: no status data
+        netLast = network;
+        netOffline = false;
+        netLastOkAt = Date.now();
+        if (network.state === 'connected' && network.type) netLastUp[network.type] = network;
+        renderNetworkSections(network);
+        updateNetworkLive();
+    }
+
+    // The board does not answer: on a board with one link this is how a dropped link shows,
+    // the same moment the status bar says "Offline"
+    function renderNetworkOffline() {
+        netOffline = true;
+        if (netLast) {
+            renderNetworkSections(Object.assign({}, netLast, { state: 'disconnected' }));
+        } else {
+            netSections.forEach(sec => { if (!sec.hidden) netBadge(sec, 'disconnected'); });
+        }
+        updateNetworkLive();
+    }
+
+    setInterval(updateNetworkLive, 1000);
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
         .then(data => {
-            // Boards without Wi-Fi: no Wi-Fi settings to show (US-092)
-            if (data.network && data.network.type === 'ethernet') {
-                const wifiTab = document.querySelector('.tab[data-target="wifi"]');
-                if (wifiTab) wifiTab.style.display = 'none';
-            }
+            // Sections of the Network page from the links of the board (US-112)
+            showNetworkSections(data.network);
             if (data.wifi && data.wifi.mode === 'STA' && data.wifi.ssid) {
                 if (!ssidInput.value) {
                     ssidInput.value = data.wifi.ssid;
@@ -540,7 +756,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         })
-        .catch(err => console.error('Failed to fetch config:', err));
+        .catch(err => {
+            console.error('Failed to fetch config:', err);
+            showNetworkSections(null);
+        });
 
     // UPS Parameters Logic
     const upsTableBody = document.getElementById('ups-table-body');
@@ -1386,6 +1605,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderDiagnostics(data);
+            renderNetworkStatus(data.network);
 
             if (lblUps && data.ups) {
                 lblUps.textContent = 'UPS: ' + data.ups.status + (data.ups.stale ? ' (stale)' : '');
@@ -1420,6 +1640,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (indWifi) indWifi.className = 'status-indicator danger';
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
+            renderNetworkOffline();
         } finally {
             statusInFlight = false;
         }

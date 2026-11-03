@@ -23,7 +23,7 @@ test.describe('Config Auto-populate', () => {
 
         // Navigate to the app
         await page.goto('http://esp32.local/');
-    await page.click('button[data-target=\"wifi\"]');
+    await page.click('button[data-target=\"network\"]');
 
         // Verify SSID field is populated
         const ssidInput = page.locator('#ssid');
@@ -54,7 +54,7 @@ test.describe('Config Auto-populate', () => {
 
         // Navigate to the app
         await page.goto('http://esp32.local/');
-    await page.click('button[data-target=\"wifi\"]');
+    await page.click('button[data-target=\"network\"]');
 
         // Verify SSID field remains empty
         const ssidInput = page.locator('#ssid');

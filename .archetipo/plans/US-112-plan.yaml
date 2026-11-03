@@ -1,0 +1,299 @@
+schema: archetipo/plan/v2
+spec_code: US-112
+body: |-
+  ## Soluzione tecnica
+
+  ### Stato attuale
+  - La voce di menu `Wi-Fi Config` (`data/www/index.html:56`, `data-target="wifi"`, contenuto `#content-wifi`) ha solo il form SSID/password (`/api/wifi/connect`). Su Ethernet la scheda viene nascosta (`bundle.js:525`, `network.type === 'ethernet'` da `/api/config`). Il titolo della pagina è il testo della voce di menu (`bundle.js:237-262`).
+  - `/api/system-status` (`web_config_server.cpp:383`) dà solo `wifi.status` (testo della barra di stato) e `network.type` del link attivo. Non ci sono gateway, MAC per la UI, RSSI, velocità né stato strutturato.
+  - I link (`INetLink`, `lib/NetCore/src/INetLink.h`) espongono `statusText()`, `localIP()` e `macAddress()`. Gli adattatori `WifiStaLink`, `WifiApLink` (`src/network/wifi_links.*`) ed `EthLink` (`src/network/eth_link.*`) sono gli unici punti con chiamate `WiFi.*` / `ETH.*` (ADR 0010). L'indirizzo arriva sempre da DHCP (station ed Ethernet): non esiste configurazione di IP statico.
+
+  ### Firmware
+  1. **`NetLinkInfo`** (nuovo, `lib/NetCore/src/NetLinkInfo.h`, header-only e puro): `enum class NetLinkState { CONNECTED, CONNECTING, DISCONNECTED, ACCESS_POINT }`, `type` ("wifi"/"ethernet"), `ip`, `gateway`, `mac[6]`, `dhcp`, `ssid`, `rssi` con `has_rssi`, `link_speed_mbps` (0 = sconosciuta), `full_duplex`.
+  2. **`INetLink::linkInfo(NetLinkInfo&) const`**, virtuale pura e implementata da ogni adattatore:
+     - `WifiStaLink`: CONNECTED con SSID, `WiFi.RSSI()`, IP, `gatewayIP()`, MAC e DHCP; altrimenti CONNECTING (oggi `statusText()` dà "Connecting" finché non c'è connessione).
+     - `WifiApLink`: ACCESS_POINT con IP del softAP e MAC; niente gateway, RSSI o DHCP client.
+     - `EthLink`: CONNECTED con IP, `ETH.gatewayIP()`, MAC, DHCP, `ETH.linkSpeed()` e `ETH.fullDuplex()`; CONNECTING con link su e senza indirizzo; DISCONNECTED con cavo staccato.
+     - `AppNetworkManager::linkInfo()` inoltra al link attivo (`m_selector.active()`). Senza link: DISCONNECTED, type "none".
+  3. **JSON puri in `WebApiJson`** (testabili in nativo):
+     - `networkStatusJson(JsonObject net, const NetLinkInfo&)` riempie l'oggetto `network` di `/api/system-status`: `type` (già presente, invariato), `state` (`connected`/`connecting`/`disconnected`/`ap`), `ip`, `gateway`, `mac` (`AA:BB:CC:DD:EE:FF`), `dhcp`, più `ssid` e `rssi` per il Wi-Fi e `link_speed` e `full_duplex` per l'Ethernet. Un campo che il link non ha viene omesso (per esempio niente gateway in AP, niente RSSI se non connesso).
+     - `networkLinksJson(JsonArray links, const BoardConfig&)` produce la lista dei link della scheda dal profilo (`has_wifi` → "wifi", `has_ethernet` → "ethernet"), per `/api/config` → `network.links`. `network.type` resta invariato per compatibilità.
+     - `handleSystemStatus()` e `handleGetConfig()` li chiamano. `wifi.status` e gli altri campi esistenti non cambiano: barra di stato, e2e e client esterni restano compatibili.
+  4. **Configurazione salvata:** nessun cambiamento (`config_manager` non si tocca).
+
+  ### Web UI (seguire `docs/mockups/US-112/`: `index.html`, `network.css`, `app.js`)
+  - Voce di menu `Network` con `data-target="network"` e contenuto `#content-network`; il titolo segue il testo della voce (logica esistente). Stessa icona o un'icona di rete coerente col mockup.
+  - `#content-network` è un contenitore di **sezioni** (`.net-section`, una `.panel` ciascuna con `data-section`). Le sezioni di link (`data-link="wifi"`, `data-link="ethernet"`) partono nascoste e si mostrano dalla lista `network.links` di `/api/config`. Se manca la lista (firmware vecchio o risposta vuota), si usa `network.type`, e in assenza anche di quello si mostra il Wi-Fi (comportamento di oggi). Una sezione futura (nome host, US-113) è un altro `.net-section` nel contenitore, senza toccare le altre: nessun `#if` di scheda e nessun ramo per board nel JS.
+  - Ogni sezione di link ha in testa un blocco di stato in sola lettura (badge di stato + griglia chiave/valore: IP, Gateway, MAC, DHCP; Wi-Fi in più Network (SSID) e Signal (dBm più indicatore); Ethernet in più Link speed). Lo riempie una funzione `renderNetworkStatus(network)` chiamata da `fetchSystemStatus()`, quindi con la stessa cadenza della barra di stato. La sezione del link attivo (`network.type`) mostra i dati. In modalità AP: messaggio "Access point mode: the board is not on your home network" con l'IP dell'AP. Link in connessione: badge e testo dedicati, valori `—`. **Link giù su una scheda con un solo link:** la scheda non risponde più, quindi `state: disconnected` non può arrivare dall'API. Quando `fetchSystemStatus()` fallisce (lo stesso momento in cui la barra mostra `Offline`), la sezione attiva passa a "Disconnected" / "No answer for N s" e tiene gli ultimi valori in grigio, come nel mockup. `state: disconnected` dall'API serve alle schede con due link e ai client delle API, e viene comunque gestito. Una sezione di un link non attivo (schede con entrambi i link, fuori scope) dice "Not the active link".
+  - La sezione Wi-Fi contiene sotto lo stato il form attuale **con gli stessi id** (`wifi-form`, `ssid`, `password`, `toggle-pwd`, `btn-connect`): stesso JS, stessa API, stesso comportamento in AP e alla prima configurazione. Il precompilamento dell'SSID da `/api/config` resta invariato.
+  - Va tolto il codice che nasconde la scheda su Ethernet (`bundle.js:525-528`): ora la pagina c'è anche sulla P4.
+  - Gli stili nuovi vanno in `bundle.css` (griglia di stato, badge, indicatore del segnale), riusando le variabili e gli indicatori esistenti.
+  - Asset rigenerati con `python scripts/embed_web.py` (`index_inlined.html`, `include/network/web_assets.h`, `.web_assets.hash`).
+
+  ### Documentazione
+  - README: riga degli screenshot `Wi-Fi Config` → `Network`, con `docs/images/ui-network.png` rigenerato da `npm run e2e:screenshots`. Il vecchio `ui-wifi.png` va rimosso se non più usato.
+  - Note di rilascio: rimandate a prima della release (decisione dell'utente). Il criterio relativo resta aperto fino ad allora.
+
+  ## Strategia di test
+  - **Unit nativi (`test/test_web_api`):** `networkStatusJson` nei casi Wi-Fi connesso (tutti i campi, MAC formattato, rssi), Wi-Fi in connessione (niente ssid/rssi/gateway), AP (state `ap`, ip, niente gateway/dhcp/rssi), Ethernet connesso (link_speed, full_duplex, niente ssid/rssi), Ethernet giù (state `disconnected`, niente ip o ip vuoto, secondo l'implementazione ma coerente) e nessun link (`type` "none"). `networkLinksJson` per profilo solo Wi-Fi, solo Ethernet ed entrambi.
+  - **E2E (Playwright, `e2e/`, `serveIndex` di `e2e/support/webui.ts` con `page.route` sulle API, come gli spec esistenti):**
+    - `wifi-config.spec.ts`: solo i selettori (`button[data-target="network"]`, titolo `Network`), stesso flusso di invio.
+    - `ethernet.spec.ts`: la scheda solo Ethernet ora **mostra** la voce Network con la sola sezione Ethernet. È il cambio di comportamento richiesto dalla spec, non una regressione. Il resto (etichetta `Ethernet:` nella barra, link giù, offline) resta com'è.
+    - nuovo `network-page.spec.ts`, che copre:
+      1. scheda solo Wi-Fi connessa: SSID, segnale, IP, gateway, MAC, DHCP; nessuna sezione Ethernet; form visibile;
+      2. scheda Wi-Fi in AP: messaggio di access point e form utilizzabile;
+      3. scheda solo Ethernet: IP, gateway, MAC, DHCP, velocità; nessuna sezione Wi-Fi e nessun form;
+      4. link giù: `state: disconnected` dall'API mostra Disconnected; la scheda che smette di rispondere (route abortita, `page.clock`) mostra "No answer" con gli ultimi valori in grigio;
+      5. aggiornamento: con `page.clock`, una seconda risposta di `/api/system-status` cambia i valori mostrati;
+      6. compatibilità: `/api/config` senza `network.links` usa `network.type`.
+    - `screenshot.spec.ts`: la scheda passa da `wifi` a `network`; lo screenshot diventa `docs/images/ui-network.png`, con mock di stato completo.
+    - Demo: la dimostrazione della spec è visibile (pagina Network su S3 e P4). Spetta ad `archetipo-review` decidere se registrarla (oggi la registrazione è disattivata nel config).
+  - **Finale:** suite nativa completa, `npm run e2e` completa, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`. Prova sulla scheda S3 di test (OTA, pagina Network con stato reale) solo con il consenso dell'utente.
+
+  ## Note
+  - Fuori scope: impostazioni Ethernet (IP statico), scelta del link sulle schede con entrambi (ADR 0010), W5500 (#64), nome host (US-113, che aggiungerà una sezione).
+  - Comandi: test nativi da Git Bash con `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native ...`; e2e con `npm run e2e`; build da PowerShell con `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e <env>`.
+  - Branch: `feature/us-112` (worktree ARchetipo disattivato).
+tasks:
+  - id: TASK-01
+    title: NetLinkInfo e INetLink::linkInfo negli adattatori Wi-Fi, AP ed Ethernet
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** ogni link sa descrivere il proprio stato in una struttura pura (`NetLinkInfo`), e `AppNetworkManager` la espone per il link attivo.
+
+      **Read:** `lib/NetCore/src/INetLink.h`, `src/network/wifi_links.h/.cpp`, `src/network/eth_link.h/.cpp`, `include/network/network_manager.h`, `src/network/network_manager.cpp` (uso di `m_selector.active()`), `test/mocks` (eventuali mock di INetLink usati da `test_net_link_selector`).
+
+      **Change:**
+      1. Nuovo `lib/NetCore/src/NetLinkInfo.h` (header-only, senza chiamate di piattaforma): `enum class NetLinkState : uint8_t { CONNECTED, CONNECTING, DISCONNECTED, ACCESS_POINT };` e `struct NetLinkInfo { const char* type = "none"; NetLinkState state = NetLinkState::DISCONNECTED; String ip; String gateway; uint8_t mac[6] = {0}; bool dhcp = false; String ssid; int32_t rssi = 0; bool has_rssi = false; uint16_t link_speed_mbps = 0; bool full_duplex = false; };`
+      2. `INetLink`: aggiungere `virtual void linkInfo(NetLinkInfo& out) const = 0;` con un commento. Aggiornare ogni implementazione di test o mock di `INetLink` (cercare `: public INetLink` in `test/`) con un'implementazione minima.
+      3. `WifiStaLink::linkInfo`: type "wifi". Se connesso: CONNECTED, `ssid = WiFi.SSID()`, `rssi = WiFi.RSSI()`, `has_rssi = true`, `ip = WiFi.localIP().toString()`, `gateway = WiFi.gatewayIP().toString()`, MAC e `dhcp = true`. Altrimenti CONNECTING, con MAC e il solo SSID configurato non nel campo ssid (che resta vuoto).
+      4. `WifiApLink::linkInfo`: type "wifi", ACCESS_POINT, `ip = localIP()`, MAC; il resto ai valori di default.
+      5. `EthLink::linkInfo`: type "ethernet". Connesso: CONNECTED, ip, `ETH.gatewayIP()`, MAC, `dhcp = true`, `link_speed_mbps = ETH.linkSpeed()`, `full_duplex = ETH.fullDuplex()`. Link su senza IP: CONNECTING con velocità. Altrimenti: DISCONNECTED con MAC. Usare la stessa logica di `isConnected()` / `statusText()` esistenti.
+      6. `AppNetworkManager`: `void linkInfo(NetLinkInfo& out) const;` che chiama il link attivo o lascia i default (type "none", DISCONNECTED).
+
+      **Steps:** header → interfaccia e mock → adattatori → manager → build.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_net_link_selector -f test_net_boot_plan` verde; da PowerShell `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` e `-e esp32-p4-eth` compilano.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `ETH.fullDuplex()` o `WiFi.gatewayIP()` non esistono nel core in uso, usare l'equivalente disponibile o omettere il campo (full_duplex) e riportarlo; non introdurre chiamate ESP-IDF dirette fuori dagli adattatori.
+
+      ## File Coinvolti
+      - lib/NetCore/src/NetLinkInfo.h — nuova struttura pura
+      - lib/NetCore/src/INetLink.h — metodo linkInfo
+      - src/network/wifi_links.h, src/network/wifi_links.cpp — linkInfo di station e AP
+      - src/network/eth_link.h, src/network/eth_link.cpp — linkInfo Ethernet
+      - include/network/network_manager.h, src/network/network_manager.cpp — linkInfo del link attivo
+      - test/ (mock di INetLink, se presenti) — implementazione minima
+
+      ## Criteri di Completamento
+      - [ ] NetLinkInfo header-only senza chiamate WiFi/ETH
+      - [ ] Le tre implementazioni riempiono stato, IP, gateway, MAC, DHCP e i campi specifici (SSID/RSSI, velocità/duplex)
+      - [ ] AppNetworkManager::linkInfo senza link dà type "none" e DISCONNECTED
+      - [ ] Test NetCore verdi e build S3 e P4 ok
+    ref: TASK-01
+  - id: TASK-02
+    title: 'WebApiJson: stato di rete in /api/system-status e link della scheda in /api/config'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** le API danno alla pagina lo stato strutturato del link attivo e la lista dei link della scheda, senza cambiare i campi esistenti.
+
+      **Read:** `lib/WebApi/src/WebApiJson.h/.cpp` (stile di `boardSettingsJson`), `src/network/web_config_server.cpp` (`handleGetConfig` ~356, `handleSystemStatus` ~383), `include/board/board.h` (`has_wifi`, `has_ethernet`).
+
+      **Change:**
+      1. `WebApiJson::networkStatusJson(JsonObject net, const NetLinkInfo& info)`: `net["type"] = info.type`; `net["state"]` = `connected`/`connecting`/`disconnected`/`ap`. `ip` solo se non vuoto e diverso da `0.0.0.0`, `gateway` solo se non vuoto e diverso da `0.0.0.0`, `mac` sempre se non tutto zero (formato `%02X:%02X:%02X:%02X:%02X:%02X`). `dhcp` per gli stati diversi da `ap`. Per type "wifi": `ssid` solo se non vuoto, `rssi` solo con `has_rssi`. Per type "ethernet": `link_speed` solo se maggiore di 0, con `full_duplex`.
+      2. `WebApiJson::networkLinksJson(JsonArray links, const BoardConfig& board)`: aggiunge "wifi" se `has_wifi` ed "ethernet" se `has_ethernet`, in quest'ordine.
+      3. `handleSystemStatus()`: al posto della sola riga `doc["network"]["type"] = ...`, `NetLinkInfo info; if (network) network->linkInfo(info); WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), info);`. Mantenere `wifi.status` e il commento US-090.
+      4. `handleGetConfig()`: lasciare `network.type` com'è e aggiungere `WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board());`.
+
+      **Steps:** funzioni in WebApiJson → wiring nel server → build.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` compila e resta verde; build `esp32-s3-standard` ok.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `WebApi` non può includere `NetLinkInfo.h` (dipendenza tra librerie), aggiungere la dipendenza nel `library.json` o come include path coerente col progetto e riportarlo.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h, lib/WebApi/src/WebApiJson.cpp — networkStatusJson, networkLinksJson
+      - src/network/web_config_server.cpp — wiring in handleSystemStatus e handleGetConfig
+
+      ## Criteri di Completamento
+      - [ ] /api/system-status ha network.{type,state,ip,gateway,mac,dhcp} e i campi specifici del link
+      - [ ] /api/config ha network.links dal profilo della scheda
+      - [ ] wifi.status, network.type e gli altri campi esistenti invariati
+      - [ ] Nessun cambiamento alla configurazione salvata
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di networkStatusJson e networkLinksJson
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** il formato JSON dello stato di rete e dei link è fissato da test nativi.
+
+      **Read:** `test/test_web_api/test_main.cpp` (struttura dei test, registrazione in `main`, eventuali due blocchi RUN_TEST), test esistenti di `boardSettingsJson` per costruire un `BoardConfig`.
+
+      **Change:** nuovi test in `test/test_web_api/test_main.cpp`:
+      1. Wi-Fi connesso: type wifi, state connected, ip, gateway, mac `3C:84:27:C1:2A:F0`, dhcp true, ssid, rssi -58; niente link_speed.
+      2. Wi-Fi in connessione: state connecting, niente ssid, rssi o gateway.
+      3. Access point: state ap, ip 192.168.4.1, mac; niente gateway, dhcp o rssi.
+      4. Ethernet connesso: type ethernet, link_speed 100, full_duplex true, dhcp; niente ssid o rssi.
+      5. Ethernet giù: state disconnected, niente ip, gateway o link_speed.
+      6. Nessun link: type none, state disconnected.
+      7. `networkLinksJson`: solo Wi-Fi → ["wifi"]; solo Ethernet → ["ethernet"]; entrambi → ["wifi","ethernet"].
+      Registrare i test in tutti i blocchi RUN_TEST del file.
+
+      **Steps:** casi → registrazione → esecuzione.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` verde.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — 7 test nuovi
+
+      ## Criteri di Completamento
+      - [ ] I sei stati del link e i tre profili coperti
+      - [ ] Campi assenti verificati con isNull()/containsKey dove la spec li omette
+      - [ ] test_web_api verde
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Web UI: pagina Network con sezioni di link, stato e form Wi-Fi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Objective:** la voce `Wi-Fi Config` diventa `Network`, con una sezione per ogni link della scheda (stato in sola lettura e, per il Wi-Fi, il form di oggi), come nel mockup `docs/mockups/US-112/`.
+
+      **Read:** `docs/mockups/US-112/index.html`, `network.css` e `app.js` (fonte per layout, testi, stili e logica dell'aggiornamento; le parti solo-mockup come il selettore degli stati non vanno portate), `data/www/index.html` (sidebar ~56, `#content-wifi` ~158), `data/www/bundle.js` (tab switching 234-262, form Wi-Fi 260-320, precompilazione `/api/config` 520-545, `fetchSystemStatus` 1355-1425), `data/www/bundle.css`.
+
+      **Change:**
+      1. `index.html`: la voce di menu diventa `data-target="network"` con testo `Network` (icona come da mockup). `#content-wifi` diventa `#content-network`, un contenitore di sezioni `.net-section` (`data-section`). Sezione Wi-Fi (`data-link="wifi"`, `hidden`) con blocco di stato e form esistente con **gli stessi id** (`wifi-form`, `ssid`, `password`, `toggle-pwd`, `btn-connect`). Sezione Ethernet (`data-link="ethernet"`, `hidden`) con solo il blocco di stato. Nel blocco di stato: badge `[data-net-state]` ed elementi con `data-net-field="ip|gateway|mac|dhcp|ssid|rssi|link_speed"`, più un messaggio `[data-net-note]` per AP, link giù e link non attivo.
+      2. `bundle.js`:
+         - togliere l'occultamento della scheda su Ethernet (525-528);
+         - nella risposta di `/api/config` chiamare `showNetworkSections(data.network)`, che mostra le sezioni elencate in `network.links`, oppure quella di `network.type`, oppure la Wi-Fi come predefinita;
+         - in `fetchSystemStatus()` chiamare `renderNetworkStatus(data.network)`. La sezione del link attivo riceve badge, valori (`—` se assenti), RSSI come `-58 dBm` con indicatore e parola come nel mockup, `100 Mbps, full duplex`, DHCP `On`. In AP mostra la nota di access point con l'IP; con link in connessione o `state: disconnected` badge e nota dedicati; le altre sezioni visibili mostrano "Not the active link". Nel `catch` di `fetchSystemStatus()` (barra `Offline`) chiamare `renderNetworkOffline()`: la sezione attiva mostra Disconnected / "No answer for N s" e tiene gli ultimi valori in grigio; alla prima risposta buona torna normale;
+         - la logica del form resta invariata. Nessun ramo per scheda: solo dati delle API.
+      3. `bundle.css`: stili della griglia di stato, del badge e dell'indicatore del segnale dal mockup, riusando variabili e `.status-indicator`.
+      4. Rigenerare gli asset: `python scripts/embed_web.py`.
+
+      **Steps:** markup → JS → CSS → embed → verifica manuale con gli e2e esistenti.
+
+      **Verify:** `npm run e2e -- e2e/sidebar-layout.spec.ts e2e/responsive.spec.ts e2e/config_autopopulate.spec.ts e2e/default-tab.spec.js e2e/system-status.spec.js` verdi; `git status` mostra `index_inlined.html`, `include/network/web_assets.h` e `.web_assets.hash` rigenerati.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se il mockup contraddice un criterio della spec, vale la spec: riportarlo. Se uno spec e2e esistente diverso da wifi-config/ethernet/screenshot richiede un cambio semantico, fermarsi.
+
+      ## File Coinvolti
+      - data/www/index.html — voce Network, contenitore di sezioni, blocchi di stato
+      - data/www/bundle.js — showNetworkSections, renderNetworkStatus, rimozione dell'occultamento su Ethernet
+      - data/www/bundle.css — stili di stato, badge, segnale
+      - data/www/index_inlined.html, include/network/web_assets.h, .web_assets.hash — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Voce e titolo "Network"; sezioni mostrate da network.links (con ripiego su network.type)
+      - [ ] Stato in sola lettura nello stesso formato per Wi-Fi ed Ethernet, aggiornato con la barra di stato; AP e link giù segnalati
+      - [ ] Form Wi-Fi con gli stessi id e lo stesso comportamento
+      - [ ] Struttura a sezioni pronta per una sezione non di link (US-113)
+      - [ ] Asset rigenerati
+    ref: TASK-04
+  - id: TASK-05
+    title: 'E2E: spec esistenti aggiornati e nuovo network-page.spec.ts'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Objective:** gli e2e coprono la pagina Network sulle schede solo Wi-Fi e solo Ethernet, e gli spec esistenti passano con i soli aggiornamenti previsti.
+
+      **Read:** `e2e/support/webui.ts` (`serveIndex`, precedenza delle route), `e2e/wifi-config.spec.ts`, `e2e/ethernet.spec.ts`, `e2e/screenshot.spec.ts` (righe 30-60 e 115-122), `e2e/system-status.spec.js` (uso di `page.clock`).
+
+      **Change:**
+      1. `wifi-config.spec.ts`: `button[data-target="network"]` e titolo `Network`; mock di `/api/config` con `network: { type: 'wifi', links: ['wifi'] }` se serve a mostrare la sezione. Il flusso di invio resta identico.
+      2. `ethernet.spec.ts`: il test "hides the Wi-Fi tab" diventa "shows the Network page with the Ethernet section only": voce Network visibile, sezione Ethernet visibile, sezione Wi-Fi e `#wifi-form` nascosti. Gli altri due test (link giù/offline nella barra, Wi-Fi visibile) vanno adattati solo nei selettori. È il cambio di comportamento richiesto dalla spec.
+      3. Nuovo `e2e/network-page.spec.ts`:
+         - Wi-Fi connesso: `/api/config` `{network:{type:'wifi',links:['wifi']}}` e `/api/system-status` con `network:{type:'wifi',state:'connected',ip,gateway,mac,dhcp:true,ssid:'HomeNetwork',rssi:-58}`. Si vedono SSID, `-58 dBm`, IP, gateway, MAC e DHCP; nessuna sezione Ethernet.
+         - Wi-Fi in AP: `state:'ap', ip:'192.168.4.1'`: nota di access point visibile, form compilabile e inviabile (mock di `/api/wifi/connect`).
+         - Ethernet connesso: `links:['ethernet']`, `state:'connected', link_speed:100, full_duplex:true`: velocità visibile, nessuna sezione Wi-Fi né form.
+         - Ethernet cavo staccato: `state:'disconnected'`: badge/nota Disconnected.
+         - Scheda che non risponde: prima una risposta connessa, poi `route.abort()` e `page.clock.runFor`: la sezione mostra "No answer" con gli ultimi valori, e alla risposta successiva torna Connected.
+         - Aggiornamento: con `page.clock.install()`, la prima risposta ha IP .50 e la successiva IP .51; dopo `runFor` del periodo di polling compare il nuovo valore.
+         - Compatibilità: `/api/config` con solo `network:{type:'ethernet'}` (senza links) mostra la sezione Ethernet.
+      4. `screenshot.spec.ts`: scheda `network`, `#content-network`, mock di stato completo (`network` come sopra), file `docs/images/ui-network.png`.
+
+      **Steps:** aggiornamenti → nuovo spec → esecuzione completa.
+
+      **Verify:** `npm run e2e` tutto verde (eventuali flaky ripetuti una volta e segnalati).
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** cambi semantici a spec diversi da quelli elencati: fermarsi.
+
+      ## File Coinvolti
+      - e2e/wifi-config.spec.ts — selettori
+      - e2e/ethernet.spec.ts — pagina Network con sezione Ethernet
+      - e2e/network-page.spec.ts — nuovo
+      - e2e/screenshot.spec.ts — scheda network e nuovo screenshot
+
+      ## Criteri di Completamento
+      - [ ] wifi-config e i test della barra di ethernet passano con i soli selettori aggiornati
+      - [ ] Nuovi scenari: solo Wi-Fi, AP, solo Ethernet, cavo staccato, scheda che non risponde, aggiornamento, ripiego su network.type
+      - [ ] npm run e2e verde
+    ref: TASK-05
+  - id: TASK-06
+    title: README e screenshot, suite completa, e2e e tre build
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Objective:** documentazione allineata e verifica finale completa.
+
+      **Read:** `README.md:118-124` (tabella degli screenshot), `e2e/README.md` (come rigenerare gli screenshot).
+
+      **Change:**
+      1. Rigenerare gli screenshot con `npm run e2e:screenshots` e controllare che `docs/images/ui-network.png` mostri la pagina Network. Rimuovere `docs/images/ui-wifi.png` se nessun file lo usa più (`grep -rn ui-wifi`). Altri screenshot rigenerati con differenze solo di rendering vanno lasciati fuori.
+      2. README: intestazione `Wi-Fi Config` → `Network` e link all'immagine `ui-network.png`. Cercare altri riferimenti a "Wi-Fi Config" nel README e aggiornarli.
+      3. Nessun task di note di rilascio: si scrivono prima della release (decisione dell'utente).
+
+      **Steps:** screenshot → README → suite nativa → e2e → build.
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` verde (in background, più di 10 minuti).
+      - `npm run e2e` verde.
+      - Da PowerShell: build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` ok.
+      - Facoltativo, solo con il consenso dell'utente: OTA sulla scheda S3 di test e controllo della pagina Network con lo stato reale.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** test falliti non legati a US-112: verificarli su main prima di procedere.
+
+      ## File Coinvolti
+      - README.md — riga degli screenshot
+      - docs/images/ui-network.png — nuovo screenshot
+      - docs/images/ui-wifi.png — rimosso se inutilizzato
+
+      ## Criteri di Completamento
+      - [ ] README e screenshot aggiornati
+      - [ ] Suite nativa completa verde
+      - [ ] npm run e2e verde
+      - [ ] Tre build ok
+    ref: TASK-06

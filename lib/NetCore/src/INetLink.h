@@ -2,6 +2,7 @@
 #define I_NET_LINK_H
 
 #include <Arduino.h>
+#include "NetLinkInfo.h"
 
 /**
  * @brief One network link of the board: Wi-Fi station, Wi-Fi access point, Ethernet
@@ -28,6 +29,8 @@ public:
     virtual String statusText() const = 0;
     virtual String localIP() const = 0;
     virtual void macAddress(uint8_t mac[6]) const = 0;
+    // Status of the link for the Network page (US-112)
+    virtual void linkInfo(NetLinkInfo& out) const = 0;
 };
 
 #endif // I_NET_LINK_H

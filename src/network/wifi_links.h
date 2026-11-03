@@ -20,6 +20,7 @@ public:
     String statusText() const override;
     String localIP() const override;
     void macAddress(uint8_t mac[6]) const override;
+    void linkInfo(NetLinkInfo& out) const override;
 
 private:
     String m_ssid;
@@ -43,6 +44,7 @@ public:
     String statusText() const override { return "AP Mode Active"; }
     String localIP() const override;
     void macAddress(uint8_t mac[6]) const override;
+    void linkInfo(NetLinkInfo& out) const override;
     uint32_t stationCount() const;
 
 private:

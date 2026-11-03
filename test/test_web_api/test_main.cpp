@@ -984,6 +984,140 @@ void test_board_body_no_led(void) {
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"No status LED on this board\"}", out.c_str());
 }
 
+// --- Network page (US-112) ---
+
+static JsonDocument netStatus(const NetLinkInfo& info) {
+    JsonDocument doc;
+    WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), info);
+    return doc;
+}
+
+static NetLinkInfo wifiConnected() {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::CONNECTED;
+    i.ip = "192.168.1.126";
+    i.gateway = "192.168.1.1";
+    const uint8_t mac[6] = { 0x3C, 0x84, 0x27, 0xC1, 0x2A, 0xF0 };
+    memcpy(i.mac, mac, 6);
+    i.dhcp = true;
+    i.ssid = "HomeNetwork";
+    i.rssi = -58;
+    i.has_rssi = true;
+    return i;
+}
+
+void test_network_status_wifi_connected(void) {
+    JsonDocument doc = netStatus(wifiConnected());
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("wifi", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("connected", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.126", n["ip"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", n["gateway"]);
+    TEST_ASSERT_EQUAL_STRING("3C:84:27:C1:2A:F0", n["mac"]);
+    TEST_ASSERT_TRUE(n["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("HomeNetwork", n["ssid"]);
+    TEST_ASSERT_EQUAL_INT(-58, n["rssi"].as<int>());
+    TEST_ASSERT_TRUE(n["link_speed"].isNull());
+    TEST_ASSERT_TRUE(n["full_duplex"].isNull());
+}
+
+void test_network_status_wifi_connecting(void) {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::CONNECTING;
+    i.ip = "0.0.0.0";
+    i.ssid = "HomeNetwork"; // the network it is joining
+    i.mac[5] = 1;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("connecting", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("00:00:00:00:00:01", n["mac"]);
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_EQUAL_STRING("HomeNetwork", n["ssid"]);
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_access_point(void) {
+    NetLinkInfo i;
+    i.type = "wifi";
+    i.state = NetLinkState::ACCESS_POINT;
+    i.ip = "192.168.4.1";
+    i.ssid = "ESP32-NUT-2AF0";
+    i.mac[0] = 0x3C;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("ap", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.4.1", n["ip"]);
+    TEST_ASSERT_EQUAL_STRING("ESP32-NUT-2AF0", n["ssid"]);
+    TEST_ASSERT_FALSE(n["mac"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_TRUE(n["dhcp"].isNull());
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_ethernet_connected(void) {
+    NetLinkInfo i;
+    i.type = "ethernet";
+    i.state = NetLinkState::CONNECTED;
+    i.ip = "192.168.1.50";
+    i.gateway = "192.168.1.1";
+    i.mac[0] = 0x30;
+    i.dhcp = true;
+    i.link_speed_mbps = 100;
+    i.full_duplex = true;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("ethernet", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("connected", n["state"]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.50", n["ip"]);
+    TEST_ASSERT_EQUAL_INT(100, n["link_speed"].as<int>());
+    TEST_ASSERT_TRUE(n["full_duplex"].as<bool>());
+    TEST_ASSERT_TRUE(n["dhcp"].as<bool>());
+    TEST_ASSERT_TRUE(n["ssid"].isNull());
+    TEST_ASSERT_TRUE(n["rssi"].isNull());
+}
+
+void test_network_status_ethernet_down(void) {
+    NetLinkInfo i;
+    i.type = "ethernet";
+    i.state = NetLinkState::DISCONNECTED;
+    i.mac[0] = 0x30;
+    JsonDocument doc = netStatus(i);
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("disconnected", n["state"]);
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+    TEST_ASSERT_TRUE(n["gateway"].isNull());
+    TEST_ASSERT_TRUE(n["link_speed"].isNull());
+    TEST_ASSERT_FALSE(n["dhcp"].as<bool>());
+}
+
+void test_network_status_no_link(void) {
+    JsonDocument doc = netStatus(NetLinkInfo());
+    JsonObject n = doc["network"];
+    TEST_ASSERT_EQUAL_STRING("none", n["type"]);
+    TEST_ASSERT_EQUAL_STRING("disconnected", n["state"]);
+    TEST_ASSERT_TRUE(n["mac"].isNull());
+    TEST_ASSERT_TRUE(n["ip"].isNull());
+}
+
+static std::string netLinks(const BoardConfig& b) {
+    JsonDocument doc;
+    WebApiJson::networkLinksJson(doc["links"].to<JsonArray>(), b);
+    std::string out;
+    serializeJson(doc["links"], out);
+    return out;
+}
+
+void test_network_links_from_board_profile(void) {
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\"]", netLinks(board()).c_str());
+    TEST_ASSERT_EQUAL_STRING("[\"ethernet\"]", netLinks(P4_LIKE).c_str());
+    BoardConfig both = P4_LIKE;
+    both.has_wifi = true;
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\",\"ethernet\"]", netLinks(both).c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_api_null_host);
@@ -1052,5 +1186,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_board_body_invalid_level);
     RUN_TEST(test_board_body_usb_port);
     RUN_TEST(test_board_body_no_led);
+    RUN_TEST(test_network_status_wifi_connected);
+    RUN_TEST(test_network_status_wifi_connecting);
+    RUN_TEST(test_network_status_access_point);
+    RUN_TEST(test_network_status_ethernet_connected);
+    RUN_TEST(test_network_status_ethernet_down);
+    RUN_TEST(test_network_status_no_link);
+    RUN_TEST(test_network_links_from_board_profile);
     return UNITY_END();
 }
