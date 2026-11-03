@@ -56,6 +56,7 @@ Il file sostituisce **tutto** il testo della release: niente "What's Changed" au
 ## Release
 
 <!-- Una riga per ogni vX.Y.Z.md, dalla più recente. -->
+- [v1.13.0](v1.13.0.md) - Spegnimento automatico dell'UPS a batteria bassa in Board Settings (US-114, #100), pagina Network con sezioni Wi-Fi ed Ethernet (US-112), nome host configurabile (US-113, #116), nome dei task bloccati dopo un riavvio del watchdog (US-110), CyberPower CP2000EIPFCRM2U e Waveshare ESP32-P4-WIFI6-POE-ETH provati (#108).
 - [v1.12.0](v1.12.0.md) - Valori e comandi Eaton, CyberPower, APC, Powercom, EcoFlow, OpenUPS, Legrand e Liebert presi dalle tabelle di NUT (US-073, US-074, US-075, US-076, US-077, US-078, US-106), tabella generica per le altre marche (US-079); `ups.alarm`, `input.transfer.reason` e token di `ups.status` come usbhid-ups, per tutti i driver (US-107); report semi-statici letti all'avvio e dopo SET/INSTCMD (US-072); APC Smart-UPS 5G letti con GET_REPORT come apc-hid (US-108); correzioni dalla prova della rc1 (US-109).
 - [v1.11.0](v1.11.0.md) - Supporto ESP32-P4 con Ethernet (#94, #103), tre immagini nella release e nel web installer, modulo per segnalare gli UPS provati (#83), driver separati dal trasporto USB.
 - [v1.10.0](v1.10.0.md) - Piattaforma ESP-IDF 5.5, pagina Board Settings (LED di stato e luminosità), export della diagnostica USB a pezzi, profili delle schede e rete come base per ESP32-P4 ed Ethernet (#94).
