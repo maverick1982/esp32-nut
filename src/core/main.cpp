@@ -12,6 +12,7 @@
 #include "board/board.h"
 #include "core/board_settings_store.h"
 #include "core/hostname_store.h"
+#include "core/auto_shutdown.h"
 #include "NetBootPlan.h"
 
 USBHostUPS usb_ups;
@@ -27,6 +28,31 @@ static NvsDriverVarStore driver_var_store;
 // Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
 static BoardSettingsStore board_settings_store;
 static HostnameStore hostname_store;
+
+// shutdown.default once per OB+LB event, option of the Board page (US-114)
+static AutoShutdown auto_shutdown;
+static const uint32_t AUTO_SHUTDOWN_CHECK_MS = 1000;
+
+// Runs from the loopTask, as INSTCMD and the Web UI commands. It reads the UPS over USB
+// only, so it works without network, in AP mode and with an invalid configuration
+static void checkAutoShutdown() {
+    String status = usb_ups.getUPSStatusString();
+    // The command catalog is read only when it can matter
+    bool available = AutoShutdown::onBatteryLow(status.c_str()) &&
+                     AutoShutdown::offersShutdownDefault(usb_ups.getSupportedCommands());
+    if (!auto_shutdown.update(usb_ups.isConnected(), usb_ups.isDataStale(), status.c_str(), available)) return;
+    AppLogger::log("WARN", "[CMD] Automatic shutdown: UPS status '%s', sending shutdown.default", status.c_str());
+    CommandResult r = usb_ups.executeCommand("shutdown.default");
+    if (r == CommandResult::OK) return;  // the host logs "Command shutdown.default: OK via ..."
+    if (r == CommandResult::NOT_CONNECTED) {
+        // Not sent to the UPS: the event is not used up
+        auto_shutdown.restoreArm();
+        AppLogger::log("WARN", "[CMD] Automatic shutdown: shutdown.default not run, will retry");
+    } else {
+        AppLogger::log("WARN", "[CMD] Automatic shutdown: shutdown.default not run, "
+                               "no new attempt until the UPS is back on line");
+    }
+}
 
 Preferences boot_prefs;
 bool is_ap_mode = false;
@@ -97,6 +123,10 @@ void setup() {
     BoardSettings board_settings = board_settings_store.load(board());
     diagnostic_led.setBrightness(ledBrightness(board_settings.led_level));
     diagnostic_led.setUserEnabled(board_settings.led_on);
+    auto_shutdown.setEnabled(board_settings.auto_shutdown);
+    if (board_settings.auto_shutdown) {
+        AppLogger::log("INFO", "[MAIN] Automatic shutdown on low battery enabled");
+    }
     // Hostname of the Network page, "" for the default of the link (US-113)
     String saved_hostname = hostname_store.load();
 
@@ -131,6 +161,7 @@ void setup() {
     web_server.setBoardSettings(&board_settings_store, board_settings);
     web_server.setHostnameStore(&hostname_store, saved_hostname);
     web_server.setStatusLed(&diagnostic_led);
+    web_server.setAutoShutdown(&auto_shutdown);
 
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
@@ -281,6 +312,13 @@ void loop() {
         CrashDiag::recordControlledRestart(usb_ups.getRestartReason());
         delay(200); // lascia uscire il log sulla seriale
         esp_restart();
+    }
+
+    // US-114: before the early return below, so it also runs with an invalid configuration
+    static uint32_t last_auto_shutdown_check = 0;
+    if (now - last_auto_shutdown_check >= AUTO_SHUTDOWN_CHECK_MS) {
+        last_auto_shutdown_check = now;
+        checkAutoShutdown();
     }
 
     // Se la configurazione non è valida, rimaniamo in modalità di attesa sicura

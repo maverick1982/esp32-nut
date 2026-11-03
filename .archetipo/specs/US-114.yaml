@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-114: Spegnimento automatico dalla scheda a batteria bassa, in Board Settings (#100)
 
@@ -33,6 +33,29 @@ body: |
   **Assunzioni**
   - Concordato nella #23 e promesso sulla #100 (issuecomment-6544399944 e 6599302978). Con US-108 la soglia del 5G si può impostare.
   - Fuori scope: un ritardo configurabile prima del comando e le notifiche.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **src/core/main.cpp:36** — Miglioramento richiesto in review: la ricerca di shutdown.default nel catalogo dei comandi (getSupportedCommands() + strcmp) è duplicata qui e in WebConfigServer::autoShutdownAvailability(). Spostarla in un unico helper condiviso, usato da entrambi, senza cambiare il comportamento (stessi test verdi).
+  - **src/network/web_config_server.cpp:229** — Seconda copia della stessa ricerca di shutdown.default: usare l'helper condiviso introdotto per main.cpp.
 history:
   - status: TODO
     at: "2026-11-03T09:45:43Z"
+  - status: PLANNED
+    at: "2026-11-03T16:48:36Z"
+  - status: IN PROGRESS
+    at: "2026-11-03T17:05:56Z"
+  - status: REVIEW
+    at: "2026-11-03T18:51:09Z"
+  - status: TODO
+    at: "2026-11-03T19:04:38Z"
+  - status: PLANNED
+    at: "2026-11-03T19:06:35Z"
+  - status: IN PROGRESS
+    at: "2026-11-03T19:07:14Z"
+  - status: REVIEW
+    at: "2026-11-03T19:22:14Z"
+  - status: DONE
+    at: "2026-11-03T20:14:19Z"

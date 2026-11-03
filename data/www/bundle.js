@@ -2314,6 +2314,88 @@ document.addEventListener('DOMContentLoaded', () => {
             b.click();
         });
 
+        // ---------- US-114: automatic shutdown, applied immediately ----------
+        const autosdSwitch = B('autosd-on');
+        const autosdResult = B('autosd-result');
+        const AUTOSD_REASONS = {
+            no_command: 'Not available: this UPS offers no shutdown command.',
+            no_ups: 'Not available: no UPS connected. Open this page again once the UPS is connected.'
+        };
+        let autosdBusy = false;
+        let autosdTimers = [];
+
+        // Missing in the answer (older firmware): treated as "no UPS"
+        function autosdState() {
+            const sd = board && board.auto_shutdown && typeof board.auto_shutdown === 'object'
+                ? board.auto_shutdown : null;
+            if (!sd) return { on: false, available: false, reason: 'no_ups' };
+            return { on: sd.on === true, available: sd.available === true, reason: sd.reason };
+        }
+
+        function renderAutoShutdown() {
+            const sd = autosdState();
+            autosdSwitch.checked = sd.on;
+            // Not available: it cannot be turned on, but it can always be turned off
+            autosdSwitch.disabled = autosdBusy || (!sd.available && !sd.on);
+            B('autosd-state').textContent = sd.on ? 'On' : 'Off';
+            B('autosd-state').classList.toggle('on', sd.on);
+            B('row-autosd').classList.toggle('is-disabled', !sd.available && !sd.on);
+            const note = B('autosd-unavailable');
+            note.hidden = sd.available;
+            if (!sd.available) {
+                B('autosd-unavailable-text').textContent = AUTOSD_REASONS[sd.reason] || AUTOSD_REASONS.no_ups;
+            }
+        }
+
+        function clearAutosdResult() {
+            autosdTimers.forEach(t => clearTimeout(t));
+            autosdTimers = [];
+            autosdResult.className = 'cmd-result';
+            autosdResult.textContent = '';
+        }
+
+        function showAutosdResult(text) {
+            clearAutosdResult();
+            autosdResult.className = 'cmd-result success';
+            autosdResult.textContent = `✓ ${text}`;
+            autosdTimers.push(setTimeout(() => autosdResult.classList.add('fade'), BOARD_RESULT_MS));
+            autosdTimers.push(setTimeout(clearAutosdResult, BOARD_RESULT_MS + 600));
+        }
+
+        autosdSwitch.addEventListener('change', async () => {
+            if (!board || autosdBusy) return;
+            const on = autosdSwitch.checked;
+            B('autosd-error').hidden = true;
+            clearAutosdResult();
+            autosdBusy = true;
+            renderAutoShutdown();
+            autosdSwitch.checked = on;
+            const r = await postBoard({ auto_shutdown: on });
+            autosdBusy = false;
+            // On error the switch goes back to the saved value
+            if (r.ok) {
+                if (!board.auto_shutdown || typeof board.auto_shutdown !== 'object') {
+                    board.auto_shutdown = { available: true };
+                }
+                board.auto_shutdown.on = on;
+            }
+            renderAutoShutdown();
+            if (r.ok) {
+                showAutosdResult(on ? 'Automatic shutdown on · saved' : 'Automatic shutdown off · saved');
+            } else {
+                B('autosd-error-text').textContent = r.message;
+                B('autosd-error').hidden = false;
+            }
+        });
+
+        // "UPS Settings tab" link in the hint: same as clicking the tab
+        B('autosd-section').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
         // ---------- UPS USB port: saved, then the board restarts ----------
         function setUsbButton(label, spinner) {
             btnSaveUsb.innerHTML = '<span class="glow"></span>' + (spinner ? BOARD_SPINNER : '');
@@ -2455,6 +2537,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const hasUsb = ports.length > 1;
             B('usb-section').hidden = !hasUsb;
             if (hasUsb) renderUsb(ports);
+
+            // US-114: on every board
+            B('autosd-error').hidden = true;
+            renderAutoShutdown();
         }
 
         async function loadBoard() {

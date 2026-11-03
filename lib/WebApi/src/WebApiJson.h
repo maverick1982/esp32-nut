@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include "IUpsSource.h"
 #include "board/board_settings.h"
+#include "core/auto_shutdown.h"
 #include "NetLinkInfo.h"
 
 class WebApiJson {
@@ -59,15 +60,19 @@ public:
     static int checkNutConfigBody(JsonVariantConst body, String& response);
 
     // GET /api/board (US-094): {"id","label","led":{present,on,level,levels},
-    // "usb":{"ports":[{id,label}],"port"}}; "led" absent on a board without LED
-    static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings);
-    // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id).
+    // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"
+    // absent on a board without LED. US-114: reason "no_ups" / "no_command", absent when
+    // available
+    static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
+                                    AutoShutdownAvailability auto_shutdown);
+    // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id),
+    // auto_shutdown (bool, US-114: false always, true only when available).
     // 0 with next filled and restart true when the USB port changes; otherwise 400
     // {"error"}: "Invalid request", "Invalid LED level", "Invalid USB port",
-    // "No status LED on this board"
+    // "No status LED on this board", "UPS not connected", "The UPS offers no shutdown command"
     static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
-                                      const BoardSettings& current, BoardSettings& next,
-                                      bool& restart, String& response);
+                                      const BoardSettings& current, AutoShutdownAvailability auto_shutdown,
+                                      BoardSettings& next, bool& restart, String& response);
 
     // "network" of GET /api/system-status (US-112): type, state ("connected", "connecting",
     // "disconnected", "ap"), ip, gateway, mac ("AA:BB:CC:DD:EE:FF"), dhcp; Wi-Fi also ssid and

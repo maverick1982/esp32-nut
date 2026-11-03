@@ -222,8 +222,20 @@ void WebConfigServer::setStatusLed(DiagnosticLED* led) {
     status_led = led;
 }
 
+void WebConfigServer::setAutoShutdown(AutoShutdown* sd) {
+    auto_shutdown = sd;
+}
+
+AutoShutdownAvailability WebConfigServer::autoShutdownAvailability() const {
+    bool connected = ups_source && ups_source->isConnected();
+    // The catalog is read only with the UPS connected
+    bool has_command = connected && AutoShutdown::offersShutdownDefault(ups_source->getSupportedCommands());
+    return ::autoShutdownAvailability(connected, has_command);
+}
+
 void WebConfigServer::handleGetBoard() {
-    server.send(200, "application/json", WebApiJson::boardSettingsJson(board(), board_settings));
+    server.send(200, "application/json",
+                WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability()));
 }
 
 void WebConfigServer::handleSetBoard() {
@@ -236,7 +248,8 @@ void WebConfigServer::handleSetBoard() {
     BoardSettings next;
     bool restart = false;
     String rejected;
-    if (int status = WebApiJson::checkBoardSettingsBody(doc, board(), board_settings, next, restart, rejected)) {
+    if (int status = WebApiJson::checkBoardSettingsBody(doc, board(), board_settings, autoShutdownAvailability(),
+                                                        next, restart, rejected)) {
         server.send(status, "application/json", rejected);
         return;
     }
@@ -245,7 +258,12 @@ void WebConfigServer::handleSetBoard() {
         return;
     }
     bool led_changed = next.led_on != board_settings.led_on || next.led_level != board_settings.led_level;
+    bool sd_changed = next.auto_shutdown != board_settings.auto_shutdown;
     board_settings = next;
+    if (sd_changed) {
+        if (auto_shutdown) auto_shutdown->setEnabled(next.auto_shutdown);
+        AppLogger::log("INFO", "[BOARD] Automatic shutdown %s", next.auto_shutdown ? "enabled" : "disabled");
+    }
     if (led_changed) {
         if (status_led) {
             status_led->setBrightness(ledBrightness(next.led_level));

@@ -1,0 +1,558 @@
+schema: archetipo/plan/v2
+spec_code: US-114
+body: |
+  ---
+  type: plan
+  title: "US-114: Spegnimento automatico dalla scheda a batteria bassa, in Board Settings (#100) — Piano di implementazione"
+  description: "Piano di implementazione per US-114"
+  tags: [plan, implementation, US-114]
+  ---
+  # US-114: Spegnimento automatico dalla scheda a batteria bassa, in Board Settings (#100) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-03
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-003 — Server NUT
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utente con un UPS che alimenta dispositivi senza client NUT (TV, impianto audio), voglio che la scheda spenga l'UPS da sola quando la batteria è scarica, in modo da non scaricare a fondo la batteria quando nessun `upsmon` è collegato.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina Board Settings ha una sezione "Automatic shutdown" con un interruttore, spento per impostazione predefinita e salvato in NVS. Una riga spiega il comportamento, con un collegamento a UPS Settings per la soglia (`battery.charge.low` / `battery.runtime.low`).
+  - [ ] L'opzione è un'impostazione della scheda: non compare in `upsrw` né in LIST RW, e i client NUT non la possono cambiare.
+  - [ ] Con l'opzione attiva, quando lo stato contiene sia `OB` sia `LB` la scheda manda `shutdown.default` una sola volta per evento. Non lo ripete finché lo stato non torna `OL`.
+  - [ ] Il comando è registrato nel System Log come gli altri, indicando che viene dallo spegnimento automatico.
+  - [ ] Se l'UPS non offre nessun comando di spegnimento, l'interruttore è disattivato e la pagina dice perché.
+  - [ ] I client NUT e `upsmon` funzionano come prima; non c'è una soglia separata da quella dell'UPS.
+  - [ ] Test nativi per la logica (attivazione, una volta per evento, riarmo) ed e2e per la sezione. Tre build ok, note di rilascio aggiornate.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Lo spegnimento automatico è un'impostazione della scheda, come il LED (US-094): un booleano in `BoardSettings`, salvato nel namespace NVS `board`, applicato subito senza riavvio. La decisione di quando mandare il comando sta in una classe di sola logica, testabile in nativo; il `loopTask` la valuta una volta al secondo e manda `shutdown.default` con `usb_ups.executeCommand()`, lo stesso percorso di INSTCMD e della Web UI (stesso task, nessun lock nuovo). La logica di `shutdown.default` resta quella attuale (`HidControl::executeCommand`: `shutdown.return`, `shutdown.reboot`, `load.off.delay`, `shutdown.stayoff`), come deciso con l'utente il 2026-11-03.
+
+  - **Macchina a stati `AutoShutdown`** (`include/core/auto_shutdown.h`, header-only, senza Arduino): `enabled` (dall'impostazione) e `armed` (true all'avvio). `update(connected, stale, status, command_available)` restituisce true quando il comando va mandato ora. Regole, nell'ordine: (1) UPS non connesso o dati vecchi: nessun cambiamento, false; (2) lo stato contiene la parola `OL`: `armed = true`, false; (3) lo stato contiene le parole `OB` e `LB`, `armed`, `enabled` e `command_available`: `armed = false`, true; (4) altrimenti false. Le parole si confrontano intere (separate da spazi), mai come sottostringhe. Disattivare l'opzione non riarma: riattivarla durante lo stesso evento già gestito non rimanda il comando. Attivarla durante un `OB LB` non ancora gestito manda il comando al controllo successivo (è ciò che l'utente chiede). `restoreArm()` riarma dopo un esito `NOT_CONNECTED` (il comando non ha raggiunto l'UPS); ogni altro esito (`OK`, `FAILED`, `NOT_SUPPORTED`, `INVALID_ARGUMENT`) consuma l'evento: nessun nuovo tentativo finché lo stato non torna `OL` (criterio "una sola volta per evento").
+  - **Disponibilità**: `enum class AutoShutdownAvailability { AVAILABLE, NO_UPS, NO_COMMAND }` nello stesso header, con `autoShutdownAvailability(bool connected, bool has_shutdown_default)`. "Offre un comando di spegnimento" equivale a "offre `shutdown.default`": `HidControl::buildCommands()` lo pubblica esattamente quando c'è uno dei comandi che prova. Nessun UPS connesso dà `NO_UPS` (i comandi non sono noti).
+  - **Impostazione**: `BoardSettings.auto_shutdown` (bool, default false, non dal profilo della scheda), chiave NVS `auto_sd` nel namespace `board`. `sanitize()` non la tocca. Non è una variabile dell'UPS: non passa da `DriverVarStore`, `UpsVariables` o `NUTServer`, quindi non compare in `upsrw`/LIST RW e i client NUT non la vedono (criteri 2 e 6 soddisfatti per costruzione). Nessuna soglia propria: decide il bit `LB` dell'UPS (`battery.charge.low` / `battery.runtime.low`).
+  - **API `/api/board`**: GET aggiunge `"auto_shutdown":{"on":bool,"available":bool,"reason":"no_ups"|"no_command"}` (`reason` assente quando `available` è true). POST accetta `auto_shutdown` booleano: `false` sempre, `true` solo con `AVAILABLE`, altrimenti 400 `{"error":"The UPS offers no shutdown command"}` o `{"error":"UPS not connected"}`; un valore non booleano dà 400 `Invalid request`. Nessun riavvio (`restart:false`). La disponibilità la calcola `WebConfigServer` (connessione + `getSupportedCommands()` contiene `shutdown.default`) e la passa alle funzioni pure di `WebApiJson`.
+  - **Loop** (`src/core/main.cpp`): oggetto globale `AutoShutdown auto_shutdown`, `setEnabled()` al boot dall'impostazione caricata, passato al web server con `setAutoShutdown()` (come `setStatusLed`). Valutazione ogni 1000 ms, prima del ritorno anticipato per configurazione non valida (vale anche in AP e senza NUT). `command_available` si calcola solo quando lo stato è `OB`+`LB` (`AutoShutdown::onBatteryLow(status)`), per non leggere il catalogo dei comandi ogni secondo.
+  - **System Log**: prima del comando `WARN [CMD] Automatic shutdown: UPS status '<status>', sending shutdown.default`; l'host scrive poi l'esito come per ogni comando (`Command shutdown.default: OK via shutdown.return`, o `failed` / `not supported`). Se l'esito non è OK: `WARN [CMD] Automatic shutdown: shutdown.default not run, no new attempt until the UPS is back on line` (con `NOT_CONNECTED`: `..., will retry`). Attivazione e disattivazione dalla pagina: `INFO [BOARD] Automatic shutdown enabled|disabled`.
+  - **Pagina Board Settings**: nuova sezione `#autosd-section` dopo `#usb-section`, sempre visibile, con la stessa riga e lo stesso interruttore del LED (`.board-row`, `label.switch`), applicata subito con POST `{auto_shutdown: bool}` e l'esito in `#autosd-result`. Testo: nome "Shut down the UPS on low battery"; hint "When the UPS is on battery and reports low battery (OB LB), the board sends shutdown.default once, also with no NUT client connected. The threshold is battery.charge.low / battery.runtime.low of the UPS, in the <UPS Settings tab>. Whether the UPS turns back on when power returns depends on the model." Il collegamento è un `button.inline-link[data-goto="settings"]` come quello della pagina Web Login. Non disponibile: interruttore disattivato (ma attivo se è acceso, così lo si può sempre spegnere) e una nota `#autosd-unavailable`: `no_command` → "Not available: this UPS offers no shutdown command."; `no_ups` → "Not available: no UPS connected. Open this page again once the UPS is connected."
+  - **Fuori scope** (dalla spec): ritardo configurabile e notifiche. Lo stato `armed` è in RAM: dopo un riavvio della scheda durante `OB LB` il comando parte di nuovo una volta (accettabile: riscrive gli stessi ritardi).
+  - **Note di rilascio**: per convenzione del progetto si scrivono prima della release, non sono un task di questo piano.
+
+  ---
+
+  ## Strategia di test
+
+  La logica di decisione e la convalida dell'API sono pure e si testano in nativo (`pio test -e native`); la pagina con Playwright sui sorgenti veri di `data/www` e `/api/board` simulato; il comportamento reale sull'Eaton 3S in review.
+
+  - `test/test_auto_shutdown` (nuova suite): scatto su `OB DISCHRG LB`, una sola volta su chiamate ripetute, riarmo su `OL` e nuovo scatto all'evento successivo, nessuno scatto con opzione spenta / comando non disponibile / dati vecchi / UPS non connesso, nessun riarmo da disconnessione o dati vecchi, `restoreArm()`, confronto per parole intere (`ALARM OB LB` scatta, `OB` senza `LB` no, `OL CHRG LB` no), disattiva e riattiva durante lo stesso evento senza nuovo scatto, `autoShutdownAvailability()`.
+  - `test/test_web_api`: GET con i tre valori di disponibilità (`reason` presente o assente), POST `true` accettato solo con `AVAILABLE`, `false` sempre, tipo errato rifiutato, campi LED/USB invariati.
+  - `test/test_board_settings`: default `auto_shutdown = false` e `sanitize()` che lo conserva.
+  - Regressione: tutta la suite nativa (in particolare `test_nut_server`, LIST RW invariato) e le tre build.
+  - Prova sul campo sull'Eaton 3S, eseguita da Claude solo con il consenso esplicito dell'utente: vedi la sezione "Prova sul campo sull'Eaton 3S" e il TASK-10.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/board-settings.spec.ts`, `e2e/support/webui.ts`)
+  **Video demo:** sì, della sezione Board Settings (registrato più tardi da `archetipo-review`, non durante l'implementazione)
+
+  | Scenario | Descrizione del flusso utente |
+  |---|---|
+  | Sezione spenta per default | L'utente apre Board Settings: vede "Automatic shutdown" con l'interruttore spento e abilitato, la spiegazione e il collegamento a UPS Settings |
+  | Attivazione e disattivazione | L'utente accende l'interruttore: parte un POST `{auto_shutdown:true}`, compare l'esito applicato; lo spegne: POST `{auto_shutdown:false}` |
+  | Collegamento alla soglia | L'utente clicca "UPS Settings tab" nella spiegazione e arriva alla pagina UPS Settings |
+  | UPS senza comandi | GET con `available:false, reason:"no_command"`: interruttore disattivato e nota che spiega perché |
+  | Nessun UPS | GET con `reason:"no_ups"`: interruttore disattivato e nota sull'UPS non connesso |
+  | Acceso ma non disponibile | GET con `on:true, available:false`: l'interruttore resta attivo per poterlo spegnere |
+  | Errore del server | POST che risponde 400 con un messaggio: l'interruttore torna allo stato precedente e il messaggio compare in `#autosd-error` |
+
+  ---
+
+  ## Prova sul campo sull'Eaton 3S
+
+  Configurazione reale dell'utente: la scheda ESP32-S3, il router Wi-Fi a cui è collegata e gli altri dispositivi sono tutti sull'uscita dello stesso Eaton 3S. Lo spegnimento automatico spegne quindi anche la scheda e il router.
+
+  **Consenso:** la prova la esegue Claude (TASK-10), ma solo dopo il consenso esplicito dell'utente a iniziarla, chiesto prima di qualsiasi azione della prova (OTA compreso). Un consenso dato per altre prove o in sessioni precedenti non vale. Staccare e riattaccare la rete all'UPS lo fa l'utente, quando Claude glielo chiede.
+
+  **Cosa cambia con scheda e router alimentati dall'UPS**
+  - Il System Log è in RAM (`AppLogger::logBuffer`) e si perde quando l'UPS spegne le prese. Le righe vanno raccolte prima, da un PC non alimentato dall'UPS, leggendo `/api/logs` e `/api/ups-vars` ogni 2 s e salvandole su file.
+  - Il PC raggiunge la scheda attraverso il router: la raccolta si interrompe quando le prese si spengono. È atteso.
+  - Il riarmo su `OL` senza riavvio non si vede: la scheda si spegne prima e riparte con lo stato azzerato, che vale come riarmo. La regola è coperta da `test_auto_shutdown`; per vederla sull'hardware c'è la variante B.
+  - "Una volta sola" si osserva solo per circa `ups.delay.shutdown` (20 s), abbastanza per escludere un secondo comando.
+  - Al ritorno della rete il router impiega qualche minuto: la scheda riprova il Wi-Fi ogni 15 s senza limiti (`src/network/wifi_links.cpp:73-82`) e non passa in AP. Lo spegnimento automatico non dipende dalla rete (legge l'UPS via USB nel loop).
+  - Dopo il riavvio del router l'IP assegnato con DHCP può cambiare: la raccolta deve ritrovare la scheda (hostname o nuovo IP). Per Home Assistant è consigliata una prenotazione DHCP sul router.
+  - Se l'alimentazione delle prese rimbalza due volte entro 3 s, la scheda lo legge come doppio reset e si avvia in AP manuale; torna normale da sola dopo 10 minuti senza client. Va annotato se succede.
+  - Se la rete manca di nuovo poco dopo la riaccensione, la batteria è ancora sotto soglia: `OB LB` subito e nuovo spegnimento. È un nuovo evento, non un comando ripetuto.
+
+  **Variante A — configurazione reale (obbligatoria)**
+  1. Prerequisiti: firmware della US caricato via OTA (credenziali dal file JSON della scheda di test, mai stampate); UPS in `OL` con batteria carica; sulle prese solo carichi che possono spegnersi di colpo; PC della raccolta alimentato fuori dall'UPS (portatile a batteria o presa diretta).
+  2. Prima: `upsc`, `upscmd -l`, `upsrw` in `docs/test-results/US-114/field/before-*.txt` (`scripts/nut_snapshot.py`, come per US-072); annotare `battery.charge.low` originale e `battery.charge`.
+  3. Attivare "Automatic shutdown" (pagina o POST `/api/board {"auto_shutdown":true}`); controllare in GET `auto_shutdown.available == true` e nel log `[BOARD] Automatic shutdown enabled`.
+  4. Alzare `battery.charge.low` con `upsrw` a un valore poco sotto la carica attuale (per esempio carica − 3) e rileggerlo; se l'UPS lo rifiuta, usare il massimo accettato e prevedere un'attesa più lunga.
+  5. Avviare la raccolta in background: `/api/logs` e `/api/ups-vars` ogni 2 s, con l'ora del PC, in `docs/test-results/US-114/field/events.jsonl`.
+  6. L'utente stacca la rete all'UPS. Atteso: `OB DISCHRG`, poi `OB DISCHRG LB`; una sola riga `[CMD] Automatic shutdown: UPS status '...'`, poi `Command shutdown.return: OK` e `Command shutdown.default: OK via shutdown.return`; nessun secondo comando nei secondi seguenti; dopo circa 20 s le prese si spengono e la raccolta perde la scheda.
+  7. L'utente riattacca la rete. Atteso: le prese si riaccendono, il router riparte, la scheda si ricollega e torna raggiungibile; `ups.status` `OL` (anche `OL CHRG` o `OL CHRG LB`); nessun nuovo comando; l'opzione è ancora attiva in GET `/api/board`. Si annotano i tempi (riaccensione prese se l'utente la osserva, ritorno della scheda in rete).
+  8. Ripristinare `battery.charge.low` al valore originale e rileggerlo; snapshot `after-*.txt`.
+  9. Esito in `docs/test-results/US-114/field/README.md`: tempi, righe di log, scostamenti.
+
+  **Variante B — riarmo senza riavvio (facoltativa, solo se l'utente la chiede)**
+  La scheda è alimentata dal PC attraverso la porta USB-UART (non dall'UPS) e il log si legge dalla seriale con `scripts/serial_log.py`, così non dipende dal router. Stessi passi 3-6; quando l'UPS si spegne, la scheda resta accesa e vede l'UPS sparire dall'USB. Al ritorno della rete l'UPS si riconnette in `OL`: nessun nuovo comando. Staccando di nuovo la rete con la carica ancora sotto soglia: nuovo `OB LB` e un nuovo comando, cioè il riarmo funziona. Ripristinare poi `battery.charge.low` come al passo 8.
+
+  ---
+
+  ## Rework (review del 2026-11-03)
+
+  Il revisore chiede di eliminare una duplicazione, senza cambiare il comportamento. La ricerca di `shutdown.default` nel catalogo dei comandi (`getSupportedCommands()` + `strcmp`) è scritta due volte: in `upsOffersShutdownDefault()` (`src/core/main.cpp:36`) e in `WebConfigServer::autoShutdownAvailability()` (`src/network/web_config_server.cpp:229`).
+
+  - Nuovo helper in `include/core/auto_shutdown.h`: `template <class Commands> static bool AutoShutdown::offersShutdownDefault(const Commands& commands)`. Restituisce true quando un elemento ha `name` uguale a `"shutdown.default"` (elementi nullptr o con `name` nullptr ignorati). È un template sul contenitore (`std::vector<const UPSCommandInfo*>` nel firmware), così l'header resta senza include Arduino né `UpsCommands.h` e si testa in nativo.
+  - `main.cpp`: `available = AutoShutdown::onBatteryLow(...) && AutoShutdown::offersShutdownDefault(usb_ups.getSupportedCommands())`; `upsOffersShutdownDefault()` sparisce. Resta l'ordine: il catalogo si legge solo in `OB`+`LB`.
+  - `WebConfigServer::autoShutdownAvailability()`: `connected && AutoShutdown::offersShutdownDefault(ups_source->getSupportedCommands())`, poi `::autoShutdownAvailability(...)` come oggi.
+  - La prova sul campo (TASK-10) non si ripete: logica, API e pagina non cambiano.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-03_
+tasks:
+  - id: TASK-01
+    title: Macchina a stati AutoShutdown e disponibilità in include/core/auto_shutdown.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** logica pura che decide quando mandare `shutdown.default`, senza dipendenze Arduino, testabile in nativo.
+
+      **Leggere:** `lib/USBHostUPS/src/OnlineDischargeLog.h` (stile di una classe di logica pura con commenti), `lib/USBHostUPS/src/UPSData.h:102-180` (come è costruito `ups.status`: parole separate da spazi, `ALARM` in testa, `Unknown` se vuoto).
+
+      **Modifiche:**
+      - `class AutoShutdown` con `void setEnabled(bool)`, `bool enabled() const`, `bool armed() const`, `bool update(bool connected, bool stale, const char* status, bool command_available)`, `void restoreArm()`, `static bool hasToken(const char* status, const char* token)`, `static bool onBatteryLow(const char* status)` (`OB` e `LB`).
+      - Regole di `update`, nell'ordine: non connesso o `stale` → false senza cambiamenti; parola `OL` → `armed = true`, false; `onBatteryLow` && `armed` && `enabled` && `command_available` → `armed = false`, true; altrimenti false. `status` nullptr = nessuna parola.
+      - `setEnabled()` non tocca `armed`. Costruttore: `enabled = false`, `armed = true`.
+      - `enum class AutoShutdownAvailability { AVAILABLE, NO_UPS, NO_COMMAND }` e `inline AutoShutdownAvailability autoShutdownAvailability(bool connected, bool has_shutdown_default)`.
+      - Commento d'intestazione: US-114, una volta per evento, riarmo solo su `OL`, `restoreArm()` solo per `NOT_CONNECTED`.
+
+      **Passi:** scrivere l'header con guard `CORE_AUTO_SHUTDOWN_H`; `hasToken` scorre le parole con confini di spazio (nessun `strstr` semplice: `OB` non deve combaciare dentro altre parole).
+
+      **Verifica:** compila nella suite del TASK-02.
+
+      **Fatto quando:** l'header esiste ed è incluso solo da codice che ne ha bisogno.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/core/auto_shutdown.h — nuovo, classe `AutoShutdown`, enum e helper di disponibilità
+
+      ## Criteri di Completamento
+      - [ ] `update()` implementa le quattro regole nell'ordine indicato
+      - [ ] Le parole di stato si confrontano intere
+      - [ ] Disattivare non riarma; `restoreArm()` riarma
+      - [ ] Nessun include Arduino: si compila con `-e native`
+    ref: TASK-01
+  - id: TASK-02
+    title: Suite nativa test_auto_shutdown
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire attivazione, una volta per evento e riarmo (criterio 7).
+
+      **Leggere:** `test/test_online_discharge_log/test_main.cpp` (struttura Unity del progetto), `include/core/auto_shutdown.h`.
+
+      **Casi:**
+      - scatto con `OB DISCHRG LB`, enabled, available → true una volta; chiamate successive → false;
+      - `OL CHRG` riarma, poi `OB DISCHRG LB` → di nuovo true;
+      - `OB DISCHRG` senza `LB`, `OL CHRG LB`, `Unknown`, nullptr → mai true;
+      - `ALARM OB DISCHRG LB` → true (parole intere, `ALARM` in testa);
+      - opzione spenta → false, e accesa dopo durante lo stesso `OB LB` mai gestito → true;
+      - dopo lo scatto: spegni e riaccendi durante `OB LB` → false;
+      - `command_available = false` → false e resta armato (scatta appena disponibile);
+      - `connected = false` o `stale = true` con `OB LB` → false; con `OL` → non riarma;
+      - `restoreArm()` dopo uno scatto → scatta di nuovo;
+      - `autoShutdownAvailability()` per le tre combinazioni.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_auto_shutdown`.
+
+      **Fatto quando:** la suite passa.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_auto_shutdown/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati sono presenti e passano
+      - [ ] La suite è eseguita da `pio test -e native` senza modifiche a `test_ignore`
+    ref: TASK-02
+  - id: TASK-03
+    title: BoardSettings.auto_shutdown salvato in NVS (chiave auto_sd)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'impostazione della scheda, spenta per default e conservata dopo il riavvio (criterio 1).
+
+      **Leggere:** `include/board/board_settings.h`, `src/core/board_settings_store.cpp`, `test/test_board_settings/test_main.cpp`.
+
+      **Modifiche:**
+      - `struct BoardSettings`: aggiungere `bool auto_shutdown;` in coda (commento: US-114, non dal profilo).
+      - `defaultsFor()`: `{ b.defaults.led_enabled, b.defaults.led_level, b.defaults.usb_port, false }`. `sanitize()` invariato.
+      - `BoardSettingsStore`: `kKeyAutoShutdown = "auto_sd"`; `load()` con `getBool(kKeyAutoShutdown, s.auto_shutdown)`; `save()` con `putBool` incluso nel controllo `ok`. Aggiornare il commento della classe con la nuova chiave.
+      - `test/test_board_settings/test_main.cpp`: aggiornare gli inizializzatori `{ true, 0, 0 }` e simili a quattro campi; aggiungere un test: default `auto_shutdown == false`, `sanitize()` conserva `true`.
+
+      **Verifica:** `pio test -e native -f test_board_settings` (con il PATH di mingw).
+
+      **Fatto quando:** la suite passa e nessun altro inizializzatore aggregato di `BoardSettings` resta a tre campi (`grep -rn "BoardSettings" src lib include test`).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/board/board_settings.h — campo `auto_shutdown`, default false
+      - src/core/board_settings_store.cpp — chiave NVS `auto_sd` in load/save
+      - src/core/board_settings_store.h — commento della classe
+      - test/test_board_settings/test_main.cpp — inizializzatori e nuovo test
+
+      ## Criteri di Completamento
+      - [ ] Default false su ogni profilo
+      - [ ] Chiave `auto_sd` letta e scritta nel namespace `board`
+      - [ ] `test_board_settings` passa
+    ref: TASK-03
+  - id: TASK-04
+    title: GET/POST /api/board con l'oggetto auto_shutdown in WebApiJson
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre l'impostazione e la sua disponibilità, e convalidare il POST (criteri 1 e 5).
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h:55-75`, `lib/WebApi/src/WebApiJson.cpp:353-415`, `test/test_web_api/test_main.cpp:890-930`.
+
+      **Modifiche:**
+      - `boardSettingsJson(const BoardConfig&, const BoardSettings&, AutoShutdownAvailability avail)`: aggiungere `auto_shutdown: { on, available, reason }`, `reason` = `"no_ups"` / `"no_command"`, assente con `AVAILABLE`.
+      - `checkBoardSettingsBody(body, board, current, avail, next, restart, response)` (nuovo parametro `avail` dopo `current`): `auto_shutdown` presente → deve essere bool, altrimenti 400 `Invalid request`; `true` con `NO_UPS` → 400 `UPS not connected`; `true` con `NO_COMMAND` → 400 `The UPS offers no shutdown command`; `false` sempre accettato. Non imposta `restart`.
+      - Aggiornare i commenti in `WebApiJson.h` con il nuovo formato.
+      - Aggiornare le chiamate esistenti in `test/test_web_api/test_main.cpp` (passando `AutoShutdownAvailability::AVAILABLE`) perché la suite compili.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      **Fatto quando:** la suite compila e i test esistenti passano invariati nel comportamento.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — firme e commenti
+      - lib/WebApi/src/WebApiJson.cpp — JSON e convalida di `auto_shutdown`
+      - test/test_web_api/test_main.cpp — chiamate esistenti adattate
+
+      ## Criteri di Completamento
+      - [ ] GET contiene `auto_shutdown.on`, `available` e `reason` solo quando non disponibile
+      - [ ] POST `true` rifiutato con 400 e il messaggio giusto se non disponibile
+      - [ ] POST `false` sempre accettato, tipo non booleano rifiutato
+    ref: TASK-04
+  - id: TASK-05
+    title: Test nativi di /api/board per auto_shutdown
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il contratto JSON usato dalla pagina.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (helper esistenti intorno a `checkBoardSettingsBody`).
+
+      **Casi:**
+      - GET con `AVAILABLE` (on false e true): `available:true`, nessun `reason`;
+      - GET con `NO_UPS` e `NO_COMMAND`: `available:false` e il `reason` giusto;
+      - POST `{auto_shutdown:true}` con `AVAILABLE` → 0, `next.auto_shutdown == true`, `restart == false`;
+      - POST `true` con `NO_UPS` / `NO_COMMAND` → 400 e i due messaggi;
+      - POST `false` con `NO_COMMAND` → 0;
+      - POST `{auto_shutdown:1}` e `"yes"` → 400 `Invalid request`;
+      - POST `{led_level:4}` lascia `auto_shutdown` com'era.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      **Fatto quando:** i nuovi casi passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti e verdi
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Collegamento nel firmware: loop, web server e System Log'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** mandare `shutdown.default` una volta per evento con l'opzione attiva e registrarlo (criteri 3 e 4).
+
+      **Leggere:** `src/core/main.cpp` (setup e loop), `src/network/web_config_server.cpp:216-260` e `:471-495`, `include/network/web_config_server.h`, `lib/USBHostUPS/src/USBHostUPS.cpp:1004-1035` (log dell'esito dei comandi).
+
+      **Modifiche:**
+      - `main.cpp`: `static AutoShutdown auto_shutdown;` con commento US-114; in `setup()` `auto_shutdown.setEnabled(board_settings.auto_shutdown)` e `web_server.setAutoShutdown(&auto_shutdown)` accanto a `setStatusLed`.
+      - `main.cpp` `loop()`: blocco ogni 1000 ms, subito dopo il blocco di `restart_policy` e prima di `if (!config_mgr.isValid())`. Legge `String st = usb_ups.getUPSStatusString()`; `available = AutoShutdown::onBatteryLow(st.c_str()) && <getSupportedCommands() contiene shutdown.default>`; se `auto_shutdown.update(usb_ups.isConnected(), usb_ups.isDataStale(), st.c_str(), available)`: log `WARN [CMD] Automatic shutdown: UPS status '%s', sending shutdown.default`, `CommandResult r = usb_ups.executeCommand("shutdown.default")`; se `NOT_CONNECTED` → `restoreArm()` e `WARN [CMD] Automatic shutdown: shutdown.default not run, will retry`; altro esito non OK → `WARN [CMD] Automatic shutdown: shutdown.default not run, no new attempt until the UPS is back on line`.
+      - `web_config_server.h/.cpp`: `void setAutoShutdown(AutoShutdown*)`, membro `AutoShutdown* auto_shutdown = nullptr`; helper privato `AutoShutdownAvailability autoShutdownAvailability() const` (da `ups_source`: connesso e `getSupportedCommands()` con `shutdown.default`). `handleGetBoard()` e `handleSetBoard()` passano la disponibilità; in `handleSetBoard()`, se `next.auto_shutdown != board_settings.auto_shutdown`: `auto_shutdown->setEnabled(next.auto_shutdown)` e `INFO [BOARD] Automatic shutdown enabled|disabled`.
+      - Nessuna modifica a `NUTServer`, `UpsVariables`, `DriverVarStore`, `HidControl`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`; suite nativa completa invariata.
+
+      **Fatto quando:** la build S3 passa e il codice segue le regole del piano.
+
+      **Blocchi:** se `getUPSStatusString()` o `getSupportedCommands()` non sono sicuri dal loopTask, fermarsi e segnalarlo (oggi li usano già il log `[DIAG]` e `/api/ups/commands` dallo stesso task).
+
+      ## File Coinvolti
+      - src/core/main.cpp — oggetto globale, setup, valutazione nel loop e log
+      - include/network/web_config_server.h — `setAutoShutdown`, membro, helper
+      - src/network/web_config_server.cpp — disponibilità in GET/POST, applicazione e log
+
+      ## Criteri di Completamento
+      - [ ] Valutazione ogni secondo, anche con configurazione non valida o in AP
+      - [ ] Una riga `[CMD] Automatic shutdown` prima del comando, l'esito dall'host
+      - [ ] `NOT_CONNECTED` riarma, ogni altro esito no
+      - [ ] Attivazione dalla pagina applicata senza riavvio e registrata con `[BOARD]`
+      - [ ] Build `esp32-s3-standard` ok
+    ref: TASK-06
+  - id: TASK-07
+    title: Sezione Automatic shutdown nella pagina Board Settings
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'interruttore, la spiegazione con il collegamento a UPS Settings e il motivo quando non è disponibile (criteri 1 e 5).
+
+      **Leggere:** `data/www/index.html:377-500` (sezioni `#led-section` e `#usb-section`), `data/www/bundle.js:2155-2490` (pagina Board: `postBoard`, `renderLed`, `showLedResult`, `renderBoard`), `data/www/bundle.js:2134-2140` (link `data-goto`), `data/www/bundle.css` (classi `.board-row`, `.switch`, `.auth-alert.info`).
+
+      **Modifiche:**
+      - `index.html`: `<section class="board-section" id="autosd-section">` dopo `#usb-section`, titolo `.cred-section` "Automatic shutdown", una `.board-row` con nome "Shut down the UPS on low battery", hint con il testo del piano e `<button type="button" class="inline-link" data-goto="settings">UPS Settings tab</button>`, interruttore `#autosd-on` con stato `#autosd-state` (On/Off); nota `.auth-alert.info#autosd-unavailable` (hidden) con `#autosd-unavailable-text`; esito `#autosd-result` (`.cmd-result`, aria-live) ed errore `#autosd-error` / `#autosd-error-text` come per il LED.
+      - `bundle.js`: in `renderBoard()` la sezione è sempre visibile; `renderAutoShutdown()` legge `board.auto_shutdown` (assente → trattato come `{on:false, available:false, reason:'no_ups'}`); interruttore disattivato quando `!available && !on`; testi dei due motivi come nel piano. Al cambio: POST `{auto_shutdown: checked}` con `postBoard`, interruttore bloccato durante la richiesta, esito "✓ Automatic shutdown on|off" che svanisce come quello del LED; errore → interruttore riportato allo stato salvato e messaggio in `#autosd-error`. Click su `[data-goto]` nella sezione → click sulla tab (riusare o generalizzare il listener di `content-weblogin` a `content-board`).
+      - Rigenerare le pagine inline: `python scripts/embed_web.py`.
+
+      **Verifica:** apertura manuale con `e2e/support/webui.ts` tramite i test del TASK-08; build S3 per gli asset incorporati.
+
+      **Fatto quando:** la sezione appare con i tre stati e `include/network/web_assets.h` è rigenerato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — nuova sezione
+      - data/www/bundle.js — render, POST, link alla tab
+      - data/www/bundle.css — solo se servono ritocchi minimi (riusare le classi esistenti)
+      - data/www/index_inlined.html — rigenerato da `scripts/embed_web.py`
+      - include/network/web_assets.h — rigenerato da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] Interruttore spento per default, applicato subito senza riavvio
+      - [ ] Spiegazione con il collegamento funzionante a UPS Settings
+      - [ ] Motivo mostrato e interruttore disattivato quando non disponibile, ma sempre spegnibile se acceso
+      - [ ] Asset incorporati rigenerati
+    ref: TASK-07
+  - id: TASK-08
+    title: Scenari Playwright della sezione in e2e/board-settings.spec.ts
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** e2e della sezione (criterio 7), con `/api/board` simulato.
+
+      **Leggere:** `e2e/board-settings.spec.ts` (mock `BoardJson`, `beforeEach`, `openBoardTab`), `e2e/support/webui.ts`.
+
+      **Modifiche:**
+      - Estendere `BoardJson` con `auto_shutdown?: { on: boolean; available: boolean; reason?: string }`, default nei profili `{ on: false, available: true }`; il mock POST applica `body.auto_shutdown` e rispetta `postStatus`/`postError`.
+      - Nuovo `test.describe('Automatic shutdown (US-114)')` con gli scenari della tabella E2E del piano: default spento, attivazione e disattivazione (corpo POST esatto `{auto_shutdown:true}` / `{auto_shutdown:false}`), link a UPS Settings (`#content-settings` attivo), `no_command`, `no_ups`, acceso ma non disponibile, errore 400 con ripristino dell'interruttore.
+      - I test esistenti della pagina devono restare verdi.
+
+      **Verifica:** `npx playwright test e2e/board-settings.spec.ts`.
+
+      **Fatto quando:** tutti gli scenari passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/board-settings.spec.ts — mock esteso e nuovi scenari
+
+      ## Criteri di Completamento
+      - [ ] Sette scenari presenti e verdi
+      - [ ] Test US-094 esistenti invariati e verdi
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Verifica finale: suite nativa, e2e e tre build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** regressione completa (criteri 6 e 7).
+
+      **Passi:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (tutta la suite, `test_nut_server` compreso: LIST RW invariato);
+      - `npx playwright test` (tutti gli e2e);
+      - `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`;
+      - se README.md / README.it.md descrivono le opzioni di Board Settings, aggiungere una riga sullo spegnimento automatico (in entrambe le lingue); le note di rilascio si scrivono prima della release, non qui.
+
+      **Fatto quando:** tutto verde; eventuali fallimenti riportati con l'output.
+
+      **Blocchi:** un fallimento non legato alla US va segnalato, non corretto in silenzio.
+
+      ## File Coinvolti
+      - README.md — solo se descrive già Board Settings
+      - README.it.md — solo se descrive già Board Settings
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] E2E completi verdi
+      - [ ] Tre build ok
+    ref: TASK-09
+  - id: TASK-10
+    title: Prova sul campo sull'Eaton 3S con scheda e router sull'UPS (solo con consenso esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare sull'Eaton 3S reale, con scheda e router alimentati dallo stesso UPS, che lo spegnimento automatico mandi `shutdown.default` una volta sola in `OB LB` e che tutto riparta al ritorno della rete.
+
+      **Consenso (bloccante):** prima di qualsiasi azione di questo task (OTA, modifica di impostazioni, raccolta, richiesta di staccare la rete) chiedere all'utente il consenso esplicito a iniziare la prova e aspettare la risposta. Senza un sì esplicito nel turno corrente, fermarsi. Un consenso dato per altre prove o in sessioni precedenti non vale.
+
+      **Leggere:** la sezione "Prova sul campo sull'Eaton 3S" del piano; `scripts/nut_snapshot.py`; `docs/test-results/US-072/field/` (formato dei risultati); `scripts/serial_log.py` (solo variante B).
+
+      **Passi:** eseguire la variante A del piano, passi 1-9. Le azioni fisiche (staccare e riattaccare la rete) le fa l'utente quando Claude glielo chiede; Claude prepara tutto il resto, avvia la raccolta in background e dice all'utente cosa sta aspettando. La variante B solo se l'utente la chiede.
+
+      **Verifica:** i file in `docs/test-results/US-114/field/` mostrano: una sola riga `[CMD] Automatic shutdown`, `Command shutdown.default: OK via shutdown.return`, la scheda di nuovo raggiungibile in `OL` senza nuovi comandi, `battery.charge.low` ripristinato.
+
+      **Fatto quando:** l'esito è scritto in `docs/test-results/US-114/field/README.md` e riportato all'utente, anche se negativo.
+
+      **Blocchi:** consenso assente; UPS non in `OL` o batteria non carica all'inizio; PC della raccolta alimentato dall'UPS; `battery.charge.low` non ripristinabile (avvisare subito l'utente). Le credenziali della scheda non vanno mai stampate.
+
+      ## File Coinvolti
+      - docs/test-results/US-114/field/before-upsc.txt, before-upscmd.txt, before-upsrw.txt — snapshot iniziali
+      - docs/test-results/US-114/field/events.jsonl — log e variabili raccolti ogni 2 s
+      - docs/test-results/US-114/field/after-upsc.txt, after-upscmd.txt, after-upsrw.txt — snapshot finali
+      - docs/test-results/US-114/field/README.md — procedura seguita, tempi ed esito
+
+      ## Criteri di Completamento
+      - [ ] Consenso esplicito dell'utente ottenuto prima di iniziare
+      - [ ] Una sola riga `[CMD] Automatic shutdown` e `shutdown.default` eseguito via `shutdown.return`
+      - [ ] Prese spente e riaccese al ritorno della rete; scheda di nuovo in rete in `OL`, nessun nuovo comando, opzione ancora attiva
+      - [ ] `battery.charge.low` riportato al valore originale e riletto
+      - [ ] Esito documentato in `docs/test-results/US-114/field/README.md`
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Fix di review: helper AutoShutdown::offersShutdownDefault e uso in main.cpp'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Feedback di review** (`src/core/main.cpp:36`): la ricerca di shutdown.default nel catalogo dei comandi è duplicata qui e in `WebConfigServer::autoShutdownAvailability()`. Va spostata in un unico helper condiviso, senza cambiare il comportamento.
+
+      **Obiettivo:** un solo helper puro, usato dal loop.
+
+      **Leggere:** `include/core/auto_shutdown.h`, `src/core/main.cpp:30-62`.
+
+      **Modifiche:**
+      - `include/core/auto_shutdown.h`: in `class AutoShutdown` aggiungere `template <class Commands> static bool offersShutdownDefault(const Commands& commands)` con un ciclo `for (const auto* c : commands) if (c && c->name && strcmp(c->name, "shutdown.default") == 0) return true; return false;`. Commento: il contenitore è `getSupportedCommands()`; template per non includere `UpsCommands.h` né Arduino.
+      - `src/core/main.cpp`: togliere `upsOffersShutdownDefault()`; in `checkAutoShutdown()` usare `AutoShutdown::offersShutdownDefault(usb_ups.getSupportedCommands())`, dopo `onBatteryLow()` come oggi.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`.
+
+      **Fatto quando:** la build passa e in `main.cpp` non resta nessun `strcmp(..., "shutdown.default")`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/core/auto_shutdown.h — nuovo helper template
+      - src/core/main.cpp — usa l'helper, via `upsOffersShutdownDefault()`
+
+      ## Criteri di Completamento
+      - [ ] Helper presente, header senza nuovi include oltre `string.h`
+      - [ ] `upsOffersShutdownDefault()` rimosso, comportamento del loop invariato
+      - [ ] Build S3 ok
+    ref: TASK-11
+  - id: TASK-12
+    title: 'Fix di review: WebConfigServer::autoShutdownAvailability usa l''helper condiviso'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Feedback di review** (`src/network/web_config_server.cpp:229`): seconda copia della stessa ricerca di shutdown.default; usare l'helper condiviso introdotto per main.cpp.
+
+      **Leggere:** `src/network/web_config_server.cpp:225-240`.
+
+      **Modifiche:** in `autoShutdownAvailability()` sostituire il ciclo con `bool has_command = connected && AutoShutdown::offersShutdownDefault(ups_source->getSupportedCommands());` e lasciare `return ::autoShutdownAvailability(connected, has_command);`. Il catalogo si legge solo con l'UPS connesso, come oggi.
+
+      **Verifica:** build S3.
+
+      **Fatto quando:** nel file non resta nessun `strcmp(..., "shutdown.default")` e la build passa.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — usa l'helper
+
+      ## Criteri di Completamento
+      - [ ] Ciclo duplicato rimosso
+      - [ ] GET/POST `/api/board` invariati nel comportamento
+      - [ ] Build S3 ok
+    ref: TASK-12
+  - id: TASK-13
+    title: Test dell'helper e regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare l'helper e che il refactoring non cambi niente.
+
+      **Leggere:** `test/test_auto_shutdown/test_main.cpp`.
+
+      **Modifiche:** in `test_auto_shutdown` un test `test_offers_shutdown_default` con una struct locale `{ const char* name; }` e `std::vector<const Cmd*>`: presente in mezzo ad altri → true; solo `shutdown.return` e `shutdown.defaultx` → false; vettore vuoto → false; elemento nullptr e `name` nullptr ignorati.
+
+      **Passi:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (suite completa);
+      - `npx playwright test e2e/board-settings.spec.ts`;
+      - build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+
+      **Fatto quando:** tutto verde.
+
+      **Blocchi:** un fallimento non legato al refactoring va segnalato.
+
+      ## File Coinvolti
+      - test/test_auto_shutdown/test_main.cpp — nuovo test dell'helper
+
+      ## Criteri di Completamento
+      - [ ] Nuovo test verde
+      - [ ] Suite nativa completa verde
+      - [ ] E2E della pagina Board verdi
+      - [ ] Tre build ok
+    ref: TASK-13

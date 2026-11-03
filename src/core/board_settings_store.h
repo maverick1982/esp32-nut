@@ -5,7 +5,7 @@
 
 /**
  * Board settings of the web UI (US-094), kept in the NVS namespace "board": led_on,
- * led_level, usb_port. load() gives the profile defaults for missing keys and
+ * led_level, usb_port, auto_sd (US-114). load() gives the profile defaults for missing keys and
  * sanitizes the stored values (PDR 0002 D4).
  */
 class BoardSettingsStore {

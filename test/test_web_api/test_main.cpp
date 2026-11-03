@@ -892,30 +892,102 @@ static const BoardConfig P4_LIKE = {
 };
 
 static int checkBoard(const char* json, const BoardConfig& b, const BoardSettings& cur, BoardSettings& next,
-                      bool& restart, String& out) {
+                      bool& restart, String& out,
+                      AutoShutdownAvailability sd = AutoShutdownAvailability::AVAILABLE) {
     JsonDocument doc;
     deserializeJson(doc, json);
-    return WebApiJson::checkBoardSettingsBody(doc, b, cur, next, restart, out);
+    return WebApiJson::checkBoardSettingsBody(doc, b, cur, sd, next, restart, out);
 }
 
 void test_board_json_s3(void) {
-    String json = WebApiJson::boardSettingsJson(board(), defaultsFor(board()));
+    String json = WebApiJson::boardSettingsJson(board(), defaultsFor(board()), AutoShutdownAvailability::AVAILABLE);
     TEST_ASSERT_EQUAL_STRING(
         "{\"id\":\"esp32s3_devkit\",\"label\":\"ESP32-S3 DevKitC-1\","
         "\"led\":{\"present\":true,\"on\":true,\"level\":3,\"levels\":5},"
-        "\"usb\":{\"ports\":[{\"id\":\"otg\",\"label\":\"USB OTG\"}],\"port\":\"otg\"}}",
+        "\"usb\":{\"ports\":[{\"id\":\"otg\",\"label\":\"USB OTG\"}],\"port\":\"otg\"},"
+        "\"auto_shutdown\":{\"on\":false,\"available\":true}}",
         json.c_str());
 }
 
 void test_board_json_two_ports_no_led(void) {
     BoardSettings s = defaultsFor(P4_LIKE);
     s.usb_port = 1;
-    String json = WebApiJson::boardSettingsJson(P4_LIKE, s);
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, s, AutoShutdownAvailability::AVAILABLE);
     TEST_ASSERT_EQUAL_STRING(
         "{\"id\":\"p4_like\",\"label\":\"P4 test board\","
         "\"usb\":{\"ports\":[{\"id\":\"hs\",\"label\":\"High-Speed\"},{\"id\":\"fs\",\"label\":\"Full-Speed\"}],"
-        "\"port\":\"fs\"}}",
+        "\"port\":\"fs\"},"
+        "\"auto_shutdown\":{\"on\":false,\"available\":true}}",
         json.c_str());
+}
+
+// US-114: the automatic shutdown object of GET /api/board
+static JsonDocument boardDoc(bool on, AutoShutdownAvailability sd) {
+    BoardSettings s = defaultsFor(board());
+    s.auto_shutdown = on;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(board(), s, sd));
+    return doc;
+}
+
+void test_board_json_auto_shutdown(void) {
+    JsonDocument d = boardDoc(true, AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["reason"].isNull());
+
+    d = boardDoc(false, AutoShutdownAvailability::NO_UPS);
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("no_ups", d["auto_shutdown"]["reason"].as<const char*>());
+
+    // On but no longer available (another UPS): still reported as on
+    d = boardDoc(true, AutoShutdownAvailability::NO_COMMAND);
+    TEST_ASSERT_TRUE(d["auto_shutdown"]["on"].as<bool>());
+    TEST_ASSERT_FALSE(d["auto_shutdown"]["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("no_command", d["auto_shutdown"]["reason"].as<const char*>());
+}
+
+void test_board_body_auto_shutdown(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.auto_shutdown);
+    TEST_ASSERT_FALSE(restart);
+    // The other settings are left alone
+    TEST_ASSERT_TRUE(next.led_on);
+    TEST_ASSERT_EQUAL_UINT8(3, next.led_level);
+
+    cur.auto_shutdown = true;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":4}", board(), cur, next, restart, out));
+    TEST_ASSERT_TRUE(next.auto_shutdown);
+    TEST_ASSERT_EQUAL_UINT8(4, next.led_level);
+
+    // Turning it off is always allowed
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":false}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_COMMAND));
+    TEST_ASSERT_FALSE(next.auto_shutdown);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"auto_shutdown\":false}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_FALSE(next.auto_shutdown);
+}
+
+void test_board_body_auto_shutdown_refused(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out,
+                                      AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"UPS not connected\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkBoard("{\"auto_shutdown\":true}", board(), cur, next, restart, out,
+                                      AutoShutdownAvailability::NO_COMMAND));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"The UPS offers no shutdown command\"}", out.c_str());
+    const char* bad[] = { "{\"auto_shutdown\":1}", "{\"auto_shutdown\":\"yes\"}", "{\"auto_shutdown\":null}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    }
 }
 
 void test_board_body_led(void) {
@@ -1249,6 +1321,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_board_body_invalid_level);
     RUN_TEST(test_board_body_usb_port);
     RUN_TEST(test_board_body_no_led);
+    RUN_TEST(test_board_json_auto_shutdown);
+    RUN_TEST(test_board_body_auto_shutdown);
+    RUN_TEST(test_board_body_auto_shutdown_refused);
     RUN_TEST(test_network_status_wifi_connected);
     RUN_TEST(test_network_status_wifi_connecting);
     RUN_TEST(test_network_status_access_point);

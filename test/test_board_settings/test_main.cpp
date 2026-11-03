@@ -36,7 +36,7 @@ void test_brightness_scale(void) {
 }
 
 void test_sanitize_led_level(void) {
-    BoardSettings s = { true, 0, 0 };
+    BoardSettings s = { true, 0, 0, false };
     TEST_ASSERT_EQUAL_UINT8(3, sanitize(board(), s).led_level);
     s.led_level = 6;
     TEST_ASSERT_EQUAL_UINT8(3, sanitize(board(), s).led_level);
@@ -47,11 +47,21 @@ void test_sanitize_led_level(void) {
 }
 
 void test_sanitize_usb_port(void) {
-    BoardSettings s = { true, 3, 1 };
+    BoardSettings s = { true, 3, 1, false };
     TEST_ASSERT_EQUAL_UINT8(0, sanitize(board(), s).usb_port);   // the S3 has one port
     TEST_ASSERT_EQUAL_UINT8(1, sanitize(P4_LIKE, s).usb_port);   // second port of two
     s.usb_port = 2;
     TEST_ASSERT_EQUAL_UINT8(0, sanitize(P4_LIKE, s).usb_port);
+}
+
+void test_auto_shutdown_off_by_default_and_kept(void) {
+    // US-114: off on every profile, and sanitize() keeps the saved value
+    TEST_ASSERT_FALSE(defaultsFor(board()).auto_shutdown);
+    TEST_ASSERT_FALSE(defaultsFor(P4_LIKE).auto_shutdown);
+    BoardSettings s = { true, 3, 0, true };
+    TEST_ASSERT_TRUE(sanitize(board(), s).auto_shutdown);
+    s.led_level = 0;
+    TEST_ASSERT_TRUE(sanitize(board(), s).auto_shutdown);
 }
 
 void test_capabilities(void) {
@@ -67,6 +77,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_brightness_scale);
     RUN_TEST(test_sanitize_led_level);
     RUN_TEST(test_sanitize_usb_port);
+    RUN_TEST(test_auto_shutdown_off_by_default_and_kept);
     RUN_TEST(test_capabilities);
     return UNITY_END();
 }

@@ -350,7 +350,8 @@ int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
     return 0;
 }
 
-String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings) {
+String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
+                                     AutoShutdownAvailability auto_shutdown) {
     JsonDocument doc;
     doc["id"] = board.name;
     doc["label"] = board.label;
@@ -369,14 +370,20 @@ String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettin
         p["label"] = board.usb.ports[i].label;
     }
     usb["port"] = board.usb.ports[settings.usb_port].id;
+    // US-114: the switch, and why it cannot be turned on
+    JsonObject sd = doc["auto_shutdown"].to<JsonObject>();
+    sd["on"] = settings.auto_shutdown;
+    sd["available"] = auto_shutdown == AutoShutdownAvailability::AVAILABLE;
+    if (auto_shutdown == AutoShutdownAvailability::NO_UPS) sd["reason"] = "no_ups";
+    if (auto_shutdown == AutoShutdownAvailability::NO_COMMAND) sd["reason"] = "no_command";
     std::string out;
     serializeJson(doc, out);
     return String(out.c_str());
 }
 
 int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
-                                       const BoardSettings& current, BoardSettings& next,
-                                       bool& restart, String& response) {
+                                       const BoardSettings& current, AutoShutdownAvailability auto_shutdown,
+                                       BoardSettings& next, bool& restart, String& response) {
     next = current;
     restart = false;
     if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
@@ -410,6 +417,20 @@ int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig&
         if (found == board.usb.port_count) return sendError(response, 400, "Invalid USB port");
         next.usb_port = found;
         restart = found != current.usb_port;
+    }
+
+    // US-114: turning it off is always allowed, on only when the UPS offers shutdown.default
+    JsonVariantConst sd = obj["auto_shutdown"];
+    if (!sd.isUnbound()) {
+        if (!sd.is<bool>()) return sendError(response, 400, "Invalid request");
+        bool on = sd.as<bool>();
+        if (on && auto_shutdown == AutoShutdownAvailability::NO_UPS) {
+            return sendError(response, 400, "UPS not connected");
+        }
+        if (on && auto_shutdown == AutoShutdownAvailability::NO_COMMAND) {
+            return sendError(response, 400, "The UPS offers no shutdown command");
+        }
+        next.auto_shutdown = on;
     }
     return 0;
 }

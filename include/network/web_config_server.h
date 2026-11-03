@@ -15,6 +15,7 @@
 #include "RecoveryWindow.h"
 #include "DiagnosticLED.h"
 #include "core/board_settings_store.h"
+#include "core/auto_shutdown.h"
 #include "core/hostname_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
@@ -33,6 +34,8 @@ public:
     // Board page (US-094): settings loaded at boot, and the LED to apply changes at once
     void setBoardSettings(BoardSettingsStore* store, const BoardSettings& settings);
     void setStatusLed(DiagnosticLED* led);
+    // Automatic shutdown on low battery (US-114): turned on and off from the Board page
+    void setAutoShutdown(AutoShutdown* auto_shutdown);
     // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
     void setHostnameStore(HostnameStore* store, const String& saved);
 
@@ -56,6 +59,7 @@ private:
     BoardSettingsStore* board_store = nullptr;
     BoardSettings board_settings = {};
     DiagnosticLED* status_led = nullptr;
+    AutoShutdown* auto_shutdown = nullptr;
     HostnameStore* hostname_store = nullptr;
     String saved_hostname;
 
@@ -64,6 +68,8 @@ private:
     void handleNutConfig();
     void handleGetBoard();
     void handleSetBoard();
+    // US-114: UPS connected and offering shutdown.default
+    AutoShutdownAvailability autoShutdownAvailability() const;
     void handleSetHostname();
     void handleGetConfig();
     void handleUpsVars();

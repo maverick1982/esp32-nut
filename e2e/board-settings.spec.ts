@@ -11,6 +11,8 @@ interface BoardJson {
   label: string;
   led?: { present: boolean; on: boolean; level: number; levels: number };
   usb: { ports: { id: string; label: string }[]; port: string };
+  // US-114
+  auto_shutdown?: { on: boolean; available: boolean; reason?: string };
 }
 
 interface Mock {
@@ -27,6 +29,7 @@ function s3Board(): BoardJson {
     label: 'ESP32-S3 DevKitC-1',
     led: { present: true, on: true, level: 3, levels: 5 },
     usb: { ports: [{ id: 'otg', label: 'USB OTG' }], port: 'otg' },
+    auto_shutdown: { on: false, available: true },
   };
 }
 
@@ -35,6 +38,7 @@ function dualBoard(withLed: boolean): BoardJson {
     id: 'esp32p4_dual_usb_test',
     label: 'ESP32-P4 dual USB (test profile)',
     usb: { ports: [{ id: 'hs', label: 'High-Speed' }, { id: 'fs', label: 'Full-Speed' }], port: 'hs' },
+    auto_shutdown: { on: false, available: true },
   };
   if (withLed) b.led = { present: true, on: true, level: 3, levels: 5 };
   return b;
@@ -84,6 +88,9 @@ test.describe('Board page (US-094)', () => {
       let restart = false;
       if (typeof body.led_on === 'boolean' && mock.board.led) mock.board.led.on = body.led_on;
       if (typeof body.led_level === 'number' && mock.board.led) mock.board.led.level = body.led_level;
+      if (typeof body.auto_shutdown === 'boolean' && mock.board.auto_shutdown) {
+        mock.board.auto_shutdown.on = body.auto_shutdown;
+      }
       if (typeof body.usb_port === 'string' && body.usb_port !== mock.board.usb.port) {
         mock.board.usb.port = body.usb_port;
         restart = true;
@@ -224,5 +231,107 @@ test.describe('Board page (US-094)', () => {
 
     const box = (await page.locator('#btn-save-usb').boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(375);
+  });
+
+  // US-114: automatic shutdown on low battery, applied immediately like the LED
+  test.describe('Automatic shutdown (US-114)', () => {
+    const autosdSwitch = (page: Page) => page.locator('#autosd-section label.switch');
+
+    test('off by default: switch enabled, explanation with the threshold', async ({ page }) => {
+      await openBoardTab(page);
+      const section = page.locator('#autosd-section');
+      await expect(section).toBeVisible();
+      await expect(section.locator('.cred-section')).toHaveText('Automatic shutdown');
+      await expect(page.locator('#autosd-on')).not.toBeChecked();
+      await expect(page.locator('#autosd-on')).toBeEnabled();
+      await expect(page.locator('#autosd-state')).toHaveText('Off');
+      await expect(page.locator('#autosd-unavailable')).toBeHidden();
+      await expect(section).toContainText('OB LB');
+      await expect(section).toContainText('shutdown.default');
+      await expect(section).toContainText('battery.charge.low / battery.runtime.low');
+      await expect(section).toContainText('depends on the model');
+      // No Save button: applied immediately
+      await expect(section.locator('button[type="submit"]')).toHaveCount(0);
+    });
+
+    test('turned on then off: one POST each, outcome shown', async ({ page }) => {
+      await openBoardTab(page);
+
+      await autosdSwitch(page).click();
+      await expect(page.locator('#autosd-result')).toContainText('Automatic shutdown on');
+      expect(mock.posts).toHaveLength(1);
+      expect(mock.posts[0].contentType).toContain('application/json');
+      expect(mock.posts[0].body).toEqual({ auto_shutdown: true });
+      await expect(page.locator('#autosd-on')).toBeChecked();
+      await expect(page.locator('#autosd-state')).toHaveText('On');
+
+      await autosdSwitch(page).click();
+      await expect(page.locator('#autosd-result')).toContainText('Automatic shutdown off');
+      expect(mock.posts).toHaveLength(2);
+      expect(mock.posts[1].body).toEqual({ auto_shutdown: false });
+      await expect(page.locator('#autosd-on')).not.toBeChecked();
+      await expect(page.locator('#autosd-state')).toHaveText('Off');
+
+      // The saved value is what the next opening shows
+      mock.board.auto_shutdown!.on = true;
+      await page.locator('button.tab[data-target="ups"]').click();
+      await openBoardTab(page);
+      await expect(page.locator('#autosd-on')).toBeChecked();
+    });
+
+    test('the "UPS Settings tab" link opens UPS Settings', async ({ page }) => {
+      await openBoardTab(page);
+      await page.locator('#autosd-section [data-goto="settings"]').click();
+      await expect(page.locator('#content-settings')).toHaveClass(/active/);
+      await expect(page.locator('#content-board')).not.toHaveClass(/active/);
+    });
+
+    test('UPS without shutdown command: switch disabled, the page says why', async ({ page }) => {
+      mock.board.auto_shutdown = { on: false, available: false, reason: 'no_command' };
+      await openBoardTab(page);
+      await expect(page.locator('#autosd-on')).toBeDisabled();
+      await expect(page.locator('#row-autosd')).toHaveClass(/is-disabled/);
+      await expect(page.locator('#autosd-unavailable')).toBeVisible();
+      await expect(page.locator('#autosd-unavailable')).toContainText('this UPS offers no shutdown command');
+      expect(mock.posts).toHaveLength(0);
+    });
+
+    test('no UPS connected: switch disabled, the page says why', async ({ page }) => {
+      mock.board.auto_shutdown = { on: false, available: false, reason: 'no_ups' };
+      await openBoardTab(page);
+      await expect(page.locator('#autosd-on')).toBeDisabled();
+      await expect(page.locator('#autosd-unavailable')).toContainText('no UPS connected');
+    });
+
+    test('on but no longer available: it can still be turned off', async ({ page }) => {
+      mock.board.auto_shutdown = { on: true, available: false, reason: 'no_command' };
+      await openBoardTab(page);
+      await expect(page.locator('#autosd-on')).toBeChecked();
+      await expect(page.locator('#autosd-on')).toBeEnabled();
+      await expect(page.locator('#autosd-unavailable')).toBeVisible();
+
+      await autosdSwitch(page).click();
+      await expect(page.locator('#autosd-result')).toContainText('Automatic shutdown off');
+      expect(mock.posts[0].body).toEqual({ auto_shutdown: false });
+      // Off and not available: now it cannot be turned on again
+      await expect(page.locator('#autosd-on')).not.toBeChecked();
+      await expect(page.locator('#autosd-on')).toBeDisabled();
+    });
+
+    test('POST rejected with 400: message shown, switch back to off', async ({ page }) => {
+      await openBoardTab(page);
+      mock.postStatus = 400;
+      mock.postError = 'The UPS offers no shutdown command';
+
+      await autosdSwitch(page).click();
+      await expect(page.locator('#autosd-error')).toBeVisible();
+      await expect(page.locator('#autosd-error')).toContainText('The UPS offers no shutdown command');
+      expect(mock.posts[0].body).toEqual({ auto_shutdown: true });
+      await expect(page.locator('#autosd-on')).not.toBeChecked();
+      await expect(page.locator('#autosd-state')).toHaveText('Off');
+      await expect(page.locator('#autosd-result')).toBeEmpty();
+      // The LED section is not touched by this error
+      await expect(page.locator('#led-error')).toBeHidden();
+    });
   });
 });

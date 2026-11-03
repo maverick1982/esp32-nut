@@ -5,7 +5,8 @@
 #include "board/board.h"
 
 /**
- * @brief User settings of the board: status LED and UPS USB port (US-094).
+ * @brief User settings of the board: status LED, UPS USB port (US-094) and automatic
+ * shutdown on low battery (US-114).
  *
  * Pure logic, so it runs in the native unit tests. The initial values come from the
  * board profile; the user changes them from the web UI and they are kept in NVS.
@@ -16,6 +17,8 @@ struct BoardSettings {
     bool led_on;
     uint8_t led_level;  // 1-5
     uint8_t usb_port;   // index in board().usb.ports
+    // US-114: shutdown.default on OB+LB, off by default on every board (not from the profile)
+    bool auto_shutdown;
 };
 
 static const uint8_t LED_LEVELS = 5;
@@ -38,7 +41,7 @@ inline bool hasUsbChoice(const BoardConfig& b) {
 }
 
 inline BoardSettings defaultsFor(const BoardConfig& b) {
-    BoardSettings s = { b.defaults.led_enabled, b.defaults.led_level, b.defaults.usb_port };
+    BoardSettings s = { b.defaults.led_enabled, b.defaults.led_level, b.defaults.usb_port, false };
     return s;
 }
 

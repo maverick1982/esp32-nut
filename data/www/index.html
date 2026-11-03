@@ -507,6 +507,51 @@
                                 reachable, the UPS is just not seen until you pick the right port here.</p>
                         </section>
 
+                        <!-- US-114: automatic shutdown on low battery (every board) -->
+                        <section class="board-section" id="autosd-section">
+                            <div class="cred-section">Automatic shutdown</div>
+
+                            <div class="board-row" id="row-autosd">
+                                <div class="board-label">
+                                    <span class="board-name">Shut down the UPS on low battery</span>
+                                    <span class="board-hint">When the UPS is on battery and reports low battery
+                                        (OB LB), the board sends shutdown.default once, also with no NUT client
+                                        connected. The threshold is battery.charge.low / battery.runtime.low of the
+                                        UPS, in the <button type="button" class="inline-link" data-goto="settings">UPS
+                                        Settings tab</button>. Whether the UPS turns back on when power returns
+                                        depends on the model.</span>
+                                </div>
+                                <div class="board-control led-toggle">
+                                    <label class="switch">
+                                        <input type="checkbox" id="autosd-on" aria-label="Automatic shutdown on low battery">
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span class="led-state" id="autosd-state">Off</span>
+                                </div>
+                            </div>
+
+                            <!-- Why the switch cannot be turned on -->
+                            <div class="auth-alert info" id="autosd-unavailable" role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 16v-4M12 8h.01" />
+                                </svg>
+                                <span id="autosd-unavailable-text"></span>
+                            </div>
+
+                            <!-- Outcome of the last change (applied immediately) -->
+                            <div class="board-outcome">
+                                <span class="cmd-result" id="autosd-result" aria-live="polite"></span>
+                            </div>
+                            <div class="auth-alert" id="autosd-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="autosd-error-text"></span>
+                            </div>
+                        </section>
+
                     </div>
                 </div>
             </div>
