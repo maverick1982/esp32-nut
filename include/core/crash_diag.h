@@ -13,6 +13,8 @@
  *   with the watchdogs disabled.
  * - Logs the reset reason, the cause of the last controlled restart and the summary of
  *   the last core dump, and exposes them to the web UI.
+ * - After a task watchdog reset, logs the tasks that did not reset the watchdog in time,
+ *   saved in RTC memory by the TWDT interrupt hook before the panic (US-110).
  */
 namespace CrashDiag {
     // Call first in setup(): arms the core dump guard and collects the boot diagnostics

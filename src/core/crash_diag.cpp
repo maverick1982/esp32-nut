@@ -1,7 +1,9 @@
 #include "core/crash_diag.h"
 #include "core/app_logger.h"
+#include "core/twdt_task_list.h"
 #include "esp_attr.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_partition.h"
 #include "esp_core_dump.h"
 #include "esp_heap_caps.h"
@@ -17,6 +19,11 @@ static RTC_NOINIT_ATTR char s_restart_reason[64];
 #define RESTART_COUNT_MAGIC 0x4E555443u // "NUTC"
 static RTC_NOINIT_ATTR uint32_t s_restart_count_magic;
 static RTC_NOINIT_ATTR uint8_t s_restart_count;
+// Tasks that did not reset the task watchdog, written by the TWDT ISR before the panic
+// and shown once after the TASK_WDT reset (US-110)
+static RTC_NOINIT_ATTR uint32_t s_twdt_magic;
+static RTC_NOINIT_ATTR TwdtTaskList s_twdt_list;
+static char s_twdt_tasks[TWDT_TASKS_MAX_LEN + 4];
 static bool s_degraded = false;
 
 static esp_reset_reason_t s_reset_reason = ESP_RST_UNKNOWN;
@@ -34,6 +41,24 @@ extern "C" void __real_esp_core_dump_write(void *info);
 extern "C" void IRAM_ATTR __wrap_esp_core_dump_write(void *info) {
     if (s_coredump_partition) {
         __real_esp_core_dump_write(info);
+    }
+}
+
+static void IRAM_ATTR twdtMsgHandler(void *opaque, const char *msg) {
+    twdt_list_feed(static_cast<TwdtTaskList *>(opaque), msg);
+}
+
+// Weak hook of ESP-IDF: task_wdt_isr() calls it after printing the guilty tasks on the
+// serial console and before the panic, outside the TWDT spinlock (US-110). Same limits as
+// the ISR: no log, no heap, no locks. The task list is read without the TWDT lock: a task
+// added or removed at that very moment (the poll task on a USB detach) can leave the names
+// incomplete, never out of the fixed buffer.
+extern "C" void IRAM_ATTR esp_task_wdt_isr_user_handler(void) {
+    s_twdt_magic = 0;
+    twdt_list_reset(&s_twdt_list);
+    esp_task_wdt_print_triggered_tasks(twdtMsgHandler, &s_twdt_list, NULL);
+    if (s_twdt_list.count > 0) {
+        s_twdt_magic = TWDT_LIST_MAGIC;
     }
 }
 
@@ -100,6 +125,8 @@ void begin() {
                                                     ESP_PARTITION_SUBTYPE_DATA_COREDUMP,
                                                     NULL) != NULL;
     s_reset_reason = esp_reset_reason();
+    twdt_list_consume(&s_twdt_magic, &s_twdt_list, s_reset_reason == ESP_RST_TASK_WDT,
+                      s_twdt_tasks, sizeof(s_twdt_tasks));
 
     if (s_restart_magic == RESTART_MAGIC && s_reset_reason == ESP_RST_SW) {
         s_restart_reason[sizeof(s_restart_reason) - 1] = '\0';
@@ -130,6 +157,9 @@ void logBootInfo() {
     if (s_has_crash) {
         AppLogger::log("ERROR", "[DIAG] Last crash: task '%s', PC 0x%08lx", s_crash_task.c_str(), (unsigned long)s_crash_pc);
         AppLogger::log("ERROR", "[DIAG] Backtrace: %s", s_crash_backtrace.c_str());
+    }
+    if (s_twdt_tasks[0] != '\0') {
+        AppLogger::log("ERROR", "[DIAG] Watchdog: tasks not responding: %s", s_twdt_tasks);
     }
     if (!s_coredump_partition) {
         AppLogger::log("WARN", "[DIAG] No coredump partition: crash details are not saved. "
@@ -185,6 +215,10 @@ void fillJson(JsonObject obj) {
         snprintf(pc, sizeof(pc), "0x%08lx", (unsigned long)s_crash_pc);
         crash["pc"] = pc;
         crash["backtrace"] = s_crash_backtrace;
+    }
+    // Outside last_crash: also without a coredump partition (US-110)
+    if (s_twdt_tasks[0] != '\0') {
+        obj["twdt_tasks"] = (const char *)s_twdt_tasks;
     }
 }
 

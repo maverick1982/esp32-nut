@@ -4613,6 +4613,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (diag.reset_reason && ['PANIC', 'TASK_WDT', 'INTERRUPT_WDT', 'OTHER_WDT', 'BROWNOUT'].includes(diag.reset_reason)) {
             addLine('Last reset reason: ' + diag.reset_reason);
         }
+        if (diag.twdt_tasks) {
+            addLine('Task watchdog: tasks not responding: ', diag.twdt_tasks);
+        }
         if (diag.coredump_partition === false) {
             addLine('Crash details cannot be saved: the partition table has no coredump partition. Flash the full firmware once with the web installer (OTA cannot update the partition table).');
         }

@@ -6,7 +6,7 @@ epic:
   title: Fondamenta del Progetto
 priority: HIGH
 points: 2
-status: TODO
+status: DONE
 body: |
   #### US-110: Nome dei task bloccati dopo un riavvio del watchdog (TASK_WDT)
 
@@ -37,3 +37,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-03T08:41:46Z"
+  - status: PLANNED
+    at: "2026-11-03T10:20:20Z"
+  - status: IN PROGRESS
+    at: "2026-11-03T10:29:23Z"
+  - status: REVIEW
+    at: "2026-11-03T10:56:39Z"
+  - status: DONE
+    at: "2026-11-03T11:14:34Z"

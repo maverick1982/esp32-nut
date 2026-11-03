@@ -137,9 +137,20 @@ void USBHostUPS::poll_task(void *arg) {
     // An iteration blocks at most for a few control transfer timeouts.
     bool wdt = esp_task_wdt_add(NULL) == ESP_OK;
     if (!wdt) self->log("WARN", "[USB] Poll task not under the task watchdog");
+#if defined(NUT_TEST_TWDT_HANG) && NUT_TEST_TWDT_HANG
+    // US-110 test build only (PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_TWDT_HANG=1): 60 s after
+    // the start the task stops feeding the watchdog, without holding _op_mutex
+    const TickType_t hang_start = xTaskGetTickCount();
+#endif
 
     while (self->_poll_task_run) {
         if (wdt) esp_task_wdt_reset();
+#if defined(NUT_TEST_TWDT_HANG) && NUT_TEST_TWDT_HANG
+        if (xTaskGetTickCount() - hang_start >= pdMS_TO_TICKS(60000)) {
+            self->log("WARN", "[TEST] Poll task stops feeding the task watchdog (NUT_TEST_TWDT_HANG)");
+            while (true) vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+#endif
         if (xSemaphoreTake(self->_op_mutex, portMAX_DELAY) == pdTRUE) {
             self->service();
             xSemaphoreGive(self->_op_mutex);

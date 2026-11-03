@@ -1,0 +1,321 @@
+schema: archetipo/plan/v2
+spec_code: US-110
+body: |
+  ---
+  type: plan
+  title: "US-110: Nome dei task bloccati dopo un riavvio del watchdog (TASK_WDT) — Piano di implementazione"
+  description: "Piano di implementazione per US-110"
+  tags: [plan, implementation, US-110]
+  ---
+  # US-110: Nome dei task bloccati dopo un riavvio del watchdog (TASK_WDT) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-03
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-000 — Fondamenta del Progetto
+  **Priorità:** HIGH | **Punti:** 2
+
+  **User Story**
+  Come manutentore che riceve il System Log di una scheda riavviata dal watchdog dei task, voglio che dopo il riavvio il log indichi quali task non hanno resettato il watchdog in tempo, in modo da capire quale parte del firmware si è bloccata senza bisogno di un log della seriale.
+
+  **Criteri di Accettazione**
+  - [ ] Quando scatta il task watchdog, i nomi dei task sotto watchdog che non l'hanno resettato in tempo, con la CPU su cui girano, vengono salvati in memoria RTC prima del panic.
+  - [ ] Al riavvio successivo con reset `TASK_WDT`, il System Log riporta quei nomi in una riga `[DIAG]`, accanto a `Last crash` e `Backtrace`. Le stesse informazioni compaiono nell'export della diagnostica USB, se lì c'è già la sezione sul crash.
+  - [ ] Il dato vale per un solo riavvio; dopo un riavvio di altro tipo la riga non compare.
+  - [ ] Il salvataggio avviene nel contesto dell'interrupt del watchdog: niente allocazioni, niente lock, dimensione massima fissa con troncamento.
+  - [ ] Comportamento di oggi invariato (timeout, `trigger_panic`, core dump, righe `Last crash` / `Backtrace`). Suite nativa verde e tre build ok.
+  - [ ] ~~Note di rilascio aggiornate.~~ Rimandato: le note si scrivono tutte alla fine, con il numero di versione corretto, prima della release (decisione utente 2026-11-03).
+
+  ---
+
+  ## Soluzione tecnica
+
+  ESP-IDF 5.5.5 (quello del core Arduino precompilato di pioarduino 55.03.312-1, per S3 e P4) chiama dall'ISR del task watchdog la funzione weak `esp_task_wdt_isr_user_handler()` **dopo** aver stampato i task colpevoli e **prima** di `task_wdt_timeout_handling()` (che fa il panic). Dentro quell'hook chiamiamo `esp_task_wdt_print_triggered_tasks(msg_handler, opaque, NULL)` con un nostro `msg_handler` che, invece di stampare, scrive i nomi in un buffer fisso in memoria RTC. Al boot `CrashDiag::begin()` legge il record solo se il reset è `TASK_WDT` e lo invalida sempre.
+
+  Verifiche già fatte in pianificazione (non da ripetere):
+  - `task_wdt.c.obj` in `libesp_system.a` ha un riferimento **weak non definito** a `esp_task_wdt_isr_user_handler` sia su S3 (`esp32s3/dio_qspi`) sia su P4 (`esp32p4`, `esp32p4_es`): definirla nel firmware la aggancia al link, senza `--wrap`. Né il core Arduino né altre librerie la definiscono, quindi niente simboli doppi.
+  - L'hook gira fuori dallo spinlock del TWDT (`portEXIT_CRITICAL_ISR` è prima della chiamata), quindi chiamare `esp_task_wdt_print_triggered_tasks` lì non va in deadlock. Con `msg_handler` non NULL la funzione non logga: chiama il callback con la didascalia, poi per ogni task `"\n - "`, il nome, e `" (CPU 0)"` / `" (CPU 1)"` / `" (CPU 0/1)"`.
+  - `esp_reset_reason_set_hint(ESP_RST_TASK_WDT)` viene messo nel percorso di abort del TWDT, quindi al boot `esp_reset_reason()` vale `ESP_RST_TASK_WDT` (già visto nella #112).
+
+  Decisioni:
+  - **Logica pura in un header senza dipendenze** `include/core/twdt_task_list.h` (struct POD + funzioni `static inline`): reset, `feed` (macchina a stati sui messaggi IDF: ignora la didascalia, `"\n - "` apre una voce e mette `", "` dalla seconda in poi, il resto viene accodato), `consume` (valida magic + reset `TASK_WDT` + almeno un nome, copia limitata con `...` se troncato, azzera sempre il magic). Copia carattere per carattere, niente `strlen`/`snprintf`/heap: va bene nell'ISR ed è testabile nella suite nativa.
+  - **Dimensione fissa:** testo 96 byte (`TWDT_TASKS_MAX_LEN`), contatore voci, flag `truncated`. Oggi i task sotto watchdog sono al massimo tre (`loopTask`, `ups_poll`, `IDLE0`): 96 byte bastano con margine.
+  - **Record RTC** in `src/core/crash_diag.cpp` accanto a `s_restart_reason`: `RTC_NOINIT_ATTR uint32_t s_twdt_magic` (`0x4E555457`, "NUTW") + `RTC_NOINIT_ATTR TwdtTaskList s_twdt_list`. Nell'hook: magic a 0, reset, raccolta, magic armato solo se almeno un nome. Se tra la stampa di IDF e l'hook il task si sblocca e non risulta più nessun nome, il record non viene armato (nessuna riga, meglio che una riga vuota).
+  - **Riga nel System Log:** in `CrashDiag::logBootInfo()` dopo il blocco `Last crash` / `Backtrace` (che resta identico), livello ERROR: `[DIAG] Watchdog: tasks not responding: ups_poll (CPU 0/1)`. Compare anche senza partizione coredump (dove `Last crash` manca): è proprio il caso in cui serve di più.
+  - **Nome reale del task USB:** è `ups_poll` creato con `tskNO_AFFINITY`, quindi la riga dirà `ups_poll (CPU 0/1)`, non `usb_poll (CPU 1)` come nell'esempio della spec (era un esempio).
+  - **Export diagnostica USB** (`lib/WebApi/src/UsbDiagJson.*`, `usb_diagnostics.json`): oggi **non** ha una sezione crash, quindi per il criterio 2 non si tocca. Le info sul crash oggi stanno in `/api/status` → `diagnostics` (`CrashDiag::fillJson`) e nel banner della web UI (`data/www/bundle.js`, "Last crash ... in task"): lì aggiungiamo `diagnostics.twdt_tasks` (stringa, solo se presente, fuori da `last_crash` che può mancare) e una riga nel banner, così il banner non mostra solo `IDLE1`, che è fuorviante.
+  - **Build di prova per la dimostrazione:** flag di compilazione `NUT_TEST_TWDT_HANG` (default assente) in `USBHostUPS::poll_task`: 60 s dopo l'avvio del task, fuori dal mutex, il task smette di resettare il watchdog (`while (true) vTaskDelay(1000 ms)`). Si attiva con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_TWDT_HANG=1`, senza toccare `platformio.ini`.
+  - **Invariato:** `LOOP_WDT_TIMEOUT_MS`, `trigger_panic = true`, `idle_core_mask`, `__wrap_esp_core_dump_write`, `readCoreDumpSummary()` e il formato delle righe `Last crash` / `Backtrace`.
+
+  Rischio noto e accettato: `esp_task_wdt_print_triggered_tasks` legge la lista dei task del TWDT senza lock; se nello stesso istante un altro task fa `esp_task_wdt_add/delete` (il poll task fa `delete` quando l'UPS si scollega) la lettura può vedere la lista a metà. Finestra di pochi microsecondi, con il panic in arrivo comunque; il buffer è limitato, quindi al peggio i nomi sono incompleti.
+
+  Da verificare sulla scheda P4: che `RTC_NOINIT_ATTR` sopravviva al reset da panic (oggi è provato solo dopo `esp_restart()`). Se non sopravvive, la riga manca solo sulla P4: va annotato nei risultati della prova (servirà per le note di rilascio), non blocca la spec.
+
+  ---
+
+  ## Strategia di test
+
+  La logica che decide cosa salvare e cosa mostrare sta tutta nell'header puro e si prova nella suite nativa; la parte ESP-IDF (hook, RTC, reset reason) si prova con le tre build, con `nm` sull'ELF e sulla scheda.
+
+  - **Unit nativi** (`test/test_twdt_task_list`): sequenze di messaggi identiche a quelle di `task_wdt.c` (didascalia + una voce, due voci, voce `CPU 0/1`), troncamento con nomi lunghi e molte voci (canary dopo il buffer intatto, testo sempre terminato, `truncated` a 1), nessuna voce → niente record, `consume` con magic giusto/sbagliato, reset `TASK_WDT` sì/no, seconda chiamata a `consume` che non restituisce più nulla (vale un solo riavvio), testo RTC non terminato (garbage) gestito senza uscire dal buffer.
+  - **Build:** `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` ok; `nm` sull'ELF S3 e P4 mostra `esp_task_wdt_isr_user_handler` come simbolo definito (`T`), non `w`.
+  - **Regressione:** suite nativa completa verde; con un riavvio normale il System Log è identico a oggi.
+  - **Prova sulla scheda** (S3 con Eaton 3S, e P4 v1.3 se disponibile): build con `NUT_TEST_TWDT_HANG=1` → dopo il riavvio `Reset reason: TASK_WDT`, `Last crash`, `Backtrace` come oggi più `[DIAG] Watchdog: tasks not responding: ups_poll (CPU 0/1)`; poi riavvio da comando/OTA con firmware normale → la riga non compare. Risultati in `docs/test-results/US-110/`.
+
+  Nessuna parte nuova di UI con layout proprio (solo una riga in più nel banner esistente): niente mockup e niente test e2e; il progetto non ha infrastruttura e2e per la web UI embedded.
+tasks:
+  - id: TASK-01
+    title: 'Header puro twdt_task_list.h: buffer fisso, feed dei messaggi IDF, consume one-shot'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** logica senza dipendenze (né Arduino né ESP-IDF) che trasforma i messaggi di `esp_task_wdt_print_triggered_tasks` in una stringa limitata e decide se mostrarla al boot.
+
+      **Da leggere:** `src/core/crash_diag.cpp` (stile di `s_restart_reason`), `~/.platformio/packages/framework-espidf/components/esp_system/task_wdt/task_wdt.c` righe 783-825 (formato dei messaggi: didascalia, poi per ogni task `"\n - "`, nome, `" (CPU 0)"` / `" (CPU 1)"` / `" (CPU 0/1)"`).
+
+      **Modifiche:** nuovo file `include/core/twdt_task_list.h`, solo `#include <stdint.h>` e `<stddef.h>`.
+
+      **Passi:**
+      1. Costanti: `TWDT_TASKS_MAX_LEN = 96`, `TWDT_LIST_MAGIC = 0x4E555457u` ("NUTW").
+      2. `struct TwdtTaskList { char text[TWDT_TASKS_MAX_LEN]; uint8_t len; uint8_t count; uint8_t in_entry; uint8_t truncated; };` (POD, va in `RTC_NOINIT_ATTR`).
+      3. `static inline void twdt_list_reset(TwdtTaskList* l)`: tutti i campi a 0, `text[0] = '\0'`.
+      4. Helper `static inline void twdt_list_append(TwdtTaskList* l, const char* s)`: copia carattere per carattere finché `len < TWDT_TASKS_MAX_LEN - 1`; se restano caratteri `truncated = 1`; termina sempre `text[len] = '\0'`. Niente `strlen`/`memcpy`/`snprintf`.
+      5. `static inline void twdt_list_feed(TwdtTaskList* l, const char* msg)`: NULL → ritorna; se `msg` è esattamente `"\n - "` (confronto manuale) → se `count > 0` appende `", "`, `count` +1 (saturato a 255), `in_entry = 1`; altrimenti se `in_entry` appende `msg`; altrimenti ignora (didascalia).
+      6. `static inline bool twdt_list_consume(uint32_t* magic, const TwdtTaskList* rec, bool reset_is_task_wdt, char* out, size_t out_size)`: `ok = *magic == TWDT_LIST_MAGIC && reset_is_task_wdt && rec->count > 0`; **sempre** `*magic = 0`; se non ok o `out_size == 0` → `out[0]='\0'` (se possibile) e false; altrimenti copia `rec->text` fino al primo `'\0'` o a `TWDT_TASKS_MAX_LEN - 1` o a `out_size - 1`, e se `rec->truncated` aggiunge `"..."` se c'è spazio; termina e ritorna true.
+      7. Commento in testa (inglese, come gli altri header): perché esiste (US-110, #112), vincoli ISR (niente heap, niente lock, niente log).
+
+      **Verifica:** compila nella suite nativa (TASK-02).
+
+      **Fatto:** header autocontenuto, nessuna funzione di libreria usata nelle funzioni chiamate dall'ISR.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/core/twdt_task_list.h — nuovo header puro
+
+      ## Criteri di Completamento
+      - [ ] Struct POD con buffer fisso da 96 byte e flag `truncated`
+      - [ ] `feed` ignora la didascalia e produce `nome (CPU x), nome2 (CPU y)`
+      - [ ] `consume` azzera sempre il magic e restituisce il testo solo con magic giusto, reset TASK_WDT e almeno un nome
+      - [ ] Nessuna allocazione, nessun lock, nessuna funzione di libreria
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di twdt_task_list.h
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare nella suite nativa tutta la logica di salvataggio e di validità del record.
+
+      **Da leggere:** `test/test_restart_policy/test_main.cpp` (stile Unity), sezione `[env:native]` di `platformio.ini` (`-I include` già presente: non serve toccarla).
+
+      **Modifiche:** nuova cartella `test/test_twdt_task_list/` con `test_main.cpp`.
+
+      **Passi (un test per punto):**
+      1. Didascalia + `"\n - "`, `"ups_poll"`, `" (CPU 0/1)"` → testo `ups_poll (CPU 0/1)`, `count == 1`.
+      2. Due voci (`loopTask (CPU 1)` e `IDLE0 (CPU 0)`) → `loopTask (CPU 1), IDLE0 (CPU 0)`.
+      3. Solo didascalia → `count == 0`, testo vuoto.
+      4. Troncamento: 10 voci con nomi da 16 caratteri dentro una struct seguita da un array canary → `len == 95`, `text[95] == '\0'`, `truncated == 1`, canary intatto.
+      5. `feed` con `msg == NULL` o lista NULL non fa nulla.
+      6. `consume` valido → true, testo copiato, magic a 0; seconda chiamata → false (vale un solo riavvio).
+      7. `consume` con reset non TASK_WDT → false e magic comunque a 0.
+      8. `consume` con magic sbagliato → false.
+      9. `consume` con record troncato → testo che finisce con `...`; con `out_size` piccolo (es. 8) → nessun overflow, terminato.
+      10. Record garbage (magic giusto, `text` tutto `'A'` senza terminatore, `count` > 0) → copia limitata e terminata.
+
+      **Verifica (PowerShell):** `$env:PATH="$env:USERPROFILE\.platformio\packages\toolchain-gccmingw32\bin;$env:PATH"; & "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" test -e native -f test_twdt_task_list`
+
+      **Fatto:** tutti i test verdi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_twdt_task_list/test_main.cpp — nuovi test Unity
+
+      ## Criteri di Completamento
+      - [ ] I 10 casi sopra coperti e verdi
+      - [ ] Il test del troncamento verifica il canary dopo il buffer
+    ref: TASK-02
+  - id: TASK-03
+    title: 'CrashDiag: hook ISR del TWDT, record RTC, riga [DIAG] nel System Log e campo twdt_tasks'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** agganciare l'hook weak di ESP-IDF, salvare i nomi in RTC prima del panic e mostrarli al boot successivo con reset TASK_WDT.
+
+      **Da leggere:** `src/core/crash_diag.cpp` (tutto), `include/core/crash_diag.h`, `include/core/twdt_task_list.h`, `esp_task_wdt.h` del core (`esp_task_wdt_isr_user_handler`, `task_wdt_msg_handler`, `esp_task_wdt_print_triggered_tasks`).
+
+      **Modifiche:** solo `src/core/crash_diag.cpp` e il commento di `include/core/crash_diag.h`.
+
+      **Passi:**
+      1. Include `core/twdt_task_list.h` e `esp_task_wdt.h`.
+      2. Accanto a `s_restart_reason`: `static RTC_NOINIT_ATTR uint32_t s_twdt_magic;` e `static RTC_NOINIT_ATTR TwdtTaskList s_twdt_list;` più `static char s_twdt_tasks[TWDT_TASKS_MAX_LEN + 4];` (RAM normale, per il boot corrente).
+      3. Callback `static void twdtMsgHandler(void* opaque, const char* msg) { twdt_list_feed((TwdtTaskList*)opaque, msg); }` marcata `IRAM_ATTR`.
+      4. `extern "C" void IRAM_ATTR esp_task_wdt_isr_user_handler(void)`: `s_twdt_magic = 0; twdt_list_reset(&s_twdt_list); esp_task_wdt_print_triggered_tasks(twdtMsgHandler, &s_twdt_list, NULL); if (s_twdt_list.count > 0) s_twdt_magic = TWDT_LIST_MAGIC;`. Commento: gira nell'ISR del TWDT fuori dallo spinlock, prima del panic; niente log, heap o lock; rischio accettato della lista letta senza lock (vedi piano).
+      5. In `begin()`, dopo aver letto `s_reset_reason`: `twdt_list_consume(&s_twdt_magic, &s_twdt_list, s_reset_reason == ESP_RST_TASK_WDT, s_twdt_tasks, sizeof(s_twdt_tasks));` (azzera sempre il magic).
+      6. In `logBootInfo()`, **dopo** il blocco `if (s_has_crash) {...}` lasciato identico: `if (s_twdt_tasks[0]) AppLogger::log("ERROR", "[DIAG] Watchdog: tasks not responding: %s", s_twdt_tasks);`.
+      7. In `fillJson()`: `if (s_twdt_tasks[0]) obj["twdt_tasks"] = s_twdt_tasks;` (a livello di `diagnostics`, non dentro `last_crash`).
+      8. Aggiornare il commento di `crash_diag.h` (elenco di cosa logga: anche i task che non hanno resettato il task watchdog).
+      9. **Non** toccare `setupLoopWatchdog()` in `src/core/main.cpp`, `__wrap_esp_core_dump_write`, `readCoreDumpSummary()`, le righe `Last crash` / `Backtrace`. Non toccare `lib/WebApi/src/UsbDiagJson.*` (non ha sezione crash).
+
+      **Verifica:** `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard` da PowerShell compila; poi `xtensa-esp32s3-elf-nm .pio/build/esp32-s3-standard/firmware.elf | Select-String esp_task_wdt_isr_user_handler` mostra `T` (definito).
+
+      **Fatto:** hook linkato, riga e campo JSON solo dopo un reset TASK_WDT con record valido.
+
+      **Blocchi:** se il link desse simbolo duplicato (non atteso: verificato che nessuna libreria lo definisce) fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - src/core/crash_diag.cpp — record RTC, hook ISR, consume al boot, riga nel log, campo JSON
+      - include/core/crash_diag.h — commento aggiornato
+
+      ## Criteri di Completamento
+      - [ ] `esp_task_wdt_isr_user_handler` definita e linkata (nm: `T`)
+      - [ ] Riga `[DIAG] Watchdog: tasks not responding: ...` solo con reset TASK_WDT e record valido, dopo `Last crash` / `Backtrace`
+      - [ ] Magic azzerato a ogni boot
+      - [ ] `diagnostics.twdt_tasks` presente solo quando c'è la riga
+      - [ ] Righe `Last crash` / `Backtrace`, timeout e `trigger_panic` invariati
+    ref: TASK-03
+  - id: TASK-04
+    title: Flag di prova NUT_TEST_TWDT_HANG che blocca il poll task USB
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** una build di prova, spenta di default, che fa scattare il task watchdog sul task `ups_poll` per la dimostrazione e la prova sulla scheda.
+
+      **Da leggere:** `lib/USBHostUPS/src/USBHostUPS.cpp` `USBHostUPS::poll_task` (righe ~133-152).
+
+      **Modifiche:** solo `poll_task`.
+
+      **Passi:**
+      1. Prima del `while`: `#if defined(NUT_TEST_TWDT_HANG) && NUT_TEST_TWDT_HANG` salva `TickType_t hang_start = xTaskGetTickCount();` `#endif`.
+      2. Nel `while`, subito dopo `esp_task_wdt_reset()` e **prima** di `xSemaphoreTake` (il mutex non deve restare preso, così loopTask e web UI continuano): se sono passati 60 s da `hang_start` → `self->log("WARN", "[TEST] Poll task stops feeding the task watchdog (NUT_TEST_TWDT_HANG)")` e `while (true) vTaskDelay(pdMS_TO_TICKS(1000));`.
+      3. Commento: solo per la prova di US-110, si attiva con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_TWDT_HANG=1`.
+
+      **Verifica:** build normale identica (il codice è tutto dentro `#if`); build con `$env:PLATFORMIO_BUILD_FLAGS="-DNUT_TEST_TWDT_HANG=1"` compila (`esp32-s3-standard`). Ricordarsi di togliere la variabile d'ambiente dopo.
+
+      **Fatto:** flag assente → nessun cambiamento; flag attivo → poll task fermo dopo 60 s.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — blocco `#if NUT_TEST_TWDT_HANG` in `poll_task`
+
+      ## Criteri di Completamento
+      - [ ] Senza flag il binario non cambia comportamento
+      - [ ] Con flag il task smette di resettare il watchdog 60 s dopo l'avvio, senza tenere `_op_mutex`
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Web UI: riga dei task del watchdog nel banner diagnostico'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il banner della web UI, che oggi mostra "Last crash ... in task IDLE1", mostra anche i task che non hanno resettato il watchdog.
+
+      **Da leggere:** `data/www/bundle.js` funzione del banner diagnostico (righe ~1315-1350, `diag.last_crash`), `scripts/embed_web.py`.
+
+      **Modifiche:** `data/www/bundle.js`, poi i file generati.
+
+      **Passi:**
+      1. Dopo il blocco `if (diag.last_crash) {...} else if (...) {...}`: `if (diag.twdt_tasks) { addLine('Task watchdog: tasks not responding: ', diag.twdt_tasks); }`.
+      2. Da `D:\esp32-nut`: `python scripts/embed_web.py` (il pre-script PlatformIO non rigenera nulla) per aggiornare `data/www/index_inlined.html` e `include/network/web_assets.h`.
+
+      **Verifica:** `git diff --stat` mostra `bundle.js`, `index_inlined.html`, `web_assets.h`; build `esp32-s3-standard` ok.
+
+      **Fatto:** riga mostrata solo se `diagnostics.twdt_tasks` c'è.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — riga nel banner
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] Riga `Task watchdog: tasks not responding: ...` nel banner quando il campo c'è
+      - [ ] File generati aggiornati con `embed_web.py`
+    ref: TASK-05
+  - id: TASK-06
+    title: Tre build, suite nativa completa e controllo del link dell'hook
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che nulla si è rotto e che l'hook è davvero linkato su S3 e P4.
+
+      **Da leggere:** memoria di progetto (build da PowerShell, PATH per mingw).
+
+      **Modifiche:** nessuna (solo verifica); correggere eventuali errori nei file dei task precedenti.
+
+      **Passi:**
+      1. Da PowerShell, senza `PLATFORMIO_BUILD_FLAGS`: `pio run -e esp32-s3-standard`, `pio run -e esp32-p4-eth`, `pio run -e esp32-p4-eth-v1` (con `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"`).
+      2. `nm` sugli ELF: S3 con `~/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-nm.exe`, P4 con il `nm` di `toolchain-riscv32-esp`; `esp_task_wdt_isr_user_handler` deve essere `T` in tutte e tre.
+      3. Suite nativa completa: `$env:PATH="$env:USERPROFILE\.platformio\packages\toolchain-gccmingw32\bin;$env:PATH"; pio test -e native`.
+
+      **Verifica:** tre build ok, simbolo `T` nei tre ELF, suite nativa tutta verde (riportare il conteggio).
+
+      **Fatto:** output delle tre build e della suite annotati nel resoconto dell'implementazione.
+
+      **Blocchi:** se il simbolo resta `w`/assente su una piattaforma, l'hook non viene chiamato lì: fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - .pio/build/*/firmware.elf — solo lettura con nm
+
+      ## Criteri di Completamento
+      - [ ] Tre build ok
+      - [ ] Hook definito nei tre ELF
+      - [ ] Suite nativa verde
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Prova sulla scheda: riavvio TASK_WDT con nomi, riavvio normale senza riga'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riprodurre la dimostrazione della spec su hardware e verificare che il dato valga per un solo riavvio.
+
+      **Da leggere:** criteri di accettazione della spec, `docs/test-results/US-072/` (formato dei risultati).
+
+      **Modifiche:** nuovo `docs/test-results/US-110/README.md` con i risultati.
+
+      **Passi:**
+      1. Build S3 con `$env:PLATFORMIO_BUILD_FLAGS="-DNUT_TEST_TWDT_HANG=1"`, caricarla sulla scheda di prova con l'Eaton 3S collegato.
+      2. Aspettare il riavvio (60 s + 30 s di timeout). Nel System Log: `Reset reason: TASK_WDT`, `Last crash` e `Backtrace` come prima, e `[DIAG] Watchdog: tasks not responding: ups_poll (CPU 0/1)`. Nel banner della web UI la riga corrispondente. Copiare le righe nei risultati.
+      3. Togliere la variabile, ricaricare il firmware normale via OTA: dopo il riavvio (reset SOFTWARE) la riga non c'è e `/api/status` non ha `twdt_tasks`.
+      4. Riavvio da comando dalla web UI: la riga non c'è.
+      5. Se disponibile la P4 v1.3 (`esp32-p4-eth-v1`): ripetere 1-3 e annotare se il record RTC sopravvive al panic sulla P4.
+
+      **Verifica:** righe del log copiate nei risultati per ogni caso.
+
+      **Fatto:** risultati salvati; eventuale limite P4 annotato.
+
+      **Blocchi:** serve la scheda fisica: se non è raggiungibile, lasciare il task aperto e segnalarlo all'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-110/README.md — risultati della prova
+
+      ## Criteri di Completamento
+      - [ ] Dopo il blocco: riga `[DIAG] Watchdog: ...` con `ups_poll`, `Last crash` e `Backtrace` presenti come prima
+      - [ ] Dopo OTA e riavvio da comando la riga non compare
+      - [ ] Esito P4 annotato (o motivo per cui non provata)
+    ref: TASK-07
