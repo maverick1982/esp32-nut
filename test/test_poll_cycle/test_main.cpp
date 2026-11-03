@@ -215,7 +215,7 @@ void test_report_id_zero_polled(void) {
 
 void test_cyberpower_policy(void) {
     standardDevice();
-    host.addUsage(0x00840040, 4, 3, "UPS.Flow.ConfigFrequency");  // hangs some firmwares
+    host.addUsage(0x00840040, 4, 3, "UPS.Flow.ConfigFrequency");  // vendor layout: report 4 hung the BR700ELCD (#40)
     host.addUsage(0x00840040, 130, 3, "UPS.Vendor");              // vendor defined
     CyberPowerDriver drv;
     drv.setup();
@@ -231,6 +231,22 @@ void test_cyberpower_policy(void) {
     TEST_ASSERT_EQUAL(0, host._reports.size());
     runLoop(drv, 31000, 31500);
     TEST_ASSERT_EQUAL(2, host._reports.size());
+}
+
+// Layout without vendor reports (CP1350C, CP1500, CP1600, CP2000): report 4 carries
+// iOEMInformation (battery.mfr.date, cps-hid.c:368) and is read; report 6 never (US-111)
+void test_cyberpower_standard_layout_reads_report_4(void) {
+    standardDevice();
+    host.addUsage(0x0085008F, 4, 3, "UPS.PowerSummary.iOEMInformation");
+    host.addUsage(0x0085002C, 6, 3, "UPS.PowerSummary.CapacityMode");
+    CyberPowerDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 2000);
+    TEST_ASSERT_EQUAL(3, host._reports.size());
+    TEST_ASSERT_EQUAL_UINT8(1, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT8(2, host._reports[1].first);
+    TEST_ASSERT_EQUAL_UINT8(4, host._reports[2].first);
+    TEST_ASSERT_EQUAL_UINT8(3, host._reports[2].second);
 }
 
 void test_eaton_skips_reports_254_255(void) {
@@ -824,6 +840,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_no_interrupt_pipe_quirk_reads_feature_reports_only);
     RUN_TEST(test_report_id_zero_polled);
     RUN_TEST(test_cyberpower_policy);
+    RUN_TEST(test_cyberpower_standard_layout_reads_report_4);
     RUN_TEST(test_eaton_skips_reports_254_255);
     RUN_TEST(test_eaton_abm_report_in_quick_poll);
     RUN_TEST(test_string_index_found_in_reports_requested_same_cycle);

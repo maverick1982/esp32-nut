@@ -10,6 +10,7 @@ public:
     std::vector<HIDUsageDef> _usages;
     uint32_t _quirks = 0;
     std::vector<uint8_t> _requestedStrings;
+    std::vector<std::pair<uint8_t, uint8_t>> _requestedReports; // (report_id, report_type)
 
     void lock() const override {}
     void unlock() const override {}
@@ -22,7 +23,10 @@ public:
     uint16_t _pid = 0x0501;
     uint16_t getPID() const override { return _pid; }
     bool isPollingPaused() const override { return false; }
-    bool requestReport(uint8_t, uint8_t, uint16_t) override { return true; }
+    bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
+        _requestedReports.push_back({report_id, report_type});
+        return true;
+    }
     bool requestStringDescriptor(uint8_t index) override {
         _requestedStrings.push_back(index);
         return true;
@@ -37,6 +41,7 @@ void setUp(void) {
     ups_data = UPSData();
     mockHost._usages.clear();
     mockHost._requestedStrings.clear();
+    mockHost._requestedReports.clear();
     mockHost._quirks = 0;
     mockHost._pid = 0x0501;
     mockHost._iManufacturer = 0;
@@ -499,6 +504,54 @@ void test_cyberpower_string_truncated_to_19(void) {
     TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJKLMNOPQRS", ups_data.get("battery.mfr.date").c_str());
 }
 
+static bool reportRequested(uint8_t report_id) {
+    for (const auto& r : mockHost._requestedReports) {
+        if (r.first == report_id && r.second == 3) return true;
+    }
+    return false;
+}
+
+// CP2000EIPFCRM2U layout (issue #108): iOEMInformation on FEATURE 4, no vendor report. The full
+// poll reads report 4, then asks for the string of its index: battery.mfr.date as cps-hid.c:368,
+// at most 19 characters (US-111)
+void test_cyberpower_cp2000_layout_reads_battery_date_from_report_4(void) {
+    mockHost._pid = 0x0601;
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.iOEMInformation", 0x0085008f, 0x04, 3));
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.CapacityMode", 0x0085002c, 0x06, 3));
+    runLoopSteps(8);
+    TEST_ASSERT_TRUE(reportRequested(0x04));
+    TEST_ASSERT_FALSE(reportRequested(0x06));
+    TEST_ASSERT_EQUAL_UINT32(0, mockHost._requestedStrings.size());
+
+    // The answer carries string index 7: asked for in the next full poll (30 s later)
+    feed(0x04, 3, 7);
+    for (uint32_t t = 31000; t <= 32000; t += 60) driver.loop(&mockHost, ups_data, t);
+    TEST_ASSERT_EQUAL_UINT32(1, mockHost._requestedStrings.size());
+    TEST_ASSERT_EQUAL_UINT8(7, mockHost._requestedStrings[0]);
+
+    const char* text = "2021/03/15 ABCDEFGHIJKLMN"; // 25 characters
+    uint8_t desc[2 + 2 * 25];
+    desc[0] = sizeof(desc);
+    desc[1] = 0x03;
+    for (int i = 0; i < 25; i++) {
+        desc[2 + 2 * i] = (uint8_t)text[i];
+        desc[3 + 2 * i] = 0;
+    }
+    driver.parseStringDescriptor(&mockHost, 7, desc, sizeof(desc), ups_data);
+    TEST_ASSERT_EQUAL_STRING("2021/03/15 ABCDEFGH", ups_data.get("battery.mfr.date").c_str());
+}
+
+// BR700ELCD layout (issue #40): report 4 (iDeviceChemistry) hung that UPS and is never read
+void test_cyberpower_vendor_layout_skips_report_4(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.iDeviceChemistry", 0x00850089, 0x04, 3));
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.RemainingCapacity", 0x00850066, 0x07, 3));
+    mockHost._usages.push_back(nutField("UPS.Output.DelayBeforeShutdown", 0x00840057, 134, 3, 16));
+    runLoopSteps(8);
+    TEST_ASSERT_TRUE(reportRequested(0x07));
+    TEST_ASSERT_FALSE(reportRequested(0x04));
+    TEST_ASSERT_FALSE(reportRequested(134));
+}
+
 // driver.name, not ups.type (the UPS topology in NUT)
 void test_cyberpower_driver_name(void) {
     driver.loop(&mockHost, ups_data, 1000);
@@ -530,6 +583,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_extensions_kept);
     RUN_TEST(test_cyberpower_realpower_estimate_when_apparent_nominal_after_load);
     RUN_TEST(test_cyberpower_string_truncated_to_19);
+    RUN_TEST(test_cyberpower_cp2000_layout_reads_battery_date_from_report_4);
+    RUN_TEST(test_cyberpower_vendor_layout_skips_report_4);
     RUN_TEST(test_cyberpower_driver_name);
     return UNITY_END();
 }
@@ -556,6 +611,8 @@ void setup() {
     RUN_TEST(test_cyberpower_extensions_kept);
     RUN_TEST(test_cyberpower_realpower_estimate_when_apparent_nominal_after_load);
     RUN_TEST(test_cyberpower_string_truncated_to_19);
+    RUN_TEST(test_cyberpower_cp2000_layout_reads_battery_date_from_report_4);
+    RUN_TEST(test_cyberpower_vendor_layout_skips_report_4);
     RUN_TEST(test_cyberpower_driver_name);
     UNITY_END();
 }

@@ -49,7 +49,7 @@ The first implementation (`7dbde3e`) never reached `main`: until 1.5.x every dri
   * 50 ms between requests, and none while `isPollingPaused()`.
   * Report ID 0 included.
 * **Implemented differently:** point 5. The driver hooks are `quickPollMs()` (0 = no quick poll), `fullPollMs()`, `acceptPollReport()`, `pollInputReports()`, `buildPollLists()`, `collectStringRequests()`, `upsTypeName()` and `onLoop()`. The request spacing is fixed (`STEP_SPACING_MS`): there is no `getPollPacingMs()` and no Powercom 800 ms pacing (that exists only on the unmerged `feature/issue-36` branch). The drivers use them as follows:
-  * **CyberPower:** no quick poll; FEATURE reports only, every 30 s, excluding IDs 4, 6 and >= 130.
+  * **CyberPower:** no quick poll; FEATURE reports only, every 30 s, excluding IDs 6 and >= 130, and ID 4 on the layouts with vendor reports (#40; read on the others for battery.mfr.date, US-111).
   * **Eaton:** excludes reports 254 and 255.
   * **Powercom:** fixed lists, 0x0A every 2 s and 0x0A, 0x1D, 0x21, 0x1F every 30 s. The `0xA4` report is decoded if it arrives but is not requested.
 * **Not implemented:**
