@@ -834,8 +834,8 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
 // Live dump of v1.11.0 attached to issue #108 (ESP32-P4): every value of the dump is the same on
 // main but the strings (battery.type, ups.firmware: no string descriptors in the dump) and the
 // serial (anonymized). battery.mfr.date (cps-hid.c:368, PowerSummary.iOEMInformation, FEATURE
-// 0x04) is bound but never published, on v1.11.0 too: CyberPowerDriver::acceptPollReport() never
-// reads reports 4 and 6. A future spec will read report 4
+// 0x04) is bound, and report 4 is read since US-111 (layout without vendor reports), but the dump
+// of v1.11.0 has neither report 4 nor the string descriptors: the date is checked on the field
 void test_replay_cyberpower_cp2000eipfcrm2u_issue108(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
         CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP2000EIPFCRM2U,
@@ -1206,7 +1206,8 @@ static const char* const kCpsSnapshotCp1600epfclcd =
 
 // Added after the cps_hid2nut migration (issue #108, dump of v1.11.0): taken from main, the same
 // as the dump but battery.type and ups.firmware (strings the dump does not have) and the serial
-// (anonymized). No battery.mfr.date: report 4 is never read (acceptPollReport)
+// (anonymized). No battery.mfr.date: report 4 is read since US-111, but the dump has neither
+// report 4 nor the string descriptors
 static const char* const kCpsSnapshotCp2000eipfcrm2u =
     "battery.charge.low=10\n"
     "battery.charge.warning=20\n"

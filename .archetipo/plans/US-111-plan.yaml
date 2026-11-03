@@ -1,0 +1,192 @@
+schema: archetipo/plan/v2
+spec_code: US-111
+body: |-
+  ## Soluzione tecnica
+
+  ### Stato attuale
+  - `cpsHid2Nut()` ha già la riga `battery.mfr.date` ← `UPS.PowerSummary.iOEMInformation` con `Conv::StringId` (`NutTable.h:2480-2481`, `cps-hid.c:368`). La richiesta della stringa (`collectTableStringRequests`), il ricontrollo a fine full poll e il taglio a 19 caratteri (`test_cyberpower_string_truncated_to_19`) funzionano già con l'indice su altri report (test con report 5).
+  - L'unico ostacolo è `CyberPowerDriver::acceptPollReport()`, che esclude sempre i report 4 e 6 e quelli dal 130 in su (`73fe02b`, #40).
+
+  ### Cosa contiene il report 4 nelle fixture (FEATURE)
+  | Fixture | PID | Report vendor ≥130 | Report 4 |
+  |---|---|---|---|
+  | BR700ELCD (#40) | 0x0501 | sì | `PowerSummary.iDeviceChemistry` |
+  | UT850EG (discussione #95) | 0x0501 | sì | `PowerSummary.iDeviceChemistry` |
+  | CP1350C | 0x0501 | no | `PowerSummary.iOEMInformation` |
+  | CP1500EPFCLCD | 0x0501 | no | `PowerSummary.iOEMInformation` |
+  | CP1600EPFCLCD (#48) | 0x0601 | no | `PowerSummary.iOEMInformation` |
+  | CP2000EIPFCRM2U (#108) | 0x0601 | no | `PowerSummary.iOEMInformation` |
+
+  ### Decisione: il report 4 si legge sui layout senza report vendor, con qualsiasi PID
+  - **Motivazione.** Il blocco sull'ID 4 è documentato solo sul BR700ELCD (`docs/issues/issue-40.md`, analisi della v4: "l'UPS si è bloccato sull'ID 4"), cioè sul layout con report vendor. In quel layout il report 4 contiene `iDeviceChemistry`, e `requestTableStrings()` lì non chiede le stringhe della tabella: leggerlo darebbe solo un indice inutile, con il rischio del blocco della #40. Sui layout standard il report 4 contiene `iOEMInformation`, sia sui `0x0501` (CP1350C, CP1500) sia sui `0x0601`. Il PID non distingue il layout a rischio, perché il BR700ELCD è `0x0501` come i CP1350C/CP1500. Il criterio è quindi quello già usato da `requestTableStrings()`: `hasVendorReports(host)`.
+  - **Cosa cambia.** Layout standard: `4/3` entra nel full poll (ogni 30 s, come la riga a flag 0 di NUT). Layout vendor: nessun cambiamento. Il report 6 e i report ≥130 restano esclusi ovunque (fuori scope).
+  - **UPS che non risponde al report 4.** La richiesta va in timeout e il canale di controllo si ripristina come previsto dall'ADR 0008 (timeout, clear del pipe, riavvio controllato), senza bloccare la scheda. Non serve codice nuovo: è lo stesso percorso di ogni altro FEATURE report.
+
+  ### Implementazione
+  - `acceptPollReport()` è `const` e non riceve l'host. `CyberPowerDriver` aggiunge `mutable bool _vendor_layout = true` e un override di `buildPollLists()` (stesso pattern di `PowercomDriver`), che imposta `_vendor_layout = hasVendorReports(host)` e poi chiama `GenericDriver::buildPollLists()`. `acceptPollReport()` diventa:
+    `return !(report_id >= FIRST_VENDOR_REPORT || report_id == 6 || (report_id == 4 && _vendor_layout));`
+  - Il valore iniziale `true` è prudente: prima che le liste esistano, `isReportRead()` (usato solo per `ups.realpower`, che non è nel report 4) tratta il report 4 come non letto. `buildPollLists()` ricalcola il flag a ogni nuova enumerazione (`setup()` rimette `_lists_built = false`).
+  - Alcuni modelli usano lo stesso indice per `iOEMInformation` e `iManufacturer` (`test_cyberpower_string_index_shared_with_device_string`): in quel caso `battery.mfr.date` vale come la stringa del produttore, esattamente come in NUT con la stessa riga. Comportamento fedele, nessun filtro.
+
+  ### Documentazione
+  - Commenti di `CyberPowerDriver.h/.cpp`, ADR 0006 (riga "CyberPower: ... excluding IDs 4, 6 and >= 130"), `notes` della fixture CP2000 e commenti dei test di replay che oggi dicono "report 4 is never read".
+  - Note di rilascio: rimandate a prima della release, scritte tutte insieme con il numero di versione corretto (decisione dell'utente). Il criterio di accettazione relativo resta aperto fino ad allora.
+
+  ## Strategia di test
+  - **Unit, `test_poll_cycle`:** layout standard CyberPower (FEATURE 1, 2, 4, 6, nessun report ≥130): il full poll chiede 1, 2 e 4, non 6. `test_cyberpower_policy` (layout con report 130) resta com'è: report 4 escluso. Aggiornare solo il commento "hangs some firmwares".
+  - **Unit, `test_cyberpower_driver`:** la mock registra anche le richieste di report. Layout CP2000 (PID 0x0601, `iOEMInformation` sul FEATURE 4): il loop chiede `4/3`; dopo il decode del report 4 con indice N la stringa N viene chiesta e `battery.mfr.date` prende il testo, tagliato a 19 caratteri. Layout vendor (`iDeviceChemistry` sul 4 e un report 130): nessuna richiesta del report 4.
+  - **Replay e golden:** rigenerare con `ESP32NUT_WRITE_GOLDEN=1`. Atteso: nelle `*.registry.txt` di CP1350C, CP1500EPFCLCD, CP1600EPFCLCD (#48) e CP2000EIPFCRM2U (#108) compare `4/3` in `[requests]`. BR700ELCD e UT850EG invariati, tutte le `*.generic.txt` invariate (GenericDriver legge già 4 e 6), snapshot invariati (le fixture non hanno dati del report 4 né descrittori di stringa). Ogni altra differenza va spiegata o corretta.
+  - **E2E:** non applicabile (nessuna UI). Nessun video demo: la dimostrazione è sul campo.
+  - **Finale:** suite nativa completa e build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+
+  ## Note
+  - La data vera si verifica solo sul campo: dopo l'implementazione, una build di prova per kobbybest sulla #108 (promessa in issuecomment-6599487772), su richiesta dell'utente come per US-110.
+  - Comandi: test nativi da Git Bash con `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native ...`. Build da PowerShell con `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e <env>`.
+  - Branch: `feature/us-111` (worktree ARchetipo disattivato).
+tasks:
+  - id: TASK-01
+    title: 'CyberPowerDriver: report 4 letto sui layout senza report vendor'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Objective:** il full poll CyberPower legge il FEATURE report 4 quando il layout non ha report vendor (≥130). Il report 6 e i report ≥130 restano sempre esclusi, e il report 4 resta escluso sui layout vendor (BR700ELCD, UT850EG).
+
+      **Read:** `lib/USBHostUPS/src/CyberPowerDriver.h`, `lib/USBHostUPS/src/CyberPowerDriver.cpp` (`acceptPollReport`, `hasVendorReports`), `lib/USBHostUPS/src/PowercomDriver.h` (esempio di override di `buildPollLists`), `GenericDriver.h:108-111`.
+
+      **Change:**
+      1. `CyberPowerDriver.h`: dichiarare `void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const override;` nella sezione protected. Aggiungere nel private `mutable bool _vendor_layout = true;`, con un commento: layout con report vendor (#40), dove il report 4 bloccava il BR700ELCD; vale true finché le liste non sono costruite.
+      2. `CyberPowerDriver.cpp`: implementare `buildPollLists()` così: `_vendor_layout = hasVendorReports(host); GenericDriver::buildPollLists(host, quick, full);`.
+      3. `acceptPollReport()`: `return !(report_id >= FIRST_VENDOR_REPORT || report_id == 6 || (report_id == 4 && _vendor_layout));`
+      4. Aggiornare i commenti (header e cpp): il report 6 e i report vendor bloccano alcuni firmware; il report 4 si salta solo sui layout vendor (#40: blocco sull'ID 4 del BR700ELCD, dove contiene iDeviceChemistry e le stringhe della tabella non si chiedono). Sui layout standard il report 4 porta `iOEMInformation` → `battery.mfr.date` (cps-hid.c:368, US-111).
+
+      **Steps:** modifica header → modifica cpp → build nativa dei test CyberPower.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_cyberpower_driver -f test_poll_cycle`: compila e i test esistenti passano (`test_cyberpower_policy` incluso, perché ha un report 130).
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se `buildPollLists` non fosse virtuale o `const` come atteso, fermarsi e riportarlo invece di cambiare la firma di `acceptPollReport` in GenericDriver ed Eaton.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/CyberPowerDriver.h — override di buildPollLists, flag _vendor_layout, commenti
+      - lib/USBHostUPS/src/CyberPowerDriver.cpp — buildPollLists, nuova regola in acceptPollReport, commenti
+
+      ## Criteri di Completamento
+      - [ ] Sui layout senza report ≥130 il report 4 è accettato, il 6 no
+      - [ ] Sui layout con report ≥130 i report 4, 6 e ≥130 restano esclusi
+      - [ ] Prima di buildPollLists il report 4 è considerato escluso (flag inizializzato a true)
+      - [ ] test_cyberpower_driver e test_poll_cycle compilano e passano
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test unitari: report 4 e battery.mfr.date sul layout CP2000, report 4 escluso sul layout vendor'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** dimostrare con test unitari che il layout CP2000 chiede il report 4, poi la stringa di `iOEMInformation`, e pubblica `battery.mfr.date` tagliata a 19 caratteri, mentre il layout vendor non chiede il report 4.
+
+      **Read:** `test/test_poll_cycle/test_main.cpp` (`standardDevice()`, `test_cyberpower_policy`, `host._reports`, `runLoop`), `test/test_cyberpower_driver/test_main.cpp` (mock, `nutField`, `feed`, `runLoopSteps`, `test_cyberpower_string_values`, `test_cyberpower_string_truncated_to_19`, `test_cyberpower_vendor_layout_adds_no_requests`).
+
+      **Change:**
+      1. `test_poll_cycle`: nuovo `test_cyberpower_standard_layout_reads_report_4`: `standardDevice()` più una usage FEATURE sul report 4 (`UPS.PowerSummary.iOEMInformation`, 0x0085008f) e una sul 6 (`UPS.PowerSummary.CapacityMode`), nessun report ≥130. Dopo il primo full poll le richieste sono 1, 2, 4 nell'ordine prodotto da buildPollLists, mai 6. In `test_cyberpower_policy` cambiare solo il commento della usage sul 4 ("vendor layout: report 4 hangs the BR700ELCD, #40") e registrare entrambi i test in `main`.
+      2. `test_cyberpower_driver`: la mock registra le richieste di report (`std::vector<std::pair<uint8_t,uint8_t>> _requestedReports`, svuotato in `setUp`).
+         - Nuovo `test_cyberpower_cp2000_layout_reads_battery_date_from_report_4`: `_pid = 0x0601`, `iOEMInformation` sul FEATURE 4, nessun report ≥130. Il loop chiede `4/3`. Poi `feed(0x04, 3, 7)` e i passi di loop: la stringa 7 viene chiesta. Un descrittore di 25 caratteri dà `battery.mfr.date` uguale ai primi 19.
+         - Nuovo `test_cyberpower_vendor_layout_skips_report_4`: `iDeviceChemistry` sul FEATURE 4 più una usage su un report 130: nessuna richiesta con id 4 (né 130) in `_requestedReports`.
+         - Registrare i test in `main`.
+
+      **Steps:** mock → test poll cycle → test driver → esecuzione.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_cyberpower_driver -f test_poll_cycle`: tutti verdi. Controprova: rimettendo temporaneamente `report_id == 4` incondizionato, i due test del layout standard falliscono.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** nessuno previsto. Se i test esistenti richiedono una modifica semantica, fermarsi.
+
+      ## File Coinvolti
+      - test/test_poll_cycle/test_main.cpp — nuovo test sul layout standard, commento di test_cyberpower_policy
+      - test/test_cyberpower_driver/test_main.cpp — mock con richieste di report, due test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Layout standard: 4/3 richiesto, 6/3 mai
+      - [ ] Layout CP2000: 4/3 → richiesta della stringa → battery.mfr.date a 19 caratteri
+      - [ ] Layout vendor: nessuna richiesta del report 4
+      - [ ] La controprova fallisce senza TASK-01; i test esistenti sono invariati nella semantica
+    ref: TASK-02
+  - id: TASK-03
+    title: Golden del replay rigenerate e commenti di fixture e test di replay aggiornati
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Objective:** le golden `[requests]` di CP1350C, CP1500EPFCLCD, CP1600EPFCLCD (#48) e CP2000EIPFCRM2U (#108) contengono `4/3`; nessun'altra golden cambia. I testi che dicono "report 4 is never read" sono corretti.
+
+      **Read:** `test/test_record_replay/test_main.cpp:836-850` (commento del replay CP2000) e `:1207-1210` (commento di `kCpsSnapshotCp2000eipfcrm2u`), `FixtureReplayRunner.h` (`goldenText`, `checkGolden`, `ESP32NUT_WRITE_GOLDEN`), campo `notes` di `test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json`.
+
+      **Change:**
+      1. Rigenerare: `ESP32NUT_WRITE_GOLDEN=1 PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay`.
+      2. `git diff --stat test/test_record_replay/golden`: devono cambiare solo le 4 `*.registry.txt` attese, e solo nella riga `[requests]` (`4/3` inserito nei due full poll). BR700ELCD e UT850EG invariati, tutte le `*.generic.txt` invariate. Ogni altra differenza va spiegata nel riepilogo o corretta.
+      3. Commenti in `test_record_replay/test_main.cpp`: il report 4 ora si legge (US-111), ma la fixture non ha né i dati del report 4 né i descrittori di stringa, quindi `battery.mfr.date` non compare nel replay; il valore si verifica sul campo.
+      4. `notes` della fixture CP2000: sostituire "is not published: CyberPowerDriver::acceptPollReport() never reads reports 4 and 6 ...; a future spec will read report 4" con: report 4 letto da US-111 (layout senza report vendor); il dump di v1.11.0 non ha né il report 4 né le stringhe, quindi qui la data non si verifica. Toccare solo il testo, non i dati.
+
+      **Steps:** rigenerazione → controllo del diff → commenti → nuova esecuzione senza la variabile.
+
+      **Verify:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_record_replay` verde senza `ESP32NUT_WRITE_GOLDEN`; diff delle golden limitato a `4/3` nelle 4 registry attese.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** se cambiano snapshot, LIST RW o LIST CMD, oppure golden di BR700ELCD/UT850EG, fermarsi e analizzare prima di accettare.
+
+      ## File Coinvolti
+      - test/test_record_replay/golden/cyberpower_cp1350c_vid0764_pid0501.registry.txt — 4/3 in [requests]
+      - test/test_record_replay/golden/cyberpower_cp1500epfclcd_vid0764_pid0501.registry.txt — 4/3 in [requests]
+      - test/test_record_replay/golden/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.registry.txt — 4/3 in [requests]
+      - test/test_record_replay/golden/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.registry.txt — 4/3 in [requests]
+      - test/test_record_replay/test_main.cpp — commenti del replay CP2000 e dello snapshot
+      - test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json — solo il campo notes
+
+      ## Criteri di Completamento
+      - [ ] 4/3 presente nelle 4 golden registry attese, assente in BR700ELCD e UT850EG
+      - [ ] Generic golden, snapshot, LIST RW e LIST CMD invariati
+      - [ ] Commenti e notes non dicono più che il report 4 non si legge
+      - [ ] test_record_replay verde senza ESP32NUT_WRITE_GOLDEN
+    ref: TASK-03
+  - id: TASK-04
+    title: ADR 0006 aggiornato, suite nativa completa e tre build
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Objective:** la documentazione dell'architettura riflette la nuova regola; la suite nativa completa e le tre build passano.
+
+      **Read:** `docs/adr/0006-centralized-hid-polling-lifecycle.md:51-52`.
+
+      **Change:**
+      1. ADR 0006, riga CyberPower: "no quick poll; FEATURE reports only, every 30 s, excluding IDs 6 and >= 130, and ID 4 on the layouts with vendor reports (#40; read on the others for battery.mfr.date, US-111)".
+      2. Nessun task di note di rilascio: le note si scrivono prima della release (decisione dell'utente).
+
+      **Steps:** ADR → suite completa → build.
+
+      **Verify:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` tutto verde (può superare i 10 minuti: lanciarlo in background).
+      - Da PowerShell: `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32-s3-standard`, poi `-e esp32-p4-eth` e `-e esp32-p4-eth-v1`: tutte ok.
+
+      **Done:** i criteri sotto sono spuntati.
+
+      **Blockers:** test falliti non legati a US-111: verificarli su main prima di procedere.
+
+      ## File Coinvolti
+      - docs/adr/0006-centralized-hid-polling-lifecycle.md — riga della policy CyberPower
+
+      ## Criteri di Completamento
+      - [ ] ADR 0006 aggiornato
+      - [ ] Suite nativa completa verde
+      - [ ] Build esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1 ok
+    ref: TASK-04

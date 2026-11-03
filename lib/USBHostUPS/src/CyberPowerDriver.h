@@ -30,6 +30,8 @@ protected:
     uint32_t quickPollMs() const override { return 0; }
     uint32_t fullPollMs() const override { return 30000; }
     bool acceptPollReport(uint8_t report_type, uint8_t report_id) const override;
+    // Notes the layout (_vendor_layout) before the GenericDriver lists are built
+    void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const override;
     // INPUT reports arrive on the interrupt endpoint: never request them on EP0
     bool pollInputReports() const override { return false; }
     // The BR700ELCD layout (issue #40) has vendor reports: no control request beyond the
@@ -37,9 +39,13 @@ protected:
     bool requestTableStrings(IHidTransport* host) const override { return !hasVendorReports(host); }
 
 private:
-    // Vendor-defined reports (>= 130) and reports 4 and 6 hang some firmwares (issue #40)
+    // Vendor-defined reports (>= 130) and report 6 hang some firmwares (issue #40)
     static const uint8_t FIRST_VENDOR_REPORT = 130;
     static bool hasVendorReports(IHidTransport* host);
+    // Layout with vendor reports (BR700ELCD, issue #40): report 4 hung that UPS, and there it
+    // carries iDeviceChemistry, whose string is not requested (requestTableStrings). True
+    // until buildPollLists() has seen the usages: report 4 stays out until then (US-111)
+    mutable bool _vendor_layout = true;
 };
 
 #endif // CYBERPOWER_DRIVER_H

@@ -32,8 +32,15 @@
 // Traffic on EP0 is what makes these firmwares stall: status values come from the
 // INPUT reports the UPS sends every few seconds, the rest is read every 30 s.
 bool CyberPowerDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const {
-    // Vendor-defined reports (>= 130) and reports 4 and 6 hang some firmwares
-    return !(report_id >= FIRST_VENDOR_REPORT || report_id == 4 || report_id == 6);
+    // Vendor-defined reports (>= 130) and report 6 hang some firmwares. Report 4 hung the
+    // BR700ELCD (issue #40), a layout with vendor reports: it is skipped only there. On the
+    // other layouts it carries iOEMInformation, the index of battery.mfr.date (cps-hid.c:368, US-111)
+    return !(report_id >= FIRST_VENDOR_REPORT || report_id == 6 || (report_id == 4 && _vendor_layout));
+}
+
+void CyberPowerDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
+    _vendor_layout = hasVendorReports(host);
+    GenericDriver::buildPollLists(host, quick, full);
 }
 
 bool CyberPowerDriver::hasVendorReports(IHidTransport* host) {
