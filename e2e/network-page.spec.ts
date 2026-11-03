@@ -147,6 +147,23 @@ test.describe('Network page (US-112)', () => {
     await expect(wifi(page)).toBeHidden();
   });
 
+  test('repeated spaces in an SSID are shown as they are', async ({ page }) => {
+    const ssid = 'My  Home   Net';
+    await serveIndex(page);
+    await page.route('**/api/config', route => route.fulfill({ json: { network: { type: 'wifi', links: ['wifi'] } } }));
+    await page.route('**/api/system-status', route => route.fulfill({
+      json: { wifi: { status: ssid }, network: { type: 'wifi', state: 'connecting', ssid }, ups: { status: 'Eaton 3S' } },
+    }));
+    await page.goto('http://esp32.local/');
+    await page.click('button[data-target="network"]');
+
+    // innerText follows the CSS white-space rule: without pre-wrap the spaces collapse to one
+    const shown = (sel: string) => page.locator(sel).first().evaluate(el => (el as HTMLElement).innerText);
+    await expect.poll(() => shown('.net-section[data-link="wifi"] [data-net-field="ssid"]')).toBe(ssid);
+    await expect.poll(() => shown('.net-section[data-link="wifi"] [data-net-notice-text]')).toContain(`Connecting to ${ssid}…`);
+    await expect.poll(() => shown('#lbl-wifi')).toBe(`Wi-Fi: ${ssid}`);
+  });
+
   test('an SSID is shown as text, not markup', async ({ page }) => {
     await openNetwork(page, { network: { type: 'wifi', links: ['wifi'] } }, { ...WIFI_UP, ssid: '<b>x</b>' });
     await expect(field(wifi(page), 'ssid')).toHaveText('<b>x</b>');
