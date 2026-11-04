@@ -1,0 +1,42 @@
+schema: archetipo/spec/v2
+code: US-117
+title: Ora di rete (NTP) con fuso orario in Board Settings, con ora e hostname nei messaggi syslog
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-117: Ora di rete (NTP) con fuso orario in Board Settings, con ora e hostname nei messaggi syslog
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-116
+
+  **User Story**
+  Come utente che conserva il System Log su un server syslog,
+  voglio che la scheda prenda l'ora da un server NTP e la metta nei messaggi,
+  in modo che il server mostri per ogni riga l'ora in cui è stata scritta e il nome della scheda, anche in RFC 3164.
+
+  **Dimostrazione**
+  L'utente apre Board Settings. Nella sezione "Time" vede NTP acceso con `pool.ntp.org`, sceglie il fuso `Europe/Rome` e salva, senza riavviare. Lo stato passa a "Synchronized" con l'ora della scheda. Sul server syslog le righe RFC 3164 arrivano come `<134>Nov  4 19:44:03 esp32-nut-d2f3b4 esp32-nut: …` e quelle RFC 5424 con l'ora UTC al posto di `-`. Senza Internet le righe arrivano come oggi e UPS e NUT funzionano come prima.
+
+  **Criteri di Accettazione**
+  - [ ] Board Settings ha una sezione "Time" con interruttore NTP, server (IP o nome), fuso orario scelto da un elenco con ora legale automatica (più UTC), stato della sincronizzazione e ora attuale della scheda. Predefiniti: NTP acceso, `pool.ntp.org`, UTC.
+  - [ ] Le impostazioni sono salvate in NVS, restano dopo un aggiornamento OTA e si applicano senza riavvio. Le rotte API sono registrate con `guarded()` e non sono pubbliche (ADR 0009).
+  - [ ] Valori non validi (server vuoto con NTP acceso, nome non valido, fuso non in elenco) sono rifiutati con un messaggio chiaro, sia dalla web UI sia dall'API.
+  - [ ] Con l'ora sincronizzata, i messaggi RFC 3164 hanno l'intestazione `Mmm dd hh:mm:ss HOSTNAME`, con l'ora locale del fuso scelto e il nome host della pagina Network. I messaggi RFC 5424 hanno il timestamp UTC con i millisecondi.
+  - [ ] Le righe scritte prima della sincronizzazione e inviate dopo hanno l'ora in cui sono state scritte, non quella di invio.
+  - [ ] Senza ora (avvio, modalità AP, LAN senza Internet, NTP spento) i messaggi restano nel formato di US-116. Il task USB e il server NUT non aspettano mai NTP.
+  - [ ] Il System Log scrive una riga alla prima sincronizzazione e una sola riga per periodo di errore. Funziona con Wi-Fi ed Ethernet senza `#if` per scheda (ADR 0010).
+  - [ ] L'ora di rete serve solo a mostrare l'ora: sessioni, limite dei login e timeout dell'AP restano basati sul tempo dall'avvio (ADR 0009, con la riga "no SNTP" del contesto aggiornata). L'ADR 0012 descrive il formato con l'ora; il testo della sezione Syslog di System Logs è aggiornato.
+  - [ ] Test nativi per l'intestazione con l'ora e per l'ora calcolata dall'uptime; e2e per la sezione Time. Tre build ok, flash del 4 MB (#93) misurato e riportato nella PR.
+
+  **Assunzioni**
+  - L'SNTP di lwIP è già nel core precompilato. Il piano verifica se il server può venire dall'opzione DHCP 42: se non è disponibile, resta fuori scope.
+  - L'ora NTP non è autenticata: non si usa per nessuna decisione di sicurezza.
+  - Prova sul campo su ESP32-S3 solo dopo un sì esplicito.
+  - Fuori scope: ora nel terminale e nell'export (US-118), RTC esterno, NTS.
+history:
+  - status: TODO
+    at: "2026-11-04T20:25:11Z"
