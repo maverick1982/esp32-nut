@@ -835,7 +835,8 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
 // main but the strings (battery.type, ups.firmware: no string descriptors in the dump) and the
 // serial (anonymized). battery.mfr.date (cps-hid.c:368, PowerSummary.iOEMInformation, FEATURE
 // 0x04) is bound, and report 4 is read since US-111 (layout without vendor reports), but the dump
-// of v1.11.0 has neither report 4 nor the string descriptors: the date is checked on the field
+// of v1.11.0 has neither report 4 nor the string descriptors: the date is checked by the dump of the
+// test build below
 void test_replay_cyberpower_cp2000eipfcrm2u_issue108(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
         CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP2000EIPFCRM2U,
@@ -848,6 +849,22 @@ void test_replay_cyberpower_cp2000eipfcrm2u_issue108(void) {
         // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x08 bytes 4-5 [.., 44, 1] = 300;
         // FEATURE 0x10 [16, 195, 0, 1, 1] = 195 / 257 (Output.*VoltageTransfer, 414-415, as on the
         // CP1600EPFCLCD); FEATURE 0x1A [26, 1]
+        RW_CPS_5 " " RW_DELAYS, RW_CPS_5 " " RW_DELAYS);
+}
+
+// Live dump of the test build cps-report4-v1 on the same CP2000EIPFCRM2U (issue #108): the v1.11.0
+// dump plus FEATURE 0x04 [4, 3], read since US-111. iOEMInformation points at string 3, the
+// manufacturer "CPS": battery.mfr.date is "CPS" as in NUT (cps-hid.c:368), also on the reporter's
+// Home Assistant NUT add-on. The strings come from what the build served; the runner hands them to
+// the driver again after the reports, when the StringId rows know their index
+void test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108_report4.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_CP2000EIPFCRM2U,
+        // The three StringId rows of cps-hid.c: iOEMInformation (FEATURE 0x04 = 3), iDeviceChemistry
+        // (FEATURE 0x03 = 4), 0xFF0100D0 (FEATURE 0x1B = 5); ups.realpower from INPUT 0x19
+        // [25, 99, 0], the last replayed (FEATURE 0x19 has 97)
+        { { "battery.mfr.date", "CPS" }, { "battery.type", "PbAcid" }, { "ups.firmware", "CR02401B7114" },
+          { "ups.realpower", "99" }, { "battery.voltage", "26.5" } },
         RW_CPS_5 " " RW_DELAYS, RW_CPS_5 " " RW_DELAYS);
 }
 
@@ -986,6 +1003,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108_report4.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json", "Unknown", nullptr, nullptr },
@@ -999,7 +1017,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(29, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(30, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -1024,6 +1042,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/cyberpower/cyberpower_cp1500epfclcd_vid0764_pid0501.json",
     "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
     "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
+    "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108_report4.json",
     "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
     "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
@@ -1041,7 +1060,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(29, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(30, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -1874,18 +1893,20 @@ static const char* const kOpenupsPollW150Before = "quick: 2/3 | full: 1/3 2/3 3/
 // - ups.temperature gone: UPS.PowerSummary.Temperature is the thermistor reading of row 309;
 // - ups.status.commfault, .off, .overheat: internal keys of rows 326, 327 and 329, no change
 //   in ups.status (OL; BatteryPresent = 0 still ignored, issue #26).
-// Unchanged: ups.load, ups.realpower(.nominal) (OpenUPSDriver hook, ADR 0011 rule 2). The
-// replay passes the strings before the reports, so battery.type and battery.mfr.date (rows 299
-// and 300, string indices 8 and 9) are not filled here: on the device the poll asks for them
-// (test_openups_driver covers them).
+// Unchanged: ups.load, ups.realpower(.nominal) (OpenUPSDriver hook, ADR 0011 rule 2).
+// battery.type and battery.mfr.date: rows 299 and 300, string indices 8 and 9, filled since the
+// replay passes the strings again after the reports (issue #108); "OPEN" is iOEMInformation, as
+// in NUT (openups-hid.c:300).
 static const char* const kOpenupsSnapshotW150After =
     "battery.capacity=100\n"
     "battery.charge.low=10\n"
     "battery.charge.warning=5\n"
     "battery.charge=100\n"
     "battery.current=0.008\n"
+    "battery.mfr.date=OPEN\n"
     "battery.runtime=12912\n"
     "battery.temperature=29.47\n"
+    "battery.type=LiFePO4\n"
     "battery.voltage=13.60\n"
     "driver.name=OpenUPSDriver\n"
     "input.current=1.237\n"
@@ -2123,6 +2144,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
+    RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
@@ -2179,6 +2201,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp1500epfclcd);
     RUN_TEST(test_replay_cyberpower_cp1600epfclcd_issue48);
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
+    RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);

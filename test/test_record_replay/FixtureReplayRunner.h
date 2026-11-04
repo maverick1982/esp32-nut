@@ -294,6 +294,15 @@ public:
                 if (!rData.empty()) replayReport(s, r_id, r_type, rData);
             }
 
+            // The strings again after the reports, as the device asks for the table strings once
+            // a report has given their index (stringid_conversion, US-073): before the reports
+            // no StringId row knows its index yet (issue #108)
+            for (JsonPair kv : stringsObj) {
+                uint8_t idx = (uint8_t)atoi(kv.key().c_str());
+                std::vector<uint8_t> sDesc = encodeUtf16Descriptor(kv.value().as<std::string>());
+                driver->parseStringDescriptor(&host, idx, sDesc.data(), sDesc.size(), ups_data);
+            }
+
             // Set driver.name directly since loop() isn't called in the replay runner
             ups_data.set("driver.name", driver->getDriverName());
 
