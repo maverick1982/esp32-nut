@@ -1,0 +1,50 @@
+schema: archetipo/spec/v2
+code: US-116
+title: Log remoti su server syslog (UDP), configurati nella pagina System Logs (#69)
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 5
+status: PLANNED
+body: |
+  #### US-116: Log remoti su server syslog (UDP), configurati nella pagina System Logs (#69)
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che deve indagare su distacchi USB o cambi di stato dell'UPS che succedono di rado,
+  voglio che la scheda mandi il System Log a un mio server syslog (rsyslog, syslog-ng, un NAS),
+  in modo da conservare lo storico dei log oltre il buffer della scheda, che si sovrascrive dopo poche ore.
+
+  **Dimostrazione**
+  L'utente apre la pagina System Logs, compila la sezione Syslog del pannello "Remote logging" sotto il terminale (server `192.168.1.10`, porta 514, RFC 3164, livello INFO) e salva, senza riavviare. Sul server arrivano le righe del System Log con il nome host scelto nella pagina Network. Nella barra delle azioni, accanto ad Auto-refresh, compare `Syslog: Active → 192.168.1.10:514`. Spegnendo il server, l'UPS e i client NUT continuano a funzionare come prima e lo stato passa a errore.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina System Logs ha, sotto il terminale, un pannello "Remote logging" con la sezione Syslog: interruttore, server (IP o nome), porta UDP, formato (RFC 3164 o RFC 5424), facility, livello minimo (INFO, WARN, ERROR) e righe al secondo. Ci sono anche lo stato e i contatori (inviate, scartate, fallite). Non si aggiunge nessuna tab.
+  - [ ] Nella barra delle azioni del System Log un indicatore compatto mostra lo stato del syslog (spento, in attesa, pronto, attivo, errore) e il server.
+  - [ ] Le rotte API delle impostazioni sono registrate con `guarded()` e non sono pubbliche (ADR 0009): in STA servono il login, in AP valgono le regole dell'ADR come per le altre impostazioni. Le impostazioni sono salvate in NVS, restano dopo un aggiornamento OTA e si applicano senza riavvio. Per impostazione predefinita il syslog è spento; i predefiniti sono porta 514, RFC 3164, livello INFO e 10 righe al secondo.
+  - [ ] Valori non validi (server vuoto con syslog acceso, nome troppo lungo, porta fuori da 1–65535, righe al secondo fuori intervallo) sono rifiutati con un messaggio chiaro, sia dalla web UI sia dall'API.
+  - [ ] Ogni riga del System Log viene messa in coda senza attese. Un task a bassa priorità la consegna al server, così il task USB e il server NUT non aspettano mai la rete. Le righe che non entrano in coda o superano il limite si contano, e una riga riassuntiva dice quante se ne sono perse.
+  - [ ] Il nome host nei messaggi syslog è quello configurabile della pagina Network (US-113), non l'id `ESP32-S3-xxxxxx`.
+  - [ ] Le righe scritte all'avvio, prima che la rete sia pronta, arrivano al server quando la connessione è su. Se il server non si raggiunge o il nome non si risolve, il System Log lo scrive una sola volta per periodo di errore, non per ogni riga.
+  - [ ] Le righe che l'uscita syslog scrive su se stessa (`[SYSLOG] ...`: invio fallito, nome non risolto) restano nel System Log e non vengono mandate al server syslog. Gli avvisi di cambio impostazioni verso il server vecchio e quello nuovo invece sì.
+  - [ ] Il syslog funziona con la connessione attiva della scheda, Wi-Fi o Ethernet (ESP32-S3 ed ESP32-P4), senza `#if` per scheda (ADR 0010).
+  - [ ] Un nuovo ADR 0012 "Remote log outputs" descrive coda, task `log_out` e suo modulo proprietario, fanout, filtro e limite, e la regola sulle righe di un'uscita su se stessa; la tabella di `docs/adr/README.md` è aggiornata. La sezione 3 di `docs/plans/mqtt-support.md` rimanda al core, con MQTT come uscita successiva del fanout.
+  - [ ] Il backend della PR #104 (coda, task, fanout, filtro, formattazione RFC 3164/5424, uscita UDP) è portato su main con i suoi test nativi e `Co-authored-by: rtadams89` nei commit. La web UI e l'integrazione con le pagine attuali sono riscritte.
+  - [ ] Test nativi per formattazione, filtro, limite e validazione; e2e per il pannello e l'indicatore. Tre build ok, con lo spazio flash del 4 MB (#93) controllato e riportato nella PR.
+
+  **Assunzioni**
+  - Concordato sulla #69 (issuecomment-6422087092): un unico core di logging con più uscite. Si parte dal syslog UDP; rtadams89 preferisce RFC 3164 (issuecomment-6422896773).
+  - La PR #104 (commit 3aede90 e 8e8b726, base 6ee8236) è 32 commit indietro su main: il backend si riusa, la UI a tab separata no. Alla consegna la #104 si chiude ringraziando, con il link alla nuova PR; la nuova PR usa "Refs #69".
+  - La scheda non ha un orologio: l'ora la mette il server all'arrivo.
+  - Il syslog UDP viaggia in chiaro: le righe del System Log, compresi i nomi utente dei login falliti (ADR 0009 vieta solo password e token), arrivano a chiunque ascolti sulla LAN. Il pannello lo dice in una riga.
+  - Il task `log_out` non è sotto il Task WDT (ADR 0008): una risoluzione DNS lenta blocca solo lui, mai il task USB o il loopTask.
+  - Prova sul campo su ESP32-S3 con un server syslog sulla LAN, solo dopo un sì esplicito.
+  - Fuori scope: syslog su TCP o TLS e MQTT. Per MQTT, in una spec successiva, la connessione al broker andrà in una pagina sua; in System Logs resteranno solo l'invio dei log a MQTT, il livello e il limite.
+history:
+  - status: TODO
+    at: "2026-11-04T17:25:55Z"
+  - status: PLANNED
+    at: "2026-11-04T17:38:41Z"

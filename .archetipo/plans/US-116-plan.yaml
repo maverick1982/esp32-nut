@@ -1,0 +1,330 @@
+schema: archetipo/plan/v2
+spec_code: US-116
+body: "---\ntype: plan\ntitle: \"US-116: Log remoti su server syslog (UDP), configurati nella pagina System Logs (#69) — Piano di implementazione\"\ndescription: \"Piano di implementazione per US-116\"\ntags: [plan, implementation, US-116]\n---\n# US-116: Log remoti su server syslog (UDP), configurati nella pagina System Logs (#69) — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-11-04\n**Branch:** `feature/us-116-remote-syslog` (da `main` 499b573)\n\n---\n\n## Spec\n\n**Epic:** EP-002 — Connettività di Rete e Configurazione\n**Priorità:** MEDIUM | **Punti:** 5\n\n**User Story**\nCome utente che deve indagare su distacchi USB o cambi di stato dell'UPS che succedono di rado, voglio che la scheda mandi il System Log a un mio server syslog (rsyslog, syslog-ng, un NAS), in modo da conservare lo storico dei log oltre il buffer della scheda, che si sovrascrive dopo poche ore.\n\n**Criteri di Accettazione**: vedi la spec US-116 (pannello in System Logs, indicatore nella barra, rotte `guarded()`, NVS e applicazione senza riavvio, validazione, coda non bloccante, hostname di US-113, righe dell'avvio, righe `[SYSLOG]` solo locali, Wi-Fi ed Ethernet, ADR 0012, test e flash).\n\n---\n\n## Soluzione tecnica\n\nSi riusa il backend della PR #104 di rtadams89 (commit 3aede90 e 8e8b726, base 6ee8236), disponibile in locale come ref `pr104` (`git fetch origin pull/104/head:pr104` se manca). I file nuovi della PR si portano così come sono con `git checkout pr104 -- <path>`; i file che esistono anche su `main` (`app_logger`, `main.cpp`, `web_config_server`, `WebApiJson`, `test_web_api`, `data/www/*`) si riscrivono a mano su `main`, prendendo dalla PR solo le parti indicate. I commit con codice della PR hanno il trailer `Co-authored-by: rtadams89 <43024360+rtadams89@users.noreply.github.com>`. La UI della PR (tab \"Remote Logging\", classi `rlog-*`) **non** si porta: si rifà nella pagina System Logs secondo `docs/mockups/US-116/`.\n\n- **Core puro `lib/LogCore`** (dalla PR, invariato salvo la regola sulle righe di un'uscita su se stessa): `LogLevel.h`, `LogOutput.h` (`LogRecord` di dimensione fissa, msg 240 byte; `ILogOutput`; `LogOutputStats`), `LogOutputFilter.h` (livello minimo e limite 1-100 righe/s, predefinito 10), `LogFanout.h` (fino a 4 uscite, `shouldHold` per 60 s dopo l'abilitazione, righe riassuntive per il limite), `SyslogFormat.h/.cpp` (RFC 3164 e 5424, facility, max 480 byte), `SyslogSettings.h` (predefiniti: spento, 514, RFC 3164, local0, INFO, 10/s; `validSyslogHost` 1-63 caratteri; `sanitize`), `SyslogStatus.h` (stati disabled/waiting/ready/active/error), `SyslogChange.h` (`planSyslogChange`: righe to_old/to_new/local con l'utente web). Nessuna chiamata a piattaforma, nessun `AppLogger`, test nativi.\n- **Regola delle righe su se stessa (nuova):** `ILogOutput` riceve `virtual const char* tag() const` (prefisso delle righe che l'uscita scrive su di sé; `SyslogOutput` restituisce `\"[SYSLOG]\"`). In `LogFanout::deliver`, prima del filtro, un record **non notice** il cui `msg` inizia con `tag()` non va a quell'uscita (non è contato in nessuna statistica). I notice (`LogRecord::notice`, avvisi di cambio impostazioni) passano sempre. Le altre uscite future (MQTT) ricevono comunque le righe `[SYSLOG]`, e viceversa.\n- **Aggancio al logger** (`src/core/app_logger.cpp/.h`, riscritto su main dalla diff della PR): `AppLogger::setForwarder(fn, ctx)`, `AppLogger::logNotice(level, fmt, ...)`, e un `write(level, msg, notice)` privato in cui, dopo il buffer del System Log e sotto lo stesso `s_log_mutex`, si chiama il forwarder. Il forwarder è `LogDispatcher::forward` → `submit()` → `xQueueSend(..., 0)`: non aspetta mai, quindi resta valida la regola dell'ADR 0008 (il task USB non attende; `AppLogger` non si usa mai nelle callback di hid_host, invariato).\n- **Dispatcher** (`src/core/log_dispatcher.h/.cpp`, dalla PR): coda FreeRTOS di 40 `LogRecord` creata in `init()` prima della prima riga di log; task `log_out` (4096 byte di stack, priorità 1, nessuna affinità) avviato con `start()` dopo la configurazione delle uscite; righe perse per coda piena contate e riassunte con `[LOG] N lines lost: log queue full`. Il task non è sotto il Task WDT: una risoluzione DNS lenta blocca solo lui.\n- **Persistenza** (`src/core/log_settings_store.h/.cpp`, dalla PR): namespace NVS `logout`, separato da `config_json` (come `HostnameStore`), quindi resta dopo OTA e vale anche in AP.\n- **Uscita syslog** (`src/network/syslog_output.h/.cpp`, dalla PR con tre modifiche):\n  1. **Hostname di US-113**: `begin(const AppNetworkManager* network)` non riceve più il device id. In `poll()`, la prima volta che la rete è su, l'uscita salva `_network->hostname()` (nome effettivo del collegamento attivo: quello scelto nella pagina Network o il predefinito `esp32-nut-xxxxxx`); se è vuoto usa `esp32-nut`. Un cambio di hostname riavvia la scheda (`handleSetHostname`), quindi il valore salvato non diventa mai vecchio.\n  2. **Rete**: `networkUp()` = `_network->isConnected() && !_network->isApMode()`. In AP non si manda nulla e lo stato resta `waiting` con \"No network connection\". Nessun `#if` per scheda: vale per Wi-Fi ed Ethernet (ADR 0010).\n  3. `tag()` restituisce `\"[SYSLOG]\"`.\n- **Avvio** (`src/core/main.cpp`): istanze statiche `log_dispatcher`, `syslog_output`, `log_settings_store` accanto agli altri store (stesso schema di `board_settings_store`). Subito dopo `CrashDiag::begin()`: `if (log_dispatcher.init()) AppLogger::setForwarder(&LogDispatcher::forward, &log_dispatcher);`. Dopo il blocco AP/STA (quando `network_mgr.begin()` è stato chiamato in entrambi i rami) e dopo `openRecoveryWindow`: `syslog_output.begin(&network_mgr); syslog_output.configure(log_settings_store.loadSyslog()); log_dispatcher.addOutput(&syslog_output); log_dispatcher.start(); web_server.setRemoteLog(&log_settings_store, &syslog_output);`.\n- **API web** (contratto della PR, invariato): `GET /api/logging` → `{\"syslog\":{enabled,host,port,protocol,facility,min_level,rate},\"status\":{\"syslog\":{state,target,error,sent,failed,rate_limited,not_ready}},\"options\":{protocols,facilities,levels,rate_min,rate_max}}` con `Cache-Control: no-store`; `POST /api/logging` `{\"syslog\":{...}}` con campi parziali, 400 `{\"error\"}` con i testi \"Invalid request\", \"Invalid server\", \"Invalid port\", \"Invalid protocol\", \"Invalid facility\", \"Invalid level\", \"Invalid rate\", \"Server required to enable syslog\"; 500 \"Failed to save settings\"; 503 \"Remote logging not available\". Funzioni pure `WebApiJson::remoteLogJson` e `WebApiJson::checkRemoteLogBody` in `lib/WebApi`; handler `handleGetLogging`/`handleSetLogging` e `setRemoteLog()` in `WebConfigServer`. Rotte registrate con `guarded()` e **non** aggiunte alla lista pubblica di `AuthPolicy` (ADR 0009): login in STA, accesso libero in AP come le altre impostazioni. Dopo il salvataggio: `syslog_output->configure(next, who)` con l'utente web (`webUiUser()`, \"Web UI\" se vuoto); il task applica entro un secondo, senza riavvio.\n- **Web UI** (pagina System Logs, `data/www/index.html`, `bundle.js`, `bundle.css`, secondo `docs/mockups/US-116/`): nessuna tab nuova. (a) Indicatore compatto nella barra `.logs-actions`, accanto ad Auto-refresh: pallino + `Syslog: <Stato> → <target>`; un clic porta al pannello. (b) Sotto il terminale, pannello \"Remote logging\" con sezione \"Syslog\": testo introduttivo (task in background, ora messa dal server, UDP in chiaro leggibile sulla LAN), riga di stato con contatori e Refresh, form (Enabled, Server, UDP port, Format, Facility, Minimum level, Max lines per second, Save), avviso d'errore e messaggio di esito. Facility, formati, livelli e limiti vengono da `options` della GET, non sono scritti nel JS. Caricamento: GET `/api/logging` quando si apre la tab System Logs, dopo Save e con Refresh; mentre la tab è attiva e Auto-refresh è acceso, la GET si ripete ogni 10 s solo per lo stato (il form non viene sovrascritto se l'utente lo sta modificando). 401 → stessa gestione della sessione scaduta delle altre chiamate (`apiFetch`). Validazione lato client uguale a quella del server (host, porta 1-65535, righe 1-100, server obbligatorio se acceso), ma il messaggio mostrato dopo un 400 è quello del server. CSS nuovo minimo, riusando le classi esistenti (budget flash #93). Scelte del mockup accettate: l'indicatore è un `<button>` con la classe `.auto-refresh` (unica classe nuova `.status-indicator.off`), il motivo del problema va nel `title`; il pulsante Refresh sta nell'intestazione del pannello (servirà anche a MQTT); il pannello riusa le classi `board-body`/`board-section`/`cred-section`/`board-row` della pagina Board Settings e `link-grid`/`link-kv`/`link-badge` della pagina Network senza rinominarle (meno CSS); avvisi con `auth-alert` (`.warn` per waiting, rosso per error, `info` per la riga \"non cifrato\"); griglia dei campi a 4 colonne, 2 sotto 1180 px, 1 sotto 768 px. Su desktop l'indicatore manda i pulsanti della barra su una seconda riga: accettato. Dopo ogni modifica a `data/www/*` si esegue a mano `python scripts/embed_web.py` (il pre-script non rigenera).\n- **Documentazione**: nuovo `docs/adr/0012-remote-log-outputs.md` (MADR come gli altri, stato Accepted, Authors @maverick1982, @rtadams89, Claude): coda non bloccante dal logger, task `log_out` proprietà del modulo `system` della mappa dell'ADR 0010 (le uscite sono adattatori: syslog in `net`, MQTT nel futuro modulo `mqtt`, che consegnerà con `esp_mqtt_client_enqueue()` dal task `log_out`), fanout con filtro e limite per uscita, notice, regola delle righe su se stessa con `tag()`, task fuori dal Task WDT, syslog UDP in chiaro; riga nella tabella di `docs/adr/README.md` e rimando dall'ADR 0010 (\"Related\"). Sezione 3 di `docs/plans/mqtt-support.md` riscritta come rimando all'ADR 0012. Le note di rilascio non fanno parte di questa spec (si scrivono prima della release).\n- **PR**: descrizione con \"Refs #69\" (mai \"Closes\"), crediti a rtadams89, misura del flash. Alla consegna la #104 si chiude con un ringraziamento e il link alla nuova PR (testo da approvare con l'utente).\n\n---\n\n## Strategia di test\n\nLa logica sta in `lib/LogCore` e `lib/WebApi`, quindi si copre con Unity nativi; l'integrazione hardware (task, coda, UDP) si verifica con le build e con la prova sul campo; la UI con Playwright e i mock di `e2e/support/webui.ts`.\n\n- `test/test_log_core` (dalla PR): livelli, filtro e limite, formattazione RFC 3164/5424 (PRI, hostname, troncamento a 480 byte), facility, `validSyslogHost`, `sanitize`, `planSyslogChange` (avvio, acceso/spento, spostamento, cambi di livello/formato/facility/limite).\n- `test/test_log_fanout` (dalla PR + nuovi casi): consegna per uscita, `shouldHold` entro e oltre 60 s, notice oltre livello e limite, riga riassuntiva del limite, `not_ready`; **nuovi**: record non notice con prefisso `tag()` non consegnato a quell'uscita ma consegnato a un'altra uscita fake con tag diverso; notice con prefisso `tag()` consegnato; statistiche invariate per il record saltato.\n- `test/test_web_api` (dalla PR, riscritti su main): JSON della GET con le opzioni, POST parziale che mantiene gli altri campi, ogni messaggio di errore 400, server obbligatorio se acceso, host di 63 e 64 caratteri, porta 0 e 65536, righe 0 e 101.\n- Comando nativo (suite a blocchi, limite 600 s): `PATH=\"$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH\" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_log_core -f test_log_fanout -f test_web_api`, poi la suite completa divisa in blocchi da circa 8 suite.\n- Build: `esp32-s3-standard`, `esp32-p4` e la terza immagine P4 (v3.1+) da PowerShell; dimensione del firmware confrontata con `main` 499b573 e riportata nella PR.\n- Prova sul campo su ESP32-S3 (COM5, 192.168.1.126) con un ricevitore UDP sul PC, solo dopo un sì esplicito dell'utente.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright (`e2e/`, mock con `serveIndex` di `e2e/support/webui.ts` e `page.route('**/api/logging', ...)`)\n**Video demo:** previsto (la `Dimostrazione` è filmabile; lo registra `archetipo-review`, non l'implementazione)\n\n| Scenario | Flusso utente |\n|---|---|\n| Configurazione e salvataggio | L'utente apre System Logs, vede il pannello sotto il terminale con i predefiniti (spento, 514, RFC 3164, local0, INFO, 10), accende Syslog, scrive `192.168.1.10`, salva: la POST contiene i valori, appare l'esito positivo e l'indicatore passa a `Syslog: Active → 192.168.1.10:514` dopo la GET successiva |\n| Stati dell'indicatore | Con la GET che risponde waiting (\"No network connection\"), ready, active, error (\"Send to 192.168.1.10 failed\") e disabled, indicatore e riga di stato mostrano testo e colore giusti, con i contatori |\n| Validazione | Acceso senza server, porta 70000, righe 0: la pagina mostra l'errore senza POST; con un 400 \"Invalid server\" dal mock mostra il messaggio del server |\n| Opzioni dal server | Le select Facility, Format e Minimum level sono riempite da `options` della GET |\n| Sessione scaduta | La GET `/api/logging` risponde 401: la pagina va al login come per le altre API |\n| Clic sull'indicatore | Un clic sull'indicatore porta il pannello in vista |\n| Telefono | A 375 px di larghezza pannello e indicatore non causano scroll orizzontale (come `e2e/responsive.spec.ts`) |\n| Regressione | `e2e/logs-viewer.spec.ts` resta verde: terminale, Auto-refresh, Export invariati |\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono in `docs/mockups/US-116/`\n\n_Piano generato con ARchetipo Planning — 2026-11-04_\n"
+tasks:
+  - id: TASK-01
+    title: 'Portare lib/LogCore dalla PR #104 e aggiungere la regola delle righe su se stessa'
+    type: Impl
+    status: TODO
+    body: |-
+      ## Descrizione
+      **Obiettivo:** avere su questo branch il core puro di logging della PR #104, con la nuova regola `tag()`.
+
+      **Leggere:** sezione "Core puro" e "Regola delle righe su se stessa" del piano; `git show pr104:lib/LogCore/src/LogFanout.h` e `LogOutput.h`.
+
+      **Modifiche:** `git checkout pr104 -- lib/LogCore` (se il ref manca: `git fetch origin pull/104/head:pr104`). In `LogOutput.h` aggiungere a `ILogOutput` `virtual const char* tag() const = 0;` con un commento (prefisso delle righe che l'uscita scrive su di sé, ADR 0012). In `LogFanout::deliver`, dopo il ramo `notice` (i notice passano sempre) e prima del filtro, saltare l'uscita se `strncmp(record.msg, out->tag(), strlen(out->tag())) == 0`, senza toccare le statistiche. Aggiornare il commento di testa di `LogFanout.h`.
+
+      **Passi:** 1) checkout; 2) `tag()`; 3) salto nel fanout; 4) controllare che nessun file di `lib/LogCore` includa `app_logger.h` o API ESP.
+
+      **Verifica:** compila con la suite del TASK-02.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/LogCore/** — nuovi, dalla PR #104
+      - lib/LogCore/src/LogOutput.h — `tag()`
+      - lib/LogCore/src/LogFanout.h — regola delle righe su se stessa
+
+      ## Criteri di Completamento
+      - [ ] `lib/LogCore` è identico a `pr104` salvo `tag()` e la regola in `deliver`
+      - [ ] Un notice con il prefisso dell'uscita viene comunque consegnato
+      - [ ] Nessuna dipendenza da `AppLogger` o da API ESP-IDF/Arduino oltre a `String`
+  - id: TASK-02
+    title: Suite native test_log_core e test_log_fanout, con i casi della regola tag()
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare i test nativi della PR e coprire la nuova regola.
+
+      **Leggere:** `git show pr104:test/test_log_fanout/test_main.cpp` (uscite fake), strategia di test del piano.
+
+      **Modifiche:** `git checkout pr104 -- test/test_log_core test/test_log_fanout`. Aggiungere `tag()` alle uscite fake (es. `"[FAKE1]"`, `"[FAKE2]"`). Nuovi casi: record non notice `"[FAKE1] x"` non consegnato a FAKE1 (sent/failed/rate_limited/not_ready invariati) ma consegnato a FAKE2; notice `"[FAKE1] x"` consegnato a FAKE1; record `"[FAKE] x"` (prefisso diverso) consegnato a FAKE1.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_log_core -f test_log_fanout`.
+
+      **Blocchi:** se un test della PR fallisce su main, capire se dipende dal nostro cambio; correggere il codice, non il test. "program.exe: Accesso negato" → cancellare `.pio/build/native/program.exe`.
+
+      ## File Coinvolti
+      - test/test_log_core/test_main.cpp — dalla PR
+      - test/test_log_fanout/test_main.cpp — dalla PR + casi nuovi
+
+      ## Criteri di Completamento
+      - [ ] Le due suite passano
+      - [ ] I tre casi della regola `tag()` esistono e passano
+  - id: TASK-03
+    title: Aggancio ad AppLogger, LogDispatcher e LogSettingsStore
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** mettere ogni riga del System Log in coda senza attese e salvare le impostazioni in NVS.
+
+      **Leggere:** `git diff 6ee8236 pr104 -- src/core/app_logger.cpp include/core/app_logger.h`; `git show pr104:src/core/log_dispatcher.h`, `log_dispatcher.cpp`, `log_settings_store.h/.cpp`; sezioni "Aggancio al logger", "Dispatcher", "Persistenza" del piano.
+
+      **Modifiche:** riscrivere a mano su main (non checkout) la diff di `app_logger.h/.cpp`: `Forwarder`, `setForwarder`, `logNotice`, `write(level, msg, notice)` privato chiamato da `log(...)`, forwarder chiamato dopo il buffer sotto `s_log_mutex`. Portare con `git checkout pr104 -- src/core/log_dispatcher.h src/core/log_dispatcher.cpp src/core/log_settings_store.h src/core/log_settings_store.cpp`.
+
+      **Passi:** 1) logger; 2) file nuovi; 3) controllare che `submit()` usi `xQueueSend(..., 0)`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (da PowerShell) compila dopo il TASK-05; qui basta che i nativi esistenti che includono `app_logger` compilino: `pio test -e native -f test_web_api`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/core/app_logger.h — forwarder, logNotice
+      - src/core/app_logger.cpp — write() e chiamata al forwarder
+      - src/core/log_dispatcher.h/.cpp — dalla PR
+      - src/core/log_settings_store.h/.cpp — dalla PR (namespace `logout`)
+
+      ## Criteri di Completamento
+      - [ ] Seriale e buffer del System Log si comportano come prima
+      - [ ] Il forwarder non blocca mai (timeout 0) e le righe perse sono contate
+      - [ ] Le impostazioni stanno nel namespace NVS `logout`
+  - id: TASK-04
+    title: SyslogOutput con hostname di US-113, niente invio in AP e tag [SYSLOG]
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'uscita UDP della PR, con le tre modifiche del piano.
+
+      **Leggere:** `git show pr104:src/network/syslog_output.h` e `.cpp`; `src/network/network_manager.cpp` (`hostname()`, `isConnected()`, `isApMode()`); sezione "Uscita syslog" del piano.
+
+      **Modifiche:** `git checkout pr104 -- src/network/syslog_output.h src/network/syslog_output.cpp`, poi: 1) `begin(const AppNetworkManager* network)` senza hostname; in `poll()`, se `networkUp()` e `_hostname` è vuoto, `_hostname = _network->hostname()`, e se resta vuoto `"esp32-nut"`; 2) `networkUp()` = `_network && _network->isConnected() && !_network->isApMode()`; 3) `const char* tag() const override { return "[SYSLOG]"; }`. Commenti aggiornati (US-113, ADR 0012).
+
+      **Passi:** come sopra, poi rileggere che `sendNow`/`deliver` usino `_hostname.c_str()`.
+
+      **Verifica:** compila con il TASK-05.
+
+      **Blocchi:** se `hostname()` restituisce sempre vuoto prima del collegamento, va bene: si legge solo a rete su.
+
+      ## File Coinvolti
+      - src/network/syslog_output.h — dalla PR, firma di begin() e tag()
+      - src/network/syslog_output.cpp — dalla PR, hostname e networkUp
+
+      ## Criteri di Completamento
+      - [ ] Nessun uso del device id `ESP32-S3-xxxxxx`
+      - [ ] In AP l'uscita non invia e resta `waiting`
+      - [ ] Nessun `#if` per scheda
+  - id: TASK-05
+    title: Integrazione in main.cpp per AP, Wi-Fi ed Ethernet
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare coda, uscita e task all'avvio, su ogni scheda.
+
+      **Leggere:** `src/core/main.cpp` (setup, righe ~90-215 su main); `git diff 6ee8236 pr104 -- src/core/main.cpp`; sezione "Avvio" del piano.
+
+      **Modifiche:** include di `log_dispatcher.h`, `log_settings_store.h`, `syslog_output.h`; tre istanze statiche accanto a `board_settings_store`; `init()` + `setForwarder` subito dopo `CrashDiag::begin()`; dopo il blocco AP/STA e `openRecoveryWindow`: `begin(&network_mgr)`, `configure(loadSyslog())`, `addOutput`, `start()`. La chiamata `web_server.setRemoteLog(...)` la aggiunge il TASK-06, insieme al setter.
+
+      **Passi:** 1) include e istanze; 2) init; 3) blocco dopo la rete.
+
+      **Verifica:** da PowerShell `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` e `-e esp32-p4` ok.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/core/main.cpp — composizione
+
+      ## Criteri di Completamento
+      - [ ] La coda esiste prima della prima riga di log
+      - [ ] Il task parte in AP e in STA/Ethernet
+      - [ ] Nessuna nuova globale fuori da main.cpp
+  - id: TASK-06
+    title: API GET/POST /api/logging protette da guarded()
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** leggere e salvare le impostazioni dal browser con il contratto della PR.
+
+      **Leggere:** `git diff 6ee8236 pr104 -- lib/WebApi src/network/web_config_server.cpp include/network/web_config_server.h`; `src/network/web_config_server.cpp` di main (rotte righe ~95-120, `handleSetHostname`, `requireJson`, `webUiUser`); sezione "API web" del piano.
+
+      **Modifiche:** in `lib/WebApi/src/WebApiJson.h/.cpp` riscrivere su main `remoteLogJson` e `checkRemoteLogBody` dalla PR (include `SyslogSettings.h`, `SyslogStatus.h`). In `WebConfigServer`: include, membri `log_store`/`syslog_output`, `setRemoteLog()`, `handleGetLogging()`, `handleSetLogging()` come nella PR; rotte `server.on("/api/logging", HTTP_GET/HTTP_POST, guarded(...))` vicino a `/api/logs`, con commento "not public in AuthPolicy (ADR 0009)". Non toccare `AuthPolicy`.
+
+      **Passi:** 1) WebApiJson; 2) header del server; 3) handler e rotte; 4) `web_server.setRemoteLog` in main.cpp (TASK-05).
+
+      **Verifica:** build S3 da PowerShell; i test arrivano nel TASK-07.
+
+      **Blocchi:** se `WebApi` non trova gli header di `LogCore` nel build nativo, aggiungere la dipendenza nel `library.json` di WebApi o un `#include` coerente con le altre lib; non toccare `platformio.ini` salvo necessità.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h/.cpp — JSON e validazione
+      - include/network/web_config_server.h — setter e handler
+      - src/network/web_config_server.cpp — rotte e handler
+      - src/core/main.cpp — setRemoteLog
+
+      ## Criteri di Completamento
+      - [ ] Le due rotte usano `guarded()` e non sono nella lista pubblica
+      - [ ] Messaggi di errore identici al piano
+      - [ ] Dopo POST le impostazioni si applicano senza riavvio
+  - id: TASK-07
+    title: Test nativi dell'API in test_web_api e blocco nativo completo
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `remoteLogJson` e `checkRemoteLogBody` e verificare che nulla si rompa.
+
+      **Leggere:** `git diff 6ee8236 pr104 -- test/test_web_api/test_main.cpp`; `test/test_web_api/test_main.cpp` di main (registrazione dei RUN_TEST).
+
+      **Modifiche:** riscrivere su main i test della PR e aggiungere i limiti del piano (host 63/64, porta 0/65536, righe 0/101, server obbligatorio se acceso, POST parziale).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api -f test_log_core -f test_log_fanout`, poi la suite completa in blocchi da ~8 suite (foreground, 600 s).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — casi /api/logging
+
+      ## Criteri di Completamento
+      - [ ] Ogni messaggio 400 è coperto
+      - [ ] Tutta la suite nativa passa
+  - id: TASK-08
+    title: Pannello Remote logging e indicatore nella pagina System Logs
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la UI della spec, secondo i mockup in `docs/mockups/US-116/`.
+
+      **Leggere:** `docs/mockups/US-116/` (index.html, remote-log.css, app.js); `data/www/index.html` sezione `#content-logs`; `data/www/bundle.js` (logs ~720-850, pagina Board ~2520-2945 come esempio di GET all'apertura della tab e POST); sezione "Web UI" del piano.
+
+      **Modifiche:** in `index.html` l'indicatore dentro `.logs-actions` accanto ad `.auto-refresh` e il pannello "Remote logging" (sezione "Syslog") sotto `.terminal-container`, con un commento per la futura sezione MQTT. In `bundle.js` un blocco "US-116": GET `/api/logging` all'apertura della tab, dopo Save, con Refresh e ogni 10 s solo per lo stato con tab attiva e Auto-refresh acceso; select riempite da `options`; validazione client; POST `{syslog:{...}}`; errore del server mostrato; clic sull'indicatore → `scrollIntoView` del pannello; nessuna sovrascrittura del form mentre è modificato. In `bundle.css` le sole regole nuove di `remote-log.css`, riusando le classi esistenti. Poi `python scripts/embed_web.py`.
+
+      **Passi:** 1) HTML; 2) CSS; 3) JS; 4) embed; 5) controllo a 375 px.
+
+      **Verifica:** e2e del TASK-09; build S3.
+
+      **Blocchi:** se il mockup e il piano divergono su un comportamento, vale il piano.
+
+      ## File Coinvolti
+      - data/www/index.html — indicatore e pannello
+      - data/www/bundle.js — logica
+      - data/www/bundle.css — stili minimi
+      - include/network/web_assets.h, include/network/.web_assets.hash, data/www/*_inlined.html — rigenerati da embed_web.py
+
+      ## Criteri di Completamento
+      - [ ] Nessuna tab nuova; terminale in alto come prima
+      - [ ] Indicatore con i 5 stati e il target
+      - [ ] Opzioni lette dalla GET, nessun elenco di facility nel JS
+      - [ ] Asset rigenerati
+  - id: TASK-09
+    title: E2E Playwright remote-logging e regressione della pagina System Logs
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** gli scenari e2e del piano.
+
+      **Leggere:** `e2e/support/webui.ts` (`serveIndex`), `e2e/logs-viewer.spec.ts`, `e2e/board-settings.spec.ts` (mock GET/POST), `e2e/responsive.spec.ts`; `git show pr104:e2e/remote-logging.spec.ts` solo come spunto.
+
+      **Modifiche:** nuovo `e2e/remote-logging.spec.ts` con gli scenari della tabella del piano (configurazione e salvataggio, 5 stati, validazione client e 400 del server, opzioni dalla GET, 401, clic sull'indicatore, 375 px).
+
+      **Verifica:** `npx playwright test e2e/remote-logging.spec.ts e2e/logs-viewer.spec.ts`, poi `npx playwright test` completo.
+
+      **Blocchi:** se un test esistente si rompe per il nuovo markup, correggere la UI, non il test esistente.
+
+      ## File Coinvolti
+      - e2e/remote-logging.spec.ts — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari del piano coperti e verdi
+      - [ ] Suite e2e completa verde
+  - id: TASK-10
+    title: ADR 0012 Remote log outputs, tabella ADR e piano MQTT
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione architetturale che MQTT seguirà.
+
+      **Leggere:** `docs/adr/template.md`, `docs/adr/0010-modular-architecture-and-board-profiles.md` (mappa moduli, task ownership), `docs/adr/README.md`, `docs/plans/mqtt-support.md` sezione 3; sezione "Documentazione" del piano.
+
+      **Modifiche:** nuovo `docs/adr/0012-remote-log-outputs.md` (frontmatter come gli altri ADR, inglese come gli ADR esistenti, stato Accepted, data 2026-11-04, contenuti del piano, sezione "Impact on Agent Implementation"); riga 0012 nella tabella di `docs/adr/README.md`; ADR 0012 in "Related" dell'ADR 0010; sezione 3 di `docs/plans/mqtt-support.md` sostituita da un rimando all'ADR 0012 (italiano, come il resto del piano).
+
+      **Verifica:** rilettura; i link relativi si aprono.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/adr/0012-remote-log-outputs.md — nuovo
+      - docs/adr/README.md — tabella
+      - docs/adr/0010-modular-architecture-and-board-profiles.md — Related
+      - docs/plans/mqtt-support.md — sezione 3
+
+      ## Criteri di Completamento
+      - [ ] L'ADR descrive coda, task e proprietario, fanout, notice, regola tag(), WDT, UDP in chiaro
+      - [ ] Tabella e rimandi aggiornati
+  - id: TASK-11
+    title: Tre build, misura del flash e suite complete
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-07
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la verifica locale e preparare i numeri per la PR.
+
+      **Leggere:** `platformio.ini` (ambienti S3 e P4).
+
+      **Modifiche:** nessuna nel codice; annotare in `docs/test-results/US-116/` (nuovo `build.md`) dimensione di firmware e partizione per ogni ambiente rispetto a main 499b573 (build di main in un worktree temporaneo o dal log di una build precedente).
+
+      **Verifica:** da PowerShell `~/.platformio/penv/Scripts/pio.exe run` per i tre ambienti; nativi completi a blocchi; `npx playwright test`.
+
+      **Blocchi:** se il flash S3 4 MB supera il margine noto della #93, fermarsi e chiedere all'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-116/build.md — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tre build ok
+      - [ ] Nativi ed e2e completi verdi
+      - [ ] Differenza di flash misurata e annotata
+  - id: TASK-12
+    title: Prova sul campo su ESP32-S3 con un ricevitore syslog sulla LAN (solo dopo un sì esplicito)
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare la Dimostrazione sulla scheda reale.
+
+      **Leggere:** memoria del progetto (COM5, 192.168.1.126, Eaton 3S, credenziali in file JSON mai stampate); la spec US-116.
+
+      **Modifiche:** nessuna nel firmware. Ricevitore UDP minimo (Python, script nello scratchpad, non nel repo) su una porta libera del PC; risultati in `docs/test-results/US-116/field.md`.
+
+      **Passi:** chiedere il sì all'utente prima di flashare o fare OTA; 1) impostazioni dalla web UI senza riavvio; 2) arrivano righe con l'hostname della pagina Network e severità coerenti, RFC 3164 e 5424; 3) livello WARN: le INFO non arrivano, gli avvisi di cambio sì; 4) ricevitore spento/IP inesistente: stato error, una riga `[SYSLOG]` nel System Log e nessuna sul server; 5) riavvio: le righe dell'avvio arrivano; 6) `upsc` e la dashboard funzionano per tutta la prova.
+
+      **Verifica:** file dei risultati con i pacchetti ricevuti (estratto).
+
+      **Blocchi:** senza un sì esplicito il task resta TODO.
+
+      ## File Coinvolti
+      - docs/test-results/US-116/field.md — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Sì esplicito dell'utente registrato
+      - [ ] I 6 controlli riusciti e annotati
