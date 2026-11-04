@@ -15,6 +15,9 @@
 #include "core/nut_override_store.h"
 #include "core/auto_shutdown.h"
 #include "NetBootPlan.h"
+#include "core/log_dispatcher.h"
+#include "core/log_settings_store.h"
+#include "network/syslog_output.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -34,6 +37,12 @@ static HostnameStore hostname_store;
 // and replaced by the web server, both from loop(): no lock needed
 static NvsNutOverrideStore nut_override_store;
 static std::vector<NutOverride> nut_overrides;
+
+// Remote logging (US-116, ADR 0012): queue + log task, syslog output, settings in NVS
+// "logout"
+static LogDispatcher log_dispatcher;
+static SyslogOutput syslog_output;
+static LogSettingsStore log_settings_store;
 
 // shutdown.default once per OB+LB event, option of the Board page (US-114)
 static AutoShutdown auto_shutdown;
@@ -116,6 +125,10 @@ LedState computeSystemState(bool wifiConnected, bool upsConnected) {
 void setup() {
     // Prima di tutto: protegge il panic handler se manca la partizione coredump
     CrashDiag::begin();
+
+    // Log queue before the first line: the boot log reaches the remote outputs once the
+    // network is up (US-116). The task starts later, when the outputs are configured
+    if (log_dispatcher.init()) AppLogger::setForwarder(&LogDispatcher::forward, &log_dispatcher);
 
     // Inizializzazione della porta seriale per il debug diagnostico
     Serial.begin(MONITOR_BAUD_RATE);
@@ -204,6 +217,15 @@ void setup() {
     }
     // Boards without Wi-Fi have no AP: the double reset opens the recovery window (US-091)
     if (net_plan.recovery_window) web_server.openRecoveryWindow(millis());
+
+    // Remote logging (US-116, ADR 0012), in AP, Wi-Fi and Ethernet: the syslog output
+    // waits for a station or Ethernet link and names the board with the hostname of the
+    // Network page (US-113)
+    syslog_output.begin(&network_mgr);
+    syslog_output.configure(log_settings_store.loadSyslog());
+    log_dispatcher.addOutput(&syslog_output);
+    log_dispatcher.start();
+    web_server.setRemoteLog(&log_settings_store, &syslog_output);
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
     // "%s": messages can carry values sent by NUT clients (SET VAR, US-067)

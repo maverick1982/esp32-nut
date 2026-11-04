@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | System Logs (US-116 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css as of US-115 (tokens, fonts, sidebar, panels, forms,
+         terminal, .auto-refresh, .board-*, .link-*, .set-field, .auth-alert, .cmd-result) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-116 (syslog indicator, Remote logging form grid) -->
+    <link rel="stylesheet" href="remote-log.css">
+    <!-- Mockup-only chrome: switcher, notes, phone frames -->
+    <link rel="stylesheet" href="mock.css">
+</head>
+
+<body class="mock-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-bar" id="mock-bar">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>US-116</span>
+            <button type="button" data-state="off" class="on">Off</button>
+            <button type="button" data-state="waiting-net">Waiting &middot; no network</button>
+            <button type="button" data-state="waiting-dns">Waiting &middot; DNS</button>
+            <button type="button" data-state="ready">Ready</button>
+            <button type="button" data-state="active">Active</button>
+            <button type="button" data-state="error">Error</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="invalid">Validation error</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="mobile">Mobile 375px</button>
+        </div>
+        <p class="mock-note" id="mock-note"></p>
+    </div>
+
+    <!-- ===================== Mockup-only: phone frames (Mobile 375px state) ===================== -->
+    <div class="phone-stage" id="phone-stage" hidden>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; actions bar, Active</figcaption>
+            <iframe title="System Logs at 375px, actions bar with the syslog indicator" data-src="index.html?embed=1&amp;state=active"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; Remote logging, Error</figcaption>
+            <iframe title="Remote logging panel at 375px, error state" data-src="index.html?embed=1&amp;state=error&amp;scroll=remote"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; validation error</figcaption>
+            <iframe title="Remote logging form at 375px, validation error" data-src="index.html?embed=1&amp;state=invalid&amp;scroll=form"></iframe>
+        </figure>
+    </div>
+
+    <div class="app-container" id="app">
+        <!-- Sidebar / Navigation (same as data/www/index.html, System Logs active) -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.14.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <button class="tab" data-target="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
+                <button class="tab" data-target="network">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+                    </svg>
+                    Network
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="board">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
+                </button>
+                <button class="tab" data-target="weblogin">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                    </svg>
+                    Web Login
+                </button>
+                <button class="tab active" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: Connected</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: Online</span>
+                </div>
+            </div>
+
+            <div class="sidebar-session" id="sidebar-session">
+                <div class="session-user" id="session-user" title="Signed in user">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span id="session-username">admin</span>
+                </div>
+                <button type="button" class="btn btn-outline btn-logout" id="btn-logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Log out
+                </button>
+                <button type="button" class="btn btn-outline btn-logout btn-logout-all" id="btn-logout-all">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" />
+                        <line x1="8" y1="21" x2="16" y2="21" />
+                        <line x1="12" y1="17" x2="12" y2="21" />
+                    </svg>
+                    Log out of all devices
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">System Logs</h1>
+                <div class="device-id">ID: <span>3C842756D784</span></div>
+            </header>
+
+            <div class="tab-content active" id="content-logs">
+
+                <!-- Terminal panel: unchanged, except the syslog indicator next to Auto-refresh -->
+                <div class="panel">
+                    <div class="logs-actions">
+                        <!-- US-116: wrapper so Auto-refresh and the indicator stay together on the left -->
+                        <div class="logs-status">
+                            <div class="auto-refresh">
+                                <span class="toggle-label">Auto-refresh</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-auto-refresh" checked>
+                                    <span class="slider"></span>
+                                </label>
+                                <span id="refresh-state" class="state-text active">Active</span>
+                            </div>
+                            <!-- US-116: compact syslog state (from GET /api/logs/remote status), click = scroll
+                                 to the Remote logging panel. title = problem text when there is one. -->
+                            <button type="button" class="auto-refresh syslog-chip" id="syslog-chip"
+                                aria-controls="remote-log" aria-describedby="syslog-chip-text">
+                                <span class="status-indicator off" id="syslog-chip-dot"></span>
+                                <span class="toggle-label">Syslog:</span>
+                                <span id="syslog-chip-text"><b>Off</b></span>
+                            </button>
+                        </div>
+                        <div class="logs-controls">
+                            <button class="btn btn-outline" id="btn-refresh">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M23 4v6h-6M1 20v-6h6" />
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                                </svg>
+                                Refresh
+                            </button>
+                            <button class="btn btn-outline" id="btn-clear-logs"
+                                style="color: var(--danger); border-color: var(--danger);">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path
+                                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                    </path>
+                                </svg>
+                                Clear
+                            </button>
+                            <button class="btn btn-primary" id="btn-download">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                                Export
+                            </button>
+                            <a href="#" class="btn btn-outline" id="link-export-usb">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                                </svg>
+                                Export USB Diagnostics
+                            </a>
+                        </div>
+                    </div>
+                    <div class="terminal-container" id="terminal-output"></div>
+                </div>
+
+                <!-- ===================== US-116: Remote logging panel ===================== -->
+                <div class="panel config-panel board-panel" id="remote-log" tabindex="-1">
+                    <div class="panel-header">
+                        <h2>Remote logging</h2>
+                        <!-- Re-reads the state of every output (Syslog now, MQTT later) -->
+                        <button type="button" class="btn btn-outline" id="btn-rlog-refresh">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6M1 20v-6h6" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+
+                    <p class="auth-lead board-lead">Send a copy of the System Log to other servers, to keep the
+                        history beyond the buffer of the board. Settings are saved on the device and applied without
+                        a restart.</p>
+
+                    <div class="board-body">
+
+                        <!-- ---------- Syslog output ---------- -->
+                        <section class="board-section" id="syslog-section" aria-labelledby="syslog-title">
+                            <div class="cred-section" id="syslog-title">Syslog</div>
+
+                            <p class="board-hint">Lines are sent over UDP by a background task: they never delay the
+                                UPS or the NUT server. The board has no clock, so the server timestamps each line when
+                                it arrives.</p>
+
+                            <div class="auth-alert info" role="note">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                                    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                                </svg>
+                                <span>UDP syslog is not encrypted: anyone on the LAN can read the lines, including the
+                                    usernames of failed logins.</span>
+                            </div>
+
+                            <!-- Status: same grid as the Network page (US-112) -->
+                            <div class="link-status" id="syslog-status">
+                                <dl class="link-grid">
+                                    <div class="link-kv wide lead"><dt>State</dt>
+                                        <dd>
+                                            <span class="link-badge idle" id="syslog-badge" role="status">
+                                                <span class="status-indicator off"></span><span class="badge-text">Off</span>
+                                            </span>
+                                        </dd>
+                                    </div>
+                                    <div class="link-kv wide lead"><dt>Server</dt><dd id="syslog-target" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Sent</dt><dd id="syslog-sent" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Failed</dt><dd id="syslog-failed" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Rate limited</dt><dd id="syslog-limited" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Dropped (not ready)</dt><dd id="syslog-dropped" class="na">—</dd></div>
+                                </dl>
+                                <!-- Problem text (Waiting = .warn, Error = default red); hidden when there is none -->
+                                <div class="auth-alert" id="syslog-problem" role="note" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="syslog-problem-text"></span>
+                                </div>
+                            </div>
+
+                            <form class="rlog-form" id="syslog-form" novalidate>
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Send to a syslog server</span>
+                                        <span class="board-hint">Off by default. Lines written before the network is
+                                            up are sent once the connection is ready.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="syslog-on" aria-label="Syslog enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="syslog-on-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <div class="rlog-fields">
+                                    <div class="form-group wide">
+                                        <label for="syslog-host">Server</label>
+                                        <div class="set-field" id="f-host">
+                                            <input type="text" id="syslog-host" maxlength="63" autocomplete="off"
+                                                spellcheck="false" placeholder="192.168.1.10 or rsyslog.lan">
+                                            <span class="set-counter" id="syslog-host-count">0/63</span>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-port">UDP port</label>
+                                        <div class="set-field" id="f-port">
+                                            <input type="text" id="syslog-port" inputmode="numeric" maxlength="5"
+                                                placeholder="514" value="514">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-format">Format</label>
+                                        <div class="set-field">
+                                            <select id="syslog-format">
+                                                <option value="rfc3164" selected>RFC 3164 (BSD)</option>
+                                                <option value="rfc5424">RFC 5424</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-facility">Facility</label>
+                                        <div class="set-field">
+                                            <select id="syslog-facility">
+                                                <option value="0">kern</option>
+                                                <option value="1">user</option>
+                                                <option value="2">mail</option>
+                                                <option value="3">daemon</option>
+                                                <option value="4">auth</option>
+                                                <option value="5">syslog</option>
+                                                <option value="6">lpr</option>
+                                                <option value="7">news</option>
+                                                <option value="8">uucp</option>
+                                                <option value="9">cron</option>
+                                                <option value="10">authpriv</option>
+                                                <option value="11">ftp</option>
+                                                <option value="16" selected>local0</option>
+                                                <option value="17">local1</option>
+                                                <option value="18">local2</option>
+                                                <option value="19">local3</option>
+                                                <option value="20">local4</option>
+                                                <option value="21">local5</option>
+                                                <option value="22">local6</option>
+                                                <option value="23">local7</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-level">Minimum level</label>
+                                        <div class="set-field">
+                                            <select id="syslog-level">
+                                                <option value="info" selected>INFO and above</option>
+                                                <option value="warn">WARN and above</option>
+                                                <option value="error">ERROR only</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-rate">Max lines per second</label>
+                                        <div class="set-field" id="f-rate">
+                                            <input type="text" id="syslog-rate" inputmode="numeric" maxlength="3"
+                                                placeholder="10" value="10" title="1 to 100">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Validation error (client side, or the 400 {"error"} of the API) -->
+                                <div class="auth-alert" id="syslog-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="syslog-error-text"></span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-syslog">
+                                        <span class="glow"></span>
+                                        Save
+                                    </button>
+                                    <span class="cmd-result" id="syslog-result" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </section>
+
+                        <!-- Future (later spec): MQTT output. A second .board-section here, with its own
+                             .cred-section heading "MQTT", same status grid and only: enabled, minimum level,
+                             max lines per second. The broker connection lives on its own page. -->
+
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>

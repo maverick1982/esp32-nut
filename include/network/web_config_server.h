@@ -20,6 +20,8 @@
 #include "core/nut_override_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
+#include "network/syslog_output.h"
+#include "core/log_settings_store.h"
 
 class WebConfigServer {
 public:
@@ -42,6 +44,9 @@ public:
     // Custom variables of the NUT Server page (US-115): the list the NUT server reads,
     // replaced after it is saved, in the same task as the NUT server
     void setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list);
+    // Remote logging of the System Logs page (US-116): settings in NVS, applied live to
+    // the syslog output
+    void setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog);
 
 private:
     WebServer server;
@@ -68,6 +73,10 @@ private:
     String saved_hostname;
     NvsNutOverrideStore* nut_override_store = nullptr;
     std::vector<NutOverride>* nut_overrides = nullptr;
+    LogSettingsStore* log_store = nullptr;
+    SyslogOutput* syslog_output = nullptr;
+    void handleGetLogging();
+    void handleSetLogging();
 
     void handleConnect();
     void handleLogs();

@@ -1,0 +1,6 @@
+{
+  "name": "LogCore",
+  "version": "1.0.0",
+  "description": "Logging core of esp32-nut (issue #69): log levels, output filters, syslog message format and settings. Pure logic, no platform calls.",
+  "platforms": ["espressif32", "native"]
+}

@@ -1,0 +1,71 @@
+/* US-116 mockup: NEW product classes for remote logging on the System Logs page.
+   Everything else comes from bundle.css (local copy of data/www/bundle.css):
+   - actions bar: .logs-actions, .auto-refresh (+ .toggle-label), .logs-controls, .status-indicator
+   - panel: .panel, .config-panel, .board-panel, .panel-header, .auth-lead + .board-lead,
+     .board-body, .board-section, .cred-section (section heading), .board-row / .board-label /
+     .board-name / .board-hint, .led-toggle + .led-state (switch + On/Off), .switch / .slider
+   - status: .link-status, .link-grid, .link-kv (+ .wide .lead), dd .sub / .na, .link-badge
+     (+ .idle .connecting .ap .connected .down), .auth-alert (+ .warn under .link-status, .info)
+   - form: .form-group label, .set-field (+ .invalid) with input / select / .set-counter,
+     .btn .btn-primary .btn-outline, .cmd-result (+ .success .error)
+   Budget (#93): 11 rules + 2 media blocks, no new colours, no new fonts. */
+
+/* --- Actions bar: Auto-refresh and the syslog indicator side by side, left of the buttons --- */
+.logs-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+/* The indicator is an .auto-refresh box (same height, border, mono text) that is a button:
+   click = scroll to the Remote logging panel. The dot carries the colour, as in the sidebar. */
+.syslog-chip {
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.syslog-chip:hover,
+.syslog-chip:focus-visible {
+    border-color: rgba(0, 240, 255, 0.45);
+    color: var(--text-primary);
+    outline: none;
+}
+.syslog-chip b { color: var(--text-primary); font-weight: 400; }
+.syslog-chip .toggle-label { white-space: nowrap; }
+
+/* Neutral dot for "Off" (bundle.css has no neutral .status-indicator) */
+.status-indicator.off { background: rgba(138, 155, 179, 0.45); }
+
+/* --- Form: Enabled row, then fields on a 4-column grid, then Save + outcome --- */
+.rlog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.rlog-fields {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem 1.25rem;
+}
+.rlog-fields .wide { grid-column: span 3; }
+
+.rlog-form .form-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.rlog-form .cmd-result { min-width: 0; white-space: normal; justify-content: flex-start; }
+
+/* Same breakpoint as the UPS Settings editor: below it the selects would cut "RFC 3164 (BSD)" */
+@media (max-width: 1180px) {
+    .rlog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rlog-fields .wide { grid-column: auto; }
+}
+
+@media (max-width: 768px) {
+    .logs-status > * { flex: 1 1 auto; }
+    .rlog-fields { grid-template-columns: 1fr; }
+    .rlog-form .form-actions { flex-direction: column; align-items: stretch; }
+    .rlog-form .form-actions .btn { justify-content: center; }
+}

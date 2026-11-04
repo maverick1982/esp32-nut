@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-118
+title: Ora della scheda nel terminale e nell'export del System Log
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 3
+status: TODO
+body: |
+  #### US-118: Ora della scheda nel terminale e nell'export del System Log
+
+  **Epic:** EP-002 | **Priorità:** LOW | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-117
+
+  **User Story**
+  Come utente che legge o esporta il System Log,
+  voglio vedere l'ora della scheda nel fuso scelto in Board Settings,
+  in modo che le righe coincidano con quelle del server syslog e con gli eventi dell'UPS, anche se apro la pagina da un dispositivo con l'orologio sbagliato.
+
+  **Dimostrazione**
+  Con l'ora sincronizzata, l'utente apre System Logs: il terminale mostra per ogni riga l'ora della scheda nel fuso di Board Settings, uguale a quella sul server syslog. Export scarica le righe con l'ora della scheda. Prima della sincronizzazione il terminale si comporta come oggi.
+
+  **Criteri di Accettazione**
+  - [ ] Con l'ora sincronizzata, il terminale mostra l'ora della scheda nel fuso di Board Settings, compreso quello delle righe scritte prima della sincronizzazione (ora calcolata dall'uptime).
+  - [ ] Senza ora sincronizzata il terminale ricostruisce l'ora con l'orologio del browser, come oggi (issue #60).
+  - [ ] L'export contiene per ogni riga, quando è nota, l'ora della scheda; i campi di oggi (`id`, `time`, `level`, `msg`) restano invariati.
+  - [ ] Riavvio della scheda e righe dopo un riavvio funzionano come oggi.
+  - [ ] e2e per il terminale con e senza ora della scheda e per l'export; `e2e/logs-viewer.spec.ts` resta verde.
+
+  **Assunzioni**
+  - Il fuso è quello di US-117; nessuna impostazione nuova.
+history:
+  - status: TODO
+    at: "2026-11-04T20:25:11Z"
