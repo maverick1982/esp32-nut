@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 5
-status: REVIEW
+status: DONE
 body: |
   #### US-115: Variabili NUT personalizzate e override dalla pagina NUT Server
 
@@ -47,3 +47,5 @@ history:
     at: "2026-11-04T15:33:47Z"
   - status: REVIEW
     at: "2026-11-04T16:07:02Z"
+  - status: DONE
+    at: "2026-11-04T16:36:25Z"
