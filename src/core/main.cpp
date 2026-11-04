@@ -12,6 +12,7 @@
 #include "board/board.h"
 #include "core/board_settings_store.h"
 #include "core/hostname_store.h"
+#include "core/nut_override_store.h"
 #include "core/auto_shutdown.h"
 #include "NetBootPlan.h"
 
@@ -28,6 +29,11 @@ static NvsDriverVarStore driver_var_store;
 // Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
 static BoardSettingsStore board_settings_store;
 static HostnameStore hostname_store;
+
+// Custom variables of the NUT Server page, NVS "nutovr" (US-115). Read by the NUT server
+// and replaced by the web server, both from loop(): no lock needed
+static NvsNutOverrideStore nut_override_store;
+static std::vector<NutOverride> nut_overrides;
 
 // shutdown.default once per OB+LB event, option of the Board page (US-114)
 static AutoShutdown auto_shutdown;
@@ -162,6 +168,11 @@ void setup() {
     web_server.setHostnameStore(&hostname_store, saved_hostname);
     web_server.setStatusLed(&diagnostic_led);
     web_server.setAutoShutdown(&auto_shutdown);
+    nut_override_store.load(nut_overrides);
+    if (!nut_overrides.empty()) {
+        AppLogger::log("INFO", "[NUT] %u custom variables loaded", (unsigned)nut_overrides.size());
+    }
+    web_server.setNutOverrides(&nut_override_store, &nut_overrides);
 
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
@@ -228,6 +239,7 @@ void setup() {
         nut_server.setLogCallback([](const char* level, const char* msg) {
             AppLogger::log(level, "%s", msg);
         });
+        nut_server.setOverrides(&nut_overrides);
         if (!nut_server.begin(nut_server_config, &usb_ups)) {
             AppLogger::log("ERROR", "[MAIN] ERROR: NUTServer initialization failed!");
         } else {

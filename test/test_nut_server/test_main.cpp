@@ -2013,9 +2013,203 @@ void test_inactivity_close_is_logged(void) {
     TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.60", 50060));
 }
 
+// --- Custom variables of the NUT Server page (US-115): override.<var> of ups.conf,
+// drivers/main.c storeval (dstate_setinfo + ST_FLAG_IMMUTABLE + dparam_setinfo) ---
+
+static std::vector<NutOverride> overrides;
+
+static void addOverride(const char* key, const char* value, const char* desc = "") {
+    NutOverride o;
+    o.key = key;
+    o.value = value;
+    o.description = desc;
+    overrides.push_back(o);
+}
+
+// The list is reset and attached for each test; detached at the end so the other tests
+// run without overrides
+static void useOverrides() {
+    overrides.clear();
+    server.setOverrides(&overrides);
+}
+
+static size_t countOf(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t pos = text.find(what); pos != std::string::npos; pos = text.find(what, pos + 1)) n++;
+    return n;
+}
+
+void test_override_replaces_ups_value(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("battery.charge", "100");
+    addOverride("ups.model", "Eaton 3S 700 studio");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Eaton 3S 700 studio\"\n",
+                             request(0, "GET VAR testups ups.model").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups ups.model "));
+    TEST_ASSERT_TRUE(out.find("VAR testups ups.model \"Eaton 3S 700 studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("Eaton 3S 700\"") == std::string::npos);
+    // The other values are untouched
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.charge \"100\"\n") != std::string::npos);
+    server.setOverrides(nullptr);
+}
+
+void test_override_adds_missing_variable(void) {
+    useOverrides();
+    mockHost.data.set("battery.charge", "100");
+    addOverride("battery.date", "2025-03-01", "Battery replaced");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.date \"2025-03-01\"\n",
+                             request(0, "GET VAR testups battery.date").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups battery.date "));
+    // After the UPS variables, before END
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.date") > out.find("VAR testups battery.charge"));
+    TEST_ASSERT_TRUE(out.find("VAR testups battery.date") < out.find("END LIST VAR testups"));
+    // Without the override the variable is gone
+    overrides.clear();
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n", request(0, "GET VAR testups battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_publishes_driver_parameter(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    addOverride("ups.model", "Studio");
+    addOverride("battery.date", "2025-03-01");
+
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.ups.model \"Studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.battery.date \"2025-03-01\"\n") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR testups driver.parameter.override.battery.date \"2025-03-01\"\n",
+                             request(0, "GET VAR testups driver.parameter.override.battery.date").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR VAR-NOT-SUPPORTED\n",
+                             request(0, "GET VAR testups driver.parameter.override.battery.type").c_str());
+    // No description in cmdvartab, as upstream
+    TEST_ASSERT_EQUAL_STRING("DESC testups driver.parameter.override.battery.date \"Description unavailable\"\n",
+                             request(0, "GET DESC testups driver.parameter.override.battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_reaches_device_alias(void) {
+    useOverrides();
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("ups.mfr", "EATON");
+    addOverride("ups.model", "Studio");
+
+    // The copy ups.* -> device.* of drivers/main.c sees the overridden ups.model
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Studio\"\n", request(0, "GET VAR testups device.model").c_str());
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Studio\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups device.mfr \"EATON\"\n") != std::string::npos);
+
+    // An override of the alias itself wins, and is listed once
+    addOverride("device.model", "Rack 2");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.model \"Rack 2\"\n", request(0, "GET VAR testups device.model").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups ups.model \"Studio\"\n", request(0, "GET VAR testups ups.model").c_str());
+    out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups device.model "));
+    TEST_ASSERT_TRUE(out.find("VAR testups device.model \"Rack 2\"\n") != std::string::npos);
+
+    // The alias exists also when the UPS reports no ups.serial
+    addOverride("ups.serial", "SN-1");
+    TEST_ASSERT_EQUAL_STRING("VAR testups device.serial \"SN-1\"\n", request(0, "GET VAR testups device.serial").c_str());
+    out = request(0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups device.serial "));
+    TEST_ASSERT_EQUAL(1, (int)countOf(out, "VAR testups ups.serial "));
+    server.setOverrides(nullptr);
+}
+
+void test_overridden_rw_variable_is_read_only(void) {
+    setupSettable();
+    useOverrides();
+    addOverride("battery.charge.low", "30");
+
+    std::string out = request(0, "LIST RW testups");
+    TEST_ASSERT_TRUE(out.find("battery.charge.low") == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("RW testups input.sensitivity \"normal\"\n") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("TYPE testups battery.charge.low STRING:64\n",
+                             request(0, "GET TYPE testups battery.charge.low").c_str());
+    TEST_ASSERT_EQUAL_STRING("TYPE testups input.sensitivity RW ENUM STRING:10\n",
+                             request(0, "GET TYPE testups input.sensitivity").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.charge.low 25").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups BATTERY.CHARGE.LOW 25").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    // An override of a variable the UPS does not report is read-only as well
+    addOverride("battery.date", "2025-03-01");
+    TEST_ASSERT_EQUAL_STRING("ERR READONLY\n", request(0, "SET VAR testups battery.date 2026").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    // The others are still writable
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "SET VAR testups ups.load.high 80").c_str());
+    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    server.setOverrides(nullptr);
+}
+
+void test_override_description(void) {
+    useOverrides();
+    mockHost.data.set("battery.charge.low", "20");
+    addOverride("battery.date", "2025-03-01", "Battery replaced");
+    addOverride("battery.charge.low", "30", "My threshold");
+    addOverride("custom.note", "x", "");
+
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.date \"Battery replaced\"\n",
+                             request(0, "GET DESC testups battery.date").c_str());
+    // cmdvartab keeps its text
+    TEST_ASSERT_EQUAL_STRING("DESC testups battery.charge.low \"Remaining battery level when UPS switches to LB (percent)\"\n",
+                             request(0, "GET DESC testups battery.charge.low").c_str());
+    TEST_ASSERT_EQUAL_STRING("DESC testups custom.note \"Description unavailable\"\n",
+                             request(0, "GET DESC testups custom.note").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_overrides_not_served_when_stale(void) {
+    useOverrides();
+    addOverride("battery.date", "2025-03-01");
+    mockHost.stale = true;
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "LIST VAR testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", request(0, "GET VAR testups battery.date").c_str());
+    server.setOverrides(nullptr);
+}
+
+void test_override_lookup_ignores_case(void) {
+    useOverrides();
+    mockHost.data.set("input.voltage", "230");
+    addOverride("battery.date", "2025-03-01");
+    addOverride("input.L1-N.voltage", "231");
+
+    TEST_ASSERT_EQUAL_STRING("VAR testups BATTERY.DATE \"2025-03-01\"\n",
+                             request(0, "GET VAR testups BATTERY.DATE").c_str());
+    TEST_ASSERT_EQUAL_STRING("VAR testups input.l1-n.voltage \"231\"\n",
+                             request(0, "GET VAR testups input.l1-n.voltage").c_str());
+    // Listed under the name it was saved with
+    std::string out = request(0, "LIST VAR testups");
+    TEST_ASSERT_TRUE(out.find("VAR testups input.L1-N.voltage \"231\"\n") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find("VAR testups driver.parameter.override.input.L1-N.voltage \"231\"\n") != std::string::npos);
+    server.setOverrides(nullptr);
+}
+
+void test_override_values_are_escaped(void) {
+    useOverrides();
+    addOverride("custom.text", "say \"hi\" \\ #1");
+    TEST_ASSERT_EQUAL_STRING("VAR testups custom.text \"say \\\"hi\\\" \\\\ \\#1\"\n",
+                             request(0, "GET VAR testups custom.text").c_str());
+    server.setOverrides(nullptr);
+}
+
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_override_replaces_ups_value);
+    RUN_TEST(test_override_adds_missing_variable);
+    RUN_TEST(test_override_publishes_driver_parameter);
+    RUN_TEST(test_override_reaches_device_alias);
+    RUN_TEST(test_overridden_rw_variable_is_read_only);
+    RUN_TEST(test_override_description);
+    RUN_TEST(test_overrides_not_served_when_stale);
+    RUN_TEST(test_override_lookup_ignores_case);
+    RUN_TEST(test_override_values_are_escaped);
     RUN_TEST(test_split_tokens);
     RUN_TEST(test_auth_flow);
     RUN_TEST(test_list_ups);

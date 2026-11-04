@@ -5,6 +5,7 @@
 #include <vector>
 #include "IUpsSource.h"
 #include "NutTracking.h"
+#include "NutOverrides.h"
 
 #ifndef PIO_UNIT_TESTING
 #include <WiFi.h>
@@ -51,6 +52,8 @@ public:
     static String defaultUpsName();
     static String normalizeUpsName(const String& name);   // vuoto → defaultUpsName()
     static bool isValidUpsName(const String& name);       // non vuoto, byte 0x21-0x7E senza " \ # @
+    // ups.* source of a device.mfr/model/serial alias (lower case), nullptr for the others
+    static const char* deviceAliasOf(const String& varNameLower);
     void processCommand(Print& client, int slot, const String& cmdLine);
 
     // Motivo della chiusura di una sessione (US-084): solo il timeout va nel System Log
@@ -96,6 +99,10 @@ public:
     typedef void (*LogFn)(const char* level, const char* msg);
     void setLogCallback(LogFn cb) { _log_cb = cb; }
 
+    // Custom variables of the NUT Server page (US-115), read at every reply: the Web UI
+    // replaces the list in the same task, so a change applies at once. nullptr = none
+    void setOverrides(const std::vector<NutOverride>* list) { _overrides = list; }
+
     // Orologio e sorgente casuale di TRACKING, sostituibili nei test (default millis ed esp_random)
     typedef uint32_t (*ClockFn)();
     void setClock(ClockFn now);
@@ -112,7 +119,10 @@ private:
     // Esito di SET VAR o INSTCMD con TRACKING ON: voce nella tabella condivisa e OK TRACKING <id>
     void replyTracking(Print& client, NutTable::SetStatus st);
     const char* missingCredentials(int slot) const;
-    static bool isVarPresent(const UPSData& data, const String& varNameLower);
+    // Value GET VAR answers for a variable, overrides included (US-115); false when the
+    // variable does not exist. The one place that decides value and presence
+    bool resolveVar(const UPSData& data, const String& varNameLower, String& out) const;
+    const NutOverride* findOverride(const char* name) const { return NutOverrides::find(_overrides, name); }
     void log(const char* level, const char* fmt, ...) const;
 
     NUTServerConfig _config;
@@ -145,6 +155,7 @@ private:
     NutTracking _tracking;
     ClockFn _now;
     LogFn _log_cb;
+    const std::vector<NutOverride>* _overrides;
 };
 
 #endif // NUT_SERVER_H

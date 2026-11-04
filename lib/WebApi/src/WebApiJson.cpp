@@ -223,7 +223,7 @@ bool WebApiJson::needsConfirmation(const char* name) {
     return false;
 }
 
-String WebApiJson::generateUpsVariables(IUpsSource* usb_ups) {
+String WebApiJson::generateUpsVariables(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides) {
     JsonDocument doc;
     bool connected = usb_ups && usb_ups->isConnected();
     doc["connected"] = connected;
@@ -245,6 +245,8 @@ String WebApiJson::generateUpsVariables(IUpsSource* usb_ups) {
             for (const char* e : v.enums) enums.add(e);
             obj["driver_side"] = v.driver_side;
             obj["confirm"] = needsConfirmation(v.name);
+            // US-115: read-only while the NUT Server page overrides it
+            if (const NutOverride* o = NutOverrides::find(overrides, v.name)) obj["override"] = o->value;
         }
     }
 
@@ -253,7 +255,8 @@ String WebApiJson::generateUpsVariables(IUpsSource* usb_ups) {
     return String(out_std.c_str());
 }
 
-int WebApiJson::runUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called) {
+int WebApiJson::runUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called,
+                               const std::vector<NutOverride>* overrides) {
     if (host_called) *host_called = false;
     // L'ordine dei controlli fa parte del contratto (piano US-068, sezione 3): forma del
     // body, host, validazione di SET VAR, scrittura
@@ -264,6 +267,8 @@ int WebApiJson::runUpsVariable(IUpsSource* usb_ups, const String& body, String& 
     if (!isPrintableAscii(value)) return sendError(response, 400, "Invalid value");
     int status = checkHost(usb_ups, response);
     if (status) return status;
+    // US-115: immutable while overridden, as SET VAR (READONLY)
+    if (NutOverrides::find(overrides, name)) return sendError(response, 400, OVERRIDDEN_VARIABLE_ERROR);
 
     // Una variabile assente dal catalogo LIST RW non è scrivibile; aux < 1 dà 400 e non
     // 500, perché all'UPS non arriva nulla
@@ -300,7 +305,8 @@ int WebApiJson::runUpsVariable(IUpsSource* usb_ups, const String& body, String& 
     }
 }
 
-int WebApiJson::resetUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called) {
+int WebApiJson::resetUpsVariable(IUpsSource* usb_ups, const String& body, String& response, bool* host_called,
+                                 const std::vector<NutOverride>* overrides) {
     if (host_called) *host_called = false;
     JsonDocument req;
     const char* name;
@@ -308,6 +314,7 @@ int WebApiJson::resetUpsVariable(IUpsSource* usb_ups, const String& body, String
     if (!parseVariableBody(body, false, req, name, value)) return sendError(response, 400, "Invalid request");
     int status = checkHost(usb_ups, response);
     if (status) return status;
+    if (NutOverrides::find(overrides, name)) return sendError(response, 400, OVERRIDDEN_VARIABLE_ERROR);
 
     // Solo le variabili del catalogo con driver_side (ups.delay.*, outlet.*.desc)
     String canonical;
@@ -493,4 +500,67 @@ void WebApiJson::hostnameJson(JsonObject out, const String& in_use, const String
     out["name"] = in_use;
     out["custom"] = saved;
     out["default"] = def;
+}
+
+String WebApiJson::nutOverridesJson(const std::vector<NutOverride>& list, IUpsSource* usb_ups) {
+    JsonDocument doc;
+    doc["max"] = (unsigned)NutOverrides::MAX_COUNT;
+    doc["max_value_length"] = (unsigned)NutOverrides::MAX_VALUE_LENGTH;
+    doc["max_description_length"] = (unsigned)NutOverrides::MAX_DESCRIPTION_LENGTH;
+    JsonArray arr = doc["overrides"].to<JsonArray>();
+    bool connected = usb_ups && usb_ups->isConnected();
+    for (const auto& o : list) {
+        JsonObject obj = arr.add<JsonObject>();
+        obj["key"] = o.key;
+        obj["value"] = o.value;
+        obj["description"] = o.description;
+        obj["ups_value"] = nullptr;
+        if (!connected) continue;
+        // The real value the override replaces: the page shows "Overrides UPS" or "Added"
+        String key = o.key;
+        key.toLowerCase();
+        const char* alias = NUTServer::deviceAliasOf(key);
+        String source = alias ? String(alias) : key;
+        IUpsSource::UPSDataLock data = usb_ups->getUPSData();
+        if (data->hasKey(source)) obj["ups_value"] = data->get(source);
+    }
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkNutOverridesBody(const String& body, std::vector<NutOverride>& next, String& response) {
+    next.clear();
+    if (body.length() > MAX_OVERRIDES_BODY_LENGTH) return sendError(response, 400, "Invalid request");
+    JsonDocument req;
+    if (deserializeJson(req, body.c_str())) return sendError(response, 400, "Invalid request");
+    JsonVariantConst items = req["overrides"];
+    if (!items.is<JsonArrayConst>()) return sendError(response, 400, "Invalid request");
+    for (JsonVariantConst item : items.as<JsonArrayConst>()) {
+        JsonVariantConst desc = item["description"];
+        if (!item["key"].is<const char*>() || !item["value"].is<const char*>() ||
+            !(desc.isNull() || desc.is<const char*>())) {
+            next.clear();
+            return sendError(response, 400, "Invalid request");
+        }
+        NutOverride o;
+        o.key = item["key"].as<const char*>();
+        o.value = item["value"].as<const char*>();
+        o.description = desc.is<const char*>() ? desc.as<const char*>() : "";
+        next.push_back(o);
+    }
+    size_t bad = 0;
+    NutOverrides::Check c = NutOverrides::checkList(next, bad);
+    if (c != NutOverrides::Check::OK) {
+        // The message carries the key typed by the user: serialized with escapes
+        JsonDocument err;
+        err["error"] = NutOverrides::errorMessage(c, bad < next.size() ? next[bad].key : String());
+        err["index"] = (unsigned)bad;
+        std::string out;
+        serializeJson(err, out);
+        response = String(out.c_str());
+        next.clear();
+        return 400;
+    }
+    return 0;
 }

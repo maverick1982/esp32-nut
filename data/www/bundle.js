@@ -378,6 +378,338 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // US-115: custom variables of the NUT Server tab (override.<var> of ups.conf). The API
+    // is the authority; the page runs the same checks first, with the same messages
+    const CV_ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+    const CV_ICON_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>';
+    const CV_ICON_LAYERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+    const CV_ICON_PLUS = '<path d="M12 5v14M5 12h14"/>';
+    const CV_ICON_PEN = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>';
+    const CV_KEY_RE = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$/;
+    const CV_ASCII_RE = /^[\x20-\x7E]*$/;
+    const cvState = { list: [], max: 16, maxValue: 64, maxDesc: 64, editing: -1, busy: false, highlight: null };
+
+    function cvProtected(key) {
+        const k = key.toLowerCase();
+        return k === 'ups.status' || k.startsWith('ups.status.') || k === 'device.type' || k.startsWith('driver.parameter.');
+    }
+
+    // Same rules and texts as NutOverrides::checkEntry / errorMessage in the firmware
+    function cvCheck(entry, others) {
+        const key = entry.key;
+        if (!key || key.length > 63 || !CV_KEY_RE.test(key)) {
+            return { field: 'cv-key', msg: `Invalid key "${key}": use dot-separated parts of letters, digits, '_' and '-' (e.g. battery.date)` };
+        }
+        if (cvProtected(key)) return { field: 'cv-key', msg: `${key} cannot be overridden` };
+        if (entry.value.length > cvState.maxValue || !CV_ASCII_RE.test(entry.value)) {
+            return { field: 'cv-value', msg: `Invalid value for ${key}: printable ASCII only, at most ${cvState.maxValue} characters` };
+        }
+        if (entry.description.length > cvState.maxDesc || !CV_ASCII_RE.test(entry.description)) {
+            return { field: 'cv-desc', msg: `Invalid description for ${key}: printable ASCII only, at most ${cvState.maxDesc} characters` };
+        }
+        if (others.some(o => o.key.toLowerCase() === key.toLowerCase())) {
+            return { field: 'cv-key', msg: `Duplicate key: ${key}` };
+        }
+        return null;
+    }
+
+    function cvShowError(msg, field) {
+        document.getElementById('cv-ok').hidden = true;
+        document.getElementById('cv-error-text').textContent = msg;
+        document.getElementById('cv-error').hidden = false;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.classList.toggle('invalid', id === field);
+        });
+    }
+
+    function cvHideError() {
+        document.getElementById('cv-error').hidden = true;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => document.getElementById(id).classList.remove('invalid'));
+    }
+
+    function cvShowOk(msg) {
+        const ok = document.getElementById('cv-ok');
+        document.getElementById('cv-ok-text').textContent = msg;
+        ok.hidden = false;
+        clearTimeout(cvShowOk.timer);
+        cvShowOk.timer = setTimeout(() => { ok.hidden = true; }, 5000);
+    }
+
+    function cvRefreshForm() {
+        const editing = cvState.editing >= 0;
+        const full = !editing && cvState.list.length >= cvState.max;
+        const form = document.getElementById('cv-form');
+        form.classList.toggle('is-edit', editing);
+        form.classList.toggle('is-full', full);
+        document.getElementById('cv-form-title').querySelector('svg').innerHTML = editing ? CV_ICON_PEN : CV_ICON_PLUS;
+        const title = document.getElementById('cv-form-title-text');
+        if (editing) {
+            title.textContent = 'Edit ';
+            const code = document.createElement('code');
+            code.textContent = cvState.list[cvState.editing].key;
+            title.appendChild(code);
+        } else {
+            title.textContent = 'Add a variable';
+        }
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).disabled = full || cvState.busy; });
+        document.getElementById('cv-submit').disabled = full || cvState.busy;
+        document.getElementById('cv-submit-text').textContent =
+            cvState.busy ? 'Saving...' : (editing ? 'Save changes' : 'Add variable');
+        document.getElementById('cv-cancel').hidden = !editing;
+        document.getElementById('cv-limit').hidden = !full;
+        document.getElementById('cv-value-count').textContent = `${document.getElementById('cv-value').value.length}/${cvState.maxValue}`;
+        document.getElementById('cv-desc-count').textContent = `${document.getElementById('cv-desc').value.length}/${cvState.maxDesc}`;
+    }
+
+    function cvBuildRow(entry, index) {
+        const row = document.createElement('div');
+        row.className = 'cmd-row cv-row' + (index === cvState.editing ? ' editing' : '');
+        row.dataset.key = entry.key;
+
+        const id = document.createElement('div');
+        id.className = 'cv-id';
+        const name = document.createElement('div');
+        name.className = 'cmd-name';
+        name.textContent = entry.key;
+        const tags = document.createElement('div');
+        tags.className = 'set-tags';
+        const tag = document.createElement('span');
+        if (entry.ups_value === null) {
+            tag.className = 'set-tag cv-tag add';
+            tag.title = 'The UPS does not report this variable';
+            tag.textContent = 'Added';
+        } else {
+            tag.className = 'set-tag cv-tag ovr';
+            tag.title = 'Replaces the value reported by the UPS';
+            tag.innerHTML = CV_ICON_LAYERS;
+            tag.appendChild(document.createTextNode('Overrides UPS'));
+        }
+        tags.appendChild(tag);
+        id.append(name, tags);
+
+        const val = document.createElement('div');
+        val.className = 'cv-val';
+        const value = document.createElement('span');
+        value.className = 'set-current-value';
+        value.textContent = entry.value;
+        val.appendChild(value);
+        if (entry.ups_value !== null) {
+            const ups = document.createElement('span');
+            ups.className = 'cv-ups';
+            ups.appendChild(document.createTextNode('UPS: '));
+            const s = document.createElement('s');
+            s.textContent = entry.ups_value;
+            ups.appendChild(s);
+            val.appendChild(ups);
+        }
+
+        const desc = document.createElement('div');
+        desc.className = 'cmd-desc';
+        desc.textContent = entry.description;
+
+        const acts = document.createElement('div');
+        acts.className = 'cv-acts';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'cv-act edit';
+        edit.title = `Edit ${entry.key}`;
+        edit.setAttribute('aria-label', `Edit ${entry.key}`);
+        edit.innerHTML = CV_ICON_EDIT;
+        // While a record is in the form the other rows are dimmed and locked: a save would
+        // clear the form and lose what was typed
+        const locked = cvState.busy || (cvState.editing >= 0 && cvState.editing !== index);
+        edit.disabled = locked;
+        edit.addEventListener('click', () => cvStartEdit(index));
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'cv-act del';
+        del.title = `Delete ${entry.key}`;
+        del.setAttribute('aria-label', `Delete ${entry.key}`);
+        del.innerHTML = CV_ICON_DEL;
+        del.disabled = locked;
+        del.addEventListener('click', () => cvDelete(index));
+        acts.append(edit, del);
+
+        row.append(id, val, desc, acts);
+        return row;
+    }
+
+    function cvRender(savedKey) {
+        const list = document.getElementById('cv-list');
+        if (!list) return;
+        list.replaceChildren(...cvState.list.map((e, i) => cvBuildRow(e, i)));
+        const group = document.getElementById('cv-group');
+        group.hidden = cvState.list.length === 0;
+        group.classList.toggle('is-editing', cvState.editing >= 0);
+        document.getElementById('cv-empty').hidden = cvState.list.length > 0;
+        document.getElementById('cv-count-n').textContent = String(cvState.list.length);
+        document.getElementById('cv-count-max').textContent = String(cvState.max);
+        document.getElementById('cv-limit-max').textContent = String(cvState.max);
+        document.getElementById('cv-count').classList.toggle('full', cvState.list.length >= cvState.max);
+        if (savedKey) {
+            const row = list.querySelector(`.cv-row[data-key="${CSS.escape(savedKey)}"]`);
+            if (row) row.classList.add('saved');
+        }
+        if (cvState.highlight) {
+            const row = list.querySelector(`.cv-row[data-key="${CSS.escape(cvState.highlight)}"]`);
+            cvState.highlight = null;
+            if (row) {
+                row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                row.classList.add('pulse');
+            }
+        }
+        cvRefreshForm();
+    }
+
+    function cvApply(json) {
+        if (!json || !Array.isArray(json.overrides)) return false;
+        if (Number.isFinite(json.max)) cvState.max = json.max;
+        if (Number.isFinite(json.max_value_length)) cvState.maxValue = json.max_value_length;
+        if (Number.isFinite(json.max_description_length)) cvState.maxDesc = json.max_description_length;
+        cvState.list = json.overrides
+            .filter(o => o && typeof o.key === 'string')
+            .map(o => ({
+                key: o.key,
+                value: typeof o.value === 'string' ? o.value : '',
+                description: typeof o.description === 'string' ? o.description : '',
+                ups_value: typeof o.ups_value === 'string' ? o.ups_value : null
+            }));
+        return true;
+    }
+
+    async function loadOverrides() {
+        if (sessionExpired || cvState.busy || !document.getElementById('cv-list')) return;
+        const loadError = document.getElementById('cv-load-error');
+        try {
+            const res = await apiFetch('/api/nut/overrides');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (!cvApply(await res.json())) throw new Error('Invalid answer');
+            loadError.hidden = true;
+        } catch (err) {
+            console.error('Failed to fetch the custom variables:', err);
+            loadError.hidden = false;
+        }
+        if (cvState.editing >= cvState.list.length) cvState.editing = -1;
+        cvRender();
+    }
+
+    // Sends the whole list; on success the page shows what the firmware saved
+    async function cvSave(next, okMessage, savedKey) {
+        cvState.busy = true;
+        cvRender();
+        let error = null;
+        try {
+            const res = await apiFetch('/api/nut/overrides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ overrides: next.map(o => ({ key: o.key, value: o.value, description: o.description })) })
+            });
+            let json = null;
+            try { json = await res.json(); } catch (e) { json = null; }
+            if (!res.ok) {
+                error = (json && typeof json.error === 'string') ? json.error : 'Failed to save the custom variables';
+            } else if (!cvApply(json)) {
+                error = 'Failed to save the custom variables';
+            }
+        } catch (err) {
+            error = 'Failed to save the custom variables';
+        }
+        cvState.busy = false;
+        if (error) {
+            cvRender();
+            cvShowError(error, null);
+            return false;
+        }
+        cvState.editing = -1;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).value = ''; });
+        cvHideError();
+        cvRender(savedKey);
+        cvShowOk(okMessage);
+        return true;
+    }
+
+    function cvStartEdit(index) {
+        const entry = cvState.list[index];
+        if (!entry || cvState.busy) return;
+        cvState.editing = index;
+        document.getElementById('cv-key').value = entry.key;
+        document.getElementById('cv-value').value = entry.value;
+        document.getElementById('cv-desc').value = entry.description;
+        cvHideError();
+        document.getElementById('cv-ok').hidden = true;
+        cvRender();
+        const value = document.getElementById('cv-value');
+        value.focus();
+        value.select();
+    }
+
+    function cvCancelEdit() {
+        cvState.editing = -1;
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => { document.getElementById(id).value = ''; });
+        cvHideError();
+        cvRender();
+    }
+
+    function cvDelete(index) {
+        const entry = cvState.list[index];
+        if (!entry || cvState.busy) return;
+        const after = entry.ups_value === null
+            ? 'NUT clients will no longer see it.'
+            : `NUT clients will see the UPS value again (${entry.ups_value}).`;
+        if (!window.confirm(`Delete the custom variable "${entry.key}"?\n\n${after}`)) return;
+        const next = cvState.list.filter((_, i) => i !== index);
+        if (cvState.editing === index) cvCancelEdit();
+        cvSave(next, `${entry.key} deleted. ${after}`, null);
+    }
+
+    function cvSubmit() {
+        if (cvState.busy) return;
+        const entry = {
+            key: document.getElementById('cv-key').value.trim(),
+            value: document.getElementById('cv-value').value,
+            description: document.getElementById('cv-desc').value.trim()
+        };
+        const editing = cvState.editing;
+        const others = cvState.list.filter((_, i) => i !== editing);
+        if (editing < 0 && cvState.list.length >= cvState.max) {
+            cvShowError(`At most ${cvState.max} custom variables`, null);
+            return;
+        }
+        const err = cvCheck(entry, others);
+        if (err) {
+            cvShowError(err.msg, err.field);
+            document.getElementById(err.field).focus();
+            return;
+        }
+        const next = cvState.list.slice();
+        if (editing >= 0) next[editing] = entry;
+        else next.push(entry);
+        cvSave(next, editing >= 0
+            ? `${entry.key} saved. NUT clients see "${entry.value}" now.`
+            : `${entry.key} added. NUT clients see "${entry.value}" now, no restart needed.`, entry.key);
+    }
+
+    if (document.getElementById('cv-form')) {
+        document.getElementById('cv-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            cvSubmit();
+        });
+        document.getElementById('cv-form').addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && cvState.editing >= 0) cvCancelEdit();
+        });
+        document.getElementById('cv-cancel').addEventListener('click', cvCancelEdit);
+        ['cv-key', 'cv-value', 'cv-desc'].forEach(id => document.getElementById(id).addEventListener('input', () => {
+            if (!document.getElementById('cv-error').hidden) cvHideError();
+            cvRefreshForm();
+        }));
+        // One read per opening of the tab, as UPS Settings
+        document.querySelectorAll('.tab[data-target="nut"]').forEach(tab => tab.addEventListener('click', loadOverrides));
+        const current = document.querySelector('.tab.active');
+        if (current && current.getAttribute('data-target') === 'nut') loadOverrides();
+        cvRefreshForm();
+    }
+
     // Logs functionality
     const terminalOutput = document.getElementById('terminal-output');
     const btnClearLogs = document.getElementById('btn-clear-logs');
@@ -1292,7 +1624,7 @@ document.addEventListener('DOMContentLoaded', () => {
             p.out.textContent = '';
             p.asciiError = false;
         }
-        if (!p.apply.classList.contains('running')) p.apply.disabled = !dirty || !ascii;
+        if (!p.apply.classList.contains('running')) p.apply.disabled = !dirty || !ascii || p.v.override !== null;
         if (p.counter) {
             p.counter.textContent = `${p.input.value.length}/${p.v.max_length}`;
             p.counter.classList.toggle('full', p.input.value.length >= p.v.max_length);
@@ -1405,6 +1737,16 @@ document.addEventListener('DOMContentLoaded', () => {
             tag.appendChild(document.createTextNode('confirm'));
             tags.appendChild(tag);
         }
+        // US-115: custom value in the NUT Server tab, read-only here as for upsrw
+        if (v.override !== null) {
+            row.classList.add('is-overridden');
+            const tag = document.createElement('span');
+            tag.className = 'set-tag ovr';
+            tag.title = 'Has a custom value in the NUT Server tab';
+            tag.innerHTML = CV_ICON_LAYERS;
+            tag.appendChild(document.createTextNode('override'));
+            tags.appendChild(tag);
+        }
         id.append(name, tags);
 
         const desc = document.createElement('div');
@@ -1482,6 +1824,31 @@ document.addEventListener('DOMContentLoaded', () => {
         out.className = 'cmd-result';
         out.setAttribute('aria-live', 'polite');
         edit.append(controls, out);
+        if (v.override !== null) {
+            input.disabled = true;
+            if (reset) reset.disabled = true;
+            const note = document.createElement('div');
+            note.className = 'set-ovr-note';
+            note.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>';
+            const text = document.createElement('span');
+            text.appendChild(document.createTextNode('Overridden in the NUT Server tab: NUT clients see '));
+            const b = document.createElement('b');
+            b.textContent = v.override;
+            text.appendChild(b);
+            text.appendChild(document.createTextNode('. Remove the custom variable to change it here. '));
+            const link = document.createElement('button');
+            link.type = 'button';
+            link.className = 'cv-link';
+            link.textContent = 'Open NUT Server';
+            link.addEventListener('click', () => {
+                cvState.highlight = v.name;
+                const tab = document.querySelector('.tab[data-target="nut"]');
+                if (tab) tab.click();
+            });
+            text.appendChild(link);
+            note.appendChild(text);
+            edit.appendChild(note);
+        }
 
         row.append(id, desc, cur, edit);
         row._set = { v, field, input, counter, apply, reset, out, current };
@@ -1547,7 +1914,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 max_length: Number.isFinite(raw.max_length) ? raw.max_length : 0,
                 enum: Array.isArray(raw.enum) ? raw.enum.map(settingText) : [],
                 driver_side: raw.driver_side === true,
-                confirm: raw.confirm === true
+                confirm: raw.confirm === true,
+                override: typeof raw.override === 'string' ? raw.override : null
             });
         }
 

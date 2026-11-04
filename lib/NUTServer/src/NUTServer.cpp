@@ -144,6 +144,7 @@ NUTServer::NUTServer() :
     , _tracking(defaultRandom)
     , _now(defaultClock)
     , _log_cb(nullptr)
+    , _overrides(nullptr)
 {
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         _clientActive[i] = false;
@@ -175,14 +176,58 @@ void NUTServer::log(const char* level, const char* fmt, ...) const {
     _log_cb(level, buf);
 }
 
+const char* NUTServer::deviceAliasOf(const String& varNameLower) {
+    return deviceAliasSource(varNameLower);
+}
+
+// Prefix of the driver parameter upstream publishes for each override.<var> of ups.conf
+// (dparam_setinfo() in drivers/main.c storeval)
+static const char* const OVERRIDE_PARAM_PREFIX = "driver.parameter.override.";
+
 // Variables GET VAR answers (sstate_getinfo() of upsd): the status, device.type, the
 // device.* aliases and the keys of UPSData but the internal ups.status.* ones. Shared by
 // GET VAR, LIST ENUM/RANGE and SET VAR.
-bool NUTServer::isVarPresent(const UPSData& data, const String& varNameLower) {
+// US-115: the overrides of the NUT Server page win over the UPS values and add the
+// variables the UPS does not report, as override.<var> (the node is set before the driver
+// starts and is immutable). Upstream copies ups.mfr/model/serial into device.* after
+// upsdrv_initinfo() (drivers/main.c), so an override of ups.model reaches device.model
+// too, unless device.model has its own (immutable, the copy cannot change it).
+bool NUTServer::resolveVar(const UPSData& data, const String& varNameLower, String& out) const {
     if (isInternalStatusKey(varNameLower)) return false;
-    if (varNameLower == "ups.status" || varNameLower == "device.type") return true;
-    const char* alias = deviceAliasSource(varNameLower);
-    return (alias && data.hasKey(alias)) || data.hasKey(varNameLower);
+    if (varNameLower == "ups.status") {
+        out = _usb_ups ? _usb_ups->getUPSStatusString() : String();
+        return true;
+    }
+    if (varNameLower == "device.type") {
+        out = "ups";
+        return true;
+    }
+    if (varNameLower.startsWith(OVERRIDE_PARAM_PREFIX)) {
+        const NutOverride* o = findOverride(varNameLower.c_str() + strlen(OVERRIDE_PARAM_PREFIX));
+        if (!o) return false;
+        out = o->value;
+        return true;
+    }
+    if (const NutOverride* o = findOverride(varNameLower.c_str())) {
+        out = o->value;
+        return true;
+    }
+    if (const char* alias = deviceAliasSource(varNameLower)) {
+        if (const NutOverride* o = findOverride(alias)) {
+            out = o->value;
+            return true;
+        }
+        if (data.hasKey(alias)) {
+            out = data.get(alias);
+            return true;
+        }
+        return false;
+    }
+    if (data.hasKey(varNameLower)) {
+        out = data.get(varNameLower);
+        return true;
+    }
+    return false;
 }
 
 NUTServer::~NUTServer() {
@@ -589,13 +634,32 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 client.printf("VAR %s ups.status \"%s\"\n", upsName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
                 client.printf("VAR %s device.type \"ups\"\n", upsName.c_str());
                 for (const auto& a : DEVICE_ALIASES) {
-                    if (data->hasKey(a[1])) {
-                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), a[0], encodeValue(data->get(a[1]).c_str()).c_str());
+                    String value;
+                    if (resolveVar(data.get(), a[0], value)) {
+                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), a[0], encodeValue(value.c_str()).c_str());
                     }
                 }
+                // US-115: an override replaces the UPS value, under the name it was saved
+                // with (upstream creates the node before the driver sets it)
                 for (const auto& param : data->getAll()) {
                     if (isInternalStatusKey(param.key)) continue;
-                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), param.key.c_str(), encodeValue(param.value.c_str()).c_str());
+                    const NutOverride* o = findOverride(param.key.c_str());
+                    const String& name = o ? o->key : param.key;
+                    const String& value = o ? o->value : param.value;
+                    client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), name.c_str(), encodeValue(value.c_str()).c_str());
+                }
+                if (_overrides) {
+                    // Then the variables the UPS does not report, in the order of the page
+                    // (the device.* aliases are already listed above)
+                    for (const auto& o : *_overrides) {
+                        String keyLower = o.key;
+                        keyLower.toLowerCase();
+                        if (data->hasKey(keyLower) || deviceAliasSource(keyLower)) continue;
+                        client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), o.key.c_str(), encodeValue(o.value.c_str()).c_str());
+                    }
+                    for (const auto& o : *_overrides) {
+                        client.printf("VAR %s %s%s \"%s\"\n", upsName.c_str(), OVERRIDE_PARAM_PREFIX, o.key.c_str(), encodeValue(o.value.c_str()).c_str());
+                    }
                 }
             }
             client.printf("END LIST VAR %s\n", upsName.c_str());
@@ -629,6 +693,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 auto data = _usb_ups->getUPSData();
                 for (const auto& v : rw) {
                     if (!data->hasKey(v.name)) continue;
+                    // US-115: an override takes the RW flag away (ST_FLAG_IMMUTABLE)
+                    if (findOverride(v.name)) continue;
                     client.printf("RW %s %s \"%s\"\n", upsName.c_str(), v.name, encodeValue(data->get(v.name).c_str()).c_str());
                 }
             }
@@ -692,7 +758,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             bool present = false;
             if (_usb_ups) {
                 auto data = _usb_ups->getUPSData();
-                present = isVarPresent(data.get(), varNameLower);
+                String unused;
+                present = resolveVar(data.get(), varNameLower, unused);
             }
             if (!present) {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
@@ -700,7 +767,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             }
             client.printf("BEGIN LIST %s %s %s\n", subcmd.c_str(), upsName.c_str(), varName.c_str());
             if (subcmd == "ENUM") {
-                // HU_FLAG_ENUM rows of the NUT table (US-066); usbhid-ups adds no ranges
+                // HU_FLAG_ENUM rows of the NUT table (US-066); usbhid-ups adds no ranges.
+                // Listed for an overridden variable too (US-115): upstream state_addenum()
+                // does not look at ST_FLAG_IMMUTABLE
                 std::vector<NutTable::RWVariable> rw = _usb_ups->getWritableVariables();
                 const NutTable::RWVariable* v = findWritable(rw, varName);
                 if (v) {
@@ -854,21 +923,13 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             String varNameLower = varName;
             varNameLower.toLowerCase();
 
-            if (!isVarPresent(data.get(), varNameLower)) {
+            String value;
+            if (!resolveVar(data.get(), varNameLower, value)) {
                 client.print("ERR VAR-NOT-SUPPORTED\n");
                 return;
             }
             // get_var() of upsd: the lookup ignores case, the reply repeats the name as sent (US-081)
-            const char* alias = deviceAliasSource(varNameLower);
-            if (varNameLower == "ups.status") {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(_usb_ups->getUPSStatusString().c_str()).c_str());
-            } else if (varNameLower == "device.type") {
-                client.printf("VAR %s %s \"ups\"\n", upsName.c_str(), varName.c_str());
-            } else if (alias && data->hasKey(alias)) {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(alias).c_str()).c_str());
-            } else {
-                client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(data->get(varNameLower).c_str()).c_str());
-            }
+            client.printf("VAR %s %s \"%s\"\n", upsName.c_str(), varName.c_str(), encodeValue(value.c_str()).c_str());
             return;
         }
         else if (subcmd == "DESC" || subcmd == "CMDDESC" || subcmd == "TYPE") {
@@ -897,7 +958,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 std::vector<NutTable::RWVariable> rw;
                 if (_usb_ups) rw = _usb_ups->getWritableVariables();
                 const NutTable::RWVariable* v = findWritable(rw, varName);
-                if (v) {
+                // US-115: an override takes the RW flag away (ST_FLAG_IMMUTABLE)
+                if (v && !findOverride(varName.c_str())) {
                     client.printf("TYPE %s %s RW%s STRING:%u\n", upsName.c_str(), varName.c_str(),
                                   v->enums.empty() ? "" : " ENUM", (unsigned)v->aux);
                 } else {
@@ -914,6 +976,10 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                     if (info) desc = info->description;
                 } else {
                     desc = NutTable::describe(varName.c_str());
+                    // US-115: the description of the NUT Server page, only where cmdvartab
+                    // has none
+                    const NutOverride* o = desc ? nullptr : findOverride(varName.c_str());
+                    if (o && o->description.length() > 0) desc = o->description.c_str();
                 }
                 client.printf("%s %s %s \"%s\"\n", subcmd.c_str(),
                               upsName.c_str(), varName.c_str(),
@@ -1019,10 +1085,17 @@ void NUTServer::setVar(Print& client, int slot, const String& upsName, const Str
     bool present;
     {
         auto data = _usb_ups->getUPSData();
-        present = isVarPresent(data.get(), varNameLower);
+        String unused;
+        present = resolveVar(data.get(), varNameLower, unused);
     }
     if (!present) {
         rejectSet(client, slot, varName, value, "VAR-NOT-SUPPORTED");
+        return;
+    }
+    // US-115: an overridden variable is immutable, as override.<var> of ups.conf: no RW
+    // flag, so set_var() of upsd answers READONLY (server/netset.c)
+    if (findOverride(varName.c_str())) {
+        rejectSet(client, slot, varName, value, "READONLY");
         return;
     }
 

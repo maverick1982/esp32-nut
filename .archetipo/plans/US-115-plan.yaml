@@ -1,0 +1,364 @@
+schema: archetipo/plan/v2
+spec_code: US-115
+body: "---\ntype: plan\ntitle: \"US-115: Variabili NUT personalizzate e override dalla pagina NUT Server — Piano di implementazione\"\ndescription: \"Piano di implementazione per US-115\"\ntags: [plan, implementation, US-115]\n---\n# US-115: Variabili NUT personalizzate e override dalla pagina NUT Server — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-11-04\n\n---\n\n## Spec\n\n**Epic:** EP-003 — Server NUT\n**Priorità:** MEDIUM | **Punti:** 5\n\n**User Story**\nCome utente che collega la scheda a Home Assistant o PeaNUT, voglio aggiungere dalla pagina NUT Server variabili NUT con un mio valore, o sostituire quello fornito dall'UPS, in modo da correggere valori sbagliati o mancanti del mio modello (per esempio `battery.date` o `ups.model`) senza cambiare firmware.\n\n**Criteri di Accettazione**\n- [ ] La pagina NUT Server ha una sezione \"Custom variables\" con l'elenco dei record (chiave, valore, descrizione) e un form per aggiungerli, modificarli ed eliminarli. I record sono salvati in NVS, si applicano subito senza riavvio e restano dopo un riavvio o un aggiornamento OTA.\n- [ ] Se l'UPS non fornisce la chiave, `LIST VAR` e `GET VAR` restituiscono la variabile; se la fornisce, restituiscono il valore dell'utente al posto di quello dell'UPS (semantica di `override.<var>` in `ups.conf`).\n- [ ] Come upstream (`dparam_setinfo`), per ogni override il server pubblica anche `driver.parameter.override.<var>` con lo stesso valore, in `LIST VAR` e `GET VAR`.\n- [ ] Un override di `ups.mfr`, `ups.model` o `ups.serial` vale anche per l'alias `device.*` corrispondente, salvo un override proprio dell'alias.\n- [ ] L'override vale solo per il server NUT: dashboard web, `ups.status`, LB e spegnimento automatico (US-114) usano i valori reali dell'UPS.\n- [ ] Una variabile scrivibile sovrascritta diventa di sola lettura come con `ST_FLAG_IMMUTABLE`: sparisce da `LIST RW`, `GET TYPE` non la riporta come `RW`, `SET VAR` risponde `ERR READONLY` e nella pagina UPS Settings non è modificabile e indica l'override.\n- [ ] `GET DESC` restituisce la descrizione dell'utente solo per le chiavi senza descrizione standard NUT; per le altre resta il testo upstream.\n- [ ] La web UI e l'API rifiutano con un messaggio chiaro: `ups.status`, `device.type`, le chiavi interne `ups.status.*` e `driver.parameter.*`, i nomi che non sono variabili NUT valide, i valori oltre il limite di protocollo, le chiavi duplicate e i record oltre il numero massimo.\n- [ ] Con dati stale il server risponde `ERR DATA-STALE` come oggi, override compresi.\n- [ ] Test nativi ed e2e per la sezione. Tre build ok, note di rilascio aggiornate.\n\n---\n\n## Soluzione tecnica\n\nGli override sono una lista in RAM (`std::vector<NutOverride>`, globale in `main.cpp`) che il server NUT legge a ogni risposta e che la web UI sostituisce in blocco dopo averla salvata in NVS. Server web e server NUT girano entrambi nel `loop()` dello stesso task (`web_server.loop()`, `nut_server.loop()` in `src/core/main.cpp`), quindi non serve nessun lock: la lista si applica subito, senza riavvio. La dashboard e la logica interna non passano dal server NUT e non vedono mai gli override (criterio 5 soddisfatto per costruzione). Riferimenti upstream verificati in `nut_repo/`: `drivers/main.c:426` (storeval: `dstate_setinfo` + `dstate_setflags(ST_FLAG_IMMUTABLE)` + `dparam_setinfo`), `common/state.c` (`state_setinfo` ignora le modifiche ai nodi immutabili, `state_delinfo` non li cancella), `drivers/dstate.c:1948`, `server/netset.c:69` (READONLY), `server/netlist.c:52` e `server/netget.c:159` (RW), `drivers/main.c:3412` (copia `ups.*` → `device.*` dopo `upsdrv_initinfo`).\n\n- **Modello e regole** (`lib/NUTServer/src/NutOverrides.h`, header-only, nessuna dipendenza da Arduino oltre a `String` e ArduinoJson come `DriverVarStore.h`): `struct NutOverride { String key, value, description; }` e `namespace NutOverrides`. Limiti come `enum : size_t` (il toolchain nativo è GCC 5.1: niente variabili `inline`): `MAX_COUNT = 16`, `MAX_KEY_LENGTH = 63`, `MAX_VALUE_LENGTH = 64` (lo `STRING:64` che il server già dichiara per le variabili non RW), `MAX_DESCRIPTION_LENGTH = 64`.\n- **Chiave valida**: 1-63 byte, almeno due parti separate da `.`, ogni parte non vuota fatta di `A-Z a-z 0-9 _ -`. Le maiuscole sono ammesse perché esistono nomi NUT come `input.L1-N.voltage`; i confronti sono case-insensitive come `strcasecmp` in upsd (`equalsIgnoreCase`), duplicati compresi. **Chiavi protette** (case-insensitive): `ups.status`, prefisso `ups.status.`, `device.type`, prefisso `driver.parameter.`. **Valore e descrizione**: solo byte 0x20-0x7E (il lettore di riga del server NUT, come `isPrintableAscii` di `runUpsVariable`), al massimo 64, anche vuoti; la descrizione è facoltativa.\n- **API del modulo**: `enum class Check { OK, INVALID_KEY, PROTECTED_KEY, INVALID_VALUE, INVALID_DESCRIPTION, DUPLICATE_KEY, TOO_MANY }`; `checkKey(const char*)`, `checkEntry(const NutOverride&)`, `checkList(const std::vector<NutOverride>&, size_t& bad_index)` (TOO_MANY prima delle singole voci, poi voce per voce, poi duplicati con l'indice del secondo); `errorMessage(Check, const String& key)` con i testi inglesi della UI: `Invalid key \"<k>\": use dot-separated parts of letters, digits, '_' and '-' (e.g. battery.date)`, `<k> cannot be overridden`, `Invalid value for <k>: printable ASCII only, at most 64 characters`, `Invalid description for <k>: printable ASCII only, at most 64 characters`, `Duplicate key: <k>`, `At most 16 custom variables`; `find(list, key)` case-insensitive (nullptr se assente); `toJson(list)` → array `[{\"k\",\"v\",\"d\"}]`; `fromJson(json, out)` che tiene solo le voci valide fino a `MAX_COUNT` e restituisce false se ne ha scartata qualcuna o il JSON non è un array.\n- **Server NUT** (`NUTServer`): `setOverrides(const std::vector<NutOverride>* list)` (nullptr = nessun override, il default: i test esistenti non cambiano). Un solo risolutore `bool resolveVar(const UPSData&, const String& nameLower, String& out) const` sostituisce `isVarPresent` e il blocco di `GET VAR`, nell'ordine: `ups.status` (stato reale, `getUPSStatusString()`); `device.type` = `ups`; chiavi interne `ups.status.*` assenti; `driver.parameter.override.<k>` presente se esiste l'override `<k>`; override esatto della chiave; alias `device.mfr/model/serial`: override proprio, poi override della sorgente `ups.*`, poi il dato reale; infine il dato reale. Chi chiama `isVarPresent` (SET VAR, LIST ENUM/RANGE) usa `resolveVar`.\n- **LIST VAR**: `ups.status`, `device.type`, alias `device.*` (presenti se la sorgente reale o un override li valorizza), chiavi di `UPSData` con il valore dell'override se c'è (il nome scritto come nell'override, come il nodo creato da upstream prima del driver), poi gli override di chiavi che l'UPS non fornisce, nell'ordine della lista (esclusi gli alias `device.*` già stampati), infine `driver.parameter.override.<k>` per ogni override. I valori passano da `encodeValue()` come oggi.\n- **Sola lettura come `ST_FLAG_IMMUTABLE`**: `LIST RW` salta le variabili con override; `GET TYPE` di una variabile con override risponde come per le non RW (`TYPE <ups> <var> STRING:64`); `SET VAR`, dopo il controllo di presenza (`VAR-NOT-SUPPORTED`) e prima di `checkSetValue`, risponde `READONLY` se c'è un override, nello stesso ordine di `netset.c` (esiste → RW?). `LIST ENUM` resta invariato: upstream `state_addenum` non guarda `ST_FLAG_IMMUTABLE`, quindi gli enum restano elencati.\n- **GET DESC**: `NutTable::describe()` vince; se è nullptr e la chiave ha un override con descrizione non vuota si restituisce quella; altrimenti `Description unavailable` come oggi. `driver.parameter.override.*` non ha descrizione (come upstream).\n- **DATA-STALE**: i controlli esistenti restano prima di ogni lettura, override compresi (criterio 9 per costruzione).\n- **Persistenza** (`src/core/nut_override_store.h/.cpp`, `NvsNutOverrideStore`): namespace NVS `nutovr`, chiave `list`, salvata come **blob** (`putBytes`) con il JSON di `NutOverrides::toJson`: con `\\\"` e `\\\\` raddoppiati 16 voci possono superare il limite di 4000 byte delle stringhe NVS. Lista vuota = chiave rimossa. `load()` usa `fromJson`; voci scartate → `WARN [NUT] Saved custom variables partly invalid: N dropped`. Il namespace è separato da `config_json` di `ConfigManager` (come `HostnameStore`), così vale anche in AP e sopravvive a OTA.\n- **Avvio** (`src/core/main.cpp`): globali `std::vector<NutOverride> nut_overrides` e `NvsNutOverrideStore nut_override_store`; `load()` prima di `web_server.begin()`; `INFO [NUT] N custom variables loaded` se N > 0; `web_server.setNutOverrides(&nut_override_store, &nut_overrides)` insieme agli altri setter; `nut_server.setOverrides(&nut_overrides)` prima di `nut_server.begin()`.\n- **API web** (funzioni pure in `WebApiJson`, rotte in `WebConfigServer`, protette dal login come le altre perché non elencate in `AuthPolicy`): `GET /api/nut/overrides` → `{\"max\":16,\"max_value_length\":64,\"max_description_length\":64,\"overrides\":[{\"key\",\"value\",\"description\",\"ups_value\"}]}` dove `ups_value` è il valore reale dell'UPS per quella chiave (per gli alias `device.*` quello della sorgente `ups.*`), `null` se l'UPS non la fornisce o non è connesso: la pagina lo usa per il badge \"Overrides UPS\" / \"Added\". `POST /api/nut/overrides` con `{\"overrides\":[{key,value,description}]}` sostituisce l'intera lista: body oltre 6144 byte, JSON non valido, `overrides` non array o voce senza `key`/`value` stringa → 400 `{\"error\":\"Invalid request\"}`; regola violata → 400 `{\"error\": errorMessage, \"index\": i}`; NVS non scritta → 500 `{\"error\":\"Failed to save\"}` e lista in RAM invariata; ok → aggiorna la lista in RAM e risponde 200 con lo stesso JSON del GET. `description` assente vale stringa vuota. System Log: `INFO [NUT] Custom variables saved (N) by '<utente>'` (`webUiUser()`).\n- **UPS Settings**: `generateUpsVariables(usb_ups, overrides)` aggiunge `\"override\": \"<valore>\"` alle variabili con override (campo assente altrimenti). `runUpsVariable` e `resetUpsVariable` ricevono la lista come ultimo parametro (default nullptr, firme esistenti compatibili) e, dopo il controllo dell'host e prima di `checkSetValue`, rifiutano con 400 `{\"error\":\"Variable overridden in the NUT Server tab\"}` (`host_called` false: lo registra `logVariableRejected` come gli altri rifiuti).\n- **Pagina NUT Server**: nuovo pannello `#nut-overrides` sotto le credenziali, secondo i mockup di `docs/mockups/US-115/`: testo introduttivo, contatore `N / 16`, elenco dei record (chiave monospazio, valore, descrizione, badge \"Overrides UPS\" con il valore reale o \"Added\", pulsanti Edit e Delete), stato vuoto, form Key / Value / Description con \"Add variable\" che in modifica diventa \"Save changes\" + \"Cancel\", errore inline sotto il form, Add disattivato a 16/16. Ogni aggiunta, modifica o eliminazione manda la lista completa con POST e ridisegna dalla risposta; un errore lascia il form compilato. La pagina fa gli stessi controlli dell'API prima di inviare (stessi messaggi) ma l'API resta l'autorità. Caricamento con `GET /api/nut/overrides` all'apertura del tab `nut` (stesso aggancio di `loadSettings()` sul tab `settings`) e al caricamento se il tab è già attivo. Eliminazione con `window.confirm`, come nei mockup e come i comandi e le impostazioni di oggi.\n- **Differenze dai mockup** (`docs/mockups/US-115/`, valgono per l'aspetto): l'API è `/api/nut/overrides` con la lista completa, non `/api/nut/custom-vars` con `old_key` (una rinomina è una lista nuova); le chiavi ammettono anche le maiuscole (`input.L1-N.voltage`), non solo le minuscole; il suggerimento sotto il campo Key mentre si scrive (\"Added\" / \"The UPS reports X\") è fuori da questo piano, perché richiederebbe i valori dell'UPS per chiavi non ancora salvate.\n- **Riga UPS Settings con override**: tag `override`, valore reale come oggi, input/Apply/Reset disattivati e la nota \"Overridden in the NUT Server tab: NUT clients see <valore>. Remove the custom variable to change it here.\" con un `button.inline-link[data-goto=\"nut\"]`.\n- **Fuori scope** (dalla spec): `default.<var>`, override dei comandi istantanei, override nella dashboard o nella logica interna.\n- **Note di rilascio**: per convenzione del progetto si scrivono prima della release, non sono un task di questo piano.\n\n---\n\n## Strategia di test\n\nLe regole e il comportamento del protocollo sono puri e si testano in nativo (`pio test -e native`); la pagina con Playwright sui sorgenti veri di `data/www` e le API simulate; la persistenza NVS e `upsc` reale sull'Eaton 3S in review.\n\n- `test/test_nut_overrides` (nuova suite): chiavi valide (`battery.date`, `input.L1-N.voltage`, `outlet.1.desc`) e non valide (senza punto, parte vuota, spazio, carattere non ammesso, 64 byte); chiavi protette anche in maiuscolo (`UPS.Status`, `ups.status.charging`, `Device.Type`, `driver.parameter.override.x`); valore e descrizione (vuoti ok, 64 ok, 65 no, byte di controllo e non ASCII no); `checkList` con 17 voci, duplicato case-insensitive con l'indice giusto; `find` case-insensitive; `toJson`/`fromJson` andata e ritorno, JSON corrotto, voci non valide scartate, troncamento a 16; testi di `errorMessage`.\n- `test/test_nut_server`: senza override l'output resta identico (la suite esistente passa invariata); override di una chiave fornita (LIST VAR e GET VAR col valore dell'utente, una sola riga); chiave non fornita aggiunta; `driver.parameter.override.<k>` in LIST VAR e GET VAR; alias `device.model` da override di `ups.model`, override proprio di `device.model` che vince, alias presente anche se l'UPS non fornisce `ups.model`; variabile RW con override assente da LIST RW, `GET TYPE` `STRING:64`, `SET VAR` → `ERR READONLY` senza chiamare `setVariable`; GET DESC con descrizione utente per chiave non standard, testo upstream per `battery.charge.low`, `Description unavailable` con descrizione vuota; DATA-STALE su LIST VAR e GET VAR con override presenti; nomi case-insensitive (`GET VAR ups BATTERY.DATE`).\n- `test/test_web_api`: GET con `ups_value` reale, `null` e alias; POST valido (lista sostituita, risposta come GET), ogni errore con `index` e testo, body troppo lungo, `description` assente; `generateUpsVariables` con il campo `override`; `runUpsVariable` / `resetUpsVariable` rifiutate con 400 e `host_called` false su una variabile con override, invariate senza.\n- Regressione: tutta la suite nativa e le tre build (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`).\n- Prova sul campo sull'Eaton 3S con `upsc` dal PC, eseguita da Claude solo con il consenso esplicito dell'utente (TASK-13).\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright (`playwright.config.ts`, helper `e2e/support/webui.ts` con `serveIndex`)\n**Video demo:** sì, la Dimostrazione è un flusso visibile nella web UI (lo registra `archetipo-review`, non l'implementazione)\n\n| Scenario | Flusso utente |\n|---|---|\n| Aggiunta | L'utente apre il tab NUT Server, vede lo stato vuoto, aggiunge `battery.date = 2025-03-01` con descrizione: il POST porta la lista completa, la riga compare con il badge \"Added\" e il contatore passa a 1 / 16 |\n| Override e modifica | Con `ups.model` già fornito dall'UPS (`ups_value` nel GET), l'utente lo aggiunge: badge \"Overrides UPS\" con il valore reale; poi preme Edit, cambia il valore, \"Save changes\" e la riga si aggiorna; Cancel annulla senza POST |\n| Eliminazione | L'utente elimina un record e conferma il dialogo: il POST non lo contiene più e la riga sparisce; annullando il dialogo non parte nessun POST |\n| Errori | La pagina blocca `ups.status` e una chiave senza punto con il messaggio dell'API senza inviare; un 400 simulato dall'API mostra il suo `error` sotto il form e lascia i campi compilati; a 16 / 16 \"Add variable\" è disattivato |\n| UPS Settings | Una variabile con `override` nel GET di `/api/ups/variables` mostra il tag, input e Apply disattivati, la nota col valore e il collegamento che apre il tab NUT Server |\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono in `docs/mockups/US-115/`\n\n_Piano generato con ARchetipo Planning — 2026-11-04_\n"
+tasks:
+  - id: TASK-01
+    title: 'Modulo NutOverrides: modello, validazione, ricerca e JSON'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare il modulo puro con il modello dei record e tutte le regole, usato da server NUT, API web e NVS.
+
+      **Leggere:** `lib/USBHostUPS/src/DriverVarStore.h` (stile header-only con ArduinoJson e `String`), `lib/NUTServer/src/NUTServer.cpp` righe 85-115 (alias, chiavi interne, `equalsIgnoreCase`), sezione "Modello e regole" del piano.
+
+      **Modifiche:** nuovo `lib/NUTServer/src/NutOverrides.h` con `struct NutOverride { String key; String value; String description; }` e `namespace NutOverrides`: limiti `enum : size_t { MAX_COUNT = 16, MAX_KEY_LENGTH = 63, MAX_VALUE_LENGTH = 64, MAX_DESCRIPTION_LENGTH = 64 }`, `enum class Check`, `checkKey`, `checkEntry`, `checkList(list, bad_index)`, `errorMessage(Check, key)`, `find(list, key)`, `toJson(list)` (array di `{k,v,d}`), `fromJson(json, out)`. Regole esatte e testi nel piano. Funzioni `inline`, nessuna variabile `inline` (GCC 5.1 nativo).
+
+      **Passi:** 1) header con guardia e commento che cita `nut_repo/drivers/main.c:426`; 2) validazione della chiave per parti; 3) protette case-insensitive; 4) valore/descrizione 0x20-0x7E e lunghezze; 5) `checkList`: prima TOO_MANY (indice = MAX_COUNT), poi voce per voce, poi duplicati (indice del secondo); 6) JSON.
+
+      **Verifica:** compila nella suite del TASK-02.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NutOverrides.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Tutte le funzioni e i limiti del piano esistono con le firme indicate
+      - [ ] Nessuna dipendenza da Arduino oltre a `String`, nessuna variabile `inline`
+      - [ ] I testi di `errorMessage` sono quelli del piano
+    ref: TASK-01
+  - id: TASK-02
+    title: Suite nativa test_nut_overrides
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire tutte le regole di `NutOverrides.h`.
+
+      **Leggere:** `test/test_board_settings/test_main.cpp` (struttura Unity), strategia di test del piano (punto `test/test_nut_overrides`).
+
+      **Modifiche:** nuova suite `test/test_nut_overrides/test_main.cpp` con i casi elencati nel piano: chiavi valide e non valide, protette anche in maiuscolo, valore/descrizione ai limiti, `checkList` (17 voci, duplicato case-insensitive con indice), `find`, `toJson`/`fromJson` (andata e ritorno, JSON corrotto, voci scartate, troncamento a 16), testi di `errorMessage`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_nut_overrides`.
+
+      **Blocchi:** se un caso rivela un errore nel TASK-01, correggere il modulo, non il test.
+
+      ## File Coinvolti
+      - test/test_nut_overrides/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La suite passa
+      - [ ] Ogni valore di `Check` è coperto da almeno un caso
+      - [ ] `input.L1-N.voltage` è accettata, `UPS.Status` e `driver.parameter.override.x` rifiutate
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Server NUT: override in LIST VAR, GET VAR, LIST RW, GET TYPE, GET DESC e SET VAR'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** applicare gli override nel protocollo con la semantica di `override.<var>` (piano, punti "Server NUT", "LIST VAR", "Sola lettura", "GET DESC").
+
+      **Leggere:** `lib/NUTServer/src/NUTServer.h`, `lib/NUTServer/src/NUTServer.cpp` (alias e `isVarPresent` 85-185, LIST VAR ~570-603, LIST RW ~605-636, LIST ENUM ~669-712, GET VAR ~825-875, GET TYPE/DESC ~880-920, `setVar` ~989).
+
+      **Modifiche:** `setOverrides(const std::vector<NutOverride>*)` e membro `_overrides` (nullptr nel costruttore); `resolveVar()` al posto di `isVarPresent()` con l'ordine del piano; LIST VAR con override, override aggiunti e `driver.parameter.override.*`; LIST RW salta le variabili con override; GET TYPE `STRING:64` per una variabile con override; SET VAR `READONLY` dopo `VAR-NOT-SUPPORTED` e prima di `checkSetValue` (passando da `rejectSet` come gli altri rifiuti); GET DESC con la descrizione dell'utente solo se `NutTable::describe()` è nullptr e la descrizione non è vuota. LIST ENUM invariato salvo usare `resolveVar` per la presenza.
+
+      **Passi:** 1) header; 2) risolutore e GET VAR; 3) LIST VAR; 4) LIST RW / TYPE / SET / DESC; 5) commenti con i riferimenti upstream del piano.
+
+      **Verifica:** la suite `test_nut_server` esistente passa invariata (senza override nessun output cambia).
+
+      **Blocchi:** non toccare l'ordine dei controlli esistenti (UNKNOWN-UPS, DATA-STALE, credenziali).
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — setter, membro, firma di `resolveVar`
+      - lib/NUTServer/src/NUTServer.cpp — logica
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_nut_server` passa senza modifiche ai test esistenti
+      - [ ] Un solo punto (`resolveVar`) decide valore e presenza di una variabile
+      - [ ] `SET VAR` su una variabile con override non arriva a `setVariable()`
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi del server NUT con override
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire ogni comando toccato dal TASK-03.
+
+      **Leggere:** `test/test_nut_server/test_main.cpp` (mock `MockUSBHost`, `server.processCommand(printer, 0, ...)`, test di GET TYPE ~951), strategia di test del piano (punto `test/test_nut_server`).
+
+      **Modifiche:** nuovi test con una lista di override locale passata con `server.setOverrides(&list)` e rimessa a `nullptr` in `tearDown` (o alla fine di ogni test) per non toccare gli altri: tutti i casi elencati nel piano (override di chiave fornita, chiave aggiunta, `driver.parameter.override.*`, alias `device.*` nei tre casi, RW → LIST RW/TYPE/SET READONLY senza `sets`, GET DESC nei tre casi, DATA-STALE, nomi case-insensitive). Registrare i test in `main`.
+
+      **Verifica:** `pio test -e native -f test_nut_server`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — nuovi test
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test passano, vecchi e nuovi
+      - [ ] Ogni criterio di protocollo della spec (2, 3, 4, 6, 7, 9) ha almeno un test
+    ref: TASK-04
+  - id: TASK-05
+    title: Persistenza NVS degli override e collegamento in main.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** salvare la lista in NVS e caricarla all'avvio per server NUT e web (piano, punti "Persistenza" e "Avvio").
+
+      **Leggere:** `src/core/hostname_store.h/.cpp`, `src/core/driver_var_store.cpp`, `src/core/main.cpp` (setup righe ~150-240), `include/network/web_config_server.h`.
+
+      **Modifiche:** nuovi `src/core/nut_override_store.h/.cpp` (`NvsNutOverrideStore::load(std::vector<NutOverride>&)` e `save(const std::vector<NutOverride>&)`, namespace `nutovr`, chiave `list` come blob, lista vuota = chiave rimossa, WARN sulle voci scartate). In `main.cpp`: globali, `load()` prima di `web_server.begin()`, log INFO con il numero se > 0, `web_server.setNutOverrides(...)` accanto a `setAutoShutdown`, `nut_server.setOverrides(&nut_overrides)` prima di `nut_server.begin()`. In `WebConfigServer`: solo il setter e i membri (le rotte nel TASK-08).
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell.
+
+      **Blocchi:** se `putBytes`/`getBytes` del core non bastano, documentarlo nel task e chiedere prima di cambiare formato.
+
+      ## File Coinvolti
+      - src/core/nut_override_store.h — nuovo
+      - src/core/nut_override_store.cpp — nuovo
+      - src/core/main.cpp — globali e collegamenti
+      - include/network/web_config_server.h — `setNutOverrides`, membri
+      - src/network/web_config_server.cpp — corpo del setter
+
+      ## Criteri di Completamento
+      - [ ] La build `esp32-s3-standard` passa
+      - [ ] Lo store usa un namespace proprio, separato da `config_json`
+      - [ ] Il server NUT riceve la lista prima di `begin()`
+    ref: TASK-05
+  - id: TASK-06
+    title: 'WebApiJson: API degli override e UPS Settings con override'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** funzioni pure per `GET/POST /api/nut/overrides` e campo `override` nella pagina UPS Settings (piano, punti "API web" e "UPS Settings").
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h`, `lib/WebApi/src/WebApiJson.cpp` (`generateUpsVariables` ~226, `runUpsVariable` ~256, `resetUpsVariable`, `checkHostnameBody`).
+
+      **Modifiche:** `static String nutOverridesJson(const std::vector<NutOverride>&, IUpsSource*)` (con `ups_value` reale, sorgente `ups.*` per gli alias, `null` se assente o UPS non connesso, letto sotto `getUPSData()`); `static int checkNutOverridesBody(const String& body, std::vector<NutOverride>& next, String& response)` con `MAX_OVERRIDES_BODY_LENGTH = 6144` ed errori del piano (`index` nel JSON); `generateUpsVariables(usb_ups, const std::vector<NutOverride>* overrides = nullptr)` con `override`; parametro finale `overrides = nullptr` in `runUpsVariable` e `resetUpsVariable` con il rifiuto 400 dopo `checkHost`. Aggiornare i commenti dell'header.
+
+      **Verifica:** suite `test_web_api` esistente invariata e verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — dichiarazioni e contratti
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native -f test_web_api` passa senza modifiche ai test esistenti
+      - [ ] Il rifiuto per override lascia `host_called` a false
+      - [ ] Il JSON di GET e quello della risposta del POST coincidono
+    ref: TASK-06
+  - id: TASK-07
+    title: Test nativi delle API degli override
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire le funzioni del TASK-06.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (mock e test di `generateUpsVariables` / `runUpsVariable`), strategia di test del piano (punto `test/test_web_api`).
+
+      **Modifiche:** nuovi test: `ups_value` reale / `null` / alias; POST valido; ogni errore con `index` e testo; body oltre 6144; `description` assente; `override` in `generateUpsVariables`; `runUpsVariable` e `resetUpsVariable` rifiutate con override (400, `host_called` false, nessuna scrittura nel mock) e invariate senza.
+
+      **Verifica:** `pio test -e native -f test_web_api`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — nuovi test
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test passano
+      - [ ] Ogni messaggio d'errore del POST ha un test
+    ref: TASK-07
+  - id: TASK-08
+    title: Rotte /api/nut/overrides e UPS Settings collegate agli override
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre le API e far rispettare gli override alla pagina UPS Settings.
+
+      **Leggere:** `src/network/web_config_server.cpp` (rotte ~97-115, `handleNutConfig` ~370, `handleUpsVariables` ~517-545, `webUiUser`), `include/network/web_config_server.h`.
+
+      **Modifiche:** rotte `GET /api/nut/overrides` e `POST /api/nut/overrides` con `guarded(...)` (non pubbliche in `AuthPolicy`); POST con `requireJson()`, `checkNutOverridesBody`, `store->save(next)`: se fallisce 500 e lista invariata, altrimenti assegnazione alla lista condivisa, log `INFO [NUT] Custom variables saved (N) by '<utente>'` e 200 con `nutOverridesJson`. Passare la lista a `generateUpsVariables`, `runUpsVariable`, `resetUpsVariable`. Nessun riavvio.
+
+      **Verifica:** build `esp32-s3-standard`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — rotte e handler
+      - include/network/web_config_server.h — dichiarazioni degli handler
+
+      ## Criteri di Completamento
+      - [ ] Build ok
+      - [ ] Le due rotte richiedono la sessione in STA come `/api/board`
+      - [ ] Un salvataggio fallito non cambia la lista usata dal server NUT
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Pagina NUT Server: sezione Custom variables'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** realizzare la sezione secondo i mockup in `docs/mockups/US-115/` (piano, punto "Pagina NUT Server").
+
+      **Leggere:** `docs/mockups/US-115/` (tutti i file), `data/www/index.html` (tab `content-nut` ~338), `data/www/bundle.js` (form NUT ~324-378, aggancio dei tab ~1646-1667, `apiFetch`), `data/www/bundle.css`.
+
+      **Modifiche:** pannello `#nut-overrides` in `index.html`; in `bundle.js` `loadOverrides()` all'apertura del tab `nut` e all'avvio se attivo, render della lista (badge "Overrides UPS" con `ups_value` / "Added"), contatore, stato vuoto, form aggiungi/modifica/annulla (anche con Esc), Delete con `window.confirm`, POST della lista completa, errori inline dalla risposta `error`, controlli lato pagina con gli stessi messaggi dell'API, Add disattivato al massimo; stili in `bundle.css` riusando le classi esistenti e quelle dei mockup. Testi solo con `textContent` (mai `innerHTML` coi valori dell'utente). Poi `python scripts/embed_web.py` (rigenera `index_inlined.html` e `include/network/web_assets.h`).
+
+      **Verifica:** pagina aperta con `serveIndex` negli e2e del TASK-11; build `esp32-s3-standard`.
+
+      **Blocchi:** se il mockup e il piano divergono, vale il piano per il comportamento e il mockup per l'aspetto.
+
+      ## File Coinvolti
+      - data/www/index.html — pannello
+      - data/www/bundle.js — logica
+      - data/www/bundle.css — stili
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] La sezione mostra gli stati dei mockup (lista, vuoto, modifica, errore, limite)
+      - [ ] Ogni azione invia la lista completa e ridisegna dalla risposta
+      - [ ] I valori dell'utente non passano mai da `innerHTML`
+      - [ ] `web_assets.h` rigenerato e riproducibile
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Pagina UPS Settings: riga di una variabile con override'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** mostrare le variabili scrivibili con override come non modificabili (piano, punto "Riga UPS Settings con override").
+
+      **Leggere:** `docs/mockups/US-115/` (stato UPS Settings), `data/www/bundle.js` (`buildSettingRow` ~1380, `renderSettings` ~1534, gestione `[data-goto]` ~2136).
+
+      **Modifiche:** `renderSettings` legge `override` (stringa) dal JSON; `buildSettingRow` aggiunge il tag `override`, disattiva input, Apply e Reset e aggiunge la nota con il valore e il `button.inline-link[data-goto="nut"]`. Poi `python scripts/embed_web.py`.
+
+      **Verifica:** e2e del TASK-11; `e2e/ups-settings.spec.ts` esistente verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — riga con override
+      - data/www/bundle.css — eventuali stili della nota
+      - data/www/index_inlined.html, include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Una variabile con override non si può applicare né resettare dalla pagina
+      - [ ] Il collegamento apre il tab NUT Server
+      - [ ] Le righe senza override sono invariate
+    ref: TASK-10
+  - id: TASK-11
+    title: Test e2e della sezione Custom variables e della riga UPS Settings
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente della tabella E2E del piano.
+
+      **Leggere:** `e2e/nut_config.spec.ts`, `e2e/ups-settings.spec.ts`, `e2e/support/webui.ts`, `e2e/screenshot.spec.ts` (fixture di `/api/...`).
+
+      **Modifiche:** nuovo `e2e/nut-overrides.spec.ts` con gli scenari Aggiunta, Override e modifica, Eliminazione, Errori (API simulate con `page.route`, verifica del body dei POST); scenario UPS Settings in `e2e/ups-settings.spec.ts`; se `e2e/screenshot.spec.ts` simula le API del tab NUT, aggiungere la risposta di `/api/nut/overrides` con un paio di record.
+
+      **Verifica:** `npm run e2e`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/nut-overrides.spec.ts — nuovo
+      - e2e/ups-settings.spec.ts — nuovo scenario
+      - e2e/screenshot.spec.ts — fixture, se serve
+
+      ## Criteri di Completamento
+      - [ ] `npm run e2e` passa tutto
+      - [ ] Ogni scenario della tabella E2E ha un test
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, tre build e README
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-07
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere con tutta la suite e le tre build, e documentare la funzione.
+
+      **Leggere:** `README.md` e `README.it.md` (sezioni sulla pagina NUT Server e sull'uso).
+
+      **Modifiche:** nessuna al codice salvo correzioni; in `README.md` e `README.it.md` una riga che descrive le variabili personalizzate del tab NUT Server (override come `override.*` di `ups.conf`, solo per i client NUT). Le note di rilascio si scrivono prima della release, non qui.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`; da PowerShell `pio run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`; `python scripts/embed_web.py` non lascia differenze.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - README.md — una riga
+      - README.it.md — una riga
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa tutta verde (numero di test riportato)
+      - [ ] Tre build ok
+      - [ ] README aggiornati in entrambe le lingue
+    ref: TASK-12
+  - id: TASK-13
+    title: Prova sul campo sull'Eaton 3S con upsc
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare sulla scheda reale (COM5, 192.168.1.126, UPS `eaton-3s-700`) persistenza e protocollo. Da eseguire solo dopo un sì esplicito dell'utente: la scheda alimenta la rete di casa dall'Eaton 3S.
+
+      **Leggere:** memoria del progetto sulle credenziali OTA (file JSON, mai stamparlo) e sul flash senza erase.
+
+      **Passi:** 1) flash della build `esp32-s3-standard` senza erase (conserva NVS); 2) dal tab NUT Server aggiungere `battery.date = 2025-03-01` ("Battery replaced") e `ups.model = Eaton 3S 700 studio`; 3) `upsc eaton-3s-700@192.168.1.126`: `battery.date`, `ups.model`, `device.model` e i due `driver.parameter.override.*`; dashboard con il modello reale; 4) override di `battery.charge.low`: `upsrw` non la elenca, `upsrw -s` risponde READONLY, UPS Settings la mostra bloccata; 5) riavvio della scheda: override ancora presenti; 6) eliminazione dei record: tornano i valori reali; 7) System Log con le righe `[NUT]`.
+
+      **Verifica:** output di `upsc`/`upsrw` e screenshot salvati in `docs/test-results/US-115/`.
+
+      **Blocchi:** senza consenso esplicito il task resta TODO e lo si segnala in review.
+
+      ## File Coinvolti
+      - docs/test-results/US-115/ — esiti della prova
+
+      ## Criteri di Completamento
+      - [ ] Consenso esplicito dell'utente registrato
+      - [ ] Tutti i passi verificati e documentati
+      - [ ] Override eliminati alla fine della prova
+    ref: TASK-13

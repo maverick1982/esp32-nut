@@ -7,6 +7,7 @@
 #include "board/board_settings.h"
 #include "core/auto_shutdown.h"
 #include "NetLinkInfo.h"
+#include "NutOverrides.h"
 
 class WebApiJson {
 public:
@@ -31,8 +32,10 @@ public:
     static bool needsConfirmation(const char* name);
     // Catalogo delle variabili scrivibili, nell'ordine di getWritableVariables():
     // {"connected", "variables": [{name, description, value, max_length, enum: [...],
-    // driver_side, confirm}]}. Senza host o con UPS scollegato: connected false e lista vuota
-    static String generateUpsVariables(IUpsSource* usb_ups);
+    // driver_side, confirm}]}. Senza host o con UPS scollegato: connected false e lista vuota.
+    // US-115: "override": <valore> per le variabili sovrascritte nella pagina NUT Server
+    // (assente per le altre), che la pagina mostra bloccate
+    static String generateUpsVariables(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides = nullptr);
     // Scrive una variabile da body {"name": "...", "value": "..."} con la logica di SET VAR
     // (NutTable::checkSetValue, poi setVariable() col nome canonico). Il valore ammette
     // solo byte 0x20-0x7E, come il lettore di riga del server NUT. 200 {"success":true,
@@ -41,14 +44,32 @@ public:
     // Restituisce lo status HTTP e scrive il JSON in response. Se host_called non è nullptr
     // vi scrive true quando la richiesta è arrivata a setVariable() (l'esito lo registra
     // già l'host), false per i rifiuti precedenti (400 di forma o di validazione, 503)
+    // US-115: una variabile con override (overrides) è di sola lettura, come per SET VAR:
+    // 400 {"error": OVERRIDDEN_VARIABLE_ERROR} dopo il controllo dell'host
     static int runUpsVariable(IUpsSource* usb_ups, const String& body, String& response,
-                              bool* host_called = nullptr);
+                              bool* host_called = nullptr, const std::vector<NutOverride>* overrides = nullptr);
     // Riporta al default del driver una variabile lato driver da body {"name": "..."}:
     // 200 {"success":true, "value": <default, null come sopra>}, altrimenti 400/500/503 con
     // {"error"}. host_called
-    // come in runUpsVariable, riferito a resetVariable()
+    // come in runUpsVariable, riferito a resetVariable(); overrides come in runUpsVariable
     static int resetUpsVariable(IUpsSource* usb_ups, const String& body, String& response,
-                                bool* host_called = nullptr);
+                                bool* host_called = nullptr, const std::vector<NutOverride>* overrides = nullptr);
+    static constexpr const char* OVERRIDDEN_VARIABLE_ERROR = "Variable overridden in the NUT Server tab";
+
+    // --- Variabili personalizzate della pagina NUT Server (US-115) ---
+
+    static constexpr size_t MAX_OVERRIDES_BODY_LENGTH = 6144;
+    // GET /api/nut/overrides e risposta di POST: {"max", "max_value_length",
+    // "max_description_length", "overrides": [{key, value, description, ups_value}]}.
+    // ups_value è il valore reale dell'UPS per la chiave (per device.mfr/model/serial quello
+    // di ups.*), null se l'UPS non la fornisce o non è connesso
+    static String nutOverridesJson(const std::vector<NutOverride>& list, IUpsSource* usb_ups);
+    // POST /api/nut/overrides: {"overrides": [{key, value, description?}]} sostituisce la
+    // lista. 0 con next compilato; body oltre MAX_OVERRIDES_BODY_LENGTH, JSON non valido,
+    // overrides non array o voce senza key/value stringa (description, se c'è, stringa) →
+    // 400 {"error":"Invalid request"}; regola di NutOverrides::checkList violata → 400
+    // {"error": NutOverrides::errorMessage, "index": <voce>}
+    static int checkNutOverridesBody(const String& body, std::vector<NutOverride>& next, String& response);
 
     // Nome dell'UPS della configurazione salvata (US-082): la stringa se non vuota,
     // altrimenti NUTServer::defaultUpsName() (chiave assente, null, non stringa o vuota).

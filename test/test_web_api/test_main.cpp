@@ -1253,8 +1253,180 @@ void test_hostname_json(void) {
     TEST_ASSERT_EQUAL_STRING("esp32-nut-56d784", def["hostname"]["name"]);
 }
 
+// ---- Custom variables of the NUT Server page (US-115) ----
+
+static NutOverride makeOverride(const char* key, const char* value, const char* desc = "") {
+    NutOverride o;
+    o.key = key;
+    o.value = value;
+    o.description = desc;
+    return o;
+}
+
+void test_overrides_json_with_ups_values() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.data.set("battery.charge.low", "20");
+    std::vector<NutOverride> list = {
+        makeOverride("ups.model", "Studio", "Renamed"),
+        makeOverride("battery.date", "2025-03-01"),
+        makeOverride("device.model", "Rack"),
+        makeOverride("BATTERY.CHARGE.LOW", "30"),
+    };
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::nutOverridesJson(list, &mockHost)));
+    TEST_ASSERT_EQUAL(16, doc["max"].as<int>());
+    TEST_ASSERT_EQUAL(64, doc["max_value_length"].as<int>());
+    TEST_ASSERT_EQUAL(64, doc["max_description_length"].as<int>());
+    JsonArray arr = doc["overrides"].as<JsonArray>();
+    TEST_ASSERT_EQUAL(4, arr.size());
+    TEST_ASSERT_EQUAL_STRING("ups.model", arr[0]["key"]);
+    TEST_ASSERT_EQUAL_STRING("Studio", arr[0]["value"]);
+    TEST_ASSERT_EQUAL_STRING("Renamed", arr[0]["description"]);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", arr[0]["ups_value"]);
+    // Not reported by the UPS: null, the page shows "Added"
+    TEST_ASSERT_TRUE(arr[1]["ups_value"].isNull());
+    TEST_ASSERT_TRUE(WebApiJson::nutOverridesJson(list, &mockHost).indexOf("\"key\":\"battery.date\",\"value\":\"2025-03-01\",\"description\":\"\",\"ups_value\":null") >= 0);
+    TEST_ASSERT_EQUAL_STRING("", arr[1]["description"]);
+    // The alias device.model replaces the value of ups.model
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", arr[2]["ups_value"]);
+    // Key in another case
+    TEST_ASSERT_EQUAL_STRING("20", arr[3]["ups_value"]);
+}
+
+void test_overrides_json_without_ups() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.connected = false;
+    std::vector<NutOverride> list = { makeOverride("ups.model", "Studio") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::nutOverridesJson(list, &mockHost));
+    TEST_ASSERT_TRUE(doc["overrides"][0]["ups_value"].isNull());
+    deserializeJson(doc, WebApiJson::nutOverridesJson(list, nullptr));
+    TEST_ASSERT_TRUE(doc["overrides"][0]["ups_value"].isNull());
+    deserializeJson(doc, WebApiJson::nutOverridesJson(std::vector<NutOverride>(), nullptr));
+    TEST_ASSERT_EQUAL(0, doc["overrides"].size());
+}
+
+void test_overrides_body_valid() {
+    std::vector<NutOverride> next;
+    String out;
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkNutOverridesBody(
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"2025-03-01\",\"description\":\"Battery replaced\"},"
+        "{\"key\":\"ups.model\",\"value\":\"\"}]}", next, out));
+    TEST_ASSERT_EQUAL(2, (int)next.size());
+    TEST_ASSERT_EQUAL_STRING("battery.date", next[0].key.c_str());
+    TEST_ASSERT_EQUAL_STRING("Battery replaced", next[0].description.c_str());
+    // description missing: empty
+    TEST_ASSERT_EQUAL_STRING("", next[1].description.c_str());
+    TEST_ASSERT_EQUAL_STRING("", next[1].value.c_str());
+    // An empty list clears every override
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkNutOverridesBody("{\"overrides\":[]}", next, out));
+    TEST_ASSERT_EQUAL(0, (int)next.size());
+}
+
+void test_overrides_body_invalid_request() {
+    std::string tooLong = "{\"overrides\":[],\"pad\":\"";
+    tooLong.append(WebApiJson::MAX_OVERRIDES_BODY_LENGTH, 'x');
+    tooLong += "\"}";
+    const char* bodies[] = {
+        "not json",
+        "{}",
+        "{\"overrides\":{}}",
+        "{\"overrides\":[{\"value\":\"1\"}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\"}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":1}]}",
+        "{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\",\"description\":2}]}",
+        "{\"overrides\":[\"battery.date\"]}",
+        tooLong.c_str(),
+    };
+    for (const char* body : bodies) {
+        std::vector<NutOverride> next;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, WebApiJson::checkNutOverridesBody(body, next, out), body);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), body);
+        TEST_ASSERT_EQUAL_MESSAGE(0, (int)next.size(), body);
+    }
+}
+
+// Rule broken: the message of NutOverrides and the index of the entry
+static void expectOverridesError(const char* body, const char* error, int index) {
+    std::vector<NutOverride> next;
+    String out;
+    TEST_ASSERT_EQUAL_MESSAGE(400, WebApiJson::checkNutOverridesBody(body, next, out), body);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, out.c_str()));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(error, doc["error"].as<const char*>(), body);
+    TEST_ASSERT_EQUAL_MESSAGE(index, doc["index"].as<int>(), body);
+    TEST_ASSERT_EQUAL_MESSAGE(0, (int)next.size(), body);
+}
+
+void test_overrides_body_rule_errors() {
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\"},{\"key\":\"ups.status\",\"value\":\"OB\"}]}",
+                         "ups.status cannot be overridden", 1);
+    expectOverridesError("{\"overrides\":[{\"key\":\"bad \\\"key\",\"value\":\"1\"}]}",
+                         "Invalid key \"bad \"key\": use dot-separated parts of letters, digits, '_' and '-' (e.g. battery.date)", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"a\\tb\"}]}",
+                         "Invalid value for battery.date: printable ASCII only, at most 64 characters", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"battery.date\",\"value\":\"1\",\"description\":\"\\u00e8\"}]}",
+                         "Invalid description for battery.date: printable ASCII only, at most 64 characters", 0);
+    expectOverridesError("{\"overrides\":[{\"key\":\"ups.model\",\"value\":\"1\"},{\"key\":\"UPS.MODEL\",\"value\":\"2\"}]}",
+                         "Duplicate key: UPS.MODEL", 1);
+    std::string many = "{\"overrides\":[";
+    for (int i = 0; i < 17; i++) {
+        if (i) many += ",";
+        many += "{\"key\":\"custom.v" + std::to_string(i) + "\",\"value\":\"1\"}";
+    }
+    many += "]}";
+    expectOverridesError(many.c_str(), "At most 16 custom variables", 16);
+}
+
+void test_variables_catalog_marks_overrides() {
+    addWritableVariables();
+    std::vector<NutOverride> list = { makeOverride("Battery.Charge.Low", "30") };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVariables(&mockHost, &list));
+    JsonObject v = findVariable(doc, "battery.charge.low");
+    TEST_ASSERT_EQUAL_STRING("30", v["override"]);
+    // The real value stays in "value"
+    TEST_ASSERT_EQUAL_STRING("20", v["value"]);
+    TEST_ASSERT_TRUE(findVariable(doc, "ups.shutdown")["override"].isNull());
+}
+
+void test_set_and_reset_refused_when_overridden() {
+    addWritableVariables();
+    std::vector<NutOverride> list = { makeOverride("battery.charge.low", "30"), makeOverride("ups.delay.shutdown", "90") };
+    String out;
+    bool host_called = true;
+    TEST_ASSERT_EQUAL(400, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"battery.charge.low\",\"value\":\"25\"}", out,
+                                                      &host_called, &list));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Variable overridden in the NUT Server tab\"}", out.c_str());
+    TEST_ASSERT_FALSE(host_called);
+    host_called = true;
+    TEST_ASSERT_EQUAL(400, WebApiJson::resetUpsVariable(&mockHost, "{\"name\":\"UPS.DELAY.SHUTDOWN\"}", out, &host_called, &list));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Variable overridden in the NUT Server tab\"}", out.c_str());
+    TEST_ASSERT_FALSE(host_called);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.resets.size());
+
+    // The variables without an override work as before
+    TEST_ASSERT_EQUAL(200, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"outlet.1.desc\",\"value\":\"Desk\"}", out,
+                                                      &host_called, &list));
+    TEST_ASSERT_TRUE(host_called);
+    TEST_ASSERT_EQUAL(200, WebApiJson::resetUpsVariable(&mockHost, "{\"name\":\"outlet.1.desc\"}", out, &host_called, &list));
+    // Not connected: 503 first, as for any request
+    mockHost.connected = false;
+    TEST_ASSERT_EQUAL(503, WebApiJson::runUpsVariable(&mockHost, "{\"name\":\"battery.charge.low\",\"value\":\"25\"}", out,
+                                                      &host_called, &list));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_overrides_json_with_ups_values);
+    RUN_TEST(test_overrides_json_without_ups);
+    RUN_TEST(test_overrides_body_valid);
+    RUN_TEST(test_overrides_body_invalid_request);
+    RUN_TEST(test_overrides_body_rule_errors);
+    RUN_TEST(test_variables_catalog_marks_overrides);
+    RUN_TEST(test_set_and_reset_refused_when_overridden);
     RUN_TEST(test_api_null_host);
     RUN_TEST(test_api_disconnected_host);
     RUN_TEST(test_api_connected_host_with_data);
