@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 5
-status: PLANNED
+status: REVIEW
 body: |
   #### US-116: Log remoti su server syslog (UDP), configurati nella pagina System Logs (#69)
 
@@ -48,3 +48,7 @@ history:
     at: "2026-11-04T17:25:55Z"
   - status: PLANNED
     at: "2026-11-04T17:38:41Z"
+  - status: IN PROGRESS
+    at: "2026-11-04T17:49:05Z"
+  - status: REVIEW
+    at: "2026-11-04T19:12:09Z"

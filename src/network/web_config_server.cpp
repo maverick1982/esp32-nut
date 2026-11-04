@@ -106,6 +106,10 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
     // Hostname (US-113), on every board; not public in AuthPolicy, so protected by the login
     server.on("/api/network/hostname", HTTP_POST, guarded([this]() { handleSetHostname(); }));
+    // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
+    // so protected by the login
+    server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
+    server.on("/api/logging", HTTP_POST, guarded([this]() { handleSetLogging(); }));
     server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
@@ -357,6 +361,51 @@ void WebConfigServer::handleSetHostname() {
     }
     should_restart = true;
     restart_request_time = millis();
+}
+
+// --- Remote logging of the System Logs page (US-116, ADR 0012) ---
+
+void WebConfigServer::setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog) {
+    log_store = store;
+    syslog_output = syslog;
+}
+
+void WebConfigServer::handleGetLogging() {
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json",
+                WebApiJson::remoteLogJson(log_store->loadSyslog(), syslog_output->status()));
+}
+
+void WebConfigServer::handleSetLogging() {
+    if (!requireJson()) return;
+    if (!log_store || !syslog_output) {
+        server.send(503, "application/json", "{\"error\":\"Remote logging not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    SyslogSettings next;
+    String rejected;
+    if (int status = WebApiJson::checkRemoteLogBody(doc, log_store->loadSyslog(), next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!log_store->saveSyslog(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    // Applied by the log task within a second, no restart; the log task logs the change
+    // and tells the syslog server (SyslogChange.h)
+    String who = webUiUser();
+    syslog_output->configure(next, who.length() > 0 ? who : String("Web UI"));
+    server.send(200, "application/json", "{\"success\":true}");
 }
 
 void WebConfigServer::openRecoveryWindow(uint32_t now) {

@@ -849,6 +849,341 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- US-116: Remote logging panel and syslog indicator of the System Logs page (ADR 0012).
+    // GET /api/logging when the tab opens, after Save and with Refresh; while the tab is open
+    // and Auto-refresh is on, again every 10 s for the state only. The form is never
+    // overwritten while the user is editing it. Selects are filled from "options". ---
+    const remoteLog = document.getElementById('remote-log');
+    if (remoteLog) {
+        const R = (id) => document.getElementById(id);
+        const RLOG_POLL_MS = 10000;
+        const RLOG_RESULT_MS = 4000;
+        // The firmware applies new settings within a second: state read again after it
+        const RLOG_APPLY_MS = 1500;
+        const RLOG_LOOK = {
+            disabled: { badge: 'idle', dot: 'off', text: 'Off' },
+            waiting: { badge: 'connecting', dot: 'warning', text: 'Waiting' },
+            ready: { badge: 'ap', dot: 'info', text: 'Ready' },
+            active: { badge: 'connected', dot: 'success', text: 'Active' },
+            error: { badge: 'down', dot: 'danger', text: 'Error' }
+        };
+        const RLOG_PROTOCOLS = { rfc3164: 'RFC 3164 (BSD)', rfc5424: 'RFC 5424' };
+        const RLOG_FIELDS = ['f-host', 'f-port', 'f-rate'];
+        // Field of a 400 {"error"} of the API
+        const RLOG_ERROR_FIELD = {
+            'Invalid server': 'f-host',
+            'Server required to enable syslog': 'f-host',
+            'Invalid port': 'f-port',
+            'Invalid rate': 'f-rate'
+        };
+        const RLOG_SPINNER = '<span class="cmd-spinner"></span>';
+        const btnSave = R('btn-save-syslog');
+        const result = R('syslog-result');
+
+        let rlog = null;            // last GET /api/logging
+        let rlogDirty = false;      // the form was edited since it was filled
+        let rlogSaving = false;
+        let rlogLoadSeq = 0;
+        let rlogOptionsKey = '';
+        let rlogTimers = [];
+
+        function rlogRates() {
+            const o = rlog && rlog.options ? rlog.options : {};
+            const min = Number.isInteger(o.rate_min) ? o.rate_min : 1;
+            const max = Number.isInteger(o.rate_max) ? o.rate_max : 100;
+            return { min, max };
+        }
+
+        // Same rule as validSyslogHost() of the firmware
+        function validHost(h) {
+            return /^[A-Za-z0-9.-]{1,63}$/.test(h) && !/^[.-]/.test(h) && !h.endsWith('.');
+        }
+
+        function fillSelect(sel, values, label) {
+            const keep = sel.value;
+            sel.textContent = '';
+            values.forEach((v, i) => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = label(v, i, values.length);
+                sel.appendChild(opt);
+            });
+            if (values.includes(keep)) sel.value = keep;
+        }
+
+        function renderOptions() {
+            const o = rlog.options || {};
+            const key = JSON.stringify([o.protocols, o.facilities, o.levels]);
+            if (key === rlogOptionsKey) return;
+            rlogOptionsKey = key;
+            fillSelect(R('syslog-format'), Array.isArray(o.protocols) ? o.protocols : [],
+                (v) => RLOG_PROTOCOLS[v] || v);
+            fillSelect(R('syslog-facility'), Array.isArray(o.facilities) ? o.facilities : [], (v) => v);
+            fillSelect(R('syslog-level'), Array.isArray(o.levels) ? o.levels : [],
+                (v, i, n) => (i === n - 1 ? `${v} only` : `${v} and above`));
+            const rates = rlogRates();
+            R('syslog-rate').title = `${rates.min} to ${rates.max}`;
+        }
+
+        function setSwitch(on) {
+            R('syslog-on').checked = on;
+            R('syslog-on-state').textContent = on ? 'On' : 'Off';
+            R('syslog-on-state').classList.toggle('on', on);
+        }
+
+        function updateCount() {
+            const n = R('syslog-host').value.length;
+            R('syslog-host-count').textContent = `${n}/63`;
+            R('syslog-host-count').classList.toggle('full', n >= 63);
+        }
+
+        function hideError() {
+            R('syslog-error').hidden = true;
+            RLOG_FIELDS.forEach(id => {
+                R(id).classList.remove('invalid');
+                R(id).querySelector('input').removeAttribute('aria-invalid');
+            });
+        }
+
+        function showError(fieldId, text) {
+            hideError();
+            R('syslog-error-text').textContent = text;
+            R('syslog-error').hidden = false;
+            if (fieldId) {
+                R(fieldId).classList.add('invalid');
+                R(fieldId).querySelector('input').setAttribute('aria-invalid', 'true');
+            }
+        }
+
+        function renderForm() {
+            const s = rlog.syslog || {};
+            setSwitch(s.enabled === true);
+            R('syslog-host').value = typeof s.host === 'string' ? s.host : '';
+            R('syslog-port').value = Number.isInteger(s.port) ? String(s.port) : '514';
+            R('syslog-format').value = s.protocol;
+            R('syslog-facility').value = s.facility;
+            R('syslog-level').value = s.min_level;
+            R('syslog-rate').value = Number.isInteger(s.rate) ? String(s.rate) : '10';
+            updateCount();
+            hideError();
+        }
+
+        function renderStatus() {
+            const st = (rlog.status && rlog.status.syslog) || {};
+            const s = rlog.syslog || {};
+            const state = RLOG_LOOK[st.state] ? st.state : 'disabled';
+            const look = RLOG_LOOK[state];
+            const off = state === 'disabled';
+            const target = typeof st.target === 'string' && st.target !== '' ? st.target
+                : (s.host ? `${s.host}:${s.port}` : '');
+            const problem = !off && typeof st.error === 'string' ? st.error : '';
+
+            // Indicator of the actions bar: "Syslog: Active → 192.168.1.10:514"
+            R('syslog-chip-dot').className = 'status-indicator ' + look.dot;
+            const text = R('syslog-chip-text');
+            text.textContent = '';
+            const b = document.createElement('b');
+            b.textContent = look.text;
+            text.appendChild(b);
+            if (!off && target) text.appendChild(document.createTextNode(` → ${target}`));
+            R('syslog-chip').title = problem || (off ? 'Remote logging is off' : 'Remote logging settings');
+
+            const badge = R('syslog-badge');
+            badge.className = 'link-badge ' + look.badge;
+            badge.querySelector('.status-indicator').className = 'status-indicator ' + look.dot;
+            badge.querySelector('.badge-text').textContent = look.text;
+
+            const tgt = R('syslog-target');
+            tgt.className = off || !target ? 'na' : '';
+            tgt.textContent = '';
+            if (off || !target) {
+                tgt.textContent = '—';
+            } else {
+                const main = document.createElement('span');
+                main.className = 'main';
+                main.textContent = target;
+                tgt.appendChild(main);
+            }
+
+            [['syslog-sent', 'sent'], ['syslog-failed', 'failed'], ['syslog-limited', 'rate_limited'],
+                ['syslog-dropped', 'not_ready']].forEach(([id, k]) => {
+                const dd = R(id);
+                const n = Number(st[k]);
+                dd.className = off ? 'na' : '';
+                dd.textContent = off || !Number.isFinite(n) ? '—' : n.toLocaleString('en-US');
+            });
+
+            R('syslog-problem').hidden = !problem;
+            R('syslog-problem').className = 'auth-alert' + (state === 'waiting' ? ' warn' : '');
+            R('syslog-problem-text').textContent = problem;
+        }
+
+        // statusOnly: the 10 s refresh, which shows no load error (the form follows the same
+        // rule as any load: filled again only when it is not being edited)
+        async function loadRemoteLog(statusOnly) {
+            if (sessionExpired) return;
+            const seq = ++rlogLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/logging', { cache: 'no-store' });
+                if (res.status === 401) return;
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch remote logging settings:', err);
+            }
+            if (seq !== rlogLoadSeq) return;
+            if (!data || typeof data !== 'object' || !data.syslog) {
+                if (!statusOnly) {
+                    R('rlog-load-error-text').textContent =
+                        'Could not read the remote logging settings. Press Refresh to retry.';
+                    R('rlog-load-error').hidden = false;
+                }
+                return;
+            }
+            R('rlog-load-error').hidden = true;
+            rlog = data;
+            renderOptions();
+            if (!rlogDirty && !rlogSaving) renderForm();
+            renderStatus();
+        }
+
+        function clearResult() {
+            rlogTimers.forEach(clearTimeout);
+            rlogTimers = [];
+            result.textContent = '';
+            result.className = 'cmd-result';
+        }
+
+        function setSaveButton(spinner) {
+            btnSave.innerHTML = '<span class="glow"></span>' + (spinner ? RLOG_SPINNER : '');
+            btnSave.appendChild(document.createTextNode(spinner ? ' Saving...' : ' Save'));
+        }
+
+        function formValues() {
+            const host = R('syslog-host').value.trim();
+            R('syslog-host').value = host;
+            updateCount();
+            return {
+                enabled: R('syslog-on').checked,
+                host,
+                portRaw: R('syslog-port').value.trim(),
+                rateRaw: R('syslog-rate').value.trim(),
+                protocol: R('syslog-format').value,
+                facility: R('syslog-facility').value,
+                min_level: R('syslog-level').value
+            };
+        }
+
+        // Same checks as checkRemoteLogBody() of the firmware
+        function validate(v) {
+            const rates = rlogRates();
+            const port = Number(v.portRaw);
+            const rate = Number(v.rateRaw);
+            if (v.host && !validHost(v.host)) {
+                return ['f-host', 'Invalid server: use an IP address or a host name (letters, digits, dots, hyphens)'];
+            }
+            if (v.enabled && !v.host) return ['f-host', 'Server required to enable syslog'];
+            if (!/^\d+$/.test(v.portRaw) || port < 1 || port > 65535) return ['f-port', 'Invalid port: use 1 to 65535'];
+            if (!/^\d+$/.test(v.rateRaw) || rate < rates.min || rate > rates.max) {
+                return ['f-rate', `Invalid lines per second: use ${rates.min} to ${rates.max}`];
+            }
+            return null;
+        }
+
+        async function saveRemoteLog(e) {
+            e.preventDefault();
+            if (rlogSaving || !rlog) return;
+            clearResult();
+            const v = formValues();
+            const err = validate(v);
+            if (err) {
+                showError(err[0], err[1]);
+                R(err[0]).querySelector('input').focus();
+                return;
+            }
+            hideError();
+            const payload = {
+                syslog: {
+                    enabled: v.enabled, host: v.host, port: Number(v.portRaw), protocol: v.protocol,
+                    facility: v.facility, min_level: v.min_level, rate: Number(v.rateRaw)
+                }
+            };
+            rlogSaving = true;
+            btnSave.disabled = true;
+            setSaveButton(true);
+            let ok = false;
+            let message = null;
+            try {
+                const res = await apiFetch('/api/logging', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                let json = null;
+                try { json = await res.json(); } catch (x) { json = null; }
+                ok = res.status === 200 && !!json && json.success === true;
+                if (!ok) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
+                }
+            } catch (x) {
+                console.error('Remote logging save error:', x);
+                message = 'Network error';
+            }
+            rlogSaving = false;
+            btnSave.disabled = false;
+            setSaveButton(false);
+            if (sessionExpired) return;
+            if (!ok) {
+                // The message of the server, as it is
+                showError(RLOG_ERROR_FIELD[message] || null, message);
+                return;
+            }
+            rlogDirty = false;
+            result.className = 'cmd-result success';
+            result.textContent = v.enabled ? `✓ Saved, sending to ${v.host}:${v.portRaw}` : '✓ Saved, syslog off';
+            rlogTimers.push(setTimeout(() => result.classList.add('fade'), RLOG_RESULT_MS));
+            loadRemoteLog(false);
+            rlogTimers.push(setTimeout(() => loadRemoteLog(true), RLOG_APPLY_MS));
+        }
+
+        function edited() {
+            rlogDirty = true;
+            hideError();
+            clearResult();
+        }
+
+        R('syslog-on').addEventListener('change', (e) => { setSwitch(e.target.checked); edited(); });
+        R('syslog-host').addEventListener('input', () => { updateCount(); edited(); });
+        ['syslog-port', 'syslog-rate'].forEach(id => R(id).addEventListener('input', edited));
+        ['syslog-format', 'syslog-facility', 'syslog-level'].forEach(id => R(id).addEventListener('change', edited));
+        R('syslog-form').addEventListener('submit', saveRemoteLog);
+
+        R('btn-rlog-refresh').addEventListener('click', () => {
+            const icon = R('btn-rlog-refresh').querySelector('svg');
+            icon.style.animation = 'spin 1s linear infinite';
+            loadRemoteLog(false).finally(() => setTimeout(() => { icon.style.animation = 'none'; }, 500));
+        });
+
+        R('syslog-chip').addEventListener('click', () => {
+            remoteLog.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            remoteLog.focus({ preventScroll: true });
+        });
+
+        // Every opening of the tab; then the state every 10 s with Auto-refresh on
+        tabs.forEach(tab => tab.addEventListener('click', () => {
+            if (tab.getAttribute('data-target') === 'logs') loadRemoteLog(false);
+        }));
+        if (activeTab && activeTab.getAttribute('data-target') === 'logs') loadRemoteLog(false);
+        setInterval(() => {
+            if (sessionExpired || !rlog) return;
+            if (!document.getElementById('content-logs').classList.contains('active')) return;
+            if (toggleAutoRefresh && !toggleAutoRefresh.checked) return;
+            loadRemoteLog(true);
+        }, RLOG_POLL_MS);
+    }
+
     // --- Network page (US-112): one section per link of the board, status from /api/system-status ---
     const netSections = document.querySelectorAll('#content-network .net-section[data-link]');
     const NET_BADGE = {

@@ -12,7 +12,7 @@ tags: [adr, decision, architecture, modularity, board, network, refactoring]
 * **Authors:** @maverick1982, Claude
 * **Product decisions:** [PDR 0002](../pdr/0002-supporto-multi-scheda-esp32-p4-ethernet.md)
 * **Amends:** ADR 0004 (scope of the `GenericDriver` inheritance rule)
-* **Related:** ADR 0002 and 0008 (task ownership), ADR 0003 (upstream fidelity), ADR 0009 (recovery), issue #94, `docs/plans/platform-upgrade-idf55.md`, `docs/plans/nutdrv-qx-support.md`, `docs/plans/mqtt-support.md`
+* **Related:** ADR 0002 and 0008 (task ownership), ADR 0003 (upstream fidelity), ADR 0009 (recovery), ADR 0012 (remote log outputs), issue #94, `docs/plans/platform-upgrade-idf55.md`, `docs/plans/nutdrv-qx-support.md`, `docs/plans/mqtt-support.md`
 
 ## Context and Problem Statement
 

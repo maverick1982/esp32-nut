@@ -5,7 +5,7 @@ tasks:
   - id: TASK-01
     title: 'Portare lib/LogCore dalla PR #104 e aggiungere la regola delle righe su se stessa'
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** avere su questo branch il core puro di logging della PR #104, con la nuova regola `tag()`.
@@ -29,10 +29,11 @@ tasks:
       - [ ] `lib/LogCore` è identico a `pr104` salvo `tag()` e la regola in `deliver`
       - [ ] Un notice con il prefisso dell'uscita viene comunque consegnato
       - [ ] Nessuna dipendenza da `AppLogger` o da API ESP-IDF/Arduino oltre a `String`
+    ref: TASK-01
   - id: TASK-02
     title: Suite native test_log_core e test_log_fanout, con i casi della regola tag()
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -54,10 +55,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Le due suite passano
       - [ ] I tre casi della regola `tag()` esistono e passano
+    ref: TASK-02
   - id: TASK-03
     title: Aggancio ad AppLogger, LogDispatcher e LogSettingsStore
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -84,10 +86,11 @@ tasks:
       - [ ] Seriale e buffer del System Log si comportano come prima
       - [ ] Il forwarder non blocca mai (timeout 0) e le righe perse sono contate
       - [ ] Le impostazioni stanno nel namespace NVS `logout`
+    ref: TASK-03
   - id: TASK-04
     title: SyslogOutput con hostname di US-113, niente invio in AP e tag [SYSLOG]
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -112,10 +115,11 @@ tasks:
       - [ ] Nessun uso del device id `ESP32-S3-xxxxxx`
       - [ ] In AP l'uscita non invia e resta `waiting`
       - [ ] Nessun `#if` per scheda
+    ref: TASK-04
   - id: TASK-05
     title: Integrazione in main.cpp per AP, Wi-Fi ed Ethernet
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -139,10 +143,11 @@ tasks:
       - [ ] La coda esiste prima della prima riga di log
       - [ ] Il task parte in AP e in STA/Ethernet
       - [ ] Nessuna nuova globale fuori da main.cpp
+    ref: TASK-05
   - id: TASK-06
     title: API GET/POST /api/logging protette da guarded()
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
     body: |-
@@ -169,10 +174,11 @@ tasks:
       - [ ] Le due rotte usano `guarded()` e non sono nella lista pubblica
       - [ ] Messaggi di errore identici al piano
       - [ ] Dopo POST le impostazioni si applicano senza riavvio
+    ref: TASK-06
   - id: TASK-07
     title: Test nativi dell'API in test_web_api e blocco nativo completo
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
     body: |-
@@ -193,10 +199,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Ogni messaggio 400 è coperto
       - [ ] Tutta la suite nativa passa
+    ref: TASK-07
   - id: TASK-08
     title: Pannello Remote logging e indicatore nella pagina System Logs
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
     body: |-
@@ -224,10 +231,11 @@ tasks:
       - [ ] Indicatore con i 5 stati e il target
       - [ ] Opzioni lette dalla GET, nessun elenco di facility nel JS
       - [ ] Asset rigenerati
+    ref: TASK-08
   - id: TASK-09
     title: E2E Playwright remote-logging e regressione della pagina System Logs
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-08
     body: |-
@@ -248,10 +256,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti gli scenari del piano coperti e verdi
       - [ ] Suite e2e completa verde
+    ref: TASK-09
   - id: TASK-10
     title: ADR 0012 Remote log outputs, tabella ADR e piano MQTT
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -275,10 +284,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] L'ADR descrive coda, task e proprietario, fanout, notice, regola tag(), WDT, UDP in chiaro
       - [ ] Tabella e rimandi aggiornati
+    ref: TASK-10
   - id: TASK-11
     title: Tre build, misura del flash e suite complete
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
       - TASK-09
@@ -302,10 +312,11 @@ tasks:
       - [ ] Tre build ok
       - [ ] Nativi ed e2e completi verdi
       - [ ] Differenza di flash misurata e annotata
+    ref: TASK-11
   - id: TASK-12
     title: Prova sul campo su ESP32-S3 con un ricevitore syslog sulla LAN (solo dopo un sì esplicito)
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-11
     body: |-
@@ -328,3 +339,4 @@ tasks:
       ## Criteri di Completamento
       - [ ] Sì esplicito dell'utente registrato
       - [ ] I 6 controlli riusciti e annotati
+    ref: TASK-12

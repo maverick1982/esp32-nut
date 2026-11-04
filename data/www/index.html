@@ -940,13 +940,24 @@
             <div class="tab-content" id="content-logs">
                 <div class="panel">
                     <div class="logs-actions">
-                        <div class="auto-refresh">
-                            <span class="toggle-label">Auto-refresh</span>
-                            <label class="switch">
-                                <input type="checkbox" id="toggle-auto-refresh" checked>
-                                <span class="slider"></span>
-                            </label>
-                            <span id="refresh-state" class="state-text active">Active</span>
+                        <!-- US-116: Auto-refresh and the syslog indicator stay together on the left -->
+                        <div class="logs-status">
+                            <div class="auto-refresh">
+                                <span class="toggle-label">Auto-refresh</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-auto-refresh" checked>
+                                    <span class="slider"></span>
+                                </label>
+                                <span id="refresh-state" class="state-text active">Active</span>
+                            </div>
+                            <!-- US-116: syslog state from GET /api/logging; click = go to the Remote logging
+                                 panel; title = problem text when there is one -->
+                            <button type="button" class="auto-refresh syslog-chip" id="syslog-chip"
+                                aria-controls="remote-log" title="Remote logging settings">
+                                <span class="status-indicator off" id="syslog-chip-dot"></span>
+                                <span class="toggle-label">Syslog:</span>
+                                <span id="syslog-chip-text"><b>Off</b></span>
+                            </button>
                         </div>
                         <div class="logs-controls">
                             <button class="btn btn-outline" id="btn-refresh">
@@ -987,6 +998,154 @@
                         </div>
                     </div>
                     <div class="terminal-container" id="terminal-output">
+                    </div>
+                </div>
+
+                <!-- US-116: Remote logging (ADR 0012). Settings and state from GET /api/logging -->
+                <div class="panel config-panel board-panel" id="remote-log" tabindex="-1">
+                    <div class="panel-header">
+                        <h2>Remote logging</h2>
+                        <!-- Reads again the state of every output (Syslog now, MQTT later) -->
+                        <button type="button" class="btn btn-outline" id="btn-rlog-refresh">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6M1 20v-6h6" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+
+                    <p class="auth-lead board-lead">Send a copy of the System Log to other servers, to keep the
+                        history beyond the buffer of the board. Settings are saved on the device and applied without
+                        a restart.</p>
+
+                    <div class="auth-alert" id="rlog-load-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span id="rlog-load-error-text"></span>
+                    </div>
+
+                    <div class="board-body">
+                        <section class="board-section" id="syslog-section" aria-labelledby="syslog-title">
+                            <div class="cred-section" id="syslog-title">Syslog</div>
+
+                            <p class="board-hint">Lines are sent over UDP by a background task: they never delay the
+                                UPS or the NUT server. The board has no clock, so the server timestamps each line when
+                                it arrives. For the same reason RFC 3164 lines carry no host name (the server shows the
+                                address of the board); RFC 5424 lines carry the host name of the Network page.</p>
+
+                            <div class="auth-alert info" role="note">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                                    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                                </svg>
+                                <span>UDP syslog is not encrypted: anyone on the LAN can read the lines, including the
+                                    usernames of failed logins.</span>
+                            </div>
+
+                            <div class="link-status" id="syslog-status">
+                                <dl class="link-grid">
+                                    <div class="link-kv wide lead"><dt>State</dt>
+                                        <dd>
+                                            <span class="link-badge idle" id="syslog-badge" role="status">
+                                                <span class="status-indicator off"></span><span class="badge-text">Off</span>
+                                            </span>
+                                        </dd>
+                                    </div>
+                                    <div class="link-kv wide lead"><dt>Server</dt><dd id="syslog-target" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Sent</dt><dd id="syslog-sent" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Failed</dt><dd id="syslog-failed" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Rate limited</dt><dd id="syslog-limited" class="na">—</dd></div>
+                                    <div class="link-kv"><dt>Dropped (not ready)</dt><dd id="syslog-dropped" class="na">—</dd></div>
+                                </dl>
+                                <!-- Waiting = .warn, Error = red; hidden when there is no problem -->
+                                <div class="auth-alert" id="syslog-problem" role="note" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="syslog-problem-text"></span>
+                                </div>
+                            </div>
+
+                            <form class="rlog-form" id="syslog-form" novalidate>
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Send to a syslog server</span>
+                                        <span class="board-hint">Off by default. Lines written before the network is
+                                            up are sent once the connection is ready.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="syslog-on" aria-label="Syslog enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="syslog-on-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <div class="rlog-fields">
+                                    <div class="form-group wide">
+                                        <label for="syslog-host">Server</label>
+                                        <div class="set-field" id="f-host">
+                                            <input type="text" id="syslog-host" maxlength="63" autocomplete="off"
+                                                spellcheck="false" placeholder="192.168.1.10 or rsyslog.lan">
+                                            <span class="set-counter" id="syslog-host-count">0/63</span>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-port">UDP port</label>
+                                        <div class="set-field" id="f-port">
+                                            <input type="text" id="syslog-port" inputmode="numeric" maxlength="5"
+                                                placeholder="514" value="514">
+                                        </div>
+                                    </div>
+                                    <!-- Options of the selects from "options" of GET /api/logging -->
+                                    <div class="form-group">
+                                        <label for="syslog-format">Format</label>
+                                        <div class="set-field"><select id="syslog-format"></select></div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-facility">Facility</label>
+                                        <div class="set-field"><select id="syslog-facility"></select></div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-level">Minimum level</label>
+                                        <div class="set-field"><select id="syslog-level"></select></div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="syslog-rate">Max lines per second</label>
+                                        <div class="set-field" id="f-rate">
+                                            <input type="text" id="syslog-rate" inputmode="numeric" maxlength="3"
+                                                placeholder="10" value="10" title="1 to 100">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Client-side check, or the 400 {"error"} of the API -->
+                                <div class="auth-alert" id="syslog-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="syslog-error-text"></span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-syslog">
+                                        <span class="glow"></span>
+                                        Save
+                                    </button>
+                                    <span class="cmd-result" id="syslog-result" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </section>
+
+                        <!-- Later spec: the MQTT output, a second .board-section here with its own
+                             .cred-section heading, the same status grid and only enabled, minimum level and
+                             max lines per second (the broker connection lives on its own page) -->
                     </div>
                 </div>
             </div>

@@ -37,11 +37,10 @@ tags: [piano, analisi, mqtt, home-assistant, log]
 
 ## 3. Log
 
-- `AppLogger::log()` (`src/core/app_logger.cpp`) viene chiamato dal loopTask **e** dal task USB, sotto un `recursive_mutex`. Pubblicare lì dentro è rischioso:
-  - si rischiano blocchi e attese dentro il task USB;
-  - un errore MQTT che scrive a sua volta un log creerebbe un ciclo.
-- **Soluzione:** un hook nel logger che mette il messaggio in una coda. La coda viene svuotata dal loopTask, oppure si usa `esp_mqtt_client_enqueue()`, che non blocca. Va escluso dalla pubblicazione tutto ciò che logga il modulo MQTT stesso.
-- **Filtro** per livello (per esempio solo WARN/ERROR di default) e **limite di frequenza**, per non saturare il broker durante una raffica di errori USB.
+Il core dei log remoti esiste già: [ADR 0012](../adr/0012-remote-log-outputs.md) (US-116, issue #69). `AppLogger` mette ogni riga in una coda senza attese, il task `log_out` la passa a ogni uscita abilitata con il suo livello minimo e il suo limite di righe al secondo; le righe che un'uscita scrive su se stessa (`tag()`) non le tornano indietro.
+
+- MQTT sarà la seconda uscita del fanout, dopo il syslog: un `ILogOutput` nel modulo `mqtt` con `tag()` = `"[MQTT]"`, che consegna dal task `log_out` con `esp_mqtt_client_enqueue()`, senza aspettare il broker.
+- In System Logs resteranno solo l'invio dei log a MQTT, il livello e il limite; la connessione al broker andrà nella pagina MQTT.
 - Topic proposto: `esp32-nut/<id>/log`, payload JSON coerente con l'export della Web UI (`{id, time, level, msg}`).
 
 ---

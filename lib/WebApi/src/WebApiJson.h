@@ -8,6 +8,8 @@
 #include "core/auto_shutdown.h"
 #include "NetLinkInfo.h"
 #include "NutOverrides.h"
+#include "SyslogSettings.h"
+#include "SyslogStatus.h"
 
 class WebApiJson {
 public:
@@ -115,6 +117,17 @@ public:
     // "network.hostname" of GET /api/config (US-113): {"name": in use, "custom": saved name
     // ("" for the default), "default": default name of the link}
     static void hostnameJson(JsonObject out, const String& in_use, const String& saved, const String& def);
+
+    // GET /api/logging (US-116): {"syslog":{enabled,host,port,protocol,facility,
+    // min_level,rate},"status":{"syslog":{state,target,error,sent,failed,rate_limited,
+    // not_ready}},"options":{protocols,facilities,levels,rate_min,rate_max}}
+    static String remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status);
+    // POST /api/logging: {"syslog":{...}} with any of the fields above; the others keep
+    // their value. 0 with next filled, otherwise 400 {"error"}: "Invalid request",
+    // "Invalid server", "Invalid port", "Invalid protocol", "Invalid facility",
+    // "Invalid level", "Invalid rate", "Server required to enable syslog"
+    static int checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& current, SyslogSettings& next,
+                                  String& response);
 };
 
 #endif

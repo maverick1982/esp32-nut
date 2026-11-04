@@ -2566,7 +2566,8 @@ body.auth-page {
     border-top-color: #000;
 }
 .board-section .auth-fineprint { margin-top: 0.25rem; }
-.board-panel > #board-error { margin-bottom: 1.25rem; }
+.board-panel > #board-error,
+.board-panel > #rlog-load-error { margin-bottom: 1.25rem; }
 
 
 /* Board page: responsive */
@@ -3207,6 +3208,32 @@ body.auth-page {
     .cv-submit { min-width: 0; }
 
     .set-ovr-note { font-size: 0.7rem; }
+}
+
+/* --- US-116: Remote logging on the System Logs page (mockup docs/mockups/US-116) --- */
+.logs-status { display: flex; flex-wrap: wrap; gap: 1rem; }
+/* The indicator is an .auto-refresh box that is a button: click = go to the panel */
+.syslog-chip { text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: var(--transition); }
+.syslog-chip:hover,
+.syslog-chip:focus-visible { border-color: rgba(0, 240, 255, 0.45); color: var(--text-primary); outline: none; }
+.syslog-chip b { color: var(--text-primary); font-weight: 400; }
+.syslog-chip .toggle-label { white-space: nowrap; }
+/* Neutral dot for "Off" */
+.status-indicator.off { background: rgba(138, 155, 179, 0.45); }
+.rlog-form { display: flex; flex-direction: column; gap: 1rem; }
+.rlog-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem 1.25rem; }
+.rlog-fields .wide { grid-column: span 3; }
+.rlog-form .form-actions { display: flex; align-items: center; gap: 1rem; }
+.rlog-form .cmd-result { min-width: 0; white-space: normal; justify-content: flex-start; }
+@media (max-width: 1180px) {
+    .rlog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rlog-fields .wide { grid-column: auto; }
+}
+@media (max-width: 768px) {
+    .logs-status > * { flex: 1 1 auto; }
+    .rlog-fields { grid-template-columns: 1fr; }
+    .rlog-form .form-actions { flex-direction: column; align-items: stretch; }
+    .rlog-form .form-actions .btn { justify-content: center; }
 }
 
 /* OTA Update Styles */
