@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Custom variables (US-115 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css as of v1.13.0 (tokens, fonts, sidebar, panels, forms,
+         .cmd-* rows, US-068 .set-* rows, .auth-lead / .auth-alert / .auth-fineprint) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by US-115 (Custom variables panel + overridden row in UPS Settings) -->
+    <link rel="stylesheet" href="custom-vars.css">
+    <!-- Mockup-only chrome: switcher, notes, phone frames -->
+    <link rel="stylesheet" href="mock.css">
+</head>
+
+<body class="mock-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-bar" id="mock-bar">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>US-115</span>
+            <button type="button" data-state="list" class="on">NUT &middot; 3 variables</button>
+            <button type="button" data-state="empty">Empty</button>
+            <button type="button" data-state="edit">Edit mode</button>
+            <button type="button" data-state="error">Validation error</button>
+            <button type="button" data-state="limit">Limit 16/16</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="settings">UPS Settings &middot; overridden row</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="mobile">Mobile 375px</button>
+        </div>
+        <p class="mock-note" id="mock-note"></p>
+    </div>
+
+    <!-- ===================== Mockup-only: phone frames (Mobile 375px state) ===================== -->
+    <div class="phone-stage" id="phone-stage" hidden>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; list, 3 variables</figcaption>
+            <iframe title="Custom variables at 375px, list" data-src="index.html?embed=1&amp;state=list&amp;scroll=cv-panel"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; validation error</figcaption>
+            <iframe title="Custom variables at 375px, validation error" data-src="index.html?embed=1&amp;state=error&amp;scroll=cv-form"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; UPS Settings, overridden</figcaption>
+            <iframe title="UPS Settings at 375px, overridden row" data-src="index.html?embed=1&amp;state=settings&amp;scroll=row-battery.charge.low"></iframe>
+        </figure>
+    </div>
+
+    <div class="app-container" id="app">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.13.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="commands">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <button class="tab" data-target="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
+                <button class="tab" data-target="network">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+                    </svg>
+                    Network
+                </button>
+                <button class="tab active" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="board">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
+                </button>
+                <button class="tab" data-target="weblogin">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                    </svg>
+                    Web Login
+                </button>
+                <button class="tab" data-target="logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+                <button class="tab" data-target="ota">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    Firmware OTA
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success"></div>
+                    <span>Wi-Fi: Connected</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success"></div>
+                    <span>UPS: Connected</span>
+                </div>
+            </div>
+
+            <div class="sidebar-session">
+                <div class="session-user" title="Signed in user">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span>admin</span>
+                </div>
+                <button type="button" class="btn btn-outline btn-logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Log out
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title" id="page-title">NUT Server</h1>
+                <div class="device-id">ID: <span>3C842756D784</span></div>
+            </header>
+
+            <!-- ======================================================================
+                 NUT Server tab: the credentials panel is unchanged, US-115 adds the
+                 "Custom variables" panel under it.
+                 ====================================================================== -->
+            <div class="tab-content active" id="content-nut">
+                <div class="panel config-panel">
+                    <div class="panel-header">
+                        <h2>NUT Server Credentials</h2>
+                    </div>
+                    <form class="form-container" onsubmit="return false">
+                        <div class="form-group">
+                            <label for="nut-upsname">UPS Name</label>
+                            <input type="text" id="nut-upsname" value="ups">
+                        </div>
+                        <div class="form-group">
+                            <label for="nut-username">Username</label>
+                            <input type="text" id="nut-username" value="admin">
+                        </div>
+                        <div class="form-group">
+                            <label for="nut-password">Password</label>
+                            <div class="input-wrapper">
+                                <input type="password" id="nut-password" value="secretsecret">
+                                <button type="button" class="btn-icon" aria-label="Show password">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-primary">
+                                <span class="glow"></span>
+                                Save Credentials
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- ================= US-115: Custom variables ================= -->
+                <div class="panel config-panel cv-panel" id="cv-panel">
+                    <div class="panel-header">
+                        <h2>Custom variables</h2>
+                        <span class="cv-count" id="cv-count" title="Custom variables saved on the board">
+                            <b id="cv-count-n">3</b> / <span id="cv-count-max">16</span>
+                        </span>
+                    </div>
+
+                    <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
+                        of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
+                        <code>override.*</code> in <code>ups.conf</code>. The dashboard and the board keep using the
+                        real UPS values.</p>
+
+                    <!-- Record list, rows rendered from GET /api/nut/custom-vars -->
+                    <div class="cmd-group cv-group" id="cv-group">
+                        <div class="cv-head" aria-hidden="true">
+                            <span>Variable</span><span>Value for NUT clients</span><span>Description</span><span></span>
+                        </div>
+                        <div id="cv-list"></div>
+                    </div>
+
+                    <!-- Empty state -->
+                    <div class="cmd-empty cv-empty" id="cv-empty" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                            <polyline points="2 17 12 22 22 17" />
+                            <polyline points="2 12 12 17 22 12" />
+                        </svg>
+                        <strong>No custom variables yet.</strong>
+                        <span>NUT clients get exactly what the UPS reports. Add one below.</span>
+                    </div>
+
+                    <!-- Add / edit form -->
+                    <form class="cv-form" id="cv-form" novalidate>
+                        <div class="cv-form-title" id="cv-form-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                <path d="M12 5v14M5 12h14" />
+                            </svg>
+                            <span id="cv-form-title-text">Add a variable</span>
+                        </div>
+
+                        <div class="form-group cv-f-key">
+                            <label for="cv-key">Key</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="cv-key" placeholder="battery.date" maxlength="63"
+                                    spellcheck="false" autocomplete="off" autocapitalize="none">
+                            </div>
+                        </div>
+                        <div class="form-group cv-f-value">
+                            <label for="cv-value">Value</label>
+                            <div class="input-wrapper cv-counted">
+                                <input type="text" id="cv-value" placeholder="2024/03/15" maxlength="64"
+                                    spellcheck="false" autocomplete="off">
+                                <span class="set-counter" id="cv-value-count">0/64</span>
+                            </div>
+                        </div>
+                        <div class="form-group cv-f-desc">
+                            <label for="cv-desc">Description <span class="cv-optional">optional</span></label>
+                            <div class="input-wrapper cv-counted">
+                                <input type="text" id="cv-desc" placeholder="Why this value" maxlength="64"
+                                    autocomplete="off">
+                                <span class="set-counter" id="cv-desc-count">0/64</span>
+                            </div>
+                        </div>
+                        <div class="form-actions cv-f-actions">
+                            <button type="button" class="btn btn-outline cv-cancel" id="cv-cancel" hidden>Cancel</button>
+                            <button type="submit" class="btn btn-primary cv-submit" id="cv-submit">
+                                <span class="glow"></span>
+                                <span id="cv-submit-text">Add variable</span>
+                            </button>
+                        </div>
+
+                        <!-- Live hint: what the key does once saved (added / replaces the UPS value) -->
+                        <p class="cv-hint" id="cv-hint" aria-live="polite"></p>
+
+                        <!-- Validation error: client-side check, or the 400 {"error"} of the API -->
+                        <div class="auth-alert cv-alert" id="cv-error" role="alert" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 8v4M12 16h.01" />
+                            </svg>
+                            <span id="cv-error-text"></span>
+                        </div>
+
+                        <!-- Saved -->
+                        <div class="auth-alert success cv-alert" id="cv-ok" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                            <span id="cv-ok-text"></span>
+                        </div>
+
+                        <!-- 16 / 16 -->
+                        <div class="auth-alert info cv-alert" id="cv-limit" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                            </svg>
+                            <span>Limit reached: the board keeps at most <strong>16</strong> custom variables.
+                                Delete one to add another; you can still edit the existing ones.</span>
+                        </div>
+                    </form>
+
+                    <p class="auth-fineprint cv-fineprint">Key: a lowercase NUT name such as <code>battery.date</code>
+                        (letters, digits, dots, <code>_</code> and <code>-</code>). Value and description: up to 64
+                        characters. These cannot be set: <code>ups.status</code>, <code>ups.status.*</code>,
+                        <code>device.type</code>, <code>driver.parameter.*</code>. Saved on the board and applied at
+                        once, no restart.</p>
+                </div>
+            </div>
+
+            <!-- ======================================================================
+                 UPS Settings tab (US-068 page). US-115 only changes the row of a writable
+                 variable that has a custom value: tag "override", editor locked, note.
+                 ====================================================================== -->
+            <div class="tab-content" id="content-settings">
+                <div class="panel ups-panel set-panel">
+                    <div class="panel-header">
+                        <h2>Writable variables</h2>
+                        <div class="set-header-side">
+                            <span class="set-snapshot" title="Values are read when the page opens and after each Apply">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <polyline points="12 6 12 12 16 14" />
+                                </svg>
+                                Read <span>21:42:07</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <p class="set-lead">Values are read from the UPS when this page opens and after each Apply.
+                        Changes take effect immediately.</p>
+
+                    <div id="set-list">
+                        <section class="cmd-group set-group">
+                            <div class="cmd-group-header">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="7" width="18" height="10" rx="2" />
+                                    <line x1="22" y1="11" x2="22" y2="13" />
+                                    <line x1="6" y1="10" x2="6" y2="14" />
+                                    <line x1="10" y1="10" x2="10" y2="14" />
+                                </svg>
+                                <span>UPS parameters</span>
+                                <span class="set-group-sub">stored in the UPS</span>
+                                <span class="cmd-group-count">3</span>
+                            </div>
+                            <div class="set-head">
+                                <span>Variable</span><span>Description</span><span>Current</span><span>New value</span>
+                            </div>
+
+                            <!-- US-115: overridden writable variable -->
+                            <div class="cmd-row set-row is-overridden" id="row-battery.charge.low" data-var="battery.charge.low">
+                                <div class="set-id">
+                                    <div class="cmd-name">battery.charge.low</div>
+                                    <div class="set-tags">
+                                        <span class="set-tag ovr" title="Has a custom value in the NUT Server tab">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                                                <polyline points="2 17 12 22 22 17" />
+                                                <polyline points="2 12 12 17 22 12" />
+                                            </svg>override
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="cmd-desc">Remaining battery level when the UPS switches to low battery (percent)</div>
+                                <div class="set-current">
+                                    <span class="set-current-label">Current</span>
+                                    <span class="set-current-value">20</span>
+                                </div>
+                                <div class="set-edit">
+                                    <div class="set-controls">
+                                        <label class="set-field">
+                                            <input type="text" value="20" disabled aria-label="New value for battery.charge.low">
+                                            <span class="set-counter">2/5</span>
+                                        </label>
+                                        <button type="button" class="btn btn-outline btn-sm set-apply" disabled>
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg> Apply
+                                        </button>
+                                    </div>
+                                    <div class="set-ovr-note">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                            <rect x="3" y="11" width="18" height="11" rx="2" />
+                                            <path d="M7 11V7a5 5 0 0110 0v4" />
+                                        </svg>
+                                        <span>Overridden in the NUT Server tab: NUT clients see <b id="ovr-value">30</b>.
+                                            Remove the custom variable to change it here.
+                                            <button type="button" class="cv-link" data-goto-key="battery.charge.low">Open NUT Server
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                    <path d="M5 12h14M13 6l6 6-6 6" />
+                                                </svg>
+                                            </button>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="cmd-row set-row" data-var="battery.runtime.low">
+                                <div class="set-id">
+                                    <div class="cmd-name">battery.runtime.low</div>
+                                </div>
+                                <div class="cmd-desc">Remaining runtime when the UPS switches to low battery (seconds)</div>
+                                <div class="set-current">
+                                    <span class="set-current-label">Current</span>
+                                    <span class="set-current-value">120</span>
+                                </div>
+                                <div class="set-edit">
+                                    <div class="set-controls">
+                                        <label class="set-field">
+                                            <input type="text" value="120" aria-label="New value for battery.runtime.low">
+                                            <span class="set-counter">3/10</span>
+                                        </label>
+                                        <button type="button" class="btn btn-outline btn-sm set-apply" disabled>
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg> Apply
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="cmd-row set-row" data-var="ups.beeper.status">
+                                <div class="set-id">
+                                    <div class="cmd-name">ups.beeper.status</div>
+                                    <div class="set-tags"><span class="set-tag">enum</span></div>
+                                </div>
+                                <div class="cmd-desc">UPS beeper status</div>
+                                <div class="set-current">
+                                    <span class="set-current-label">Current</span>
+                                    <span class="set-current-value">enabled</span>
+                                </div>
+                                <div class="set-edit">
+                                    <div class="set-controls">
+                                        <label class="set-field enum">
+                                            <select aria-label="New value for ups.beeper.status">
+                                                <option>enabled</option>
+                                                <option>disabled</option>
+                                                <option>muted</option>
+                                            </select>
+                                        </label>
+                                        <button type="button" class="btn btn-outline btn-sm set-apply" disabled>
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg> Apply
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="cmd-group set-group">
+                            <div class="cmd-group-header">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                                    <rect x="9" y="9" width="6" height="6" />
+                                    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                                </svg>
+                                <span>Driver parameters</span>
+                                <span class="set-group-sub">saved on the ESP32</span>
+                                <span class="cmd-group-count">1</span>
+                            </div>
+                            <div class="set-head">
+                                <span>Variable</span><span>Description</span><span>Current</span><span>New value</span>
+                            </div>
+                            <div class="cmd-row set-row" data-var="ups.delay.shutdown">
+                                <div class="set-id">
+                                    <div class="cmd-name">ups.delay.shutdown</div>
+                                </div>
+                                <div class="cmd-desc">Interval to wait after the shutdown command (seconds)</div>
+                                <div class="set-current">
+                                    <span class="set-current-label">Current</span>
+                                    <span class="set-current-value">20</span>
+                                    <button type="button" class="btn btn-sm set-reset">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <polyline points="1 4 1 10 7 10" />
+                                            <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+                                        </svg> Reset to default
+                                    </button>
+                                </div>
+                                <div class="set-edit">
+                                    <div class="set-controls">
+                                        <label class="set-field">
+                                            <input type="text" value="20" aria-label="New value for ups.delay.shutdown">
+                                            <span class="set-counter">2/10</span>
+                                        </label>
+                                        <button type="button" class="btn btn-outline btn-sm set-apply" disabled>
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg> Apply
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Other tabs are not part of this mockup -->
+            <div class="tab-content" id="content-other">
+                <div class="panel placeholder-panel">
+                    <p>Not part of the US-115 mockup: use the NUT Server and UPS Settings tabs.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

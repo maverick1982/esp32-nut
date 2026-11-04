@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-115
+title: Variabili NUT personalizzate e override dalla pagina NUT Server
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 5
+status: PLANNED
+body: |
+  #### US-115: Variabili NUT personalizzate e override dalla pagina NUT Server
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che collega la scheda a Home Assistant o PeaNUT,
+  voglio aggiungere dalla pagina NUT Server variabili NUT con un mio valore, o sostituire quello fornito dall'UPS,
+  in modo da correggere valori sbagliati o mancanti del mio modello (per esempio `battery.date` o `ups.model`) senza cambiare firmware.
+
+  **Dimostrazione**
+  Nella pagina NUT Server l'utente aggiunge `battery.date = 2025-03-01` ("Batteria sostituita") e `ups.model = Eaton 3S 700 studio`, e salva. Con `upsc ups@<ip>`, `battery.date` compare anche se l'UPS non la fornisce, `ups.model` e `device.model` mostrano il valore dell'utente e compaiono `driver.parameter.override.battery.date` e `driver.parameter.override.ups.model`. La dashboard web continua a mostrare il modello reale. `GET DESC ups battery.date` restituisce "Batteria sostituita". Eliminando un record torna il valore dell'UPS.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina NUT Server ha una sezione "Custom variables" con l'elenco dei record (chiave, valore, descrizione) e un form per aggiungerli, modificarli ed eliminarli. I record sono salvati in NVS, si applicano subito senza riavvio e restano dopo un riavvio o un aggiornamento OTA.
+  - [ ] Se l'UPS non fornisce la chiave, `LIST VAR` e `GET VAR` restituiscono la variabile; se la fornisce, restituiscono il valore dell'utente al posto di quello dell'UPS (semantica di `override.<var>` in `ups.conf`, `drivers/main.c` storeval).
+  - [ ] Come upstream (`dparam_setinfo`), per ogni override il server pubblica anche `driver.parameter.override.<var>` con lo stesso valore, in `LIST VAR` e `GET VAR`.
+  - [ ] Un override di `ups.mfr`, `ups.model` o `ups.serial` vale anche per l'alias `device.*` corrispondente, salvo un override proprio dell'alias (come la copia ups.* -> device.* di `main.c` dopo `upsdrv_initinfo`).
+  - [ ] L'override vale solo per il server NUT: dashboard web, `ups.status`, LB e spegnimento automatico (US-114) usano i valori reali dell'UPS.
+  - [ ] Una variabile scrivibile sovrascritta diventa di sola lettura come con `ST_FLAG_IMMUTABLE`: sparisce da `LIST RW`, `GET TYPE` non la riporta come `RW`, `SET VAR` risponde `ERR READONLY` e nella pagina UPS Settings non è modificabile e indica l'override.
+  - [ ] `GET DESC` restituisce la descrizione dell'utente solo per le chiavi senza descrizione standard NUT; per le altre resta il testo upstream.
+  - [ ] La web UI e l'API rifiutano con un messaggio chiaro: `ups.status`, `device.type`, le chiavi interne `ups.status.*` e `driver.parameter.*`, i nomi che non sono variabili NUT valide, i valori oltre il limite di protocollo, le chiavi duplicate e i record oltre il numero massimo.
+  - [ ] Con dati stale il server risponde `ERR DATA-STALE` come oggi, override compresi.
+  - [ ] Test nativi (merge degli override, `driver.parameter.override.*`, alias `device.*`, RW resa immutabile, DESC, validazione) ed e2e per la sezione. Tre build ok, note di rilascio aggiornate.
+
+  **Assunzioni**
+  - Decisioni prese con l'utente il 2026-11-04: ambito solo server NUT, chiavi speciali come upstream, descrizione anche in `GET DESC` (senza sostituire i testi standard), niente `default.<var>`.
+  - Differenza voluta da upstream: gli override si applicano e si cambiano senza riavvio (upstream serve il riavvio del driver) e il nome della chiave viene validato.
+  - Numero massimo di record, lunghezza massima di valore e descrizione e formato in NVS si decidono in pianificazione.
+  - Fuori scope: `default.<var>` e l'override dei comandi istantanei.
+history:
+  - status: TODO
+    at: "2026-11-04T15:14:45Z"
+  - status: PLANNED
+    at: "2026-11-04T15:24:51Z"
