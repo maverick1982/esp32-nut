@@ -371,6 +371,119 @@
                         </div>
                     </form>
                 </div>
+
+                <!-- US-115: custom variables, override.<var> of ups.conf. Rows rendered from GET /api/nut/overrides -->
+                <div class="panel config-panel cv-panel" id="nut-overrides">
+                    <div class="panel-header">
+                        <h2>Custom variables</h2>
+                        <span class="cv-count" id="cv-count" title="Custom variables saved on the board">
+                            <b id="cv-count-n">0</b> / <span id="cv-count-max">16</span>
+                        </span>
+                    </div>
+
+                    <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
+                        of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
+                        <code>override.*</code> in <code>ups.conf</code>. The dashboard and the board keep using the
+                        real UPS values.</p>
+
+                    <!-- GET /api/nut/overrides failed -->
+                    <div class="auth-alert" id="cv-load-error" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v4M12 16h.01" />
+                        </svg>
+                        <span>Could not read the custom variables. Open the tab again to retry.</span>
+                    </div>
+
+                    <div class="cmd-group cv-group" id="cv-group" hidden>
+                        <div class="cv-head" aria-hidden="true">
+                            <span>Variable</span><span>Value for NUT clients</span><span>Description</span><span></span>
+                        </div>
+                        <div id="cv-list"></div>
+                    </div>
+
+                    <div class="cmd-empty cv-empty" id="cv-empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                            <polyline points="2 17 12 22 22 17" />
+                            <polyline points="2 12 12 17 22 12" />
+                        </svg>
+                        <strong>No custom variables yet.</strong>
+                        <span>NUT clients get exactly what the UPS reports. Add one below.</span>
+                    </div>
+
+                    <form class="cv-form" id="cv-form" novalidate>
+                        <div class="cv-form-title" id="cv-form-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                <path d="M12 5v14M5 12h14" />
+                            </svg>
+                            <span id="cv-form-title-text">Add a variable</span>
+                        </div>
+
+                        <div class="form-group cv-f-key">
+                            <label for="cv-key">Key</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="cv-key" placeholder="battery.date" maxlength="63"
+                                    spellcheck="false" autocomplete="off" autocapitalize="none">
+                            </div>
+                        </div>
+                        <div class="form-group cv-f-value">
+                            <label for="cv-value">Value</label>
+                            <div class="input-wrapper cv-counted">
+                                <input type="text" id="cv-value" placeholder="2025/03/01" maxlength="64"
+                                    spellcheck="false" autocomplete="off">
+                                <span class="set-counter" id="cv-value-count">0/64</span>
+                            </div>
+                        </div>
+                        <div class="form-group cv-f-desc">
+                            <label for="cv-desc">Description <span class="cv-optional">optional</span></label>
+                            <div class="input-wrapper cv-counted">
+                                <input type="text" id="cv-desc" placeholder="Why this value" maxlength="64"
+                                    autocomplete="off">
+                                <span class="set-counter" id="cv-desc-count">0/64</span>
+                            </div>
+                        </div>
+                        <div class="form-actions cv-f-actions">
+                            <button type="button" class="btn btn-outline cv-cancel" id="cv-cancel" hidden>Cancel</button>
+                            <button type="submit" class="btn btn-primary cv-submit" id="cv-submit">
+                                <span class="glow"></span>
+                                <span id="cv-submit-text">Add variable</span>
+                            </button>
+                        </div>
+
+                        <!-- Client-side check, or the 400 {"error"} of the API -->
+                        <div class="auth-alert cv-alert" id="cv-error" role="alert" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 8v4M12 16h.01" />
+                            </svg>
+                            <span id="cv-error-text"></span>
+                        </div>
+
+                        <div class="auth-alert success cv-alert" id="cv-ok" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                            <span id="cv-ok-text"></span>
+                        </div>
+
+                        <div class="auth-alert info cv-alert" id="cv-limit" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                            </svg>
+                            <span>Limit reached: the board keeps at most <strong id="cv-limit-max">16</strong> custom
+                                variables. Delete one to add another; you can still edit the existing ones.</span>
+                        </div>
+                    </form>
+
+                    <p class="auth-fineprint cv-fineprint">Key: a NUT variable name such as <code>battery.date</code>
+                        (dot-separated parts of letters, digits, <code>_</code> and <code>-</code>). Value and
+                        description: printable ASCII, up to 64 characters. These cannot be set: <code>ups.status</code>,
+                        <code>ups.status.*</code>, <code>device.type</code>, <code>driver.parameter.*</code>. Saved on
+                        the board and applied at once, no restart. A writable variable with a custom value is read-only
+                        for <code>upsrw</code> and in the UPS Settings tab.</p>
+                </div>
             </div>
 
             <!-- US-094: Board tab. Sections rendered from GET /api/board (profile capabilities + saved values) -->

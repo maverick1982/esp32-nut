@@ -5,7 +5,7 @@ tasks:
   - id: TASK-01
     title: 'Modulo NutOverrides: modello, validazione, ricerca e JSON'
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** creare il modulo puro con il modello dei record e tutte le regole, usato da server NUT, API web e NVS.
@@ -27,10 +27,11 @@ tasks:
       - [ ] Tutte le funzioni e i limiti del piano esistono con le firme indicate
       - [ ] Nessuna dipendenza da Arduino oltre a `String`, nessuna variabile `inline`
       - [ ] I testi di `errorMessage` sono quelli del piano
+    ref: TASK-01
   - id: TASK-02
     title: Suite nativa test_nut_overrides
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -52,10 +53,11 @@ tasks:
       - [ ] La suite passa
       - [ ] Ogni valore di `Check` è coperto da almeno un caso
       - [ ] `input.L1-N.voltage` è accettata, `UPS.Status` e `driver.parameter.override.x` rifiutate
+    ref: TASK-02
   - id: TASK-03
     title: 'Server NUT: override in LIST VAR, GET VAR, LIST RW, GET TYPE, GET DESC e SET VAR'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -80,10 +82,11 @@ tasks:
       - [ ] `pio test -e native -f test_nut_server` passa senza modifiche ai test esistenti
       - [ ] Un solo punto (`resolveVar`) decide valore e presenza di una variabile
       - [ ] `SET VAR` su una variabile con override non arriva a `setVariable()`
+    ref: TASK-03
   - id: TASK-04
     title: Test nativi del server NUT con override
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
     body: |-
@@ -104,10 +107,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti i test passano, vecchi e nuovi
       - [ ] Ogni criterio di protocollo della spec (2, 3, 4, 6, 7, 9) ha almeno un test
+    ref: TASK-04
   - id: TASK-05
     title: Persistenza NVS degli override e collegamento in main.cpp
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-03
@@ -134,10 +138,11 @@ tasks:
       - [ ] La build `esp32-s3-standard` passa
       - [ ] Lo store usa un namespace proprio, separato da `config_json`
       - [ ] Il server NUT riceve la lista prima di `begin()`
+    ref: TASK-05
   - id: TASK-06
     title: 'WebApiJson: API degli override e UPS Settings con override'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -160,10 +165,11 @@ tasks:
       - [ ] `pio test -e native -f test_web_api` passa senza modifiche ai test esistenti
       - [ ] Il rifiuto per override lascia `host_called` a false
       - [ ] Il JSON di GET e quello della risposta del POST coincidono
+    ref: TASK-06
   - id: TASK-07
     title: Test nativi delle API degli override
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-06
     body: |-
@@ -184,10 +190,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] Tutti i test passano
       - [ ] Ogni messaggio d'errore del POST ha un test
+    ref: TASK-07
   - id: TASK-08
     title: Rotte /api/nut/overrides e UPS Settings collegate agli override
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-05
       - TASK-06
@@ -211,10 +218,11 @@ tasks:
       - [ ] Build ok
       - [ ] Le due rotte richiedono la sessione in STA come `/api/board`
       - [ ] Un salvataggio fallito non cambia la lista usata dal server NUT
+    ref: TASK-08
   - id: TASK-09
     title: 'Pagina NUT Server: sezione Custom variables'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-08
     body: |-
@@ -241,10 +249,11 @@ tasks:
       - [ ] Ogni azione invia la lista completa e ridisegna dalla risposta
       - [ ] I valori dell'utente non passano mai da `innerHTML`
       - [ ] `web_assets.h` rigenerato e riproducibile
+    ref: TASK-09
   - id: TASK-10
     title: 'Pagina UPS Settings: riga di una variabile con override'
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-08
     body: |-
@@ -268,10 +277,11 @@ tasks:
       - [ ] Una variabile con override non si può applicare né resettare dalla pagina
       - [ ] Il collegamento apre il tab NUT Server
       - [ ] Le righe senza override sono invariate
+    ref: TASK-10
   - id: TASK-11
     title: Test e2e della sezione Custom variables e della riga UPS Settings
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-09
       - TASK-10
@@ -295,10 +305,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] `npm run e2e` passa tutto
       - [ ] Ogni scenario della tabella E2E ha un test
+    ref: TASK-11
   - id: TASK-12
     title: Regressione completa, tre build e README
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-04
@@ -324,10 +335,11 @@ tasks:
       - [ ] Suite nativa tutta verde (numero di test riportato)
       - [ ] Tre build ok
       - [ ] README aggiornati in entrambe le lingue
+    ref: TASK-12
   - id: TASK-13
     title: Prova sul campo sull'Eaton 3S con upsc
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-12
     body: |-
@@ -349,3 +361,4 @@ tasks:
       - [ ] Consenso esplicito dell'utente registrato
       - [ ] Tutti i passi verificati e documentati
       - [ ] Override eliminati alla fine della prova
+    ref: TASK-13

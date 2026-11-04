@@ -23,6 +23,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), up to 8 at the same time.
 - **UPS Commands**: Battery and panel tests, beeper, load and shutdown commands, from the Web UI or with `upscmd` and Home Assistant, as with NUT's `usbhid-ups` driver.
 - **UPS Settings**: Change the parameters your UPS allows (low battery thresholds, transfer points, battery date, shutdown delays, …) from the Web UI or with `upsrw`.
+- **Custom NUT variables**: In the **NUT Server** tab, add variables the UPS does not report (e.g. `battery.date`) or replace a wrong value (e.g. `ups.model`), like `override.*` in `ups.conf`. Only NUT clients see them; the dashboard keeps the real UPS values.
 - **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface, protected by a login.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.

@@ -2883,3 +2883,321 @@ body.auth-page {
     .host-current { margin-bottom: 1.1rem; padding: 0.7rem 0.85rem; }
     .host-current code { font-size: 0.95rem; }
 }
+
+/* ==========================================================================
+   US-115: custom variables of the NUT Server tab and overridden rows of UPS Settings
+   (from docs/mockups/US-115/custom-vars.css)
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- panel header: 3 / 16 */
+.cv-count {
+    padding: 0.15rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.cv-count b { color: var(--text-primary); font-weight: 400; }
+.cv-count.full {
+    border-color: rgba(255, 184, 0, 0.45);
+    color: var(--warning);
+}
+.cv-count.full b { color: var(--warning); }
+
+.cv-lead { margin-top: -0.5rem; max-width: 72ch; }
+.cv-panel code,
+.cv-fineprint code {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+}
+
+/* ---------------------------------------------------------------- record list
+   desktop:  variable (+ badge) | value (+ UPS value) | description | actions
+   <=1180px: description moves under the value
+   <=768px:  variable + actions on top, value, description */
+.cv-group[hidden] { display: none; }
+
+.cv-row,
+.cv-head {
+    grid-template-columns: minmax(170px, 0.9fr) minmax(0, 1.1fr) minmax(0, 1.2fr) auto;
+    grid-template-areas: "id val desc acts";
+    align-items: start;
+}
+.cv-head {
+    display: grid;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(138, 155, 179, 0.7);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.cv-head > :nth-child(1) { grid-area: id; }
+.cv-head > :nth-child(2) { grid-area: val; }
+.cv-head > :nth-child(3) { grid-area: desc; }
+.cv-head > :nth-child(4) { grid-area: acts; width: 4.6rem; }
+
+.cv-row { position: relative; }
+.cv-row .cv-id { grid-area: id; min-width: 0; padding-top: 0.4rem; }
+.cv-row .cv-val { grid-area: val; min-width: 0; }
+.cv-row .cmd-desc { grid-area: desc; min-width: 0; padding-top: 0.45rem; line-height: 1.4; overflow-wrap: anywhere; }
+.cv-row .cmd-desc:empty::before { content: '\2014'; color: rgba(138, 155, 179, 0.4); }
+.cv-row .cv-acts { grid-area: acts; }
+
+/* Value for NUT clients: same box as the UPS Settings "Current" value */
+.cv-val {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+}
+/* The value the UPS reports, under the custom one (override rows only) */
+.cv-ups {
+    color: rgba(138, 155, 179, 0.75);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    overflow-wrap: anywhere;
+}
+.cv-ups s { text-decoration-color: rgba(138, 155, 179, 0.5); }
+.cv-ups em { font-style: normal; color: rgba(255, 184, 0, 0.75); }
+
+/* Badges, same shape as the UPS Settings .set-tag */
+.cv-tag.ovr {
+    border-color: rgba(255, 184, 0, 0.45);
+    color: var(--warning);
+    background: rgba(255, 184, 0, 0.06);
+}
+.cv-tag.add {
+    border-color: rgba(0, 240, 255, 0.35);
+    color: var(--accent);
+}
+
+/* Edit / Delete icon buttons */
+.cv-acts {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+}
+.cv-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    padding: 0;
+    border: 1px solid rgba(138, 155, 179, 0.3);
+    border-radius: var(--border-radius);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.cv-act svg { width: 15px; height: 15px; }
+.cv-act:hover:not(:disabled),
+.cv-act:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0, 240, 255, 0.06);
+    outline: none;
+}
+.cv-act.del:hover:not(:disabled),
+.cv-act.del:focus-visible {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: rgba(255, 51, 102, 0.08);
+}
+.cv-act:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Row being edited in the form: accent bar on the left, other rows dimmed */
+.cv-row.editing { background: rgba(0, 240, 255, 0.05); }
+.cv-row.editing::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+.cv-group.is-editing .cv-row:not(.editing) { opacity: 0.55; }
+
+/* Just saved: the value glows green (same flash as UPS Settings after Apply) */
+.cv-row.saved .set-current-value {
+    color: var(--success);
+    border-color: rgba(0, 255, 157, 0.45);
+    box-shadow: 0 0 12px rgba(0, 255, 157, 0.18);
+    animation: set-flash 0.9s ease-out;
+}
+/* Highlight when arriving from the UPS Settings link */
+.cv-row.pulse { animation: cv-pulse 1.6s ease-out; }
+@keyframes cv-pulse {
+    0%, 30% { background: rgba(255, 184, 0, 0.14); }
+    100% { background: transparent; }
+}
+
+.cv-empty { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- form
+   desktop:  title / key | value | description | buttons / hint / alert
+   <=1180px: key | value, description | buttons
+   <=768px:  one column */
+.cv-form {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) minmax(0, 1.2fr) auto;
+    gap: 0.9rem 1.25rem;
+    align-items: end;
+    margin-top: 1.5rem;
+    padding: 1.1rem 1.1rem 1.2rem;
+    border: 1px dashed var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.15);
+    transition: border-color 0.25s, background 0.25s;
+}
+.cv-form.is-edit {
+    border-style: solid;
+    border-color: rgba(0, 240, 255, 0.4);
+    background: rgba(0, 240, 255, 0.03);
+}
+.cv-form-title,
+.cv-form .cv-alert { grid-column: 1 / -1; }
+
+.cv-form-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.cv-form-title svg { width: 14px; height: 14px; color: var(--accent); }
+.cv-form-title code { color: var(--accent); text-transform: none; letter-spacing: 0; font-size: 0.85rem; }
+
+.cv-optional {
+    margin-left: 0.35rem;
+    color: rgba(138, 155, 179, 0.55);
+    text-transform: lowercase;
+    letter-spacing: 0;
+}
+.cv-form input[type="text"] { padding: 0.7rem 0.9rem; font-size: 0.88rem; }
+.cv-form .cv-counted input { padding-right: 3.6rem; }
+
+.cv-f-actions {
+    display: flex;
+    gap: 0.6rem;
+}
+.cv-f-actions .btn { justify-content: center; white-space: nowrap; }
+.cv-submit { min-width: 11.5rem; }
+.cv-cancel[hidden] { display: none; }
+
+.cv-form .cv-alert strong,
+.cv-form .cv-alert code { color: var(--text-primary); font-weight: 400; font-family: var(--font-mono); }
+
+/* Limit reached: fields and Add are disabled until a record is deleted or opened for editing */
+.cv-form.is-full .form-group label { opacity: 0.6; }
+
+.cv-fineprint { margin-top: 1.25rem; }
+
+/* ---------------------------------------------------------------- UPS Settings: overridden row */
+.set-tag.ovr {
+    border-color: rgba(255, 184, 0, 0.45);
+    color: var(--warning);
+    background: rgba(255, 184, 0, 0.06);
+}
+.set-row.is-overridden { background: rgba(255, 184, 0, 0.025); position: relative; }
+.set-row.is-overridden::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: rgba(255, 184, 0, 0.6);
+}
+.set-group .set-row.is-overridden:hover { background: rgba(255, 184, 0, 0.045); }
+.set-row.is-overridden .set-field input:disabled { opacity: 0.45; }
+
+.set-ovr-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+.set-row .set-tags[hidden],
+.set-ovr-note[hidden] { display: none; }
+.set-ovr-note > svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 0.15rem; color: var(--warning); }
+.set-ovr-note b { color: var(--warning); font-weight: 400; }
+
+/* Link-styled button (goes to the NUT Server tab, record highlighted) */
+.cv-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 0.2rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: rgba(0, 240, 255, 0.35);
+    text-underline-offset: 3px;
+    white-space: nowrap;
+}
+.cv-link svg { width: 11px; height: 11px; }
+.cv-link:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
+
+/* ---------------------------------------------------------------- responsive */
+@media (max-width: 1180px) {
+    .cv-row,
+    .cv-head {
+        grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.4fr) auto;
+        grid-template-areas:
+            "id val  acts"
+            "id desc acts";
+        row-gap: 0.35rem;
+    }
+    .cv-row .cmd-desc { padding-top: 0; font-size: 0.8rem; }
+    .cv-head > :nth-child(3) { display: none; }
+    .cv-head > :nth-child(2)::after { content: ' / description'; }
+
+    .cv-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .cv-f-actions { justify-content: flex-end; }
+}
+
+@media (max-width: 768px) {
+    .cv-panel { padding: 1.1rem; }
+    .cv-panel .panel-header { margin-bottom: 1rem; }
+    .cv-lead { margin-top: 0; font-size: 0.8rem; }
+
+    .cv-head { display: none; }
+    .cv-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "id acts" "val val" "desc desc";
+        gap: 0.5rem;
+        padding: 0.9rem;
+    }
+    .cv-row .cv-id { padding-top: 0.15rem; }
+
+    /* one column: the alerts above the buttons */
+    .cv-form { grid-template-columns: minmax(0, 1fr); padding: 1rem 0.9rem; gap: 0.85rem; }
+    .cv-f-key { order: 1; }
+    .cv-f-value { order: 3; }
+    .cv-f-desc { order: 4; }
+    .cv-form .cv-alert { order: 5; }
+    .cv-f-actions { order: 6; }
+    .cv-f-actions { flex-direction: column-reverse; align-items: stretch; }
+    .cv-f-actions .btn { width: 100%; }
+    .cv-submit { min-width: 0; }
+
+    .set-ovr-note { font-size: 0.7rem; }
+}

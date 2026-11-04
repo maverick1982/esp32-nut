@@ -97,6 +97,10 @@ void WebConfigServer::begin(bool isAPMode) {
         server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
     }
     server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
+    // Custom variables of the NUT Server page (US-115); not public in AuthPolicy, so
+    // protected by the login
+    server.on("/api/nut/overrides", HTTP_GET, guarded([this]() { handleGetNutOverrides(); }));
+    server.on("/api/nut/overrides", HTTP_POST, guarded([this]() { handleSetNutOverrides(); }));
     // Board page (US-094): not public in AuthPolicy, so protected by the login
     server.on("/api/board", HTTP_GET, guarded([this]() { handleGetBoard(); }));
     server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
@@ -284,6 +288,42 @@ void WebConfigServer::handleSetBoard() {
 void WebConfigServer::setHostnameStore(HostnameStore* store, const String& saved) {
     hostname_store = store;
     saved_hostname = saved;
+}
+
+void WebConfigServer::setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list) {
+    nut_override_store = store;
+    nut_overrides = list;
+}
+
+// Custom variables of the NUT Server page (US-115)
+void WebConfigServer::handleGetNutOverrides() {
+    static const std::vector<NutOverride> none;
+    server.send(200, "application/json",
+                WebApiJson::nutOverridesJson(nut_overrides ? *nut_overrides : none, ups_source));
+}
+
+// Replaces the whole list: saved first, then used by the NUT server at once (same task)
+void WebConfigServer::handleSetNutOverrides() {
+    if (!requireJson()) return;
+    if (!nut_override_store || !nut_overrides) {
+        server.send(503, "application/json", "{\"error\":\"Not available\"}");
+        return;
+    }
+    String body = server.hasArg("plain") ? server.arg("plain") : String();
+    std::vector<NutOverride> next;
+    String response;
+    if (int status = WebApiJson::checkNutOverridesBody(body, next, response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!nut_override_store->save(next)) {
+        AppLogger::log("ERROR", "[NUT] Cannot save the custom variables to NVS");
+        server.send(500, "application/json", "{\"error\":\"Failed to save\"}");
+        return;
+    }
+    *nut_overrides = next;
+    AppLogger::log("INFO", "[NUT] Custom variables saved (%u) by '%s'", (unsigned)next.size(), webUiUser().c_str());
+    server.send(200, "application/json", WebApiJson::nutOverridesJson(*nut_overrides, ups_source));
 }
 
 void WebConfigServer::handleSetHostname() {
@@ -515,7 +555,7 @@ void WebConfigServer::handleUpsCommand() {
 
 // Variabili scrivibili dell'UPS (US-068), uguale in STA e in AP
 void WebConfigServer::handleUpsVariables() {
-    server.send(200, "application/json", WebApiJson::generateUpsVariables(ups_source));
+    server.send(200, "application/json", WebApiJson::generateUpsVariables(ups_source, nut_overrides));
 }
 
 // Scrive una variabile: la logica e gli status sono in WebApiJson::runUpsVariable
@@ -524,7 +564,7 @@ void WebConfigServer::handleUpsVariable() {
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
     bool host_called = false;
-    int status = WebApiJson::runUpsVariable(ups_source, body, response, &host_called);
+    int status = WebApiJson::runUpsVariable(ups_source, body, response, &host_called, nut_overrides);
     // L'esito di setVariable() lo registra già l'host: una sola riga per richiesta
     if (status != 200 && !host_called) logVariableRejected(body, true, response);
     server.send(status, "application/json", response);
@@ -536,7 +576,7 @@ void WebConfigServer::handleUpsVariableReset() {
     String body = server.hasArg("plain") ? server.arg("plain") : String();
     String response;
     bool host_called = false;
-    int status = WebApiJson::resetUpsVariable(ups_source, body, response, &host_called);
+    int status = WebApiJson::resetUpsVariable(ups_source, body, response, &host_called, nut_overrides);
     // L'esito di resetVariable() lo registra già l'host
     if (status != 200 && !host_called) logVariableRejected(body, false, response);
     server.send(status, "application/json", response);

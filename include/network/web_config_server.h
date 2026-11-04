@@ -17,6 +17,7 @@
 #include "core/board_settings_store.h"
 #include "core/auto_shutdown.h"
 #include "core/hostname_store.h"
+#include "core/nut_override_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
 
@@ -38,6 +39,9 @@ public:
     void setAutoShutdown(AutoShutdown* auto_shutdown);
     // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
     void setHostnameStore(HostnameStore* store, const String& saved);
+    // Custom variables of the NUT Server page (US-115): the list the NUT server reads,
+    // replaced after it is saved, in the same task as the NUT server
+    void setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list);
 
 private:
     WebServer server;
@@ -62,10 +66,14 @@ private:
     AutoShutdown* auto_shutdown = nullptr;
     HostnameStore* hostname_store = nullptr;
     String saved_hostname;
+    NvsNutOverrideStore* nut_override_store = nullptr;
+    std::vector<NutOverride>* nut_overrides = nullptr;
 
     void handleConnect();
     void handleLogs();
     void handleNutConfig();
+    void handleGetNutOverrides();
+    void handleSetNutOverrides();
     void handleGetBoard();
     void handleSetBoard();
     // US-114: UPS connected and offering shutdown.default

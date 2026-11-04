@@ -64,6 +64,17 @@ test.describe('Generate Screenshots', () => {
       json: { configured: true, authenticated: true, ap_mode: false, username: 'admin' },
     }));
 
+    // US-115: custom variables of the NUT Server tab
+    await page.route('**/api/nut/overrides', route => route.fulfill({
+      json: {
+        max: 16, max_value_length: 64, max_description_length: 64,
+        overrides: [
+          { key: 'battery.date', value: '2025/03/01', description: 'Battery replaced', ups_value: null },
+          { key: 'ups.model', value: 'Eaton 3S 700 studio', description: '', ups_value: 'Eaton 3S 700' },
+        ],
+      },
+    }));
+
     await page.route('**/api/ups-vars', route => route.fulfill({
       json: {
         'ups.status': 'OL',

@@ -23,6 +23,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), fino a 8 contemporaneamente.
 - **Comandi UPS**: Test della batteria e del pannello, beeper, comandi di carico e di spegnimento, dalla Web UI oppure con `upscmd` e Home Assistant, come con il driver `usbhid-ups` di NUT.
 - **Parametri UPS**: Modifica dei parametri che l'UPS permette di cambiare (soglie di batteria scarica, punti di intervento, data della batteria, ritardi di spegnimento, …) dalla Web UI oppure con `upsrw`.
+- **Variabili NUT personalizzate**: Nella scheda **NUT Server** puoi aggiungere variabili che l'UPS non fornisce (es. `battery.date`) o sostituire un valore sbagliato (es. `ups.model`), come `override.*` in `ups.conf`. Le vedono solo i client NUT; la dashboard continua a mostrare i valori reali dell'UPS.
 - **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva, protetta da login.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
 - **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
