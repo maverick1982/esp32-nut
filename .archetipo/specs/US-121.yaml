@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: HIGH
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-121: Riprovare l'enumerazione quando l'UPS non torna dopo un riavvio automatico (#78)
 
@@ -38,3 +38,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-05T08:03:31Z"
+  - status: PLANNED
+    at: "2026-11-05T14:56:26Z"
+  - status: IN PROGRESS
+    at: "2026-11-05T15:00:55Z"
+  - status: REVIEW
+    at: "2026-11-05T16:23:24Z"
+  - status: DONE
+    at: "2026-11-05T16:26:01Z"

@@ -2404,7 +2404,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.ups && data.ups.stale) {
             addLine('UPS is not answering: values are stale and NUT clients get ERR DATA-STALE.');
         }
-        if (diag.degraded) {
+        if (diag.degraded && diag.ups_not_enumerated) {
+            // US-121: port power-cycled and board restarted, the UPS never enumerated
+            addLine('The UPS did not come back after the automatic restart: the board restarted ' + diag.consecutive_restarts + ' times in a row and power-cycled its USB port, and the UPS never enumerated. Automatic restarts are suspended and NUT clients get ERR DATA-STALE. Unplug and replug the UPS USB cable.');
+        } else if (diag.degraded) {
             addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable or reboot the board.');
         }
         if (diag.last_restart_cause) {
