@@ -53,6 +53,11 @@ public:
     bool resetDriverSideValue(const char* name, String& value) override;
     void invalidateReport(uint8_t report_type, uint8_t report_id) override;
     void noteDataChanged() override { _data_changed = true; }
+    // The on-demand read of the export follows the poll's exclusions and spacing (US-119)
+    bool acceptDiagReport(uint8_t report_type, uint8_t report_id) const override {
+        return acceptPollReport(report_type, report_id);
+    }
+    uint32_t requestSpacingMs() const override { return stepSpacingMs(); }
 
     // Hook of the replay runner (US-067): ends the first full poll as loop() does, and applies
     // NutTable::finishInit() as postDecode() then would. Not called by the firmware.

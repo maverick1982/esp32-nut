@@ -12,6 +12,7 @@
 #include "SyslogStatus.h"
 #include "TimeSettings.h"
 #include "TimeStatus.h"
+#include "DiagReadStatus.h"
 
 // State of the network time for GET /api/time (US-117), already formatted by the handler
 // so that the native tests do not need a clock. local, abbr, utc and since_sync_s only
@@ -142,6 +143,10 @@ public:
     // "Invalid level", "Invalid rate", "Server required to enable syslog"
     static int checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& current, SyslogSettings& next,
                                   String& response);
+
+    // POST e GET /api/usb/dump/read (US-119): stato della lettura su richiesta dell'export,
+    // {"state":"idle|reading|done|interrupted","total","done","read","empty","failed"}
+    static String diagReadJson(const DiagReadStatus& status);
 
     // GET /api/time (US-117): {"time":{ntp,server,zone},"status":{state[,local,abbr,utc,
     // since_sync_s]},"options":{"zones":[...]}}

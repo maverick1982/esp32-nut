@@ -743,12 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const linkExportUsb = document.getElementById('link-export-usb');
-    if(linkExportUsb) {
-        linkExportUsb.addEventListener('click', () => {
-            addLogEntry('INFO', 'Downloading USB diagnostics...');
-        });
-    }
+    // The terminal lines of "Export USB Diagnostics" come from its handler below (US-119)
 
 
     // when: time of the entry on the device, converted to the browser clock (issue #60).
@@ -2512,6 +2507,59 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchSystemStatus();
     setInterval(fetchSystemStatus, 3000);
 
+    // US-119: before the download the board reads once the USB reports the poll has not cached
+    // (POST /api/usb/dump/read); the page follows the read (GET) until it ends or for 60 s.
+    // Without a UPS ready (503) or on an error the export is downloaded at once, as before.
+    // Returns 'expired' when the session ended, so the download does not start.
+    const DIAG_READ_POLL_MS = 500;
+    const DIAG_READ_MAX_MS = 60000;
+    async function runDiagRead() {
+        addLogEntry('INFO', 'Reading USB reports for the export...');
+        let st;
+        try {
+            const res = await apiFetch('/api/usb/dump/read', { method: 'POST', cache: 'no-store' });
+            if (res.status === 401) return 'expired';
+            if (!res.ok) {
+                addLogEntry('WARN', 'UPS not ready: export without the read');
+                return 'skipped';
+            }
+            st = await res.json();
+        } catch (err) {
+            console.error('USB read request failed:', err);
+            return 'skipped';
+        }
+        const started = Date.now();
+        let statusError = false;
+        while (st && st.state === 'reading' && Date.now() - started < DIAG_READ_MAX_MS) {
+            await new Promise(resolve => setTimeout(resolve, DIAG_READ_POLL_MS));
+            if (sessionExpired) return 'expired';
+            try {
+                const res = await apiFetch('/api/usb/dump/read', { cache: 'no-store' });
+                if (res.status === 401) return 'expired';
+                if (!res.ok) { statusError = true; break; }
+                st = await res.json();
+            } catch (err) {
+                console.error('USB read status failed:', err);
+                statusError = true;
+                break;
+            }
+        }
+        const state = st && st.state;
+        if (state === 'done') {
+            addLogEntry('INFO', `Read ${st.total} USB reports (${st.empty} empty, ${st.failed} failed)`);
+        } else if (state === 'interrupted') {
+            addLogEntry('WARN', 'USB link interrupted: export with the reports read so far');
+        } else if (state === 'idle') {
+            // The board forgets the read when the UPS is disconnected (or a new one is claimed)
+            addLogEntry('WARN', 'UPS disconnected during the read: export without the read');
+        } else if (statusError) {
+            addLogEntry('WARN', 'USB read status not available: export with the reports read so far');
+        } else {
+            addLogEntry('WARN', 'USB read still running after 60 s: export with the reports read so far');
+        }
+        return state || 'unknown';
+    }
+
     const exportUsbBtn = document.getElementById('link-export-usb');
     if (exportUsbBtn) {
         exportUsbBtn.addEventListener('click', async (e) => {
@@ -2532,6 +2580,9 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             
             try {
+                // The link stays disabled during the read: a second click sends nothing
+                if (await runDiagRead() === 'expired') return;
+                addLogEntry('INFO', 'Downloading USB diagnostics...');
                 const response = await apiFetch(exportUsbBtn.href);
                 if (response.ok) {
                     const blob = await response.blob();

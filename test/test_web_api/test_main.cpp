@@ -1426,6 +1426,44 @@ static int checkLog(const char* json, const SyslogSettings& cur, SyslogSettings&
     return WebApiJson::checkRemoteLogBody(doc, cur, next, out);
 }
 
+// US-119: stato della lettura su richiesta dell'export, POST e GET /api/usb/dump/read
+static JsonDocument diagRead(DiagReadState state, uint16_t total, uint16_t done, uint16_t read,
+                             uint16_t empty, uint16_t failed) {
+    DiagReadStatus s;
+    s.state = state;
+    s.total = total;
+    s.done = done;
+    s.read = read;
+    s.empty = empty;
+    s.failed = failed;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::diagReadJson(s).c_str());
+    return doc;
+}
+
+void test_diag_read_json_states(void) {
+    JsonDocument idle = diagRead(DiagReadState::Idle, 0, 0, 0, 0, 0);
+    TEST_ASSERT_EQUAL_STRING("idle", idle["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(0, idle["total"].as<int>());
+    TEST_ASSERT_EQUAL(6, (int)idle.as<JsonObject>().size());
+
+    JsonDocument reading = diagRead(DiagReadState::Reading, 41, 10, 9, 1, 0);
+    TEST_ASSERT_EQUAL_STRING("reading", reading["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(41, reading["total"].as<int>());
+    TEST_ASSERT_EQUAL(10, reading["done"].as<int>());
+
+    JsonDocument done = diagRead(DiagReadState::Done, 41, 41, 39, 1, 1);
+    TEST_ASSERT_EQUAL_STRING("done", done["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(39, done["read"].as<int>());
+    TEST_ASSERT_EQUAL(1, done["empty"].as<int>());
+    TEST_ASSERT_EQUAL(1, done["failed"].as<int>());
+
+    JsonDocument interrupted = diagRead(DiagReadState::Interrupted, 41, 12, 11, 1, 0);
+    TEST_ASSERT_EQUAL_STRING("interrupted", interrupted["state"].as<const char*>());
+    TEST_ASSERT_EQUAL(12, interrupted["done"].as<int>());
+    TEST_ASSERT_EQUAL(11, interrupted["read"].as<int>());
+}
+
 void test_remote_log_json(void) {
     SyslogSettings s = { true, String("10.0.0.5"), 514, SyslogProtocol::RFC3164, 16, LogLevel::WARN, 10 };
     SyslogStatus st;
@@ -1798,5 +1836,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_time_body_partial_keeps_the_rest);
     RUN_TEST(test_time_body_error_messages);
     RUN_TEST(test_time_body_server_required_only_with_ntp);
+    RUN_TEST(test_diag_read_json_states);
     return UNITY_END();
 }

@@ -2,6 +2,7 @@
 #include <unity.h>
 #include <ArduinoJson.h>
 #include <climits>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -15,9 +16,20 @@
 
 static const size_t BUFFER_SIZES[] = {1, 7, 64, 1024};
 
+static const char* exportReadName(DiagSweep::State st) {
+    switch (st) {
+        case DiagSweep::State::Reading:     return "reading";
+        case DiagSweep::State::Done:        return "done";
+        case DiagSweep::State::Interrupted: return "interrupted";
+        default:                            return "not_requested";
+    }
+}
+
 // Copia fedele di USBHostUPS::buildUSBDiagnostics() (commit 975df38, US-095), che legge
-// dall'istantanea invece che dai membri dell'host
-static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc) {
+// dall'istantanea invece che dai membri dell'host. US-119 aggiunge solo l'oggetto
+// "export_read" dopo "link" (with_export_read = false: l'export di prima) e le chiavi
+// "on_demand"/"empty" dei report letti su richiesta.
+static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc, bool with_export_read = true) {
     doc["firmware_version"] = s.firmware_version;
     doc["vid"] = s.vid;
     doc["pid"] = s.pid;
@@ -53,6 +65,15 @@ static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc) {
     link["incomplete_input_reports"] = s.incomplete_input_reports;
     link["ep_in_mps"] = s.ep_in_mps;
 
+    if (with_export_read) {
+        JsonObject er = doc["export_read"].to<JsonObject>();
+        er["state"] = exportReadName(s.export_read.state);
+        er["requested"] = s.export_read.total;
+        er["read"] = s.export_read.read;
+        er["empty"] = s.export_read.empty;
+        er["failed"] = s.export_read.failed;
+    }
+
     JsonArray scenarios = doc["scenarios"].to<JsonArray>();
     JsonObject scenario = scenarios.add<JsonObject>();
     scenario["description"] = "Live ESP32 dump";
@@ -70,6 +91,8 @@ static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc) {
         }
         dataStr += "]";
         report["data"] = serialized(dataStr);
+        if (r.on_demand) report["on_demand"] = true;
+        if (r.empty) report["empty"] = true;
     }
 
     JsonObject expectedData = scenario["expected_ups_data"].to<JsonObject>();
@@ -226,6 +249,126 @@ void test_numeric_limits(void) {
     assertSameAsReference(s);
 }
 
+// --- US-119: lettura su richiesta dell'export ---
+
+static const char* kNotRequested =
+    ",\r\n  \"export_read\": {\r\n    \"state\": \"not_requested\",\r\n    \"requested\": 0,"
+    "\r\n    \"read\": 0,\r\n    \"empty\": 0,\r\n    \"failed\": 0\r\n  }";
+
+// Senza lettura l'export è quello di prima byte per byte, a parte l'oggetto export_read
+void test_without_read_only_export_read_is_added(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    JsonDocument old_doc;
+    buildReferenceDoc(s, old_doc, false);
+    std::string old_bytes;
+    serializeJsonPretty(old_doc, old_bytes);
+
+    std::string got = writeChunked(s, 64);
+    size_t at = got.find(kNotRequested);
+    TEST_ASSERT_TRUE_MESSAGE(at != std::string::npos, "export_read not_requested missing");
+    // Subito dopo la chiusura di "link"
+    TEST_ASSERT_EQUAL_STRING("\"ep_in_mps\": 8\r\n  }", got.substr(at - 19, 19).c_str());
+    got.erase(at, strlen(kNotRequested));
+    TEST_ASSERT_TRUE(got == old_bytes);
+    TEST_ASSERT_TRUE(got.find("on_demand") == std::string::npos);
+    assertSameAsReference(s);
+}
+
+void test_on_demand_report(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    UsbDiagReport r;
+    r.id = 227;
+    r.type = 3;
+    r.data = {227, 5};
+    r.on_demand = true;
+    s.reports.push_back(r);
+    s.export_read.state = DiagSweep::State::Done;
+    s.export_read.total = 1;
+    s.export_read.done = 1;
+    s.export_read.read = 1;
+    assertSameAsReference(s);
+
+    std::string got = writeChunked(s, 7);
+    TEST_ASSERT_TRUE(got.find("\"id\": 227,\r\n          \"type\": 3,\r\n          \"data\": [227, 5],"
+                              "\r\n          \"on_demand\": true\r\n        }") != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"empty\": true") == std::string::npos);
+    // Il report del poll resta senza chiavi nuove
+    TEST_ASSERT_TRUE(got.find("\"data\": [1, 2, 255]\r\n        }") != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"state\": \"done\",\r\n    \"requested\": 1,\r\n    \"read\": 1,") != std::string::npos);
+}
+
+void test_empty_on_demand_report(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    UsbDiagReport r;
+    r.id = 227;
+    r.type = 3;
+    r.on_demand = true;
+    r.empty = true;
+    s.reports.push_back(r);
+    s.export_read.state = DiagSweep::State::Done;
+    s.export_read.total = 1;
+    s.export_read.done = 1;
+    s.export_read.empty = 1;
+    assertSameAsReference(s);
+
+    std::string got = writeChunked(s, 1);
+    TEST_ASSERT_TRUE(got.find("\"data\": [],\r\n          \"on_demand\": true,\r\n          \"empty\": true\r\n        }")
+                     != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"empty\": 1,") != std::string::npos);
+}
+
+// Le letture su richiesta si uniscono ai report del poll per chiave (type << 8) | id; la copia
+// del poll vince
+void test_on_demand_reports_merged_by_key(void) {
+    std::vector<UsbDiagReport> reports;
+    reports.push_back({0x01, 1, {9}});   // INPUT 1  -> 0x0101
+    reports.push_back({0x02, 3, {8}});   // FEATURE 2 -> 0x0302
+    reports.push_back({0x10, 3, {7}});   // FEATURE 16 -> 0x0310
+
+    std::vector<DiagSweep::Entry> results;
+    results.push_back({3, 0x20, false, {1, 2}});
+    results.push_back({3, 0x01, true, {}});
+    results.push_back({3, 0x10, false, {6, 6}});  // già nel poll: ignorato
+    results.push_back({3, 0x05, false, {5}});
+    addOnDemandReports(reports, results);
+
+    const uint8_t ids[] = {0x01, 0x01, 0x02, 0x05, 0x10, 0x20};
+    const uint8_t types[] = {1, 3, 3, 3, 3, 3};
+    const bool on_demand[] = {false, true, false, true, false, true};
+    TEST_ASSERT_EQUAL(6, (int)reports.size());
+    for (size_t i = 0; i < 6; ++i) {
+        TEST_ASSERT_EQUAL_UINT8(ids[i], reports[i].id);
+        TEST_ASSERT_EQUAL_UINT8(types[i], reports[i].type);
+        TEST_ASSERT_EQUAL(on_demand[i], reports[i].on_demand);
+    }
+    TEST_ASSERT_TRUE(reports[1].empty);
+    TEST_ASSERT_EQUAL(0, (int)reports[1].data.size());
+    TEST_ASSERT_EQUAL(1, (int)reports[4].data.size());  // la copia del poll
+    TEST_ASSERT_EQUAL_UINT8(7, reports[4].data[0]);
+
+    UsbDiagSnapshot s = baseSnapshot();
+    s.reports = reports;
+    assertSameAsReference(s);
+}
+
+void test_interrupted_and_reading_states(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.export_read.state = DiagSweep::State::Interrupted;
+    s.export_read.total = 41;
+    s.export_read.done = 12;
+    s.export_read.read = 10;
+    s.export_read.empty = 1;
+    s.export_read.failed = 1;
+    assertSameAsReference(s);
+    std::string got = writeChunked(s, 1024);
+    TEST_ASSERT_TRUE(got.find("\"export_read\": {\r\n    \"state\": \"interrupted\",\r\n    \"requested\": 41,"
+                              "\r\n    \"read\": 10,\r\n    \"empty\": 1,\r\n    \"failed\": 1\r\n  }") != std::string::npos);
+
+    s.export_read.state = DiagSweep::State::Reading;
+    assertSameAsReference(s);
+    TEST_ASSERT_TRUE(writeChunked(s, 64).find("\"state\": \"reading\"") != std::string::npos);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -238,5 +381,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_odd_descriptor_and_line_breaks);
     RUN_TEST(test_reports_edge_cases);
     RUN_TEST(test_numeric_limits);
+    RUN_TEST(test_without_read_only_export_read_is_added);
+    RUN_TEST(test_on_demand_report);
+    RUN_TEST(test_empty_on_demand_report);
+    RUN_TEST(test_on_demand_reports_merged_by_key);
+    RUN_TEST(test_interrupted_and_reading_states);
     return UNITY_END();
 }

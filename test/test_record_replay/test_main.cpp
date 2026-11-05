@@ -2110,10 +2110,77 @@ void test_legrand_liebert_snapshot_baseline(void) {
     TEST_ASSERT_EQUAL_STRING(kLiebertPollVi2200Before, FixtureReplayRunner::pollLists<LiebertDriver>("test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json").c_str());
 }
 
+// US-119: an export with the on-demand read (reports marked "on_demand", an empty one with
+// "data": [] and "empty", the "export_read" object) replays as before. The Eaton 3S fixture
+// gets those additions in a copy written to the temp directory.
+void test_export_with_on_demand_read_replays_us119(void) {
+    const char* src = "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json";
+    std::ifstream f(src);
+    TEST_ASSERT_TRUE_MESSAGE(f.is_open(), "cannot open the Eaton 3S fixture");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, ss.str()) == DeserializationError::Ok);
+
+    JsonObject er = doc["export_read"].to<JsonObject>();
+    er["state"] = "done";
+    er["requested"] = 2;
+    er["read"] = 1;
+    er["empty"] = 1;
+    er["failed"] = 0;
+    JsonArray reports = doc["scenarios"][0]["reports"].as<JsonArray>();
+    const size_t poll_reports = reports.size();
+    // An empty answer (the vendor report 227 of issue #123)
+    JsonObject empty = reports.add<JsonObject>();
+    empty["id"] = 227;
+    empty["type"] = 3;
+    empty["data"].to<JsonArray>();
+    empty["on_demand"] = true;
+    empty["empty"] = true;
+    // A report no row reads, read on demand: replayed as any report
+    JsonObject extra = reports.add<JsonObject>();
+    extra["id"] = 228;
+    extra["type"] = 3;
+    JsonArray d = extra["data"].to<JsonArray>();
+    d.add(228);
+    d.add(1);
+    extra["on_demand"] = true;
+
+    const char* tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMPDIR");
+    std::string path = std::string(tmp ? tmp : ".") + "/us119_on_demand_replay.json";
+    {
+        std::ofstream out(path, std::ios::binary);
+        TEST_ASSERT_TRUE_MESSAGE(out.is_open(), "cannot write the temp fixture");
+        serializeJsonPretty(doc, out);
+    }
+
+    ReplaySession base;
+    if (!FixtureReplayRunner::replay(src, base)) return;
+    ReplaySession s;
+    // The fixture's own expectations are checked by replay()
+    if (!FixtureReplayRunner::replay(path.c_str(), s)) return;
+    remove(path.c_str());
+
+    // The empty report is skipped, the other one decoded; the values do not change
+    TEST_ASSERT_EQUAL(base.reports.size() + 1, s.reports.size());
+    TEST_ASSERT_TRUE(poll_reports <= base.reports.size());
+    for (const auto& r : s.reports) TEST_ASSERT_NOT_EQUAL(227, r.id);
+    TEST_ASSERT_EQUAL_UINT8(228, s.reports.back().id);
+    auto a = base.ups_data.getAll();
+    auto b = s.ups_data.getAll();
+    TEST_ASSERT_EQUAL(a.size(), b.size());
+    for (size_t i = 0; i < a.size() && i < b.size(); i++) {
+        TEST_ASSERT_EQUAL_STRING(a[i].key.c_str(), b[i].key.c_str());
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(a[i].value.c_str(), b[i].value.c_str(), a[i].key.c_str());
+    }
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_export_with_on_demand_read_replays_us119);
     RUN_TEST(test_replay_eaton_3s);
     RUN_TEST(test_replay_eaton_5p);
     RUN_TEST(test_replay_eaton_ellipse_pro_650_issue110);

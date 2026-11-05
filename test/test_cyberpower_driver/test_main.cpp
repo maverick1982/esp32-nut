@@ -559,6 +559,17 @@ void test_cyberpower_driver_name(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.type"));
 }
 
+// US-119: the on-demand read of the export never asks the reports that hang CyberPower
+// firmwares (6 and the vendor reports >= 130), and keeps the poll's spacing
+void test_cyberpower_diag_read_follows_poll_exclusions(void) {
+    const IUPSDriver& d = driver;
+    TEST_ASSERT_FALSE(d.acceptDiagReport(3, 6));
+    TEST_ASSERT_FALSE(d.acceptDiagReport(3, 130));
+    TEST_ASSERT_FALSE(d.acceptDiagReport(3, 134));
+    TEST_ASSERT_TRUE(d.acceptDiagReport(3, 0x07));
+    TEST_ASSERT_EQUAL_UINT32(GenericDriver::STEP_SPACING_MS, d.requestSpacingMs());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -586,6 +597,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_cyberpower_cp2000_layout_reads_battery_date_from_report_4);
     RUN_TEST(test_cyberpower_vendor_layout_skips_report_4);
     RUN_TEST(test_cyberpower_driver_name);
+    RUN_TEST(test_cyberpower_diag_read_follows_poll_exclusions);
     return UNITY_END();
 }
 #else
@@ -614,6 +626,7 @@ void setup() {
     RUN_TEST(test_cyberpower_cp2000_layout_reads_battery_date_from_report_4);
     RUN_TEST(test_cyberpower_vendor_layout_skips_report_4);
     RUN_TEST(test_cyberpower_driver_name);
+    RUN_TEST(test_cyberpower_diag_read_follows_poll_exclusions);
     UNITY_END();
 }
 void loop() {}
