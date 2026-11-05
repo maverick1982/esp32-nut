@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-119
+title: 'Export USB Diagnostics: leggere su richiesta tutti i report del descrittore'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-119: Export USB Diagnostics: leggere su richiesta tutti i report del descrittore
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come manutentore che riceve gli export degli utenti nelle issue di compatibilità,
+  voglio che "Export USB Diagnostics" legga una volta, al momento dell'export, tutti i report Feature del descrittore,
+  in modo che l'export contenga anche i report che il poll non chiede, e che continui a servire per trovare nuove mappature anche quando il poll leggerà solo quello che legge NUT (US-120).
+
+  **Dimostrazione**
+  Si collega un UPS e si preme "Export USB Diagnostics" nella pagina System Logs. Il file contiene tutti i report Feature del descrittore, compresi quelli che nessuna riga della tabella legge. Se un report risponde vuoto, l'export lo indica e il System Log non mostra nessun `[ERROR] requestReport FAILED ... empty response` per quella lettura. Il poll normale non cambia.
+
+  **Criteri di Accettazione**
+  - [ ] Quando l'utente chiede l'export, il firmware legge una volta i report Feature del descrittore che non ha in cache o che il poll non legge, con la stessa spaziatura delle richieste del poll e senza bloccare il server NUT né la web UI.
+  - [ ] I report esclusi dai driver per sicurezza (`acceptPollReport()`: i report 6 e ≥ 130 di CyberPower e quelli di Eaton) restano esclusi anche dall'export.
+  - [ ] Un report che risponde con 0 byte compare nell'export come "vuoto" (formato deciso dal piano, compatibile con il replay). Quella lettura non produce log ERROR: al massimo un DEBUG/INFO.
+  - [ ] Se il collegamento USB si interrompe durante la lettura, l'export si completa con i report già letti e lo dice. Le regole di ripristino dell'ADR 0008 non cambiano.
+  - [ ] Le fixture esistenti e il loro replay restano validi. Suite nativa verde e tre build ok.
+
+  **Assunzioni**
+  - Oggi l'export scrive `_cached_reports`, cioè solo quello che il poll ha letto: finché il poll legge tutto, il problema non si vede.
+  - Leggere tutto su richiesta è una differenza da NUT voluta, limitata alla diagnostica e fatta solo quando l'utente la chiede.
+  - Fuori scope: la sezione `"strings"` nell'export (idea separata, non ancora decisa).
+history:
+  - status: TODO
+    at: "2026-11-04T21:10:34Z"

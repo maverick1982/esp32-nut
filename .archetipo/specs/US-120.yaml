@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-120
+title: 'Full poll come NUT: chiedere solo i report che contengono righe della tabella (#123)'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-120: Full poll come NUT: chiedere solo i report che contengono righe della tabella (#123)
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-119
+
+  **User Story**
+  Come utente di un UPS con report vendor senza mappatura (per esempio l'APC Back-UPS BXR1200MI della #123),
+  voglio che il firmware chieda all'UPS solo i report che NUT legge,
+  in modo da non avere più errori nel System Log ogni 30 s per report che nessuno usa, e da fare meno richieste ai firmware UPS fragili.
+
+  **Dimostrazione**
+  Nel replay della nuova fixture BXR1200MI (#123), le richieste `[requests]` del golden non contengono più `227/3`. Il diff dei golden di tutte le fixture mostra solo report che nessuna riga legge, e lo snapshot dei valori pubblicati non cambia. Sulla scheda, con un UPS APC Back-UPS BX, il System Log non mostra più `requestReport FAILED: type=3, id=227, empty response`.
+
+  **Criteri di Accettazione**
+  - [ ] Il full poll chiede un report Feature solo se contiene almeno un campo letto da una riga legata della tabella (la riga o il suo twin), dal beeper attivo letto fuori dalle righe, oppure da un hook del driver che dichiara i campi che legge. Al primo poll entrano tutte le righe legate, come l'INIT di `usbhid-ups`. Dopo `finishInit()` vengono tolti i report che hanno solo righe `DEAD`, comandi o righe `HU_FLAG_ABSENT`.
+  - [ ] I valori pubblicati da tutte le fixture non cambiano: snapshot e `LIST RW` identici. Cambiano solo le righe `[requests]` dei golden, e il piano riporta per ogni fixture quali report spariscono.
+  - [ ] Restano invariati: le liste fisse di Powercom, le esclusioni `acceptPollReport()` di CyberPower ed Eaton, il quick poll, i report semi-statici (US-072), i report Input dal pipe interrupt e le regole dei Back-UPS BX (#60) e dell'APC 5G senza pipe interrupt (US-108).
+  - [ ] Nuova fixture `apc_backups_bxr1200mi_vid051d_pid0002_issue123.json` dall'export della #123, con il suo test di replay e i suoi golden.
+  - [ ] ADR 0006 aggiornata: tolta la differenza "Fields without a row are not read upstream either, so a report made only of them is still read as before", e descritta la nuova regola. Note di rilascio aggiornate. Suite nativa verde e tre build ok.
+
+  **Assunzioni**
+  - Le righe "Kept" dell'ADR 0011 regola 2 sono righe della coda generica (US-079) e contano già come righe legate. Le letture davvero fuori tabella sono il beeper attivo (`decodeBeeperStatus()`) e le `decodeReport()` dei driver (CyberPower, Eaton, OpenUPS, Powercom): il piano le elenca una per una.
+  - US-119 deve arrivare prima, perché l'export continui a contenere i report non mappati.
+  - La #123 resta aperta fino alla release ("Refs #123").
+history:
+  - status: TODO
+    at: "2026-11-04T21:10:34Z"
