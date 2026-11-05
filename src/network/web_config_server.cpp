@@ -4,6 +4,7 @@
 #include "AuthPolicy.h"
 #include "AuthService.h"
 #include "UpsCommands.h"
+#include "BoardTime.h"
 #include "network/web_config_server.h"
 #include <ArduinoJson.h>
 #include "core/app_logger.h"
@@ -509,9 +510,27 @@ void WebConfigServer::handleConnect() {
     }
 }
 
+// Board time of a System Log line (US-118), in the time zone of Board Settings. Called
+// under the logger mutex: it uses only the copied reference (not the NtpClock mutex,
+// whose owner may log) and localtime_r/gmtime_r, guarded by newlib
+static bool boardTimeOf(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len) {
+    const WallClock* ref = static_cast<const WallClock*>(ctx);
+    int64_t list_epoch_ms;
+    if (!ref->epochMsAt(list_uptime_ms, list_epoch_ms)) return false;
+    int64_t ms = boardEpochMs(list_epoch_ms, list_uptime_ms, row_uptime_ms);
+    struct tm local;
+    struct tm utc;
+    NtpClock::localTm(ms, local);
+    NtpClock::utcTm(ms, utc);
+    return formatBoardTime(local, utc, (uint16_t)(ms % 1000), out, len) > 0;
+}
+
 void WebConfigServer::handleLogs() {
-    String logs = AppLogger::getLogsJSON();
-    // La UI converte il campo "time" (millis) nell'ora del browser (issue 60)
+    // With the board time each line gets "board_time" (US-118); the UI shows it, and
+    // without it converts the field "time" (millis) to the browser clock (issue 60)
+    WallClock ref;
+    bool has_time = ntp_clock && ntp_clock->reference(ref);
+    String logs = has_time ? AppLogger::getLogsJSON(&boardTimeOf, &ref) : AppLogger::getLogsJSON();
     server.sendHeader("X-Uptime-Ms", String(millis()));
     server.send(200, "application/json", logs);
 }

@@ -21,10 +21,10 @@ bool LogDispatcher::start() {
     return true;
 }
 
-void LogDispatcher::submit(const char* level, const char* msg, bool notice) {
+void LogDispatcher::submit(const char* level, const char* msg, bool notice, uint32_t uptime_ms) {
     if (!_queue) return;
     LogRecord r;
-    r.uptime_ms = millis();
+    r.uptime_ms = uptime_ms;
     r.level = logLevelOf(level);
     r.notice = notice;
     strncpy(r.msg, msg ? msg : "", sizeof(r.msg) - 1);

@@ -4,6 +4,7 @@
 #include "TimeSettings.h"
 #include "WallClock.h"
 #include "TimeStatus.h"
+#include "BoardTime.h"
 
 // Network time core (US-117): time zones, settings, time from the uptime, System Log lines
 
@@ -190,6 +191,82 @@ void test_new_line_after_new_settings_and_none_when_stopped(void) {
     TEST_ASSERT_FALSE(p.noAnswer());
 }
 
+// --- Board time of a System Log line (US-118) ---
+
+static struct tm tmOf(int year, int mon, int day, int hour, int min, int sec) {
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = year - 1900;
+    t.tm_mon = mon - 1;
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min = min;
+    t.tm_sec = sec;
+    return t;
+}
+
+static const int64_t NOW_MS = 1793866323007LL;  // 2026-11-05T08:12:03.007Z
+
+void test_board_epoch_of_the_newest_and_older_lines(void) {
+    TEST_ASSERT_TRUE(boardEpochMs(NOW_MS, 50000, 50000) == NOW_MS);
+    TEST_ASSERT_TRUE(boardEpochMs(NOW_MS, 50000, 45000) == NOW_MS - 5000);
+    // Written at boot, long before the first synchronization
+    TEST_ASSERT_TRUE(boardEpochMs(NOW_MS, 50000, 0) == NOW_MS - 50000);
+}
+
+void test_board_epoch_across_the_millis_wrap(void) {
+    // List at 1000 ms after the wrap, line 1000 ms before it
+    TEST_ASSERT_TRUE(boardEpochMs(NOW_MS, 1000, 0xFFFFFC18u) == NOW_MS - 2000);
+}
+
+void test_board_epoch_of_a_line_older_than_24_days(void) {
+    // 30 days: beyond the int32_t difference of WallClock::epochMsAt
+    const uint32_t age = 30u * 86400u * 1000u;
+    TEST_ASSERT_TRUE(boardEpochMs(NOW_MS, age + 7000, 7000) == NOW_MS - (int64_t)age);
+}
+
+void test_utc_offset_of_common_zones(void) {
+    struct tm utc = tmOf(2026, 11, 5, 8, 12, 3);
+    TEST_ASSERT_EQUAL_INT32(0, utcOffsetSeconds(utc, utc));
+    TEST_ASSERT_EQUAL_INT32(3600, utcOffsetSeconds(tmOf(2026, 11, 5, 9, 12, 3), utc));    // Rome, winter
+    TEST_ASSERT_EQUAL_INT32(-18000, utcOffsetSeconds(tmOf(2026, 11, 5, 3, 12, 3), utc));  // New York
+    TEST_ASSERT_EQUAL_INT32(19800, utcOffsetSeconds(tmOf(2026, 11, 5, 13, 42, 3), utc));  // India
+    TEST_ASSERT_EQUAL_INT32(-12600, utcOffsetSeconds(tmOf(2026, 11, 5, 4, 42, 3), utc));  // Newfoundland
+    struct tm utc_summer = tmOf(2026, 7, 1, 10, 0, 0);
+    TEST_ASSERT_EQUAL_INT32(7200, utcOffsetSeconds(tmOf(2026, 7, 1, 12, 0, 0), utc_summer));  // Rome, summer
+}
+
+void test_utc_offset_across_days_months_and_years(void) {
+    // Local 00:30 of 1 January, UTC still 23:30 of 31 December
+    TEST_ASSERT_EQUAL_INT32(3600, utcOffsetSeconds(tmOf(2027, 1, 1, 0, 30, 0), tmOf(2026, 12, 31, 23, 30, 0)));
+    // Local 31 October 20:00 in New York, UTC 1 November 01:00
+    TEST_ASSERT_EQUAL_INT32(-18000, utcOffsetSeconds(tmOf(2026, 10, 31, 20, 0, 0), tmOf(2026, 11, 1, 1, 0, 0)));
+    // Leap day
+    TEST_ASSERT_EQUAL_INT32(3600, utcOffsetSeconds(tmOf(2028, 3, 1, 0, 30, 0), tmOf(2028, 2, 29, 23, 30, 0)));
+}
+
+void test_format_board_time(void) {
+    char out[32];
+    struct tm utc = tmOf(2026, 11, 5, 8, 12, 3);
+    TEST_ASSERT_EQUAL_UINT32(29, formatBoardTime(tmOf(2026, 11, 5, 9, 12, 3), utc, 7, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T09:12:03.007+01:00", out);
+    formatBoardTime(utc, utc, 0, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T08:12:03.000+00:00", out);
+    formatBoardTime(tmOf(2026, 11, 5, 3, 12, 3), utc, 999, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T03:12:03.999-05:00", out);
+    formatBoardTime(tmOf(2026, 11, 5, 13, 42, 3), utc, 500, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T13:42:03.500+05:30", out);
+    formatBoardTime(tmOf(2026, 11, 5, 4, 42, 3), utc, 1, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T04:42:03.001-03:30", out);
+}
+
+void test_format_board_time_needs_room(void) {
+    char out[29];
+    struct tm utc = tmOf(2026, 11, 5, 8, 12, 3);
+    TEST_ASSERT_EQUAL_UINT32(0, formatBoardTime(utc, utc, 0, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT32(0, formatBoardTime(utc, utc, 0, nullptr, 64));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_utc_is_first_and_the_default);
@@ -208,5 +285,12 @@ int main(int argc, char** argv) {
     RUN_TEST(test_one_line_per_failure_period);
     RUN_TEST(test_no_line_without_network);
     RUN_TEST(test_new_line_after_new_settings_and_none_when_stopped);
+    RUN_TEST(test_board_epoch_of_the_newest_and_older_lines);
+    RUN_TEST(test_board_epoch_across_the_millis_wrap);
+    RUN_TEST(test_board_epoch_of_a_line_older_than_24_days);
+    RUN_TEST(test_utc_offset_of_common_zones);
+    RUN_TEST(test_utc_offset_across_days_months_and_years);
+    RUN_TEST(test_format_board_time);
+    RUN_TEST(test_format_board_time_needs_room);
     return UNITY_END();
 }

@@ -47,6 +47,9 @@ public:
     // Unix time in ms of a millis() value, also of one before the synchronization; false
     // without the time. Any task
     bool epochMsAt(uint32_t uptime_ms, int64_t& out) const;
+    // Copy of the reference pair, to compute many times without holding the mutex (the
+    // list of GET /api/logs, built under the logger mutex: US-118); false without the time
+    bool reference(WallClock& out) const;
     Status status() const;
 
     // Broken-down time of a Unix time in ms: local (time zone of the settings) and UTC

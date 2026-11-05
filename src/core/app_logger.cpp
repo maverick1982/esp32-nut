@@ -34,12 +34,14 @@ void AppLogger::logNotice(const char* level, const char* format, ...) {
 
 void AppLogger::write(const String& level, const String& msg, bool notice) {
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+    // One millis() for the serial line, the buffer and the remote outputs (US-118)
+    const uint32_t now = millis();
     // Print to serial
-    Serial.printf("[%lu] [%s] %s\n", millis(), level.c_str(), msg.c_str());
+    Serial.printf("[%lu] [%s] %s\n", (unsigned long)now, level.c_str(), msg.c_str());
 
     // Add to buffer
     logBuffer[head].id = nextId++;
-    logBuffer[head].time = millis();
+    logBuffer[head].time = now;
     logBuffer[head].level = level;
     logBuffer[head].msg = msg;
 
@@ -49,7 +51,7 @@ void AppLogger::write(const String& level, const String& msg, bool notice) {
     }
 
     // Remote outputs: a non-blocking copy into the log queue (issue #69)
-    if (forwarder) forwarder(forwarderCtx, level.c_str(), msg.c_str(), notice);
+    if (forwarder) forwarder(forwarderCtx, level.c_str(), msg.c_str(), notice, now);
 }
 
 void AppLogger::log(const char* level, const char* format, ...) {
@@ -62,10 +64,13 @@ void AppLogger::log(const char* level, const char* format, ...) {
     log(String(level), String(buffer));
 }
 
-String AppLogger::getLogsJSON() {
+String AppLogger::getLogsJSON(BoardTimeFn fn, void* ctx) {
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+    // After the lock: every line is written under it, so none is newer (US-118)
+    const uint32_t list_uptime = millis();
     JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
+    char board_time[40];
 
     int startIdx = (count < MAX_LOGS) ? 0 : head;
     for (int i = 0; i < count; i++) {
@@ -75,6 +80,10 @@ String AppLogger::getLogsJSON() {
         obj["time"] = logBuffer[idx].time;
         obj["level"] = logBuffer[idx].level;
         obj["msg"] = logBuffer[idx].msg;
+        if (fn && fn(ctx, (uint32_t)logBuffer[idx].time, list_uptime, board_time, sizeof(board_time))) {
+            // A copy: the buffer is reused for the next line
+            obj["board_time"] = String(board_time);
+        }
     }
 
     String output;

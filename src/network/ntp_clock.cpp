@@ -129,6 +129,12 @@ bool NtpClock::epochMsAt(uint32_t uptime_ms, int64_t& out) const {
     return _clock.epochMsAt(uptime_ms, out);
 }
 
+bool NtpClock::reference(WallClock& out) const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    out = _clock;
+    return out.valid();
+}
+
 NtpClock::Status NtpClock::status() const {
     uint32_t now = millis();
     std::lock_guard<std::mutex> lock(_mutex);

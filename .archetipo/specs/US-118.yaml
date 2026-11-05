@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: LOW
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-118: Ora della scheda nel terminale e nell'export del System Log
 
@@ -33,3 +33,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-04T20:25:11Z"
+  - status: PLANNED
+    at: "2026-11-05T09:35:37Z"
+  - status: IN PROGRESS
+    at: "2026-11-05T09:38:33Z"
+  - status: REVIEW
+    at: "2026-11-05T10:00:42Z"
+  - status: DONE
+    at: "2026-11-05T10:20:28Z"
