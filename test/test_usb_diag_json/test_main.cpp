@@ -62,6 +62,7 @@ static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc, bool 
     link["dropped_input_reports"] = s.dropped_input_reports;
     link["input_period_ms"] = s.input_period_ms;
     link["input_recoveries"] = s.input_recoveries;
+    link["port_cycles"] = s.port_cycles;
     link["incomplete_input_reports"] = s.incomplete_input_reports;
     link["ep_in_mps"] = s.ep_in_mps;
 
@@ -244,6 +245,7 @@ void test_numeric_limits(void) {
     s.dropped_input_reports = UINT32_MAX;
     s.input_period_ms = UINT32_MAX;
     s.input_recoveries = UINT8_MAX;
+    s.port_cycles = UINT32_MAX;
     s.incomplete_input_reports = UINT32_MAX;
     s.ep_in_mps = UINT16_MAX;
     assertSameAsReference(s);

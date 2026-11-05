@@ -314,21 +314,46 @@ void USBHostUPS::service() {
         return;
     }
 
+    if (servicePortCycleWait(now)) return;
+
     if (!_is_ready_to_poll || !_driver) return;
+
+#if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
+    // Test build (US-122): TEST_STUCK_EVERY_MS after the pipe is proven, act as if a control
+    // transfer were stuck. No request goes out meanwhile, so nothing clears the failure.
+    if (!_test_stuck_active) {
+        if (!isControlPipeProven() || _port_cycles.waiting()) {
+            _test_stuck_at = now;
+        } else if (now - _test_stuck_at >= TEST_STUCK_EVERY_MS) {
+            log("WARN", "[TEST] Simulated stuck control transfer (NUT_TEST_STUCK_CYCLE)");
+            _test_stuck_active = true;
+            _link.onLinkFailure(now);
+        }
+    }
+#endif
 
     // Under _op_mutex: no request of ours is in progress, so in flight means stuck
     bool ctrl_stuck = _link.failures() > 0 && hid_host_device_ctrl_stuck(_hid_dev_handle);
+#if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
+    if (_test_stuck_active) ctrl_stuck = true;
+#endif
     switch (_link.tick(now, ctrl_stuck)) {
     case LinkMonitor::Action::RECOVER:
         recoverInterface("control pipe not answering", now);
         return;
     case LinkMonitor::Action::RESTART:
-        requestRestart(ctrl_stuck ? "control transfer stuck in the USB stack"
-                                  : "control pipe not answering after recovery");
+        if (ctrl_stuck) {
+            recoverStuckTransfer(now);
+        } else {
+            requestRestart("control pipe not answering after recovery");
+        }
         return;
     default:
         break;
     }
+#if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
+    if (_test_stuck_active) return;
+#endif
 
     switch (_in_wd.tick(now)) {
     case LinkMonitor::Action::RECOVER:
@@ -371,19 +396,26 @@ void USBHostUPS::service() {
 
 void USBHostUPS::logStats(uint32_t now) {
     if ((now - _stat_since) < STATS_PERIOD_MS) return;
-    if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed || _stat_diag_empty) {
+    if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed || _stat_diag_empty ||
+        _stat_port_cycles) {
         // The empty answers of the export read (US-119) are not failures: their own count,
-        // written only when there are some, so the line stays as before without an export
+        // written only when there are some, so the line stays as before without an export.
+        // Same for the USB port power cycles of a stuck transfer (US-122).
         char empty[40] = "";
         if (_stat_diag_empty) {
             snprintf(empty, sizeof(empty), ", %u empty (export read)", (unsigned)_stat_diag_empty);
         }
-        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed%s",
+        char cycles[40] = "";
+        if (_stat_port_cycles) {
+            snprintf(cycles, sizeof(cycles), ", %u USB port power cycles", (unsigned)_stat_port_cycles);
+        }
+        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed%s%s",
             (unsigned)((now - _stat_since) / 1000), (unsigned)_stat_input, (unsigned)_stat_in_packets,
-            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed, empty);
+            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed, empty, cycles);
     }
     _stat_since = now;
     _stat_input = _stat_in_packets = _stat_get_ok = _stat_get_failed = _stat_diag_empty = 0;
+    _stat_port_cycles = 0;
 }
 
 void USBHostUPS::processEvents() {
@@ -772,7 +804,8 @@ void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
 // The root port of a cancelled enumeration stays disabled until a detach (hub.c). Powering
 // it off frees the device node, powering it on lets an attached device connect again. The
 // boards do not switch VBUS with it: the UPS stays powered, like across esp_restart().
-// Poll task, _op_mutex held, no device: the pause blocks no request of ours.
+// With a device attached (US-122) the USBH gives the stuck control URB back before DEV_GONE.
+// Poll task, _op_mutex held: the pause blocks no request of ours.
 void USBHostUPS::cycleRootPort() {
     esp_err_t err = usb_host_lib_set_root_port_power(false);
     if (err != ESP_OK) {
@@ -784,6 +817,46 @@ void USBHostUPS::cycleRootPort() {
     if (err != ESP_OK) {
         log("WARN", "[USB] USB port power on failed: %s", esp_err_to_name(err));
     }
+}
+
+// A timed-out control URB stays in flight in the ESP-IDF stack (issue #120): switching the
+// port off makes the device go away, and the USBH halts and flushes EP0 and hands the URB
+// back with its callback before DEV_GONE (usbh.c, ADR 0008). The UPS then re-enumerates;
+// a restart only if the cycle did not help (PortCyclePolicy).
+void USBHostUPS::recoverStuckTransfer(uint32_t now) {
+#if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
+    _test_stuck_active = false;
+#endif
+    if (_port_cycles.onStuck(now) == PortCyclePolicy::Decision::RESTART) {
+        requestRestart(_port_cycles.lastRestartReason());
+        return;
+    }
+    log("WARN", "[USB] Control transfer stuck: power-cycling the USB port (cycle %u since boot)",
+        (unsigned)_port_cycles.cyclesSinceBoot());
+    {
+        // Stale at once, and no more requests to a device that is going away
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _is_ready_to_poll = false;
+    }
+    // No other RESTART before the disconnection event; claimInterface() resets it again
+    _link.reset(now);
+    _stat_port_cycles++;
+    cycleRootPort();
+}
+
+bool USBHostUPS::servicePortCycleWait(uint32_t now) {
+    if (!_port_cycles.waiting()) return false;
+    if (isControlPipeProven()) {
+        _port_cycles.onProven();
+        log("INFO", "[USB] UPS back after the USB port power cycle in %u ms",
+            (unsigned)(now - _port_cycles.cycleStartedAt()));
+        return false;
+    }
+    if (_port_cycles.backTimedOut(now)) {
+        requestRestart(PortCyclePolicy::NOT_BACK_REASON);
+        return true;
+    }
+    return false;
 }
 
 bool USBHostUPS::isPollingPaused() const {
@@ -1453,6 +1526,7 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
     s.dropped_input_reports = (uint32_t)_dropped_events;
     s.input_period_ms = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
     s.input_recoveries = _in_wd.recoveries();
+    s.port_cycles = _port_cycles.cyclesSinceBoot();
     s.incomplete_input_reports = _in_reasm.dropped();
     s.ep_in_mps = _ep_in_mps;
 

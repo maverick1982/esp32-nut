@@ -117,6 +117,7 @@ void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
     key(w, 2, "dropped_input_reports", false);   num(w, s.dropped_input_reports);
     key(w, 2, "input_period_ms", false);         num(w, s.input_period_ms);
     key(w, 2, "input_recoveries", false);        num(w, s.input_recoveries);
+    key(w, 2, "port_cycles", false);             num(w, s.port_cycles);
     key(w, 2, "incomplete_input_reports", false); num(w, s.incomplete_input_reports);
     key(w, 2, "ep_in_mps", false);               num(w, s.ep_in_mps);
     newline(w, 1);
