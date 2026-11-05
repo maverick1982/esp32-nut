@@ -20,6 +20,7 @@
 #include "OnlineDischargeLog.h"
 #include "DriverVarStore.h"
 #include "DiagSweep.h"
+#include "EnumWatchdog.h"
 #include <atomic>
 #include <map>
 #include <vector>
@@ -88,6 +89,9 @@ public:
     // USB peripheral the UPS is attached to, from the board profile (US-090); call before
     // begin(). 0 is the ESP-IDF default, the only one on the ESP32-S3
     void setPeripheralMap(uint32_t map) { _peripheral_map = map; }
+    // Consecutive controlled restarts before this boot (CrashDiag, RTC memory); call before
+    // begin(). Above 0, a UPS that does not enumerate gets its port power-cycled (US-121)
+    void setAutomaticRestartCount(uint8_t count) { _auto_restart_count = count; }
     void logDebug(const String& msg) const override;
 
     // Set when in-place recovery failed: the owner must restart the system (never from an ISR)
@@ -98,6 +102,13 @@ public:
     // Claimed, first full poll still running: stale for NUT, but not a link problem
     bool isWaitingFirstData() const override { return _is_ready_to_poll && !_first_data_ready; }
     const char* getRestartReason() const { return _restart_reason; }
+    // Restart reason of the enumeration watchdog (US-121): kept in RTC memory (64 bytes)
+    static constexpr const char* NOT_ENUMERATED_REASON = "UPS not enumerated after the automatic restart";
+    // The pending restart request comes from the enumeration watchdog: degraded mode then
+    // means the UPS never came back, and only replugging the cable helps (US-121)
+    bool isNotEnumeratedRestart() const {
+        return _restart_requested && _restart_reason == NOT_ENUMERATED_REASON;
+    }
 
     // Free stack of the poll task in bytes (diagnostics)
     uint32_t getPollTaskStackHighWater() const;
@@ -203,6 +214,8 @@ private:
     void recoverInterface(const char* why, uint32_t now, bool clear_in_halt = false);
     void retryInterfaceStart(uint32_t now);
     void requestRestart(const char* why);
+    void serviceEnumWatchdog(uint32_t now);
+    void cycleRootPort();
     void logStats(uint32_t now);
     // _op_mutex held; field: the beeper usage to write, nullptr = the active beeper (US-074)
     bool setBeeperLocked(bool enable, const HIDUsageDef* field = nullptr);
@@ -259,6 +272,11 @@ private:
     uint8_t _in_recoveries;
     bool _restart_requested;
     const char* _restart_reason;
+
+    // UPS not enumerated after an automatic restart (US-121): poll task only
+    EnumWatchdog _enum_wd;
+    uint8_t _auto_restart_count = 0;
+    bool _enum_seen = false;  // a HID device connected (or failed to open) since the boot
 
     UPSData _ups_data;
     IUPSDriver* _driver;

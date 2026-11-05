@@ -116,6 +116,22 @@ bool USBHostUPS::begin() {
         return false;
     }
 
+    // US-121: after a controlled restart, a UPS that does not enumerate gets its root port
+    // power-cycled, then a new restart (ESP-IDF does not retry a cancelled enumeration).
+    // Armed before the poll task starts: the task reads the watchdog without a lock.
+#if defined(NUT_TEST_ENUM_WATCHDOG) && NUT_TEST_ENUM_WATCHDOG
+    if (_auto_restart_count == 0 && !_poll_task_handle) {
+        log("WARN", "[TEST] Enumeration watchdog armed on a normal boot, enumerations ignored "
+                    "(NUT_TEST_ENUM_WATCHDOG)");
+        _enum_wd.arm(millis());
+    }
+#endif
+    if (_auto_restart_count > 0 && !_poll_task_handle) {
+        log("INFO", "[USB] Automatic restart #%u: waiting for the UPS to enumerate",
+            (unsigned)_auto_restart_count);
+        _enum_wd.arm(millis());
+    }
+
     if (!_poll_task_handle) {
         _poll_task_run = true;
         if (xTaskCreatePinnedToCore(USBHostUPS::poll_task, "ups_poll", POLL_TASK_STACK, this,
@@ -286,6 +302,8 @@ void USBHostUPS::service() {
         now = millis(); // the read can block up to its 5 s timeout
     }
 
+    serviceEnumWatchdog(now);
+
     // The export read stops when the recovery takes over the link (US-119, ADR 0008)
     if (_restart_requested || _in_restart_pending) interruptDiagRead();
 
@@ -375,10 +393,12 @@ void USBHostUPS::processEvents() {
     for (UBaseType_t i = 0; i < EVENT_QUEUE_LEN && xQueueReceive(_event_queue, &ev, 0) == pdTRUE; i++) {
         switch (ev.type) {
         case HidEvent::CONNECTED:
+            _enum_seen = true;
             log("INFO", "HID Device Connected event");
             claimInterface(ev.handle);
             break;
         case HidEvent::OPEN_FAILED:
+            _enum_seen = true; // enumerated: the HID driver saw it
             log("ERROR", "hid_host_device_open failed");
             break;
         case HidEvent::INPUT_REPORT:
@@ -721,6 +741,49 @@ void USBHostUPS::requestRestart(const char* why) {
     log("ERROR", "[USB] Recovery exhausted (%s): system restart requested", why);
     _restart_reason = why;
     _restart_requested = true;
+}
+
+void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
+    if (!_enum_wd.armed()) return;
+    bool enumerated = _enum_seen;
+    if (!enumerated) {
+        // Also a device the HID driver does not report, or an event we missed
+        usb_host_lib_info_t info;
+        enumerated = usb_host_lib_info(&info) == ESP_OK && info.num_devices > 0;
+    }
+#if defined(NUT_TEST_ENUM_WATCHDOG) && NUT_TEST_ENUM_WATCHDOG
+    if (_auto_restart_count == 0) enumerated = false; // test build: the UPS "never" enumerates
+#endif
+    switch (_enum_wd.tick(enumerated, now)) {
+    case EnumWatchdog::Action::CYCLE_PORT:
+        log("WARN", "[USB] UPS not enumerated %u min after the automatic restart: "
+                    "power-cycling the USB port (attempt %u of %u)",
+            (unsigned)(now / 60000), (unsigned)_enum_wd.cycles(), (unsigned)EnumWatchdog::MAX_PORT_CYCLES);
+        cycleRootPort();
+        break;
+    case EnumWatchdog::Action::REQUEST_RESTART:
+        requestRestart(NOT_ENUMERATED_REASON);
+        break;
+    default:
+        break;
+    }
+}
+
+// The root port of a cancelled enumeration stays disabled until a detach (hub.c). Powering
+// it off frees the device node, powering it on lets an attached device connect again. The
+// boards do not switch VBUS with it: the UPS stays powered, like across esp_restart().
+// Poll task, _op_mutex held, no device: the pause blocks no request of ours.
+void USBHostUPS::cycleRootPort() {
+    esp_err_t err = usb_host_lib_set_root_port_power(false);
+    if (err != ESP_OK) {
+        log("WARN", "[USB] USB port power off failed: %s", esp_err_to_name(err));
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+    err = usb_host_lib_set_root_port_power(true);
+    if (err != ESP_OK) {
+        log("WARN", "[USB] USB port power on failed: %s", esp_err_to_name(err));
+    }
 }
 
 bool USBHostUPS::isPollingPaused() const {

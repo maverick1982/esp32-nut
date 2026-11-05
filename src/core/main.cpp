@@ -255,6 +255,7 @@ void setup() {
     }
 
     usb_ups.setPeripheralMap(board().usb.ports[board_settings.usb_port].peripheral_map);
+    usb_ups.setAutomaticRestartCount(CrashDiag::consecutiveRestarts()); // US-121
     if (!usb_ups.begin()) {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");
     } else {
@@ -351,7 +352,7 @@ void loop() {
         } else if (decision == RestartPolicy::Decision::NONE) {
             AppLogger::log("INFO", "[MAIN] Restart no longer needed");
         }
-        CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED);
+        CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED, usb_ups.isNotEnumeratedRestart());
         last_decision = decision;
     }
     if (decision == RestartPolicy::Decision::RESTART) {

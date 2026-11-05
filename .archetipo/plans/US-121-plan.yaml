@@ -1,0 +1,405 @@
+schema: archetipo/plan/v2
+spec_code: US-121
+body: |
+  ---
+  type: plan
+  title: 'US-121: Riprovare l enumerazione quando l UPS non torna dopo un riavvio automatico (#78) — Piano di implementazione'
+  description: 'Piano di implementazione per US-121'
+  tags: [plan, implementation, US-121]
+  ---
+  # US-121: Riprovare l'enumerazione quando l'UPS non torna dopo un riavvio automatico (#78) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** da creare all'implementazione, da `main` c39021d (es. `feature/us-121-reenum-after-restart`)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3 | **Bloccato da:** -
+
+  Dopo un riavvio controllato (contatore dei riavvii consecutivi > 0 in RTC), se nessun UPS si enumera, il firmware spegne e riaccende la porta USB root, poi continua la scala dei riavvii di `RestartPolicy` fino al degraded mode. Un'enumerazione annulla tutto. Al boot normale (contatore 0) non cambia niente.
+
+  ## Contesto verificato nei sorgenti (ESP-IDF 5.5.5, `~/.platformio/packages/framework-espidf`)
+
+  - `usb_host_lib_set_root_port_power(bool)` (`usb_host.c:742`) chiama `hub_root_stop()` / `hub_root_start()` (`hub.c:634-668`). `hub_root_start()` vuole lo stato `ROOT_PORT_STATE_NOT_POWERED`, quindi va chiamata solo dopo uno stop riuscito. `hub_root_stop()` è idempotente se la porta è già spenta.
+  - Dopo un'enumerazione annullata (`ENUM_EVENT_CANCELED`, `usb_host.c:401` → `hub_port_disable` → `root_port_disable`, `hub.c:504`) la porta HCD è `DISABLED`, ma lo stato del hub resta `ROOT_PORT_STATE_ENABLED` con il nodo del device tree ancora presente. Si recupera solo con `HCD_PORT_EVENT_DISCONNECTION/ERROR` (`hub.c:412-437`): nessuno riprova da solo.
+  - Con la porta spenta (`NOT_POWERED`) un evento di disconnessione libera il nodo (`port_has_device = true` → `dev_tree_node_dev_gone`). Dopo la riaccensione la porta è `DISCONNECTED`, quindi un device collegato genera una nuova `HCD_PORT_EVENT_CONNECTION` → reset → enumerazione. Gli stessi test di IDF fanno così (`test_apps/usb_host/main/test_usb_host_plugging.c:52-62`, `msc_client_async_enum.c:179-181`: off, pausa, on).
+  - Sulle schede attuali la VBUS non è comandata dal bit di potenza del DWC: il ciclo è logico (la porta si stacca e si riattacca), non toglie corrente all'UPS. È lo stesso effetto di un `esp_restart()`, che nella #78 ha fatto tornare l'UPS (OTA a v1.13.0).
+  - **Un'enumerazione fallita non si può osservare con l'API pubblica.** `usb_host.h` non ha eventi per un'enumerazione annullata: `ENUM_EVENT_CANCELED` resta dentro `usb_host.c`, i flag della libreria sono solo `NO_CLIENTS` e `ALL_FREE`, e le righe `ESP_LOGE(ENUM_TAG, ...)` di `enum.c` vanno solo sulla seriale. L'unica alternativa è un hook globale `esp_log_set_vprintf` che analizzi il testo di tutti i log di IDF da qualunque contesto: fragile e invasivo, scartato. Il System Log dice quindi che l'UPS non si è enumerato entro N minuti, che è l'effetto osservabile. Questa spiegazione va nell'ADR 0008 (criterio 4 della spec).
+
+  ## Soluzione tecnica
+
+  ### 1. Logica pura `EnumWatchdog` (`lib/USBHostUPS/src/EnumWatchdog.h`)
+
+  Header-only come `RestartPolicy`, senza dipendenze da IDF, testabile in native.
+
+  - `enum class Action : uint8_t { NONE, CYCLE_PORT, REQUEST_RESTART };`
+  - Costanti: `FIRST_CYCLE_MS = 60000` (1 min dopo l'avvio dello stack USB), `CYCLE_INTERVAL_MS = 60000`, `MAX_PORT_CYCLES = 2`. Cicli a 1 e 2 min, richiesta di riavvio a 3 min. Con le attese di `RestartPolicy` (1/5/15 min) il degraded mode arriva dopo circa 35 min, senza tenere conto del primo riavvio automatico.
+  - `void arm(uint32_t now)`: avvia l'attesa (chiamata solo se il contatore è > 0).
+  - `Action tick(bool enumerated, uint32_t now)`:
+    - se non è armato restituisce `NONE`;
+    - se `enumerated` si disarma per sempre e restituisce `NONE`;
+    - quando `now - armedAt >= FIRST_CYCLE_MS + cycles * CYCLE_INTERVAL_MS` e `cycles < MAX_PORT_CYCLES`: `++cycles`, `CYCLE_PORT`;
+    - quando `cycles == MAX_PORT_CYCLES` e `now - armedAt >= FIRST_CYCLE_MS + MAX_PORT_CYCLES * CYCLE_INTERVAL_MS`: `REQUEST_RESTART` una sola volta, poi `NONE`.
+    Differenze unsigned, così il wrap di `millis()` non conta.
+  - Accessori: `armed()`, `cycles()`, `restartRequested()`.
+
+  ### 2. Integrazione in `USBHostUPS`
+
+  - `void setAutomaticRestartCount(uint8_t n)` (pubblico, prima di `begin()`): salva `n`. In `begin()`, se `n > 0`, `_enum_wd.arm(millis())` e un INFO `[USB] Automatic restart #n: waiting for the UPS to enumerate`.
+  - L'UPS conta come enumerato se il driver HID ha mandato `CONNECTED` o `OPEN_FAILED` dal boot (flag `_enum_seen`, impostato in `processEvents()`) **oppure** se `usb_host_lib_info()` riporta `num_devices > 0` (un device non HID, o un evento perso).
+  - `service()`: subito dopo `processEvents()` e il retry del descrittore, prima di `if (_restart_requested) return;`, chiama `serviceEnumWatchdog(now)`:
+    - `CYCLE_PORT` → WARN `[USB] UPS not enumerated %u min after the automatic restart: power-cycling the USB port (attempt %u of %u)` (minuti da `millis()`, cioè dal boot), poi `cycleRootPort()`;
+    - `REQUEST_RESTART` → `requestRestart(kNotEnumeratedReason)` con la costante `"UPS not enumerated after the automatic restart"` (sta nei 64 byte RTC di `recordRestartReason`).
+  - `cycleRootPort()`: `usb_host_lib_set_root_port_power(false)`. Se fallisce, WARN con `esp_err_to_name` e niente riaccensione. Altrimenti `vTaskDelay(500 ms)` (gira nel poll task sotto `_op_mutex`, nessun device: nessuna richiesta bloccata; il TWDT è a 30 s), poi `usb_host_lib_set_root_port_power(true)` e WARN se fallisce.
+  - `bool isNotEnumeratedRestart() const`: `_restart_requested && _restart_reason == kNotEnumeratedReason` (confronto di puntatore alla costante).
+  - Un'enumerazione dopo la richiesta la annulla già oggi (`claimInterface()` azzera `_restart_requested` e scrive `UPS enumerated again: restart request cancelled`), e `RestartPolicy` torna a `NONE`.
+  - **Build di prova** `NUT_TEST_ENUM_WATCHDOG` (precedente: `NUT_TEST_TWDT_HANG`): con contatore 0 arma comunque il watchdog e ignora le enumerazioni. Con l'UPS collegato, quindi, ogni ciclo stacca e riattacca l'UPS e dopo 3 min chiede il riavvio. Dopo il riavvio il contatore è 1 e vale la logica normale: l'UPS si enumera, il watchdog si disarma e il contatore si azzera dopo 30 s di dati freschi. Il ciclo di prova quindi si chiude da solo. Serve solo per la prova sul banco.
+
+  ### 3. `main.cpp` e `CrashDiag`
+
+  - Prima di `usb_ups.begin()`: `usb_ups.setAutomaticRestartCount(CrashDiag::consecutiveRestarts())`.
+  - `CrashDiag::setDegraded(bool degraded, bool upsNotEnumerated = false)`. In `main.cpp`: `CrashDiag::setDegraded(decision == DEGRADED, usb_ups.isNotEnumeratedRestart())`.
+  - `fillJson()`: oltre a `degraded: true`, aggiunge `ups_not_enumerated: true` solo quando entrambi sono veri. Nessun altro campo cambia.
+  - Il ramo DEGRADED di `main.cpp` scrive già un ERROR con il motivo, e il WAIT scrive `Restart #N in a row delayed by S s: <reason>`: con il nuovo motivo non serve altro.
+
+  ### 4. Web UI (`data/www/bundle.js`, `renderDiagnostics`)
+
+  Se `diag.degraded && diag.ups_not_enumerated`, al posto della riga generica del degraded mode: `The UPS did not come back after the automatic restart: the board restarted N times in a row and power-cycled its USB port, and the UPS never enumerated. Automatic restarts are suspended and NUT clients get ERR DATA-STALE. Unplug and replug the UPS USB cable.` Senza il flag resta il testo attuale. `index_inlined.html` e `web_assets.h` li rigenera la build (`scripts/embed_web.py`).
+
+  ### 5. Documentazione
+
+  ADR 0008: nuova sezione sull'UPS che non torna dopo un riavvio automatico (US-121). Contenuto: meccanismo IDF, ciclo logico della porta root, tempi, integrazione con `RestartPolicy`, perché un'enumerazione fallita non va nel System Log, rischi aperti. I rischi sono: non è dimostrato che basti il ciclo senza riavvio, e il nodo del device tree potrebbe restare orfano se lo spegnimento non generasse la disconnessione. La rete di sicurezza è la scala dei riavvii.
+
+  ## Strategia di test
+
+  - **Native (Unity, `test/test_enum_watchdog`):** sequenza dei cicli e della richiesta, confini esatti (59 999 / 60 000 ms), una sola richiesta, enumerazione che annulla prima, durante e dopo i cicli, nessuna azione se non armato (boot normale, un'ora simulata), wrap di `millis()`. Più un test di scenario che concatena `EnumWatchdog` e `RestartPolicy` su 4 boot simulati (contatore 1, 2, 3, 4): ogni boot fa 2 cicli e una richiesta, `RestartPolicy` aspetta 60 s / 5 min / 15 min, il quarto va in `DEGRADED`. Un'enumerazione a metà di un boot porta tutto a `NONE`. È la Dimostrazione della spec.
+  - **E2E (Playwright, framework esistente; `serveIndex` e mock di `/api/system-status` come in `e2e/system-status.spec.js`):** il banner con `degraded` + `ups_not_enumerated` mostra il testo che dice di staccare e riattaccare il cavo; con il solo `degraded` mostra il testo generico (regressione); senza `degraded` nessuna delle due righe. Niente video demo: la parte visibile è una riga di banner, la Dimostrazione è il test nativo più il System Log sulla scheda.
+  - **Build:** `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` (l'API esiste anche nelle librerie P4). Dimensione dell'S3 confrontata con `main` (issue #93).
+  - **Sul campo (solo dopo un sì esplicito dell'utente):** build `NUT_TEST_ENUM_WATCHDOG` sull'ESP32-S3 di test con l'Eaton 3S. Si osserva: i due WARN, lo stacco e ritorno dell'UPS a ogni ciclo (`HID Device Connected event`, interfaccia ripresa), la richiesta di riavvio, il riavvio controllato con `Last automatic restart: UPS not enumerated after the automatic restart`, poi il ritorno normale e il contatore azzerato. Infine OTA della build normale. Il caso vero (nodo orfano dopo un'enumerazione annullata) non si riproduce sul banco: lo verificherà miskor-bgd con una build di prova per la #78, da pubblicare solo con l'ok dell'utente.
+
+  ## Note
+
+  - Note di rilascio: si scrivono prima della release, non sono un task di questo piano.
+  - Issue #78 e #120 aperte fino alla release: nei commit e nella PR `Refs #78`.
+  - Fuori scope: la causa del transfer bloccato sui Smart-UPS.
+tasks:
+  - id: TASK-01
+    title: 'EnumWatchdog: logica pura dei cicli della porta e della richiesta di riavvio'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** classe header-only `EnumWatchdog` che, una volta armata, decide quando spegnere e riaccendere la porta root e quando chiedere il riavvio se nessun UPS si enumera.
+
+      **Leggere:** `lib/USBHostUPS/src/RestartPolicy.h` (stile, commenti, differenze unsigned), sezione 1 del piano.
+
+      **Modificare:** nuovo `lib/USBHostUPS/src/EnumWatchdog.h`:
+      - `enum class Action : uint8_t { NONE, CYCLE_PORT, REQUEST_RESTART }`;
+      - costanti `FIRST_CYCLE_MS = 60000`, `CYCLE_INTERVAL_MS = 60000`, `MAX_PORT_CYCLES = 2`;
+      - `arm(uint32_t now)`, `Action tick(bool enumerated, uint32_t now)`, `armed()`, `cycles()`, `restartRequested()`;
+      - un'enumerazione disarma per sempre; `REQUEST_RESTART` una volta sola; differenze `now - armedAt` unsigned.
+      - Commento di classe in inglese come `RestartPolicy`: perché esiste (#78, IDF non riprova dopo `ENUM_EVENT_CANCELED`), tempi, legame con `RestartPolicy`.
+
+      **Passi:** 1) scrivere la classe; 2) compilarla includendola nel test del TASK-02.
+
+      **Verifica:** compila nella suite native del TASK-02.
+
+      **Fatto:** nessuna dipendenza da IDF o Arduino; solo `<stdint.h>`.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EnumWatchdog.h — nuova classe pura
+
+      ## Criteri di Completamento
+      - [ ] Cicli a 1 e 2 min dall'arm, richiesta a 3 min, una sola volta
+      - [ ] Non armata o già enumerata: sempre `NONE`
+      - [ ] Robusta al wrap di `millis()`
+    ref: TASK-01
+  - id: TASK-02
+    title: Test native di EnumWatchdog e scenario con RestartPolicy fino al degraded mode
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire la logica nuova e dimostrare la scala completa (Dimostrazione della spec) in un test nativo.
+
+      **Leggere:** `test/test_restart_policy/test_main.cpp` (struttura Unity, `RUN_TEST`), `lib/USBHostUPS/src/RestartPolicy.h`, sezione Strategia di test del piano.
+
+      **Modificare:** nuova suite `test/test_enum_watchdog/test_main.cpp` con almeno:
+      - `test_not_armed_never_acts`: un'ora simulata senza `arm`, sempre `NONE` (boot normale, contatore 0);
+      - `test_cycles_then_restart`: `CYCLE_PORT` a 60 000 ms (non a 59 999), il secondo a 120 000, `REQUEST_RESTART` a 180 000, poi solo `NONE`;
+      - `test_enumeration_cancels_before`, `_between_cycles`, `_after_request`: dopo `enumerated = true` sempre `NONE`, anche se poi torna `false`;
+      - `test_millis_wrap`: arm a `0xFFFFFFFF - 30000`, i tempi restano giusti;
+      - `test_ladder_to_degraded`: 4 boot simulati con contatore 1..4. Per ogni boot un `EnumWatchdog` armato e un `RestartPolicy(n)`; a ogni passo `requested` diventa vero dopo `REQUEST_RESTART`. Si verifica WAIT di 60 s / 5 min / 15 min, poi `RESTART`, e al boot 4 `DEGRADED`;
+      - `test_enumeration_mid_ladder_cancels_restart`: con richiesta in WAIT, l'enumerazione (requested torna falso, come fa `claimInterface`) porta `RestartPolicy` a `NONE`.
+
+      **Passi:** 1) scrivere i test; 2) eseguire la suite.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_enum_watchdog` verde.
+
+      **Fatto:** tutti i test passano; nomi per comportamento.
+
+      **Blocchi:** se `test_ladder_to_degraded` richiede di cambiare `RestartPolicy`, fermarsi: la spec vuole le regole di oggi.
+
+      ## File Coinvolti
+      - test/test_enum_watchdog/test_main.cpp — nuova suite native
+
+      ## Criteri di Completamento
+      - [ ] Copertura di cicli, richiesta unica, annullamento, boot normale e wrap
+      - [ ] Scenario 1/5/15 min fino a `DEGRADED` con `RestartPolicy` invariato
+      - [ ] Suite verde
+    ref: TASK-02
+  - id: TASK-03
+    title: 'USBHostUPS: watchdog dell''enumerazione, ciclo della porta root e build di prova'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare `EnumWatchdog` al poll task: dopo un riavvio automatico senza enumerazione, ciclare la porta root e poi chiedere il riavvio con un motivo riconoscibile.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.h` e `.cpp` (`begin`, `service`, `processEvents`, `claimInterface` righe ~519-524, `requestRestart`), sezione 2 del piano, `~/.platformio/packages/framework-espidf/components/usb/hub.c:634-668`.
+
+      **Modificare:**
+      - `USBHostUPS.h`: `#include "EnumWatchdog.h"`; pubblici `void setAutomaticRestartCount(uint8_t n)` e `bool isNotEnumeratedRestart() const`; costante `static const char* const kNotEnumeratedReason` (o `static constexpr`) = `"UPS not enumerated after the automatic restart"`; privati `EnumWatchdog _enum_wd`, `uint8_t _auto_restart_count = 0`, `bool _enum_seen = false`, `void serviceEnumWatchdog(uint32_t now)`, `void cycleRootPort()`.
+      - `USBHostUPS.cpp`:
+        - `begin()`: se `_auto_restart_count > 0` (o build `NUT_TEST_ENUM_WATCHDOG` con contatore 0), `_enum_wd.arm(millis())` e INFO `[USB] Automatic restart #%u: waiting for the UPS to enumerate` (la build di prova scrive un WARN `[TEST] ...`);
+        - `processEvents()`: `_enum_seen = true` su `CONNECTED` e `OPEN_FAILED`;
+        - `serviceEnumWatchdog()`: `enumerated = _enum_seen || (usb_host_lib_info ok && num_devices > 0)`; nella build di prova con contatore 0 `enumerated = false`. Su `CYCLE_PORT`: WARN `[USB] UPS not enumerated %u min after the automatic restart: power-cycling the USB port (attempt %u of %u)` e `cycleRootPort()`. Su `REQUEST_RESTART`: `requestRestart(kNotEnumeratedReason)`;
+        - `service()`: chiamata subito dopo il blocco `_desc_retry`, prima di `interruptDiagRead`/`if (_restart_requested) return;`;
+        - `cycleRootPort()`: off; se errore, WARN `[USB] USB port power off failed: %s` e return; `vTaskDelay(pdMS_TO_TICKS(500))`; on; se errore, WARN `[USB] USB port power on failed: %s`;
+        - `isNotEnumeratedRestart()`: `_restart_requested && _restart_reason == kNotEnumeratedReason`.
+
+      **Passi:** 1) header; 2) cpp; 3) build S3; 4) build S3 con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_ENUM_WATCHDOG=1` (solo per vedere che compila; il binario si usa nel TASK-09).
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok, anche con il flag di prova.
+
+      **Fatto:** nessun comportamento nuovo con contatore 0 nella build normale; il motivo è quello della costante.
+
+      **Blocchi:** se `usb_host_lib_info` o `usb_host_lib_set_root_port_power` mancano nelle librerie di una delle tre schede, fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — API, costante del motivo, membri del watchdog
+      - lib/USBHostUPS/src/USBHostUPS.cpp — arm in `begin`, `_enum_seen`, `serviceEnumWatchdog`, `cycleRootPort`, build di prova
+
+      ## Criteri di Completamento
+      - [ ] Con contatore > 0 e nessuna enumerazione: due cicli della porta con WARN, poi richiesta di riavvio con il nuovo motivo
+      - [ ] Un'enumerazione disarma il watchdog; la richiesta già fatta viene annullata come oggi
+      - [ ] Errori di off/on scritti nel System Log, nessun on dopo un off fallito
+      - [ ] Build S3 normale e di prova ok
+    ref: TASK-03
+  - id: TASK-04
+    title: 'main.cpp e CrashDiag: contatore passato a USBHostUPS e flag ups_not_enumerated'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare a `USBHostUPS` il contatore dei riavvii e far sapere alla web UI che il degraded mode è dovuto a un UPS mai enumerato.
+
+      **Leggere:** `src/core/main.cpp` (righe ~140-145, ~257-260, ~333-362), `include/core/crash_diag.h`, `src/core/crash_diag.cpp` (`setDegraded`, `fillJson`), sezione 3 del piano.
+
+      **Modificare:**
+      - `main.cpp`: prima di `usb_ups.begin()`, `usb_ups.setAutomaticRestartCount(CrashDiag::consecutiveRestarts());`; nel blocco delle decisioni `CrashDiag::setDegraded(decision == RestartPolicy::Decision::DEGRADED, usb_ups.isNotEnumeratedRestart());`.
+      - `crash_diag.h/.cpp`: `void setDegraded(bool degraded, bool upsNotEnumerated = false)`, nuovo `static bool s_ups_not_enumerated`; in `fillJson()` `obj["ups_not_enumerated"] = true` solo se `s_degraded && s_ups_not_enumerated`.
+
+      **Passi:** 1) modifiche; 2) build S3.
+
+      **Verifica:** `pio run -e esp32-s3-standard` ok; suite native `test_web_api` verde se tocca `CrashDiag` (di solito no).
+
+      **Fatto:** `/api/system-status` invariato salvo il nuovo campo nel solo caso degraded da UPS non enumerato.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - src/core/main.cpp — `setAutomaticRestartCount` prima di `begin`, `setDegraded` con il nuovo flag
+      - include/core/crash_diag.h — firma di `setDegraded`
+      - src/core/crash_diag.cpp — flag e campo JSON
+
+      ## Criteri di Completamento
+      - [ ] Contatore passato prima di `begin()`
+      - [ ] `diagnostics.ups_not_enumerated` presente solo con `degraded` e motivo di non enumerazione
+      - [ ] Build S3 ok
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Web UI: banner che chiede di staccare e riattaccare il cavo USB'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** quando i tentativi sono esauriti perché l'UPS non si è mai enumerato, il banner lo dice e chiede di staccare e riattaccare il cavo USB.
+
+      **Leggere:** `data/www/bundle.js` (`renderDiagnostics`, ~riga 2388), `scripts/embed_web.py`, sezione 4 del piano.
+
+      **Modificare:** `data/www/bundle.js`: se `diag.degraded && diag.ups_not_enumerated`, `addLine('The UPS did not come back after the automatic restart: the board restarted ' + diag.consecutive_restarts + ' times in a row and power-cycled its USB port, and the UPS never enumerated. Automatic restarts are suspended and NUT clients get ERR DATA-STALE. Unplug and replug the UPS USB cable.')`; altrimenti, se `diag.degraded`, la riga di oggi.
+
+      **Passi:** 1) modifica; 2) build S3 (rigenera `index_inlined.html`, `include/network/web_assets.h` e il suo hash).
+
+      **Verifica:** la build rigenera gli asset senza errori; la stringa è presente in `data/www/index_inlined.html`.
+
+      **Fatto:** nessun altro cambiamento al banner.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - data/www/bundle.js — nuova riga del banner
+      - data/www/index_inlined.html — rigenerato dalla build
+      - include/network/web_assets.h, include/network/.web_assets.hash — rigenerati dalla build
+
+      ## Criteri di Completamento
+      - [ ] Testo nuovo solo con `degraded` + `ups_not_enumerated`
+      - [ ] Testo generico invariato negli altri casi
+      - [ ] Asset rigenerati
+    ref: TASK-05
+  - id: TASK-06
+    title: E2E del banner del degraded mode per UPS non enumerato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare nel browser le tre varianti del banner.
+
+      **Leggere:** `e2e/system-status.spec.js` (`serveIndex`, mock di `/api/system-status`), `e2e/support/webui.*`, `data/www/bundle.js` (`renderDiagnostics`, `#diag-banner`).
+
+      **Modificare:** nuovo `e2e/diag-banner.spec.ts` (o un `describe` in `e2e/system-status.spec.js`, seguendo lo stile del file scelto) con:
+      - `degraded` + `ups_not_enumerated` + `consecutive_restarts: 4` → `#diag-banner` visibile con `Unplug and replug the UPS USB cable` e `did not come back after the automatic restart`, senza la riga generica `Degraded mode:`;
+      - solo `degraded` → riga generica `Degraded mode:`, senza la nuova;
+      - nessun `degraded` → nessuna delle due righe.
+
+      **Passi:** 1) scrivere i test; 2) eseguirli; 3) eseguire tutta la suite e2e.
+
+      **Verifica:** `npx playwright test e2e/diag-banner.spec.ts` verde, poi `npx playwright test` verde.
+
+      **Fatto:** test indipendenti, attese basate su `expect(...).toBeVisible()/toContainText()`.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - e2e/diag-banner.spec.ts — nuovi scenari del banner
+
+      ## Criteri di Completamento
+      - [ ] Tre scenari verdi
+      - [ ] Suite e2e completa verde
+    ref: TASK-06
+  - id: TASK-07
+    title: 'ADR 0008: UPS che non torna dopo un riavvio automatico'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione, i limiti dell'API e i rischi aperti.
+
+      **Leggere:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md` (parti su `RestartPolicy` e degraded mode), sezioni Contesto verificato e Soluzione tecnica del piano.
+
+      **Modificare:** nuova sezione `UPS not enumerated after an automatic restart (US-121, 2026-11-xx)` nella lingua dell'ADR. Contenuto:
+      - causa in IDF (`ENUM_EVENT_CANCELED` → porta disabilitata, nessun nuovo tentativo);
+      - ciclo logico della porta root (la VBUS non viene tolta), tempi 1/2/3 min, `MAX_PORT_CYCLES`;
+      - integrazione con `RestartPolicy` e motivo `UPS not enumerated after the automatic restart`;
+      - campo `ups_not_enumerated` e banner;
+      - perché un'enumerazione fallita non va nel System Log (nessun evento pubblico, hook di `esp_log` scartato);
+      - rischi: efficacia del solo ciclo non dimostrata sul banco, nodo del device tree se lo spegnimento non generasse la disconnessione, device non HID contato come enumerato tramite `num_devices`;
+      - build di prova `NUT_TEST_ENUM_WATCHDOG`.
+
+      **Passi:** 1) scrivere la sezione; 2) aggiornare l'indice dell'ADR se elenca le sezioni.
+
+      **Verifica:** rilettura; i riferimenti `file:riga` di IDF sono corretti per 5.5.5.
+
+      **Fatto:** il criterio 4 della spec (spiegazione del perché il fallimento non si vede) è coperto.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — nuova sezione US-121
+
+      ## Criteri di Completamento
+      - [ ] Meccanismo, tempi e integrazione descritti
+      - [ ] Spiegato perché l'enumerazione fallita non si può scrivere nel System Log
+      - [ ] Rischi aperti elencati
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Verifica finale: suite native, e2e, tre build e dimensione flash'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che tutto il resto è invariato e che le tre schede compilano.
+
+      **Leggere:** sezione Strategia di test del piano.
+
+      **Modificare:** niente codice. Risultati in `docs/test-results/US-121/verification.md`.
+
+      **Passi:**
+      1) `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (lunga: in background);
+      2) `npx playwright test`;
+      3) `pio run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`;
+      4) dimensione di `firmware.bin` S3 confrontata con `main` c39021d (2 136 624 byte) e con lo slot 0x1F0000 (#93).
+
+      **Verifica:** tutti i comandi verdi.
+
+      **Fatto:** numeri annotati nel file dei risultati.
+
+      **Blocchi:** un fallimento in suite non toccate va capito prima di procedere.
+
+      ## File Coinvolti
+      - docs/test-results/US-121/verification.md — esito di test, build e dimensioni
+
+      ## Criteri di Completamento
+      - [ ] Suite native verde
+      - [ ] E2E verde
+      - [ ] Tre build ok, dimensione S3 annotata
+    ref: TASK-08
+  - id: TASK-09
+    title: Prova sul campo con la build NUT_TEST_ENUM_WATCHDOG sull'Eaton 3S (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** vedere sulla scheda reale i WARN, lo stacco e il ritorno dell'UPS con il ciclo della porta root, la richiesta di riavvio e la chiusura del ciclo.
+
+      **Leggere:** sezione Strategia di test del piano, `docs/test-results/US-120/field-eaton3s.md` (formato), `scripts/nut_snapshot.py`. Le credenziali della scheda sono nel file JSON indicato in memoria: non stamparle mai.
+
+      **Modificare:** niente codice. Risultati in `docs/test-results/US-121/field-eaton3s.md` e `field/`.
+
+      **Passi (solo dopo il sì esplicito dell'utente, chiesto al momento):**
+      1) build S3 con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_ENUM_WATCHDOG=1`, OTA sulla scheda di test;
+      2) leggere il System Log a 1, 2 e 3 min: due WARN `UPS not enumerated ... power-cycling the USB port`, `HID Device Connected event` e interfaccia ripresa dopo ogni ciclo, poi `Recovery exhausted (UPS not enumerated after the automatic restart)` e `Controlled restart`;
+      3) dopo il riavvio: `Last automatic restart: UPS not enumerated after the automatic restart` nel banner/diagnostica, `Automatic restart #1: waiting for the UPS to enumerate`, UPS enumerato senza cicli, contatore azzerato dopo i dati freschi; `upsc` con le stesse chiavi;
+      4) OTA della build normale e controllo finale.
+
+      **Verifica:** i passi 2-4 come descritti; nessun panic, nessun `abort` nello stack USB.
+
+      **Fatto:** file dei risultati scritto; sulla scheda resta la build normale.
+
+      **Blocchi:** senza il sì dell'utente non si fa. Se dopo un ciclo l'UPS non torna, fermarsi, raccogliere il System Log e riportare (non insistere con altri riavvii).
+
+      ## File Coinvolti
+      - docs/test-results/US-121/field-eaton3s.md — esito della prova
+      - docs/test-results/US-121/field/ — log, snapshot NUT, diagnostica
+
+      ## Criteri di Completamento
+      - [ ] Due cicli della porta visti nel System Log, UPS tornato dopo ciascuno
+      - [ ] Riavvio controllato con il nuovo motivo, poi ritorno normale e contatore azzerato
+      - [ ] Build normale di nuovo sulla scheda
+    ref: TASK-09

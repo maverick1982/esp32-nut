@@ -30,8 +30,10 @@ namespace CrashDiag {
     // Controlled restarts in a row since the data was last healthy (review A7)
     uint8_t consecutiveRestarts();
     void clearConsecutiveRestarts();
-    // Degraded mode: restarts suspended after too many in a row (shown in the web UI)
-    void setDegraded(bool degraded);
+    // Degraded mode: restarts suspended after too many in a row (shown in the web UI).
+    // upsNotEnumerated: the UPS never enumerated after the restarts (US-121), so the web
+    // UI asks to replug the USB cable
+    void setDegraded(bool degraded, bool upsNotEnumerated = false);
     bool hasCoredumpPartition();
     void fillJson(JsonObject obj);
 }

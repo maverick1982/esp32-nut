@@ -25,6 +25,7 @@ static RTC_NOINIT_ATTR uint32_t s_twdt_magic;
 static RTC_NOINIT_ATTR TwdtTaskList s_twdt_list;
 static char s_twdt_tasks[TWDT_TASKS_MAX_LEN + 4];
 static bool s_degraded = false;
+static bool s_ups_not_enumerated = false; // US-121, only with s_degraded
 
 static esp_reset_reason_t s_reset_reason = ESP_RST_UNKNOWN;
 static String s_last_restart_cause;
@@ -186,8 +187,9 @@ void clearConsecutiveRestarts() {
     s_restart_count = 0;
 }
 
-void setDegraded(bool degraded) {
+void setDegraded(bool degraded, bool upsNotEnumerated) {
     s_degraded = degraded;
+    s_ups_not_enumerated = degraded && upsNotEnumerated;
 }
 
 bool hasCoredumpPartition() {
@@ -207,6 +209,7 @@ void fillJson(JsonObject obj) {
     obj["heap_largest_block"] = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     if (s_degraded) {
         obj["degraded"] = true;
+        if (s_ups_not_enumerated) obj["ups_not_enumerated"] = true;
     }
     if (s_has_crash) {
         JsonObject crash = obj["last_crash"].to<JsonObject>();
