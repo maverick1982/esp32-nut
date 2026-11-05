@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-121
+title: Riprovare l'enumerazione quando l'UPS non torna dopo un riavvio automatico (#78)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: TODO
+body: |
+  #### US-121: Riprovare l'enumerazione quando l'UPS non torna dopo un riavvio automatico (#78)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS che a volte blocca un transfer di controllo (per esempio i Smart-UPS 750 di miskor-bgd nella #78),
+  voglio che la scheda riprovi da sola a collegare l'UPS quando, dopo un riavvio automatico, l'UPS non si enumera più,
+  in modo da non dover andare a staccare e riattaccare il cavo USB, e da non restare per ore senza dati sul server NUT.
+
+  **Dimostrazione**
+  In un test nativo, la logica di recupero dopo un riavvio controllato senza nessun UPS enumerato prima spegne e riaccende la porta USB root, poi richiede un nuovo riavvio sulla scala 1/5/15 min fino al degraded mode. Un'enumerazione riuscita annulla tutto. Al primo boot senza UPS (nessun riavvio controllato) non fa niente. Sulla scheda, con una build di prova per la #78, il System Log mostra il tentativo, e dopo un blocco l'UPS torna senza staccare il cavo.
+
+  **Criteri di Accettazione**
+  - [ ] Dopo un riavvio controllato (contatore dei riavvii consecutivi > 0 nella memoria RTC), se nessun UPS si enumera entro un tempo deciso dal piano (ordine dei minuti), il firmware spegne e riaccende la porta USB root con `usb_host_lib_set_root_port_power()` per forzare una nuova enumerazione, al massimo un numero di volte deciso dal piano.
+  - [ ] Se nemmeno questo basta, il firmware richiede un nuovo riavvio con le regole di `RestartPolicy` già in uso: attese 1/5/15 min, degraded mode dopo 4 riavvii, contatore azzerato da dati freschi. Un'enumerazione riuscita annulla i tentativi in corso.
+  - [ ] Al boot normale (contatore a 0, per esempio una scheda accesa senza UPS collegato) non succede niente di nuovo: nessun ciclo della porta e nessun riavvio.
+  - [ ] Il System Log mostra con un WARN ogni tentativo ("UPS not enumerated N min after the automatic restart: power-cycling the USB port"). Se lo stack USB permette di sapere che un'enumerazione è fallita, anche quella va nel System Log; altrimenti il piano spiega perché non si può.
+  - [ ] Il banner della web UI dice, quando i tentativi sono esauriti, che l'UPS non è tornato dopo il riavvio automatico e che bisogna staccare e riattaccare il cavo USB.
+  - [ ] Test nativi per la nuova logica (pura, come `RestartPolicy`). Suite nativa verde, tre build ok e note di rilascio aggiornate.
+
+  **Assunzioni**
+  - Causa verificata nei sorgenti di ESP-IDF: un'enumerazione annullata (`ENUM_EVENT_CANCELED`, `usb_host.c:401`) disabilita la porta root (`hub_port_disable`), che si recupera solo con un evento di distacco o di errore (`hub.c:415-422`). Lo stack quindi non riprova da solo.
+  - Prova dalla #78: dopo il riavvio automatico i due Smart-UPS sono rimasti assenti per ore (export con vid 0, un solo riavvio nel banner). Un riavvio software successivo (OTA a v1.13.0) ha ritrovato subito l'UPS, e anche staccare il cavo lo fa tornare.
+  - Non è dimostrato che il ciclo della porta root basti senza riavviare la scheda: per questo resta come rete di sicurezza la scala dei riavvii. La verifica sul campo la fa miskor-bgd con una build di prova; sul banco l'Eaton 3S non riproduce il blocco.
+  - Fuori scope: la causa del transfer bloccato sui Smart-UPS (#78, #120), che richiede il log seriale.
+  - Issue aperte fino alla release ("Refs #78").
+history:
+  - status: TODO
+    at: "2026-11-05T08:03:31Z"
