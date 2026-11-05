@@ -164,6 +164,12 @@ bool EatonDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const
     return report_id != 254 && report_id != 255;
 }
 
+// The context inputs decodeReport() reads outside the rows keep their reports in the full poll
+// (US-120): the same comparisons as there
+bool EatonDriver::readsFieldOutsideRows(const HIDUsageDef& u) const {
+    return strcmp(u.path, kIModelPath) == 0 || NutTable::pathMatches(u, kApparentPowerPath);
+}
+
 void EatonDriver::collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const {
     GenericDriver::collectStringRequests(host, data, out);
     if (_iModelIdx > 0 && !_iModelSeen) out.push_back(_iModelIdx);

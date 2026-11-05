@@ -618,6 +618,24 @@ void test_replay_apc_xs1500m_issue94(void) {
         RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
 }
 
+// US-120: live dump of v1.13.0 attached to issue #123. FEATURE report 227 holds only the vendor
+// field UPS.0xFFFF00FF.0xFFFF00EF, read by no row: the UPS answers it empty, so the dump has no
+// data for it and the full poll no longer asks for it (golden [requests])
+void test_replay_apc_bxr1200mi_issue123(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076): the BX750MI ones and test.panel.* */
+        "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low "
+        "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute "
+        "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage "
+        "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep "
+        "test.battery.start.quick test.battery.stop test.panel.start test.panel.stop ups.beeper.status "
+        "ups.load ups.mfr.date ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown",
+        /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } },
+        // apc-hid.c rows, aux 10: FEATURE 0x11 [17, 10]; 0x20 [32, 97, 93] = 2026/11/01; 0x24
+        // [36, 120, 0]; 0x35 [53, 1]; 0x33 [51, 39, 1] = 295; 0x32 [50, 145, 0] = 145
+        RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
+}
+
 void test_replay_apc_es700g_issue71(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
         CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_ES700G_PID0002_ISSUE71,
@@ -989,6 +1007,8 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json", "OL DISCHRG", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json", "Unknown", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json", "OL CHRG", nullptr, nullptr },
+        // US-076: APCLineFailCause gives the reason of the last transfer, also back on mains
+        { "test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json", "OL", nullptr, "input voltage out of range" },
         { "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json", "Unknown", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json", "OL", nullptr, nullptr },
         { "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json", "OL CHRG", nullptr, nullptr },
@@ -1017,7 +1037,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(30, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(31, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -1028,6 +1048,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98_online.json",
     "test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
     "test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json",
+    "test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json",
     "test/fixtures/apc/apc_backups_cs500_vid051d_pid0002_issue18.json",
     "test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
     "test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
@@ -1060,7 +1081,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(30, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(31, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -1084,6 +1105,23 @@ void test_semi_static_reports_skipped_after_first_full_poll(void) {
     }
     TEST_ASSERT_TRUE_MESSAGE(total > 0, "some fixture has semi-static reports");
     TEST_ASSERT_EQUAL(6, FixtureReplayRunner::checkSemiStaticReports("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", false));
+}
+
+// US-120: on every fixture, with the registry's driver and with GenericDriver, the full poll
+// asks for exactly the FEATURE reports something reads (FixtureReplayRunner::checkFullPollReaders).
+// The BXR1200MI of issue #123 no longer asks for report 227, a vendor field it answers empty.
+void test_full_poll_reads_only_reports_with_readers(void) {
+    size_t left_out = 0;
+    for (const char* f : kAllFixtures) {
+        left_out += FixtureReplayRunner::checkFullPollReaders(f, false);
+        left_out += FixtureReplayRunner::checkFullPollReaders(f, true);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(left_out > 0, "some fixture has FEATURE reports nothing reads");
+    const char* bxr = "test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json";
+    TEST_ASSERT_TRUE(FixtureReplayRunner::checkFullPollReaders(bxr, false) > 0);
+    std::string golden = FixtureReplayRunner::goldenText(bxr, false);
+    TEST_ASSERT_TRUE(golden.find("[requests]") != std::string::npos);
+    TEST_ASSERT_TRUE_MESSAGE(golden.find(" 227/3") == std::string::npos, "report 227 left out of the full poll");
 }
 
 // US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
@@ -2199,6 +2237,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_xs1500m_issue94);
+    RUN_TEST(test_replay_apc_bxr1200mi_issue123);
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_bgm2200_issue98);
     RUN_TEST(test_replay_apc_bgm2200_issue98_online);
@@ -2224,6 +2263,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_golden_registry_all_fixtures);
     RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
+    RUN_TEST(test_full_poll_reads_only_reports_with_readers);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
@@ -2256,6 +2296,7 @@ void setup() {
     RUN_TEST(test_replay_apc_bx1500g_issue55);
     RUN_TEST(test_replay_apc_bx750mi_issue60);
     RUN_TEST(test_replay_apc_xs1500m_issue94);
+    RUN_TEST(test_replay_apc_bxr1200mi_issue123);
     RUN_TEST(test_replay_apc_es700g_issue71);
     RUN_TEST(test_replay_apc_bgm2200_issue98);
     RUN_TEST(test_replay_apc_bgm2200_issue98_online);
@@ -2281,6 +2322,7 @@ void setup() {
     RUN_TEST(test_golden_registry_all_fixtures);
     RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
+    RUN_TEST(test_full_poll_reads_only_reports_with_readers);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);

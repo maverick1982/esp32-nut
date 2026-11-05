@@ -46,6 +46,7 @@ GenericDriver::GenericDriver() :
     _beeper_row(false),
     _beeper_indexed(false),
     _lists_built(false),
+    _lists_pruned(false),
     _active_power_checked(false),
     _input_twin{},
     _static_report{},
@@ -81,6 +82,7 @@ void GenericDriver::setup() {
     _beeper_usages.clear();
     _beeper_indexed = false;
     _lists_built = false;
+    _lists_pruned = false;
     _active_power_checked = false;
     _quick.clear();
     _full.clear();
@@ -179,10 +181,41 @@ uint8_t GenericDriver::featureReportOf(const std::vector<HIDUsageDef>& usages, c
     return 0;
 }
 
+// What hid_ups_walk() reads (usbhid-ups.c:2232-2340): the INIT walk reads every bound row but
+// the HU_FLAG_ABSENT ones (command rows too, to see whether they exist), and drops the later
+// rows of a variable already set (DEAD here); the full update skips HU_FLAG_ABSENT and the
+// command rows. libhid asks for the report of each row read, so a report no row reads is never
+// requested (issue #123: APC report 227, a vendor field answered empty).
+void GenericDriver::featureReportsRead(IHidTransport* host, uint32_t out[8]) const {
+    if (!_nut_bound) {
+        for (int w = 0; w < 8; w++) out[w] = 0xFFFFFFFFu;
+        return;
+    }
+    for (int w = 0; w < 8; w++) out[w] = 0;
+    const auto& usages = host->getUsages();
+    auto mark = [&](const HIDUsageDef& u) {
+        if (u.report_type == 3) out[u.report_id / 32] |= 1u << (u.report_id % 32);
+    };
+    for (const auto& b : _nut_rows) {
+        if (b.info->hidflags & NutTable::HU_FLAG_ABSENT) continue;
+        if (_nut_init_done && (NutTable::isCommandRow(*b.info) || b.role == NutTable::Bound::Role::DEAD)) continue;
+        for (int idx : { b.idx, b.twin_idx }) {
+            if (idx >= 0 && (size_t)idx < usages.size()) mark(usages[idx]);
+        }
+    }
+    // The active beeper decoded outside the rows (decodeBeeperStatus()), as classifySemiStatic()
+    String beeper = _beeper_row ? String("") : host->getActiveBeeperPath();
+    for (const auto& u : usages) {
+        if ((beeper.length() > 0 && strcmp(u.path, beeper.c_str()) == 0) || readsFieldOutsideRows(u)) mark(u);
+    }
+}
+
 void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
     quick.clear();
     full.clear();
     const auto& usages = host->getUsages();
+    uint32_t read[8];
+    featureReportsRead(host, read);
 
     // Reports in order of first appearance. Report ID 0 is kept (review M4): a device
     // without report IDs has only that one.
@@ -216,7 +249,11 @@ void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& q
             }
             if (has_feature) continue;
         }
-        full.push_back(PollItem{r.type, r.id, 0});
+        // A FEATURE report nothing reads stays out of the full poll (US-120). The quick poll and
+        // the INPUT check above are unchanged: an INPUT report whose FEATURE twin is left out is
+        // still not requested.
+        bool unread = r.type == 3 && !(read[r.id / 32] & (1u << (r.id % 32)));
+        if (!unread) full.push_back(PollItem{r.type, r.id, 0});
         if (r.status) quick.push_back(PollItem{r.type, r.id, 0});
     }
 }
@@ -271,8 +308,8 @@ bool GenericDriver::isStaticAndKnown(const PollItem& item) const {
 // A semi-static report (US-072): every field a row reads in it (the row's usage or its twin)
 // belongs to a HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC row, as hid_ups_walk() of usbhid-ups.c:2343-2362
 // skips those rows in the full update. Command rows, HU_FLAG_ABSENT rows and the rows the INIT
-// rule dropped (DEAD) are not read upstream; fields without a row are not read either, so a
-// report made only of them stays read as before. The active beeper read outside the rows
+// rule dropped (DEAD) are not read upstream; a report with only such rows, or with no row at
+// all, is not in the full poll anyway (US-120). The active beeper read outside the rows
 // (decodeBeeperStatus()) makes its report dynamic. STATIC and SEMI_STATIC rows go together:
 // both are read again after a change (deviation: upstream reads only the SEMI_STATIC ones).
 // A row still undecided (no value yet, deferred until the conversion inputs are known, as the
@@ -440,6 +477,35 @@ void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool fu
     _step_now = true; // first request right away
 }
 
+void GenericDriver::pruneFullPoll(IHidTransport* host) {
+    _lists_pruned = true;
+    buildPollLists(host, _quick, _full);
+    // Logged once: the FEATURE reports of the descriptor that nothing reads and the full poll
+    // does not request (the reports acceptPollReport() refuses are not counted)
+    uint32_t read[8];
+    featureReportsRead(host, read);
+    uint32_t seen[8] = {};
+    String left;
+    int n = 0;
+    for (const auto& u : host->getUsages()) {
+        if (u.report_type != 3) continue;
+        uint32_t bit = 1u << (u.report_id % 32);
+        if ((seen[u.report_id / 32] & bit) || (read[u.report_id / 32] & bit)) continue;
+        seen[u.report_id / 32] |= bit;
+        if (!acceptPollReport(u.report_type, u.report_id)) continue;
+        bool polled = false;
+        for (const auto& f : _full) {
+            if (f.report_type == 3 && f.id == u.report_id) { polled = true; break; }
+        }
+        if (polled) continue;
+        left += " " + String((int)u.report_id);
+        n++;
+    }
+    if (n == 0) return;
+    host->logDebug("[" + String(getDriverName()) + "] Full poll: " + String(n) +
+                   " FEATURE reports left out (no NUT row reads them):" + left);
+}
+
 void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
     if (!host) return;
 
@@ -458,6 +524,9 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
     host->unlock();
 
     if (!_lists_built) {
+        // The rows depend only on the usages: bound before the lists, which keep only the
+        // FEATURE reports they read (US-120). decodeReport() would bind them at the first report.
+        bindNutTable(host);
         buildPollLists(host, _quick, _full);
         findInputTwins(host);
         findStaticReports(host);
@@ -471,6 +540,10 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
         appendNewStrings(host, data);
     }
     if (_queue_pos >= _queue.size() && _cycle_full && _strings_rechecked) _first_full_done = true;
+    // End of the INIT walk (finishInit()): the full update no longer reads the command rows and
+    // the rows the INIT rule dropped, so their reports leave the full poll (US-120). The running
+    // cycle keeps its own copy (_queue).
+    if (_lists_built && _nut_bound && _nut_init_done && !_lists_pruned) pruneFullPoll(host);
     // Once the INIT rule has dropped the rows never read (finishInit() at the first report
     // after the first full poll), the semi-static reports are known
     if (_first_full_done && _nut_bound && _nut_init_done && !_semi_classified) classifySemiStatic(host);
@@ -648,6 +721,7 @@ void GenericDriver::bindNutTable(IHidTransport* host) {
         }
     }
     _nut_init_done = false;
+    _lists_pruned = false; // other rows: the lists are built again after their INIT (US-120)
     _nut_usage_count = usages.size();
     // bind() gives the HU_FLAG_ABSENT rows their dfl: the values set since win
     for (const auto& o : _absent_overrides) applyAbsentOverride(o.first, o.second);

@@ -17,7 +17,11 @@
  * Poll cycles (review S3, A6, like usbhid-ups and ADR 0006):
  * - quick poll every quickPollMs(): only the reports that carry status usages
  *   (PresentStatus, RemainingCapacity, RunTimeToEmpty, PercentLoad...);
- * - full poll every fullPollMs(): the missing string descriptors, then every report;
+ * - full poll every fullPollMs(): the missing string descriptors, then every report, but a
+ *   FEATURE report only when something reads one of its fields (US-120): a bound row (or its
+ *   twin), the active beeper decoded outside the rows, or readsFieldOutsideRows(). As
+ *   hid_ups_walk(), the first full poll counts every bound row but HU_FLAG_ABSENT (the INIT
+ *   walk), the later ones neither the command rows nor the rows the INIT rule dropped (DEAD);
  * - semi-static reports (US-072): a report whose fields read by rows all come from
  *   HU_FLAG_STATIC / HU_FLAG_SEMI_STATIC rows is read by the first full poll, then left out
  *   of the full poll until a SET VAR or an INSTCMD (noteDataChanged()), which makes the next
@@ -114,6 +118,14 @@ protected:
     // INPUT reports without a FEATURE twin are requested with GET_REPORT too
     virtual bool pollInputReports() const { return true; }
     virtual void buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const;
+    // A field the driver's decodeReport() reads outside the table rows (US-120): its FEATURE
+    // report stays in the full poll even without rows. None by default.
+    virtual bool readsFieldOutsideRows(const HIDUsageDef& u) const { (void)u; return false; }
+    // Bitmap of the FEATURE report IDs something reads (US-120): the fields of the bound rows
+    // and their twins (not HU_FLAG_ABSENT; once finishInit() has run, not the command and DEAD
+    // rows either), the active beeper read outside the rows, readsFieldOutsideRows(). Every bit
+    // set while the rows are not bound: nothing is known, every report is read.
+    void featureReportsRead(IHidTransport* host, uint32_t out[8]) const;
     // True for the usages of the HU_FLAG_QUICK_POLL status rows of hid2nut() (US-073)
     bool isQuickPollStatusUsage(const HIDUsageDef& u) const;
     // The FEATURE report of the first usage with the row's path, 0 when none (US-077)
@@ -200,10 +212,13 @@ private:
     bool isFreshFromInput(IHidTransport* host, const PollItem& item, uint32_t now) const;
     bool isStaticAndKnown(const PollItem& item) const;
     void classifySemiStatic(IHidTransport* host);
+    // Builds the lists again once finishInit() has run, and logs the reports left out (US-120)
+    void pruneFullPoll(IHidTransport* host);
     bool isSemiStaticAndKnown(const PollItem& item) const;
     static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 
     bool _lists_built;
+    bool _lists_pruned;                   // lists built again after finishInit() (US-120)
     bool _active_power_checked;           // readsActivePower() looked at since setup()
     std::vector<PollItem> _quick;
     std::vector<PollItem> _full;
