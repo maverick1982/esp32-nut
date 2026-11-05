@@ -62,12 +62,19 @@ static bool isTagChar(char c) {
 }
 
 size_t formatSyslog(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, LogLevel level,
-                    const char* hostname, const char* app, const char* msg) {
-    return formatSyslogSeverity(out, cap, protocol, facility, syslogSeverity(level), hostname, app, msg);
+                    const char* hostname, const char* app, const char* msg, const SyslogTime* time) {
+    return formatSyslogSeverity(out, cap, protocol, facility, syslogSeverity(level), hostname, app, msg, time);
+}
+
+// A struct tm field kept in its range, so a corrupted value cannot widen the header
+static int clampField(int v, int lo, int hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
 }
 
 size_t formatSyslogSeverity(char* out, size_t cap, SyslogProtocol protocol, uint8_t facility, uint8_t severity,
-                            const char* hostname, const char* app, const char* msg) {
+                            const char* hostname, const char* app, const char* msg, const SyslogTime* time) {
+    static const char* const MONTHS[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
     if (!out || cap == 0) return 0;
     out[0] = '\0';
     if (facility > 23) facility = 1;  // user
@@ -80,10 +87,27 @@ size_t formatSyslogSeverity(char* out, size_t cap, SyslogProtocol protocol, uint
     if (protocol == SyslogProtocol::RFC5424) {
         copyToken(host, sizeof(host), hostname, 63, isPrintUsAscii);
         copyToken(tag, sizeof(tag), app, 48, isPrintUsAscii);
-        header = snprintf(out, cap, "<%u>1 - %s %s - - - ", pri, host, tag);
+        if (time) {
+            const struct tm& t = time->utc;
+            header = snprintf(out, cap, "<%u>1 %04d-%02d-%02dT%02d:%02d:%02d.%03uZ %s %s - - - ", pri,
+                              clampField(t.tm_year + 1900, 0, 9999), clampField(t.tm_mon, 0, 11) + 1,
+                              clampField(t.tm_mday, 1, 31), clampField(t.tm_hour, 0, 23), clampField(t.tm_min, 0, 59),
+                              clampField(t.tm_sec, 0, 60), (unsigned)(time->ms > 999 ? 999 : time->ms), host, tag);
+        } else {
+            header = snprintf(out, cap, "<%u>1 - %s %s - - - ", pri, host, tag);
+        }
     } else {
         copyToken(tag, sizeof(tag), app, 32, isTagChar);
-        header = snprintf(out, cap, "<%u>%s: ", pri, tag);
+        if (time) {
+            // RFC 3164 §4.1.2: HOSTNAME has no spaces; the RFC 5424 characters are kept
+            copyToken(host, sizeof(host), hostname, 63, isPrintUsAscii);
+            const struct tm& t = time->local;
+            header = snprintf(out, cap, "<%u>%s %2d %02d:%02d:%02d %s %s: ", pri, MONTHS[clampField(t.tm_mon, 0, 11)],
+                              clampField(t.tm_mday, 1, 31), clampField(t.tm_hour, 0, 23), clampField(t.tm_min, 0, 59),
+                              clampField(t.tm_sec, 0, 60), host, tag);
+        } else {
+            header = snprintf(out, cap, "<%u>%s: ", pri, tag);
+        }
     }
     if (header < 0 || (size_t)header >= cap) {
         out[0] = '\0';

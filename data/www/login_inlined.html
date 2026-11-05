@@ -3224,11 +3224,14 @@ body.auth-page {
 .rlog-form { display: flex; flex-direction: column; gap: 1rem; }
 .rlog-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem 1.25rem; }
 .rlog-fields .wide { grid-column: span 3; }
+/* US-117: server and time zone, half each */
+.time-fields .form-group { grid-column: span 2; }
 .rlog-form .form-actions { display: flex; align-items: center; gap: 1rem; }
 .rlog-form .cmd-result { min-width: 0; white-space: normal; justify-content: flex-start; }
 @media (max-width: 1180px) {
     .rlog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .rlog-fields .wide { grid-column: auto; }
+    .time-fields .form-group { grid-column: span 1; }
 }
 @media (max-width: 768px) {
     .logs-status > * { flex: 1 1 auto; }

@@ -1,0 +1,410 @@
+schema: archetipo/plan/v2
+spec_code: US-117
+body: |
+  ---
+  type: plan
+  title: "US-117: Ora di rete (NTP) con fuso orario in Board Settings, con ora e hostname nei messaggi syslog — Piano di implementazione"
+  description: "Piano di implementazione per US-117"
+  tags: [plan, implementation, US-117]
+  ---
+  # US-117: Ora di rete (NTP) con fuso orario in Board Settings, con ora e hostname nei messaggi syslog — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** `feature/us-117-ntp-time` (da `main` 93708a3)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utente che conserva il System Log su un server syslog, voglio che la scheda prenda l'ora da un server NTP e la metta nei messaggi, in modo che il server mostri per ogni riga l'ora in cui è stata scritta e il nome della scheda, anche in RFC 3164.
+
+  **Criteri di Accettazione**: vedi la spec US-117 (sezione Time in Board Settings, NVS e applicazione senza riavvio, rotte `guarded()`, validazione, intestazioni RFC 3164/5424 con l'ora, ora della scrittura per le righe in coda, formato di US-116 senza ora, righe del System Log, Wi-Fi ed Ethernet senza `#if`, sessioni e timeout basati sull'uptime, ADR 0009/0012, test e flash).
+
+  ---
+
+  ## Soluzione tecnica
+
+  L'SNTP di lwIP è già nel core precompilato (`CONFIG_LWIP_SNTP_MAX_SERVERS 3`, aggiornamento ogni 3 h). La logica si divide come per US-116: un core puro in `lib/TimeCore`, testato in nativo, e un adattatore di piattaforma in `src/network`, l'unico codice che chiama `esp_sntp_*`, `setenv("TZ")` e `tzset()`.
+
+  - **Core puro `lib/TimeCore`** (nessuna chiamata a piattaforma, nessun `AppLogger`):
+    - `TimeZones.h/.cpp`: tabella costante `{ const char* name; const char* posix; }` di circa 70 fusi IANA con ora legale automatica (Europa, Americhe, Asia, Oceania, Africa), più `UTC` al primo posto (`"UTC0"`). Funzioni `findTimeZone(name)` → puntatore o `nullptr`, `timeZoneCount()`, `timeZoneAt(i)`. Le stringhe POSIX vengono dalla tabella zones.csv di nayarsystems/posix_tz_db; il commento di testa lo cita.
+    - `TimeSettings.h`: `struct TimeSettings { bool ntp; String server; String zone; }`, `timeDefaults()` = `{ true, "pool.ntp.org", "UTC" }`, `validNtpServer()` con le stesse regole di `validSyslogHost` (1-63 caratteri, lettere, cifre, `-` e `.`, niente `.` o `-` iniziale e niente `.` finale; un IPv4 passa), `sanitize()` (zona sconosciuta → `UTC`; server non valido → vuoto; NTP acceso senza server → spento).
+    - `WallClock.h`: ora calcolata dall'uptime. `setSynced(int64_t epoch_ms, uint32_t uptime_ms)` salva il riferimento; `clear()` lo cancella; `valid()`; `epochMsAt(uint32_t uptime_ms, int64_t& out)` = `epoch_ms + (int32_t)(uptime_ms - ref_uptime)`, con la differenza su `int32_t` così anche le righe scritte prima della sincronizzazione (uptime minore del riferimento) hanno la loro ora. Nessun mutex qui: lo aggiunge l'adattatore.
+    - `TimeStatus.h`: `enum class TimeState { Disabled, Waiting, Synchronized, NoAnswer }`, nomi per l'API (`disabled`, `waiting`, `synchronized`, `no_answer`) e una piccola macchina `TimeLogPolicy` che decide le righe del System Log: una alla prima sincronizzazione dopo l'avvio o dopo una modifica, una sola quando non arriva risposta entro `NO_ANSWER_MS` = 60 s con la rete su (periodo d'errore), di nuovo una alla sincronizzazione successiva.
+  - **Formato syslog con l'ora** (`lib/LogCore/src/SyslogFormat.h/.cpp`): nuova `struct SyslogTime { struct tm local; struct tm utc; uint16_t ms; }` e un parametro finale `const SyslogTime* time = nullptr` in `formatSyslog` e `formatSyslogSeverity`. Con `nullptr` l'uscita resta byte per byte quella di US-116. Con l'ora:
+    - RFC 3164: `<PRI>Mmm dd hh:mm:ss HOSTNAME TAG: MSG` (RFC 3164 §4.1.2: mese inglese a tre lettere, giorno di due caratteri con spazio iniziale, `Nov  4`), ora locale, HOSTNAME con i caratteri ammessi da RFC 5424 PRINTUSASCII, `-` se vuoto.
+    - RFC 5424: `<PRI>1 YYYY-MM-DDThh:mm:ss.mmmZ HOSTNAME APP - - - MSG`, ora UTC con i millisecondi.
+    - La formattazione dei campi usa solo i `struct tm` passati: niente `localtime` dentro `LogCore`, così i test nativi non dipendono dal TZ di Windows.
+  - **Persistenza** (`src/core/time_settings_store.h/.cpp`): namespace NVS `time` (chiavi `ntp`, `server`, `zone`), separato da `config_json` come `log_settings_store`, quindi resta dopo un OTA. `load()` restituisce `sanitize()` dei valori salvati o i predefiniti.
+  - **Adattatore `NtpClock`** (`src/network/ntp_clock.h/.cpp`), stesso schema di `SyslogOutput`:
+    - `begin(const AppNetworkManager*)`, `configure(const TimeSettings&, const String& who)` dal web server, che salva le impostazioni sotto mutex; `poll(uint32_t now)` nel `loop()` di `main.cpp` le applica: `esp_sntp_stop()`, `esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL)`, `esp_sntp_servermode_dhcp(false)`, `esp_sntp_setservername(0, server)`, `setenv("TZ", posix, 1)` e `tzset()`, poi `esp_sntp_init()` solo se NTP è acceso e la rete è su (`isConnected() && !isApMode()`). Con NTP spento: `esp_sntp_stop()` e `WallClock::clear()`. Dopo una modifica l'ora già valida resta valida finché NTP è acceso (cambiano solo il server o il fuso).
+    - Callback `sntp_set_time_sync_notification_cb`: gira nel task di lwIP. Legge `gettimeofday()` e `millis()`, chiama `WallClock::setSynced()` sotto un `std::mutex`, e alza un flag atomico che `poll()` trasforma nelle righe di `TimeLogPolicy` (mai `AppLogger` nella callback).
+    - `epochMsAt(uptime, out)` e `status()` thread-safe per il log task e il web server. `localTime(epoch_ms, tm&)` e `utcTime(...)` usano `localtime_r`/`gmtime_r` (newlib protegge il TZ con il suo lock).
+    - Righe del System Log (prefisso `[TIME]`): `[TIME] Synchronized with pool.ntp.org: 2026-11-05 09:12:03 CET` alla prima sincronizzazione; `[TIME] No answer from pool.ntp.org for 60 s, retrying` una volta per periodo d'errore; `[TIME] Settings changed by admin: NTP on, pool.ntp.org, Europe/Rome` dopo un salvataggio. Nessun `#if` per scheda: vale per Wi-Fi ed Ethernet (ADR 0010). Il task USB e il server NUT non dipendono da NtpClock.
+    - **Opzione DHCP 42**: è nel core (`CONFIG_LWIP_DHCP_GET_NTP_SRV 1`), ma lwIP scrive i server ricevuti dal DHCP a partire dall'indice 0 e sovrascriverebbe quello scelto dall'utente. Resta spenta (`esp_sntp_servermode_dhcp(false)`) e fuori scope: si può aggiungere più avanti come interruttore separato.
+  - **Syslog con l'ora** (`src/network/syslog_output.h/.cpp`): `setClock(const NtpClock*)`. In `deliver()` e `sendNow()`: se `clock->epochMsAt(record.uptime_ms, ms)` riesce, si riempie `SyslogTime` (locale, UTC, millisecondi) e lo si passa al formatter; altrimenti `nullptr` e il formato resta quello di US-116. Per `sendNow()` (notice fuori coda) si usa `millis()` come uptime.
+  - **Avvio** (`src/core/main.cpp`): istanze statiche `time_settings_store` e `ntp_clock` accanto agli altri store. Dopo `network_mgr.begin()` (in entrambi i rami AP/STA): `ntp_clock.begin(&network_mgr); ntp_clock.configure(time_settings_store.load());`, poi `syslog_output.setClock(&ntp_clock)` prima di `log_dispatcher.start()`, e `web_server.setTime(&time_settings_store, &ntp_clock)`. In `loop()`: `ntp_clock.poll(millis())`, che non blocca mai (SNTP è asincrono).
+  - **API web** (`lib/WebApi/src/WebApiJson.h/.cpp` + handler in `WebConfigServer`): `GET /api/time` → `{"time":{"ntp":true,"server":"pool.ntp.org","zone":"UTC"},"status":{"state":"synchronized","local":"2026-11-05 09:12:03","abbr":"CET","utc":"2026-11-05T08:12:03Z","since_sync_s":42},"options":{"zones":["UTC","Europe/Rome",...]}}` con `Cache-Control: no-store`; senza ora valida `local`, `abbr`, `utc` e `since_sync_s` mancano. `POST /api/time` `{"time":{...}}` con campi parziali; 400 `{"error"}` con "Invalid request", "Invalid server", "Server required to enable NTP", "Invalid time zone"; 500 "Failed to save settings"; 503 "Time not available". Funzioni pure `WebApiJson::timeJson(settings, status_view)` e `WebApiJson::checkTimeBody(body, current, next, response)`; lo stato arriva come struct semplice già formattata (`TimeStatusView`), così i test nativi non toccano l'orologio. Rotte registrate con `guarded()` e non aggiunte alla lista pubblica di `AuthPolicy` (ADR 0009).
+  - **Web UI** (`data/www/index.html`, `bundle.js`, `bundle.css`), senza mockup: nuova `section.board-section#time-section` "Time" in fondo a Board Settings, dopo Automatic shutdown, con le classi già usate da US-114 e US-116 (`cred-section`, `board-row`, `board-label`, `board-hint`, `switch`, `link-kv`, `link-badge`, `auth-alert`, `form-actions`). Contenuto: testo breve (l'ora serve solo per i log, non per la sicurezza; senza Internet la scheda funziona come prima); interruttore NTP; campo Server; select Time zone riempita da `options.zones`; riga di stato con badge (Off / Waiting / Synchronized / No answer) e "Board time: 2026-11-05 09:12:03 CET"; pulsante "Save" (applicato subito, senza riavvio) con esito ed errore. GET quando si apre la tab Board Settings, dopo Save, e ogni 10 s solo per lo stato mentre la tab è visibile (il form non si sovrascrive mentre l'utente lo modifica). Validazione lato client uguale a quella del server, ma dopo un 400 si mostra il messaggio del server. 401 → gestione della sessione scaduta di `apiFetch`. Nel pannello Syslog di System Logs il testo "The board has no clock..." diventa: con l'ora sincronizzata (Board Settings → Time) le righe portano l'ora in cui sono state scritte e, in RFC 3164, il nome host; senza ora il server mette l'ora d'arrivo. Dopo ogni modifica a `data/www/*`: `python scripts/embed_web.py`.
+  - **Documentazione**: ADR 0009, contesto: la riga "No wall clock" diventa "The firmware may have an SNTP time (US-117), unauthenticated and absent on a LAN without Internet: it is shown and written in the logs only; sessions, login limits and the AP timeout keep using `millis()`". ADR 0012: sezione sul formato con l'ora (RFC 3164 con TIMESTAMP e HOSTNAME, RFC 5424 con timestamp UTC, ora della scrittura dall'uptime, formato di US-116 senza ora). Le note di rilascio non fanno parte di questa spec (si scrivono prima della release).
+  - **PR**: "Refs" della issue syslog (#69) se pertinente, mai "Closes"; misura del flash di `esp32-s3-standard` rispetto a `main` 93708a3, con il margine rispetto ai 2.031.616 byte dello slot della 4 MB (#93).
+
+  ---
+
+  ## Strategia di test
+
+  La logica sta in `lib/TimeCore`, `lib/LogCore` e `lib/WebApi`, quindi si copre con Unity nativi. L'integrazione con SNTP, TZ e UDP si verifica con le build e con la prova sul campo; la UI con Playwright e i mock di `e2e/support/webui.ts`.
+
+  - `test/test_time_core` (nuova): `findTimeZone` per `UTC`, `Europe/Rome` (`CET-1CEST,M3.5.0,M10.5.0/3`), nome sconosciuto e stringa vuota; nessun nome duplicato nella tabella; `UTC` al primo posto; `validNtpServer` (vuoto, 63 e 64 caratteri, IPv4, `-` iniziale, `.` finale, spazio); `sanitize` (zona sconosciuta, server non valido, acceso senza server); `WallClock` (non valido prima di `setSynced`, ora di una riga dopo e prima del riferimento, wrap di `uint32_t` dell'uptime, `clear()`); `TimeLogPolicy` (una riga alla sincronizzazione, una sola per periodo senza risposta, nessuna riga con la rete giù, nuova riga dopo una modifica).
+  - `test/test_log_core` (casi nuovi): con `time == nullptr` l'uscita è identica a quella attuale per RFC 3164 e 5424; RFC 3164 con l'ora `<134>Nov  4 19:44:03 esp32-nut-d2f3b4 esp32-nut: msg` (giorno con spazio, mese inglese); giorno a due cifre `Nov 14`; hostname vuoto → `-`; RFC 5424 `<134>1 2026-11-04T18:44:03.007Z host esp32-nut - - - msg`; troncamento a 480 byte con l'intestazione più lunga.
+  - `test/test_web_api` (casi nuovi): JSON della GET con e senza ora valida, opzioni dei fusi; POST parziale che mantiene gli altri campi; ogni messaggio di errore 400; server obbligatorio solo con NTP acceso; NTP spento con server vuoto accettato.
+  - Comando nativo: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_time_core -f test_log_core -f test_web_api`, poi la suite completa divisa in blocchi da circa 8 suite (limite 600 s).
+  - Build: `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1` da PowerShell; dimensione confrontata con `main` 93708a3 e riportata nella PR.
+  - Prova sul campo su ESP32-S3 con un ricevitore UDP sul PC (righe RFC 3164 e 5424 con l'ora, Europe/Rome, NTP spento, LAN senza Internet), solo dopo un sì esplicito dell'utente.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`e2e/`, mock con `serveIndex` di `e2e/support/webui.ts` e `page.route('**/api/time', ...)`, accanto ai mock di `/api/board` come in `e2e/board-settings.spec.ts`)
+  **Video demo:** previsto (la `Dimostrazione` è filmabile; lo registra `archetipo-review`, non l'implementazione)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Predefiniti e salvataggio | L'utente apre Board Settings, vede la sezione Time con NTP acceso, `pool.ntp.org` e `UTC`, sceglie `Europe/Rome` e salva: la POST contiene `{"time":{"zone":"Europe/Rome"}}` (o i tre campi), appare l'esito positivo senza countdown di riavvio |
+  | Stati | Con la GET che risponde `disabled`, `waiting`, `synchronized` (con "Board time: 2026-11-05 09:12:03 CET") e `no_answer`, badge e riga di stato mostrano testo e colore giusti |
+  | Validazione | NTP acceso con server vuoto o `bad host!`: la pagina mostra l'errore senza POST; con un 400 "Invalid time zone" dal mock mostra il messaggio del server |
+  | Fusi dal server | La select contiene esattamente `options.zones` della GET |
+  | NTP spento | Con l'interruttore spento il campo server non è obbligatorio e la POST manda `ntp:false` |
+  | Sessione scaduta | La GET `/api/time` risponde 401: la pagina va al login come per le altre API |
+  | Telefono | A 375 px la sezione non causa scroll orizzontale (come `e2e/responsive.spec.ts`) |
+  | Regressione | `e2e/board-settings.spec.ts` e `e2e/remote-logging.spec.ts` restano verdi |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-05_
+tasks:
+  - id: TASK-01
+    title: 'Core puro lib/TimeCore: fusi, impostazioni, ora dall''uptime, righe del System Log'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** avere la logica dell'ora senza dipendenze di piattaforma, testabile in nativo.
+
+      **Leggere:** sezione "Core puro `lib/TimeCore`" del piano; `lib/LogCore/src/SyslogSettings.h` (stile di `validSyslogHost` e `sanitize`); `lib/LogCore/src/SyslogStatus.h`.
+
+      **Modifiche:** creare `lib/TimeCore/src/TimeZones.h/.cpp` (tabella costante di circa 70 fusi con `UTC` al primo posto, stringhe POSIX da posix_tz_db, funzioni `findTimeZone`, `timeZoneCount`, `timeZoneAt`), `TimeSettings.h` (`TimeSettings`, `timeDefaults`, `validNtpServer`, `sanitize`), `WallClock.h` (`setSynced`, `clear`, `valid`, `epochMsAt` con differenza `int32_t`), `TimeStatus.h` (`TimeState` con nomi API e `TimeLogPolicy` con `NO_ANSWER_MS` = 60000).
+
+      **Passi:** 1) tabella dei fusi; 2) impostazioni; 3) WallClock; 4) stato e politica delle righe; 5) controllare che nessun file includa `Arduino.h` oltre a `String` (come LogCore) o API ESP.
+
+      **Verifica:** compila con la suite del TASK-02.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/TimeCore/src/TimeZones.h — nuovo
+      - lib/TimeCore/src/TimeZones.cpp — nuovo
+      - lib/TimeCore/src/TimeSettings.h — nuovo
+      - lib/TimeCore/src/WallClock.h — nuovo
+      - lib/TimeCore/src/TimeStatus.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] `findTimeZone("Europe/Rome")` restituisce `CET-1CEST,M3.5.0,M10.5.0/3`, un nome sconosciuto `nullptr`
+      - [ ] `epochMsAt` funziona anche per uptime precedenti al riferimento e oltre il wrap di `uint32_t`
+      - [ ] Nessuna dipendenza da `AppLogger`, `esp_sntp` o `time.h` di piattaforma
+    ref: TASK-01
+  - id: TASK-02
+    title: Suite nativa test_time_core
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il core dell'ora con test Unity nativi.
+
+      **Leggere:** "Strategia di test" del piano; `test/test_log_core/test_main.cpp` come modello di struttura.
+
+      **Modifiche:** nuova `test/test_time_core/test_main.cpp` con i casi elencati nel piano per fusi, `validNtpServer`, `sanitize`, `WallClock` e `TimeLogPolicy`.
+
+      **Passi:** 1) scheletro con `setUp`/`tearDown` e `main`; 2) casi; 3) eseguire.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_time_core`.
+
+      **Blocchi:** "program.exe: Accesso negato" → cancellare `.pio/build/native/program.exe`. Un test che fallisce si risolve correggendo il codice, non il test.
+
+      ## File Coinvolti
+      - test/test_time_core/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La suite passa
+      - [ ] Ci sono i casi di wrap dell'uptime, riga prima del riferimento, periodo senza risposta con una sola riga
+    ref: TASK-02
+  - id: TASK-03
+    title: SyslogFormat con timestamp opzionale (RFC 3164 e RFC 5424)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il formatter scrive l'ora e l'hostname quando li riceve, e resta identico a US-116 senza.
+
+      **Leggere:** sezione "Formato syslog con l'ora" del piano; `lib/LogCore/src/SyslogFormat.h/.cpp`; RFC 3164 §4.1.2 e RFC 5424 §6.2.3.
+
+      **Modifiche:** in `SyslogFormat.h` aggiungere `struct SyslogTime { struct tm local; struct tm utc; uint16_t ms; }` (include `<time.h>`) e il parametro finale `const SyslogTime* time = nullptr` a `formatSyslog` e `formatSyslogSeverity`. In `.cpp`: con l'ora, RFC 3164 `<PRI>Mmm dd hh:mm:ss HOSTNAME TAG: ` (mesi in inglese da una tabella costante, giorno `%2d`), RFC 5424 `<PRI>1 YYYY-MM-DDThh:mm:ss.mmmZ HOSTNAME APP - - - `. Aggiornare il commento di testa ("no RTC, no SNTP" non è più vero).
+
+      **Passi:** 1) struct e firme; 2) intestazioni; 3) controllare che i chiamanti esistenti compilino senza modifiche.
+
+      **Verifica:** suite del TASK-04.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/LogCore/src/SyslogFormat.h — `SyslogTime`, parametro opzionale, commento
+      - lib/LogCore/src/SyslogFormat.cpp — intestazioni con l'ora
+
+      ## Criteri di Completamento
+      - [ ] Con `time == nullptr` l'uscita è byte per byte quella attuale
+      - [ ] RFC 3164 usa l'ora locale e il formato `Nov  4`, RFC 5424 l'ora UTC con millisecondi e `Z`
+      - [ ] Nessun `localtime`/`gmtime` dentro `LogCore`
+    ref: TASK-03
+  - id: TASK-04
+    title: Casi nuovi in test_log_core per le intestazioni con l'ora
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il formato con e senza ora.
+
+      **Leggere:** `test/test_log_core/test_main.cpp`; casi elencati nella strategia di test del piano.
+
+      **Modifiche:** aggiungere i casi: `nullptr` invariato (3164 e 5424), RFC 3164 `<134>Nov  4 19:44:03 esp32-nut-d2f3b4 esp32-nut: msg`, giorno `Nov 14`, hostname vuoto → `-`, RFC 5424 `<134>1 2026-11-04T18:44:03.007Z host esp32-nut - - - msg`, troncamento a 480 byte con l'ora. I `struct tm` si costruiscono a mano nel test.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_log_core -f test_log_fanout`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_log_core/test_main.cpp — casi nuovi
+
+      ## Criteri di Completamento
+      - [ ] Le suite `test_log_core` e `test_log_fanout` passano
+      - [ ] I sei casi nuovi esistono e passano
+    ref: TASK-04
+  - id: TASK-05
+    title: TimeSettingsStore (NVS "time") e adattatore NtpClock
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** salvare le impostazioni e far girare SNTP con il fuso scelto, applicando le modifiche senza riavvio.
+
+      **Leggere:** sezioni "Persistenza" e "Adattatore `NtpClock`" del piano; `src/core/log_settings_store.h/.cpp` (schema NVS); `src/network/syslog_output.h/.cpp` (configure/poll sotto mutex, `networkUp()`); `esp_sntp.h` del core.
+
+      **Modifiche:** creare `src/core/time_settings_store.h/.cpp` (namespace `time`, chiavi `ntp`, `server`, `zone`, `load()` con `sanitize`). Creare `src/network/ntp_clock.h/.cpp`: `begin`, `configure(settings, who)`, `poll(now)`, `epochMsAt`, `status()` (struct con stato, server, zona, ora valida, secondi dall'ultima sincronizzazione), `localTime`/`utcTime` con `localtime_r`/`gmtime_r`. In `poll`: applicare le impostazioni in sospeso (`esp_sntp_stop`, `ESP_SNTP_OPMODE_POLL`, `esp_sntp_servermode_dhcp(false)`, `esp_sntp_setservername(0, ...)`, `setenv("TZ")` + `tzset()`, `esp_sntp_init()` solo con NTP acceso e rete su; avviarlo quando la rete arriva dopo), trasformare il flag della callback nelle righe di `TimeLogPolicy`, scrivere la riga "Settings changed by ...". Callback di sincronizzazione: `gettimeofday` + `millis()` → `WallClock::setSynced` sotto `std::mutex`, flag atomico, nessun `AppLogger`.
+
+      **Passi:** 1) store; 2) NtpClock senza log; 3) righe del System Log; 4) rileggere che nessun percorso di NtpClock blocchi il `loop()`.
+
+      **Verifica:** compila con `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (da PowerShell) dopo il TASK-06.
+
+      **Blocchi:** se `esp_sntp_servermode_dhcp` o `sntp_set_time_sync_notification_cb` non sono esportati dal core precompilato, fermarsi e riportarlo con l'errore del linker.
+
+      ## File Coinvolti
+      - src/core/time_settings_store.h — nuovo
+      - src/core/time_settings_store.cpp — nuovo
+      - src/network/ntp_clock.h — nuovo
+      - src/network/ntp_clock.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Le impostazioni si applicano in `poll()` senza riavvio
+      - [ ] Con NTP spento SNTP è fermo e l'ora non è valida
+      - [ ] La callback SNTP non chiama `AppLogger` e protegge l'offset con un mutex
+      - [ ] Nessun `#if` per scheda
+    ref: TASK-05
+  - id: TASK-06
+    title: Ora nei messaggi syslog e collegamento in main.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le righe syslog portano l'ora della scrittura quando la scheda ha l'ora.
+
+      **Leggere:** sezioni "Syslog con l'ora" e "Avvio" del piano; `src/network/syslog_output.cpp` (`deliver`, `sendNow`); `src/core/main.cpp` righe 120-230 e `loop()`.
+
+      **Modifiche:** in `SyslogOutput` aggiungere `setClock(const NtpClock*)` e un helper che, dato un uptime, riempie `SyslogTime` (locale, UTC, millisecondi) se `epochMsAt` riesce. Usarlo in `deliver()` con `record.uptime_ms` e in `sendNow()` con `millis()`; passare `nullptr` senza ora. In `main.cpp`: istanze statiche `time_settings_store` e `ntp_clock`; dopo il blocco AP/STA `ntp_clock.begin(&network_mgr); ntp_clock.configure(time_settings_store.load());`; `syslog_output.setClock(&ntp_clock)` prima di `log_dispatcher.start()`; `ntp_clock.poll(millis())` nel `loop()`.
+
+      **Passi:** 1) SyslogOutput; 2) main; 3) build S3.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/syslog_output.h — `setClock`
+      - src/network/syslog_output.cpp — ora in `deliver` e `sendNow`
+      - src/core/main.cpp — istanze, avvio, `poll` nel loop
+
+      ## Criteri di Completamento
+      - [ ] Senza ora valida i datagrammi sono identici a quelli di US-116
+      - [ ] Una riga scritta prima della sincronizzazione e consegnata dopo usa il suo `uptime_ms`
+      - [ ] La build S3 compila
+    ref: TASK-06
+  - id: TASK-07
+    title: API GET/POST /api/time (WebApiJson e WebConfigServer)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** leggere e cambiare le impostazioni dell'ora dalla web UI, con la validazione lato server.
+
+      **Leggere:** sezione "API web" del piano; `lib/WebApi/src/WebApiJson.h/.cpp` (`remoteLogJson`, `checkRemoteLogBody`); `src/network/web_config_server.cpp` (`handleGetLogging`, `handleSetLogging`, registrazione delle rotte, `webUiUser()`); `include/network/web_config_server.h`.
+
+      **Modifiche:** in `WebApiJson` aggiungere `struct TimeStatusView` (stato, `local`, `abbr`, `utc`, `since_sync_s`, `has_time`), `timeJson(settings, view)` e `checkTimeBody(body, current, next, response)` con i messaggi del piano. In `WebConfigServer`: `setTime(TimeSettingsStore*, NtpClock*)`, `handleGetTime`, `handleSetTime` (salva, poi `ntp_clock->configure(next, who)`), rotte `/api/time` GET e POST con `guarded()`, non pubbliche. L'handler costruisce `TimeStatusView` da `NtpClock::status()`. In `main.cpp`: `web_server.setTime(&time_settings_store, &ntp_clock)`.
+
+      **Passi:** 1) funzioni pure; 2) handler e rotte; 3) collegamento in main.
+
+      **Verifica:** suite del TASK-08 e build S3.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — `TimeStatusView`, `timeJson`, `checkTimeBody`
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+      - include/network/web_config_server.h — `setTime`, handler, puntatori
+      - src/network/web_config_server.cpp — rotte e handler
+      - src/core/main.cpp — `setTime`
+
+      ## Criteri di Completamento
+      - [ ] GET con `Cache-Control: no-store` e `options.zones`
+      - [ ] POST parziale, errori 400/500/503 con i testi del piano
+      - [ ] Rotte con `guarded()` e non nella lista pubblica di `AuthPolicy`
+    ref: TASK-07
+  - id: TASK-08
+    title: Casi nuovi in test_web_api per /api/time
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il contratto JSON e la validazione dell'API dell'ora.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (casi di `remoteLogJson`/`checkRemoteLogBody`); strategia di test del piano.
+
+      **Modifiche:** casi per `timeJson` con e senza ora valida, opzioni dei fusi, `checkTimeBody` con POST parziale, ogni errore 400, server obbligatorio solo con NTP acceso, NTP spento con server vuoto.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api`.
+
+      **Blocchi:** se `test_web_api` non vede `lib/TimeCore`, aggiungere l'include path in `[env:native]` di `platformio.ini` come per le altre librerie.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — casi nuovi
+      - platformio.ini — solo se serve l'include path
+
+      ## Criteri di Completamento
+      - [ ] La suite passa
+      - [ ] Ogni messaggio di errore 400 del piano ha un caso
+    ref: TASK-08
+  - id: TASK-09
+    title: Sezione Time in Board Settings e testo del pannello Syslog
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'utente vede e cambia NTP, server e fuso, con lo stato e l'ora della scheda.
+
+      **Leggere:** sezione "Web UI" del piano; `data/www/index.html` righe 600-670 (sezione Automatic shutdown di US-114) e 1028-1045 (testo Syslog); in `data/www/bundle.js` il codice di Board Settings (`/api/board`) e del pannello Syslog (`/api/logging`, aggiornamento ogni 10 s, `apiFetch`).
+
+      **Modifiche:** in `index.html` aggiungere `section.board-section#time-section` dopo `#autosd-section` con testo, interruttore `#time-ntp`, campo `#time-server`, select `#time-zone`, riga di stato con badge `#time-state` e `#time-now`, esito `#time-result`, errore `#time-error`, pulsante `#btn-save-time`. Aggiornare il testo del pannello Syslog come nel piano. In `bundle.js`: GET all'apertura della tab, dopo Save e ogni 10 s per lo stato mentre la tab è visibile e il form non è stato toccato; select dalle `options.zones`; validazione client; POST `{"time":{...}}`; errori del server. CSS solo se indispensabile, riusando le classi esistenti. Poi `python scripts/embed_web.py`.
+
+      **Passi:** 1) HTML; 2) JS; 3) testo Syslog; 4) embed; 5) controllo a 375 px.
+
+      **Verifica:** suite e2e del TASK-10.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — sezione Time, testo Syslog
+      - data/www/bundle.js — logica della sezione
+      - data/www/bundle.css — solo se serve
+      - include/network/web_assets.h — rigenerato da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] Predefiniti mostrati come dalla GET, Save senza riavvio
+      - [ ] Badge e ora per i quattro stati
+      - [ ] Il testo del pannello Syslog non dice più che la scheda non ha l'ora
+      - [ ] `web_assets.h` rigenerato
+    ref: TASK-09
+  - id: TASK-10
+    title: E2E Playwright della sezione Time
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare l'utente sulla sezione Time con le API mockate.
+
+      **Leggere:** tabella "Test E2E" del piano; `e2e/board-settings.spec.ts` (mock di `/api/board`); `e2e/remote-logging.spec.ts`; `e2e/support/webui.ts`; `e2e/README.md` per il comando.
+
+      **Modifiche:** nuovo `e2e/time-settings.spec.ts` con gli scenari del piano (predefiniti e salvataggio, quattro stati, validazione, fusi dal server, NTP spento, 401, 375 px). Aggiornare i mock di `/api/time` negli spec esistenti che aprono Board Settings, se la nuova GET li fa fallire.
+
+      **Verifica:** i comandi di `e2e/README.md` per `time-settings.spec.ts`, `board-settings.spec.ts`, `remote-logging.spec.ts`, `responsive.spec.ts`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/time-settings.spec.ts — nuovo
+      - e2e/board-settings.spec.ts — solo il mock di `/api/time`, se serve
+
+      ## Criteri di Completamento
+      - [ ] Tutti gli scenari della tabella passano
+      - [ ] Gli spec di regressione restano verdi
+    ref: TASK-10
+  - id: TASK-11
+    title: ADR 0009 e 0012, suite completa, tre build e misura del flash
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-08
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione e verificare tutto prima della PR.
+
+      **Leggere:** sezione "Documentazione" e "PR" del piano; `docs/adr/0009-web-ui-authentication.md` riga 26; `docs/adr/0012-remote-log-outputs.md`.
+
+      **Modifiche:** ADR 0009: sostituire la riga "No wall clock" con il testo del piano. ADR 0012: sezione sul formato con l'ora. Eseguire la suite nativa completa a blocchi di circa 8 suite, le tre build (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`) da PowerShell, e confrontare la dimensione del firmware S3 con `main` 93708a3, con il margine rispetto a 2.031.616 byte (#93).
+
+      **Passi:** 1) ADR; 2) nativi; 3) build; 4) numeri del flash per la PR.
+
+      **Verifica:** tutte le suite verdi, tre build ok.
+
+      **Blocchi:** la prova sul campo su ESP32-S3 (ricevitore UDP, Europe/Rome, NTP spento, LAN senza Internet) si fa solo dopo un sì esplicito dell'utente; senza, la PR lo dice.
+
+      ## File Coinvolti
+      - docs/adr/0009-web-ui-authentication.md — riga del contesto
+      - docs/adr/0012-remote-log-outputs.md — formato con l'ora
+
+      ## Criteri di Completamento
+      - [ ] ADR aggiornate
+      - [ ] Suite nativa completa verde e tre build ok
+      - [ ] Dimensione del firmware e margine #93 annotati per la PR
+    ref: TASK-11

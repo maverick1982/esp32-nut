@@ -1166,6 +1166,14 @@ document.addEventListener('DOMContentLoaded', () => {
             loadRemoteLog(false).finally(() => setTimeout(() => { icon.style.animation = 'none'; }, 500));
         });
 
+        // "Board Settings → Time" link in the hint (US-117): same as clicking the tab
+        R('syslog-section').addEventListener('click', (e) => {
+            const link = e.target.closest('[data-goto]');
+            if (!link) return;
+            const tab = document.querySelector(`.tab[data-target="${link.dataset.goto}"]`);
+            if (tab) tab.click();
+        });
+
         R('syslog-chip').addEventListener('click', () => {
             remoteLog.scrollIntoView({ behavior: 'smooth', block: 'start' });
             remoteLog.focus({ preventScroll: true });
@@ -3276,6 +3284,247 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
         if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
+    }
+
+    // --- US-117: Time section of Board Settings (ADR 0009). GET /api/time when the tab opens
+    // and after Save; while the tab is visible, again every 10 s for the state only. The form
+    // is never overwritten while the user is editing it. The select is filled from
+    // "options.zones". Applied by the firmware without a restart. ---
+    const timeSection = document.getElementById('time-section');
+    if (timeSection) {
+        const T = (id) => document.getElementById(id);
+        const TIME_POLL_MS = 10000;
+        const TIME_RESULT_MS = 4000;
+        // The firmware applies new settings in the next loop: state read again after it
+        const TIME_APPLY_MS = 1500;
+        const TIME_LOOK = {
+            disabled: { badge: 'idle', dot: 'off', text: 'Off' },
+            waiting: { badge: 'connecting', dot: 'warning', text: 'Waiting' },
+            synchronized: { badge: 'connected', dot: 'success', text: 'Synchronized' },
+            no_answer: { badge: 'down', dot: 'danger', text: 'No answer' }
+        };
+        const TIME_FIELDS = ['f-time-server', 'f-time-zone'];
+        // Field of a 400 {"error"} of the API
+        const TIME_ERROR_FIELD = {
+            'Invalid server': 'f-time-server',
+            'Server required to enable NTP': 'f-time-server',
+            'Invalid time zone': 'f-time-zone'
+        };
+        const TIME_SPINNER = '<span class="cmd-spinner"></span>';
+        const btnSave = T('btn-save-time');
+        const result = T('time-result');
+
+        let time = null;            // last GET /api/time
+        let timeDirty = false;      // the form was edited since it was filled
+        let timeSaving = false;
+        let timeLoadSeq = 0;
+        let zonesKey = '';
+        let timeTimers = [];
+
+        // Same rule as validNtpServer() of the firmware
+        function validServer(h) {
+            return /^[A-Za-z0-9.-]{1,63}$/.test(h) && !/^[.-]/.test(h) && !h.endsWith('.');
+        }
+
+        function renderZones() {
+            const zones = time.options && Array.isArray(time.options.zones)
+                ? time.options.zones.filter(z => typeof z === 'string' && z !== '') : [];
+            const key = zones.join('|');
+            if (key === zonesKey) return;
+            zonesKey = key;
+            const sel = T('time-zone');
+            const keep = sel.value;
+            sel.textContent = '';
+            zones.forEach(z => {
+                const opt = document.createElement('option');
+                opt.value = z;
+                opt.textContent = z.replace(/_/g, ' ');
+                sel.appendChild(opt);
+            });
+            if (zones.includes(keep)) sel.value = keep;
+        }
+
+        function setSwitch(on) {
+            T('time-ntp').checked = on;
+            T('time-ntp-state').textContent = on ? 'On' : 'Off';
+            T('time-ntp-state').classList.toggle('on', on);
+        }
+
+        function hideError() {
+            T('time-error').hidden = true;
+            TIME_FIELDS.forEach(id => {
+                T(id).classList.remove('invalid');
+                T(id).querySelector('input, select').removeAttribute('aria-invalid');
+            });
+        }
+
+        function showError(fieldId, text) {
+            hideError();
+            T('time-error-text').textContent = text;
+            T('time-error').hidden = false;
+            if (fieldId) {
+                T(fieldId).classList.add('invalid');
+                T(fieldId).querySelector('input, select').setAttribute('aria-invalid', 'true');
+            }
+        }
+
+        function renderForm() {
+            const s = time.time || {};
+            setSwitch(s.ntp === true);
+            T('time-server').value = typeof s.server === 'string' ? s.server : '';
+            if (typeof s.zone === 'string') T('time-zone').value = s.zone;
+            hideError();
+        }
+
+        function renderStatus() {
+            const st = time.status || {};
+            const state = TIME_LOOK[st.state] ? st.state : 'disabled';
+            const look = TIME_LOOK[state];
+            const badge = T('time-state');
+            badge.className = 'link-badge ' + look.badge;
+            badge.querySelector('.status-indicator').className = 'status-indicator ' + look.dot;
+            badge.querySelector('.badge-text').textContent = look.text;
+
+            // "2026-11-05 09:12:03 CET", only with a valid time
+            const now = T('time-now');
+            const hasTime = typeof st.local === 'string' && st.local !== '';
+            now.className = hasTime ? '' : 'na';
+            now.textContent = '';
+            if (!hasTime) {
+                now.textContent = '—';
+                now.title = '';
+                return;
+            }
+            const main = document.createElement('span');
+            main.className = 'main';
+            main.textContent = typeof st.abbr === 'string' && st.abbr !== '' ? `${st.local} ${st.abbr}` : st.local;
+            now.appendChild(main);
+            now.title = typeof st.utc === 'string' ? `UTC ${st.utc}` : '';
+        }
+
+        // statusOnly: the 10 s refresh (the form follows the same rule as any load: filled
+        // again only when it is not being edited)
+        async function loadTime(statusOnly) {
+            if (sessionExpired) return;
+            const seq = ++timeLoadSeq;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/time', { cache: 'no-store' });
+                if (res.status === 401) return;
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                console.error('Failed to fetch time settings:', err);
+            }
+            if (seq !== timeLoadSeq) return;
+            if (!data || typeof data !== 'object' || !data.time) {
+                if (!statusOnly && !timeDirty) {
+                    showError(null, 'Could not read the time settings. Open the tab again to retry.');
+                }
+                return;
+            }
+            time = data;
+            renderZones();
+            if (!timeDirty && !timeSaving) renderForm();
+            renderStatus();
+        }
+
+        function clearResult() {
+            timeTimers.forEach(clearTimeout);
+            timeTimers = [];
+            result.textContent = '';
+            result.className = 'cmd-result';
+        }
+
+        function setSaveButton(spinner) {
+            btnSave.innerHTML = '<span class="glow"></span>' + (spinner ? TIME_SPINNER : '');
+            btnSave.appendChild(document.createTextNode(spinner ? ' Saving...' : ' Save'));
+        }
+
+        // Same checks as checkTimeBody() of the firmware
+        function validate(v) {
+            if (v.server && !validServer(v.server)) {
+                return ['f-time-server', 'Invalid server: use an IP address or a host name (letters, digits, dots, hyphens)'];
+            }
+            if (v.ntp && !v.server) return ['f-time-server', 'Server required to enable NTP'];
+            if (!v.zone) return ['f-time-zone', 'Invalid time zone'];
+            return null;
+        }
+
+        async function saveTime(e) {
+            e.preventDefault();
+            if (timeSaving || !time) return;
+            clearResult();
+            const server = T('time-server').value.trim();
+            T('time-server').value = server;
+            const v = { ntp: T('time-ntp').checked, server, zone: T('time-zone').value };
+            const err = validate(v);
+            if (err) {
+                showError(err[0], err[1]);
+                T(err[0]).querySelector('input, select').focus();
+                return;
+            }
+            hideError();
+            timeSaving = true;
+            btnSave.disabled = true;
+            setSaveButton(true);
+            let ok = false;
+            let message = null;
+            try {
+                const res = await apiFetch('/api/time', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time: v })
+                });
+                let json = null;
+                try { json = await res.json(); } catch (x) { json = null; }
+                ok = res.status === 200 && !!json && json.success === true;
+                if (!ok) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
+                }
+            } catch (x) {
+                console.error('Time settings save error:', x);
+                message = 'Network error';
+            }
+            timeSaving = false;
+            btnSave.disabled = false;
+            setSaveButton(false);
+            if (sessionExpired) return;
+            if (!ok) {
+                // The message of the server, as it is
+                showError(TIME_ERROR_FIELD[message] || null, message);
+                return;
+            }
+            timeDirty = false;
+            result.className = 'cmd-result success';
+            result.textContent = v.ntp ? `✓ Saved, applied now (${v.server}, ${v.zone})` : `✓ Saved, NTP off (${v.zone})`;
+            timeTimers.push(setTimeout(() => result.classList.add('fade'), TIME_RESULT_MS));
+            loadTime(false);
+            timeTimers.push(setTimeout(() => loadTime(true), TIME_APPLY_MS));
+        }
+
+        function edited() {
+            timeDirty = true;
+            hideError();
+            clearResult();
+        }
+
+        T('time-ntp').addEventListener('change', (e) => { setSwitch(e.target.checked); edited(); });
+        T('time-server').addEventListener('input', edited);
+        T('time-zone').addEventListener('change', edited);
+        T('time-form').addEventListener('submit', saveTime);
+
+        // Every opening of the tab; then the state every 10 s while it is visible
+        tabs.forEach(tab => tab.addEventListener('click', () => {
+            if (tab.getAttribute('data-target') === 'board') loadTime(false);
+        }));
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadTime(false);
+        setInterval(() => {
+            if (sessionExpired || !time || document.hidden) return;
+            if (!document.getElementById('content-board').classList.contains('active')) return;
+            loadTime(true);
+        }, TIME_POLL_MS);
     }
 
     // US-061 Log out (this session) and US-062 Log out of all devices: same

@@ -10,6 +10,20 @@
 #include "NutOverrides.h"
 #include "SyslogSettings.h"
 #include "SyslogStatus.h"
+#include "TimeSettings.h"
+#include "TimeStatus.h"
+
+// State of the network time for GET /api/time (US-117), already formatted by the handler
+// so that the native tests do not need a clock. local, abbr, utc and since_sync_s only
+// when has_time
+struct TimeStatusView {
+    TimeState state;
+    bool has_time;
+    String local;  // "2026-11-05 09:12:03", time zone of the settings
+    String abbr;   // "CET"
+    String utc;    // "2026-11-05T08:12:03Z"
+    uint32_t since_sync_s;
+};
 
 class WebApiJson {
 public:
@@ -128,6 +142,15 @@ public:
     // "Invalid level", "Invalid rate", "Server required to enable syslog"
     static int checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& current, SyslogSettings& next,
                                   String& response);
+
+    // GET /api/time (US-117): {"time":{ntp,server,zone},"status":{state[,local,abbr,utc,
+    // since_sync_s]},"options":{"zones":[...]}}
+    static String timeJson(const TimeSettings& time, const TimeStatusView& status);
+    // POST /api/time: {"time":{...}} with any of the fields above; the others keep their
+    // value. 0 with next filled, otherwise 400 {"error"}: "Invalid request", "Invalid
+    // server", "Invalid time zone", "Server required to enable NTP"
+    static int checkTimeBody(JsonVariantConst body, const TimeSettings& current, TimeSettings& next,
+                             String& response);
 };
 
 #endif

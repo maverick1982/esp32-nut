@@ -321,8 +321,87 @@ void test_change_while_off_is_local_only(void) {
     TEST_ASSERT_EQUAL_STRING("[SYSLOG] Settings saved by 'admin' (remote logging off)", c.local.c_str());
 }
 
+// --- Syslog format with the time (US-117) ---
+
+// 2026-11-04 19:44:03 CET, 18:44:03.007 UTC
+static SyslogTime sampleTime(int mday = 4) {
+    SyslogTime t;
+    memset(&t, 0, sizeof(t));
+    t.local.tm_year = 126;
+    t.local.tm_mon = 10;
+    t.local.tm_mday = mday;
+    t.local.tm_hour = 19;
+    t.local.tm_min = 44;
+    t.local.tm_sec = 3;
+    t.utc = t.local;
+    t.utc.tm_hour = 18;
+    t.ms = 7;
+    return t;
+}
+
+void test_without_time_the_format_is_unchanged(void) {
+    char a[SYSLOG_MAX_MESSAGE], b[SYSLOG_MAX_MESSAGE];
+    for (SyslogProtocol p : { SyslogProtocol::RFC3164, SyslogProtocol::RFC5424 }) {
+        formatSyslog(a, sizeof(a), p, 16, LogLevel::INFO, "esp32-nut-d2f3b4", "esp32-nut", "[MAIN] boot");
+        formatSyslog(b, sizeof(b), p, 16, LogLevel::INFO, "esp32-nut-d2f3b4", "esp32-nut", "[MAIN] boot", nullptr);
+        TEST_ASSERT_EQUAL_STRING(a, b);
+    }
+    TEST_ASSERT_EQUAL_STRING("<134>1 - esp32-nut-d2f3b4 esp32-nut - - - [MAIN] boot", b);
+}
+
+void test_rfc3164_with_time_and_hostname(void) {
+    char out[SYSLOG_MAX_MESSAGE];
+    SyslogTime t = sampleTime();
+    size_t n = formatSyslog(out, sizeof(out), SyslogProtocol::RFC3164, 16, LogLevel::INFO, "esp32-nut-d2f3b4",
+                            "esp32-nut", "[MAIN] boot", &t);
+    // RFC 3164 §4.1.2: local time, English month, day padded with a space
+    TEST_ASSERT_EQUAL_STRING("<134>Nov  4 19:44:03 esp32-nut-d2f3b4 esp32-nut: [MAIN] boot", out);
+    TEST_ASSERT_EQUAL(strlen(out), n);
+}
+
+void test_rfc3164_two_digit_day(void) {
+    char out[SYSLOG_MAX_MESSAGE];
+    SyslogTime t = sampleTime(14);
+    formatSyslog(out, sizeof(out), SyslogProtocol::RFC3164, 16, LogLevel::WARN, "ups-rack", "esp32-nut", "x", &t);
+    TEST_ASSERT_EQUAL_STRING("<132>Nov 14 19:44:03 ups-rack esp32-nut: x", out);
+}
+
+void test_rfc3164_empty_hostname_with_time(void) {
+    char out[SYSLOG_MAX_MESSAGE];
+    SyslogTime t = sampleTime();
+    formatSyslog(out, sizeof(out), SyslogProtocol::RFC3164, 16, LogLevel::INFO, "", "esp32-nut", "x", &t);
+    TEST_ASSERT_EQUAL_STRING("<134>Nov  4 19:44:03 - esp32-nut: x", out);
+}
+
+void test_rfc5424_with_utc_time_and_milliseconds(void) {
+    char out[SYSLOG_MAX_MESSAGE];
+    SyslogTime t = sampleTime();
+    formatSyslog(out, sizeof(out), SyslogProtocol::RFC5424, 16, LogLevel::INFO, "esp32-nut-d2f3b4", "esp32-nut",
+                 "[MAIN] boot", &t);
+    TEST_ASSERT_EQUAL_STRING("<134>1 2026-11-04T18:44:03.007Z esp32-nut-d2f3b4 esp32-nut - - - [MAIN] boot", out);
+}
+
+void test_long_message_with_time_is_cut(void) {
+    char msg[600];
+    memset(msg, 'x', sizeof(msg) - 1);
+    msg[sizeof(msg) - 1] = '\0';
+    SyslogTime t = sampleTime();
+    char out[SYSLOG_MAX_MESSAGE];
+    for (SyslogProtocol p : { SyslogProtocol::RFC3164, SyslogProtocol::RFC5424 }) {
+        size_t n = formatSyslog(out, sizeof(out), p, 16, LogLevel::INFO, "esp32-nut-d2f3b4", "esp32-nut", msg, &t);
+        TEST_ASSERT_EQUAL(SYSLOG_MAX_MESSAGE - 1, n);
+        TEST_ASSERT_EQUAL(SYSLOG_MAX_MESSAGE - 1, strlen(out));
+    }
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_without_time_the_format_is_unchanged);
+    RUN_TEST(test_rfc3164_with_time_and_hostname);
+    RUN_TEST(test_rfc3164_two_digit_day);
+    RUN_TEST(test_rfc3164_empty_hostname_with_time);
+    RUN_TEST(test_rfc5424_with_utc_time_and_milliseconds);
+    RUN_TEST(test_long_message_with_time_is_cut);
     RUN_TEST(test_levels_from_the_logger_strings);
     RUN_TEST(test_strict_level_parse_for_the_api);
     RUN_TEST(test_syslog_severities);
