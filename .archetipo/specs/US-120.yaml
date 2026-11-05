@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 5
-status: TODO
+status: DONE
 body: |
   #### US-120: Full poll come NUT: chiedere solo i report che contengono righe della tabella (#123)
 
@@ -35,3 +35,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-04T21:10:34Z"
+  - status: PLANNED
+    at: "2026-11-05T12:55:50Z"
+  - status: IN PROGRESS
+    at: "2026-11-05T12:59:16Z"
+  - status: REVIEW
+    at: "2026-11-05T13:59:05Z"
+  - status: DONE
+    at: "2026-11-05T14:19:46Z"

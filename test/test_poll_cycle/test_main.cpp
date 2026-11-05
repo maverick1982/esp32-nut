@@ -213,10 +213,21 @@ void test_report_id_zero_polled(void) {
     TEST_ASSERT_EQUAL_UINT8(0, host._reports[0].first);
 }
 
-void test_cyberpower_policy(void) {
+// standardDevice() with report 2 on a path the driver's table reads: UPS.Flow.ConfigVoltage is
+// no row of cps-hid nor of mge-hid, and the full poll asks only for the reports something reads
+// (US-120)
+static void standardDeviceReport2(const char* path) {
     standardDevice();
-    host.addUsage(0x00840040, 4, 3, "UPS.Flow.ConfigFrequency");  // vendor layout: report 4 hung the BR700ELCD (#40)
-    host.addUsage(0x00840040, 130, 3, "UPS.Vendor");              // vendor defined
+    HIDUsageDef& u = host._usages[3];
+    memset(u.path, 0, sizeof(u.path));
+    strncpy(u.path, path, sizeof(u.path) - 1);
+}
+
+void test_cyberpower_policy(void) {
+    standardDeviceReport2("UPS.Input.ConfigVoltage");
+    // Fields of cps-hid rows: only the exclusions keep these reports out
+    host.addUsage(0x00840040, 4, 3, "UPS.Output.ConfigVoltage");       // vendor layout: report 4 hung the BR700ELCD (#40)
+    host.addUsage(0x00840040, 130, 3, "UPS.PowerSummary.ConfigVoltage"); // vendor defined
     CyberPowerDriver drv;
     drv.setup();
     runLoop(drv, 1000, 2000);
@@ -236,9 +247,9 @@ void test_cyberpower_policy(void) {
 // Layout without vendor reports (CP1350C, CP1500, CP1600, CP2000): report 4 carries
 // iOEMInformation (battery.mfr.date, cps-hid.c:368) and is read; report 6 never (US-111)
 void test_cyberpower_standard_layout_reads_report_4(void) {
-    standardDevice();
+    standardDeviceReport2("UPS.Input.ConfigVoltage");
     host.addUsage(0x0085008F, 4, 3, "UPS.PowerSummary.iOEMInformation");
-    host.addUsage(0x0085002C, 6, 3, "UPS.PowerSummary.CapacityMode");
+    host.addUsage(0x00840040, 6, 3, "UPS.Output.ConfigVoltage"); // a cps-hid row: excluded anyway
     CyberPowerDriver drv;
     drv.setup();
     runLoop(drv, 1000, 2000);
@@ -250,9 +261,10 @@ void test_cyberpower_standard_layout_reads_report_4(void) {
 }
 
 void test_eaton_skips_reports_254_255(void) {
-    standardDevice();
-    host.addUsage(0x00840040, 254, 3, "UPS.X");
-    host.addUsage(0x00840040, 255, 3, "UPS.Y");
+    standardDeviceReport2("UPS.BatterySystem.Voltage");
+    // Fields of mge-hid rows: only the exclusion keeps these reports out
+    host.addUsage(0x00840035, 254, 3, "UPS.PowerSummary.PercentLoad");
+    host.addUsage(0x00840036, 255, 3, "UPS.BatterySystem.Battery.Temperature");
     EatonDriver drv;
     drv.setup();
     runLoop(drv, 1000, 2000);
@@ -527,26 +539,27 @@ void test_apc_back_ups_bx_invalidated_static_report_requested_again(void) {
     TEST_ASSERT_EQUAL(2, host._reports.size()); // 37 known: left out
 
     IUPSDriver& d = drv;
-    // INPUT 37 is another report: FEATURE 37 stays known
+    // INPUT 37 is another report: FEATURE 37 stays known. From here on 50 is not asked either:
+    // its only row was never answered in the first full poll, finishInit() dropped it (DEAD),
+    // and nothing else reads the report (US-120)
     d.invalidateReport(1, 37);
     host._reports.clear();
     runLoop(drv, 61000, 61500);
-    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL(1, host._reports.size());
     TEST_ASSERT_EQUAL_UINT8(38, host._reports[0].first);
 
     d.invalidateReport(3, 37);
     host._reports.clear();
     runLoop(drv, 91000, 91500);
-    TEST_ASSERT_EQUAL(3, host._reports.size());
+    TEST_ASSERT_EQUAL(2, host._reports.size());
     TEST_ASSERT_EQUAL_UINT8(37, host._reports[0].first);
     TEST_ASSERT_EQUAL_UINT8(3, host._reports[0].second);
     TEST_ASSERT_EQUAL_UINT8(38, host._reports[1].first);
-    TEST_ASSERT_EQUAL_UINT8(50, host._reports[2].first);
 
     // Decoded again: left out from then on
     host._reports.clear();
     runLoop(drv, 121000, 121500);
-    TEST_ASSERT_EQUAL(2, host._reports.size());
+    TEST_ASSERT_EQUAL(1, host._reports.size());
     TEST_ASSERT_EQUAL_UINT8(38, host._reports[0].first);
 }
 
@@ -597,13 +610,18 @@ static size_t bx750miRequestsPerMinute(const char* model) {
 }
 
 void test_apc_back_ups_bx750mi_requests_per_minute(void) {
-    // v1.6.1: ~336/min. fix-issue-60-v1: 102/min (Tim's log). Static reports read once:
-    // 2 full polls of 13 dynamic reports + 4 quick polls of 6 (15, 19, 34, 35, 80, 122)
-    TEST_ASSERT_EQUAL(50, bx750miRequestsPerMinute("Back-UPS BX750MI"));
+    // v1.6.1: ~336/min. fix-issue-60-v1: 102/min (Tim's log). Static reports read once: 2 full
+    // polls of 13 dynamic reports + 4 quick polls of 6 (15, 19, 34, 35, 80, 122) = 50.
+    // US-120: the full poll asks only for the reports a row reads, as hid_ups_walk(): 2 full
+    // polls of 6 (19, 21, 35, 38, 49, 80) + the same quick polls = 36. Left out: 14, 34, 120 and
+    // 122 (no row), 15 (battery.runtime DEAD: UPS.Battery.RunTimeToEmpty comes first), 24 and 33
+    // (their only value rows fail on the zeros this mock answers, the rest are command rows)
+    TEST_ASSERT_EQUAL(36, bx750miRequestsPerMinute("Back-UPS BX750MI"));
 }
 
 // US-072: a small table. Report 1: status, dynamic rows (quick poll). Report 2: a STATIC row.
-// Report 3: a SEMI_STATIC row. Report 4: mixed, a STATIC and a dynamic row. Report 5: no row.
+// Report 3: a SEMI_STATIC row. Report 4: mixed, a STATIC and a dynamic row. Report 5: no row, never
+// requested (US-120: nothing reads it, as hid_ups_walk()).
 // Report 6: a STATIC row, a row the INIT rule drops (DEAD: test.dup is taken by report 1) and a
 // command row, both without flags.
 static const NutTable::HidInfo kSemiStaticTable[] = {
@@ -670,7 +688,7 @@ void test_semi_static_first_full_poll_reads_every_report(void) {
     host._driver = &drv;
     host._data = &data;
     runLoop(drv, 1000, 1500);
-    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
     TEST_ASSERT_TRUE(data.hasKey("test.limit"));
 }
 
@@ -680,11 +698,12 @@ void test_semi_static_reports_left_out_of_later_full_polls(void) {
     runFirstMinuteHalf(drv);
     host._reports.clear();
     runLoop(drv, 31000, 31500);
-    // Report 4 (mixed) and 5 (no row) stay; 6 is semi-static: DEAD and command rows do not count
-    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+    // Report 4 (mixed) stays; 6 is semi-static: DEAD and command rows do not count. Report 5 (no
+    // row) is never requested (US-120)
+    TEST_ASSERT_EQUAL_STRING("1 4", requestedIds().c_str());
     host._reports.clear();
     runLoop(drv, 61000, 61500);
-    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4", requestedIds().c_str());
 }
 
 // US-108: in "pollonly" (QUIRK_NO_INTERRUPT_PIPE) every full poll reads the semi-static reports
@@ -696,10 +715,10 @@ void test_semi_static_no_interrupt_pipe_reads_every_full_poll(void) {
     runFirstMinuteHalf(drv);
     host._reports.clear();
     runLoop(drv, 31000, 31500);
-    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
     host._reports.clear();
     runLoop(drv, 61000, 61500);
-    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
 }
 
 // SET VAR or INSTCMD: the next cycle is a full poll right away, with the semi-static reports;
@@ -713,13 +732,13 @@ void test_semi_static_reports_read_again_after_data_change(void) {
     IUPSDriver& d = drv;
     d.noteDataChanged();
     runLoop(drv, 40000, 40500); // 9 s after the last full poll
-    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
     host._reports.clear();
     runLoop(drv, 42000, 69500); // quick polls only
     TEST_ASSERT_EQUAL_STRING("1 1 1 1 1 1 1 1 1 1 1 1 1 1", requestedIds().c_str());
     host._reports.clear();
     runLoop(drv, 70000, 70500); // 30 s after the full poll of the change
-    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4", requestedIds().c_str());
 }
 
 // A change in the middle of a full poll: the running cycle is not touched, the next one is a
@@ -733,7 +752,7 @@ void test_semi_static_change_during_full_poll_reads_next_cycle(void) {
     IUPSDriver& d = drv;
     d.noteDataChanged();
     runLoop(drv, 31060, 31500);
-    TEST_ASSERT_EQUAL_STRING("1 4 5 1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4 1 2 3 4 6", requestedIds().c_str());
 }
 
 // pollSoon() (Powercom) is not filtered: a semi-static report it asks for is read
@@ -774,7 +793,7 @@ void test_semi_static_active_beeper_report_stays_read(void) {
     runFirstMinuteHalf(drv);
     host._reports.clear();
     runLoop(drv, 31000, 31500);
-    TEST_ASSERT_EQUAL_STRING("1 3 4 5", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 3 4", requestedIds().c_str());
 }
 
 // A deferred row is not decided by the first full poll: its report stays in the full poll
@@ -791,17 +810,17 @@ void test_semi_static_deferred_row_read_until_decided(void) {
     runLoop(drv, 1000, 30000);
     host._reports.clear();
     runLoop(drv, 31000, 31500);
-    TEST_ASSERT_EQUAL_STRING("1 4 5 7", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4 7", requestedIds().c_str());
     TEST_ASSERT_FALSE(data.hasKey("test.vnom"));
 
     drv.setInputsKnown(true);
     host._reports.clear();
     runLoop(drv, 61000, 61500); // reads report 7 again: the row is decided
-    TEST_ASSERT_EQUAL_STRING("1 4 5 7", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4 7", requestedIds().c_str());
     TEST_ASSERT_EQUAL_STRING("230", data.get("test.vnom").c_str());
     host._reports.clear();
     runLoop(drv, 91000, 91500);
-    TEST_ASSERT_EQUAL_STRING("1 4 5", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 4", requestedIds().c_str());
 }
 
 // A new enumeration (setup()) reads everything again and classifies again
@@ -812,7 +831,134 @@ void test_semi_static_new_enumeration_reads_every_report(void) {
     drv.setup();
     host._reports.clear();
     runLoop(drv, 31000, 31500);
-    TEST_ASSERT_EQUAL_STRING("1 2 3 4 5 6", requestedIds().c_str());
+    TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
+}
+
+// US-120: the full poll asks only for the FEATURE reports something reads, as hid_ups_walk().
+// Report 1: status, a row (quick poll) and the first row of test.dup. Report 2: a command row
+// only. Report 3: the second row of test.dup (DEAD once report 1 is read). Report 4: a
+// HU_FLAG_ABSENT row only. Report 5: a vendor field without rows (APC report 227, issue #123).
+// Report 6: a row bound to its INPUT usage, with the FEATURE twin. Report 7: the active beeper
+// outside the rows. Report 8: a status usage without rows (not even a genericHid2Nut() one).
+static const NutTable::HidInfo kRowFilterTable[] = {
+    { "test.charge", 0, 0, "UPS.R.Charge", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.dup", 0, 0, "UPS.R.Dup1", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.cmd", 0, 0, "UPS.R.Cmd", "1", NutTable::HU_TYPE_CMD, NutTable::Conv::Number, nullptr, 0 },
+    { "test.dup", 0, 0, "UPS.R.Dup3", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+    { "test.absent", NutTable::ST_FLAG_RW | NutTable::ST_FLAG_STRING, 20, "UPS.R.Absent", "x", NutTable::HU_FLAG_ABSENT, NutTable::Conv::Number, nullptr, 0 },
+    { "test.twin", 0, 0, "UPS.R.Twin", "%.0f", 0, NutTable::Conv::Number, nullptr, 0 },
+};
+
+class RowFilterDriver : public GenericDriver {
+public:
+    const NutTable::HidInfo* hid2nut(size_t& n) const override {
+        n = sizeof(kRowFilterTable) / sizeof(kRowFilterTable[0]);
+        return kRowFilterTable;
+    }
+};
+
+static void rowFilterDevice() {
+    host.addUsage(0x00850066, 1, 3, "UPS.R.Charge"); // RemainingCapacity: a status usage
+    host.addUsage(0xFFFF0001, 1, 3, "UPS.R.Dup1");
+    host.addUsage(0xFFFF0002, 2, 3, "UPS.R.Cmd");
+    host.addUsage(0xFFFF0003, 3, 3, "UPS.R.Dup3");
+    host.addUsage(0xFFFF0004, 4, 3, "UPS.R.Absent");
+    host.addUsage(0xFFFF00EF, 5, 3, "UPS.0xFFFF00FF.0xFFFF00EF");
+    host.addUsage(0xFFFF0006, 6, 1, "UPS.R.Twin");
+    host.addUsage(0xFFFF0006, 6, 3, "UPS.R.Twin");
+    host.addUsage(0x0084005A, 7, 3, "UPS.R.Beeper"); // AudibleAlarmControl
+    host.addUsage(0xFFFF0008, 8, 3, "UPS.R.PresentStatus.Flag"); // a status path no row reads
+    host._beeper_path = "UPS.R.Beeper";
+    host._answer_all = true;
+}
+
+// INIT: every bound row but HU_FLAG_ABSENT, so the command row and the row that will be DEAD
+// too; nothing reads reports 4 and 5
+void test_full_poll_first_cycle_reads_reports_with_rows(void) {
+    rowFilterDevice();
+    RowFilterDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 6 7", requestedIds().c_str());
+}
+
+// After finishInit(): the command row and the DEAD row no longer count, the twin and the beeper
+// keep their reports; report 5 is never requested
+void test_full_poll_after_init_drops_command_and_dead_reports(void) {
+    rowFilterDevice();
+    RowFilterDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 30000);
+    host._reports.clear();
+    runLoop(drv, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 6 7", requestedIds().c_str());
+    host._reports.clear();
+    runLoop(drv, 61000, 61500);
+    TEST_ASSERT_EQUAL_STRING("1 6 7", requestedIds().c_str());
+    for (const auto& r : host._reports) TEST_ASSERT_EQUAL_UINT8(3, r.second); // INPUT 6: never by GET_REPORT
+}
+
+// The quick poll is not filtered: report 8 (a status usage without rows) stays in it
+void test_quick_poll_unchanged_by_row_filter(void) {
+    rowFilterDevice();
+    RowFilterDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 1500);
+    host._reports.clear();
+    runLoop(drv, 3000, 3500);
+    TEST_ASSERT_EQUAL_STRING("1 8", requestedIds().c_str());
+    runLoop(drv, 31000, 31500);
+    host._reports.clear();
+    runLoop(drv, 33000, 33500);
+    TEST_ASSERT_EQUAL_STRING("1 8", requestedIds().c_str());
+}
+
+// A new enumeration binds the rows again: the first full poll is an INIT again
+void test_full_poll_new_enumeration_reads_init_reports_again(void) {
+    rowFilterDevice();
+    RowFilterDriver drv;
+    drv.setup();
+    host._driver = &drv;
+    host._data = &data;
+    runLoop(drv, 1000, 31500);
+    drv.setup();
+    host._reports.clear();
+    runLoop(drv, 32000, 32500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 6 7", requestedIds().c_str());
+}
+
+// EatonDriver::decodeReport() reads iModel outside the rows (mge_type): its report stays in the
+// full poll with the Eaton driver, and is not requested by GenericDriver, which does not read it
+void test_eaton_full_poll_keeps_imodel_report(void) {
+    standardDeviceReport2("UPS.BatterySystem.Voltage");
+    host.addUsage(0xFFFF00F0, 9, 3, "UPS.PowerSummary.0xFFFF00F0");
+    host._answer_all = true;
+    EatonDriver eaton;
+    eaton.setup();
+    host._driver = &eaton;
+    host._data = &data;
+    runLoop(eaton, 1000, 30000);
+    host._reports.clear();
+    runLoop(eaton, 31000, 31500);
+    TEST_ASSERT_EQUAL_STRING("1 2 3 9", requestedIds().c_str()); // 3: the INPUT-only report, unchanged
+
+    host = MockPollHost();
+    data = UPSData();
+    standardDeviceReport2("UPS.BatterySystem.Voltage");
+    host.addUsage(0xFFFF00F0, 9, 3, "UPS.PowerSummary.0xFFFF00F0");
+    host._answer_all = true;
+    GenericDriver generic;
+    generic.setup();
+    host._driver = &generic;
+    host._data = &data;
+    runLoop(generic, 1000, 1500);
+    for (const auto& r : host._reports) TEST_ASSERT_TRUE(r.first != 9);
 }
 
 // Issue #60: the host serves the data only after the first full poll
@@ -869,5 +1015,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_semi_static_active_beeper_report_stays_read);
     RUN_TEST(test_semi_static_deferred_row_read_until_decided);
     RUN_TEST(test_semi_static_new_enumeration_reads_every_report);
+    RUN_TEST(test_full_poll_first_cycle_reads_reports_with_rows);
+    RUN_TEST(test_full_poll_after_init_drops_command_and_dead_reports);
+    RUN_TEST(test_quick_poll_unchanged_by_row_filter);
+    RUN_TEST(test_full_poll_new_enumeration_reads_init_reports_again);
+    RUN_TEST(test_eaton_full_poll_keeps_imodel_report);
     return UNITY_END();
 }

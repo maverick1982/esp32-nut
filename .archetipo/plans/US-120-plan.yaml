@@ -1,0 +1,396 @@
+schema: archetipo/plan/v2
+spec_code: US-120
+body: |
+  ---
+  type: plan
+  title: "US-120: Full poll come NUT, chiedere solo i report che contengono righe della tabella — Piano di implementazione"
+  description: "Piano di implementazione per US-120"
+  tags: [plan, implementation, US-120]
+  ---
+  # US-120: Full poll come NUT, chiedere solo i report che contengono righe della tabella — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** `feature/us-119-us-120-report-reads` (dopo ab04514, US-119), condiviso con US-119
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 5 | **Bloccato da:** US-119 (DONE, commit ab04514)
+
+  **User Story**
+  Come utente di un UPS con report vendor senza mappatura (APC Back-UPS BXR1200MI, #123), voglio che il firmware chieda all'UPS solo i report che NUT legge, così non compaiono più errori nel System Log ogni 30 s per report che nessuno usa, e i firmware UPS fragili ricevono meno richieste.
+
+  **Criteri di Accettazione**: vedi la spec. In breve: full poll solo sui report FEATURE con almeno un lettore (riga legata o il suo twin, beeper attivo fuori dalle righe, hook del driver); al primo poll tutte le righe legate, dopo `finishInit()` fuori i report con sole righe `DEAD`, comandi o `HU_FLAG_ABSENT`; valori pubblicati e `LIST RW` invariati su tutte le fixture, cambiano solo le righe `[requests]`; liste fisse Powercom, esclusioni `acceptPollReport()`, quick poll, semi-statici (US-072), INPUT dal pipe interrupt, regole Back-UPS BX (#60) e APC 5G (US-108) invariati; nuova fixture BXR1200MI con replay e golden; ADR 0006 aggiornata; suite nativa e tre build.
+
+  ---
+
+  ## Soluzione tecnica
+
+  ### La regola upstream
+
+  `hid_ups_walk()` (`nut_repo/drivers/usbhid-ups.c:2232-2420`) legge riga per riga: `HIDGetDataValue()` chiede il report della riga e libhid tiene un buffer per report. Un report che nessuna riga legge non viene mai chiesto.
+  - **INIT**: legge ogni riga con `hiddata`, tranne `HU_FLAG_ABSENT` (valore lato server) e le righe di una variabile già presente (`hiddata = NULL`, da noi `DEAD` tramite `resolve()`). Anche le righe comando vengono lette all'INIT.
+  - **FULL_UPDATE**: salta `HU_FLAG_ABSENT | HU_TYPE_CMD` e le righe senza `hiddata`.
+
+  ### La regola nel firmware (solo report FEATURE del full poll)
+
+  Un report FEATURE `(3, id)` ha un **lettore** quando almeno uno di questi casi vale:
+  1. il campo `idx` o `twin_idx` di una riga legata (`_nut_rows`) sta nel report, e la riga non è `HU_FLAG_ABSENT`. Prima di `finishInit()` (`!_nut_init_done`) contano tutte le altre righe, comandi compresi: è l'INIT. Dopo contano solo le righe non `DEAD` e non comando;
+  2. il beeper attivo letto fuori dalle righe: `!_beeper_row` e path uguale a `host->getActiveBeeperPath()`, come già in `classifySemiStatic()`;
+  3. un nuovo hook `virtual bool readsFieldOutsideRows(const HIDUsageDef& u) const` (default `false`), con cui un driver dichiara i campi che legge in `decodeReport()`.
+
+  Un report FEATURE senza lettori esce da `_full`. Non cambiano: le liste `_quick`, i report INPUT (pipe interrupt, e le GET_REPORT INPUT di `pollInputReports()`), le stringhe, `acceptPollReport()`, e `acceptDiagReport()`: l'export di US-119 continua a leggere su richiesta anche i report senza righe. Non cambia nemmeno `isReportRead()`, che decide la stima di `ups.realpower`.
+
+  ### Letture fuori dalle righe, driver per driver (assunzione della spec)
+
+  | Driver | Lettura di campi HID fuori dalle righe | Trattamento |
+  |---|---|---|
+  | GenericDriver (tutti i driver) | beeper attivo, `decodeBeeperStatus()`, quando la tabella non ha `ups.beeper.status` | lettore (caso 2) |
+  | EatonDriver | `UPS.PowerSummary.0xFFFF00F0` (iModel) e `UPS.Flow.[4].ConfigApparentPower`, letti in `decodeReport()` per `mge_type` | hook (caso 3) |
+  | CyberPowerDriver | nessun campo: solo `might_need_scale` dal PID | niente |
+  | OpenUPSDriver | nessun campo: scale dal PID; `postDecode()` legge `ups_data` | niente |
+  | PowercomDriver | report 0x0A (confronto grezzo) e 0xA4 (testo) | liste fisse: `buildPollLists()` non chiama la base, quindi invariate |
+  | APCDriver | `onLoop()` legge `ups.model`, nessun campo | niente |
+  | Legrand, Liebert, EcoFlow | solo il beeper della base | caso 2 |
+
+  Le righe "Kept" dell'ADR 0011 regola 2 stanno nella coda generica di `_nut_rows` (US-079): sono già righe legate.
+
+  ### Modifiche a `GenericDriver`
+
+  1. **Righe legate prima delle liste.** Oggi `bindNutTable()` gira al primo report decodificato, cioè dopo `buildPollLists()`. In `loop()`, nel blocco `if (!_lists_built)`, si chiama `bindNutTable(host)` prima di `buildPollLists()`. Il bind dipende solo dagli usage, che sono già pronti, e riapplica `_absent_overrides`. Le chiamate successive da `decodeReport()`/`postDecode()` restano idempotenti grazie al confronto sul conteggio degli usage.
+  2. **Bitmap dei lettori.** Nuovo metodo protetto `void featureReportsRead(IHidTransport* host, uint32_t out[8]) const`, che applica la regola qui sopra. Se `!_nut_bound` la bitmap è tutta a 1: senza informazioni il comportamento resta quello di oggi. Serve alle sonde `FixtureReplayRunner::pollLists<D>()`, che costruiscono le liste senza bind.
+  3. **Filtro in `GenericDriver::buildPollLists()`.** Un report FEATURE fuori dalla bitmap non entra in `full`. Va in `quick` come oggi, se ha usage di stato: il quick poll non cambia. La verifica `has_feature` dei report INPUT usa ancora la lista non filtrata, così un INPUT con twin FEATURE senza lettori non diventa una nuova richiesta GET_REPORT INPUT.
+  4. **Potatura dopo l'INIT.** In `loop()`, quando `_lists_built && _nut_bound && _nut_init_done && !_lists_pruned`, si chiama di nuovo `buildPollLists(host, _quick, _full)` e si imposta `_lists_pruned = true`. Va fatto prima di `classifySemiStatic()`, che conta `_full`. Un solo `logDebug`: `"[<driver>] Full poll: N FEATURE reports without NUT rows left out: <id> <id> ..."` (niente log se N = 0). `_lists_pruned` torna a `false` in `setup()` e in `bindNutTable()` quando rilega. La coda del ciclo in corso è una copia (`_queue`), quindi la ricostruzione non la tocca. Per CyberPower (`_vendor_layout`) e Powercom la ricostruzione dà gli stessi valori.
+  5. **Caso limite.** Con `_nut_bound` ma nessuna riga legata, il full poll non ha report FEATURE, come upstream. Con un descrittore PDC non succede, perché `genericHid2Nut()` lega sempre le righe di stato. Il log lo rende visibile.
+
+  ### Interazioni
+
+  - **Semi-statici (US-072):** `classifySemiStatic()` resta com'è. I report tolti non sono in `_full` e non vengono contati. Si aggiorna il commento che diceva "fields without a row ... stays read as before".
+  - **Back-UPS BX (#60):** `pollStaticReportsOnce()`, quick poll a 10 s e lunghezze minime restano invariati. Spariscono solo i report senza lettori.
+  - **APC 5G senza pipe interrupt (US-108):** gli INPUT restano esclusi come oggi, e il filtro FEATURE è lo stesso. Una riga legata a un INPUT con twin FEATURE conta tramite il twin.
+  - **Scritture:** SET VAR, beeper e INSTCMD fanno una propria GET_REPORT prima di scrivere (`USBHostUPS.cpp:1035`, read-modify-write). Non dipendono dal poll.
+  - **Replay:** `goldenText()` chiama `completeInitialPoll()` prima del primo `loop()`. Le liste nascono quindi già potate, e il golden `[requests]` mostra il regime.
+
+  ### Decisioni
+
+  - Le righe `HU_FLAG_ABSENT` non contano mai, nemmeno al primo poll. Upstream non le legge neppure all'INIT, e lo stato a regime è comunque quello chiesto dalla spec.
+  - Il filtro vale solo per i report FEATURE, come dice la spec. Le GET_REPORT INPUT del full poll (`pollInputReports()`) restano come sono.
+  - Le note di rilascio non sono un task: si scrivono prima della release (prassi del progetto). Da ricordare: nota US-120 con "Refs #123", e il README con il BXR1200MI tra gli APC provati, promesso nella #123 (è nel TASK-06).
+
+  ---
+
+  ## Strategia di test
+
+  - **Unit (`test/test_poll_cycle/test_main.cpp`, mock host sintetico):**
+    - un report vendor senza righe resta fuori dal full poll;
+    - un report con sola riga comando viene letto nel primo full poll ed esce dopo `finishInit()`;
+    - un report con sole righe `DEAD` (seconda riga della stessa variabile) esce dopo l'INIT;
+    - un report con sola riga `HU_FLAG_ABSENT` non viene mai letto;
+    - il twin conta;
+    - il beeper attivo tiene il suo report;
+    - l'hook Eaton tiene il report di iModel;
+    - le esclusioni CyberPower ed Eaton e il quick poll restano invariati.
+    - I test esistenti che si rompono perché usano usage senza riga si adattano con path di righe reali, mai cambiando l'atteso solo per farli passare.
+  - **Replay (`test/test_record_replay`):** nuova fixture BXR1200MI, il suo `runFixtureTest` e i golden registry e generic, senza `227/3`. Nuovo controllo `FixtureReplayRunner::checkFullPollReaders()` su tutte le fixture, con driver del registry e con GenericDriver: i report FEATURE di `_full` dopo l'INIT devono coincidere con i report calcolati in modo indipendente dalle righe legate (più beeper e hook), filtrati da `acceptPollReport()`. Powercom è escluso (liste fisse).
+  - **Guardia sui golden:** dopo `ESP32NUT_WRITE_GOLDEN=1` cambiano solo le righe sotto `[requests]`. `[snapshot]`, `[cmd]`, `[rw]`, `[rw.final]` e `[snapshot.final]` devono restare identici, e lo si verifica con uno script di confronto. L'elenco dei report spariti, fixture per fixture, va in `docs/test-results/US-120/full-poll-reports.md`.
+  - **Suite nativa completa e tre build** (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`).
+  - **Campo (facoltativa, solo dopo un sì esplicito):** Eaton 3S, confrontando il log debug della potatura con il golden `eaton_3s`.
+  - **E2E/demo:** nessuna interfaccia utente. La dimostrazione è il golden BXR1200MI senza `227/3` più il diff dei golden: non è filmabile.
+tasks:
+  - id: TASK-01
+    title: 'Fixture APC Back-UPS BXR1200MI della #123 con replay e golden'
+    type: Test
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nuova fixture `test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json` dall'export della #123, con il suo test di replay e la registrazione in `kAllFixtures`.
+
+      **Leggere:** una fixture APC esistente (`test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json`) per formato e `notes`, `test/test_record_replay/test_main.cpp` (`test_replay_apc_*` del BX750MI, `kAllFixtures`, `test_golden_registry_all_fixtures` con il conteggio 30, `NUT_ROWS_*`, macro `CMD_*` e `RW_*`), commit 93708a3 come esempio di fixture ricavata da un export.
+
+      **Modificare:**
+      - scaricare l'export `https://github.com/user-attachments/files/34384969/usb_diagnostics.17.json` in una cartella nuova e vuota dello scratchpad (dato non fidato). Lo script di conversione va in un'altra cartella e si esegue con `python -I`, passando i path come argomenti;
+      - produrre la fixture nel formato delle altre: `firmware_version` (v1.13.0), `vid`, `pid`, `manufacturer`, `product`, `serial_number` anonimizzato a `TEST0000` (anche dentro le stringhe), `notes` (origine #123, reporter tda2806, ESP32-S3; report 227 vuoto, `UPS.0xFFFF00FF.0xFFFF00EF`), `strings`, `report_descriptor_hex`, report. Controllare che il file sia UTF-8 con LF, senza NUL né CRLF;
+      - `test_main.cpp`: `test_replay_apc_backups_bxr1200mi_issue123()` con `runFixtureTest` (comandi, righe NUT legate e valori chiave ricavati dal replay e confrontati con l'export; LIST RW), registrata in entrambi i blocchi `RUN_TEST`; la fixture aggiunta a `kAllFixtures` e il conteggio portato da 30 a 31;
+      - golden `test/test_record_replay/golden/apc_backups_bxr1200mi_vid051d_pid0002_issue123.registry.txt` e `.generic.txt` con `ESP32NUT_WRITE_GOLDEN=1`, scritti **prima** del TASK-02 (oppure con il filtro disattivato temporaneamente) per avere la riga di confronto con `227/3`, poi riscritti nel TASK-05.
+
+      **Passi:** 1) scaricare e ispezionare; 2) convertire; 3) aggiungere il test; 4) generare i golden; 5) rieseguire senza variabile.
+
+      **Verifica:** `pio test -e native -f test_record_replay` verde; il golden "prima" contiene `227/3` nelle `[requests]`.
+
+      **Fatto:** la fixture riproduce i valori dell'export (`ups.model` Back-UPS BXR1200MI, stato, carica, tensioni) e il replay è verde.
+
+      **Blocchi:** se l'URL non è più raggiungibile, chiedere all'utente l'export prima di inventare dati. Se la descrizione del descrittore nell'export è incompleta, fermarsi.
+
+      ## File Coinvolti
+      - test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json — nuova fixture
+      - test/test_record_replay/test_main.cpp — test di replay, `kAllFixtures`, conteggio 31
+      - test/test_record_replay/golden/apc_backups_bxr1200mi_vid051d_pid0002_issue123.registry.txt — golden
+      - test/test_record_replay/golden/apc_backups_bxr1200mi_vid051d_pid0002_issue123.generic.txt — golden
+
+      ## Criteri di Completamento
+      - [ ] La fixture è anonimizzata, in UTF-8 con LF, con `notes` che citano la #123
+      - [ ] Il test di replay è verde e la fixture è in `kAllFixtures` (31)
+      - [ ] Il golden prima del filtro mostra `227/3` (riferimento per la demo)
+    ref: TASK-01
+  - id: TASK-02
+    title: 'GenericDriver: righe legate prima delle liste, hook readsFieldOutsideRows e filtro dei report FEATURE senza lettori'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il full poll di `GenericDriver::buildPollLists()` chiede un report FEATURE solo se ha un lettore (riga legata o il suo twin, beeper attivo fuori dalle righe, hook del driver). Dopo `finishInit()` le liste si ricostruiscono senza le righe `DEAD` e senza i comandi.
+
+      **Leggere:** `lib/USBHostUPS/src/GenericDriver.h`, `lib/USBHostUPS/src/GenericDriver.cpp` (`buildPollLists`, `classifySemiStatic`, `loop`, `bindNutTable`, `setup`), `lib/USBHostUPS/src/NutTable.h` (`Bound`, `resolve`, `finishInit`, `isCommandRow`), `nut_repo/drivers/usbhid-ups.c:2232-2340`, sezione "Modifiche a GenericDriver" del piano.
+
+      **Modificare:**
+      - `GenericDriver.h`: hook protetto `virtual bool readsFieldOutsideRows(const HIDUsageDef& u) const { (void)u; return false; }` con commento (campi letti da `decodeReport()` del driver fuori dalle righe); metodo protetto `void featureReportsRead(IHidTransport* host, uint32_t out[8]) const`; membro privato `bool _lists_pruned`; aggiornare il commento di classe (full poll: solo i report con lettori).
+      - `GenericDriver.cpp`:
+        - costruttore e `setup()` inizializzano `_lists_pruned = false`; `bindNutTable()` lo rimette a `false` quando rilega;
+        - `featureReportsRead()`: se `!_nut_bound` mette tutti i bit a 1. Altrimenti segna, per ogni riga di `_nut_rows`: niente se `HU_FLAG_ABSENT`; se `_nut_init_done`, niente anche se comando o `DEAD`; poi segna `idx` e `twin_idx` quando `report_type == 3`. Segna anche il beeper attivo (`!_beeper_row`, path `host->getActiveBeeperPath()` non vuoto, usage FEATURE) e gli usage FEATURE per cui `readsFieldOutsideRows(u)` è vero;
+        - `buildPollLists()`: calcola la bitmap. Nel ciclo finale un report `type == 3` fuori bitmap non va in `full`, ma va in `quick` se `r.status`. La ricerca `has_feature` degli INPUT resta sulla lista `reports` non filtrata;
+        - `loop()`: nel blocco `if (!_lists_built)`, `bindNutTable(host)` prima di `buildPollLists()`. Subito dopo il blocco `_first_full_done` e prima della chiamata a `classifySemiStatic()`: `if (_lists_built && _nut_bound && _nut_init_done && !_lists_pruned) { buildPollLists(host, _quick, _full); _lists_pruned = true; }`, più un solo `logDebug` con il numero e gli ID dei report FEATURE tolti rispetto alla lista precedente (niente log se zero).
+
+      **Passi:** 1) header; 2) `featureReportsRead`; 3) filtro in `buildPollLists`; 4) bind anticipato e potatura in `loop`; 5) compilare la suite `native` di `test_poll_cycle` per vedere quali test esistenti cambiano. Non correggerli qui (TASK-04).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_poll_cycle` compila. I fallimenti attesi vengono annotati per il TASK-04.
+
+      **Fatto:** il codice compila; il filtro tocca solo `full` e i report FEATURE; `acceptDiagReport()` e `isReportRead()` invariati.
+
+      **Blocchi:** se il bind anticipato cambia un valore pubblicato (lo segnalano i golden nel TASK-05), fermarsi e capire il perché prima di procedere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.h — hook `readsFieldOutsideRows`, `featureReportsRead`, `_lists_pruned`, commento di classe
+      - lib/USBHostUPS/src/GenericDriver.cpp — bitmap dei lettori, filtro in `buildPollLists`, bind anticipato e potatura in `loop`
+
+      ## Criteri di Completamento
+      - [ ] I report FEATURE senza lettori non entrano in `_full`; `_quick` invariato
+      - [ ] Al primo poll contano tutte le righe legate tranne `HU_FLAG_ABSENT`; dopo `finishInit()` le liste si ricostruiscono una volta senza righe `DEAD` e comandi
+      - [ ] Senza righe legate (`!_nut_bound`) le liste sono quelle di oggi
+      - [ ] Un solo log debug della potatura, solo se toglie qualcosa
+      - [ ] Compila nella suite native
+    ref: TASK-02
+  - id: TASK-03
+    title: 'EatonDriver: dichiarare iModel e Flow.[4].ConfigApparentPower con readsFieldOutsideRows'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il report che contiene iModel (`UPS.PowerSummary.0xFFFF00F0`) e quello di `UPS.Flow.[4].ConfigApparentPower` restano nel full poll di Eaton anche senza righe, perché `EatonDriver::decodeReport()` li legge per `mge_type`.
+
+      **Leggere:** `lib/USBHostUPS/src/EatonDriver.h`, `lib/USBHostUPS/src/EatonDriver.cpp:55-80` e `:172-201` (`kIModelPath`, `kApparentPowerPath`, `decodeReport`).
+
+      **Modificare:**
+      - `EatonDriver.h`: `bool readsFieldOutsideRows(const HIDUsageDef& u) const override;`
+      - `EatonDriver.cpp`: vero quando `strcmp(u.path, kIModelPath) == 0 || NutTable::pathMatches(u, kApparentPowerPath)`, cioè gli stessi confronti di `decodeReport()`. Commento: campi letti per `mge_type` fuori dalle righe (US-120).
+
+      **Passi:** 1) override; 2) compilare.
+
+      **Verifica:** la suite `native` `test_eaton_driver` compila e resta verde.
+
+      **Fatto:** l'hook usa gli stessi confronti di `decodeReport()`, senza copie dei path.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EatonDriver.h — dichiarazione dell'override
+      - lib/USBHostUPS/src/EatonDriver.cpp — implementazione con `kIModelPath` e `kApparentPowerPath`
+
+      ## Criteri di Completamento
+      - [ ] `readsFieldOutsideRows()` vero solo per i due campi letti da `decodeReport()`
+      - [ ] `test_eaton_driver` verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Test unit del filtro nel poll cycle e adattamento dei test esistenti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire la regola con il mock host di `test_poll_cycle` e riportare al verde i test esistenti.
+
+      **Leggere:** `test/test_poll_cycle/test_main.cpp` (`MockPollHost`, `standardDevice()`, test `test_semi_static_*`, `test_cyberpower_policy`, `test_eaton_skips_reports_254_255`), `lib/USBHostUPS/src/NutTable.h` (`genericHid2Nut()`, per scegliere path con e senza riga).
+
+      **Modificare:** `test/test_poll_cycle/test_main.cpp`, con nuovi test registrati in `main`:
+      - `test_full_poll_skips_report_without_rows`: report FEATURE con un solo usage vendor (es. `UPS.0xFFFF00FF.0xFFFF00EF`, come il 227 della #123): mai chiesto nei primi due full poll;
+      - `test_full_poll_reads_command_only_report_at_init`: report con il solo campo di una riga comando (es. `UPS.PowerSummary.DelayBeforeShutdown`, se nella tabella generica è solo comando o `ups.delay`/ABSENT: scegliere un path che sia davvero solo comando); letto nel primo full poll, non più dopo `completeInitialPoll()` o la fine del primo full poll;
+      - `test_full_poll_drops_dead_only_report_after_init`: due report con righe della stessa variabile; la seconda riga diventa `DEAD` e il suo report esce dopo l'INIT;
+      - `test_full_poll_twin_counts`: riga legata all'INPUT con twin FEATURE: il FEATURE resta;
+      - `test_full_poll_keeps_active_beeper_report`: `host._beeper_path` su un usage senza riga: il report resta;
+      - `test_eaton_full_poll_keeps_imodel_report`: con `EatonDriver`, report con il solo `UPS.PowerSummary.0xFFFF00F0`: resta;
+      - `test_quick_poll_unchanged_by_row_filter`: un report di stato senza righe del driver resta nel quick poll;
+      - esclusioni CyberPower (6, >= 130, 4 con layout vendor) ed Eaton (254, 255) ancora rispettate: estendere i test esistenti, se non lo verificano già.
+
+      Per ogni test esistente che fallisce, capire il motivo. Se usa usage senza riga per comodità, passare a path di righe reali. Se il nuovo comportamento è quello giusto, aggiornare l'atteso con un commento US-120. Mai togliere asserzioni.
+
+      **Passi:** 1) eseguire la suite e annotare i fallimenti; 2) adattarli; 3) aggiungere i nuovi test; 4) rieseguire.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_poll_cycle -f test_generic_driver -f test_eaton_driver -f test_cyberpower_driver -f test_apc_driver -f test_powercom_driver -f test_ecoflow_driver` tutto verde.
+
+      **Fatto:** nuovi test verdi; ogni atteso cambiato ha un commento con il motivo.
+
+      **Blocchi:** se un path ipotizzato (comando puro, variabile con due righe) non esiste nella tabella generica, cercarne uno reale in `NutTable.h` invece di inventarlo.
+
+      ## File Coinvolti
+      - test/test_poll_cycle/test_main.cpp — nuovi test del filtro, adattamento dei test esistenti
+      - test/test_generic_driver/test_main.cpp — solo se un test esistente dipende dalle liste complete
+
+      ## Criteri di Completamento
+      - [ ] I casi report vendor, solo comando, solo `DEAD`, twin, beeper, hook Eaton e quick poll sono coperti
+      - [ ] Le esclusioni CyberPower ed Eaton sono verificate
+      - [ ] Le suite native dei driver sono verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: Controllo checkFullPollReaders su tutte le fixture, golden rigenerati e report spariti per fixture
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare su tutte le fixture che il full poll chiede esattamente i report con lettori, e che dei golden cambiano solo le righe `[requests]`.
+
+      **Leggere:** `test/test_record_replay/FixtureReplayRunner.h` (`goldenText`, `checkSemiStaticReports`, `PollListAccess`), `test/test_record_replay/test_main.cpp` (`test_semi_static_reports_skipped_after_first_full_poll`, `test_apc_poll_baseline`, conteggi attesi).
+
+      **Modificare:**
+      - `FixtureReplayRunner.h`: `static void checkFullPollReaders(const char* filePath, bool forceGeneric)`. Replay, `completeInitialPoll()`, un `loop()`. Poi l'atteso si calcola **dalle righe legate e non dalla bitmap del driver**: per ogni riga non `HU_FLAG_ABSENT`, non comando e non `DEAD`, i report FEATURE di `idx` e `twin_idx`; il beeper attivo se la tabella propria non ha `ups.beeper.status`; per Eaton gli usage con i path di iModel e `Flow.[4].ConfigApparentPower`; il tutto filtrato da `acceptDiagReport()` (= `acceptPollReport()`). L'atteso si confronta con i report `type == 3` di `PollListAccess::lists()` come stringhe ordinate. Per `PowercomDriver` (liste fisse) il controllo si salta;
+      - `test_main.cpp`: `test_full_poll_reads_only_reports_with_readers()`, che scorre `kAllFixtures` con registry e generic, registrato in entrambi i blocchi `RUN_TEST`;
+      - rigenerare tutti i golden con `ESP32NUT_WRITE_GOLDEN=1` e controllare con uno script (nello scratchpad, non nei sorgenti) che per ogni file cambiato differiscano solo le righe dopo `[requests]`. Se cambia anche una sola riga di `[snapshot]`, `[cmd]`, `[rw]`, `[rw.final]` o `[snapshot.final]`, fermarsi e indagare;
+      - aggiornare gli attesi numerici che dipendono dalle liste (es. `test_apc_poll_baseline`, contatori semi-statici), con un commento US-120;
+      - `docs/test-results/US-120/full-poll-reports.md`: tabella fixture → report FEATURE spariti dal full poll a regime (registry e generic), richieste al minuto prima e dopo, totale su tutte le fixture (come l'ADR 0006 riporta 827 → 773). Il BXR1200MI deve mostrare `227`.
+
+      **Passi:** 1) runner; 2) test; 3) golden; 4) script di confronto; 5) attesi numerici; 6) documento dei risultati.
+
+      **Verifica:** `pio test -e native -f test_record_replay` verde senza variabile d'ambiente; lo script di confronto riporta solo differenze in `[requests]`; il golden BXR1200MI non contiene `227/3`.
+
+      **Fatto:** il controllo indipendente passa su 31 fixture × 2 e il documento elenca i report spariti per ogni fixture.
+
+      **Blocchi:** un valore pubblicato che cambia indica una lettura fuori dalle righe non ancora dichiarata: aggiungerla all'inventario del piano e a un hook, non al golden.
+
+      ## File Coinvolti
+      - test/test_record_replay/FixtureReplayRunner.h — `checkFullPollReaders`
+      - test/test_record_replay/test_main.cpp — nuovo test e attesi numerici aggiornati
+      - test/test_record_replay/golden/*.txt — righe `[requests]` rigenerate
+      - docs/test-results/US-120/full-poll-reports.md — report spariti per fixture
+
+      ## Criteri di Completamento
+      - [ ] `checkFullPollReaders` verde su tutte le fixture, con registry e generic
+      - [ ] Nei golden cambiano solo le righe `[requests]`
+      - [ ] Il golden BXR1200MI non contiene `227/3`
+      - [ ] Il documento dei risultati riporta i report spariti per ogni fixture
+    ref: TASK-05
+  - id: TASK-06
+    title: ADR 0006, commenti del codice e README aggiornati alla nuova regola
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la regola. Dall'ADR 0006 si toglie la differenza "Fields without a row are not read upstream either, so a report made only of them is still read as before" e si descrive la nuova regola. Il README aggiunge il BXR1200MI tra gli APC provati (promesso nella #123).
+
+      **Leggere:** `docs/adr/0006-centralized-hid-polling-lifecycle.md` (sezioni "Implementation status" e "Semi-static reports"), `lib/USBHostUPS/src/GenericDriver.cpp` (commento sopra `classifySemiStatic()`), `README.md` (elenco degli UPS provati), `docs/test-results/US-120/full-poll-reports.md`.
+
+      **Modificare:**
+      - ADR 0006: nuova sottosezione "Reports with NUT rows only (US-120, 2026-11)" con la regola (lettori: riga legata o twin, beeper attivo, `readsFieldOutsideRows()`; INIT = tutte le righe legate tranne `HU_FLAG_ABSENT`; dopo `finishInit()` fuori le sole `DEAD` e comandi), il riferimento a `usbhid-ups.c:2232-2340`, cosa resta invariato (Powercom, `acceptPollReport()`, quick poll, INPUT, US-072, #60, US-108, export di US-119) e l'effetto (totali dal documento dei risultati). Nella sezione semi-statici: togliere la frase sui campi senza riga. Aggiornare l'elenco degli hook in "Implementation status" con `readsFieldOutsideRows()`;
+      - `GenericDriver.cpp`: commento di `classifySemiStatic()` senza "fields without a row are not read either, so a report made only of them stays read as before";
+      - `README.md`: APC Back-UPS BXR1200MI (#123) tra i modelli APC provati, nello stesso formato delle righe vicine.
+
+      **Passi:** 1) ADR; 2) commento; 3) README.
+
+      **Verifica:** `grep -n "still read as before\|stays read as before" docs/adr/0006-centralized-hid-polling-lifecycle.md lib/USBHostUPS/src/GenericDriver.cpp` non trova nulla.
+
+      **Fatto:** l'ADR descrive la regola con i numeri misurati; il README cita il BXR1200MI.
+
+      **Blocchi:** nessuno. Le note di rilascio non vanno scritte qui: si scrivono prima della release.
+
+      ## File Coinvolti
+      - docs/adr/0006-centralized-hid-polling-lifecycle.md — nuova regola, frase tolta, hook
+      - lib/USBHostUPS/src/GenericDriver.cpp — commento di `classifySemiStatic()`
+      - README.md — BXR1200MI tra gli APC provati
+
+      ## Criteri di Completamento
+      - [ ] ADR 0006 senza la vecchia differenza e con la nuova regola e i suoi effetti
+      - [ ] Commento di `classifySemiStatic()` coerente
+      - [ ] README aggiornato
+    ref: TASK-06
+  - id: TASK-07
+    title: Suite nativa completa e tre build
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare l'intero progetto dopo le modifiche.
+
+      **Leggere:** `platformio.ini` (env `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, `native`).
+
+      **Modificare:** niente, salvo correzioni dei fallimenti trovati. Ogni correzione va spiegata.
+
+      **Passi:**
+      1) `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`;
+      2) `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, poi `-e esp32-p4-eth` e `-e esp32-p4-eth-v1`;
+      3) `git status` per controllare che non ci siano file estranei (script, `__pycache__`, export scaricati).
+
+      **Verifica:** tutte le suite native verdi e le tre build ok.
+
+      **Fatto:** l'esito (numero di test, eventuali warning nuovi) è annotato per il commit e la PR ("Refs #123", mai "Closes").
+
+      **Blocchi:** un fallimento non legato a US-120 va segnalato all'utente, non nascosto.
+
+      ## File Coinvolti
+      - platformio.ini — solo lettura (env di build e test)
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] Build esp32-s3-standard, esp32-p4-eth ed esp32-p4-eth-v1 ok
+      - [ ] Nessun file temporaneo nel working tree
+    ref: TASK-07
+  - id: TASK-08
+    title: Prova sul campo su Eaton 3S (solo dopo un sì esplicito dell'utente)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare sulla scheda reale che la potatura toglie dal full poll solo i report previsti dal golden `eaton_3s`, e che i valori NUT non cambiano.
+
+      **Leggere:** `docs/test-results/US-120/full-poll-reports.md` (riga Eaton 3S), il golden `test/test_record_replay/golden/eaton_3s_vid0463_pidffff.registry.txt`, la procedura OTA già usata per US-119 (credenziali nel file JSON indicato in memoria, mai stamparle).
+
+      **Modificare:** niente nei sorgenti. Il risultato va in `docs/test-results/US-120/field-eaton3s.md`.
+
+      **Passi:**
+      1) chiedere all'utente un sì esplicito: la prova va fatta solo dopo;
+      2) flash OTA della build `esp32-s3-standard`;
+      3) leggere nel System Log il log debug "Full poll: N FEATURE reports without NUT rows left out" e confrontarlo con il documento dei risultati;
+      4) per almeno 10 minuti, nessun `requestReport FAILED` nuovo, e `upsc` con le stesse variabili di prima della prova (stesso insieme di chiavi);
+      5) scrivere l'esito.
+
+      **Verifica:** l'elenco dei report tolti coincide con il golden; nessuna variabile NUT sparita.
+
+      **Fatto:** esito scritto in `docs/test-results/US-120/field-eaton3s.md`, oppure il task resta aperto con il motivo, se l'utente non dà il consenso.
+
+      **Blocchi:** senza consenso esplicito non si fa. L'Eaton 3S alimenta anche la scheda: niente prove di blackout.
+
+      ## File Coinvolti
+      - docs/test-results/US-120/field-eaton3s.md — esito della prova sul campo
+
+      ## Criteri di Completamento
+      - [ ] Consenso esplicito dell'utente ottenuto prima della prova
+      - [ ] Report tolti uguali a quelli del golden Eaton 3S
+      - [ ] Variabili NUT invariate ed esito documentato
+    ref: TASK-08

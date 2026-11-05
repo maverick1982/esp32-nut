@@ -598,6 +598,71 @@ public:
         return left_out;
     }
 
+    /**
+     * US-120: after the INIT walk (completeInitialPoll()), the FEATURE reports of the full poll
+     * are exactly the ones something reads, computed here from the bound rows and not from the
+     * driver's bitmap: the fields (usage or twin) of the rows that are not HU_FLAG_ABSENT, command
+     * or DEAD rows; the active beeper when the driver's own table has no ups.beeper.status row;
+     * for EatonDriver iModel and Flow.[4].ConfigApparentPower (mge_type, read by decodeReport());
+     * all of it filtered by the driver's exclusions (acceptDiagReport() = acceptPollReport()).
+     * PowercomDriver builds fixed lists and is skipped. Returns the number of FEATURE reports of
+     * the descriptor the full poll leaves out because nothing reads them.
+     */
+    static size_t checkFullPollReaders(const char* filePath, bool forceGeneric) {
+        ReplaySession s;
+        if (!replay(filePath, s, forceGeneric)) return 0;
+        if (dynamic_cast<PowercomDriver*>(s.driver)) return 0;
+        GenericDriver* drv = static_cast<GenericDriver*>(s.driver);
+        // loop() binds the rows before the first lists, also for a fixture without reports
+        s.driver->loop(&s.host, s.ups_data, 1);
+        drv->completeInitialPoll();
+        std::string where = std::string(filePath) + (forceGeneric ? " (generic)" : "");
+
+        const auto& usages = s.host.getUsages();
+        size_t n_own = 0;
+        const NutTable::HidInfo* own = drv->hid2nut(n_own);
+        std::set<uint8_t> expected;
+        bool beeper_row = false;
+        auto add = [&](const HIDUsageDef& u) {
+            if (u.report_type == 3 && drv->acceptDiagReport(u.report_type, u.report_id)) expected.insert(u.report_id);
+        };
+        for (const auto& b : drv->nutBindings()) {
+            if (b.info >= own && b.info < own + n_own && strcmp(b.info->info_type, "ups.beeper.status") == 0) beeper_row = true;
+            if (NutTable::isCommandRow(*b.info) || (b.info->hidflags & NutTable::HU_FLAG_ABSENT)) continue;
+            if (b.role == NutTable::Bound::Role::DEAD) continue;
+            for (int idx : { b.idx, b.twin_idx }) {
+                if (idx >= 0 && (size_t)idx < usages.size()) add(usages[idx]);
+            }
+        }
+        String beeper = s.host.getActiveBeeperPath();
+        bool eaton = dynamic_cast<EatonDriver*>(s.driver) != nullptr;
+        for (const auto& u : usages) {
+            if (!beeper_row && beeper.length() > 0 && strcmp(u.path, beeper.c_str()) == 0) add(u);
+            if (eaton && (strcmp(u.path, "UPS.PowerSummary.0xFFFF00F0") == 0 ||
+                          NutTable::pathMatches(u, "UPS.Flow.[4].ConfigApparentPower"))) add(u);
+        }
+
+        std::vector<GenericDriver::PollItem> quick, full;
+        PollListAccess::lists(*drv, &s.host, quick, full);
+        std::set<uint8_t> actual;
+        for (const auto& f : full) {
+            if (f.report_type == 3) actual.insert(f.id);
+        }
+        auto text = [](const std::set<uint8_t>& ids) {
+            std::string out;
+            for (uint8_t id : ids) out += " " + std::to_string(id);
+            return out;
+        };
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(text(expected).c_str(), text(actual).c_str(),
+                                         (where + ": FEATURE reports of the full poll").c_str());
+
+        std::set<uint8_t> descriptor;
+        for (const auto& u : usages) {
+            if (u.report_type == 3 && drv->acceptDiagReport(u.report_type, u.report_id)) descriptor.insert(u.report_id);
+        }
+        return descriptor.size() - actual.size();
+    }
+
     // A driver of class D with its poll hooks public (US-076)
     template <class D>
     struct PollListProbe : D {

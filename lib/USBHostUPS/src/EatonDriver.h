@@ -29,6 +29,8 @@ protected:
     bool acceptPollReport(uint8_t report_type, uint8_t report_id) const override;
     void collectStringRequests(IHidTransport* host, const UPSData& data, std::vector<uint8_t>& out) const override;
     void onLoop(IHidTransport* host, UPSData& data) override;
+    // iModel and Flow.[4].ConfigApparentPower, read by decodeReport() for mge_type (US-120)
+    bool readsFieldOutsideRows(const HIDUsageDef& u) const override;
 
 private:
     // Usages of the context inputs, found once per device (US-079: no hand-written mappings)
