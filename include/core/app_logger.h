@@ -17,7 +17,14 @@ public:
 
     static void log(const String& level, const String& msg);
     static void log(const char* level, const char* format, ...);
-    static String getLogsJSON();
+    // Board time of a line (US-118): writes it in out and returns true, or false when the
+    // board has no time. list_uptime_ms is millis() read under the logger mutex, so no
+    // line is newer. Called under the logger mutex: it must not log nor wait for a lock
+    // that a logging task may hold
+    typedef bool (*BoardTimeFn)(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out,
+                                size_t len);
+    // [{id, time, level, msg}], plus "board_time" on each line when fn gives it
+    static String getLogsJSON(BoardTimeFn fn = nullptr, void* ctx = nullptr);
 
     // A change of the remote logging itself (enabled, minimum level changed): logged
     // like any line, and sent to the remote outputs past their minimum level and rate
@@ -26,7 +33,9 @@ public:
 
     // Remote outputs (issue #69): every line is also handed to fn, which must not block
     // (LogDispatcher::submit copies it into a queue). nullptr turns it off.
-    typedef void (*Forwarder)(void* ctx, const char* level, const char* msg, bool notice);
+    // uptime_ms: millis() of the line, the same value kept in the buffer, so the System
+    // Log page and the syslog server show the same time (US-118)
+    typedef void (*Forwarder)(void* ctx, const char* level, const char* msg, bool notice, uint32_t uptime_ms);
     static void setForwarder(Forwarder fn, void* ctx);
 
 private:

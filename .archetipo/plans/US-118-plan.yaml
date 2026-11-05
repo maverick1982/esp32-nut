@@ -1,0 +1,320 @@
+schema: archetipo/plan/v2
+spec_code: US-118
+body: |
+  ---
+  type: plan
+  title: "US-118: Ora della scheda nel terminale e nell'export del System Log — Piano di implementazione"
+  description: "Piano di implementazione per US-118"
+  tags: [plan, implementation, US-118]
+  ---
+  # US-118: Ora della scheda nel terminale e nell'export del System Log — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** `feature/us-118-board-time-logs`, da creare a partire da `feature/us-117-ntp-time` (1df42c5), perché US-117 è DONE ma non ancora in `main`. Se US-117 viene unita prima, si parte da `main`.
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** LOW | **Punti:** 3 | **Bloccato da:** US-117 (DONE)
+
+  **User Story**
+  Come utente che legge o esporta il System Log, voglio vedere l'ora della scheda nel fuso scelto in Board Settings, in modo che le righe coincidano con quelle del server syslog e con gli eventi dell'UPS, anche se apro la pagina da un dispositivo con l'orologio sbagliato.
+
+  **Criteri di Accettazione**: vedi la spec US-118: ora della scheda nel terminale (anche per le righe scritte prima della sincronizzazione), ricostruzione con l'orologio del browser senza ora (issue #60), export con l'ora della scheda e campi `id`, `time`, `level`, `msg` invariati, riavvio come oggi, e2e.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi `GET /api/logs` restituisce `[{id, time, level, msg}]`, dove `time` è il `millis()` della riga, più l'intestazione `X-Uptime-Ms`. Il terminale (`fetchLogs` in `data/www/bundle.js`) converte `time` nell'ora del browser. Export (`#btn-download`) apre semplicemente `/api/logs`. **L'ora della scheda la calcola il firmware**, riga per riga, e la mette in un campo nuovo della stessa risposta: così terminale ed export hanno la stessa fonte, e il browser non deve convertire fusi POSIX (non può: conosce solo i nomi IANA, e la stringa POSIX della tabella di US-117 è la regola che usa la scheda).
+
+  - **Campo nuovo `board_time`** in ogni riga di `GET /api/logs`, solo quando la scheda ha l'ora (`NtpClock::epochMsAt` valido): ISO 8601 con millisecondi e offset del fuso di Board Settings, ad esempio `"board_time":"2026-11-05T09:12:03.007+01:00"` (UTC → `+00:00`). L'offset rende l'export leggibile da solo. Senza ora il campo manca: la risposta è byte per byte quella di oggi. `id`, `time`, `level`, `msg` e `X-Uptime-Ms` restano invariati.
+  - **Core puro `lib/TimeCore/src/BoardTime.h/.cpp`** (test nativi, niente piattaforma):
+    - `int64_t boardEpochMs(int64_t list_epoch_ms, uint32_t list_uptime_ms, uint32_t row_uptime_ms)` = `list_epoch_ms - (uint32_t)(list_uptime_ms - row_uptime_ms)`. Si conta all'indietro dall'istante in cui si costruisce la lista, con la differenza **senza segno**, come fa oggi il browser. Così vale per qualsiasi riga del buffer: scritta prima della sincronizzazione, oltre il wrap di `millis()`, e anche più vecchia di 24,8 giorni (limite di `WallClock::epochMsAt` con la differenza `int32_t`). Precondizione: `row_uptime_ms <= list_uptime_ms` (vero, vedi sotto).
+    - `int32_t utcOffsetSeconds(const struct tm& local, const struct tm& utc)`: differenza in secondi tra i due istanti scomposti, con un `daysFromCivil(y, m, d)` interno, senza `mktime`/`timegm`, così i test nativi non dipendono dal TZ di Windows. Gestisce il cambio di giorno, di mese e di anno tra locale e UTC.
+    - `size_t formatBoardTime(const struct tm& local, const struct tm& utc, uint16_t ms, char* out, size_t len)`: scrive `YYYY-MM-DDThh:mm:ss.mmm+hh:mm` (29 caratteri) con `snprintf`, segno `-` per gli offset negativi, minuti dell'offset per i fusi a mezz'ora (`+05:30`, `-03:30`). Restituisce 0 se `len < 30`.
+  - **Stesso uptime per il buffer e per il syslog**: oggi `AppLogger::write` scrive `millis()` nel buffer e `LogDispatcher::submit` legge di nuovo `millis()`. Raramente i due valori cadono in secondi diversi, e allora il terminale e il server syslog mostrerebbero ore diverse. `AppLogger::write` legge `millis()` una volta e lo passa al forwarder: `Forwarder` diventa `void (*)(void* ctx, const char* level, const char* msg, bool notice, uint32_t uptime_ms)`, `LogDispatcher::submit(level, msg, notice, uptime_ms)` lo copia in `LogRecord::uptime_ms`. Nessun altro cambiamento di comportamento.
+  - **Costruzione della lista** (`include/core/app_logger.h`, `src/core/app_logger.cpp`): `getLogsJSON(BoardTimeFn fn = nullptr, void* ctx = nullptr)` con `typedef bool (*BoardTimeFn)(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len)`. Dentro il lock, `list_uptime_ms = millis()` letto **dopo** aver preso il mutex: nessuna riga può essere più recente, perché ogni scrittura prende lo stesso mutex. Per ogni riga, se `fn` restituisce true, si aggiunge `board_time` **come copia** (`String(buf)` o equivalente: un `char[]` locale passato a ArduinoJson potrebbe essere memorizzato come puntatore). Senza `fn` l'uscita è quella di oggi. `AppLogger` resta senza dipendenze da `NtpClock`.
+  - **Riferimento dell'ora senza lock annidati** (`src/network/ntp_clock.h/.cpp`): nuovo `bool NtpClock::reference(WallClock& out) const` che copia `_clock` sotto `_mutex` e restituisce `out.valid()`. In `WebConfigServer::handleLogs()`: se `ntp_clock && ntp_clock->reference(ref)`, si passa a `getLogsJSON` una callback statica con `ctx = &ref` che fa: `ref.epochMsAt(list_uptime, list_epoch)` → `boardEpochMs(...)` → `NtpClock::localTm` / `NtpClock::utcTm` → `formatBoardTime(..., epoch % 1000, ...)`. Nella callback, eseguita sotto il mutex del logger, non si prende mai il mutex di `NtpClock` (copiato prima) e non si chiama `AppLogger`: solo `localtime_r` e `gmtime_r`, che newlib protegge con il suo lock. Così niente deadlock con `NtpClock::poll()`, che scrive righe con `AppLogger::log`.
+  - **Coerenza con il syslog**: il syslog (US-117) formatta con `SyslogOutput::timeOf(record.uptime_ms)` e il riferimento del momento dell'invio. `/api/logs` usa il riferimento del momento della lettura. I due istanti differiscono solo per la correzione dell'orologio a una nuova sincronizzazione (ogni 3 h, millisecondi): nel caso peggiore il secondo mostrato può cambiare di uno, solo per righe a cavallo di una sincronizzazione. Il terminale tronca ai secondi come RFC 3164 (`localTm` tronca i ms), quindi `hh:mm:ss` coincide con il TIMESTAMP 3164 e, in RFC 5424, con l'ora UTC convertita.
+  - **Terminale** (`data/www/bundle.js`, poi `python scripts/embed_web.py`): in `fetchLogs`, per ogni riga nuova, se `typeof logs[i].board_time === 'string'` e `/T(\d{2}):(\d{2}):(\d{2})/` lo riconosce, l'ora mostrata è quella `hh:mm:ss` così com'è (nessuna conversione `Date`, che la riporterebbe al fuso del browser). Altrimenti resta la ricostruzione di oggi da `X-Uptime-Ms` (issue #60). `addLogEntry(level, msg, when, timeText)` accetta un quarto parametro facoltativo, il testo `hh:mm:ss` già pronto, che ha la precedenza su `when`. Il rilevamento del riavvio (`Device restarted`, ID e uptime che calano) e `lastLogId` non cambiano. Le righe scritte dalla pagina stessa (`Downloading logs...`, `Auto-refresh enabled`) restano con l'ora del browser come oggi: non vengono dalla scheda.
+  - **Export**: invariato lato UI (`window.location.href = '/api/logs'`): scarica la stessa lista, che ora contiene `board_time` quando c'è l'ora. Nessun nuovo endpoint né `Content-Disposition` (fuori scope).
+  - **Prima della sincronizzazione / NTP spento / dopo un riavvio**: `reference()` restituisce false (US-117: `WallClock::clear()` con NTP spento, nessun riferimento dopo l'avvio), quindi niente `board_time` e il terminale si comporta come oggi. Alla prima sincronizzazione tutte le righe del buffer, comprese quelle scritte prima, ricevono `board_time`; nel terminale quelle già mostrate non vengono ridisegnate (lo sono una volta sola, per ID).
+  - **Documentazione**: ADR 0012, nella sezione sull'ora di US-117, una riga: `GET /api/logs` aggiunge `board_time` (ISO 8601 con offset) per ogni riga quando la scheda ha l'ora; il terminale la mostra, senza ora usa l'orologio del browser. Le note di rilascio non fanno parte di questa spec.
+  - **Flash**: aumento di poche centinaia di byte. Si riporta nella PR la dimensione di `esp32-s3-standard` rispetto a US-117 (2.126.736 B), con il margine rispetto allo slot della 4 MB (#93, già superato da US-117).
+
+  ### Assunzioni
+
+  - Il formato di `board_time` (ISO 8601 con ms e offset) non è chiesto dalla spec: è scelto perché un export letto da solo, senza Board Settings, resta univoco.
+  - Il riferimento di `WallClock` invecchiato di più di 24,8 giorni senza nuova sincronizzazione (rete persa per settimane) è un limite di US-117 per `epochMsAt(list_uptime)`: non si corregge qui.
+
+  ---
+
+  ## Strategia di test
+
+  La parte nuova di logica (conto all'indietro, offset, formato) sta in `lib/TimeCore`, coperta da Unity nativi. `AppLogger` e `handleLogs` usano la piattaforma: si verificano con le build e con la prova sul campo (`curl` su `/api/logs`). Il terminale e l'export con Playwright e i mock di `e2e/support/webui.ts`.
+
+  - `test/test_time_core` (casi nuovi): `boardEpochMs` per riga uguale alla lista, riga 5 s prima, riga prima della sincronizzazione, wrap di `millis()` (lista a 1000, riga a `0xFFFFFC18`), riga di 30 giorni prima; `utcOffsetSeconds` per UTC (0), Europe/Rome inverno (+3600) ed estate (+7200), America/New_York (−18000), India (+19800), Newfoundland (−12600), cambio di giorno (locale 00:30 del 1 gennaio contro UTC 23:30 del 31 dicembre); `formatBoardTime`: `2026-11-05T09:12:03.007+01:00`, `+00:00`, `-05:00`, `+05:30`, millisecondi `000` e `999`, buffer troppo corto → 0.
+  - Comando nativo: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_time_core -f test_log_core -f test_web_api`, poi la suite completa a blocchi di circa 8 suite (limite 600 s).
+  - Build: `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` (controlla anche che i chiamanti del forwarder compilino).
+  - Prova sul campo su ESP32-S3 + Eaton 3S, **solo dopo un sì esplicito dell'utente**: `curl` di `/api/logs` con NTP spento (nessun `board_time`) e acceso (tutte le righe con `board_time`, anche quelle dell'avvio), confronto `hh:mm:ss` tra terminale e ricevitore syslog RFC 3164 sul PC, browser con il fuso diverso da Europe/Rome.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`e2e/logs-viewer.spec.ts`, mock con `serveIndex` di `e2e/support/webui.ts` e `page.route('**/api/logs', ...)` con l'intestazione `X-Uptime-Ms`)
+  **Video demo:** previsto (la `Dimostrazione` è filmabile; lo registra `archetipo-review`, non l'implementazione)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Ora della scheda | Browser con `timezoneId` `America/New_York` (`test.use`), l'utente apre System Logs: le righe con `board_time` `2026-11-05T09:12:03.007+01:00` mostrano `[09:12:03]`, non l'ora del browser |
+  | Senza ora della scheda | Righe senza `board_time`, orologio del browser fissato (`page.clock`, o valore atteso calcolato con `page.evaluate`), `X-Uptime-Ms` 10000 e `time` 4000: la riga mostra l'ora del browser meno 6 s, come oggi |
+  | Ora che arriva dopo | Prima risposta senza `board_time`, seconda con una riga nuova con `board_time`: la prima riga resta com'era, la nuova mostra l'ora della scheda |
+  | Riavvio | Seconda risposta con `X-Uptime-Ms` minore e ID che ripartono da 1: compare `Device restarted` e le righe nuove sono mostrate (con o senza `board_time`) |
+  | Export | Click su Export: il browser apre `/api/logs` e la risposta contiene per ogni riga `id`, `time`, `level`, `msg` e `board_time` |
+  | Regressione | I test esistenti di `e2e/logs-viewer.spec.ts` e `e2e/remote-logging.spec.ts` restano verdi |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-05_
+tasks:
+  - id: TASK-01
+    title: 'Core puro lib/TimeCore/BoardTime: ora di una riga, offset del fuso, formato ISO 8601'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** avere il calcolo e il formato dell'ora di una riga del System Log senza dipendenze di piattaforma.
+
+      **Leggere:** sezione "Core puro `lib/TimeCore/src/BoardTime.h/.cpp`" del piano; `lib/TimeCore/src/WallClock.h` (stile e commenti); `lib/LogCore/src/SyslogFormat.cpp` (formato da `struct tm` senza `localtime`).
+
+      **Modifiche:** creare `lib/TimeCore/src/BoardTime.h` e `BoardTime.cpp` con `boardEpochMs(list_epoch_ms, list_uptime_ms, row_uptime_ms)` (differenza `uint32_t`), `utcOffsetSeconds(local, utc)` con `daysFromCivil` interno, `formatBoardTime(local, utc, ms, out, len)` → `YYYY-MM-DDThh:mm:ss.mmm+hh:mm`, 0 se `len < 30`.
+
+      **Passi:** 1) `boardEpochMs`; 2) `daysFromCivil` e `utcOffsetSeconds`; 3) `formatBoardTime` con `snprintf`, segno e minuti dell'offset; 4) commenti in inglese come gli altri file di TimeCore, che spiegano perché la differenza è senza segno.
+
+      **Verifica:** compila con la suite del TASK-02.
+
+      **Blocchi:** nessuno. Non usare `mktime`, `timegm`, `localtime` né `strftime("%z")`.
+
+      ## File Coinvolti
+      - lib/TimeCore/src/BoardTime.h — nuovo
+      - lib/TimeCore/src/BoardTime.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] `boardEpochMs` dà l'ora giusta per righe precedenti alla sincronizzazione, oltre il wrap di `millis()` e più vecchie di 24,8 giorni
+      - [ ] `formatBoardTime` scrive `2026-11-05T09:12:03.007+01:00` per Europe/Rome in inverno e gestisce offset negativi e a mezz'ora
+      - [ ] Nessuna chiamata di piattaforma né dipendenza dal TZ del processo
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di BoardTime in test_time_core
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `BoardTime` con test Unity nativi.
+
+      **Leggere:** "Strategia di test" del piano (elenco dei casi); `test/test_time_core/test_main.cpp`.
+
+      **Modifiche:** aggiungere a `test/test_time_core/test_main.cpp` i casi di `boardEpochMs`, `utcOffsetSeconds` e `formatBoardTime` elencati nel piano, costruendo i `struct tm` a mano, e registrarli in `main` con `RUN_TEST`.
+
+      **Passi:** 1) helper per costruire un `struct tm`; 2) casi; 3) eseguire.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_time_core`.
+
+      **Blocchi:** "program.exe: Accesso negato" → cancellare `.pio/build/native/program.exe`. Un test che fallisce si risolve correggendo il codice, non il test.
+
+      ## File Coinvolti
+      - test/test_time_core/test_main.cpp — casi nuovi
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi del piano presenti e verdi
+      - [ ] I test esistenti di test_time_core restano verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: Stesso uptime per il buffer del System Log e per il syslog
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far sì che la riga del terminale e quella del server syslog partano dallo stesso `millis()`, così il secondo mostrato coincide sempre.
+
+      **Leggere:** sezione "Stesso uptime per il buffer e per il syslog" del piano; `include/core/app_logger.h`, `src/core/app_logger.cpp` (`write`), `src/core/log_dispatcher.h/.cpp` (`submit`, `forward`).
+
+      **Modifiche:** `AppLogger::Forwarder` riceve un ultimo parametro `uint32_t uptime_ms`; `AppLogger::write` legge `millis()` una volta, lo usa per `logBuffer[head].time`, per il `Serial.printf` e per il forwarder; `LogDispatcher::submit(level, msg, notice, uptime_ms)` lo copia in `r.uptime_ms` al posto di `millis()`; `LogDispatcher::forward` passa il parametro.
+
+      **Passi:** 1) cercare con Grep tutti i chiamanti di `setForwarder`, `submit(` e `Forwarder` in `src`, `include`, `lib`, `test`; 2) aggiornare firme e chiamanti; 3) aggiornare il commento di `submit`.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila; le suite native che toccano LogCore restano verdi.
+
+      **Blocchi:** se un test nativo usa un forwarder finto, aggiornarlo alla nuova firma senza cambiarne le asserzioni.
+
+      ## File Coinvolti
+      - include/core/app_logger.h — firma di `Forwarder`
+      - src/core/app_logger.cpp — un solo `millis()` in `write`
+      - src/core/log_dispatcher.h — firma di `submit` e `forward`
+      - src/core/log_dispatcher.cpp — `r.uptime_ms` dal parametro
+
+      ## Criteri di Completamento
+      - [ ] `write` legge `millis()` una sola volta e lo stesso valore arriva in `LogRecord::uptime_ms`
+      - [ ] Nessun altro cambiamento di comportamento del logger o del syslog
+      - [ ] Build S3 verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Campo board_time in GET /api/logs
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ogni riga di `GET /api/logs` ha `board_time` quando la scheda ha l'ora; senza ora la risposta resta quella di oggi.
+
+      **Leggere:** sezioni "Costruzione della lista" e "Riferimento dell'ora senza lock annidati" del piano; `src/core/app_logger.cpp` (`getLogsJSON`); `src/network/ntp_clock.h/.cpp` (`epochMsAt`, `localTm`, `utcTm`); `src/network/web_config_server.cpp` (`handleLogs`).
+
+      **Modifiche:**
+      - `AppLogger`: `typedef bool (*BoardTimeFn)(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len)` e `getLogsJSON(BoardTimeFn fn = nullptr, void* ctx = nullptr)`; `list_uptime_ms = millis()` letto dopo aver preso il mutex; `obj["board_time"]` aggiunto come copia (`String(buf)`) solo se `fn` restituisce true.
+      - `NtpClock`: `bool reference(WallClock& out) const`, copia di `_clock` sotto `_mutex`.
+      - `WebConfigServer::handleLogs`: se `ntp_clock && ntp_clock->reference(ref)`, callback statica con `ctx = &ref` che chiama `ref.epochMsAt(list_uptime)`, `boardEpochMs`, `NtpClock::localTm`, `NtpClock::utcTm`, `formatBoardTime` (ms = `epoch % 1000`). Aggiornare il commento "issue 60".
+
+      **Passi:** 1) `reference()`; 2) `getLogsJSON` con la callback; 3) `handleLogs`; 4) controllare che la callback non prenda il mutex di `NtpClock` né chiami `AppLogger`.
+
+      **Verifica:** build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` da PowerShell.
+
+      **Blocchi:** se `ArduinoJson` in uso memorizza il `char[]` per puntatore, usare la copia esplicita; se il `JsonDocument` cresce troppo, segnalarlo invece di ridurre `MAX_LOGS`.
+
+      ## File Coinvolti
+      - include/core/app_logger.h — `BoardTimeFn`, nuova firma
+      - src/core/app_logger.cpp — `board_time` per riga
+      - src/network/ntp_clock.h — `reference()`
+      - src/network/ntp_clock.cpp — `reference()`
+      - src/network/web_config_server.cpp — `handleLogs` con la callback
+
+      ## Criteri di Completamento
+      - [ ] Con l'ora, ogni riga ha `board_time` nel formato del piano, anche quelle scritte prima della sincronizzazione
+      - [ ] Senza ora (NTP spento, prima della sincronizzazione) la risposta non contiene `board_time`
+      - [ ] `id`, `time`, `level`, `msg` e `X-Uptime-Ms` invariati
+      - [ ] Nessun lock di `NtpClock` preso sotto il mutex del logger
+      - [ ] Tre build verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: Terminale del System Log con l'ora della scheda
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il terminale mostra `hh:mm:ss` di `board_time` quando c'è, altrimenti l'ora ricostruita dal browser come oggi.
+
+      **Leggere:** sezione "Terminale" del piano; `data/www/bundle.js` (`addLogEntry` e `fetchLogs`, circa righe 754-825).
+
+      **Modifiche:** `addLogEntry(level, msg, when, timeText)` con `timeText` facoltativo che ha la precedenza; in `fetchLogs`, per le righe nuove, estrarre `hh:mm:ss` da `board_time` con `/T(\d{2}):(\d{2}):(\d{2})/` senza passare da `Date`; se il campo manca o non corrisponde, il calcolo di oggi da `X-Uptime-Ms`. Commento che cita US-118 e issue #60. Poi `python scripts/embed_web.py`.
+
+      **Passi:** 1) `addLogEntry`; 2) `fetchLogs`; 3) rigenerare gli asset; 4) controllare che rilevamento del riavvio e `lastLogId` siano intatti.
+
+      **Verifica:** `npx playwright test e2e/logs-viewer.spec.ts` verde (test esistenti); build S3 con gli asset rigenerati.
+
+      **Blocchi:** `scripts/embed_web.py` va eseguito a mano: il pre-script di PlatformIO non rigenera nulla.
+
+      ## File Coinvolti
+      - data/www/bundle.js — `addLogEntry`, `fetchLogs`
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+      - include/network/.web_assets.hash — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] Le righe con `board_time` mostrano la sua ora, qualunque sia il fuso del browser
+      - [ ] Le righe senza `board_time` mostrano l'ora come oggi
+      - [ ] `Device restarted` e ID dopo un riavvio come oggi
+      - [ ] Asset rigenerati e committabili insieme al sorgente
+    ref: TASK-05
+  - id: TASK-06
+    title: e2e del terminale con e senza ora della scheda e dell'export
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della tabella "Test E2E" del piano.
+
+      **Leggere:** tabella "Test E2E — Simulazione utente" del piano; `e2e/logs-viewer.spec.ts`; `e2e/support/webui.ts`; `e2e/time-settings.spec.ts` (mock dell'ora di US-117).
+
+      **Modifiche:** in `e2e/logs-viewer.spec.ts`, nuovo `test.describe` per US-118 con: ora della scheda con `test.use({ timezoneId: 'America/New_York' })` e atteso `[09:12:03]`; senza ora con l'orologio del browser fissato (`page.clock` se la versione di Playwright lo supporta, altrimenti valore atteso calcolato con `page.evaluate`); ora che arriva alla seconda risposta; riavvio con uptime minore e ID da 1; export che apre `/api/logs` con i cinque campi. I mock rispondono con l'intestazione `X-Uptime-Ms`.
+
+      **Passi:** 1) helper di mock con risposte in sequenza; 2) scenari; 3) eseguire anche `e2e/remote-logging.spec.ts`.
+
+      **Verifica:** `npx playwright test e2e/logs-viewer.spec.ts e2e/remote-logging.spec.ts` verde.
+
+      **Blocchi:** un test che fallisce si risolve correggendo il codice, non il test; se Export mostra il JSON invece di scaricarlo, è il comportamento di oggi: si verifica la risposta di `/api/logs`, non il download.
+
+      ## File Coinvolti
+      - e2e/logs-viewer.spec.ts — scenari US-118
+
+      ## Criteri di Completamento
+      - [ ] Cinque scenari del piano presenti e verdi
+      - [ ] Test esistenti di `logs-viewer.spec.ts` e `remote-logging.spec.ts` verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: ADR 0012, suite native complete, build e flash
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la documentazione e verificare tutto prima della review.
+
+      **Leggere:** sezioni "Documentazione" e "Flash" del piano; `docs/adr/0012-remote-log-outputs.md` (sezione sull'ora di US-117).
+
+      **Modifiche:** una riga in ADR 0012 su `board_time` in `GET /api/logs` e sul terminale che lo mostra; niente note di rilascio.
+
+      **Passi:** 1) ADR; 2) suite native complete a blocchi di circa 8 suite; 3) build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; 4) dimensione di `firmware.bin` S3 contro 2.126.736 B di US-117 e margine rispetto ai 2.031.616 B dello slot della 4 MB (#93), da annotare per la PR.
+
+      **Verifica:** tutte le suite native verdi, tre build verdi, e2e del TASK-06 verde.
+
+      **Blocchi:** nessun commit o push senza conferma dell'utente; nella PR "Refs", mai "Closes".
+
+      ## File Coinvolti
+      - docs/adr/0012-remote-log-outputs.md — riga su `board_time`
+
+      ## Criteri di Completamento
+      - [ ] ADR aggiornata
+      - [ ] Suite native complete e tre build verdi
+      - [ ] Dimensione del flash misurata e annotata
+    ref: TASK-07
+  - id: TASK-08
+    title: Prova sul campo su ESP32-S3 (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare sulla scheda reale che terminale, export e server syslog mostrino la stessa ora della scheda.
+
+      **Leggere:** "Strategia di test" del piano; `docs/test-results/US-117/` (procedura di US-117, ricevitore UDP sul PC).
+
+      **Modifiche:** nessuna nel codice. Evidenze in `docs/test-results/US-118/` (cartella in `.gitignore`, resta in locale).
+
+      **Passi:** 1) chiedere il consenso esplicito all'utente prima di flashare o toccare la scheda; 2) OTA del firmware; 3) NTP spento: `curl` di `/api/logs` senza `board_time`; 4) NTP acceso con Europe/Rome: tutte le righe con `board_time`, comprese quelle dell'avvio; 5) syslog RFC 3164 verso il PC: `hh:mm:ss` uguale tra terminale e ricevitore; 6) browser con fuso diverso; 7) riavvio della scheda dalla pagina.
+
+      **Verifica:** evidenze salvate (output di `curl`, righe del ricevitore, screenshot del terminale).
+
+      **Blocchi:** senza consenso esplicito la prova non si fa: lo si riporta come non eseguita. Le credenziali della scheda non vanno mai stampate.
+
+      ## File Coinvolti
+      - docs/test-results/US-118/ — evidenze locali
+
+      ## Criteri di Completamento
+      - [ ] Consenso dell'utente ottenuto prima della prova
+      - [ ] `board_time` assente senza ora e presente con l'ora, anche per le righe dell'avvio
+      - [ ] Stessa ora tra terminale e server syslog
+    ref: TASK-08
