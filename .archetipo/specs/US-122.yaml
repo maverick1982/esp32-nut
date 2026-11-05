@@ -1,0 +1,49 @@
+schema: archetipo/spec/v2
+code: US-122
+title: Recuperare un transfer di controllo bloccato con il ciclo della porta USB invece del riavvio (#120)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: DONE
+body: |
+  #### US-122: Recuperare un transfer di controllo bloccato con il ciclo della porta USB invece del riavvio (#120)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS che ogni tanto non risponde a una richiesta USB (per esempio lo Smart-UPS 1500 di tevaadarelsol nella #120, ma anche i Back-UPS BX della #60),
+  voglio che la scheda liberi la richiesta bloccata spegnendo e riaccendendo la porta USB, senza riavviarsi,
+  in modo che il server NUT perda solo qualche secondo di dati e che la rete, il System Log e la web UI restino attivi.
+
+  **Dimostrazione**
+  In un test nativo, la logica di recupero davanti a un transfer bloccato sceglie prima il ciclo della porta root, al massimo un numero di volte deciso dal piano, e solo dopo il riavvio con `RestartPolicy`. Sulla scheda, con una build di prova che simula il transfer bloccato sull'Eaton 3S, il System Log mostra il WARN del ciclo e l'UPS torna in pochi secondi. La scheda non si riavvia: l'uptime continua.
+
+  **Criteri di Accettazione**
+  - [ ] Quando `LinkMonitor` vede un transfer di controllo bloccato (`hid_host_device_ctrl_stuck()`, oggi `Recovery exhausted (control transfer stuck in the USB stack)`), il firmware spegne e riaccende la porta root con `usb_host_lib_set_root_port_power()` invece di chiedere subito il riavvio. L'UPS si ri-enumera e il poll riprende.
+  - [ ] Il System Log mostra un WARN per ogni ciclo (per esempio "Control transfer stuck: power-cycling the USB port"). Il numero di cicli dal boot è visibile nella diagnostica o nella riga `[USB] Last 60 s`.
+  - [ ] Il riavvio con le regole di `RestartPolicy` resta la rete di sicurezza: si usa se il ciclo non libera la pipe, se l'UPS non torna entro un tempo deciso dal piano, o se i cicli in una finestra superano un limite deciso dal piano.
+  - [ ] Durante il ciclo i dati sono stale come oggi: i client NUT ricevono `ERR DATA-STALE` e mai valori vecchi spacciati per freschi.
+  - [ ] Il piano verifica, nei sorgenti di IDF 5.5.5 e sulla scheda, l'ordine tra il callback dell'URB svuotato (`usbh.c`, halt e flush di EP0 al device gone) e l'evento `DEV_GONE` di `hid_host.c`. Cicli ripetuti non devono lasciare memoria persa: oggi con `ctrl_inflight` ancora vero al `DEV_GONE` il contesto del device viene lasciato in memoria ("leaking device context"). L'heap libero resta stabile dopo almeno 10 cicli.
+  - [ ] Test nativi per la nuova logica (pura, come `LinkMonitor` e `RestartPolicy`). Suite nativa verde, tre build ok, ADR 0008 aggiornato.
+
+  **Assunzioni**
+  - Prova dalla #120 (log seriale, v1.13.0): 13 riavvii in circa 2 ore, a intervalli da 28 s a 30 min. Ogni volta una GET_REPORT FEATURE va in timeout, sempre su un report diverso (9, 11, 29, 30, 32, 42, 44). La richiesta successiva trova "Control pipe not available", e dopo circa 3 s arriva il riavvio. Dopo il riavvio l'UPS torna subito.
+  - Con NUT su un PC lo stesso UPS andava senza problemi: libusb abbandona la richiesta in timeout. Qui l'HCD di IDF non ha timeout e il client non può fare halt o flush di EP0 (ADR 0008).
+  - In IDF 5.5.5 un device gone fa halt e flush di EP0 e restituisce gli URB in volo con il loro callback (`usbh.c:537-560`). Il ciclo della porta root di US-121 provoca proprio un device gone: sull'Eaton 3S l'UPS si stacca e torna in circa 6 s.
+  - La VBUS non viene tolta: per l'UPS il ciclo vale come un riavvio della scheda, che oggi lo fa tornare.
+  - Fuori scope: la causa per cui lo Smart-UPS non risponde, e la riduzione delle richieste (US-120, già in main).
+  - Issue aperte fino alla release ("Refs #120").
+history:
+  - status: TODO
+    at: "2026-11-05T17:11:41Z"
+  - status: PLANNED
+    at: "2026-11-05T17:22:31Z"
+  - status: IN PROGRESS
+    at: "2026-11-05T17:28:26Z"
+  - status: REVIEW
+    at: "2026-11-05T18:33:15Z"
+  - status: DONE
+    at: "2026-11-05T19:27:57Z"

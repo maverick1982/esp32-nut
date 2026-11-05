@@ -18,8 +18,9 @@
  * If a timed-out control transfer is still held by the USB stack (ctrlStuck), an
  * interface recovery cannot free EP0: stuckRestartMs after the first failure the monitor
  * asks for the restart directly (issue #60, APC Back-UPS BX). 3 s, before the data turns
- * stale (staleAfterMs): the INPUT reports keep the status current meanwhile, so NUT
- * clients only miss the few seconds of the reboot.
+ * stale (staleAfterMs). For a RESTART with ctrlStuck the owner first power-cycles the
+ * root port, which hands the stuck URB back, and restarts only if that did not help
+ * (PortCyclePolicy, US-122).
  * Devices that only stream INPUT reports never issue control requests, so they
  * never accumulate failures and are never reset.
  */
@@ -81,7 +82,8 @@ public:
 
     Action tick(uint32_t now, bool ctrlStuck = false) {
         if (_failures == 0) return Action::NONE;
-        // Only the bus reset of a restart gives EP0 back (ADR 0008)
+        // An interface restart cannot give EP0 back: the owner power-cycles the root port,
+        // or restarts (US-122, ADR 0008)
         if (ctrlStuck && (now - _firstFailureMs) >= _cfg.stuckRestartMs) return Action::RESTART;
         if ((now - _windowStartMs) < _cfg.linkTimeoutMs) return Action::NONE;
         if (_recoveries >= _cfg.maxRecoveries) return Action::RESTART;

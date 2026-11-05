@@ -21,6 +21,7 @@
 #include "DriverVarStore.h"
 #include "DiagSweep.h"
 #include "EnumWatchdog.h"
+#include "PortCyclePolicy.h"
 #include <atomic>
 #include <map>
 #include <vector>
@@ -109,6 +110,9 @@ public:
     bool isNotEnumeratedRestart() const {
         return _restart_requested && _restart_reason == NOT_ENUMERATED_REASON;
     }
+
+    // USB port power cycles since the boot that recovered a stuck control transfer (US-122)
+    uint32_t getPortCyclesSinceBoot() const { return _port_cycles.cyclesSinceBoot(); }
 
     // Free stack of the poll task in bytes (diagnostics)
     uint32_t getPollTaskStackHighWater() const;
@@ -216,6 +220,10 @@ private:
     void requestRestart(const char* why);
     void serviceEnumWatchdog(uint32_t now);
     void cycleRootPort();
+    // LinkMonitor asked for a restart with a control transfer stuck in the stack (US-122)
+    void recoverStuckTransfer(uint32_t now);
+    // After a port cycle: true when the poll must not go on (US-122)
+    bool servicePortCycleWait(uint32_t now);
     void logStats(uint32_t now);
     // _op_mutex held; field: the beeper usage to write, nullptr = the active beeper (US-074)
     bool setBeeperLocked(bool enable, const HIDUsageDef* field = nullptr);
@@ -266,6 +274,7 @@ private:
     uint32_t _stat_get_ok;
     uint32_t _stat_get_failed;
     uint32_t _stat_diag_empty = 0; // empty answers of the export read (US-119)
+    uint32_t _stat_port_cycles = 0; // USB port power cycles for a stuck transfer (US-122)
     bool _in_restart_pending;
     uint8_t _in_start_attempts;
     uint32_t _in_restart_at;
@@ -277,6 +286,14 @@ private:
     EnumWatchdog _enum_wd;
     uint8_t _auto_restart_count = 0;
     bool _enum_seen = false;  // a HID device connected (or failed to open) since the boot
+
+    // Stuck control transfer recovered with a USB port power cycle (US-122): poll task only
+    PortCyclePolicy _port_cycles;
+#if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
+    static const uint32_t TEST_STUCK_EVERY_MS = 90000;
+    uint32_t _test_stuck_at = 0;    // last time the pipe was not proven, or a cycle waited
+    bool _test_stuck_active = false; // simulated stuck transfer, until the cycle starts
+#endif
 
     UPSData _ups_data;
     IUPSDriver* _driver;

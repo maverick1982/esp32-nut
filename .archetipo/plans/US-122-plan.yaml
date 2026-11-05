@@ -1,0 +1,374 @@
+schema: archetipo/plan/v2
+spec_code: US-122
+body: |
+  ---
+  type: plan
+  title: 'US-122: Recuperare un transfer di controllo bloccato con il ciclo della porta USB invece del riavvio (#120) — Piano di implementazione'
+  description: 'Piano di implementazione per US-122'
+  tags: [plan, implementation, US-122]
+  ---
+  # US-122: Recuperare un transfer di controllo bloccato con il ciclo della porta USB invece del riavvio (#120) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** da creare all'implementazione, da `main` 68f67f3 (es. `feature/us-122-stuck-port-cycle`)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3 | **Bloccato da:** -
+
+  Quando `LinkMonitor` vede un transfer di controllo bloccato, si spegne e riaccende la porta root invece di riavviare. L'UPS si ri-enumera e il poll riprende. Il riavvio resta come rete di sicurezza.
+
+  ## Contesto verificato nei sorgenti (ESP-IDF 5.5.5)
+
+  - Oggi (`USBHostUPS::service()`), con `hid_host_device_ctrl_stuck()` vero, `LinkMonitor::tick()` restituisce `RESTART` 3 s dopo il primo fallimento (`stuckRestartMs`), e `requestRestart("control transfer stuck in the USB stack")` porta al riavvio con `RestartPolicy`. Il log della #120 mostra 13 di questi episodi in circa 90 min, ognuno chiuso da un riavvio.
+  - **Device gone libera l'URB bloccato.** Quando la porta root si spegne, l'USBH imposta per il device `EPn_HALT_FLUSH | EP0_FLUSH | EP0_DEQUEUE | PROP_GONE_EVT` (`usbh.c:915-918`). Le esegue in quest'ordine (`usbh.c:745-760`): halt e flush di EP0 e dequeue degli URB con un evento `USBH_EVENT_CTRL_XFER` per ciascuno (`usbh.c:537-560`), *poi* propaga `DEV_GONE`.
+  - **L'ordine arriva uguale al client.** `usb_host_client_handle_events()` chiama prima i callback dei transfer di controllo completati (`done_ctrl_xfer_tailq`, `usb_host.c:940-948`), *poi* gli eventi del client (`DEV_GONE`, `usb_host.c:954-959`). Il callback di `hid_host.c` (riga ~1062) azzera `ctrl_inflight` e dà il semaforo. Quando arriva `DEV_GONE` (`hid_host_device_disconnected`), `ctrl_inflight` è quindi già falso: il ramo `Control transfer still in flight on device removal, leaking device context` (`hid_host.c:1516`) non dovrebbe scattare. Va confermato sulla scheda con l'heap dopo almeno 10 cicli (criterio 5).
+  - Il ciclo della porta di US-121 (`USBHostUPS::cycleRootPort()`: off, 500 ms, on) sull'Eaton 3S stacca e riattacca un device enumerato: `HID Device Disconnected` dopo circa 1 s, `Connected` dopo un altro secondo, dati serviti dopo circa 6 s.
+
+  ## Soluzione tecnica
+
+  ### 1. Logica pura `PortCyclePolicy` (`lib/USBHostUPS/src/PortCyclePolicy.h`)
+
+  Header-only, senza IDF, come `LinkMonitor`, `RestartPolicy` ed `EnumWatchdog`.
+
+  - `enum class Decision : uint8_t { CYCLE_PORT, RESTART };`
+  - Costanti:
+    - `BACK_TIMEOUT_MS = 30000`: dopo il ciclo l'UPS deve tornare (claim e pipe di controllo provata) entro 30 s; l'Eaton ci mette circa 6 s, lo Smart-UPS della #120 circa 4 s di full poll dopo il claim;
+    - `MAX_CYCLES_PER_WINDOW = 12` con `WINDOW_MS = 3600000`: oltre 12 cicli nell'ultima ora si torna al riavvio. Il log della #120 ne ha al massimo 10 in un'ora (simulato nel TASK-02).
+  - `Decision onStuck(uint32_t now)`:
+    - `RESTART` se un ciclo precedente è ancora in attesa (`waiting()`, cioè l'UPS si è bloccato di nuovo prima che la pipe fosse provata: il ciclo non è bastato);
+    - `RESTART` se negli ultimi `WINDOW_MS` ci sono già `MAX_CYCLES_PER_WINDOW` cicli (anello di 12 timestamp, differenze unsigned);
+    - altrimenti registra il ciclo, entra in attesa e restituisce `CYCLE_PORT`.
+  - `void onProven()`: esce dall'attesa.
+  - `bool backTimedOut(uint32_t now)`: vero una sola volta se l'attesa supera `BACK_TIMEOUT_MS`.
+  - `waiting()`, `cyclesSinceBoot()`, `lastRestartReason()`: la costante del motivo dell'ultimo `RESTART`.
+  - Motivi (≤ 64 byte, per `recordRestartReason`):
+    - `"control transfer stuck again after the USB port power cycle"`;
+    - `"too many USB port power cycles in an hour"`;
+    - `"UPS not back after the USB port power cycle"` (per `backTimedOut`).
+
+  ### 2. Integrazione in `USBHostUPS::service()`
+
+  - Nel ramo `LinkMonitor::Action::RESTART`: se `ctrl_stuck`, `_port_cycles.onStuck(now)`.
+    - **`CYCLE_PORT`:**
+      1. WARN `[USB] Control transfer stuck: power-cycling the USB port (cycle %u since boot)`;
+      2. sotto `_mutex`: `_is_ready_to_poll = false`, così i dati diventano subito stale e il driver smette di chiedere al device che sta per sparire; `_link.reset(now)`, così nessun altro `RESTART` scatta prima dell'evento di disconnessione;
+      3. `cycleRootPort()`, `++_stat_port_cycles`, return.
+    - **`RESTART`:** `requestRestart(_port_cycles.lastRestartReason())`.
+    Il ramo `RESTART` senza `ctrl_stuck` (pipe che non risponde dopo i recuperi dell'interfaccia) resta com'è.
+  - Prima di `if (!_is_ready_to_poll || !_driver) return;`, se `_port_cycles.waiting()`:
+    - se `isControlPipeProven()`: `onProven()` e INFO `[USB] UPS back after the USB port power cycle in %u ms`;
+    - altrimenti, se `backTimedOut(now)`: `requestRestart("UPS not back after the USB port power cycle")` e return.
+  - `DISCONNECTED` e `CONNECTED` restano gestiti come oggi (`handleDisconnected`, `claimInterface`, che fa `_link.reset`).
+  - `_port_cycles` non si azzera alla disconnessione: conta dal boot.
+  - **Contatore visibile:**
+    - la riga `[USB] Last 60 s` aggiunge `, N USB port power cycles` solo quando N > 0 nel periodo (come `empty (export read)` di US-119);
+    - l'export USB aggiunge `link.port_cycles`, cicli dal boot: `UsbDiagSnapshot::port_cycles`, `UsbDiagJson` dopo `input_recoveries`.
+  - **Build di prova `NUT_TEST_STUCK_CYCLE`.** Con l'UPS collegato e la pipe provata, ogni 90 s simula un transfer bloccato: `_link.onLinkFailure(now)` e `ctrl_stuck = true` per quei tick. Dopo 3 s parte il ciclo vero. Con 12 cicli in 18 min il tredicesimo trova il limite e chiede il riavvio: si prova anche la rete di sicurezza. Il riavvio del contatore e il resto seguono le regole normali. Non simula l'URB realmente in volo: quel ramo è coperto dall'analisi dei sorgenti, e lo confermerà il reporter della #120.
+
+  ### 3. Documentazione
+
+  - ADR 0008, nuova sezione US-122:
+    - ordine `EP0_DEQUEUE` → callback → `DEV_GONE` con i riferimenti;
+    - politica dei cicli, motivi e limiti;
+    - contatori;
+    - build di prova;
+    - rischi aperti: lo URB vero non si riproduce sul banco, e un UPS che ogni tanto non si ri-enumera ricade sul riavvio, poi su US-121.
+  - Aggiornare la frase "A control URB that never comes back can only be cleared by a restart" (Negative) e il commento in `LinkMonitor.h` ("Only the bus reset of a restart gives EP0 back"). `LinkMonitor` non cambia comportamento: `RESTART` con `ctrlStuck` diventa, per `USBHostUPS`, la richiesta di ciclo.
+
+  ## Strategia di test
+
+  - **Native `test/test_port_cycle_policy`:**
+    - primo stuck → `CYCLE_PORT`;
+    - stuck in attesa → `RESTART` con il motivo `stuck again`;
+    - `onProven` riabilita;
+    - `backTimedOut` a 30 000 ms, non a 29 999, e una volta sola;
+    - limite di 12 nell'ultima ora (il tredicesimo → `RESTART` con il motivo `too many`), e la finestra che scorre (dopo un'ora si torna a ciclare);
+    - `cyclesSinceBoot`;
+    - wrap di `millis()`;
+    - **scenario della #120:** gli intervalli fra un blocco e il successivo, presi dal log seriale (190, 452, 518, 28, 158, 760, 84, 200, 260, 100, 1810, 519, 339 s), più circa 6 s di ritorno dopo ogni ciclo, danno solo `CYCLE_PORT` e nessun `RESTART`.
+  - **Native `test_usb_diag_json`:** campo `link.port_cycles`, anche con `UINT16_MAX` se il tipo è `uint16_t`.
+  - **E2E:** nessuna, perché non cambia la web UI (l'export è un download già coperto).
+  - **Build:** S3, P4, P4 v1; dimensione dell'S3 contro `main` 68f67f3 (#93).
+  - **Sul campo (solo dopo un sì esplicito dell'utente):** build `NUT_TEST_STUCK_CYCLE` sull'Eaton 3S per circa 25 min. Si osserva:
+    - 12 cicli, ciascuno con WARN, `HID Device Disconnected` / `Connected` e `UPS back after the USB port power cycle in N ms`;
+    - nessun riavvio fino al tredicesimo, che chiede il riavvio con `too many USB port power cycles in an hour`;
+    - nessun `leaking device context`, nessun panic;
+    - heap libero stabile fra il primo e il dodicesimo ciclo (righe `[DIAG] Heap` ogni minuto);
+    - `[USB] Last 60 s` con il contatore e `link.port_cycles` nell'export;
+    - alla fine, OTA della build normale.
+
+  ## Note
+
+  - Note di rilascio: si scrivono prima della release, non sono un task di questo piano. Alla release, commento su #120 (promesso al reporter).
+  - Issue aperte fino alla release: `Refs #120`.
+  - Fuori scope: la causa per cui lo Smart-UPS non risponde, e la riduzione delle richieste (US-120).
+tasks:
+  - id: TASK-01
+    title: 'PortCyclePolicy: logica pura dei cicli della porta per un transfer bloccato'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** classe header-only che decide se un transfer bloccato si recupera con il ciclo della porta root o con il riavvio, e quando il ciclo non ha funzionato.
+
+      **Leggere:** `lib/USBHostUPS/src/EnumWatchdog.h` e `lib/USBHostUPS/src/RestartPolicy.h` (stile, commenti in inglese, differenze unsigned), sezione 1 del piano.
+
+      **Modificare:** nuovo `lib/USBHostUPS/src/PortCyclePolicy.h`:
+      - `enum class Decision : uint8_t { CYCLE_PORT, RESTART }`;
+      - costanti `BACK_TIMEOUT_MS = 30000`, `MAX_CYCLES_PER_WINDOW = 12`, `WINDOW_MS = 3600000`;
+      - costanti dei tre motivi (`static constexpr const char*`);
+      - `onStuck(now)`, `onProven()`, `backTimedOut(now)` (una sola volta per attesa), `waiting()`, `cyclesSinceBoot()`, `lastRestartReason()`;
+      - anello di 12 timestamp per la finestra, differenze unsigned;
+      - commento di classe: #120, `usbh.c` che restituisce l'URB al device gone, rete di sicurezza.
+
+      **Passi:** 1) scrivere la classe; 2) compilarla con il test del TASK-02.
+
+      **Verifica:** compila nella suite native del TASK-02.
+
+      **Fatto:** solo `<stdint.h>`; nessuna dipendenza da IDF o Arduino.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/PortCyclePolicy.h — nuova classe pura
+
+      ## Criteri di Completamento
+      - [ ] Primo stuck: ciclo; stuck di nuovo prima della prova: riavvio
+      - [ ] Al massimo 12 cicli nell'ultima ora, poi riavvio
+      - [ ] Timeout di ritorno a 30 s, una sola volta
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test native di PortCyclePolicy, con lo scenario del log della #120'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire la logica e dimostrare che, con gli intervalli reali della #120, non si arriva al riavvio.
+
+      **Leggere:** `test/test_enum_watchdog/test_main.cpp` (struttura), sezione Strategia di test del piano.
+
+      **Modificare:** nuova suite `test/test_port_cycle_policy/test_main.cpp` con almeno:
+      - `test_first_stuck_cycles_port`;
+      - `test_stuck_again_before_proven_restarts` (motivo `stuck again`);
+      - `test_proven_allows_next_cycle`;
+      - `test_back_timeout_once` (29 999 no, 30 000 sì, poi no);
+      - `test_window_limit` (12 cicli in meno di un'ora, il tredicesimo → `RESTART` con il motivo `too many`);
+      - `test_window_slides` (dopo un'ora dal più vecchio si torna a ciclare);
+      - `test_cycles_since_boot`;
+      - `test_millis_wrap`;
+      - `test_issue120_timeline`: intervalli fra un blocco e il successivo {190, 452, 518, 28, 158, 760, 84, 200, 260, 100, 1810, 519, 339} s; dopo ogni `CYCLE_PORT` `onProven()` a +6 s; tutti `CYCLE_PORT`, nessun `RESTART`, `cyclesSinceBoot() == 13`.
+
+      **Passi:** 1) scrivere i test; 2) eseguirli.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_port_cycle_policy` verde.
+
+      **Fatto:** tutti verdi; nomi per comportamento.
+
+      **Blocchi:** se lo scenario della #120 supera il limite di 12, rivedere il limite nel TASK-01 e annotarlo nel piano (non cambiare lo scenario).
+
+      ## File Coinvolti
+      - test/test_port_cycle_policy/test_main.cpp — nuova suite native
+
+      ## Criteri di Completamento
+      - [ ] Ciclo, riavvio per stuck ripetuto, timeout e limite orario coperti
+      - [ ] Scenario della #120 senza riavvii
+      - [ ] Suite verde
+    ref: TASK-02
+  - id: TASK-03
+    title: 'USBHostUPS: ciclo della porta al posto del riavvio per il transfer bloccato, e build di prova'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** con `ctrl_stuck` il poll task cicla la porta root e aspetta che l'UPS torni; il riavvio resta per i casi in cui il ciclo non basta.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.h/.cpp` (`service()`, `cycleRootPort()`, `handleDisconnected()`, `claimInterface()`, `isControlPipeProven()`, `logStats()`, `requestRestart()`), `lib/USBHostUPS/src/LinkMonitor.h`, sezione 2 del piano.
+
+      **Modificare:**
+      - `USBHostUPS.h`: `#include "PortCyclePolicy.h"`; privati `PortCyclePolicy _port_cycles`, `uint32_t _stat_port_cycles = 0`; pubblico `uint32_t getPortCyclesSinceBoot() const`.
+      - `USBHostUPS.cpp`:
+        - ramo `LinkMonitor::Action::RESTART` in `service()`: se `ctrl_stuck`, `onStuck(now)`:
+          - `CYCLE_PORT`: WARN `[USB] Control transfer stuck: power-cycling the USB port (cycle %u since boot)`; sotto `_mutex` `_is_ready_to_poll = false`; `_link.reset(now)`; `cycleRootPort()`; `_stat_port_cycles++`; return;
+          - `RESTART`: `requestRestart(_port_cycles.lastRestartReason())`.
+          Senza `ctrl_stuck`, invariato.
+        - Prima di `if (!_is_ready_to_poll || !_driver) return;`: se `_port_cycles.waiting()`, `isControlPipeProven()` → `onProven()` + INFO `[USB] UPS back after the USB port power cycle in %u ms`; altrimenti se `backTimedOut(now)` → `requestRestart(PortCyclePolicy::NOT_BACK_REASON)` e return.
+        - `logStats()`: suffisso `, %u USB port power cycles` solo se `_stat_port_cycles > 0`, azzerato col periodo.
+        - Build `NUT_TEST_STUCK_CYCLE`: con `isControlPipeProven()` e `!_port_cycles.waiting()`, ogni 90 s (`millis()`), WARN `[TEST] Simulated stuck control transfer (NUT_TEST_STUCK_CYCLE)`, `_link.onLinkFailure(now)` e `ctrl_stuck = true` finché il ciclo non parte.
+
+      **Passi:** 1) header; 2) cpp; 3) build S3; 4) build S3 con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_STUCK_CYCLE=1` (binario per il TASK-08).
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok, anche con il flag di prova.
+
+      **Fatto:** il riavvio per stuck passa sempre da `PortCyclePolicy`; il riavvio non-stuck è invariato; dati stale subito dopo il ciclo.
+
+      **Blocchi:** se `isControlPipeProven()` non diventa mai vero dopo il ri-claim (per esempio per i device solo INPUT), fermarsi e decidere un'altra condizione di ritorno (per i device solo INPUT lo stuck non può succedere: non fanno richieste di controllo).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — membri, include, getter dei cicli
+      - lib/USBHostUPS/src/USBHostUPS.cpp — ramo stuck, attesa del ritorno, riga delle statistiche, build di prova
+
+      ## Criteri di Completamento
+      - [ ] Stuck: ciclo con WARN, dati stale, nessun riavvio se l'UPS torna e la pipe è provata
+      - [ ] Riavvio con il motivo giusto se il ciclo non basta, se l'UPS non torna in 30 s o oltre 12 cicli in un'ora
+      - [ ] Contatore nella riga `[USB] Last 60 s`
+      - [ ] Build S3 normale e di prova ok
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Export USB: link.port_cycles, e test di UsbDiagJson'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il numero di cicli dal boot nell'export USB Diagnostics.
+
+      **Leggere:** `lib/USBHostUPS/src/UsbDiagSnapshot.h` (campi `link`), `lib/WebApi/src/UsbDiagJson.cpp` (~riga 119), `USBHostUPS::snapshotUSBDiagnostics()` (~riga 1455), `test/test_usb_diag_json/test_main.cpp` (righe ~64 e ~246).
+
+      **Modificare:**
+      - `UsbDiagSnapshot.h`: `uint16_t port_cycles = 0;` dopo `input_recoveries`;
+      - `USBHostUPS::snapshotUSBDiagnostics()`: `s.port_cycles` da `_port_cycles.cyclesSinceBoot()` (saturato a `UINT16_MAX`);
+      - `UsbDiagJson.cpp`: chiave `port_cycles` dopo `input_recoveries` (attenzione alla virgola dell'ultimo campo);
+      - `test_usb_diag_json`: il modello di riferimento con `link["port_cycles"]`, il caso dei valori massimi con `UINT16_MAX`.
+
+      **Passi:** 1) modifiche; 2) suite `test_usb_diag_json`; 3) build S3.
+
+      **Verifica:** `pio test -e native -f test_usb_diag_json` verde; build S3 ok.
+
+      **Fatto:** nessun altro campo dell'export cambia; le fixture si rigiocano (le fixture ignorano i campi nuovi di `link`; verificarlo con `test_record_replay`).
+
+      **Blocchi:** se il loader delle fixture rifiuta chiavi sconosciute in `link`, fermarsi.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — campo `port_cycles`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — snapshot
+      - lib/WebApi/src/UsbDiagJson.cpp — chiave JSON
+      - test/test_usb_diag_json/test_main.cpp — attese aggiornate
+
+      ## Criteri di Completamento
+      - [ ] `link.port_cycles` nell'export
+      - [ ] `test_usb_diag_json` e `test_record_replay` verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: 'ADR 0008 e commento di LinkMonitor: il ciclo della porta libera EP0'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione e correggere le frasi che dicono che solo un riavvio libera EP0.
+
+      **Leggere:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md` (addendum #60, addendum US-121, sezione Negative), `lib/USBHostUPS/src/LinkMonitor.h` (commento di classe e di `tick`), sezioni Contesto e Soluzione del piano.
+
+      **Modificare:**
+      - ADR 0008, nuova sezione `Stuck control transfer: USB port power cycle instead of a restart (US-122, issue #120, 2026-11-xx)`, in inglese come l'ADR:
+        - prova della #120;
+        - ordine `usbh.c:915-918` / `745-760` / `537-560` e `usb_host.c:940-959`, quindi nessun leak atteso;
+        - `PortCyclePolicy` (attesa, 30 s, 12 per ora, motivi);
+        - contatori (`[USB] Last 60 s`, `link.port_cycles`);
+        - build `NUT_TEST_STUCK_CYCLE`;
+        - rischi: lo URB vero non si riproduce sul banco; un UPS che non si ri-enumera ricade sul riavvio e su US-121.
+      - ADR 0008, sezione Negative: la frase sul solo riavvio diventa "... until US-122 only a restart cleared it; now a root port power cycle does (see its addendum)".
+      - `LinkMonitor.h`: commenti aggiornati ("`RESTART` with `ctrlStuck`: the owner power-cycles the root port first, US-122"), senza cambiare il codice.
+      - `docs/adr/README.md`: riga della 0008 con US-122.
+
+      **Passi:** 1) ADR; 2) commenti; 3) README.
+
+      **Verifica:** rilettura; riferimenti `file:riga` di IDF 5.5.5 corretti.
+
+      **Fatto:** nessuna frase rimasta che dica che solo il riavvio libera EP0.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — nuova sezione US-122 e frase Negative
+      - lib/USBHostUPS/src/LinkMonitor.h — commenti
+      - docs/adr/README.md — riga della 0008
+
+      ## Criteri di Completamento
+      - [ ] Ordine degli eventi IDF documentato con i riferimenti
+      - [ ] Politica, motivi e contatori descritti
+      - [ ] Frasi superate corrette
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Verifica finale: suite native, tre build e dimensione flash'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che il resto è invariato e che le tre schede compilano.
+
+      **Leggere:** sezione Strategia di test del piano.
+
+      **Modificare:** niente codice. Risultati in `docs/test-results/US-122/verification.md`.
+
+      **Passi:**
+      1) `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (lunga: in background);
+      2) build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, **una alla volta** (memoria del PC);
+      3) dimensione di `firmware.bin` S3 contro `main` 68f67f3 (2.137.728 byte) e lo slot 0x1F0000 (#93).
+
+      **Verifica:** tutto verde.
+
+      **Fatto:** numeri annotati nel file dei risultati.
+
+      **Blocchi:** un fallimento in suite non toccate va capito prima di procedere.
+
+      ## File Coinvolti
+      - docs/test-results/US-122/verification.md — esito di test, build e dimensioni
+
+      ## Criteri di Completamento
+      - [ ] Suite native verde
+      - [ ] Tre build ok, dimensione S3 annotata
+    ref: TASK-06
+  - id: TASK-07
+    title: Prova sul campo con la build NUT_TEST_STUCK_CYCLE sull'Eaton 3S (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** vedere sulla scheda reale 12 cicli senza riavvio, il ritorno dell'UPS ogni volta, la rete di sicurezza al tredicesimo e l'heap stabile.
+
+      **Leggere:** `docs/test-results/US-121/field-eaton3s.md` (formato e script), sezione Strategia di test del piano. Le credenziali della scheda sono nel file JSON indicato in memoria: non stamparle mai. Lo script `collect.py` (raccolta continua di `/api/logs` e `/api/system-status`) è nello scratchpad della sessione di US-121: copiarlo.
+
+      **Modificare:** niente codice. Risultati in `docs/test-results/US-122/field-eaton3s.md` e `field/`.
+
+      **Passi (solo dopo il sì esplicito dell'utente, chiesto al momento):**
+      1) snapshot prima (status, NUT);
+      2) OTA della build `NUT_TEST_STUCK_CYCLE` e raccolta dei log per circa 25 min;
+      3) per ogni ciclo: `[TEST] Simulated stuck`, WARN del ciclo, `HID Device Disconnected` / `Connected`, `UPS back after the USB port power cycle in N ms`;
+      4) controllare che non ci siano `leaking device context`, riavvii o panic fino al tredicesimo stuck, che chiede il riavvio con `too many USB port power cycles in an hour`;
+      5) heap: righe `[DIAG] Heap` al primo e al dodicesimo ciclo; contatore nella riga `[USB] Last 60 s`; export con `link.port_cycles`;
+      6) OTA della build normale, snapshot finale (chiavi NUT uguali).
+
+      **Verifica:** i passi 3-6 come descritti.
+
+      **Fatto:** file dei risultati scritto; sulla scheda resta la build normale.
+
+      **Blocchi:** senza il sì dell'utente non si fa. Se dopo un ciclo l'UPS non torna, o compare `leaking device context`, fermarsi e riportare.
+
+      ## File Coinvolti
+      - docs/test-results/US-122/field-eaton3s.md — esito della prova
+      - docs/test-results/US-122/field/ — log, stato, snapshot NUT, export
+
+      ## Criteri di Completamento
+      - [ ] 12 cicli senza riavvio, UPS tornato ogni volta
+      - [ ] Riavvio al tredicesimo con il motivo del limite
+      - [ ] Nessun leak del contesto, heap stabile
+      - [ ] Build normale di nuovo sulla scheda
+    ref: TASK-07
