@@ -109,6 +109,19 @@ public:
     virtual uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const { return expected; }
 
     /**
+     * @brief False for the reports the on-demand read of the diagnostics export must not
+     * request (US-119): the same reports the poll leaves out for safety, so a report that
+     * freezes a firmware (CyberPower 6 and >= 130, Eaton 254/255) is never asked.
+     */
+    virtual bool acceptDiagReport(uint8_t report_type, uint8_t report_id) const { return true; }
+
+    /**
+     * @brief Minimum gap between two control requests of the driver (US-119): the on-demand
+     * read of the export keeps it from any other request, as the poll steps do.
+     */
+    virtual uint32_t requestSpacingMs() const { return 50; }
+
+    /**
      * @brief Forgets that a report was decoded: the next poll requests it again even when
      * static reports are read once (US-067, after a failed read back of a written report).
      */

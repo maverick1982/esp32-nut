@@ -1,0 +1,426 @@
+schema: archetipo/plan/v2
+spec_code: US-119
+body: |
+  ---
+  type: plan
+  title: "US-119: Export USB Diagnostics, leggere su richiesta tutti i report del descrittore — Piano di implementazione"
+  description: "Piano di implementazione per US-119"
+  tags: [plan, implementation, US-119]
+  ---
+  # US-119: Export USB Diagnostics, leggere su richiesta tutti i report del descrittore — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-05
+  **Branch:** `feature/us-119-us-120-report-reads` (da `main` e87bfe5), condiviso con US-120
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 3 | **Bloccato da:** -
+
+  **User Story**
+  Come manutentore che riceve gli export degli utenti nelle issue di compatibilità, voglio che "Export USB Diagnostics" legga una volta, al momento dell'export, tutti i report Feature del descrittore, in modo che l'export contenga anche i report che il poll non chiede, e che continui a servire per trovare nuove mappature anche quando il poll leggerà solo quello che legge NUT (US-120).
+
+  **Criteri di Accettazione**: vedi la spec US-119: lettura su richiesta dei report non in cache con la spaziatura del poll e senza bloccare NUT e web UI; esclusioni di `acceptPollReport()` mantenute; report vuoto indicato nell'export senza log ERROR; export parziale se il collegamento cade, ADR 0008 invariata; fixture e replay validi, suite nativa e tre build.
+
+  Origine: issue #123 (APC BXR1200MI, report vendor 227 vuoto ogni 30 s). US-120 toglierà dal full poll i report senza righe; questa spec viene prima, perché gli export non perdano quei report.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi `GET /api/usb/dump` scrive l'istantanea di `_cached_reports`, cioè solo quello che il poll ha letto. Le richieste USB sono bloccanti e girano nel task `ups_poll` (ADR 0008). Il loopTask serve sia NUT sia la web UI: una lettura di decine di report lì dentro (50 ms di spaziatura ciascuno, più eventuali timeout) li bloccherebbe per secondi. Per questo la lettura diventa **asincrona, in due tempi**: la pagina la chiede, il task di poll la esegue intercalata al poll, la pagina scarica l'export quando è finita.
+
+  ### Core puro `lib/USBHostUPS/src/DiagSweep.h` (test nativi)
+
+  Classe senza piattaforma che tiene lo stato della lettura su richiesta:
+  - `start(const std::vector<HIDUsageDef>& usages, const std::set<uint16_t>& cached_keys, Accept accept)`: lista dei report **FEATURE** (`report_type == 3`) del descrittore, in ordine di prima comparsa e senza doppioni, compreso il report ID 0 per i dispositivi senza ID; esclude quelli già in cache (`(type << 8) | id`) e quelli che `accept(type, id)` rifiuta. Gli INPUT e gli OUTPUT non si leggono.
+  - `next(PollItem& out)`: il prossimo report da chiedere; `record(uint8_t id, Result r, const uint8_t* data, size_t len)` con `Result { Read, Empty, Failed }`.
+  - `interrupt()`: il collegamento non permette più richieste; `state()` → `Idle`, `Reading`, `Done`, `Interrupted`; contatori `total`, `done`, `read`, `empty`, `failed`.
+  - `results()`: per ogni report letto i byte, per un report vuoto `data` vuoto e il flag `empty`, per un fallito nessun dato (viene solo contato).
+  - `clear()`: nuovo dispositivo o disconnessione.
+
+  ### Driver
+
+  - `IUPSDriver::acceptDiagReport(uint8_t type, uint8_t id) const` (predefinito `true`) e `IUPSDriver::requestSpacingMs() const` (predefinito 50, come `GenericDriver::STEP_SPACING_MS`).
+  - `GenericDriver` li implementa con `acceptPollReport()` e `stepSpacingMs()`. Così i report esclusi per sicurezza restano esclusi anche dall'export: CyberPower 6 e ≥ 130, Eaton 254 e 255. Nessuna modifica a `CyberPowerDriver` né a `EatonDriver`.
+
+  ### Host `USBHostUPS`
+
+  - **Richiesta (qualsiasi task):** `requestDiagRead()` alza un flag atomico. Restituisce false senza UPS pronto (`!_is_ready_to_poll` o nessun driver). Se una lettura è già in corso non la riavvia. `diagReadStatus()` copia stato e contatori sotto `_mutex`.
+  - **Esecuzione (task `ups_poll`, in `service()`):**
+    - Al flag: `DiagSweep::start()` sotto `_mutex` con `getUsages()`, le chiavi di `_cached_reports` e `_driver->acceptDiagReport`. I risultati della lettura precedente si cancellano.
+    - Spaziatura: `noteControlResult()` registra `_last_ctrl_at` per ogni richiesta di controllo (poll, comandi, letture su richiesta). Un passo della lettura parte solo se `now - _last_ctrl_at >= _driver->requestSpacingMs()`. In più, se l'ultima richiesta è stata della lettura su richiesta (`_diag_last_at`) e non è passata la spaziatura, `_driver->loop()` salta quell'iterazione (≤ 50 ms di ritardo). Così fra due richieste c'è sempre la spaziatura del poll, e il poll ha la precedenza quando entrambi sono pronti: la lettura parte dopo `loop()`.
+    - Un passo per iterazione con `readReportRaw()`. Se `!_link.canPoll(now)`, `_restart_requested` o `_in_restart_pending`, la lettura passa a `Interrupted` e si ferma. Le soglie e la scala di ripristino dell'ADR 0008 non cambiano, perché i risultati passano dallo stesso `noteControlResult()`.
+    - Alla fine una sola riga INFO: `[USB] Export read: 41 reports, 39 read, 1 empty, 1 failed` (o `... interrupted after 12 of 41`).
+  - **`readReportRaw(id, type, len, out)`:** `hid_class_request_get_report` come `requestReport()`, con `noteControlResult()` e le statistiche GET, ma **senza decodifica, senza `_cached_reports` e senza log ERROR**. Un report vuoto (0 byte) diventa `Empty` senza log; un errore diventa `Failed`, con al massimo un `logDebug`. Lunghezza: `_hid_parser.getExpectedLength(id, FEATURE)` passata da `_driver->requestLength()`, come il poll. Nessun lock applicativo durante il trasferimento (ADR 0008).
+  - **Il poll normale non cambia:** i report letti su richiesta non vengono decodificati e non toccano `UPSData`, la cache del poll o le liste del driver.
+  - **Pulizia:** `DiagSweep::clear()` dove oggi si svuota `_cached_reports` (claim e disconnessione).
+
+  ### Export (`UsbDiagSnapshot`, `UsbDiagJson`)
+
+  - `UsbDiagReport` riceve `bool on_demand` e `bool empty`. `snapshotUSBDiagnostics()` unisce `_cached_reports` e i risultati della lettura su richiesta (solo le chiavi assenti dalla cache) nell'ordine della chiave `(type << 8) | id`, che è l'ordine di oggi.
+  - Formato di un report letto su richiesta: `{"id": 227, "type": 3, "data": [...], "on_demand": true}`; se vuoto `{"id": 227, "type": 3, "data": [], "on_demand": true, "empty": true}`. I report del poll restano byte per byte come oggi (nessuna chiave nuova). Il replay salta già i report con `data` vuoto (`FixtureReplayRunner.h`: `if (!rData.empty())`) e ignora le chiavi sconosciute: le fixture esistenti e i nuovi export restano compatibili.
+  - Nuovo oggetto `"export_read"` dopo `"link"`: `{"state": "done", "requested": 41, "read": 39, "empty": 1, "failed": 1}`. `state` vale `done`, `interrupted`, `reading` (export scaricato prima della fine) o `not_requested` (export senza lettura, ad esempio da un client che chiama solo `GET /api/usb/dump`).
+
+  ### API web (`WebConfigServer`, rotte `guarded()`)
+
+  - `POST /api/usb/dump/read` → 202 `{"state":"reading","total":41,"done":0}`; 503 `{"error":"UPS not ready"}` senza UPS pronto. Body vuoto, nessun parametro.
+  - `GET /api/usb/dump/read` → 200 `{"state":"idle|reading|done|interrupted","total","done","read","empty","failed"}` con `Cache-Control: no-store`.
+  - `GET /api/usb/dump` invariato come rotta e come scrittura a pezzi (US-096); aggiunge solo i campi sopra.
+  - Il JSON di stato si costruisce in una funzione pura di `WebApiJson` (`diagReadJson`), testata in nativo.
+
+  ### Web UI (`data/www/bundle.js`, senza mockup)
+
+  Il link `#link-export-usb` resta dov'è, con lo stesso testo. Al click (`preventDefault`):
+  1. riga nel terminale `Reading USB reports for the export...`;
+  2. `POST /api/usb/dump/read`;
+  3. `GET /api/usb/dump/read` ogni 500 ms, finché lo stato è `done` o `interrupted`, oppure fino a un tetto di 60 s;
+  4. riga di esito (`Read 41 USB reports (1 empty, 1 failed)` o `USB link interrupted: export with the reports read so far`), poi `Downloading USB diagnostics...` e `window.location.href = '/api/usb/dump'`.
+
+  Se la POST risponde 503 o fallisce, si scarica subito come oggi. Un 401 segue il percorso di `apiFetch` (login). Il link è disattivato durante la lettura, così un secondo click non parte.
+
+  ### Documentazione
+
+  ADR 0008, sezione sul task di poll: la lettura su richiesta dell'export gira nel task `ups_poll`, una richiesta alla volta con la spaziatura del poll, senza decodifica, e si ferma quando il collegamento non permette richieste. ADR 0006 la aggiorna US-120. Le note di rilascio non fanno parte di questa spec.
+
+  ### Assunzioni
+
+  - "Il firmware legge i report che non ha in cache o che il poll non legge": si leggono i report FEATURE assenti dalla cache. Un report in cache viene dal poll e c'è già; dopo US-120 resteranno in cache solo quelli che il poll legge.
+  - Gli INPUT senza gemello FEATURE non si leggono su richiesta: arrivano dall'endpoint interrupt e, se il poll li chiede, sono già in cache.
+  - La lettura su richiesta non usa `_op_mutex` dall'esterno: gira dentro `service()`, che lo tiene già.
+
+  ---
+
+  ## Strategia di test
+
+  La logica (lista, esclusioni, stati, contatori, formato) sta in codice puro, coperto da Unity nativi. L'integrazione con il trasferimento USB e la spaziatura si verificano con le build e con la prova sul campo; la pagina con Playwright e i mock di `e2e/support/webui.ts`.
+
+  - `test/test_diag_sweep` (nuova): solo FEATURE, ordine di prima comparsa, nessun doppione, report ID 0 incluso; esclusione delle chiavi in cache; esclusione da `accept` (predicato con le regole CyberPower 6 e ≥ 130, Eaton 254/255); risultati `Read`/`Empty`/`Failed` e contatori; `interrupt()` a metà che lascia i letti; `start()` di nuovo che cancella i risultati; `clear()`; descrittore senza FEATURE → `Done` subito con `total` 0.
+  - `test/test_usb_diag_json` (casi nuovi): istantanea senza lettura uguale byte per byte a oggi, a parte `"export_read": {"state": "not_requested", ...}`; report su richiesta con `on_demand`; report vuoto con `data: []` ed `empty`; ordine unito per chiave; stato `interrupted`.
+  - `test/test_web_api` (casi nuovi): `diagReadJson` per ogni stato.
+  - `test/test_record_replay` (caso nuovo): una fixture minima con un report `"data": [], "empty": true, "on_demand": true` passa dal runner senza errori e senza decodifica di quel report. Tutte le fixture esistenti restano verdi.
+  - Driver: `acceptDiagReport` di `CyberPowerDriver` ed `EatonDriver` uguale a `acceptPollReport` (in `test_cyberpower_driver` e `test_eaton_driver`).
+  - Comando nativo: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_diag_sweep -f test_usb_diag_json -f test_web_api -f test_record_replay`, poi la suite completa a blocchi di circa 11 suite (limite 600 s).
+  - Build: `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; dimensione di `firmware.bin` S3 confrontata con `main` e87bfe5 (2.127.984 B).
+  - Prova sul campo su ESP32-S3 + Eaton 3S, **solo dopo un sì esplicito dell'utente**: export dalla pagina reale prima e dopo; tutti i report FEATURE del descrittore presenti tranne 254/255; NUT che risponde durante la lettura; nessun ERROR nel System Log; il poll come prima (righe `[USB] Last 60 s`).
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`e2e/logs-viewer.spec.ts`, mock con `serveIndex` di `e2e/support/webui.ts` e `page.route` per `**/api/usb/dump/read` e `**/api/usb/dump`)
+  **Video demo:** non previsto (la registrazione è disattivata in configurazione; la `Dimostrazione` è filmabile ma l'esito sta nel file scaricato)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Lettura e download | L'utente apre System Logs e clicca "Export USB Diagnostics": parte la POST, le GET di stato passano da `reading` (`done` 10 di 41) a `done`, il terminale mostra la riga di lettura e l'esito con vuoti e falliti, poi parte la richiesta di `/api/usb/dump` |
+  | Collegamento interrotto | Lo stato finisce `interrupted`: il terminale lo dice e il download parte lo stesso |
+  | Senza UPS | La POST risponde 503: il download parte subito, come oggi |
+  | Doppio click | Durante la lettura un secondo click non manda un'altra POST |
+  | Sessione scaduta | La POST risponde 401: la pagina va al login |
+  | Regressione | Il test esistente "should trigger USB diagnostics download" e il resto di `e2e/logs-viewer.spec.ts` restano verdi |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-05_
+tasks:
+  - id: TASK-01
+    title: 'Core puro DiagSweep: lista dei report FEATURE, stati e risultati della lettura su richiesta'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** avere lo stato della lettura su richiesta in codice puro, testabile in nativo.
+
+      **Leggere:** sezione "Core puro `lib/USBHostUPS/src/DiagSweep.h`" del piano; `GenericDriver::buildPollLists` in `lib/USBHostUPS/src/GenericDriver.cpp` (ordine di prima comparsa, report ID 0); `PollItem` e `HIDUsageDef` (header già inclusi da GenericDriver).
+
+      **Modifiche:** creare `lib/USBHostUPS/src/DiagSweep.h` (eventuale `.cpp`) con `start(usages, cached_keys, accept)`, `next()`, `record()`, `interrupt()`, `clear()`, `state()`, contatori e `results()` come descritto nel piano. `Accept` è una `std::function<bool(uint8_t, uint8_t)>` o un template: nessuna dipendenza da `IUPSDriver`.
+
+      **Passi:** 1) tipi `State` e `Result`; 2) `start()` con filtro FEATURE, cache e `accept`; 3) passi e risultati; 4) commenti in inglese che citano US-119 e #123.
+
+      **Verifica:** compila con la suite del TASK-02.
+
+      **Blocchi:** niente `Arduino.h` oltre a quanto già usano gli header puri della libreria; niente chiamate USB.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/DiagSweep.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La lista contiene solo i report FEATURE non in cache e accettati, senza doppioni, nell'ordine del descrittore
+      - [ ] Stati e contatori coerenti anche dopo `interrupt()` e un nuovo `start()`
+      - [ ] Nessuna dipendenza di piattaforma
+    ref: TASK-01
+  - id: TASK-02
+    title: Suite nativa test_diag_sweep
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `DiagSweep` con test Unity nativi.
+
+      **Leggere:** "Strategia di test" del piano (casi di `test/test_diag_sweep`); una suite esistente come modello, ad esempio `test/test_link_monitor/test_main.cpp`.
+
+      **Modifiche:** nuova `test/test_diag_sweep/test_main.cpp` con i casi del piano. Le usages si costruiscono a mano (`HIDUsageDef` con `report_type` e `report_id`).
+
+      **Passi:** 1) helper per le usages; 2) casi; 3) eseguire.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_diag_sweep`.
+
+      **Blocchi:** "program.exe: Accesso negato" → cancellare `.pio/build/native/program.exe`. Un test che fallisce si risolve correggendo il codice, non il test.
+
+      ## File Coinvolti
+      - test/test_diag_sweep/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi del piano presenti e verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Driver: acceptDiagReport e requestSpacingMs in IUPSDriver'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far conoscere all'host quali report non si possono chiedere e la spaziatura del driver, senza duplicare le regole.
+
+      **Leggere:** sezione "Driver" del piano; `lib/USBHostUPS/src/IUPSDriver.h`; `GenericDriver.h` (`acceptPollReport`, `stepSpacingMs`, sezione protected); `CyberPowerDriver.cpp:34` ed `EatonDriver.cpp:162`.
+
+      **Modifiche:** in `IUPSDriver` aggiungere `virtual bool acceptDiagReport(uint8_t report_type, uint8_t report_id) const { return true; }` e `virtual uint32_t requestSpacingMs() const { return 50; }` con commento; in `GenericDriver` le due override pubbliche che restituiscono `acceptPollReport()` e `stepSpacingMs()`. Aggiungere a `test/test_cyberpower_driver` e `test/test_eaton_driver` un caso che confronta `acceptDiagReport` con le esclusioni note (CyberPower 6 e 130, Eaton 254 e 255, un ID ammesso).
+
+      **Passi:** 1) interfaccia; 2) GenericDriver; 3) test dei driver.
+
+      **Verifica:** `pio test -e native -f test_cyberpower_driver -f test_eaton_driver -f test_generic_driver` (con il PATH di mingw).
+
+      **Blocchi:** non cambiare `acceptPollReport` né i driver concreti.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — due metodi virtuali
+      - lib/USBHostUPS/src/GenericDriver.h — override
+      - test/test_cyberpower_driver/test_main.cpp — caso nuovo
+      - test/test_eaton_driver/test_main.cpp — caso nuovo
+
+      ## Criteri di Completamento
+      - [ ] `acceptDiagReport` segue `acceptPollReport` per ogni driver basato su GenericDriver
+      - [ ] Suite dei driver verdi
+    ref: TASK-03
+  - id: TASK-04
+    title: 'USBHostUPS: lettura su richiesta nel task di poll, con spaziatura e interruzione'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** eseguire la lettura su richiesta nel task `ups_poll`, intercalata al poll, senza toccare decodifica, cache e regole di ripristino.
+
+      **Leggere:** sezione "Host `USBHostUPS`" del piano; in `lib/USBHostUPS/src/USBHostUPS.cpp` `service()` (~280), `requestReport()` (~726), `noteControlResult()` (~642), i punti dove si fa `_cached_reports.clear()` (~441, ~600); il commento sul modello dei thread in `USBHostUPS.h` (~34).
+
+      **Modifiche:**
+      - `USBHostUPS.h`: `bool requestDiagRead()`, `DiagReadStatus diagReadStatus() const` (stato e contatori), membri `DiagSweep _diag`, `std::atomic<bool> _diag_requested`, `uint32_t _last_ctrl_at`, `uint32_t _diag_last_at`; metodo privato `readReportRaw(...)`.
+      - `noteControlResult()`: registra `_last_ctrl_at = now`.
+      - `service()`: salto di `_driver->loop()` se `now - _diag_last_at < _driver->requestSpacingMs()` e la lettura è attiva; dopo `loop()`, avvio della lettura al flag (sotto `_mutex`) e un passo se `now - _last_ctrl_at >= requestSpacingMs()`; interruzione se `!_link.canPoll(now)`, `_restart_requested` o `_in_restart_pending`; una riga INFO finale.
+      - `readReportRaw()`: trasferimento come `requestReport()`, statistiche GET e `noteControlResult()`, nessuna decodifica, nessuna cache, nessun log ERROR (vuoto → `Empty`, errore → `Failed` con al massimo `logDebug`).
+      - `_diag.clear()` accanto ai due `_cached_reports.clear()`.
+
+      **Passi:** 1) membri e firme; 2) `readReportRaw`; 3) integrazione in `service()`; 4) pulizia; 5) aggiornare il commento sul modello dei thread.
+
+      **Verifica:** build `esp32-s3-standard`; suite native `test_usb_host`, `test_usb_host_interface`, `test_poll_cycle`, `test_link_monitor` verdi.
+
+      **Blocchi:** nessun lock applicativo durante il trasferimento (ADR 0008); `_mutex` solo per leggere usages e cache e per scrivere i risultati. Se `service()` non permette di saltare `loop()` senza effetti sul primo full poll (`_first_data_ready`), fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — API, membri, commento sui thread
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `readReportRaw`, `service()`, `noteControlResult()`, pulizia
+
+      ## Criteri di Completamento
+      - [ ] La lettura gira solo nel task `ups_poll`, una richiesta per iterazione, con la spaziatura del driver rispetto a qualsiasi altra richiesta di controllo
+      - [ ] Nessuna decodifica né scrittura in `_cached_reports` o `UPSData` per i report letti su richiesta
+      - [ ] Report vuoto senza log ERROR; una sola riga INFO a fine lettura
+      - [ ] Collegamento interrotto → stato `Interrupted` con i risultati già letti
+      - [ ] Build S3 verde
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Export: report su richiesta, report vuoti e oggetto export_read'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** mettere nell'export i report letti su richiesta e l'esito della lettura, lasciando invariati i report del poll.
+
+      **Leggere:** sezione "Export" del piano; `lib/USBHostUPS/src/UsbDiagSnapshot.h`; `UsbDiagJson.cpp` (funzione `write`, sezione reports); `USBHostUPS::snapshotUSBDiagnostics` (~1250).
+
+      **Modifiche:** `UsbDiagReport` con `on_demand` ed `empty`; `UsbDiagSnapshot` con i campi di `export_read` (`state`, `requested`, `read`, `empty`, `failed`); `snapshotUSBDiagnostics()` che unisce cache e risultati per chiave; `UsbDiagJson::write` che scrive `"on_demand": true` ed `"empty": true` solo quando servono e l'oggetto `"export_read"` dopo `"link"`, con lo stesso stile di rientro e a capo.
+
+      **Passi:** 1) snapshot; 2) unione per chiave; 3) JSON.
+
+      **Verifica:** suite del TASK-06.
+
+      **Blocchi:** i report del poll devono uscire byte per byte come oggi; se un test esistente di `test_usb_diag_json` cambia, l'unica differenza ammessa è l'oggetto `export_read`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — campi nuovi
+      - lib/USBHostUPS/src/UsbDiagJson.cpp — scrittura
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `snapshotUSBDiagnostics()`
+
+      ## Criteri di Completamento
+      - [ ] Report su richiesta con `on_demand`, report vuoti con `data: []` ed `empty`
+      - [ ] Oggetto `export_read` con stato e contatori
+      - [ ] Ordine dei report per chiave, come oggi
+    ref: TASK-05
+  - id: TASK-06
+    title: Test nativi dell'export e del replay
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che il nuovo formato è giusto e compatibile con il replay.
+
+      **Leggere:** "Strategia di test" del piano (casi di `test_usb_diag_json` e `test_record_replay`); `test/test_usb_diag_json/test_main.cpp`; `test/test_record_replay/FixtureReplayRunner.h` (`if (!rData.empty())`).
+
+      **Modifiche:** casi nuovi in `test/test_usb_diag_json/test_main.cpp` (senza lettura, report su richiesta, vuoto, ordine, interrotto) e in `test/test_record_replay/test_main.cpp` un caso con una fixture minima, scritta nel test o in `test/fixtures/`, che contiene un report vuoto su richiesta e passa dal runner.
+
+      **Passi:** 1) casi dell'export; 2) caso del replay; 3) eseguire anche tutte le fixture esistenti.
+
+      **Verifica:** `pio test -e native -f test_usb_diag_json -f test_record_replay` (con il PATH di mingw).
+
+      **Blocchi:** un test esistente che cambia per un motivo diverso dall'oggetto `export_read` è un difetto del codice, non del test.
+
+      ## File Coinvolti
+      - test/test_usb_diag_json/test_main.cpp — casi nuovi
+      - test/test_record_replay/test_main.cpp — caso nuovo
+
+      ## Criteri di Completamento
+      - [ ] Casi del piano presenti e verdi
+      - [ ] Tutte le fixture esistenti verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: API POST/GET /api/usb/dump/read e flusso dell'export nella pagina
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** permettere alla pagina di chiedere la lettura, seguirla e poi scaricare l'export.
+
+      **Leggere:** sezioni "API web" e "Web UI" del piano; `src/network/web_config_server.cpp` (rotta `/api/usb/dump` ~124, `guarded()`); `lib/WebApi/src/WebApiJson.h/.cpp`; in `data/www/bundle.js` il gestore di `link-export-usb` (~746) e `apiFetch`.
+
+      **Modifiche:**
+      - `WebApiJson::diagReadJson(...)` pura, con un caso per stato in `test/test_web_api/test_main.cpp`.
+      - Rotte `guarded()` `POST /api/usb/dump/read` (202 o 503 `{"error":"UPS not ready"}`) e `GET /api/usb/dump/read` (200, `Cache-Control: no-store`).
+      - `bundle.js`: click con `preventDefault`, link disattivato durante la lettura, POST, GET ogni 500 ms fino a `done`/`interrupted` o 60 s, righe nel terminale, poi `window.location.href = '/api/usb/dump'`; con 503 o errore download immediato come oggi.
+      - `python scripts/embed_web.py`.
+
+      **Passi:** 1) JSON puro e test; 2) rotte; 3) pagina; 4) asset.
+
+      **Verifica:** `pio test -e native -f test_web_api`; `npx playwright test e2e/logs-viewer.spec.ts` (i test esistenti restano verdi); build S3.
+
+      **Blocchi:** `scripts/embed_web.py` va eseguito a mano. Le rotte nuove non vanno tra quelle pubbliche di `AuthPolicy`.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — `diagReadJson`
+      - lib/WebApi/src/WebApiJson.cpp — `diagReadJson`
+      - test/test_web_api/test_main.cpp — casi nuovi
+      - src/network/web_config_server.cpp — due rotte
+      - data/www/bundle.js — flusso dell'export
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+      - include/network/.web_assets.hash — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] POST e GET di stato rispondono come nel piano, protette dal login
+      - [ ] La pagina scarica l'export dopo la lettura, o subito senza UPS
+      - [ ] Un secondo click durante la lettura non manda un'altra POST
+    ref: TASK-07
+  - id: TASK-08
+    title: e2e del flusso di Export USB Diagnostics
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della tabella "Test E2E" del piano.
+
+      **Leggere:** tabella "Test E2E — Simulazione utente" del piano; `e2e/logs-viewer.spec.ts` (test "should trigger USB diagnostics download"); `e2e/support/webui.ts`.
+
+      **Modifiche:** in `e2e/logs-viewer.spec.ts` un `test.describe` per US-119 con i cinque scenari: lettura e download, interrotto, senza UPS (503), doppio click, 401. Il mock di `**/api/usb/dump/read` risponde alla POST e alle GET in sequenza; il download si verifica con `page.waitForRequest` su `/api/usb/dump`.
+
+      **Passi:** 1) helper di mock; 2) scenari; 3) eseguire l'intero file e `e2e/remote-logging.spec.ts`.
+
+      **Verifica:** `npx playwright test e2e/logs-viewer.spec.ts e2e/remote-logging.spec.ts` verde.
+
+      **Blocchi:** un test esistente che fallisce si risolve correggendo il codice, non il test; per i tempi della GET ogni 500 ms usare `page.clock` se serve.
+
+      ## File Coinvolti
+      - e2e/logs-viewer.spec.ts — scenari US-119
+
+      ## Criteri di Completamento
+      - [ ] Cinque scenari presenti e verdi
+      - [ ] Test esistenti del file verdi
+    ref: TASK-08
+  - id: TASK-09
+    title: ADR 0008, suite native complete, build e flash
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la documentazione e verificare tutto prima della review.
+
+      **Leggere:** sezione "Documentazione" del piano; `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md`.
+
+      **Modifiche:** paragrafo in ADR 0008 sulla lettura su richiesta dell'export (task `ups_poll`, una richiesta alla volta con la spaziatura del poll, senza decodifica, ferma quando il collegamento non permette richieste). Niente note di rilascio.
+
+      **Passi:** 1) ADR; 2) suite native complete a blocchi di circa 11 suite; 3) build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; 4) dimensione di `firmware.bin` S3 contro 2.127.984 B di `main` e87bfe5, annotata per la PR; 5) e2e completa.
+
+      **Verifica:** tutte le suite native verdi, tre build verdi, e2e completa verde.
+
+      **Blocchi:** nessun commit o push senza conferma dell'utente; nella PR "Refs #123", mai "Closes".
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — paragrafo nuovo
+
+      ## Criteri di Completamento
+      - [ ] ADR aggiornata
+      - [ ] Suite native, tre build ed e2e verdi
+      - [ ] Dimensione del flash misurata
+    ref: TASK-09
+  - id: TASK-10
+    title: Prova sul campo su ESP32-S3 + Eaton 3S (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare sul dispositivo reale che l'export contenga tutti i report FEATURE e che poll e NUT non ne risentano.
+
+      **Leggere:** "Strategia di test" del piano; `docs/test-results/US-118/field.md` (procedura, script nello scratchpad `hw/`).
+
+      **Modifiche:** nessuna nel codice. Evidenze in `docs/test-results/US-119/` (cartella ignorata da git).
+
+      **Passi:** 1) chiedere il consenso esplicito prima di flashare o toccare la scheda; 2) export dalla pagina reale col firmware attuale (riferimento); 3) OTA del firmware US-119; 4) export dalla pagina reale: report FEATURE del descrittore tutti presenti tranne 254/255, `export_read` coerente, vuoti indicati; 5) durante la lettura `upsc` risponde; 6) System Log senza ERROR e con una sola riga `[USB] Export read`; 7) righe `[USB] Last 60 s` come prima.
+
+      **Verifica:** evidenze salvate (due export, confronto dei report, output di `upsc`, System Log).
+
+      **Blocchi:** senza consenso la prova non si fa e lo si riporta. Le credenziali della scheda non vanno mai stampate.
+
+      ## File Coinvolti
+      - docs/test-results/US-119/ — evidenze locali
+
+      ## Criteri di Completamento
+      - [ ] Consenso ottenuto prima della prova
+      - [ ] Export con tutti i report FEATURE ammessi
+      - [ ] NUT e poll non toccati, nessun ERROR
+    ref: TASK-10

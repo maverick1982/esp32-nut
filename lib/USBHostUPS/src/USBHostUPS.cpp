@@ -286,6 +286,9 @@ void USBHostUPS::service() {
         now = millis(); // the read can block up to its 5 s timeout
     }
 
+    // The export read stops when the recovery takes over the link (US-119, ADR 0008)
+    if (_restart_requested || _in_restart_pending) interruptDiagRead();
+
     if (_restart_requested) return;
 
     if (_in_restart_pending) {
@@ -324,9 +327,15 @@ void USBHostUPS::service() {
 
     logStats(now);
 
-    // Drivers skip their poll steps while isPollingPaused() reports a backoff
-    _driver->loop(this, _ups_data, now);
+    // Drivers skip their poll steps while isPollingPaused() reports a backoff. Right after a
+    // request of the export read the poll waits for the spacing too (US-119): the driver
+    // only knows the time of its own steps.
+    bool diag_spacing = _diag.state() == DiagSweep::State::Reading &&
+                        (now - _diag_last_at) < _driver->requestSpacingMs();
+    if (!diag_spacing) _driver->loop(this, _ups_data, now);
     logOnlineDischarge(now);
+    // After the poll, so the poll goes first when both are due
+    serviceDiagRead();
 
     if (!_first_data_ready) {
         bool done = false;
@@ -344,13 +353,19 @@ void USBHostUPS::service() {
 
 void USBHostUPS::logStats(uint32_t now) {
     if ((now - _stat_since) < STATS_PERIOD_MS) return;
-    if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed) {
-        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed",
+    if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed || _stat_diag_empty) {
+        // The empty answers of the export read (US-119) are not failures: their own count,
+        // written only when there are some, so the line stays as before without an export
+        char empty[40] = "";
+        if (_stat_diag_empty) {
+            snprintf(empty, sizeof(empty), ", %u empty (export read)", (unsigned)_stat_diag_empty);
+        }
+        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed%s",
             (unsigned)((now - _stat_since) / 1000), (unsigned)_stat_input, (unsigned)_stat_in_packets,
-            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed);
+            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed, empty);
     }
     _stat_since = now;
-    _stat_input = _stat_in_packets = _stat_get_ok = _stat_get_failed = 0;
+    _stat_input = _stat_in_packets = _stat_get_ok = _stat_get_failed = _stat_diag_empty = 0;
 }
 
 void USBHostUPS::processEvents() {
@@ -439,6 +454,8 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     _hid_dev_handle = handle;
     _hid_parser = temp_parser;
     _cached_reports.clear();
+    _diag.clear();
+    _diag_requested = false;
 
     _cached_report_descriptor_hex = "";
     for (size_t i = 0; i < desc_len; i++) {
@@ -598,6 +615,8 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
     _cached_reports.clear();
+    _diag.clear();
+    _diag_requested = false;
     _ol_dischrg_log = OnlineDischargeLog();
 }
 
@@ -640,6 +659,8 @@ void USBHostUPS::closeInterface(hid_host_device_handle_t handle) {
 }
 
 void USBHostUPS::noteControlResult(esp_err_t err, uint32_t now) {
+    // Every control request passes here: the export read keeps its spacing from it (US-119)
+    _last_ctrl_at = now;
     // A STALL or an oversized answer still proves the device is talking to us
     if (err == ESP_OK || err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_INVALID_SIZE) {
         if (_link.failures() > 0) log("INFO", "[USB] Control pipe answering again");
@@ -761,6 +782,110 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         log("ERROR", "requestReport FAILED: type=%d, id=%d, err=0x%x (%s)", report_type, report_id, err, esp_err_to_name(err));
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand read of the USB diagnostics export (US-119, issue #123)
+// ---------------------------------------------------------------------------
+
+bool USBHostUPS::requestDiagRead() {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_is_ready_to_poll || !_driver) return false;
+    if (_diag.state() == DiagSweep::State::Reading) return true; // not started again
+    _diag_requested = true;
+    return true;
+}
+
+DiagSweep::Status USBHostUPS::diagReadStatus() const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (_diag_requested) {
+        // Waiting for the poll task: the previous results are about to be dropped
+        DiagSweep::Status s;
+        s.state = DiagSweep::State::Reading;
+        return s;
+    }
+    return _diag.status();
+}
+
+void USBHostUPS::serviceDiagRead() {
+    if (_diag_requested) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_diag_requested.exchange(false)) {
+            std::set<uint16_t> cached;
+            for (const auto& kv : _cached_reports) cached.insert(kv.first);
+            const IUPSDriver* drv = _driver;
+            _diag.start(_hid_parser.getUsages(), cached, [drv](uint8_t type, uint8_t id) {
+                return drv->acceptDiagReport(type, id);
+            });
+            if (_diag.state() == DiagSweep::State::Done) logDiagReadEnd();
+        }
+    }
+    if (_diag.state() != DiagSweep::State::Reading) return;
+
+    // The poll's request (if any) may have just blocked: time taken again
+    uint32_t now = millis();
+    if (!_link.canPoll(now)) {
+        interruptDiagRead();
+        return;
+    }
+    if ((now - _last_ctrl_at) < _driver->requestSpacingMs()) return;
+
+    DiagSweep::Item item;
+    if (!_diag.next(item)) return;
+    uint16_t expected = _hid_parser.getExpectedLength(item.id, item.type);
+    size_t length = 0;
+    DiagSweep::Result r = readReportRaw(item.id, item.type, _driver->requestLength(item.type, item.id, expected), length);
+    _diag_last_at = millis();
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _diag.record(item.id, r, _request_buffer, length);
+    }
+    if (_diag.state() == DiagSweep::State::Done) logDiagReadEnd();
+}
+
+void USBHostUPS::interruptDiagRead() {
+    if (_diag.state() != DiagSweep::State::Reading) return;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _diag.interrupt();
+    }
+    logDiagReadEnd();
+}
+
+void USBHostUPS::logDiagReadEnd() {
+    DiagSweep::Status s = _diag.status();
+    if (s.state == DiagSweep::State::Interrupted) {
+        log("INFO", "[USB] Export read: interrupted after %u of %u reports, %u read, %u empty, %u failed",
+            (unsigned)s.done, (unsigned)s.total, (unsigned)s.read, (unsigned)s.empty, (unsigned)s.failed);
+    } else {
+        log("INFO", "[USB] Export read: %u reports, %u read, %u empty, %u failed",
+            (unsigned)s.total, (unsigned)s.read, (unsigned)s.empty, (unsigned)s.failed);
+    }
+}
+
+DiagSweep::Result USBHostUPS::readReportRaw(uint8_t report_id, uint8_t report_type, uint16_t expected_length, size_t& length) {
+    length = expected_length > 0 ? expected_length : 255;
+    if (length > sizeof(_request_buffer)) length = sizeof(_request_buffer);
+
+    // Blocking control transfer: no application lock may be held here (ADR 0008)
+    esp_err_t err = hid_class_request_get_report(_hid_dev_handle, report_type, report_id, _request_buffer, &length);
+    noteControlResult(err, millis());
+
+    if (err == ESP_OK && length > 0) {
+        _stat_get_ok++;
+        _get_ok_since_claim++;
+        return DiagSweep::Result::Read;
+    }
+    // A report the device leaves empty is what the export is for: no ERROR line and no
+    // failure in the traffic summary, only its own count (issue #123)
+    length = 0;
+    if (err == ESP_OK) {
+        _stat_diag_empty++;
+        return DiagSweep::Result::Empty;
+    }
+    _stat_get_failed++;
+    logDebug(String("[USB] Export read: report ") + report_id + " failed: " + esp_err_to_name(err));
+    return DiagSweep::Result::Failed;
 }
 
 uint32_t USBHostUPS::inputReportAgeMs(uint8_t report_id, uint32_t now) const {
@@ -1268,11 +1393,20 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
     s.incomplete_input_reports = _in_reasm.dropped();
     s.ep_in_mps = _ep_in_mps;
 
+    s.export_read = diagReadStatus();
+
     s.reports.clear();
-    s.reports.reserve(_cached_reports.size());
+    s.reports.reserve(_cached_reports.size() + _diag.results().size());
     for (const auto& kv : _cached_reports) {
-        s.reports.push_back({kv.second.report_id, kv.second.report_type, kv.second.data});
+        UsbDiagReport r;
+        r.id = kv.second.report_id;
+        r.type = kv.second.report_type;
+        r.data = kv.second.data;
+        s.reports.push_back(std::move(r));
     }
+    // Then the reports of the on-demand read the cache does not hold (US-119), by key. A
+    // pending read has no results yet: the old ones are about to be dropped.
+    if (!_diag_requested) addOnDemandReports(s.reports, _diag.results());
     s.ups_data = _ups_data.getAll();
 }
 

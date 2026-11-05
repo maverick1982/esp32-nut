@@ -19,6 +19,8 @@
 #include "DescriptorRetry.h"
 #include "OnlineDischargeLog.h"
 #include "DriverVarStore.h"
+#include "DiagSweep.h"
+#include <atomic>
 #include <map>
 #include <vector>
 
@@ -45,6 +47,9 @@ class IUPSDriver;
  *   protects UPSData, the parser and the report cache against the readers.
  * - _op_mutex serialises the control requests of the other tasks (setBeeper) with a
  *   poll iteration. Lock order: _op_mutex, then _mutex.
+ * - The on-demand read of the diagnostics export (US-119) runs in the poll task too:
+ *   requestDiagRead() only raises a flag, service() then asks one report per iteration,
+ *   requestSpacingMs() after any other control request, without decoding it.
  */
 class USBHostUPS : public IUSBHostUPS {
 public:
@@ -63,6 +68,11 @@ public:
     // Copies the data of the USB diagnostics export (/api/usb/dump) under _mutex. The web
     // server writes the JSON from it outside the lock, in chunks (US-095, US-096)
     void snapshotUSBDiagnostics(UsbDiagSnapshot& s);
+    // Asks the poll task to read once the FEATURE reports the export would miss (US-119).
+    // False without a UPS ready; a read already running is not started again.
+    bool requestDiagRead();
+    // State and counters of that read; Reading while the request waits for the poll task
+    DiagSweep::Status diagReadStatus() const;
 
     bool setBeeper(bool enable) override;
     bool isConnected() const override;
@@ -182,6 +192,14 @@ private:
     void logOnlineDischarge(uint32_t now);
     void closeInterface(hid_host_device_handle_t handle);
     void noteControlResult(esp_err_t err, uint32_t now);
+    // On-demand read of the export (US-119): start at the flag, then one step
+    void serviceDiagRead();
+    // Stops a running read with the results so far (the link no longer allows requests)
+    void interruptDiagRead();
+    void logDiagReadEnd();
+    // GET_REPORT of the on-demand read: no decoding, no cache, no ERROR log. The bytes stay
+    // in _request_buffer, length is their count (0 unless Read).
+    DiagSweep::Result readReportRaw(uint8_t report_id, uint8_t report_type, uint16_t expected_length, size_t& length);
     void recoverInterface(const char* why, uint32_t now, bool clear_in_halt = false);
     void retryInterfaceStart(uint32_t now);
     void requestRestart(const char* why);
@@ -234,6 +252,7 @@ private:
     uint32_t _stat_in_packets;  // INPUT events from the HID task, before reassembly
     uint32_t _stat_get_ok;
     uint32_t _stat_get_failed;
+    uint32_t _stat_diag_empty = 0; // empty answers of the export read (US-119)
     bool _in_restart_pending;
     uint8_t _in_start_attempts;
     uint32_t _in_restart_at;
@@ -249,6 +268,12 @@ private:
     std::vector<std::pair<String, String>> _saved_vars;
 
     std::map<uint16_t, CachedReport> _cached_reports;
+
+    // On-demand read of the export (US-119): written by the poll task under _mutex
+    DiagSweep _diag;
+    std::atomic<bool> _diag_requested{false};
+    uint32_t _last_ctrl_at = 0;   // end of the last control request (noteControlResult)
+    uint32_t _diag_last_at = 0;   // end of the last request of the on-demand read
 
     uint32_t _quirks;
     uint32_t _peripheral_map = 0;

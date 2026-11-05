@@ -6,7 +6,7 @@ epic:
   title: Gestione USB Host
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |
   #### US-119: Export USB Diagnostics: leggere su richiesta tutti i report del descrittore
 
@@ -35,3 +35,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-04T21:10:34Z"
+  - status: PLANNED
+    at: "2026-11-05T10:58:47Z"
+  - status: IN PROGRESS
+    at: "2026-11-05T11:05:16Z"
+  - status: REVIEW
+    at: "2026-11-05T12:06:04Z"
+  - status: DONE
+    at: "2026-11-05T12:47:30Z"

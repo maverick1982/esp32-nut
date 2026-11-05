@@ -143,6 +143,22 @@ void WebConfigServer::begin(bool isAPMode) {
         writer.flush();
         server.sendContent("");
     }));
+    // Lettura su richiesta dei report per l'export (US-119): la POST la chiede al task di
+    // poll e risponde subito, la pagina segue lo stato con la GET e poi scarica /api/usb/dump
+    server.on("/api/usb/dump/read", HTTP_POST, guarded([this]() {
+        if (!usb_ups || !usb_ups->requestDiagRead()) {
+            server.send(503, "application/json", "{\"error\":\"UPS not ready\"}");
+            return;
+        }
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(202, "application/json", WebApiJson::diagReadJson(usb_ups->diagReadStatus()));
+    }));
+    server.on("/api/usb/dump/read", HTTP_GET, guarded([this]() {
+        DiagReadStatus st;
+        if (usb_ups) st = usb_ups->diagReadStatus();
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(200, "application/json", WebApiJson::diagReadJson(st));
+    }));
 
     // Rotte pubbliche dell'autenticazione (elencate in AuthPolicy)
     server.on("/login", HTTP_GET, guarded([this]() { handleLoginPage(); }));

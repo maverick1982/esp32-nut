@@ -592,6 +592,17 @@ void test_eaton_realpower_follows_load(void) {
     TEST_ASSERT_EQUAL_STRING("400", ups_data.get("ups.realpower").c_str());
 }
 
+// US-119: the on-demand read of the export never asks the reports that freeze Eaton
+// devices, and keeps the poll's spacing
+void test_eaton_diag_read_follows_poll_exclusions(void) {
+    const IUPSDriver& d = driver;
+    TEST_ASSERT_FALSE(d.acceptDiagReport(3, 254));
+    TEST_ASSERT_FALSE(d.acceptDiagReport(3, 255));
+    TEST_ASSERT_TRUE(d.acceptDiagReport(3, 0x01));
+    TEST_ASSERT_TRUE(d.acceptDiagReport(3, 0x14));
+    TEST_ASSERT_EQUAL_UINT32(GenericDriver::STEP_SPACING_MS, d.requestSpacingMs());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -624,6 +635,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
     RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
     RUN_TEST(test_eaton_realpower_follows_load);
+    RUN_TEST(test_eaton_diag_read_follows_poll_exclusions);
     return UNITY_END();
 }
 #else
@@ -657,6 +669,7 @@ void setup() {
     RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
     RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
     RUN_TEST(test_eaton_realpower_follows_load);
+    RUN_TEST(test_eaton_diag_read_follows_poll_exclusions);
     UNITY_END();
 }
 void loop() {}

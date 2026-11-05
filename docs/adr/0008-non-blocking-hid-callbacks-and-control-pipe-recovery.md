@@ -134,6 +134,15 @@ Logs from an APC Back-UPS BX750MI (v1.6.1): after 1-2 minutes of polling a GET_R
 * New `IUPSDriver::formatDeviceStrings()`, called after the strings are read at claim time and after every string descriptor, like the `format_model` hooks of the NUT subdrivers. It must be idempotent.
 * `APCDriver` splits the product string like `apc_format_model()`: `ups.model` before `FW:`, `ups.firmware` up to `USB FW:`, `ups.firmware.aux` after it. `device.model` follows `ups.model`, and `isBackUpsBX()` still matches the split model.
 
+### Addendum: on-demand read of the diagnostics export (US-119, issue #123, 2026-11-05)
+The USB diagnostics export (`/api/usb/dump`) carried only the reports the poll had cached. When the user asks for an export, the board now reads once every FEATURE report of the descriptor that is not cached, so the export also shows the reports no row reads (US-120 will drop them from the full poll).
+
+* **Where it runs.** In the `ups_poll` task, never in the loopTask: `POST /api/usb/dump/read` only raises a flag (`requestDiagRead()`), `service()` asks one report per iteration after `_driver->loop()`, so the poll goes first when both are due. The page follows the read with `GET /api/usb/dump/read` and then downloads the export.
+* **Spacing.** `noteControlResult()` records the end of every control request. A step of the read starts only `requestSpacingMs()` (the poll's 50 ms) after it, and right after a step of the read `_driver->loop()` waits for the same spacing: two requests are never closer than in the poll.
+* **No decoding, no cache.** `readReportRaw()` runs the GET_REPORT without any application lock, counts it in the GET statistics and passes it to `noteControlResult()`, so the thresholds and the recovery ladder above see it as any other request. The answer is neither decoded nor written to the report cache or `UPSData`. An empty answer is recorded as empty, with no ERROR line and not as a failure: the `[USB] Last 60 s` line counts it apart (`, N empty (export read)`, only when N > 0). A failure gets at most a DEBUG line.
+* **Exclusions.** The reports the driver never polls (`acceptPollReport()`: CyberPower 6 and >= 130, Eaton 254/255) are not read either (`IUPSDriver::acceptDiagReport()`).
+* **Stop.** The read becomes `interrupted` with the reports read so far when the link no longer allows requests (`!canPoll()`, interface restart pending, restart requested); a disconnection or a new claim forgets it. One INFO line at the end: `[USB] Export read: ...`.
+
 ## Consequences
 ### Positive
 * Removes the root cause of the timeouts: the HID task can always deliver control completions.

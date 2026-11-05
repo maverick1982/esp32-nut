@@ -84,6 +84,17 @@ void reportData(ChunkWriter& w, const std::vector<uint8_t>& data) {
     w.write(']');
 }
 
+// "state" of "export_read": an export without a read says so (a client that only calls
+// GET /api/usb/dump)
+const char* exportReadState(DiagSweep::State st) {
+    switch (st) {
+        case DiagSweep::State::Reading:     return "\"reading\"";
+        case DiagSweep::State::Done:        return "\"done\"";
+        case DiagSweep::State::Interrupted: return "\"interrupted\"";
+        default:                            return "\"not_requested\"";
+    }
+}
+
 }  // namespace
 
 void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
@@ -111,6 +122,17 @@ void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
     newline(w, 1);
     w.write('}');
 
+    // Outcome of the on-demand read of the export (US-119)
+    key(w, 1, "export_read", false);
+    w.write('{');
+    key(w, 2, "state", true);      raw(w, exportReadState(s.export_read.state));
+    key(w, 2, "requested", false); num(w, s.export_read.total);
+    key(w, 2, "read", false);      num(w, s.export_read.read);
+    key(w, 2, "empty", false);     num(w, s.export_read.empty);
+    key(w, 2, "failed", false);    num(w, s.export_read.failed);
+    newline(w, 1);
+    w.write('}');
+
     // scenarios: un solo oggetto, quindi l'array non è mai vuoto
     key(w, 1, "scenarios", false);
     w.write('[');
@@ -132,6 +154,10 @@ void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
             key(w, 5, "id", true);    num(w, r.id);
             key(w, 5, "type", false); num(w, r.type);
             key(w, 5, "data", false); reportData(w, r.data);
+            // Only for the reports of the on-demand read (US-119): the poll's reports stay
+            // as before, byte for byte
+            if (r.on_demand) { key(w, 5, "on_demand", false); raw(w, "true"); }
+            if (r.empty) { key(w, 5, "empty", false); raw(w, "true"); }
             newline(w, 4);
             w.write('}');
         }

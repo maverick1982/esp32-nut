@@ -11,6 +11,8 @@
 // CRLF, rientro di 2 spazi, escape di virgolette, backslash, \b \f \n \r \t e del byte nullo
 // come \u0000). Il descriptor e i dati dei report restano parti grezze con la loro
 // formattazione storica (a capo LF).
+// US-119 aggiunge l'oggetto "export_read" dopo "link" e, solo nei report letti su richiesta,
+// le chiavi "on_demand" ed "empty": i report del poll restano come prima.
 // Lo verifica test/test_usb_diag_json.
 class UsbDiagJson {
 public:

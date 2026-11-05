@@ -567,6 +567,26 @@ int WebApiJson::checkNutOverridesBody(const String& body, std::vector<NutOverrid
 
 // --- Remote logging (US-116) ---
 
+String WebApiJson::diagReadJson(const DiagReadStatus& status) {
+    const char* state = "idle";
+    switch (status.state) {
+        case DiagReadState::Reading:     state = "reading"; break;
+        case DiagReadState::Done:        state = "done"; break;
+        case DiagReadState::Interrupted: state = "interrupted"; break;
+        default: break;
+    }
+    JsonDocument doc;
+    doc["state"] = state;
+    doc["total"] = status.total;
+    doc["done"] = status.done;
+    doc["read"] = status.read;
+    doc["empty"] = status.empty;
+    doc["failed"] = status.failed;
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
 String WebApiJson::remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status) {
     JsonDocument doc;
     JsonObject sl = doc["syslog"].to<JsonObject>();
