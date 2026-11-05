@@ -10,7 +10,7 @@ tags: [adr, decision, logging, syslog, mqtt, tasks]
 * **Status:** Accepted
 * **Date:** 2026-11-04
 * **Authors:** @maverick1982, @rtadams89, Claude
-* **Related:** ADR 0008 (non-blocking USB task, Task WDT), ADR 0009 (protected routes), ADR 0010 (module map, task ownership), issue #69, PR #104, US-116, `docs/plans/mqtt-support.md`
+* **Related:** ADR 0008 (non-blocking USB task, Task WDT), ADR 0009 (protected routes), ADR 0010 (module map, task ownership), issue #69, PR #104, US-116, US-117 (time in the messages), `docs/plans/mqtt-support.md`
 
 ## Context and Problem Statement
 
@@ -35,7 +35,8 @@ Chosen option: **C**, the backend of PR #104 by @rtadams89, with one added rule 
 * **Notices.** A change of the remote logging itself (enabled, disabled, moved, level changed) is logged with `AppLogger::logNotice()`: it skips the minimum level and the rate limit, so the receiver always learns about it. Before a move or a disable, the previous server is told directly (`SyslogChange.h`).
 * **Own lines.** `ILogOutput::tag()` is the prefix of the lines an output writes about itself in the System Log (`"[SYSLOG]"` for syslog: send failed, host not resolved). A line that is not a notice and starts with an output's tag is not delivered to that output and does not touch its statistics; the other outputs still receive it, so a future MQTT output gets the `[SYSLOG]` lines and syslog gets the `[MQTT]` ones. Failures are written once per failure period, not once per line.
 * **Settings** are stored in their own NVS namespace (`logout`), separate from `config_json`: they survive an OTA update, apply without a restart and are available in AP mode. The API (`GET`/`POST /api/logging`) is registered with `guarded()` and is not public in `AuthPolicy` (ADR 0009).
-* **Network.** The syslog output sends only when a station or Ethernet link is up (never in AP mode), with the hostname of the Network page (US-113) as HOSTNAME, on every board without `#if` (ADR 0010). The board has no clock: the receiver timestamps each line.
+* **Network.** The syslog output sends only when a station or Ethernet link is up (never in AP mode), with the hostname of the Network page (US-113) as HOSTNAME, on every board without `#if` (ADR 0010). Without the network time the receiver timestamps each line.
+* **Time in the messages (US-117).** With the SNTP time of Board Settings → Time (`NtpClock`, ADR 0009: logs only), each message carries the time its line was written, computed from `LogRecord.uptime_ms` and the reference pair of the last synchronization, so a line held since boot gets its own time, not the sending time. RFC 3164: `<PRI>Mmm dd hh:mm:ss HOSTNAME TAG: MSG`, local time of the chosen time zone, with the hostname of the Network page. RFC 5424: `<PRI>1 YYYY-MM-DDThh:mm:ss.mmmZ HOST APP - - - MSG`, in UTC. Without the time (NTP off, no answer yet, LAN without Internet) the format stays the one of US-116: RFC 3164 without TIMESTAMP and HOSTNAME, RFC 5424 with `-` (`SyslogFormat.h`, native tests).
 * **Security.** Syslog over UDP is not encrypted: anyone on the LAN can read the lines, including the usernames of failed logins (ADR 0009 forbids only passwords and tokens in the log). The Web UI says so next to the settings. TCP and TLS are out of scope.
 
 ## Consequences

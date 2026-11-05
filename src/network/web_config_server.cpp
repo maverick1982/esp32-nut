@@ -110,6 +110,8 @@ void WebConfigServer::begin(bool isAPMode) {
     // so protected by the login
     server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
     server.on("/api/logging", HTTP_POST, guarded([this]() { handleSetLogging(); }));
+    server.on("/api/time", HTTP_GET, guarded([this]() { handleGetTime(); }));
+    server.on("/api/time", HTTP_POST, guarded([this]() { handleSetTime(); }));
     server.on("/api/logs", HTTP_GET, guarded([this]() { handleLogs(); }));
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
@@ -405,6 +407,64 @@ void WebConfigServer::handleSetLogging() {
     // and tells the syslog server (SyslogChange.h)
     String who = webUiUser();
     syslog_output->configure(next, who.length() > 0 ? who : String("Web UI"));
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
+// --- Network time of Board Settings (US-117, ADR 0009) ---
+
+void WebConfigServer::setTime(TimeSettingsStore* store, NtpClock* clock) {
+    time_store = store;
+    ntp_clock = clock;
+}
+
+void WebConfigServer::handleGetTime() {
+    if (!time_store || !ntp_clock) {
+        server.send(503, "application/json", "{\"error\":\"Time not available\"}");
+        return;
+    }
+    NtpClock::Status s = ntp_clock->status();
+    TimeStatusView view = { s.state, s.has_time, String(), String(), String(), s.since_sync_s };
+    if (s.has_time) {
+        struct tm t;
+        char buf[32];
+        NtpClock::localTm(s.epoch_ms, t);
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
+        view.local = buf;
+        strftime(buf, sizeof(buf), "%Z", &t);
+        view.abbr = buf;
+        NtpClock::utcTm(s.epoch_ms, t);
+        strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &t);
+        view.utc = buf;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    // The saved settings: the clock may apply a POST a loop later
+    server.send(200, "application/json", WebApiJson::timeJson(time_store->load(), view));
+}
+
+void WebConfigServer::handleSetTime() {
+    if (!requireJson()) return;
+    if (!time_store || !ntp_clock) {
+        server.send(503, "application/json", "{\"error\":\"Time not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    TimeSettings next;
+    String rejected;
+    if (int status = WebApiJson::checkTimeBody(doc, time_store->load(), next, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!time_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    // Applied by NtpClock::poll() in the next loop, no restart; it logs the change
+    String who = webUiUser();
+    ntp_clock->configure(next, who.length() > 0 ? who : String("Web UI"));
     server.send(200, "application/json", "{\"success\":true}");
 }
 

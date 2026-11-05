@@ -665,6 +665,76 @@
                             </div>
                         </section>
 
+                        <!-- US-117: network time and time zone (every board) -->
+                        <section class="board-section" id="time-section" aria-labelledby="time-title">
+                            <div class="cred-section" id="time-title">Time</div>
+
+                            <p class="board-hint">The time is used only to show it here and to write it in the
+                                syslog lines: logins, sessions and timeouts do not depend on it. Without Internet
+                                access the board works as before, the lines just carry no time.</p>
+
+                            <div class="link-status" id="time-status">
+                                <dl class="link-grid">
+                                    <div class="link-kv wide lead"><dt>State</dt>
+                                        <dd>
+                                            <span class="link-badge idle" id="time-state" role="status">
+                                                <span class="status-indicator off"></span><span class="badge-text">Off</span>
+                                            </span>
+                                        </dd>
+                                    </div>
+                                    <div class="link-kv wide lead"><dt>Board time</dt><dd id="time-now" class="na">—</dd></div>
+                                </dl>
+                            </div>
+
+                            <form class="rlog-form" id="time-form" novalidate>
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Get the time from an NTP server</span>
+                                        <span class="board-hint">Applied immediately, no restart.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="time-ntp" aria-label="NTP enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="time-ntp-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <div class="rlog-fields time-fields">
+                                    <div class="form-group">
+                                        <label for="time-server">Server</label>
+                                        <div class="set-field" id="f-time-server">
+                                            <input type="text" id="time-server" maxlength="63" autocomplete="off"
+                                                spellcheck="false" placeholder="pool.ntp.org">
+                                        </div>
+                                    </div>
+                                    <!-- Options from "options.zones" of GET /api/time -->
+                                    <div class="form-group">
+                                        <label for="time-zone">Time zone</label>
+                                        <div class="set-field" id="f-time-zone"><select id="time-zone"></select></div>
+                                    </div>
+                                </div>
+
+                                <!-- Client-side check, or the 400 {"error"} of the API -->
+                                <div class="auth-alert" id="time-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="time-error-text"></span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-time">
+                                        <span class="glow"></span>
+                                        Save
+                                    </button>
+                                    <span class="cmd-result" id="time-result" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </section>
+
                     </div>
                 </div>
             </div>
@@ -1032,9 +1102,11 @@
                             <div class="cred-section" id="syslog-title">Syslog</div>
 
                             <p class="board-hint">Lines are sent over UDP by a background task: they never delay the
-                                UPS or the NUT server. The board has no clock, so the server timestamps each line when
-                                it arrives. For the same reason RFC 3164 lines carry no host name (the server shows the
-                                address of the board); RFC 5424 lines carry the host name of the Network page.</p>
+                                UPS or the NUT server. With the time synchronized (<button type="button"
+                                class="inline-link" data-goto="board">Board Settings → Time</button>) each line carries
+                                the time it was written and, in RFC 3164, the host name of the Network page; without
+                                it the server timestamps each line when it arrives and RFC 3164 lines carry no host
+                                name. RFC 5424 lines always carry the host name.</p>
 
                             <div class="auth-alert info" role="note">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

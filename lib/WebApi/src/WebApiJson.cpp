@@ -667,3 +667,61 @@ int WebApiJson::checkRemoteLogBody(JsonVariantConst body, const SyslogSettings& 
     if (next.enabled && next.host.length() == 0) return sendError(response, 400, "Server required to enable syslog");
     return 0;
 }
+
+// --- Network time (US-117) ---
+
+String WebApiJson::timeJson(const TimeSettings& time, const TimeStatusView& status) {
+    JsonDocument doc;
+    JsonObject t = doc["time"].to<JsonObject>();
+    t["ntp"] = time.ntp;
+    t["server"] = time.server.c_str();
+    t["zone"] = time.zone.c_str();
+
+    JsonObject st = doc["status"].to<JsonObject>();
+    st["state"] = timeStateName(status.state);
+    if (status.has_time) {
+        st["local"] = status.local.c_str();
+        st["abbr"] = status.abbr.c_str();
+        st["utc"] = status.utc.c_str();
+        st["since_sync_s"] = status.since_sync_s;
+    }
+
+    JsonArray zones = doc["options"]["zones"].to<JsonArray>();
+    for (size_t i = 0; i < timeZoneCount(); i++) zones.add(timeZoneAt(i)->name);
+
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkTimeBody(JsonVariantConst body, const TimeSettings& current, TimeSettings& next,
+                              String& response) {
+    next = current;
+    if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonVariantConst tv = body["time"];
+    if (!tv.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonObjectConst obj = tv.as<JsonObjectConst>();
+
+    JsonVariantConst v = obj["ntp"];
+    if (!v.isUnbound()) {
+        if (!v.is<bool>()) return sendError(response, 400, "Invalid request");
+        next.ntp = v.as<bool>();
+    }
+    v = obj["server"];
+    if (!v.isUnbound()) {
+        if (!v.is<const char*>()) return sendError(response, 400, "Invalid server");
+        String server = v.as<const char*>();
+        server.trim();
+        if (server.length() > 0 && !validNtpServer(server)) return sendError(response, 400, "Invalid server");
+        next.server = server;
+    }
+    v = obj["zone"];
+    if (!v.isUnbound()) {
+        if (!v.is<const char*>() || !findTimeZone(v.as<const char*>())) {
+            return sendError(response, 400, "Invalid time zone");
+        }
+        next.zone = v.as<const char*>();
+    }
+    if (next.ntp && next.server.length() == 0) return sendError(response, 400, "Server required to enable NTP");
+    return 0;
+}

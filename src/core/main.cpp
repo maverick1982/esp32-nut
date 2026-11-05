@@ -18,6 +18,8 @@
 #include "core/log_dispatcher.h"
 #include "core/log_settings_store.h"
 #include "network/syslog_output.h"
+#include "network/ntp_clock.h"
+#include "core/time_settings_store.h"
 
 USBHostUPS usb_ups;
 ConfigManager config_mgr;
@@ -43,6 +45,10 @@ static std::vector<NutOverride> nut_overrides;
 static LogDispatcher log_dispatcher;
 static SyslogOutput syslog_output;
 static LogSettingsStore log_settings_store;
+
+// Network time and time zone of Board Settings (US-117, ADR 0009), NVS "time"
+static TimeSettingsStore time_settings_store;
+static NtpClock ntp_clock;
 
 // shutdown.default once per OB+LB event, option of the Board page (US-114)
 static AutoShutdown auto_shutdown;
@@ -221,11 +227,17 @@ void setup() {
     // Remote logging (US-116, ADR 0012), in AP, Wi-Fi and Ethernet: the syslog output
     // waits for a station or Ethernet link and names the board with the hostname of the
     // Network page (US-113)
+    // Network time (US-117): SNTP starts in poll() once a station or Ethernet link is up
+    ntp_clock.begin(&network_mgr);
+    ntp_clock.configure(time_settings_store.load());
+
     syslog_output.begin(&network_mgr);
+    syslog_output.setClock(&ntp_clock);
     syslog_output.configure(log_settings_store.loadSyslog());
     log_dispatcher.addOutput(&syslog_output);
     log_dispatcher.start();
     web_server.setRemoteLog(&log_settings_store, &syslog_output);
+    web_server.setTime(&time_settings_store, &ntp_clock);
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)
     // "%s": messages can carry values sent by NUT clients (SET VAR, US-067)
@@ -284,6 +296,7 @@ void loop() {
 
     web_server.loop();
     network_mgr.loop();
+    ntp_clock.poll(now);
 
     // Before the early return for an invalid config (the timer is disabled there anyway)
     if (ap_timeout.isEnabled()) {

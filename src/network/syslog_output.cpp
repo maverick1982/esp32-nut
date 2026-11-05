@@ -1,5 +1,6 @@
 #include "network/syslog_output.h"
 #include "network/network_manager.h"
+#include "network/ntp_clock.h"
 #include "core/app_logger.h"
 #include <Network.h>
 
@@ -85,10 +86,21 @@ bool SyslogOutput::sendDatagram(const char* buf, size_t n) {
     return false;
 }
 
+bool SyslogOutput::timeOf(uint32_t uptime_ms, SyslogTime& out) const {
+    int64_t ms = 0;
+    if (!_clock || !_clock->epochMsAt(uptime_ms, ms)) return false;
+    NtpClock::localTm(ms, out.local);
+    NtpClock::utcTm(ms, out.utc);
+    out.ms = (uint16_t)(((ms % 1000) + 1000) % 1000);
+    return true;
+}
+
 bool SyslogOutput::sendNow(const char* msg) {
     char buf[SYSLOG_MAX_MESSAGE];
+    SyslogTime t;
+    bool has_time = timeOf(millis(), t);
     size_t n = formatSyslogSeverity(buf, sizeof(buf), _active.protocol, _active.facility, SYSLOG_SEVERITY_NOTICE,
-                                    _hostname.c_str(), kAppName, msg);
+                                    _hostname.c_str(), kAppName, msg, has_time ? &t : nullptr);
     bool ok = sendDatagram(buf, n);
     if (ok) {
         _stats.sent++;
@@ -163,8 +175,11 @@ void SyslogOutput::poll(uint32_t now) {
 bool SyslogOutput::deliver(const LogRecord& record) {
     char buf[SYSLOG_MAX_MESSAGE];
     uint8_t severity = record.notice ? SYSLOG_SEVERITY_NOTICE : syslogSeverity(record.level);
+    // The time the line was written, also for a line held since before the synchronization
+    SyslogTime t;
+    bool has_time = timeOf(record.uptime_ms, t);
     size_t n = formatSyslogSeverity(buf, sizeof(buf), _active.protocol, _active.facility, severity,
-                                    _hostname.c_str(), kAppName, record.msg);
+                                    _hostname.c_str(), kAppName, record.msg, has_time ? &t : nullptr);
     bool ok = sendDatagram(buf, n);
     if (ok) {
         _send_failing = false;

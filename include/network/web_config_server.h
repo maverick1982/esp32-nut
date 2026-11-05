@@ -22,6 +22,8 @@
 #include "network/network_manager.h"
 #include "network/syslog_output.h"
 #include "core/log_settings_store.h"
+#include "core/time_settings_store.h"
+#include "network/ntp_clock.h"
 
 class WebConfigServer {
 public:
@@ -47,6 +49,8 @@ public:
     // Remote logging of the System Logs page (US-116): settings in NVS, applied live to
     // the syslog output
     void setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog);
+    // Network time of Board Settings (US-117): settings in NVS, applied live to the clock
+    void setTime(TimeSettingsStore* store, NtpClock* clock);
 
 private:
     WebServer server;
@@ -77,6 +81,10 @@ private:
     SyslogOutput* syslog_output = nullptr;
     void handleGetLogging();
     void handleSetLogging();
+    TimeSettingsStore* time_store = nullptr;
+    NtpClock* ntp_clock = nullptr;
+    void handleGetTime();
+    void handleSetTime();
 
     void handleConnect();
     void handleLogs();

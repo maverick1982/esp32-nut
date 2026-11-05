@@ -11,6 +11,7 @@
 #include "SyslogChange.h"
 
 class AppNetworkManager;
+class NtpClock;
 
 /**
  * @brief Syslog output over UDP, RFC 3164 or RFC 5424 (issue #69). Adapter of the net
@@ -32,6 +33,9 @@ public:
     // The network service tells whether a link is up and gives the HOSTNAME of the
     // messages: the name of the Network page (US-113), read once the link is up
     void begin(const AppNetworkManager* network);
+    // Network time (US-117): with the time, each message carries the time its line was
+    // written (and the HOSTNAME in RFC 3164); without it the format stays as before
+    void setClock(const NtpClock* clock) { _clock = clock; }
     // who: the Web UI user who changed the settings, empty for the saved ones at boot
     void configure(const SyslogSettings& settings, const String& who = String());
     SyslogStatus status() const;
@@ -57,8 +61,11 @@ private:
     void resolve(uint32_t now);
     // Updates the Web UI copy only when something changed
     void setState(SyslogState state, const String& error);
+    // Time of a line written at uptime_ms; false without the network time
+    bool timeOf(uint32_t uptime_ms, SyslogTime& out) const;
 
     const AppNetworkManager* _network = nullptr;
+    const NtpClock* _clock = nullptr;
     // Set by poll() the first time the link is up. A new hostname restarts the board
     // (handleSetHostname), so the value never gets stale
     String _hostname;

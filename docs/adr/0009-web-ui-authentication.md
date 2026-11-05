@@ -23,7 +23,7 @@ For this reason the web UI refuses destructive UPS commands with 403 (US-059). W
 
 How should credentials, sessions and the route guard be implemented, given these platform constraints?
 
-* **No wall clock.** No RTC, and the firmware has no SNTP. The LAN may also have no Internet access. Only `millis()` since boot is reliable.
+* **No wall clock.** No RTC. The firmware may have an SNTP time (US-117), unauthenticated and absent on a LAN without Internet: it is shown and written in the logs only; sessions, login limits and the AP timeout keep using `millis()` since boot, the only reliable time.
 * **One loop.** `WebServer` is synchronous and is serviced in the same loop as the NUT server. Any blocking work in a handler stalls the NUT clients.
 * **No middleware.** `WebServer` has none. Request headers are only visible when listed in `collectHeaders()` (today only `Content-Type`).
 * **Upload order.** The `/update` upload callback runs, and starts writing flash, **before** the route's final handler.

@@ -1566,6 +1566,134 @@ void test_remote_log_defaults(void) {
     TEST_ASSERT_EQUAL_UINT16(10, d.rate);
 }
 
+// --- Network time (US-117) ---
+
+static int checkTime(const char* json, const TimeSettings& cur, TimeSettings& next, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkTimeBody(doc, cur, next, out);
+}
+
+void test_time_json_with_time(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome") };
+    TimeStatusView v = { TimeState::Synchronized, true, String("2026-11-05 09:12:03"), String("CET"),
+                         String("2026-11-05T08:12:03Z"), 42 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["ntp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", doc["time"]["zone"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("synchronized", doc["status"]["state"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("2026-11-05 09:12:03", doc["status"]["local"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("CET", doc["status"]["abbr"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("2026-11-05T08:12:03Z", doc["status"]["utc"].as<const char*>());
+    TEST_ASSERT_EQUAL(42, doc["status"]["since_sync_s"].as<int>());
+}
+
+void test_time_json_without_time(void) {
+    TimeStatusView v = { TimeState::NoAnswer, false, String(), String(), String(), 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(timeDefaults(), v).c_str());
+    TEST_ASSERT_EQUAL_STRING("no_answer", doc["status"]["state"].as<const char*>());
+    // Without a valid time the fields of the time are missing, not empty
+    TEST_ASSERT_TRUE(doc["status"]["local"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["abbr"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["utc"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["since_sync_s"].isNull());
+
+    TimeSettings off = { false, String(""), String("UTC") };
+    v.state = TimeState::Disabled;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_FALSE(doc["time"]["ntp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("disabled", doc["status"]["state"].as<const char*>());
+    v.state = TimeState::Waiting;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("waiting", doc["status"]["state"].as<const char*>());
+}
+
+void test_time_json_zones(void) {
+    TimeStatusView v = { TimeState::Waiting, false, String(), String(), String(), 0 };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(timeDefaults(), v).c_str());
+    JsonArrayConst zones = doc["options"]["zones"].as<JsonArrayConst>();
+    TEST_ASSERT_EQUAL((int)timeZoneCount(), (int)zones.size());
+    TEST_ASSERT_EQUAL_STRING("UTC", zones[0].as<const char*>());
+    bool rome = false;
+    for (JsonVariantConst z : zones) {
+        if (strcmp(z.as<const char*>(), "Europe/Rome") == 0) rome = true;
+    }
+    TEST_ASSERT_TRUE(rome);
+}
+
+void test_time_body_full_update(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":true,\"server\":\" ntp.lan \",\"zone\":\"Europe/Rome\"}}", cur,
+                                   next, out));
+    TEST_ASSERT_TRUE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());  // trimmed
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"server\":\"192.168.1.1\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", next.server.c_str());
+}
+
+void test_time_body_partial_keeps_the_rest(void) {
+    TimeSettings cur = { true, String("ntp.lan"), String("Europe/Rome") }, next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"America/New_York\"}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+    TEST_ASSERT_EQUAL_STRING("America/New_York", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", next.server.c_str());
+}
+
+void test_time_body_error_messages(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkTime("[]", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"ntp\":true}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"ntp\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":\"bad host!\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":123}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    std::string host64(64, 'a');
+    std::string body = "{\"time\":{\"server\":\"" + host64 + "\"}}";
+    TEST_ASSERT_EQUAL(400, checkTime(body.c_str(), cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid server\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":\"Mars/Olympus\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":\"\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"zone\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid time zone\"}", out.c_str());
+}
+
+void test_time_body_server_required_only_with_ntp(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":\"  \"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
+    TimeSettings off = { false, String(""), String("UTC") };
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"ntp\":true}}", off, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
+    // NTP off with an empty server is accepted
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"ntp\":false,\"server\":\"\"}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.ntp);
+    TEST_ASSERT_EQUAL_STRING("", next.server.c_str());
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"Europe/Rome\"}}", off, next, out));
+    TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_overrides_json_with_ups_values);
@@ -1663,5 +1791,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_remote_log_body_limits);
     RUN_TEST(test_remote_log_body_error_messages);
     RUN_TEST(test_remote_log_defaults);
+    RUN_TEST(test_time_json_with_time);
+    RUN_TEST(test_time_json_without_time);
+    RUN_TEST(test_time_json_zones);
+    RUN_TEST(test_time_body_full_update);
+    RUN_TEST(test_time_body_partial_keeps_the_rest);
+    RUN_TEST(test_time_body_error_messages);
+    RUN_TEST(test_time_body_server_required_only_with_ntp);
     return UNITY_END();
 }
