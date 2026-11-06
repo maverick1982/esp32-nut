@@ -17,6 +17,7 @@
 #include "core/board_settings_store.h"
 #include "core/auto_shutdown.h"
 #include "core/hostname_store.h"
+#include "core/eth_spi_store.h"
 #include "core/nut_override_store.h"
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
@@ -43,6 +44,8 @@ public:
     void setAutoShutdown(AutoShutdown* auto_shutdown);
     // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
     void setHostnameStore(HostnameStore* store, const String& saved);
+    // W5500 of the Network page (US-126): store and settings loaded at boot
+    void setEthSpi(EthSpiStore* store, const EthSpiSettings& settings);
     // Custom variables of the NUT Server page (US-115): the list the NUT server reads,
     // replaced after it is saved, in the same task as the NUT server
     void setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list);
@@ -75,6 +78,10 @@ private:
     AutoShutdown* auto_shutdown = nullptr;
     HostnameStore* hostname_store = nullptr;
     String saved_hostname;
+    EthSpiStore* eth_spi_store = nullptr;
+    EthSpiSettings eth_spi = { false, -1, -1, -1, -1, -1, -1 };
+    void handleGetEthSpi();
+    void handleSetEthSpi();
     NvsNutOverrideStore* nut_override_store = nullptr;
     std::vector<NutOverride>* nut_overrides = nullptr;
     LogSettingsStore* log_store = nullptr;

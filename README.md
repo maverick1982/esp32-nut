@@ -166,6 +166,26 @@ To find the revision, run `esptool chip-id` (`esptool.py chip_id` with esptool v
 
 Thanks to [rtadams89](https://github.com/rtadams89) for the ESP32-P4 and Ethernet support.
 
+### Ethernet with a W5500 module (ESP32-S3)
+
+An ESP32-S3 can use wired Ethernet through a W5500 SPI module: an external module wired to the DevKit, or a board with a built-in W5500. There is no common pinout among these boards, so you always enter the pins yourself in the **Network** tab ([#64](https://github.com/maverick1982/esp32-nut/issues/64)).
+
+- **Wires**: SCK, MOSI, MISO and CS are required; INT and RST are optional. Power the module from 3.3 V and connect GND. Without INT the board reads the chip at regular intervals; without RST there is no hardware reset of the module.
+- **Pins that cannot be used** (the page refuses them): GPIO 19-20 (USB port of the UPS), 22-25 (not present on the ESP32-S3), 26-37 (flash and PSRAM), 43-44 (serial console), the status LED pins (48 and 38 on the DevKit) and the same GPIO in two fields.
+- **Strapping pins** (GPIO 0, 3, 45, 46) are allowed with a warning: the board may not start if the module pulls one of them high or low at power-on.
+- **Turning it on**: in the **Network** tab, section **Ethernet module (W5500)**, turn on **Use a W5500 module**, enter the GPIOs and save. The board restarts. The example values in grey (SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14) are six adjacent pins on the DevKitC-1 header, none of them a strapping pin.
+- **At startup**, with the module on, the board uses Ethernet when the cable has a link and gets an address by DHCP (with the hostname of the **Network** tab). Only one link is active at a time. A manual choice between Wi-Fi and Ethernet will come later.
+- **Fallback**: if the W5500 does not answer (wrong pins, no module), the cable has no link within 5 s, or the router gives no address within 15 s, the board starts on Wi-Fi, or in access point mode when Wi-Fi is not configured. The **System Log** and the W5500 section say why. The double reset always starts the access point.
+- **First start of a board with a built-in W5500**: the board starts in access point mode as usual. Enter the pins and turn the module on from the access point (or after setting up Wi-Fi): after the restart the board joins the network by cable.
+
+**Known pins.** Verify them against your board's schematic; send a PR to add a board.
+
+| Board | SCK | MOSI | MISO | CS | INT | RST | UPS USB port | Source |
+| :--- | :-: | :-: | :-: | :-: | :-: | :-: | :--- | :--- |
+| External module on an ESP32-S3 DevKit (Mickel4711) | 12 | 11 | 13 | 10 | 9 | 3 | `USB` port of the DevKit | [#94](https://github.com/maverick1982/esp32-nut/issues/94) |
+| Waveshare ESP32-S3-ETH / ESP32-S3-POE-ETH | 13 | 11 | 12 | 14 | 10 | 9 | USB-C, not documented as a host port: an OTG adapter may be needed | [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-ETH) |
+| LilyGO T-ETH-Lite S3 | 10 | 12 | 11 | 9 | 13 | 14 | Not known | [`utilities.h`](https://github.com/Xinyuan-LilyGO/LilyGO-T-ETH-Series) (the wiki gives different values) |
+
 ### 3D Printed Case (Optional)
 
 Turn your bare ESP32-S3 board into a finished product! We have designed a sleek 3D-printable case for this project.
@@ -248,6 +268,7 @@ The Web UI is protected by a username and password.
 
 ### 5. More Settings
 - **Hostname** (**Network** tab): the name the board sends to your router, 1-32 letters, digits and hyphens. Empty means the default `esp32-nut-xxxxxx`. The board restarts to apply it.
+- **W5500 Ethernet module** (**Network** tab, ESP32-S3, off by default): the pins of a W5500 wired to the board, see [Ethernet with a W5500 module](#ethernet-with-a-w5500-module-esp32-s3). The board restarts to apply them.
 - **Automatic shutdown** (**Board Settings** tab, off by default): when the UPS is on battery and reports low battery (`OB LB`), the board sends `shutdown.default` once, even with no NUT client connected, and not again until the UPS is back on line. The threshold is `battery.charge.low` / `battery.runtime.low` of the UPS (**UPS Settings** tab). Whether the UPS turns back on when power returns depends on the model.
 - **Time** (**Board Settings** tab): NTP on by default (`pool.ntp.org`, UTC), with a time zone list with automatic daylight saving time. The time is only shown in the System Log and written in the syslog lines; without Internet access the board works as before.
 - **Status LED** (**Board Settings** tab, ESP32-S3): turn it off or choose its brightness.

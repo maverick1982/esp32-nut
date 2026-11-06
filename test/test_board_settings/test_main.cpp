@@ -6,7 +6,8 @@
 // A P4-like profile with two USB ports and no status LED
 static const BoardConfig P4_LIKE = {
     "p4_like", "P4 test board", false, true,
-    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1 },
+    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1, -1 },
+    { false, 0, 0, {}, 0, {} },
     { -1, -1 },
     { 2, { { "hs", "High-Speed", 1 }, { "fs", "Full-Speed", 2 } } },
     { "", "", false, 3, 0, NetworkMode::ETHERNET },

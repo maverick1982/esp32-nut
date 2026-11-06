@@ -20,6 +20,7 @@ enum class EthType : uint8_t { NONE, RMII, SPI };
 namespace EthPhy {
 static const uint8_t NONE = 0;
 static const uint8_t IP101 = 1;
+static const uint8_t W5500 = 2;  // SPI module, pins set by the user (US-126)
 }
 
 // Network mode offered when a board has both links (PDR 0002 D3)
@@ -40,6 +41,26 @@ struct EthConfig {
     int8_t sck;
     int8_t miso;
     int8_t mosi;
+    int8_t rst;   // hardware reset of the SPI module, -1 = none (US-126)
+};
+
+// A range of GPIOs (first..last, inclusive) the user cannot give to an SPI Ethernet module
+struct ReservedGpio {
+    uint8_t first;
+    uint8_t last;
+    const char* reason;  // shown in the error message of the web UI
+};
+
+// What the board can give to a W5500 wired by the user (US-126). The pins are a user
+// setting, not profile data: PDR 0002 D4 allows it because the reserved GPIOs below can
+// never be chosen and a module that does not answer falls back to Wi-Fi or the AP.
+struct SpiEthOption {
+    bool available;            // the web UI offers the W5500 section
+    uint8_t gpio_max;          // highest GPIO of the chip
+    uint8_t reserved_count;
+    ReservedGpio reserved[6];  // flash, PSRAM, USB, console...
+    uint8_t strapping_count;
+    uint8_t strapping[4];      // allowed, with a warning in the web UI
 };
 
 struct LedConfig {
@@ -75,6 +96,7 @@ struct BoardConfig {
     bool has_wifi;
     bool has_ethernet;
     EthConfig eth;
+    SpiEthOption spi_eth;  // US-126
     LedConfig led;
     UsbConfig usb;
     BoardDefaults defaults;

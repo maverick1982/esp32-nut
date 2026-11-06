@@ -885,7 +885,8 @@ void test_needs_confirmation_other_names() {
 
 static const BoardConfig P4_LIKE = {
     "p4_like", "P4 test board", false, true,
-    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1 },
+    { EthType::RMII, 0, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1, -1 },
+    { false, 0, 0, {}, 0, {} },
     { -1, -1 },
     { 2, { { "hs", "High-Speed", 1 }, { "fs", "Full-Speed", 2 } } },
     { "", "", false, 3, 0, NetworkMode::ETHERNET },
@@ -1251,6 +1252,153 @@ void test_hostname_json(void) {
                              String("esp32-nut-56d784"));
     TEST_ASSERT_EQUAL_STRING("", def["hostname"]["custom"]);
     TEST_ASSERT_EQUAL_STRING("esp32-nut-56d784", def["hostname"]["name"]);
+}
+
+// --- US-126: GET/POST /api/network/eth and network.links with a W5500 ---
+
+static EthSpiSettings ethExample() {
+    EthSpiSettings s = { true, 12, 11, 13, 10, 9, 14 };
+    return s;
+}
+
+void test_eth_spi_json_off(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethSpiDefaults(), "off", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":false,\"pins\":{\"sck\":null,\"mosi\":null,\"miso\":null,\"cs\":null,"
+        "\"irq\":null,\"rst\":null},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"off\"}}",
+        json.c_str());
+}
+
+void test_eth_spi_json_active(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethExample(), "active", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+        "\"irq\":9,\"rst\":14},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"active\"}}",
+        json.c_str());
+}
+
+void test_eth_spi_json_fallback_with_reason(void) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), "fallback", "no_chip")));
+    TEST_ASSERT_EQUAL_STRING("fallback", doc["status"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("no_chip", doc["status"]["reason"]);
+}
+
+static int ethStatus(const char* json, const EthSpiSettings& current, EthSpiSettings& next, bool& restart,
+                     String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkEthSpiBody(doc, board(), current, next, restart, out);
+}
+
+void test_eth_spi_body_valid_enables_and_restarts(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":14}}",
+                                   ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_TRUE(restart);
+    TEST_ASSERT_TRUE(next == ethExample());
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_same_values_do_not_restart(void) {
+    EthSpiSettings next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":14}}",
+                                   ethExample(), next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":false,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_invalid_requests(void) {
+    const char* bodies[] = { "{}", "{\"enabled\":1}", "{\"enabled\":\"true\"}", "{\"enabled\":null}",
+                             "{\"enabled\":true,\"pins\":[12]}", "{\"enabled\":true,\"pins\":5}",
+                             "{\"enabled\":false,\"pins\":{\"sck\":\"12\"}}",
+                             "{\"enabled\":false,\"pins\":{\"cs\":2.5}}",
+                             "{\"enabled\":false,\"pins\":{\"rst\":true}}" };
+    for (const char* json : bodies) {
+        EthSpiSettings next;
+        bool restart = true;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, ethStatus(json, ethExample(), next, restart, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+        TEST_ASSERT_TRUE_MESSAGE(next == ethExample(), json);
+        TEST_ASSERT_FALSE_MESSAGE(restart, json);
+    }
+}
+
+void test_eth_spi_body_forbidden_pin(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":19,\"mosi\":11,\"miso\":13,\"cs\":10}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 19 cannot be used for SCK: USB port of the UPS\"}", out.c_str());
+    TEST_ASSERT_TRUE(next == ethSpiDefaults());
+
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":false,\"pins\":{\"cs\":300}}", ethSpiDefaults(), next, restart,
+                                     out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 300 does not exist on this board\"}", out.c_str());
+}
+
+void test_eth_spi_body_duplicate_and_required(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":12}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 12 is used for both SCK and CS\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"cs\":10}}",
+                                     ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"MISO is required to enable the W5500\"}", out.c_str());
+}
+
+void test_eth_spi_body_strapping_warning(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":9,\"rst\":3}}",
+                                   ethSpiDefaults(), next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[\"GPIO 3 is a strapping pin: the "
+                             "board may not boot if the module pulls it at power-on\"]}",
+                             out.c_str());
+    TEST_ASSERT_EQUAL_INT8(3, next.rst);
+}
+
+void test_eth_spi_body_optional_pins_null(void) {
+    EthSpiSettings next;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true,\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,"
+                                   "\"irq\":null,\"rst\":null}}",
+                                   ethExample(), next, restart, out));
+    TEST_ASSERT_EQUAL_INT8(-1, next.irq);
+    TEST_ASSERT_EQUAL_INT8(-1, next.rst);
+    TEST_ASSERT_TRUE(restart);
+
+    // Missing keys are not set either
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":false}", ethExample(), next, restart, out));
+    TEST_ASSERT_TRUE(next == ethSpiDefaults());
+}
+
+void test_network_links_with_w5500(void) {
+    JsonDocument on;
+    WebApiJson::networkLinksJson(on["links"].to<JsonArray>(), board(), true);
+    std::string out;
+    serializeJson(on["links"], out);
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\",\"ethernet\"]", out.c_str());
+
+    JsonDocument off;
+    WebApiJson::networkLinksJson(off["links"].to<JsonArray>(), board(), false);
+    out.clear();
+    serializeJson(off["links"], out);
+    TEST_ASSERT_EQUAL_STRING("[\"wifi\"]", out.c_str());
 }
 
 // ---- Custom variables of the NUT Server page (US-115) ----
@@ -1822,6 +1970,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_hostname_body_missing_or_not_a_string);
     RUN_TEST(test_hostname_body_invalid_name);
     RUN_TEST(test_hostname_json);
+    RUN_TEST(test_eth_spi_json_off);
+    RUN_TEST(test_eth_spi_json_active);
+    RUN_TEST(test_eth_spi_json_fallback_with_reason);
+    RUN_TEST(test_eth_spi_body_valid_enables_and_restarts);
+    RUN_TEST(test_eth_spi_body_same_values_do_not_restart);
+    RUN_TEST(test_eth_spi_body_invalid_requests);
+    RUN_TEST(test_eth_spi_body_forbidden_pin);
+    RUN_TEST(test_eth_spi_body_duplicate_and_required);
+    RUN_TEST(test_eth_spi_body_strapping_warning);
+    RUN_TEST(test_eth_spi_body_optional_pins_null);
+    RUN_TEST(test_network_links_with_w5500);
     RUN_TEST(test_remote_log_json);
     RUN_TEST(test_remote_log_body_full_update);
     RUN_TEST(test_remote_log_body_partial_keeps_the_rest);

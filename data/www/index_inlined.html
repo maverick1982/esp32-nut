@@ -3243,6 +3243,151 @@ body.auth-page {
     .rlog-form .form-actions { flex-direction: column; align-items: stretch; }
     .rlog-form .form-actions .btn { justify-content: center; }
 }
+
+/* --- Network page: Ethernet module (W5500) section (US-126, docs/mockups/US-126/w5500.css) --- */
+/* Wire colours: the usual jumper colours of a breadboard, one per signal. They make the six
+   fields readable at a glance and match what the user sees on the module's header. */
+.pin-cell[data-wire="sck"]  { --wire: #ffb800; }
+.pin-cell[data-wire="mosi"] { --wire: #00f0ff; }
+.pin-cell[data-wire="miso"] { --wire: #00ff9d; }
+.pin-cell[data-wire="cs"]   { --wire: #c77dff; }
+.pin-cell[data-wire="irq"]  { --wire: #ff8a3d; }
+.pin-cell[data-wire="rst"]  { --wire: #8a9bb3; }
+
+.panel-header .w5500-badge { margin-left: auto; }
+
+.w5500-toggle-row { margin-bottom: 1.25rem; }
+
+/* --- Amber alert: strapping pins and fallback to Wi-Fi (not an error: nothing is refused) --- */
+.auth-alert.warning {
+    border-color: rgba(255, 184, 0, 0.45);
+    border-left-color: var(--warning);
+    background: rgba(255, 184, 0, 0.07);
+}
+.auth-alert.warning svg { color: var(--warning); }
+.auth-alert strong { color: var(--text-primary); font-weight: 400; }
+.auth-alert code { color: var(--text-primary); font-family: var(--font-mono); }
+.w5500-status { margin-bottom: 1.25rem; }
+
+/* --- Form: pin grid, alerts, button --- */
+.w5500-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* Desktop: 3 columns (signals SCK MOSI MISO / CS INT RST); phone: 2 columns */
+.pin-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.pin-cell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem 0.85rem 0.85rem 1.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.22);
+    transition: border-color 0.2s, background 0.2s, opacity 0.3s;
+}
+/* The jumper wire: a coloured stripe on the left, glowing once the field has a GPIO */
+.pin-cell::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--wire);
+    opacity: 0.35;
+    transition: opacity 0.2s, box-shadow 0.2s;
+}
+.pin-cell.is-set::before {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--wire);
+}
+.pin-cell:focus-within {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.32);
+}
+
+.pin-cell label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.pin-name { color: var(--text-primary); font-size: 0.85rem; }
+.pin-role { color: var(--text-secondary); font-size: 0.62rem; text-align: right; }
+.pin-cell.optional .pin-role { color: var(--wire); opacity: 0.8; }
+
+.pin-input {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.3);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.pin-input:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+.pin-prefix {
+    display: flex;
+    align-items: center;
+    padding: 0 0.6rem;
+    border-right: 1px solid var(--bg-panel-border);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+}
+.pin-input input {
+    width: 100%;
+    min-width: 0;
+    padding: 0.65rem 0.75rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 1.05rem;
+    outline: none;
+    -moz-appearance: textfield;
+}
+.pin-input input::-webkit-outer-spin-button,
+.pin-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pin-input input::placeholder { color: rgba(138, 155, 179, 0.38); }
+.pin-input input:disabled { color: var(--text-secondary); }
+
+/* Field named by a 400 error (red) or by the strapping note (amber) */
+.pin-cell.invalid .pin-input { border-color: var(--danger); box-shadow: 0 0 10px rgba(255, 51, 102, 0.25); }
+.pin-cell.invalid .pin-name { color: var(--danger); }
+.pin-cell.strap .pin-input { border-color: rgba(255, 184, 0, 0.6); }
+
+/* Module off: the pins stay editable (they are saved and checked), just quieter */
+.w5500-form.is-off .pin-cell { opacity: 0.6; }
+.w5500-form.is-off .pin-cell:focus-within { opacity: 1; }
+
+.w5500-actions { display: flex; justify-content: flex-end; }
+#btn-w5500 { min-width: 14rem; justify-content: center; }
+
+@media (max-width: 768px) {
+    .pin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+    .pin-cell { padding: 0.65rem 0.7rem 0.75rem 0.95rem; }
+    .pin-role { display: none; }
+    .pin-cell.optional .pin-role { display: inline; }
+    .w5500-actions .btn { width: 100%; }
+    .panel-header .w5500-badge { margin-left: 0; }
+}
 </style>
 </head>
 
@@ -3499,6 +3644,133 @@ body.auth-page {
                         </div>
                         <p class="auth-fineprint">The board gets its address from your router (DHCP). To always find it at
                             the same address, reserve one for its MAC address in the router.</p>
+                    </div>
+                </section>
+
+                <!-- W5500 wired by the user (US-126, docs/mockups/US-126): shown only when
+                     GET /api/network/eth answers 200 with available:true (not on the P4) -->
+                <section class="net-section" id="sec-w5500" data-section="w5500" aria-labelledby="ttl-w5500" hidden>
+                    <h2 class="net-section-title" id="ttl-w5500">
+                        <!-- Chip icon with pins on two sides: an SPI module, not the RJ45 of the Ethernet link -->
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="6" y="5" width="12" height="14" rx="1.5" />
+                            <path d="M2 8h4M2 12h4M2 16h4M18 8h4M18 12h4M18 16h4" />
+                            <circle cx="9.5" cy="8.5" r=".6" fill="currentColor" />
+                        </svg>
+                        Ethernet module (W5500)
+                    </h2>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>SPI Wiring</h2>
+                            <!-- status.state, same shape as the link badges -->
+                            <span class="link-badge w5500-badge" id="w5500-badge" role="status">
+                                <span class="status-indicator"></span><span class="badge-text">Off</span>
+                            </span>
+                        </div>
+
+                        <!-- Enable switch: same markup as Board Settings > Status LED -->
+                        <div class="board-row w5500-toggle-row">
+                            <div class="board-label">
+                                <span class="board-name">Use a W5500 module</span>
+                                <span class="board-hint">With the module on, the board tries Ethernet first at
+                                    startup and uses Wi-Fi when it gets no connection.</span>
+                            </div>
+                            <div class="board-control led-toggle">
+                                <label class="switch">
+                                    <input type="checkbox" id="w5500-enabled" aria-label="Use a W5500 module">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="led-state" id="w5500-state">Off</span>
+                            </div>
+                        </div>
+
+                        <!-- status.state = fallback: why the board is on Wi-Fi. Hidden otherwise -->
+                        <div class="auth-alert warning w5500-status" id="w5500-status" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                <path d="M12 9v4M12 17h.01" />
+                            </svg>
+                            <span id="w5500-status-text"></span>
+                        </div>
+
+                        <form id="w5500-form" class="w5500-form is-off" novalidate>
+                            <!-- Six GPIO fields. Placeholders = an example wiring, never prefilled values:
+                                 an empty field is "not set" (null in the POST) -->
+                            <div class="pin-grid" id="pin-grid">
+                                <div class="pin-cell" data-wire="sck">
+                                    <label for="w5500-sck"><span class="pin-name">SCK</span><span class="pin-role">clock</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-sck" min="0" max="48" inputmode="numeric" placeholder="12"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="mosi">
+                                    <label for="w5500-mosi"><span class="pin-name">MOSI</span><span class="pin-role">data to W5500</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-mosi" min="0" max="48" inputmode="numeric" placeholder="11"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="miso">
+                                    <label for="w5500-miso"><span class="pin-name">MISO</span><span class="pin-role">data from W5500</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-miso" min="0" max="48" inputmode="numeric" placeholder="13"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="cs">
+                                    <label for="w5500-cs"><span class="pin-name">CS</span><span class="pin-role">chip select</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-cs" min="0" max="48" inputmode="numeric" placeholder="10"></div>
+                                </div>
+                                <div class="pin-cell optional" data-wire="irq">
+                                    <label for="w5500-irq"><span class="pin-name">INT</span><span class="pin-role">optional</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-irq" min="0" max="48" inputmode="numeric" placeholder="9"></div>
+                                </div>
+                                <div class="pin-cell optional" data-wire="rst">
+                                    <label for="w5500-rst"><span class="pin-name">RST</span><span class="pin-role">optional</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-rst" min="0" max="48" inputmode="numeric" placeholder="14"></div>
+                                </div>
+                            </div>
+
+                            <!-- Strapping pins (strapping[] of the GET), shown while typing; saving stays allowed -->
+                            <div class="auth-alert warning" id="w5500-strapping" role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="w5500-strapping-text"></span>
+                            </div>
+
+                            <!-- 400 {"error"} from POST /api/network/eth: names the pin. Hidden on input -->
+                            <div class="auth-alert" id="w5500-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="w5500-error-text"></span>
+                            </div>
+
+                            <!-- {"success":true,"restart":true}: same pattern as the Hostname section -->
+                            <div class="auth-alert success" id="w5500-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span id="w5500-success-text">Saved. The board is restarting,
+                                    this page reloads in <span class="countdown" id="w5500-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions w5500-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-w5500">
+                                    <span class="glow"></span>
+                                    Save W5500 settings
+                                </button>
+                            </div>
+                        </form>
+
+                        <p class="auth-fineprint">Enter the GPIOs your W5500 is wired to. The grey values are a common
+                            wiring for an external module; boards with a built-in W5500 use their own pins, see the
+                            documentation. GPIO 19-20 (USB), 26-37 (flash and PSRAM), 43-44 (serial console) and the status
+                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi. Saving restarts
+                            the board.</p>
                     </div>
                 </section>
 
@@ -6011,6 +6283,227 @@ document.addEventListener('DOMContentLoaded', () => {
                 showHostnameNoChanges();
             }
         });
+    }
+
+    // --- W5500 section of the Network page (US-126, docs/mockups/US-126) ---
+    // GET /api/network/eth when the page loads: the section appears only with a 200 answer
+    // and available:true (404 on the P4). POST {enabled, pins} saves; the board restarts.
+    const W5500_PINS = ['sck', 'mosi', 'miso', 'cs', 'irq', 'rst'];
+    const W5500_LABEL = { sck: 'SCK', mosi: 'MOSI', miso: 'MISO', cs: 'CS', irq: 'INT', rst: 'RST' };
+    const W5500_RESTART_S = 15;      // as the Hostname section
+    const W5500_FALLBACK = {
+        no_chip: [{ b: 'The W5500 did not answer at startup.' }, ' Check the wiring and the pins below. The board is using Wi-Fi.'],
+        no_link: [{ b: 'No Ethernet cable link at startup.' }, ' Check the cable and the switch port. The board is using Wi-Fi.'],
+        no_ip: [{ b: 'The router gave no address over Ethernet (DHCP).' }, ' The board is using Wi-Fi.'],
+        '': [{ b: 'The board is not using the W5500 now.' }, ' It started on Wi-Fi or in access point mode.']
+    };
+    const w5500Section = document.getElementById('sec-w5500');
+    const w5500Form = document.getElementById('w5500-form');
+    const w5500Toggle = document.getElementById('w5500-enabled');
+    const btnW5500 = document.getElementById('btn-w5500');
+    const W5500_BTN_IDLE = btnW5500 ? btnW5500.innerHTML : '';
+    let w5500Strapping = [];
+    let w5500NoChangeTimer = null;
+    const w5500Input = (f) => document.getElementById('w5500-' + f);
+    const w5500Cell = (f) => w5500Input(f).closest('.pin-cell');
+
+    // parts: strings and {b: text} for bold, built as text nodes
+    function w5500Text(el, parts) {
+        el.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { el.appendChild(document.createTextNode(p)); return; }
+            const s = document.createElement('strong');
+            s.textContent = p.b;
+            el.appendChild(s);
+        });
+    }
+
+    function w5500Badge(state) {
+        const el = document.getElementById('w5500-badge');
+        const b = state === 'active' ? { cls: 'connected', ind: 'success', text: 'Active' }
+            : state === 'fallback' ? { cls: 'connecting', ind: 'warning', text: 'Fallback' }
+                : { cls: 'idle', ind: '', text: 'Off' };
+        el.className = 'link-badge w5500-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    function setW5500Toggle(on) {
+        w5500Toggle.checked = on;
+        const st = document.getElementById('w5500-state');
+        st.textContent = on ? 'On' : 'Off';
+        st.classList.toggle('on', on);
+        w5500Form.classList.toggle('is-off', !on);
+    }
+
+    function readW5500Pins() {
+        const out = {};
+        W5500_PINS.forEach(f => {
+            const v = w5500Input(f).value.trim();
+            out[f] = v === '' ? null : Number(v);
+        });
+        return out;
+    }
+
+    // Wire glow and strapping note, live while typing (strapping[] of the GET)
+    function refreshW5500Pins() {
+        const pins = readW5500Pins();
+        const straps = [];
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.toggle('is-set', pins[f] !== null);
+            const isStrap = pins[f] !== null && w5500Strapping.includes(pins[f]);
+            w5500Cell(f).classList.toggle('strap', isStrap);
+            if (isStrap) straps.push(`GPIO ${pins[f]} (${W5500_LABEL[f]})`);
+        });
+        const box = document.getElementById('w5500-strapping');
+        if (straps.length) {
+            w5500Text(document.getElementById('w5500-strapping-text'), [
+                { b: `${straps.join(', ')} ${straps.length > 1 ? 'are strapping pins' : 'is a strapping pin'}.` },
+                ' The board may not start if the module pulls it high or low at power-on. It works with most modules; you can still save.'
+            ]);
+            box.hidden = false;
+        } else {
+            box.hidden = true;
+        }
+    }
+
+    // The field a 400 message names: "... for SCK: ...", "... both SCK and CS", "MISO is required ..."
+    function w5500FieldOf(message) {
+        const m = /for (\w+):/.exec(message) || /and (\w+)$/.exec(message) || /^(\w+) is required/.exec(message);
+        if (!m) return null;
+        return W5500_PINS.find(f => W5500_LABEL[f] === m[1]) || null;
+    }
+
+    function showW5500Error(text) {
+        document.getElementById('w5500-error-text').textContent = text;
+        document.getElementById('w5500-error').hidden = false;
+        const f = w5500FieldOf(text);
+        if (f) {
+            w5500Cell(f).classList.add('invalid');
+            w5500Input(f).setAttribute('aria-invalid', 'true');
+        }
+    }
+
+    function hideW5500Error() {
+        document.getElementById('w5500-error').hidden = true;
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.remove('invalid');
+            w5500Input(f).removeAttribute('aria-invalid');
+        });
+    }
+
+    function setW5500Disabled(disabled) {
+        btnW5500.disabled = disabled;
+        w5500Toggle.disabled = disabled;
+        W5500_PINS.forEach(f => { w5500Input(f).disabled = disabled; });
+    }
+
+    function renderW5500(data) {
+        w5500Strapping = Array.isArray(data.strapping) ? data.strapping : [];
+        const status = data.status || {};
+        w5500Badge(status.state);
+        const st = document.getElementById('w5500-status');
+        if (status.state === 'fallback') {
+            w5500Text(document.getElementById('w5500-status-text'), W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+            st.hidden = false;
+        } else {
+            st.hidden = true;
+        }
+        setW5500Toggle(!!data.enabled);
+        const pins = data.pins || {};
+        W5500_PINS.forEach(f => {
+            const v = pins[f];
+            w5500Input(f).value = v === null || v === undefined ? '' : v;
+        });
+        refreshW5500Pins();
+        w5500Section.hidden = false;
+    }
+
+    function showW5500NoChanges() {
+        setW5500Disabled(false);
+        btnW5500.innerHTML = 'No changes';
+        clearTimeout(w5500NoChangeTimer);
+        w5500NoChangeTimer = setTimeout(() => { btnW5500.innerHTML = W5500_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startW5500Restart() {
+        netRestarting = true;
+        btnW5500.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnW5500.classList.add('is-saved');
+        setW5500Disabled(true);
+        document.getElementById('w5500-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('w5500-countdown');
+        let left = W5500_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (w5500Section && w5500Form && btnW5500) {
+        W5500_PINS.forEach(f => w5500Input(f).addEventListener('input', () => {
+            hideW5500Error();
+            refreshW5500Pins();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        }));
+        w5500Toggle.addEventListener('change', () => {
+            setW5500Toggle(w5500Toggle.checked);
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+
+        w5500Form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnW5500.disabled) return;
+            hideW5500Error();
+            const next = { enabled: w5500Toggle.checked, pins: readW5500Pins() };
+            btnW5500.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            setW5500Disabled(true);
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/eth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(next)
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('W5500 save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+                setW5500Disabled(false);
+                showW5500Error(data && typeof data.error === 'string' ? data.error : 'Could not save the W5500 settings.');
+                const f = data && typeof data.error === 'string' ? w5500FieldOf(data.error) : null;
+                if (f) w5500Input(f).focus();
+                return;
+            }
+            // restart:false: the same values were already saved
+            if (data.restart) startW5500Restart();
+            else showW5500NoChanges();
+        });
+
+        apiFetch('/api/network/eth', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => { if (data && data.available === true) renderW5500(data); })
+            .catch(err => console.error('Failed to fetch the W5500 settings:', err));
     }
 
     // Pre-populate fields

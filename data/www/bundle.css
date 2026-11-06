@@ -3231,3 +3231,148 @@ body.auth-page {
     .rlog-form .form-actions { flex-direction: column; align-items: stretch; }
     .rlog-form .form-actions .btn { justify-content: center; }
 }
+
+/* --- Network page: Ethernet module (W5500) section (US-126, docs/mockups/US-126/w5500.css) --- */
+/* Wire colours: the usual jumper colours of a breadboard, one per signal. They make the six
+   fields readable at a glance and match what the user sees on the module's header. */
+.pin-cell[data-wire="sck"]  { --wire: #ffb800; }
+.pin-cell[data-wire="mosi"] { --wire: #00f0ff; }
+.pin-cell[data-wire="miso"] { --wire: #00ff9d; }
+.pin-cell[data-wire="cs"]   { --wire: #c77dff; }
+.pin-cell[data-wire="irq"]  { --wire: #ff8a3d; }
+.pin-cell[data-wire="rst"]  { --wire: #8a9bb3; }
+
+.panel-header .w5500-badge { margin-left: auto; }
+
+.w5500-toggle-row { margin-bottom: 1.25rem; }
+
+/* --- Amber alert: strapping pins and fallback to Wi-Fi (not an error: nothing is refused) --- */
+.auth-alert.warning {
+    border-color: rgba(255, 184, 0, 0.45);
+    border-left-color: var(--warning);
+    background: rgba(255, 184, 0, 0.07);
+}
+.auth-alert.warning svg { color: var(--warning); }
+.auth-alert strong { color: var(--text-primary); font-weight: 400; }
+.auth-alert code { color: var(--text-primary); font-family: var(--font-mono); }
+.w5500-status { margin-bottom: 1.25rem; }
+
+/* --- Form: pin grid, alerts, button --- */
+.w5500-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* Desktop: 3 columns (signals SCK MOSI MISO / CS INT RST); phone: 2 columns */
+.pin-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.pin-cell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem 0.85rem 0.85rem 1.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.22);
+    transition: border-color 0.2s, background 0.2s, opacity 0.3s;
+}
+/* The jumper wire: a coloured stripe on the left, glowing once the field has a GPIO */
+.pin-cell::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--wire);
+    opacity: 0.35;
+    transition: opacity 0.2s, box-shadow 0.2s;
+}
+.pin-cell.is-set::before {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--wire);
+}
+.pin-cell:focus-within {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.32);
+}
+
+.pin-cell label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.pin-name { color: var(--text-primary); font-size: 0.85rem; }
+.pin-role { color: var(--text-secondary); font-size: 0.62rem; text-align: right; }
+.pin-cell.optional .pin-role { color: var(--wire); opacity: 0.8; }
+
+.pin-input {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: var(--border-radius);
+    background: rgba(0, 0, 0, 0.3);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.pin-input:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+.pin-prefix {
+    display: flex;
+    align-items: center;
+    padding: 0 0.6rem;
+    border-right: 1px solid var(--bg-panel-border);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+}
+.pin-input input {
+    width: 100%;
+    min-width: 0;
+    padding: 0.65rem 0.75rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 1.05rem;
+    outline: none;
+    -moz-appearance: textfield;
+}
+.pin-input input::-webkit-outer-spin-button,
+.pin-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pin-input input::placeholder { color: rgba(138, 155, 179, 0.38); }
+.pin-input input:disabled { color: var(--text-secondary); }
+
+/* Field named by a 400 error (red) or by the strapping note (amber) */
+.pin-cell.invalid .pin-input { border-color: var(--danger); box-shadow: 0 0 10px rgba(255, 51, 102, 0.25); }
+.pin-cell.invalid .pin-name { color: var(--danger); }
+.pin-cell.strap .pin-input { border-color: rgba(255, 184, 0, 0.6); }
+
+/* Module off: the pins stay editable (they are saved and checked), just quieter */
+.w5500-form.is-off .pin-cell { opacity: 0.6; }
+.w5500-form.is-off .pin-cell:focus-within { opacity: 1; }
+
+.w5500-actions { display: flex; justify-content: flex-end; }
+#btn-w5500 { min-width: 14rem; justify-content: center; }
+
+@media (max-width: 768px) {
+    .pin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+    .pin-cell { padding: 0.65rem 0.7rem 0.75rem 0.95rem; }
+    .pin-role { display: none; }
+    .pin-cell.optional .pin-role { display: inline; }
+    .w5500-actions .btn { width: 100%; }
+    .panel-header .w5500-badge { margin-left: 0; }
+}

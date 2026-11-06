@@ -1,82 +1,11 @@
 schema: archetipo/plan/v2
 spec_code: US-126
-body: |-
-  ---
-  type: plan
-  title: "US-126: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64) — Piano di implementazione"
-  description: "Piano di implementazione per US-126"
-  tags: [plan, implementation, US-126]
-  ---
-  # US-126: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64) — Piano di implementazione
-
-  **Generato da:** ARchetipo Planning Team
-  **Data:** 2026-11-06
-
-  ---
-
-  ## Spec
-
-  **Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)
-  **Priorità:** MEDIUM | **Punti:** 5
-
-  Vedi `.archetipo/specs/US-126.yaml` per user story e criteri di accettazione completi.
-
-  ---
-
-  ## Soluzione tecnica
-
-  Il W5500 entra nell'immagine `esp32-s3-standard` esistente, senza una nuova immagine né `#if`: le librerie precompilate della S3 hanno già `CONFIG_ETH_SPI_ETHERNET_W5500=1` e la libreria `ETH` di Arduino 3.3.12 accetta tipo e pin a runtime (`ETH.begin(ETH_PHY_W5500, addr, cs, irq, rst, SPI2_HOST, sck, miso, mosi)`). `ETH_SPI_SUPPORTS_NO_IRQ` è definito: senza INT il driver legge il chip ogni `setPollPeriod()` ms (10 ms di default), quindi INT e RST sono davvero facoltativi. Se i pin sono sbagliati il driver non legge l'ID del W5500 e `ETH.begin()` restituisce false: è il segnale per tornare al Wi-Fi.
-
-  - **Profilo della scheda (ADR 0010 §3, PDR 0002 D4).** `BoardConfig` riceve un campo `spi_eth` con: disponibilità (true solo sulla S3), GPIO massimo, intervalli riservati con il motivo (`{22,25,"not present on the ESP32-S3"}`, `{26,32,"flash and PSRAM"}`, `{33,37,"octal PSRAM"}`, `{19,20,"USB port of the UPS"}`, `{43,44,"serial console"}`) e pin di strapping (0, 3, 45, 46). I pin del LED (`led.pin`, `led.power_pin`) sono riservati automaticamente dal validatore con motivo "status LED". `EthConfig` riceve `rst` e `EthPhy::W5500`. Il profilo S3 resta `EthType::NONE`, `has_ethernet false`: l'Ethernet SPI è un'impostazione utente, non un dato della scheda.
-  - **Impostazioni pure (`include/board/eth_spi_settings.h`).** `EthSpiSettings {enabled, sck, mosi, miso, cs, irq, rst}` (-1 = non impostato), `checkEthSpiSettings()` che restituisce il primo errore con campo, GPIO e motivo, `strappingWarnings()`, `toEthConfig()` e `sanitizeEthSpi()` (impostazioni attive ma non valide → spente). Regole: ogni pin impostato è controllato anche con il modulo spento; SCK, MOSI, MISO e CS sono obbligatori solo per attivare; nessun GPIO in due campi. Testato in nativo.
-  - **Archivio NVS `eth`** (`src/core/eth_spi_store.*`), come `HostnameStore` e `TimeSettingsStore`: namespace proprio, quindi sopravvive all'OTA e non tocca `config_json`. `load()` applica `sanitizeEthSpi()` e scrive un WARN se spegne il modulo.
-  - **Avvio (`NetBootPlan`).** Nuovo ingresso `NetBootInput {has_wifi, has_ethernet, spi_eth, config_valid, wifi_ssid_set, manual_trigger}` e campo `fallback` nel piano. Con W5500 attivo, Wi-Fi presente e senza doppio reset: `link = ETHERNET`, `fallback = WIFI_STATION` se la configurazione è valida con SSID, altrimenti `WIFI_ACCESS_POINT` (captive portal, senza timeout). Il doppio reset avvia sempre l'AP. La stazione richiede ora anche un SSID non vuoto: dopo una configurazione NUT di default salvata in Ethernet, spegnere il W5500 porta all'AP e non a una stazione senza rete. La firma a 3 argomenti resta come wrapper, così i test esistenti non cambiano.
-  - **Prova dell'Ethernet all'avvio (`EthBootProbe`, puro).** Macchina a stati con tempi fissi: chip non risponde → fallimento immediato (`no_chip`); nessun link entro `ETH_LINK_TIMEOUT_MS = 5000` → `no_link`; link senza IP entro `ETH_DHCP_TIMEOUT_MS = 15000` dal link → `no_ip`; IP → `connected`. `AppNetworkManager::probeEthernet()` la esegue in modo bloccante in `setup()`, prima della scelta AP/stazione, chiamando `esp_task_wdt_reset()` e `delay(50)` a ogni giro. In questo modo `is_ap_mode`, l'avvio del server web e del server NUT in `main.cpp` restano invariati. Il caso peggiore (cavo staccato) ritarda l'avvio di circa 5 s, con link senza DHCP di circa 20 s. Dopo il ritorno al Wi-Fi la scheda resta sul Wi-Fi fino al riavvio; il passaggio a caldo è in US-127.
-  - **Configurazione di default in Ethernet.** Se la prova riesce e la configurazione non è valida (scheda integrata mai configurata in Wi-Fi), si salva la configurazione NUT di default come sull'ESP32-P4 (US-092), così il server NUT parte. Solo se il link finale è l'Ethernet.
-  - **`EthLink`.** Nuovo ramo `EthType::SPI` con `EthPhy::W5500`: `ETH.setPollPeriod(10)` se `irq < 0`, poi `ETH.begin(...)` su `SPI2_HOST`. Errore chiaro nel log: "W5500 not responding: check the pins in the Network page". Nuovo `started()` per la prova.
-  - **API.** `GET /api/network/eth` → `{"available":true,"enabled","pins":{sck,mosi,miso,cs,irq,rst},"strapping":[0,3,45,46],"status":{"state":"off|active|fallback","reason":"no_chip|no_link|no_ip"}}`. `POST /api/network/eth` con lo stesso `enabled` e `pins` (null o -1 = non impostato) → 400 `{"error":"GPIO 19 cannot be used for SCK: USB port of the UPS"}`, `{"error":"GPIO 10 is used for both CS and SCK"}`, `{"error":"SCK is required to enable the W5500"}`, oppure 200 `{"success":true,"restart":true|false,"warnings":[...]}` (riavvio solo se cambia qualcosa). Le rotte esistono in AP e in stazione, protette dal login come `/api/network/hostname`, e non sono registrate se `board().spi_eth.available` è false (404 sul P4). `GET /api/config` aggiunge `"ethernet"` a `network.links` quando il W5500 è attivo, così la sezione Ethernet di US-112 compare e la barra laterale mostra già "Ethernet" (bundle.js gestisce `network.type`).
-  - **Web UI.** Nuova sezione `data-section="w5500"` nella pagina Network, tra Ethernet e Hostname, secondo il mockup `docs/mockups/US-126/` e dell'interruttore di Board Settings. Sei campi numerici con i pin di esempio nel testo grigio (SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14: sei pin adiacenti sul connettore della DevKitC-1, nessuno di strapping, quindi l'esempio non fa scattare l'avviso), INT e RST marcati "optional", avviso per i pin di strapping, riga di stato del ritorno al Wi-Fi e conto alla rovescia di 15 s dopo il salvataggio. La sezione compare solo se `GET /api/network/eth` risponde 200.
-  - **Fuori dal codice.** La build di prova nella #64 e la conferma di Mickel4711 e judahrand avvengono dopo la review, con il consenso dell'utente: non fanno parte dell'implementazione. Il manuale utente vive sul branch `feature/user-manual`: l'aggiornamento va fatto lì dopo il merge, e va segnalato nel riepilogo di completamento.
-  - **Spazio flash.** Il codice SPI/W5500 entra nell'immagine S3; la partizione app è di 0x3F0000 byte. La verifica finale registra la dimensione prima e dopo.
-
-  ---
-
-  ## Strategia di test
-
-  La logica sta in header puri testati in nativo (validazione dei pin, piano di avvio, prova dell'Ethernet, JSON dell'API); le parti con piattaforma (NVS, `ETH.*`, `main.cpp`) sono sottili e coperte dalle tre build e dalla prova su hardware dei tester.
-
-  - `test_eth_spi_settings` (nuovo): pin vietati per intervallo e LED con il motivo, GPIO inesistenti, duplicati, obbligatori solo con `enabled`, INT/RST facoltativi, strapping come avviso, `sanitizeEthSpi`, `toEthConfig`.
-  - `test_net_boot_plan`: casi esistenti invariati; nuovi casi W5500 (stazione o AP come ripiego, doppio reset → AP, SSID vuoto → AP, P4 invariato, configurazione di default solo per l'Ethernet).
-  - `test_eth_boot_probe` (nuovo): chip assente, nessun link a 5 s, nessun IP a 15 s dal link, successo, link che arriva al limite.
-  - `test_web_api`: `ethSpiJson`, `checkEthSpiBody` (errori 400 col testo esatto, `restart` false senza cambiamenti, warnings), `networkLinksJson` con W5500 attivo.
-  - `test_board_profile`: `spi_eth` della S3.
-  - Regressione: tutta la suite nativa, la suite e2e completa, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
-
-  ### Test E2E — simulazione utente
-
-  **Framework:** Playwright (`playwright.config.ts`, helper `e2e/support/webui.ts`, API simulate con `page.route`)
-  **Video demo:** previsto (la Dimostrazione è una sequenza visibile nella pagina Network); lo registra `archetipo-review`, non l'implementazione.
-
-  | Scenario | Flusso utente |
-  |---|---|
-  | Attivazione con i pin di esempio | Su una S3 l'utente apre Network, vede la sezione W5500 spenta con i pin di esempio nel testo grigio, la attiva, inserisce SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14, salva: nessun avviso di strapping, la POST contiene esattamente quei pin e compare il conto alla rovescia del riavvio |
-  | Pin vietato | L'utente inserisce SCK 19 e salva: il server risponde 400 e la pagina mostra "GPIO 19 cannot be used for SCK: USB port of the UPS"; correggendo il campo il messaggio sparisce |
-  | Pin di strapping | L'utente inserisce RST 3: compare l'avviso sui pin di strapping, il salvataggio resta possibile |
-  | INT e RST vuoti | L'utente lascia vuoti INT e RST: la POST li invia come non impostati e il salvataggio riesce |
-  | Ritorno al Wi-Fi | Con `status.state = fallback` e `reason = no_chip` la sezione spiega che il W5500 non risponde e che la scheda usa il Wi-Fi |
-  | ESP32-P4 | `GET /api/network/eth` risponde 404: la sezione W5500 non compare, il resto della pagina Network è invariato |
-  | Nessuna modifica | Salvando gli stessi valori la risposta `restart:false` non avvia il conto alla rovescia |
-
-  ---
-
-  > 🎨 Mockup per questa spec in `docs/mockups/US-126/`
-
-  _Piano generato con ARchetipo Planning — 2026-11-06_
+body: "---\ntype: plan\ntitle: \"US-126: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64) — Piano di implementazione\"\ndescription: \"Piano di implementazione per US-126\"\ntags: [plan, implementation, US-126]\n---\n# US-126: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64) — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-11-06\n\n---\n\n## Spec\n\n**Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)\n**Priorità:** MEDIUM | **Punti:** 5\n\nVedi `.archetipo/specs/US-126.yaml` per user story e criteri di accettazione completi.\n\n---\n\n## Soluzione tecnica\n\nIl W5500 entra nell'immagine `esp32-s3-standard` esistente, senza una nuova immagine né `#if`: le librerie precompilate della S3 hanno già `CONFIG_ETH_SPI_ETHERNET_W5500=1` e la libreria `ETH` di Arduino 3.3.12 accetta tipo e pin a runtime (`ETH.begin(ETH_PHY_W5500, addr, cs, irq, rst, SPI2_HOST, sck, miso, mosi)`). `ETH_SPI_SUPPORTS_NO_IRQ` è definito: senza INT il driver legge il chip ogni `setPollPeriod()` ms (10 ms di default), quindi INT e RST sono davvero facoltativi. Se i pin sono sbagliati il driver non legge l'ID del W5500 e `ETH.begin()` restituisce false: è il segnale per tornare al Wi-Fi.\n\n- **Profilo della scheda (ADR 0010 §3, PDR 0002 D4).** `BoardConfig` riceve un campo `spi_eth` con: disponibilità (true solo sulla S3), GPIO massimo, intervalli riservati con il motivo (`{22,25,\"not present on the ESP32-S3\"}`, `{26,32,\"flash and PSRAM\"}`, `{33,37,\"octal PSRAM\"}`, `{19,20,\"USB port of the UPS\"}`, `{43,44,\"serial console\"}`) e pin di strapping (0, 3, 45, 46). I pin del LED (`led.pin`, `led.power_pin`) sono riservati automaticamente dal validatore con motivo \"status LED\". `EthConfig` riceve `rst` e `EthPhy::W5500`. Il profilo S3 resta `EthType::NONE`, `has_ethernet false`: l'Ethernet SPI è un'impostazione utente, non un dato della scheda.\n- **Impostazioni pure (`include/board/eth_spi_settings.h`).** `EthSpiSettings {enabled, sck, mosi, miso, cs, irq, rst}` (-1 = non impostato), `checkEthSpiSettings()` che restituisce il primo errore con campo, GPIO e motivo, `strappingWarnings()`, `toEthConfig()` e `sanitizeEthSpi()` (impostazioni attive ma non valide → spente). Regole: ogni pin impostato è controllato anche con il modulo spento; SCK, MOSI, MISO e CS sono obbligatori solo per attivare; nessun GPIO in due campi. Testato in nativo.\n- **Archivio NVS `eth`** (`src/core/eth_spi_store.*`), come `HostnameStore` e `TimeSettingsStore`: namespace proprio, quindi sopravvive all'OTA e non tocca `config_json`. `load()` applica `sanitizeEthSpi()` e scrive un WARN se spegne il modulo.\n- **Avvio (`NetBootPlan`).** Nuovo ingresso `NetBootInput {has_wifi, has_ethernet, spi_eth, config_valid, wifi_ssid_set, manual_trigger}` e campo `fallback` nel piano. Con W5500 attivo, Wi-Fi presente e senza doppio reset: `link = ETHERNET`, `fallback = WIFI_STATION` se la configurazione è valida con SSID, altrimenti `WIFI_ACCESS_POINT` (captive portal, senza timeout). Il doppio reset avvia sempre l'AP. La stazione richiede ora anche un SSID non vuoto: dopo una configurazione NUT di default salvata in Ethernet, spegnere il W5500 porta all'AP e non a una stazione senza rete. La firma a 3 argomenti resta come wrapper, così i test esistenti non cambiano.\n- **Prova dell'Ethernet all'avvio (`EthBootProbe`, puro).** Macchina a stati con tempi fissi: chip non risponde → fallimento immediato (`no_chip`); nessun link entro `ETH_LINK_TIMEOUT_MS = 5000` → `no_link`; link senza IP entro `ETH_DHCP_TIMEOUT_MS = 15000` dal link → `no_ip`; IP → `connected`. `AppNetworkManager::probeEthernet()` la esegue in modo bloccante in `setup()`, prima della scelta AP/stazione, chiamando `esp_task_wdt_reset()` e `delay(50)` a ogni giro. In questo modo `is_ap_mode`, l'avvio del server web e del server NUT in `main.cpp` restano invariati. Il caso peggiore (cavo staccato) ritarda l'avvio di circa 5 s, con link senza DHCP di circa 20 s. Dopo il ritorno al Wi-Fi la scheda resta sul Wi-Fi fino al riavvio; il passaggio a caldo è in US-127.\n- **Configurazione di default in Ethernet.** Se la prova riesce e la configurazione non è valida (scheda integrata mai configurata in Wi-Fi), si salva la configurazione NUT di default come sull'ESP32-P4 (US-092), così il server NUT parte. Solo se il link finale è l'Ethernet.\n- **`EthLink`.** Nuovo ramo `EthType::SPI` con `EthPhy::W5500`: `ETH.setPollPeriod(10)` se `irq < 0`, poi `ETH.begin(...)` su `SPI2_HOST`. Errore chiaro nel log: \"W5500 not responding: check the pins in the Network page\". Nuovo `started()` per la prova.\n- **API.** `GET /api/network/eth` → `{\"available\":true,\"enabled\",\"pins\":{sck,mosi,miso,cs,irq,rst},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"off|active|fallback\",\"reason\":\"no_chip|no_link|no_ip\"}}`. `POST /api/network/eth` con lo stesso `enabled` e `pins` (null o -1 = non impostato) → 400 `{\"error\":\"GPIO 19 cannot be used for SCK: USB port of the UPS\"}`, `{\"error\":\"GPIO 10 is used for both CS and SCK\"}`, `{\"error\":\"SCK is required to enable the W5500\"}`, oppure 200 `{\"success\":true,\"restart\":true|false,\"warnings\":[...]}` (riavvio solo se cambia qualcosa). Le rotte esistono in AP e in stazione, protette dal login come `/api/network/hostname`, e non sono registrate se `board().spi_eth.available` è false (404 sul P4). `GET /api/config` aggiunge `\"ethernet\"` a `network.links` quando il W5500 è attivo, così la sezione Ethernet di US-112 compare e la barra laterale mostra già \"Ethernet\" (bundle.js gestisce `network.type`).\n- **Web UI.** Nuova sezione `data-section=\"w5500\"` nella pagina Network, tra Ethernet e Hostname, secondo il mockup `docs/mockups/US-126/` e dell'interruttore di Board Settings. Sei campi numerici con i pin di esempio nel testo grigio (SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14: sei pin adiacenti sul connettore della DevKitC-1, nessuno di strapping, quindi l'esempio non fa scattare l'avviso), INT e RST marcati \"optional\", avviso per i pin di strapping, riga di stato del ritorno al Wi-Fi e conto alla rovescia di 15 s dopo il salvataggio. La sezione compare solo se `GET /api/network/eth` risponde 200.\n- **Fuori dal codice.** La build di prova nella #64 e la conferma di Mickel4711 e judahrand avvengono dopo la review, con il consenso dell'utente: non fanno parte dell'implementazione. Il manuale utente vive sul branch `feature/user-manual`: l'aggiornamento va fatto lì dopo il merge, e va segnalato nel riepilogo di completamento.\n- **Spazio flash.** Il codice SPI/W5500 entra nell'immagine S3; la partizione app è di 0x3F0000 byte. La verifica finale registra la dimensione prima e dopo.\n\n---\n\n## Strategia di test\n\nLa logica sta in header puri testati in nativo (validazione dei pin, piano di avvio, prova dell'Ethernet, JSON dell'API); le parti con piattaforma (NVS, `ETH.*`, `main.cpp`) sono sottili e coperte dalle tre build e dalla prova su hardware dei tester.\n\n- `test_eth_spi_settings` (nuovo): pin vietati per intervallo e LED con il motivo, GPIO inesistenti, duplicati, obbligatori solo con `enabled`, INT/RST facoltativi, strapping come avviso, `sanitizeEthSpi`, `toEthConfig`.\n- `test_net_boot_plan`: casi esistenti invariati; nuovi casi W5500 (stazione o AP come ripiego, doppio reset → AP, SSID vuoto → AP, P4 invariato, configurazione di default solo per l'Ethernet).\n- `test_eth_boot_probe` (nuovo): chip assente, nessun link a 5 s, nessun IP a 15 s dal link, successo, link che arriva al limite.\n- `test_web_api`: `ethSpiJson`, `checkEthSpiBody` (errori 400 col testo esatto, `restart` false senza cambiamenti, warnings), `networkLinksJson` con W5500 attivo.\n- `test_board_profile`: `spi_eth` della S3.\n- Regressione: tutta la suite nativa, la suite e2e completa, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.\n\n### Test E2E — simulazione utente\n\n**Framework:** Playwright (`playwright.config.ts`, helper `e2e/support/webui.ts`, API simulate con `page.route`)\n**Video demo:** previsto (la Dimostrazione è una sequenza visibile nella pagina Network); lo registra `archetipo-review`, non l'implementazione.\n\n| Scenario | Flusso utente |\n|---|---|\n| Attivazione con i pin di esempio | Su una S3 l'utente apre Network, vede la sezione W5500 spenta con i pin di esempio nel testo grigio, la attiva, inserisce SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14, salva: nessun avviso di strapping, la POST contiene esattamente quei pin e compare il conto alla rovescia del riavvio |\n| Pin vietato | L'utente inserisce SCK 19 e salva: il server risponde 400 e la pagina mostra \"GPIO 19 cannot be used for SCK: USB port of the UPS\"; correggendo il campo il messaggio sparisce |\n| Pin di strapping | L'utente inserisce RST 3: compare l'avviso sui pin di strapping, il salvataggio resta possibile |\n| INT e RST vuoti | L'utente lascia vuoti INT e RST: la POST li invia come non impostati e il salvataggio riesce |\n| Ritorno al Wi-Fi | Con `status.state = fallback` e `reason = no_chip` la sezione spiega che il W5500 non risponde e che la scheda usa il Wi-Fi |\n| ESP32-P4 | `GET /api/network/eth` risponde 404: la sezione W5500 non compare, il resto della pagina Network è invariato |\n| Nessuna modifica | Salvando gli stessi valori la risposta `restart:false` non avvia il conto alla rovescia |\n\n---\n\n> \U0001F3A8 Mockup per questa spec in `docs/mockups/US-126/`\n\n_Piano generato con ARchetipo Planning — 2026-11-06_"
 tasks:
   - id: TASK-01
     title: Profilo della scheda e logica pura delle impostazioni W5500
     type: Impl
-    status: TODO
+    status: DONE
     body: |-
       ## Descrizione
       **Obiettivo:** descrivere nel profilo quali GPIO la S3 può dare al W5500 e scrivere la validazione pura dei pin.
@@ -107,10 +36,11 @@ tasks:
       - [ ] **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` passa senza modifiche ai test esistenti
       - [ ] I messaggi d'errore sono esattamente quelli elencati sopra
       - [ ] Nessun `#if` sul target: la differenza S3/P4 sta solo nei profili
+    ref: TASK-01
   - id: TASK-02
     title: Test nativi della validazione dei pin e del profilo
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -132,10 +62,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] **Verifica:** `pio test -e native -f test_eth_spi_settings -f test_board_profile` passa (con il PATH del toolchain mingw)
       - [ ] Ogni intervallo riservato, il LED, i duplicati, gli obbligatori e lo strapping hanno almeno un test
+    ref: TASK-02
   - id: TASK-03
     title: Archivio NVS delle impostazioni W5500
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -161,10 +92,11 @@ tasks:
       - [ ] **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell compila
       - [ ] Impostazioni salvate non valide vengono spente al caricamento con una riga WARN
       - [ ] Il namespace `eth` non è usato da altri store
+    ref: TASK-03
   - id: TASK-04
     title: Piano di avvio con W5500 e prova dell'Ethernet (logica pura)
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
     body: |-
@@ -194,10 +126,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] **Verifica:** i test esistenti di `test_net_boot_plan` passano senza modifiche
       - [ ] Nessuna chiamata di piattaforma negli header (solo `<stdint.h>`)
+    ref: TASK-04
   - id: TASK-05
     title: Test nativi del piano di avvio e della prova dell'Ethernet
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-04
     body: |-
@@ -221,10 +154,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] **Verifica:** `pio test -e native -f test_net_boot_plan -f test_eth_boot_probe` passa
       - [ ] I limiti di 5 s e 15 s sono provati da entrambi i lati
+    ref: TASK-05
   - id: TASK-06
     title: EthLink con W5500 e prova bloccante nel gestore di rete
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-04
@@ -252,10 +186,11 @@ tasks:
       - [ ] **Verifica:** `pio run -e esp32-s3-standard` e `pio run -e esp32-p4-eth` compilano (PowerShell)
       - [ ] Il percorso RMII del P4 non cambia
       - [ ] Il ciclo di prova resetta il watchdog e non supera 5 s senza link o 20 s con link senza DHCP
+    ref: TASK-06
   - id: TASK-07
     title: API GET/POST /api/network/eth e network.links
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-01
       - TASK-03
@@ -284,10 +219,11 @@ tasks:
       - [ ] **Verifica:** `pio run -e esp32-s3-standard` e `pio run -e esp32-p4-eth` compilano
       - [ ] Sul P4 le rotte non esistono (404)
       - [ ] Salvare gli stessi valori risponde `restart:false` e non riavvia
+    ref: TASK-07
   - id: TASK-08
     title: Test nativi dell'API del W5500
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |-
@@ -308,10 +244,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] **Verifica:** `pio test -e native -f test_web_api` passa
       - [ ] I testi degli errori coincidono con quelli che usa l'e2e (TASK-11)
+    ref: TASK-08
   - id: TASK-09
     title: Collegare W5500 all'avvio in main.cpp
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-03
       - TASK-04
@@ -342,10 +279,11 @@ tasks:
       - [ ] **Verifica:** `pio run -e esp32-s3-standard`, `pio run -e esp32-p4-eth`, `pio run -e esp32-p4-eth-v1` compilano (PowerShell)
       - [ ] Con W5500 spento il percorso di avvio è identico a prima (stesso piano, nessuna prova)
       - [ ] Il doppio reset avvia l'AP anche con W5500 attivo
+    ref: TASK-09
   - id: TASK-10
     title: Sezione W5500 nella pagina Network
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-07
     body: |-
@@ -375,10 +313,11 @@ tasks:
       - [ ] **Verifica:** `npx playwright test e2e/network-page.spec.ts e2e/ethernet.spec.ts e2e/hostname.spec.ts` passano invariati
       - [ ] Senza risposta 200 da `/api/network/eth` la sezione non compare
       - [ ] La pagina rigenerata è inclusa nell'immagine (build S3)
+    ref: TASK-10
   - id: TASK-11
     title: Test e2e della sezione W5500
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-10
     body: |-
@@ -399,10 +338,11 @@ tasks:
       ## Criteri di Completamento
       - [ ] **Verifica:** `npx playwright test e2e/eth-spi.spec.ts --repeat-each 3` passa
       - [ ] **Verifica:** `npm run e2e` (suite completa) passa
+    ref: TASK-11
   - id: TASK-12
     title: README, PDR 0002 e tabella dei pin noti
     type: Impl
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-10
     body: |-
@@ -428,10 +368,11 @@ tasks:
       - [ ] **Verifica:** le due versioni hanno la stessa tabella e gli stessi valori
       - [ ] La tabella segnala che i valori vanno verificati sullo schema
       - [ ] Nessun riferimento a codici US nei README
+    ref: TASK-12
   - id: TASK-13
     title: 'Verifica finale: suite, tre build e spazio flash'
     type: Test
-    status: TODO
+    status: DONE
     dependencies:
       - TASK-02
       - TASK-05
@@ -462,3 +403,4 @@ tasks:
       - [ ] **Verifica:** suite nativa, e2e e tre build passano
       - [ ] La dimensione dell'immagine S3 e lo spazio libero sono registrati
       - [ ] Il riepilogo di completamento ricorda: build di prova nella #64, conferma dei tester, aggiornamento del manuale su `feature/user-manual`
+    ref: TASK-13

@@ -481,8 +481,104 @@ void WebApiJson::networkStatusJson(JsonObject net, const NetLinkInfo& info) {
 }
 
 void WebApiJson::networkLinksJson(JsonArray links, const BoardConfig& board) {
+    networkLinksJson(links, board, false);
+}
+
+void WebApiJson::networkLinksJson(JsonArray links, const BoardConfig& board, bool spi_eth_enabled) {
     if (board.has_wifi) links.add("wifi");
-    if (board.has_ethernet) links.add("ethernet");
+    if (board.has_ethernet || spi_eth_enabled) links.add("ethernet");
+}
+
+// --- US-126: W5500 wired by the user ---
+
+// JSON keys of the pins, in the order of ethSpiPin()
+static const char* const ETH_SPI_KEYS[ETH_SPI_PIN_COUNT] = { "sck", "mosi", "miso", "cs", "irq", "rst" };
+
+static void setEthSpiPin(EthSpiSettings& s, uint8_t index, int8_t pin) {
+    switch (index) {
+        case 0: s.sck = pin; break;
+        case 1: s.mosi = pin; break;
+        case 2: s.miso = pin; break;
+        case 3: s.cs = pin; break;
+        case 4: s.irq = pin; break;
+        case 5: s.rst = pin; break;
+        default: break;
+    }
+}
+
+String WebApiJson::ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, const char* state,
+                              const char* reason) {
+    JsonDocument doc;
+    doc["available"] = board.spi_eth.available;
+    doc["enabled"] = settings.enabled;
+    JsonObject pins = doc["pins"].to<JsonObject>();
+    for (uint8_t i = 0; i < ETH_SPI_PIN_COUNT; i++) {
+        const int8_t pin = ethSpiPin(settings, i);
+        if (pin >= 0) {
+            pins[ETH_SPI_KEYS[i]] = pin;
+        } else {
+            pins[ETH_SPI_KEYS[i]] = nullptr;
+        }
+    }
+    JsonArray strapping = doc["strapping"].to<JsonArray>();
+    for (uint8_t i = 0; i < board.spi_eth.strapping_count && i < 4; i++) strapping.add(board.spi_eth.strapping[i]);
+    JsonObject status = doc["status"].to<JsonObject>();
+    status["state"] = state;
+    if (reason && reason[0] != '\0') status["reason"] = reason;
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
+                                EthSpiSettings& next, bool& restart, String& response) {
+    next = current;
+    restart = false;
+    if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonVariantConst enabled = body["enabled"];
+    if (!enabled.is<bool>()) return sendError(response, 400, "Invalid request");
+    JsonVariantConst pins = body["pins"];
+    if (!pins.isNull() && !pins.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+
+    EthSpiSettings candidate = ethSpiDefaults();
+    candidate.enabled = enabled.as<bool>();
+    for (uint8_t i = 0; i < ETH_SPI_PIN_COUNT; i++) {
+        JsonVariantConst v = pins[ETH_SPI_KEYS[i]];
+        if (v.isNull()) continue;  // missing or null: not set
+        // An integer only: true, 2.5 or "12" are rejected
+        if (!v.is<long>()) return sendError(response, 400, "Invalid request");
+        const long gpio = v.as<long>();
+        if (gpio < -1 || gpio > 127) {
+            // Outside int8_t: the same message the check gives for a GPIO the chip lacks
+            char msg[64];
+            snprintf(msg, sizeof(msg), "GPIO %ld does not exist on this board", gpio);
+            return sendError(response, 400, msg);
+        }
+        setEthSpiPin(candidate, i, (int8_t)gpio);
+    }
+
+    EthPinCheck check;
+    if (!checkEthSpiSettings(board, candidate, check)) return sendError(response, 400, check.message);
+
+    next = candidate;
+    restart = next != current;
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["restart"] = restart;
+    JsonArray warnings = doc["warnings"].to<JsonArray>();
+    int8_t straps[ETH_SPI_PIN_COUNT];
+    const uint8_t n = strappingWarnings(board, next, straps);
+    for (uint8_t i = 0; i < n; i++) {
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "GPIO %d is a strapping pin: the board may not boot if the module pulls it at power-on",
+                 (int)straps[i]);
+        warnings.add(msg);
+    }
+    std::string out;
+    serializeJson(doc, out);
+    response = String(out.c_str());
+    return 0;
 }
 
 int WebApiJson::checkHostnameBody(JsonVariantConst body, String& next, String& response) {

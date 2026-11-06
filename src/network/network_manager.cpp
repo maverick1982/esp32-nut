@@ -3,8 +3,11 @@
 #include "network/eth_link.h"
 #include "core/app_logger.h"
 #include "NetHostname.h"
+#include <esp_task_wdt.h>
 
-AppNetworkManager::AppNetworkManager() : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr) {}
+AppNetworkManager::AppNetworkManager()
+    : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr), m_ethCfg(), m_hasEthCfg(false),
+      m_ethProbe(EthProbeOutcome::WAITING) {}
 
 AppNetworkManager::~AppNetworkManager() {
     m_selector.activate(nullptr);
@@ -25,18 +28,51 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         if (!m_ap) m_ap = new WifiApLink(board.defaults.ap_ssid, board.defaults.ap_password);
         m_selector.activate(m_ap);
         break;
-    case BootLink::ETHERNET:
-        if (board.eth.type != EthType::NONE) {
-            if (!m_eth) m_eth = new EthLink(board.eth, saved_hostname);
+    case BootLink::ETHERNET: {
+        // A W5500 set by the user (US-126) or the board's own port. After probeEthernet()
+        // the link is already active and activate() leaves it as it is
+        const EthConfig& cfg = m_hasEthCfg ? m_ethCfg : board.eth;
+        if (cfg.type != EthType::NONE) {
+            if (!m_eth) m_eth = new EthLink(cfg, saved_hostname);
             m_selector.activate(m_eth);
             break;
         }
+    }
         // fall through: a profile with has_ethernet but no Ethernet port data
     case BootLink::NONE:
         AppLogger::log("WARN", "[NETWORK] No network link available on this board (%s)", board.name);
         m_selector.activate(nullptr);
         break;
     }
+}
+
+void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
+    m_ethCfg = cfg;
+    m_hasEthCfg = true;
+}
+
+EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now)) {
+    m_savedHostname = saved_hostname;
+    if (!m_eth) m_eth = new EthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), saved_hostname);
+    m_selector.activate(m_eth);
+    EthBootProbe probe;
+    probe.begin(millis(), m_eth->started());
+    EthProbeOutcome outcome = probe.step(millis(), m_eth->linkUp(), m_eth->hasIP());
+    while (outcome == EthProbeOutcome::WAITING) {
+        m_selector.loop(millis());
+        if (tick) tick(millis());
+        esp_task_wdt_reset();
+        delay(50);
+        outcome = probe.step(millis(), m_eth->linkUp(), m_eth->hasIP());
+    }
+    m_selector.loop(millis());  // logs the link and the address before going on
+    if (outcome != EthProbeOutcome::CONNECTED) {
+        AppLogger::log("WARN", "[NETWORK] Ethernet (W5500) not available (%s): falling back to Wi-Fi",
+                       ethProbeReason(outcome));
+        m_selector.activate(nullptr);
+    }
+    m_ethProbe = outcome;
+    return outcome;
 }
 
 void AppNetworkManager::loop() {

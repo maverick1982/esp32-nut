@@ -166,6 +166,26 @@ Per conoscere la revisione, esegui `esptool chip-id` (`esptool.py chip_id` con e
 
 Grazie a [rtadams89](https://github.com/rtadams89) per il supporto ESP32-P4 ed Ethernet.
 
+### Ethernet con un modulo W5500 (ESP32-S3)
+
+Un ESP32-S3 può usare l'Ethernet via cavo con un modulo SPI W5500: un modulo esterno collegato alla DevKit, oppure una scheda con il W5500 integrato. Non esiste uno schema di pin comune tra queste schede, quindi i pin li inserisci sempre tu nella scheda **Network** ([#64](https://github.com/maverick1982/esp32-nut/issues/64)).
+
+- **Fili**: SCK, MOSI, MISO e CS sono obbligatori; INT e RST sono facoltativi. Alimenta il modulo a 3,3 V e collega GND. Senza INT la scheda legge il chip a intervalli regolari; senza RST non viene fatto il reset hardware del modulo.
+- **Pin non ammessi** (la pagina li rifiuta): GPIO 19-20 (porta USB dell'UPS), 22-25 (non presenti sull'ESP32-S3), 26-37 (flash e PSRAM), 43-44 (console seriale), i pin del LED di stato (48 e 38 sulla DevKit) e lo stesso GPIO in due campi.
+- **Pin di strapping** (GPIO 0, 3, 45, 46): ammessi con un avviso, perché la scheda potrebbe non avviarsi se il modulo ne tiene uno alto o basso all'accensione.
+- **Attivazione**: nella scheda **Network**, sezione **Ethernet module (W5500)**, attiva **Use a W5500 module**, inserisci i GPIO e salva. La scheda si riavvia. I valori di esempio in grigio (SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 14) sono sei pin adiacenti sul connettore della DevKitC-1, nessuno di strapping.
+- **All'avvio**, con il modulo attivo, la scheda usa l'Ethernet se il cavo ha il link e riceve un indirizzo in DHCP (con il nome host della scheda **Network**). È attivo un solo collegamento alla volta. La scelta manuale tra Wi-Fi ed Ethernet arriverà più avanti.
+- **Ritorno al Wi-Fi**: se il W5500 non risponde (pin errati, modulo assente), se il cavo non ha il link entro 5 s o se il router non dà un indirizzo entro 15 s, la scheda parte in Wi-Fi, oppure in access point se il Wi-Fi non è configurato. Il **System Log** e la sezione W5500 spiegano il motivo. Il doppio reset avvia sempre l'access point.
+- **Primo avvio di una scheda con W5500 integrato**: la scheda parte in access point come sempre. Inserisci i pin e attiva il modulo dall'access point (o dopo aver configurato il Wi-Fi): dopo il riavvio la scheda entra in rete via cavo.
+
+**Pin noti.** Verificali sullo schema della tua scheda; per aggiungere una scheda manda una PR.
+
+| Scheda | SCK | MOSI | MISO | CS | INT | RST | Porta USB dell'UPS | Fonte |
+| :--- | :-: | :-: | :-: | :-: | :-: | :-: | :--- | :--- |
+| Modulo esterno su ESP32-S3 DevKit (Mickel4711) | 12 | 11 | 13 | 10 | 9 | 3 | Porta `USB` della DevKit | [#94](https://github.com/maverick1982/esp32-nut/issues/94) |
+| Waveshare ESP32-S3-ETH / ESP32-S3-POE-ETH | 13 | 11 | 12 | 14 | 10 | 9 | USB-C, non documentata come host: può servire un adattatore OTG | [Wiki Waveshare](https://www.waveshare.com/wiki/ESP32-S3-ETH) |
+| LilyGO T-ETH-Lite S3 | 10 | 12 | 11 | 9 | 13 | 14 | Non nota | [`utilities.h`](https://github.com/Xinyuan-LilyGO/LilyGO-T-ETH-Series) (il wiki riporta valori diversi) |
+
 ### Case in Stampa 3D (Opzionale)
 
 Trasforma la tua scheda ESP32-S3 nuda in un prodotto finito! Abbiamo disegnato un case elegante da stampare in 3D.
@@ -248,6 +268,7 @@ La Web UI è protetta da nome utente e password.
 
 ### 5. Altre Impostazioni
 - **Hostname** (scheda **Network**): il nome che la scheda comunica al router, da 1 a 32 lettere, cifre e trattini. Vuoto significa il predefinito `esp32-nut-xxxxxx`. La scheda si riavvia per applicarlo.
+- **Modulo Ethernet W5500** (scheda **Network**, ESP32-S3, spento di default): i pin di un W5500 collegato alla scheda, vedi [Ethernet con un modulo W5500](#ethernet-con-un-modulo-w5500-esp32-s3). La scheda si riavvia per applicarli.
 - **Automatic shutdown** (scheda **Board Settings**, disattivato di default): quando l'UPS è a batteria e segnala batteria scarica (`OB LB`), la scheda invia una volta `shutdown.default`, anche senza client NUT collegati, e non lo invia di nuovo finché l'UPS non torna in rete. La soglia è `battery.charge.low` / `battery.runtime.low` dell'UPS (scheda **UPS Settings**). Se l'UPS si riaccende al ritorno della corrente dipende dal modello.
 - **Time** (scheda **Board Settings**): NTP attivo di default (`pool.ntp.org`, UTC), con un elenco di fusi orari con ora legale automatica. L'ora serve solo a mostrarla nel System Log e a scriverla nelle righe syslog; senza accesso a Internet la scheda funziona come prima.
 - **Status LED** (scheda **Board Settings**, ESP32-S3): spegnilo o scegline la luminosità.

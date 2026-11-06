@@ -3,9 +3,11 @@
 #include "NetHostname.h"
 #include <esp_mac.h>
 #include <ETH.h>
+#include <driver/spi_common.h>
 
 // RMII needs the internal EMAC (ESP32, ESP32-P4). Images for chips without it (ESP32-S3)
-// still build this adapter, but no profile of theirs asks for it.
+// still build the RMII branch, but no profile of theirs asks for it. The W5500 (SPI, US-126)
+// works on every chip: its pins come from the Network page, not from the profile.
 #if CONFIG_ETH_USE_ESP32_EMAC
 #define NUT_HAS_EMAC 1
 #else
@@ -26,6 +28,10 @@ void EthLink::begin() {
     m_hostname = NetHostname::effective(m_savedHostname, mac);
     const char* hostname = m_hostname.c_str();
 
+    if (m_cfg.type == EthType::SPI && m_cfg.phy_type == EthPhy::W5500) {
+        beginW5500(hostname);
+        return;
+    }
     if (m_cfg.type != EthType::RMII) {
         AppLogger::log("ERROR", "[NETWORK] Ethernet type of this board profile not supported yet");
         return;
@@ -68,8 +74,55 @@ void EthLink::begin() {
 #endif
 }
 
+void EthLink::beginW5500(const char* hostname) {
+#if CONFIG_ETH_SPI_ETHERNET_W5500
+    // Without INT the driver reads the chip every 10 ms instead of waiting for the interrupt
+    const bool polling = m_cfg.irq < 0;
+    if (polling) ETH.setPollPeriod(10);
+    m_started = ETH.begin(ETH_PHY_W5500, m_cfg.phy_addr, m_cfg.cs, m_cfg.irq, m_cfg.rst, SPI2_HOST, m_cfg.sck,
+                          m_cfg.miso, m_cfg.mosi);
+    if (!m_started) {
+        AppLogger::log("ERROR", "[NETWORK] W5500 not responding: check the pins in the Network page");
+        releaseW5500();
+        return;
+    }
+    AppLogger::log("INFO", "[NETWORK] W5500 started: SCK %d, MOSI %d, MISO %d, CS %d, INT %d, RST %d (%s)",
+                   (int)m_cfg.sck, (int)m_cfg.mosi, (int)m_cfg.miso, (int)m_cfg.cs, (int)m_cfg.irq, (int)m_cfg.rst,
+                   polling ? "polling" : "interrupt");
+    if (ETH.setHostname(hostname)) {
+        AppLogger::log("INFO", "[NETWORK] Ethernet started, hostname %s, waiting for link and DHCP", hostname);
+    } else {
+        AppLogger::log("WARN", "[NETWORK] Could not set the Ethernet hostname %s", hostname);
+        AppLogger::log("INFO", "[NETWORK] Ethernet started, waiting for link and DHCP");
+    }
+#else
+    (void)hostname;
+    AppLogger::log("ERROR", "[NETWORK] W5500 driver not available in this image");
+#endif
+}
+
+// ETH.end() stops the driver and deletes the W5500 device, but leaves the SPI bus
+// initialized and its GPIOs routed to it: free it, so the fallback to Wi-Fi starts from a
+// clean state. Also after a failed ETH.begin(), which already deleted the device but not
+// the bus. ESP_ERR_INVALID_STATE = bus not initialized, nothing to free
+void EthLink::releaseW5500() {
+#if CONFIG_ETH_SPI_ETHERNET_W5500
+    ETH.end();
+    const esp_err_t err = spi_bus_free(SPI2_HOST);
+    if (err == ESP_OK) {
+        AppLogger::log("INFO", "[NETWORK] W5500 stopped, SPI bus released");
+    } else if (err != ESP_ERR_INVALID_STATE) {
+        AppLogger::log("WARN", "[NETWORK] Could not release the W5500 SPI bus: %s", esp_err_to_name(err));
+    }
+#endif
+}
+
 void EthLink::end() {
-    if (m_started) ETH.end();
+    if (m_cfg.type == EthType::SPI && m_cfg.phy_type == EthPhy::W5500) {
+        if (m_started) releaseW5500();
+    } else if (m_started) {
+        ETH.end();
+    }
     m_started = false;
 }
 
@@ -137,5 +190,25 @@ void EthLink::linkInfo(NetLinkInfo& out) const {
 
 void EthLink::macAddress(uint8_t mac[6]) const {
     // From eFuse: valid before ETH.begin() too, so the hostname and the device id match
-    if (esp_read_mac(mac, ESP_MAC_ETH) != ESP_OK) memset(mac, 0, 6);
+    if (esp_read_mac(mac, ESP_MAC_ETH) != ESP_OK) {
+        memset(mac, 0, 6);
+        return;
+    }
+    // US-126: an SPI module has no MAC of its own. The core gives it the locally
+    // administered address derived from the Ethernet MAC (ETHClass::beginSPI, ETH index 0):
+    // the same one here, so the Network page shows the MAC the router sees. Only the first
+    // byte changes, so the default hostname (last 3 bytes) stays the same
+    if (m_cfg.type == EthType::SPI) {
+        uint8_t universal[6];
+        memcpy(universal, mac, 6);
+        if (esp_derive_local_mac(mac, universal) != ESP_OK) memcpy(mac, universal, 6);
+    }
+}
+
+bool EthLink::linkUp() const {
+    return m_started && ETH.linkUp();
+}
+
+bool EthLink::hasIP() const {
+    return m_started && ETH.hasIP();
 }
