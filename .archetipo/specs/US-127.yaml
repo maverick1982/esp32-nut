@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-127
+title: Scelta del collegamento di rete nella pagina Network (Wi-Fi / Ethernet / Automatico)
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-127: Scelta del collegamento di rete nella pagina Network (Wi-Fi / Ethernet / Automatico)
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-126
+
+  **User Story**
+  Come utente con una scheda che ha sia Wi-Fi sia Ethernet,
+  voglio scegliere quale collegamento usare,
+  in modo da decidere se la scheda deve stare solo sul cavo, solo sul Wi-Fi o passare da uno all'altro da sola.
+
+  **Dimostrazione**
+  Nella pagina Network di una ESP32-S3 con W5500 si sceglie **Automatico**. Staccando il cavo la scheda passa al Wi-Fi entro 30 s, e ricollegandolo torna all'Ethernet. Con **Ethernet** e senza cavo, la scheda resta senza rete e lo dice nel System Log. Con **Wi-Fi** il modulo non viene usato.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina Network mostra la scelta **Wi-Fi / Ethernet / Automatico** solo sulle schede che hanno entrambi i collegamenti. Il valore predefinito è Automatico quando il W5500 è attivo.
+  - [ ] **Automatico:** Ethernet quando il cavo ha il link, altrimenti Wi-Fi. Se il link cambia mentre la scheda è accesa, passa all'altro collegamento entro 30 s, con una riga nel System Log.
+  - [ ] **Ethernet:** solo il cavo. Se il modulo non si avvia, la scheda torna al Wi-Fi per non chiudere fuori l'utente, come in US-126.
+  - [ ] **Wi-Fi:** solo il Wi-Fi, come oggi.
+  - [ ] Il nome host e le impostazioni di server NUT, syslog e NTP valgono su entrambi i collegamenti. Dopo un cambio i client NUT si ricollegano al nuovo indirizzo.
+  - [ ] Sulle schede con un solo collegamento (ESP32-S3 senza W5500 attivo, ESP32-P4) la scelta non compare e non cambia nulla.
+  - [ ] Test nativi per la logica di scelta e di passaggio, e2e della pagina.
+  - [ ] Fuori ambito: due collegamenti attivi insieme, IP statico.
+history:
+  - status: TODO
+    at: "2026-11-06T15:43:03Z"
