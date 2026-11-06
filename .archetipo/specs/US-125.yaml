@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-125
+title: 'Credenziali NUT facoltative come in NUT: senza credenziali niente comandi, password vuota conservata'
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: TODO
+body: |-
+  #### US-125: Credenziali NUT facoltative come in NUT: senza credenziali niente comandi, password vuota conservata
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** US-124
+
+  **User Story**
+  Come utente che configura il server NUT della scheda,
+  voglio poter lasciare le credenziali NUT vuote o cambiare il nome UPS senza ridigitare la password, con i comandi riservati a chi ha le credenziali,
+  in modo che nessun dispositivo della rete possa spegnere l'UPS senza autorizzazione e la configurazione sia semplice come con NUT.
+
+  **Dimostrazione**
+  Nella pagina NUT Server si cambia il nome UPS lasciando vuota la password: dopo il salvataggio `upscmd` funziona ancora con la password di prima. Con **Remove NUT credentials** le credenziali spariscono: `upsc` legge ancora i dati, mentre `upscmd` e `upsrw -s` ricevono `ERR ACCESS-DENIED`.
+
+  **Contesto**
+  Nel firmware le credenziali NUT sono già facoltative (le schede ESP32-P4 partono senza), ma il modulo della pagina rende obbligatori Username e Password e la password non viene mai precompilata: ogni salvataggio richiede di ridigitarla. Senza credenziali oggi il server ammette ogni client anche per `INSTCMD` e `SET VAR`. In NUT, senza utenti in `upsd.users`, la lettura è libera ma nessuno può eseguire comandi o cambiare variabili.
+
+  **Criteri di Accettazione**
+  - [ ] La lettura dei dati (`LIST`, `GET`, `VER`) resta libera per ogni client, con o senza credenziali.
+  - [ ] Senza credenziali NUT configurate, `INSTCMD` e `SET VAR` rispondono `ERR ACCESS-DENIED` come in NUT, e il rifiuto va nel System Log. `LOGIN` e `LOGOUT` restano ammessi, così `upsmon` continua a collegarsi. I comandi dalla web UI e lo spegnimento automatico della scheda non passano dal server NUT e non cambiano.
+  - [ ] Con credenziali configurate il comportamento resta quello di oggi.
+  - [ ] Nella pagina NUT Server Username e Password non sono più obbligatori. La pagina indica se una password è già impostata; una password lasciata vuota conserva quella attuale.
+  - [ ] Un username senza password, quando nessuna password è salvata, viene rifiutato con un messaggio chiaro: le credenziali sono entrambe presenti o entrambe assenti.
+  - [ ] Un'azione esplicita **Remove NUT credentials**, con conferma, cancella username e password; si applica al volo e chiude le sessioni NUT aperte come in US-124.
+  - [ ] La pagina avvisa che senza credenziali i client NUT possono solo leggere i dati.
+  - [ ] Test nativi del server NUT (comandi e `SET VAR` con e senza credenziali, `LOGIN` senza credenziali), test dell'API (password vuota conservata, username senza password, rimozione) ed e2e della pagina.
+  - [ ] README (EN/IT) e manuale utente descrivono le nuove regole. Le note di rilascio avvisano chi oggi invia comandi senza credenziali NUT (per esempio da Home Assistant su una ESP32-P4 con le impostazioni predefinite) che dovrà impostarle.
+  - [ ] Fuori ambito: più utenti NUT con permessi diversi (`upsd.users`), credenziali della web UI.
+history:
+  - status: TODO
+    at: "2026-11-06T14:43:58Z"

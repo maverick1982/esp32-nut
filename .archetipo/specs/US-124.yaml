@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-124
+title: Impostazioni del server NUT applicate senza riavviare la scheda
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 2
+status: TODO
+body: |-
+  #### US-124: Impostazioni del server NUT applicate senza riavviare la scheda
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che cambia nome UPS o credenziali NUT dalla pagina NUT Server,
+  voglio che le nuove impostazioni valgano subito senza riavviare la scheda,
+  in modo che web UI, collegamento USB, spegnimento automatico e log non si interrompano per una modifica che riguarda solo il server NUT.
+
+  **Dimostrazione**
+  Nella pagina NUT Server si cambia la password NUT e si preme **Save Credentials**: la pagina resta collegata, senza riavvio, e l'uptime della scheda non si azzera. Un `upsc` già in esecuzione viene scollegato e si ricollega; `upscmd` con la vecchia password riceve `ERR ACCESS-DENIED`, con la nuova esegue il comando.
+
+  **Contesto**
+  Oggi `POST /api/nut/config` salva e riavvia la scheda dopo 1 s (`handleNutConfig`, `should_restart`), perché il server NUT legge la configurazione solo in `begin()` all'avvio. La pagina mostra "Saved!" senza avvisare del riavvio. Server NUT e web UI girano entrambi nel loop principale. Il server segna un client come autenticato al comando `PASSWORD` e non lo ricontrolla: senza chiusura delle sessioni, un client autenticato con la vecchia password continuerebbe a eseguire comandi.
+
+  **Criteri di Accettazione**
+  - [ ] `POST /api/nut/config` salva **UPS Name**, **Username** e **Password** e li applica subito al server NUT, senza riavviare la scheda. Le regole di validazione e gli errori 400 restano invariati (US-082).
+  - [ ] Quando cambia almeno uno tra nome UPS, username e password, tutte le sessioni NUT aperte vengono chiuse, così nessun client resta autenticato con le credenziali precedenti; i client si ricollegano e vengono verificati con le impostazioni nuove.
+  - [ ] Un salvataggio con gli stessi valori di prima non chiude nessuna sessione.
+  - [ ] Il nome UPS applicato al volo è normalizzato come all'avvio. Dopo il cambio `LIST UPS` e `GET VAR` rispondono con il nuovo nome; il vecchio riceve `ERR UNKNOWN-UPS`.
+  - [ ] Il System Log riporta l'applicazione con il numero di sessioni chiuse; le password non compaiono mai nel log.
+  - [ ] La risposta dell'API e la pagina NUT Server indicano che le impostazioni sono applicate, senza riavvio. Dopo un riavvio vale la configurazione salvata.
+  - [ ] Test nativi del server NUT (applicazione con e senza cambiamenti, chiusura delle sessioni, client autenticato con la vecchia password, cambio del nome UPS), test dell'API ed e2e della pagina.
+  - [ ] README (EN/IT) e manuale utente non dicono più che il salvataggio riavvia la scheda.
+  - [ ] Fuori ambito: configurazione Wi-Fi (il riavvio resta necessario), nome host (DHCP), campi facoltativi e password conservata (US-125).
+history:
+  - status: TODO
+    at: "2026-11-06T14:43:58Z"
