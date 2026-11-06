@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-126
+title: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64)
+epic:
+  code: EP-005
+  title: Supporto multi-scheda (ESP32-P4, Ethernet)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |-
+  #### US-126: Ethernet W5500 sulla ESP32-S3 con pin impostati dall'utente (#64)
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente con una ESP32-S3 collegata a un modulo W5500 esterno, o con una scheda ESP32-S3 che ha il W5500 integrato,
+  voglio indicare io i pin a cui è collegato il W5500 e usare la rete via cavo,
+  in modo che UPS, web UI e server NUT restino raggiungibili in modo stabile anche dove il Wi-Fi è debole, qualunque sia la scheda.
+
+  **Dimostrazione**
+  Su una ESP32-S3 DevKit con un modulo W5500 collegato come nell'esempio della pagina (SCK 12, MOSI 11, MISO 13, CS 10, INT 9, RST 3), nella pagina Network si attiva il W5500, si inseriscono i pin e si salva: la scheda si riavvia, riceve l'indirizzo dal router in DHCP e la sezione Ethernet mostra link, velocità e IP. Inserendo apposta un CS sbagliato, la scheda torna al Wi-Fi e il System Log spiega che il W5500 non risponde. Inserendo GPIO 19 (USB) il salvataggio viene rifiutato con un messaggio chiaro.
+
+  **Contesto**
+  Non esiste uno schema di pin comune tra le schede con W5500 integrato (Waveshare ESP32-S3-ETH, LilyGO T-ETH-Lite S3 e il modulo esterno di Mickel4711 nella #94 usano pin tutti diversi). Per non dover aggiungere una voce nel firmware per ogni nuova scheda, i pin li imposta sempre l'utente, sia con un modulo esterno sia con una scheda integrata. Il profilo della scheda prevede già `EthType::SPI` e i campi `cs/irq/sck/miso/mosi` in `EthConfig` (`include/board/board.h`). La regola D4 del PDR 0002 ammette un pin nella web UI solo se un errore non chiude fuori l'utente: qui lo garantiscono i pin vietati e il ritorno al Wi-Fi o all'access point.
+
+  **Criteri di Accettazione**
+  - [ ] La pagina Network delle schede ESP32-S3 ha una sezione W5500 con un interruttore di attivazione (spento di default) e i campi SCK, MOSI, MISO, CS (obbligatori), INT e RST (facoltativi). I campi partono vuoti, con i pin di Mickel4711 come esempio nel testo grigio. Salvare riavvia la scheda; le impostazioni restano dopo un riavvio o un aggiornamento OTA. Sull'ESP32-P4 la sezione non compare.
+  - [ ] Il salvataggio viene rifiutato, nella pagina e nell'API con un errore 400 che nomina il pin, per: GPIO inesistenti sull'S3, GPIO 26–32 (flash e PSRAM), GPIO 33–37 (PSRAM octal), GPIO 19 e 20 (USB verso l'UPS), GPIO 43 e 44 (console seriale), i pin del LED del profilo della scheda (48 e 38 sulla DevKit) e lo stesso pin usato in due campi.
+  - [ ] I pin di strapping (0, 3, 45, 46) sono ammessi, con un avviso nella pagina.
+  - [ ] Senza INT il W5500 funziona leggendo il chip a intervalli regolari; senza RST non viene fatto il reset hardware. Il comportamento di ESP-IDF 5.5 senza interrupt si conferma in pianificazione.
+  - [ ] Con il W5500 attivo, all'avvio la scheda usa l'Ethernet se il cavo ha il link, altrimenti il Wi-Fi, con un solo collegamento attivo alla volta (PDR 0002, D3). In Ethernet l'indirizzo arriva in DHCP con il nome host della pagina Network (US-113).
+  - [ ] Ritorno garantito: se il W5500 non risponde all'avvio (pin errati, modulo assente) o non ottiene un indirizzo entro un tempo fissato, la scheda passa al Wi-Fi o, se il Wi-Fi non è configurato, all'access point. Il System Log e la sezione W5500 spiegano il motivo. Il doppio reset avvia sempre l'access point.
+  - [ ] La pagina Network mostra la sezione Ethernet (stato, velocità, cavo, IP, gateway, MAC, DHCP) quando il W5500 è attivo; la barra laterale mostra il collegamento in uso.
+  - [ ] Server NUT, web UI, syslog, NTP e OTA funzionano allo stesso modo sui due collegamenti.
+  - [ ] Con il W5500 spento la scheda si comporta esattamente come oggi: test nativi, fixture ed e2e esistenti invariati.
+  - [ ] Test nativi per la validazione dei pin (vietati, duplicati, strapping, facoltativi) e per la scelta del collegamento e il ritorno al Wi-Fi o all'access point all'avvio; e2e della sezione W5500. Le tre build compilano.
+  - [ ] README (EN/IT) e manuale utente spiegano collegamento e impostazioni, il primo avvio di una scheda integrata (pin impostati dall'access point o dal Wi-Fi, poi attivazione) e contengono una tabella di pin noti, da verificare sullo schema: modulo esterno di Mickel4711, Waveshare ESP32-S3-ETH / POE-ETH, LilyGO T-ETH-Lite S3. La tabella indica anche la porta USB a cui collegare l'UPS, quando nota, e si amplia con una PR senza toccare il firmware.
+  - [ ] Una build di prova viene pubblicata nella #64 per Mickel4711 e judahrand; la funzione entra in una release solo dopo una loro conferma su hardware reale.
+  - [ ] Fuori ambito: preset di schede nel firmware, scelta manuale del collegamento (US-127), IP statico, Wi-Fi ed Ethernet attivi insieme, altri chip SPI (ENC28J60, DM9051).
+history:
+  - status: TODO
+    at: "2026-11-06T15:43:03Z"
