@@ -1,5 +1,5 @@
 site_name: ESP32-NUT
-site_description: Firmware open source per colmare il divario tra gli UPS basati su USB ed i server NUT.
+site_description: Open-source firmware for ESP32-S3 and ESP32-P4 boards that turns a USB UPS into a NUT server on your network.
 docs_dir: docs/user-manual
 
 theme:
@@ -23,6 +23,7 @@ nav:
     - Hardware Requirements: en/hardware.md
     - Installation: en/installation.md
     - Configuration: en/configuration.md
+    - Web Interface: en/web-interface.md
     - Status LED: en/status-led.md
     - Client Integration: en/integration.md
     - Troubleshooting: en/troubleshooting.md
@@ -32,6 +33,7 @@ nav:
     - Requisiti Hardware: it/hardware.md
     - Installazione: it/installation.md
     - Configurazione: it/configuration.md
+    - Interfaccia Web: it/web-interface.md
     - LED di Stato: it/status-led.md
     - Integrazione Client: it/integration.md
     - Risoluzione Problemi: it/troubleshooting.md

@@ -1,42 +1,64 @@
 ---
-title: "Integrazione con i Client NUT"
+title: "Integrazione Client NUT"
 type: manual
 tags: [user-manual]
 ---
 
-# Integrazione con i Client NUT
+# Integrazione Client NUT
 
-Una volta che il tuo ESP32-NUT è connesso alla rete Wi-Fi e l'UPS è stato rilevato correttamente, il dispositivo funzionerà esattamente come un server NUT tradizionale in rete locale.
-
-Questo significa che è "plug & play" con qualsiasi client software compatibile con il protocollo NUT standard.
+Quando la scheda è in rete e legge l'UPS, funziona come un server NUT (`upsd`) con il driver `usbhid-ups`. Qualsiasi client NUT può usarla.
 
 ## Parametri di Connessione
 
-Per configurare il tuo client (Home Assistant, pfSense, TrueNAS, o un client Linux generico), avrai bisogno di questi quattro parametri:
+- **Host:** l'indirizzo IP della scheda, o il suo nome host se la tua rete lo risolve. La pagina **Network** mostra l'indirizzo.
+- **Porta:** `3493`, la porta standard di NUT.
+- **Nome UPS:** l'**UPS Name** della pagina NUT Server (predefinito `ups`), non il modello dell'UPS.
+- **Username / Password:** le credenziali NUT della pagina NUT Server, se le hai impostate. Servono per comandi e impostazioni; la lettura dei dati funziona anche senza.
 
-- **Indirizzo IP (Host):** L'indirizzo IP assegnato dal tuo router (DHCP) all'ESP32. Puoi trovarlo nella pagina del tuo router o tramite la Web UI dell'ESP32.
-- **Porta (Port):** `3493` (la porta standard del protocollo NUT).
-- **Nome UPS (UPS Name):** Il nome che hai scelto in fase di [Configurazione Iniziale](configuration.md) (es. `ups_salotto`).
-- **Username / Password:** Le credenziali impostate in fase di configurazione.
+Possono essere collegati fino a **8 client NUT** contemporaneamente. Oltre, una nuova connessione viene rifiutata e il System Log indica quali indirizzi occupano le connessioni. Un client che sparisce senza chiudere la connessione libera il suo posto dopo circa 90 secondi.
 
-## Esempio 1: Home Assistant
+## Home Assistant
 
-L'integrazione ufficiale di Network UPS Tools in Home Assistant è il modo più rapido per avere una dashboard.
+1. Vai su **Impostazioni → Dispositivi e servizi**.
+2. Premi **Aggiungi integrazione** e cerca **Network UPS Tools (NUT)**.
+3. Inserisci l'indirizzo della scheda e la porta `3493`.
+4. Inserisci username e password NUT, se li hai impostati.
+5. Conferma: Home Assistant trova l'UPS e crea i suoi sensori (batteria, carico, tensioni, stato…).
 
-1. In Home Assistant, vai su **Impostazioni > Dispositivi e Servizi**.
-2. Clicca su **Aggiungi Integrazione** e cerca "Network UPS Tools (NUT)".
-3. Inserisci l'Indirizzo IP (Host) dell'ESP32 e lascia la porta a `3493`.
-4. Inserisci l'Username e la Password.
-5. Invia il modulo: Home Assistant rileverà automaticamente il nome del tuo UPS e inizierà a creare le entità sensore (Batteria, Carico, Tensione, ecc.).
+I comandi dell'UPS (test della batteria, cicalino, …) sono disponibili come azioni di Home Assistant quando le credenziali NUT sono impostate.
 
-## Esempio 2: Client Linux generico (`upsc`)
+> [!TIP]
+> Home Assistant riconosce l'UPS da produttore, modello e numero di serie. Se sostituisci l'UPS e vuoi conservare lo stesso dispositivo e il suo storico, imposta `ups.mfr`, `ups.model` e `ups.serial` come [variabili personalizzate](web-interface.md#custom-variables).
 
-Se stai testando il server da una macchina Linux (es. Raspberry Pi o un server Ubuntu), puoi utilizzare il client standard da riga di comando `upsc`.
+## Linux: upsc, upscmd, upsrw
 
-Installa il client (es. `sudo apt install nut-client`), poi esegui il comando usando la sintassi `nome_ups@indirizzo_ip`:
+Installa gli strumenti client di NUT (per esempio `sudo apt install nut-client`), poi usa `<nome ups>@<indirizzo>`:
 
 ```bash
-upsc ups_salotto@192.168.1.50
+# Tutte le variabili
+upsc ups@192.168.1.50
+
+# Comandi supportati dall'UPS, poi eseguine uno
+upscmd -l ups@192.168.1.50
+upscmd -u admin ups@192.168.1.50 test.battery.start.quick
+
+# Variabili scrivibili, poi cambiane una
+upsrw ups@192.168.1.50
+upsrw -s battery.charge.low=20 -u admin ups@192.168.1.50
 ```
 
-Se la connessione ha successo, vedrai stampata a terminale la lista completa dei dati telemetrici forniti dall'UPS.
+## Linux: upsmon (Spegnimento Automatico di un Computer)
+
+Per spegnere un computer quando la batteria si sta scaricando, aggiungi la scheda a `upsmon.conf` su quel computer:
+
+```
+MONITOR ups@192.168.1.50 1 admin latuapassword secondary
+```
+
+Username e password NUT sono quelli della pagina NUT Server.
+
+Se nessun client NUT deve gestire lo spegnimento, la scheda può spegnere da sola l'UPS a batteria scarica: vedi [Automatic shutdown](web-interface.md#automatic-shutdown).
+
+## Quando l'UPS Non Risponde
+
+Quando la scheda non ha dati aggiornati dall'UPS (UPS scollegato, collegamento USB in recupero), i client NUT ricevono `ERR DATA-STALE`, come con NUT. Home Assistant mostra i sensori come *Non disponibile* finché i dati non tornano.

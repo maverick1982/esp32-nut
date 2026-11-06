@@ -17,3 +17,4 @@ Benvenuto nella documentazione del progetto **esp32-nut**, organizzata seguendo 
 - [Plans](plans/index.md) - Piani di migrazione, refactoring o sviluppo.
 - [Release Notes](releases/index.md) - Template e regole per scrivere le release notes.
 - [Issues](issues/index.md) - Tracciamento locale del contesto di issue e bug.
+- [User Manual](user-manual/index.md) - Manuale utente in inglese e italiano (sito MkDocs, `mkdocs.yml` nella radice).

@@ -6,18 +6,20 @@ tags: [user-manual]
 
 # LED di Stato (Colori e Lampeggi)
 
-Questo documento fornisce una guida rapida all'interpretazione del comportamento del LED di stato RGB (generalmente un WS2812 o simile, integrato sulla scheda o collegato esternamente). 
-
-Il LED fornisce un feedback diagnostico immediato sullo stato vitale del sistema (Wi-Fi e connessione USB con l'UPS).
+Il LED RGB di stato delle schede ESP32-S3 (su GPIO 48, abilitato dalle piazzole `RGB`) mostra a colpo d'occhio lo stato della rete e dell'UPS. Le schede ESP32-P4 non hanno un LED di stato: usa l'interfaccia web.
 
 ## Legenda degli Stati
 
-| Colore | Pattern di Lampeggio | Significato (Stato) | Descrizione Tecnica |
+| Colore | Sequenza | Stato | Significato |
 | :--- | :--- | :--- | :--- |
-| 🔵 **Blu** / 🔴 **Rosso** | Alternati veloci (Cicli da 4s) | **Modalità Setup (AP_MODE)** | Il dispositivo è in modalità Access Point. Attende che l'utente si connetta alla rete Wi-Fi temporanea per effettuare la configurazione iniziale. L'animazione dura 4 secondi, seguita da 4 secondi di spegnimento. |
-| 🟡 **Giallo** | Lampeggio lento continuo | **In Connessione (CONNECTING)** | Il dispositivo sta tentando di stabilire la connessione con la rete Wi-Fi configurata. Questo stato è tipicamente visibile per pochi secondi durante l'avvio. |
-| 🟢 **Verde** | Breve impulso ogni 5 secondi | **Operativo (OPERATIONAL)** | Funzionamento normale. Il dispositivo è connesso correttamente al Wi-Fi, il server NUT è in ascolto e l'UPS è stato rilevato ed è in comunicazione sulla porta USB. (L'impulso è breve per non disturbare in ambienti bui). |
-| 🔴 **Rosso** | Lampeggio veloce continuo | **Errore (ERROR)** | Si è verificata una condizione di anomalia. Le cause più comuni includono l'impossibilità di connettersi alla rete Wi-Fi salvata, un fallimento nell'inizializzazione del server NUT, o il cavo USB dell'UPS scollegato/non riconosciuto. |
+| 🔵 **Blu** / 🔴 **Rosso** | Alternanza veloce per 4 s, poi 4 s spento | **Access point di configurazione** | La scheda è in modalità access point (`NUT_ESP32_Config`) e attende che tu ti colleghi e inserisca le impostazioni Wi-Fi. |
+| 🟡 **Giallo** | Lampeggio lento (1 s acceso, 1 s spento) | **Connessione in corso** | La scheda non è ancora collegata alla rete Wi-Fi. È normale per qualche secondo dopo l'accensione. Se dura, la rete Wi-Fi non è raggiungibile o le impostazioni salvate sono sbagliate. |
+| 🔴 **Rosso** | Lampeggio veloce | **Nessun UPS** | La scheda è in rete, ma sulla porta USB non c'è un UPS collegato o riconosciuto. |
+| 🟢 **Verde** | Breve lampo ogni 5 s | **Operativo** | Tutto funziona: la scheda è in rete e legge l'UPS. Il lampo è breve per non disturbare in una stanza buia. |
+
+## Impostazioni del LED
+
+In **Board Settings → Status LED** puoi spegnere il LED o sceglierne la luminosità da 1 a 5. Da spento resta buio in ogni stato, anche dopo un riavvio.
 
 > [!TIP]
-> Se il LED indica uno stato di Errore (Rosso lampeggiante veloce), ti consigliamo di consultare la sezione dedicata alla [Risoluzione dei Problemi](troubleshooting.md) o di accedere ai log di sistema tramite l'interfaccia web per individuare la causa esatta dell'anomalia.
+> Con un lampeggio rosso veloce o giallo prolungato, apri l'interfaccia web e controlla la pagina **System Logs**, oppure vedi [Risoluzione Problemi](troubleshooting.md).

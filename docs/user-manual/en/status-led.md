@@ -6,18 +6,20 @@ tags: [user-manual]
 
 # Status LED (Colors and Blinking)
 
-This document provides a quick guide to interpreting the behavior of the RGB status LED (typically a WS2812 or similar, integrated on the board or connected externally). 
-
-The LED provides immediate diagnostic feedback on the system's vital status (Wi-Fi and USB connection with the UPS).
+The RGB status LED of the ESP32-S3 boards (on GPIO 48, enabled by the `RGB` pads) shows the state of the network and of the UPS at a glance. The ESP32-P4 boards have no status LED: use the web interface instead.
 
 ## State Legend
 
-| Color | Blinking Pattern | Meaning (State) | Technical Description |
+| Color | Pattern | State | Meaning |
 | :--- | :--- | :--- | :--- |
-| 🔵 **Blue** / 🔴 **Red** | Fast alternating (4s cycles) | **Setup Mode (AP_MODE)** | The device is in Access Point mode. It waits for the user to connect to the temporary Wi-Fi network for initial configuration. The animation lasts 4 seconds, followed by 4 seconds off. |
-| 🟡 **Yellow** | Continuous slow blink | **Connecting (CONNECTING)** | The device is attempting to establish a connection with the configured Wi-Fi network. This state is typically visible for a few seconds during startup. |
-| 🟢 **Green** | Short pulse every 5 seconds | **Operational (OPERATIONAL)** | Normal operation. The device is successfully connected to Wi-Fi, the NUT server is listening, and the UPS has been detected and is communicating on the USB port. (The pulse is short to avoid disturbance in dark environments). |
-| 🔴 **Red** | Continuous fast blink | **Error (ERROR)** | An anomaly condition has occurred. Common causes include failure to connect to the saved Wi-Fi network, NUT server initialization failure, or the UPS USB cable is unplugged/unrecognized. |
+| 🔵 **Blue** / 🔴 **Red** | Fast alternation for 4 s, then 4 s off | **Setup access point** | The board is in access point mode (`NUT_ESP32_Config`) and waits for you to connect and enter the Wi-Fi settings. |
+| 🟡 **Yellow** | Slow blink (1 s on, 1 s off) | **Connecting** | The board is not connected to the Wi-Fi network yet. It is normal for a few seconds after power-on. If it lasts, the Wi-Fi network is out of reach or the saved settings are wrong. |
+| 🔴 **Red** | Fast blink | **No UPS** | The board is on the network, but no UPS is connected or recognized on the USB port. |
+| 🟢 **Green** | Short flash every 5 s | **Operational** | Everything works: the board is on the network and reads the UPS. The flash is short so it does not disturb a dark room. |
+
+## LED Settings
+
+In **Board Settings → Status LED** you can turn the LED off or choose its brightness from 1 to 5. When off, it stays dark in every state, also after a restart.
 
 > [!TIP]
-> If the LED indicates an Error state (Fast blinking red), we recommend consulting the dedicated [Troubleshooting](troubleshooting.md) section or checking the system logs via the web interface to identify the exact cause of the anomaly.
+> With a fast red or a long yellow blink, open the web interface and check the **System Logs** page, or see [Troubleshooting](troubleshooting.md).

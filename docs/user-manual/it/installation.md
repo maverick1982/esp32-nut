@@ -6,42 +6,76 @@ tags: [user-manual]
 
 # Installazione del Firmware
 
-L'installazione del firmware ESP32-NUT sulla tua scheda ESP32-S3 può essere eseguita in due modi: un'installazione rapida tramite browser web (consigliata per la maggior parte degli utenti) o un'installazione manuale tramite PlatformIO per gli utenti più avanzati.
+Ci sono tre modi per installare ESP32-NUT: il web installer (consigliato), lo zip della release con `esptool`, oppure la compilazione dai sorgenti con PlatformIO. Gli aggiornamenti successivi si installano in rete dall'interfaccia web (OTA).
 
-## Metodo A: Installazione rapida via Browser (Consigliato)
+## Metodo A: Web Installer (Consigliato)
 
-Questo è il metodo più semplice e veloce. Non richiede lo scaricamento di alcun software o codice sorgente sul tuo computer.
+Nessun programma da installare: è il browser a programmare la scheda.
 
 > [!IMPORTANT]
-> L'installazione via Web richiede l'utilizzo di un browser basato su Chromium, come **Google Chrome, Microsoft Edge o Brave**. Firefox e Safari non supportano attualmente le API Web Serial necessarie.
+> Il web installer richiede un browser basato su Chromium (**Google Chrome, Microsoft Edge, Brave**). Firefox e Safari non supportano l'API Web Serial che usa.
 
-1. Collega la porta `COM` (o `UART`) della tua scheda ESP32-S3 a una porta USB del tuo computer utilizzando un cavo dati.
-2. Vai alla pagina di installazione ufficiale: <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Web Installer ESP32-NUT**</a>.
-3. Clicca sul pulsante **"Connect"** (o "Install").
-4. Il browser ti chiederà di selezionare una porta seriale. Seleziona quella corrispondente al tuo ESP32 (potrebbe chiamarsi "USB to UART Bridge" o "USB Serial").
-5. Segui le istruzioni a schermo per avviare il flashing. Il processo cancellerà automaticamente i dati precedenti (Erase Flash) e installerà l'ultima versione stabile del firmware.
-6. Al termine, la scheda si riavvierà automaticamente.
+1. Collega la scheda al computer con un cavo dati: la porta `COM` (o `UART`) su una ESP32-S3, la porta USB-C su una ESP32-P4.
+2. Apri il [**Web Installer di ESP32-NUT**](https://maverick1982.github.io/esp32-nut/).
+3. Premi il pulsante della tua scheda:
+   - il pulsante principale per una **ESP32-S3**;
+   - nella sezione **ESP32-P4**, il pulsante della revisione del tuo chip, **v3.1 or later** o **before v3** (vedi [Revisione del chip](hardware.md#revisione-del-chip-due-immagini)).
+4. Scegli la porta seriale della scheda (spesso si chiama "USB to UART Bridge", "USB Serial" o "USB JTAG/serial debug unit").
+5. Quando l'installer chiede **"Do you want to erase the device before installing?"**:
+   - lascia **"Erase device"** deselezionato per conservare le impostazioni Wi-Fi, NUT e del login web di una scheda che usa già ESP32-NUT;
+   - selezionalo per un'installazione pulita. Una ESP32-S3 riparte allora come access point di configurazione `NUT_ESP32_Config`.
+6. Attendi la fine dell'installazione: la scheda si riavvia da sola.
 
-## Metodo B: Compilazione manuale tramite PlatformIO (Avanzato)
+L'installer installa sempre l'ultima release.
 
-Se desideri apportare modifiche al codice, testare versioni in via di sviluppo (branch specifici) o semplicemente preferisci compilare il firmware da zero, puoi utilizzare PlatformIO.
+## Metodo B: Zip della Release ed esptool
 
-### Prerequisiti
-- [Visual Studio Code](https://code.visualstudio.com/) installato.
-- Estensione **PlatformIO IDE** installata su VSCode.
-- Git (opzionale, ma consigliato per clonare il repository).
+Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip per scheda:
 
-### Procedura
-1. Clona il repository ufficiale sul tuo computer:
+| Zip | Scheda |
+| :--- | :--- |
+| `esp32-nut-vX.Y.Z.zip` | ESP32-S3 |
+| `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` | ESP32-P4 v3.1 o successiva |
+| `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` | ESP32-P4 prima della v3 |
+
+Dentro, `firmware.factory.bin` è l'immagine completa da scrivere all'indirizzo `0x0`:
+
+```bash
+esptool write-flash 0x0 firmware.factory.bin
+```
+
+Con esptool v4 il comando è `esptool.py write_flash 0x0 firmware.factory.bin`. Il file `README.txt` nello zip spiega gli altri file.
+
+## Metodo C: Compilazione con PlatformIO (Avanzato)
+
+Per modificare il codice o provare un branch di sviluppo:
+
+1. Installa [Visual Studio Code](https://code.visualstudio.com/) con l'estensione **PlatformIO IDE**, e Git.
+2. Clona il repository:
    ```bash
    git clone https://github.com/maverick1982/esp32-nut.git
    ```
-2. Apri la cartella `esp32-nut` appena scaricata con Visual Studio Code. PlatformIO rileverà automaticamente il progetto e scaricherà le dipendenze necessarie.
-3. Collega la scheda ESP32-S3 al computer tramite la porta `COM` (UART).
-4. Nella barra inferiore di PlatformIO (o dal pannello laterale a forma di formica aliena), clicca sul pulsante di spunta **"Build"** (per compilare il codice e verificare che non ci siano errori).
-5. Successivamente, clicca sulla freccia verso destra **"Upload"** per caricare il firmware compilato sulla scheda.
-6. (Opzionale) Clicca sull'icona a forma di presa elettrica **"Upload File System image"** se hai apportato modifiche ai file della Web UI nella cartella `data/` (sebbene il firmware principale generalmente contenga già le risorse compresse).
+3. Apri la cartella `esp32-nut` in Visual Studio Code. PlatformIO scarica toolchain e librerie.
+4. Scegli l'ambiente della tua scheda:
+   - `esp32-s3-standard` (ESP32-S3);
+   - `esp32-p4-eth` (ESP32-P4 v3.1 o successiva);
+   - `esp32-p4-eth-v1` (ESP32-P4 prima della v3).
+5. Collega la scheda e premi **Upload**. L'interfaccia web è inclusa nel firmware, quindi non c'è un'immagine del file system separata da caricare.
+
+## Aggiornare il Firmware (OTA)
+
+Quando la scheda usa già ESP32-NUT, puoi aggiornarla dal browser:
+
+1. Scarica lo zip della tua scheda dalla pagina delle [release](https://github.com/maverick1982/esp32-nut/releases).
+2. Nell'interfaccia web, apri **Firmware OTA** nella barra laterale.
+3. Trascina lo zip, o il `firmware.bin` che contiene, nell'area di caricamento, oppure fai clic per scegliere il file.
+4. Attendi la fine del caricamento: la scheda si riavvia con la nuova versione.
+
+Le impostazioni vengono conservate.
+
+> [!WARNING]
+> **Aggiorni dalla v1.5.x o precedente?** Installa la v1.6.0 o successiva con il web installer, non via OTA. La v1.6 ha aggiunto una partizione della flash (`coredump`) che conserva i dettagli dei crash, e un aggiornamento OTA non può cambiare la tabella delle partizioni. Lascia **"Erase device"** deselezionato per conservare le impostazioni. Dopo questa installazione una tantum, l'OTA torna a funzionare.
 
 ---
 
-Indipendentemente dal metodo scelto, una volta installato il firmware, il passo successivo è procedere alla [Configurazione Iniziale](configuration.md) per connettere il dispositivo al Wi-Fi e all'UPS.
+Prossimo passo: la [Configurazione Iniziale](configuration.md).
