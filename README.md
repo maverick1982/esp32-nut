@@ -24,9 +24,13 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **UPS Commands**: Battery and panel tests, beeper, load and shutdown commands, from the Web UI or with `upscmd` and Home Assistant, as with NUT's `usbhid-ups` driver.
 - **UPS Settings**: Change the parameters your UPS allows (low battery thresholds, transfer points, battery date, shutdown delays, …) from the Web UI or with `upsrw`.
 - **Custom NUT variables**: In the **NUT Server** tab, add variables the UPS does not report (e.g. `battery.date`) or replace a wrong value (e.g. `ups.model`), like `override.*` in `ups.conf`. Only NUT clients see them; the dashboard keeps the real UPS values.
-- **Web UI & Captive Portal**: Easy configuration of Wi-Fi and NUT credentials via a modern, responsive web interface, protected by a login.
+- **Automatic Shutdown**: In **Board Settings**, the board can send `shutdown.default` to the UPS on low battery by itself, even with no NUT client connected (for UPSes that power a TV, an audio system or other devices without `upsmon`).
+- **Web UI & Captive Portal**: A modern, responsive web interface protected by a login, with Wi-Fi setup through a captive portal on the ESP32-S3.
+- **Network Page & Hostname**: The state of every link of the board (Wi-Fi or Ethernet), and the hostname the board sends to your router.
+- **Remote Logging & Network Time**: Send the System Log to a syslog server (UDP, RFC 3164 or RFC 5424), with the time from an NTP server and the time zone of your choice.
+- **USB Diagnostics**: One click in the **System Logs** tab exports a file with everything the UPS reports, to attach to a bug or compatibility report.
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
-- **Diagnostic LED**: Visual feedback for Wi-Fi and UPS connection status.
+- **Status LED (ESP32-S3)**: Visual feedback for the network and UPS connection, with adjustable brightness.
 - **ESP32-P4 with Ethernet**: A wired network, and PoE on the boards that have it, with ESP32-P4 boards such as the Waveshare ESP32-P4-ETH (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
 ## 🔌 Supported UPS Devices
@@ -53,7 +57,9 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - APC Back-UPS ES 600M1, ES 700G
 - APC Smart-UPS 750, 750L, 1000L
 
-**Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). Since v1.7.1 the board restarts on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+**Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). The board recovers on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+
+**Smart-UPS:** a USB request sometimes stays stuck. Since v1.14.0 the board switches its USB port off and on instead of restarting: the UPS comes back in a few seconds while the network, the web UI and the NUT server stay up. ([#78](https://github.com/maverick1982/esp32-nut/issues/78), [#120](https://github.com/maverick1982/esp32-nut/issues/120))
 </details>
 
 <details>
@@ -202,8 +208,8 @@ Every [release](https://github.com/maverick1982/esp32-nut/releases) has one zip 
    > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss). If the saved configuration is valid and no device stays connected to the access point for 10 minutes, the board restarts in normal mode by itself; while a device is connected it stays in Access Point mode.
 2. Connect your phone or PC to this Wi-Fi network.
 3. A captive portal should automatically open. If not, navigate to `http://192.168.4.1`.
-4. Enter your home Wi-Fi credentials and set your preferred NUT Server username/password.
-5. Save and reboot.
+4. Open the **Network** tab, type your Wi-Fi name and password in **Connection Setup** and press **Initialize Connection**. The board saves them and restarts on your network.
+5. Find the board in your router as `esp32-nut-xxxxxx` and open its address in the browser.
 
 ### 3. 🔐 Web UI Login
 The Web UI is protected by a username and password.
@@ -219,7 +225,7 @@ The Web UI is protected by a username and password.
 - **Separate from NUT**: the Web UI credentials are independent of the NUT credentials (NUT tab), which keep working as before for Home Assistant, PeaNUT, `upscmd`, etc.
 - **Access Point mode** (double reset within 3 seconds): the Web UI is open without login, as before. It gives full access: credentials, NUT settings, OTA, UPS commands and settings. Keep the Access Point window short.
 - ⚠️ **Plain HTTP**: the Web UI is served over HTTP, so passwords travel unencrypted on the network. Use it on a trusted LAN and don't reuse a password you use elsewhere.
-- **Change credentials**: open the **Web Login** tab (sidebar, after **NUT Server**), enter the current password and the new username/password. Saving signs out every other device; the current one stays signed in.
+- **Change credentials**: open the **Web Login** tab (sidebar, after **Board Settings**), enter the current password and the new username/password. Saving signs out every other device; the current one stays signed in.
 - **Forgotten password**:
   1. Double reset within 3 seconds: the board starts as access point `NUT_ESP32_Config` (password `12345678`).
   2. Connect to it, open the Web UI and go to the **Web Login** tab.
@@ -228,11 +234,22 @@ The Web UI is protected by a username and password.
 - ⚠️ **While in Access Point mode** the board is not on the home network, so NUT clients (Home Assistant, PeaNUT, …) cannot reach it. With a valid configuration the NUT server stays on, but only devices connected to the access point can reach it. Keep the recovery short.
 - **Credentials are kept**: entering Access Point mode does not erase the Web UI credentials, and changing only the Wi-Fi settings keeps them too.
 ### 4. Usage
-- Once connected to your home Wi-Fi, the ESP32 will grab an IP address from your DHCP server.
-- **Web Dashboard**: Navigate to the ESP32's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
-- **NUT Client**: Configure your Home Assistant or NAS to connect to the ESP32's IP on port `3493` using the credentials you defined.
+- Once connected to your home network, the board gets an IP address from your DHCP server. The **Network** tab shows it; to always find the board at the same address, reserve one for its MAC address in the router.
+- **Web Dashboard**: Navigate to the board's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
+- **NUT Client**: Configure your Home Assistant or NAS to connect to the board's IP on port `3493`.
+- **NUT credentials**: set them in the **NUT Server** tab (saving restarts the board). NUT clients need them to run commands and change settings; reading the data works without them, as with NUT. With no NUT credentials set, every client is allowed.
 - **UPS name**: NUT clients address the UPS by the **UPS Name** of the NUT tab (default `ups`), not by its model, e.g. `upsc ups@192.168.1.50`.
 - **Up to 8 NUT clients** can be connected at the same time. Beyond that a new connection is rejected, and the System Log shows which addresses hold the connections. A client that disappears without closing its connection frees its slot after about 90 seconds.
+- **No fresh data**: when the UPS is not answering (disconnected, USB link being recovered), NUT clients get `ERR DATA-STALE`, as with NUT.
+
+### 5. More Settings
+- **Hostname** (**Network** tab): the name the board sends to your router, 1-32 letters, digits and hyphens. Empty means the default `esp32-nut-xxxxxx`. The board restarts to apply it.
+- **Automatic shutdown** (**Board Settings** tab, off by default): when the UPS is on battery and reports low battery (`OB LB`), the board sends `shutdown.default` once, even with no NUT client connected, and not again until the UPS is back on line. The threshold is `battery.charge.low` / `battery.runtime.low` of the UPS (**UPS Settings** tab). Whether the UPS turns back on when power returns depends on the model.
+- **Time** (**Board Settings** tab): NTP on by default (`pool.ntp.org`, UTC), with a time zone list with automatic daylight saving time. The time is only shown in the System Log and written in the syslog lines; without Internet access the board works as before.
+- **Status LED** (**Board Settings** tab, ESP32-S3): turn it off or choose its brightness.
+- **Custom variables** (**NUT Server** tab): up to 16 values that NUT clients see in place of the UPS ones, or as extra variables. `ups.status`, `ups.status.*`, `device.type` and `driver.parameter.*` cannot be set, and a writable variable with a custom value becomes read-only.
+- **Remote logging** (**System Logs** tab, off by default): send the System Log to a syslog server over UDP, with server, port (default 514), format, facility, minimum level and rate limit. UDP syslog is not encrypted: anyone on the LAN can read the lines.
+- **Automatic recovery**: when the UPS stops answering, the board recovers the USB link by itself: first the USB interface, then a power cycle of the USB port, then a restart (at once, then after 1, 5 and 15 minutes). After 4 restarts in a row without the UPS it stops restarting (degraded mode) and the yellow box at the top of the web UI says what to do.
 
 ## 🛠 Support the Project
 

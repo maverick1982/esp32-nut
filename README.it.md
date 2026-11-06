@@ -24,9 +24,13 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 - **Comandi UPS**: Test della batteria e del pannello, beeper, comandi di carico e di spegnimento, dalla Web UI oppure con `upscmd` e Home Assistant, come con il driver `usbhid-ups` di NUT.
 - **Parametri UPS**: Modifica dei parametri che l'UPS permette di cambiare (soglie di batteria scarica, punti di intervento, data della batteria, ritardi di spegnimento, …) dalla Web UI oppure con `upsrw`.
 - **Variabili NUT personalizzate**: Nella scheda **NUT Server** puoi aggiungere variabili che l'UPS non fornisce (es. `battery.date`) o sostituire un valore sbagliato (es. `ups.model`), come `override.*` in `ups.conf`. Le vedono solo i client NUT; la dashboard continua a mostrare i valori reali dell'UPS.
-- **Interfaccia Web & Captive Portal**: Configurazione facile del Wi-Fi e delle credenziali NUT tramite una dashboard web moderna e responsiva, protetta da login.
+- **Spegnimento automatico**: In **Board Settings** la scheda può inviare da sola `shutdown.default` all'UPS a batteria scarica, anche senza client NUT collegati (per gli UPS che alimentano una TV, un impianto audio o altri dispositivi senza `upsmon`).
+- **Interfaccia Web & Captive Portal**: Una dashboard web moderna e responsiva protetta da login, con la configurazione del Wi-Fi tramite captive portal sull'ESP32-S3.
+- **Pagina Network e nome host**: Lo stato di ogni collegamento della scheda (Wi-Fi o Ethernet) e il nome host che la scheda comunica al router.
+- **Log remoto e ora di rete**: Invio del System Log a un server syslog (UDP, RFC 3164 o RFC 5424), con l'ora da un server NTP e il fuso orario che preferisci.
+- **Diagnostica USB**: Un clic nella scheda **System Logs** esporta un file con tutto ciò che l'UPS riporta, da allegare a una segnalazione di bug o di compatibilità.
 - **Aggiornamenti Over-The-Air (OTA)**: Carica nuove versioni del firmware direttamente dal browser web senza collegare fisicamente la scheda al PC.
-- **LED Diagnostico**: Feedback visivo immediato per lo stato della connessione Wi-Fi e del collegamento con l'UPS.
+- **LED di stato (ESP32-S3)**: Feedback visivo immediato sullo stato della rete e del collegamento con l'UPS, con luminosità regolabile.
 - **ESP32-P4 con Ethernet**: Rete via cavo, e PoE sulle schede che lo prevedono, con schede ESP32-P4 come la Waveshare ESP32-P4-ETH (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
 ## 🔌 UPS Supportati
@@ -49,11 +53,13 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - APC BackUPS Pro 900
 - APC Back-UPS Pro BN1050M, BGM2200
 - APC Back-UPS XS 700U, XS 1500M
-- APC Back-UPS BX750MI, BX1200MI
+- APC Back-UPS BX750MI, BX1200MI, BXR1200MI
 - APC Back-UPS ES 600M1, ES 700G
 - APC Smart-UPS 750, 750L, 1000L
 
-**Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). Dalla v1.7.1 la scheda si riavvia da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+**Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). La scheda si riprende da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+
+**Smart-UPS:** a volte una richiesta USB resta bloccata. Dalla v1.14.0 la scheda spegne e riaccende la sua porta USB invece di riavviarsi: l'UPS torna in pochi secondi mentre rete, Web UI e server NUT restano attivi. ([#78](https://github.com/maverick1982/esp32-nut/issues/78), [#120](https://github.com/maverick1982/esp32-nut/issues/120))
 </details>
 
 <details>
@@ -202,8 +208,8 @@ Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip pe
    > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale). Se la configurazione salvata è valida e nessun dispositivo resta collegato all'access point per 10 minuti, la scheda riparte da sola in modalità normale; finché un dispositivo è collegato resta in modalità Access Point.
 2. Connetti il tuo telefono o PC a questa rete Wi-Fi.
 3. Si aprirà automaticamente un Captive Portal. In caso contrario, naviga su `http://192.168.4.1`.
-4. Inserisci le credenziali del Wi-Fi di casa e imposta un nome utente/password per il Server NUT.
-5. Salva e riavvia.
+4. Apri la scheda **Network**, scrivi nome e password del Wi-Fi in **Connection Setup** e premi **Initialize Connection**. La scheda li salva e si riavvia sulla tua rete.
+5. Trova la scheda nel router come `esp32-nut-xxxxxx` e apri il suo indirizzo nel browser.
 
 ### 3. 🔐 Login alla Web UI
 La Web UI è protetta da nome utente e password.
@@ -219,7 +225,7 @@ La Web UI è protetta da nome utente e password.
 - **Separate da NUT**: le credenziali della Web UI sono indipendenti da quelle NUT (scheda NUT), che continuano a funzionare come prima per Home Assistant, PeaNUT, `upscmd`, ecc.
 - **Modalità Access Point** (doppio reset entro 3 secondi): la Web UI è accessibile senza login, come prima. Dà accesso completo: credenziali, impostazioni NUT, OTA, comandi e parametri dell'UPS. Tieni la finestra Access Point breve.
 - ⚠️ **HTTP in chiaro**: la Web UI è servita in HTTP, quindi le password viaggiano non cifrate sulla rete. Usala su una rete locale fidata e non riutilizzare una password usata altrove.
-- **Cambiare le credenziali**: apri la scheda **Web Login** (barra laterale, dopo **NUT Server**), inserisci la password attuale e il nuovo nome utente/password. Il salvataggio disconnette tutti gli altri dispositivi; quello in uso resta connesso.
+- **Cambiare le credenziali**: apri la scheda **Web Login** (barra laterale, dopo **Board Settings**), inserisci la password attuale e il nuovo nome utente/password. Il salvataggio disconnette tutti gli altri dispositivi; quello in uso resta connesso.
 - **Password dimenticata**:
   1. Doppio reset entro 3 secondi: la scheda si avvia come access point `NUT_ESP32_Config` (password `12345678`).
   2. Collegati, apri la Web UI e vai alla scheda **Web Login**.
@@ -228,11 +234,22 @@ La Web UI è protetta da nome utente e password.
 - ⚠️ **In modalità Access Point** la scheda non è sulla rete di casa, quindi i client NUT (Home Assistant, PeaNUT, …) non la raggiungono. Con una configurazione valida il server NUT resta attivo, ma lo raggiungono solo i dispositivi collegati all'access point. Fai il recupero in tempi brevi.
 - **Le credenziali restano**: entrare in modalità Access Point non cancella le credenziali della Web UI, e cambiare solo le impostazioni Wi-Fi le mantiene.
 ### 4. Utilizzo Quotidiano
-- Una volta connesso al Wi-Fi di casa, l'ESP32 otterrà un indirizzo IP dal tuo router.
-- **Dashboard Web**: Naviga verso l'indirizzo IP dell'ESP32 nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).
-- **Client NUT**: Configura Home Assistant o il tuo NAS per connettersi all'IP dell'ESP32 sulla porta `3493` utilizzando le credenziali definite in precedenza.
+- Una volta connessa alla rete di casa, la scheda ottiene un indirizzo IP dal tuo router. La scheda **Network** lo mostra; per trovarla sempre allo stesso indirizzo, riservane uno al suo indirizzo MAC nel router.
+- **Dashboard Web**: Naviga verso l'indirizzo IP della scheda nel tuo browser per vedere in tempo reale le statistiche dell'UPS (Batteria, Tensione, Carico, ecc.).
+- **Client NUT**: Configura Home Assistant o il tuo NAS per connettersi all'IP della scheda sulla porta `3493`.
+- **Credenziali NUT**: si impostano nella scheda **NUT Server** (il salvataggio riavvia la scheda). Ai client NUT servono per eseguire comandi e cambiare impostazioni; la lettura dei dati funziona anche senza, come in NUT. Senza credenziali NUT impostate, ogni client è ammesso.
 - **Nome dell'UPS**: i client NUT indicano l'UPS con il campo **UPS Name** della scheda NUT (predefinito `ups`), non con il modello, per esempio `upsc ups@192.168.1.50`.
 - **Fino a 8 client NUT** possono essere connessi contemporaneamente. Oltre questo numero una nuova connessione viene rifiutata, e il System Log mostra quali indirizzi occupano le connessioni. Un client che sparisce senza chiudere la connessione libera il suo posto dopo circa 90 secondi.
+- **Dati non aggiornati**: quando l'UPS non risponde (scollegato, collegamento USB in recupero), i client NUT ricevono `ERR DATA-STALE`, come con NUT.
+
+### 5. Altre Impostazioni
+- **Hostname** (scheda **Network**): il nome che la scheda comunica al router, da 1 a 32 lettere, cifre e trattini. Vuoto significa il predefinito `esp32-nut-xxxxxx`. La scheda si riavvia per applicarlo.
+- **Automatic shutdown** (scheda **Board Settings**, disattivato di default): quando l'UPS è a batteria e segnala batteria scarica (`OB LB`), la scheda invia una volta `shutdown.default`, anche senza client NUT collegati, e non lo invia di nuovo finché l'UPS non torna in rete. La soglia è `battery.charge.low` / `battery.runtime.low` dell'UPS (scheda **UPS Settings**). Se l'UPS si riaccende al ritorno della corrente dipende dal modello.
+- **Time** (scheda **Board Settings**): NTP attivo di default (`pool.ntp.org`, UTC), con un elenco di fusi orari con ora legale automatica. L'ora serve solo a mostrarla nel System Log e a scriverla nelle righe syslog; senza accesso a Internet la scheda funziona come prima.
+- **Status LED** (scheda **Board Settings**, ESP32-S3): spegnilo o scegline la luminosità.
+- **Custom variables** (scheda **NUT Server**): fino a 16 valori che i client NUT vedono al posto di quelli dell'UPS, o come variabili in più. `ups.status`, `ups.status.*`, `device.type` e `driver.parameter.*` non si possono impostare, e una variabile scrivibile con un valore personalizzato diventa di sola lettura.
+- **Remote logging** (scheda **System Logs**, disattivato di default): invia il System Log a un server syslog via UDP, con server, porta (predefinita 514), formato, facility, livello minimo e limite di righe al secondo. Il syslog su UDP non è cifrato: chiunque sulla rete locale può leggere le righe.
+- **Recupero automatico**: quando l'UPS smette di rispondere, la scheda recupera da sola il collegamento USB: prima l'interfaccia USB, poi un ciclo di alimentazione della porta USB, poi un riavvio (subito, poi dopo 1, 5 e 15 minuti). Dopo 4 riavvii di fila senza l'UPS smette di riavviarsi (modalità degradata) e il riquadro giallo in cima alla Web UI indica cosa fare.
 
 ## 🛠 Supporta il Progetto
 
