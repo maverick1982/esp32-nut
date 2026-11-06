@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "board/board.h"
 #include "NetBootPlan.h"
+#include "EthBootProbe.h"
 #include "NetLinkSelector.h"
 
 class WifiStaLink;
@@ -21,6 +22,17 @@ public:
     // saved_hostname: the name chosen in the Network page, "" for the default (US-113)
     void begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid, const String& password,
                const String& saved_hostname);
+
+    // US-126: Ethernet configuration to use instead of board.eth (a W5500 wired by the user)
+    void setEthernetConfig(const EthConfig& cfg);
+    // US-126: starts the Ethernet link and waits for cable link and DHCP (EthBootProbe, at
+    // most about 20 s, resetting the task watchdog). If it does not connect, the link is
+    // stopped and the caller falls back to Wi-Fi; otherwise begin() with the Ethernet plan
+    // keeps it as it is. tick, if set, runs at every step of the wait with millis() (the
+    // double reset window of main.cpp)
+    EthProbeOutcome probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now) = nullptr);
+    // Outcome of the last probeEthernet(), WAITING if it never ran
+    EthProbeOutcome ethProbe() const { return m_ethProbe; }
 
     // Gestisce il monitoraggio e la riconnessione
     void loop();
@@ -50,6 +62,9 @@ private:
     WifiApLink* m_ap;
     EthLink* m_eth;
     String m_savedHostname;
+    EthConfig m_ethCfg;
+    bool m_hasEthCfg;
+    EthProbeOutcome m_ethProbe;
 };
 
 #endif // NETWORK_MANAGER_H

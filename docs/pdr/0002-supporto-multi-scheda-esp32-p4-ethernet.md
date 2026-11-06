@@ -36,7 +36,7 @@ Servono regole di prodotto valide per qualsiasi scheda futura, non solo per il P
 ## Fuori ambito
 
 - Wi-Fi ed Ethernet attivi **contemporaneamente** (vedi D3).
-- Moduli Ethernet SPI (W5500) sull'ESP32-S3: l'architettura lo permette (ADR 0010), ma non è deciso. Resta un lavoro futuro.
+- Altri chip Ethernet SPI (ENC28J60, DM9051) e preset di schede con W5500 nel firmware. Il W5500 sull'ESP32-S3 è deciso: vedi D7.
 - Schede P4 con cablaggio Ethernet diverso dal design di riferimento Espressif: si possono aggiungere con un nuovo profilo, su richiesta.
 - `nutdrv_qx` e MQTT: hanno analisi separate in `docs/plans`.
 
@@ -98,6 +98,12 @@ Sulle schede senza Wi-Fi non c'è la modalità AP del PDR 0001. Al suo posto il 
 - Chiediamo a rtadams89 di adattare la sua PR alla nuova struttura. Il suo lavoro resta riconosciuto come contributo: è l'autore dei commit ed è citato nelle note di rilascio.
 - La PR porta il firmware del P4 (profilo, link Ethernet, Web UI senza Wi-Fi, diagnostica dei crash su RISC-V, ambienti PlatformIO). CI, zip della release, web installer e README li facciamo noi, perché rtadams89 non può provarli e si intrecciano con la scelta della versione del firmware (US-099, US-100).
 - Le release del P4 dipendono dai test della community: le note di rilascio indicano su quali schede e revisioni è stata provata ciascuna versione.
+
+### D7. Modulo W5500 sull'ESP32-S3 (US-126, #64)
+
+- I pin del W5500 (SCK, MOSI, MISO, CS obbligatori; INT e RST facoltativi) sono **un'impostazione della Web UI per qualunque scheda**, modulo esterno o W5500 integrato: non c'è uno schema di pin comune e nel firmware non ci sono preset di schede. La tabella dei pin noti sta nel README e si amplia con una PR.
+- Rispetta D4 perché un errore non chiude fuori l'utente: il profilo elenca i GPIO che non si possono mai dare al modulo (USB verso l'UPS, flash e PSRAM, console seriale, LED di stato), rifiutati dalla pagina e dall'API; i pin di strapping sono ammessi con un avviso. Se all'avvio il W5500 non risponde o non ottiene un indirizzo, la scheda torna al Wi-Fi o all'access point, e il doppio reset avvia sempre l'access point.
+- Con il W5500 attivo l'Ethernet ha la precedenza all'avvio, con un solo link attivo (D3). La scelta manuale del link è una storia separata (US-127).
 
 ## Limiti accettati
 

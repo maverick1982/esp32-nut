@@ -269,6 +269,133 @@
                     </div>
                 </section>
 
+                <!-- W5500 wired by the user (US-126, docs/mockups/US-126): shown only when
+                     GET /api/network/eth answers 200 with available:true (not on the P4) -->
+                <section class="net-section" id="sec-w5500" data-section="w5500" aria-labelledby="ttl-w5500" hidden>
+                    <h2 class="net-section-title" id="ttl-w5500">
+                        <!-- Chip icon with pins on two sides: an SPI module, not the RJ45 of the Ethernet link -->
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="6" y="5" width="12" height="14" rx="1.5" />
+                            <path d="M2 8h4M2 12h4M2 16h4M18 8h4M18 12h4M18 16h4" />
+                            <circle cx="9.5" cy="8.5" r=".6" fill="currentColor" />
+                        </svg>
+                        Ethernet module (W5500)
+                    </h2>
+
+                    <div class="panel config-panel net-panel">
+                        <div class="panel-header">
+                            <h2>SPI Wiring</h2>
+                            <!-- status.state, same shape as the link badges -->
+                            <span class="link-badge w5500-badge" id="w5500-badge" role="status">
+                                <span class="status-indicator"></span><span class="badge-text">Off</span>
+                            </span>
+                        </div>
+
+                        <!-- Enable switch: same markup as Board Settings > Status LED -->
+                        <div class="board-row w5500-toggle-row">
+                            <div class="board-label">
+                                <span class="board-name">Use a W5500 module</span>
+                                <span class="board-hint">With the module on, the board tries Ethernet first at
+                                    startup and uses Wi-Fi when it gets no connection.</span>
+                            </div>
+                            <div class="board-control led-toggle">
+                                <label class="switch">
+                                    <input type="checkbox" id="w5500-enabled" aria-label="Use a W5500 module">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="led-state" id="w5500-state">Off</span>
+                            </div>
+                        </div>
+
+                        <!-- status.state = fallback: why the board is on Wi-Fi. Hidden otherwise -->
+                        <div class="auth-alert warning w5500-status" id="w5500-status" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                <path d="M12 9v4M12 17h.01" />
+                            </svg>
+                            <span id="w5500-status-text"></span>
+                        </div>
+
+                        <form id="w5500-form" class="w5500-form is-off" novalidate>
+                            <!-- Six GPIO fields. Placeholders = an example wiring, never prefilled values:
+                                 an empty field is "not set" (null in the POST) -->
+                            <div class="pin-grid" id="pin-grid">
+                                <div class="pin-cell" data-wire="sck">
+                                    <label for="w5500-sck"><span class="pin-name">SCK</span><span class="pin-role">clock</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-sck" min="0" max="48" inputmode="numeric" placeholder="12"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="mosi">
+                                    <label for="w5500-mosi"><span class="pin-name">MOSI</span><span class="pin-role">data to W5500</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-mosi" min="0" max="48" inputmode="numeric" placeholder="11"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="miso">
+                                    <label for="w5500-miso"><span class="pin-name">MISO</span><span class="pin-role">data from W5500</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-miso" min="0" max="48" inputmode="numeric" placeholder="13"></div>
+                                </div>
+                                <div class="pin-cell" data-wire="cs">
+                                    <label for="w5500-cs"><span class="pin-name">CS</span><span class="pin-role">chip select</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-cs" min="0" max="48" inputmode="numeric" placeholder="10"></div>
+                                </div>
+                                <div class="pin-cell optional" data-wire="irq">
+                                    <label for="w5500-irq"><span class="pin-name">INT</span><span class="pin-role">optional</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-irq" min="0" max="48" inputmode="numeric" placeholder="9"></div>
+                                </div>
+                                <div class="pin-cell optional" data-wire="rst">
+                                    <label for="w5500-rst"><span class="pin-name">RST</span><span class="pin-role">optional</span></label>
+                                    <div class="pin-input"><span class="pin-prefix">GPIO</span>
+                                        <input type="number" id="w5500-rst" min="0" max="48" inputmode="numeric" placeholder="14"></div>
+                                </div>
+                            </div>
+
+                            <!-- Strapping pins (strapping[] of the GET), shown while typing; saving stays allowed -->
+                            <div class="auth-alert warning" id="w5500-strapping" role="note" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="w5500-strapping-text"></span>
+                            </div>
+
+                            <!-- 400 {"error"} from POST /api/network/eth: names the pin. Hidden on input -->
+                            <div class="auth-alert" id="w5500-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="w5500-error-text"></span>
+                            </div>
+
+                            <!-- {"success":true,"restart":true}: same pattern as the Hostname section -->
+                            <div class="auth-alert success" id="w5500-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span id="w5500-success-text">Saved. The board is restarting,
+                                    this page reloads in <span class="countdown" id="w5500-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions w5500-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-w5500">
+                                    <span class="glow"></span>
+                                    Save W5500 settings
+                                </button>
+                            </div>
+                        </form>
+
+                        <p class="auth-fineprint">Enter the GPIOs your W5500 is wired to. The grey values are a common
+                            wiring for an external module; boards with a built-in W5500 use their own pins, see the
+                            documentation. GPIO 19-20 (USB), 26-37 (flash and PSRAM), 43-44 (serial console) and the status
+                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi. Saving restarts
+                            the board.</p>
+                    </div>
+                </section>
+
                 <section class="net-section" id="sec-hostname" data-section="hostname" aria-labelledby="ttl-hostname">
                     <h2 class="net-section-title" id="ttl-hostname">
                         <!-- Tag icon: the label the router puts on the board -->

@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include "IUpsSource.h"
 #include "board/board_settings.h"
+#include "board/eth_spi_settings.h"
 #include "core/auto_shutdown.h"
 #include "NetLinkInfo.h"
 #include "NutOverrides.h"
@@ -120,6 +121,22 @@ public:
     // "network.links" of GET /api/config (US-112): the links of the board profile, "wifi"
     // then "ethernet"
     static void networkLinksJson(JsonArray links, const BoardConfig& board);
+    // US-126: as above, with "ethernet" after "wifi" also when the user enabled a W5500
+    static void networkLinksJson(JsonArray links, const BoardConfig& board, bool spi_eth_enabled);
+
+    // GET /api/network/eth (US-126): {"available":true,"enabled":bool,"pins":{"sck","mosi",
+    // "miso","cs","irq","rst"} (null when not set),"strapping":[strapping GPIOs of the board],
+    // "status":{"state":
+    // "off"|"active"|"fallback","reason":"no_chip"|"no_link"|"no_ip"}}; reason absent when ""
+    static String ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, const char* state,
+                             const char* reason);
+    // POST /api/network/eth (US-126): {"enabled": bool, "pins": {"sck": n|null, ...}}, a pin
+    // missing or null is not set. 0 with next filled, restart = next != current and
+    // response = {"success":true,"restart":bool,"warnings":["GPIO 3 is a strapping pin..."]};
+    // otherwise 400 {"error"}: "Invalid request" (enabled missing or not bool, pins not an
+    // object, a pin neither integer nor null) or the message of checkEthSpiSettings()
+    static int checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
+                               EthSpiSettings& next, bool& restart, String& response);
 
     // Error of POST /api/network/hostname for a name outside NetHostname::isValid (US-113)
     static constexpr const char* INVALID_HOSTNAME_ERROR =

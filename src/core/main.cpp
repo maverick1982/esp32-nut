@@ -12,6 +12,7 @@
 #include "board/board.h"
 #include "core/board_settings_store.h"
 #include "core/hostname_store.h"
+#include "core/eth_spi_store.h"
 #include "core/nut_override_store.h"
 #include "core/auto_shutdown.h"
 #include "NetBootPlan.h"
@@ -34,6 +35,7 @@ static NvsDriverVarStore driver_var_store;
 // Status LED and UPS USB port chosen in the Board page, NVS "board" (US-094)
 static BoardSettingsStore board_settings_store;
 static HostnameStore hostname_store;
+static EthSpiStore eth_spi_store;  // US-126
 
 // Custom variables of the NUT Server page, NVS "nutovr" (US-115). Read by the NUT server
 // and replaced by the web server, both from loop(): no lock needed
@@ -79,6 +81,17 @@ Preferences boot_prefs;
 bool is_ap_mode = false;
 bool clear_ap_flag_pending = false;
 uint32_t boot_time_ms = 0;
+
+// Double reset window: 3 s after boot the manual_ap flag is cleared. Called by loop() and
+// by the W5500 probe of setup() (US-126), so a probe of up to ~20 s does not keep the
+// window open: a power cut during the probe must not open the access point at the next boot
+static void closeManualApWindow(uint32_t now) {
+    if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
+        boot_prefs.putBool("manual_ap", false);
+        clear_ap_flag_pending = false;
+        AppLogger::log("INFO", "[MAIN] Manual AP trigger window closed.");
+    }
+}
 
 // Controlled restarts with growing delays, then degraded mode (review A7)
 RestartPolicy restart_policy;
@@ -154,6 +167,8 @@ void setup() {
     }
     // Hostname of the Network page, "" for the default of the link (US-113)
     String saved_hostname = hostname_store.load();
+    // W5500 wired by the user (US-126): off on every board until enabled in the Network page
+    EthSpiSettings eth_spi = eth_spi_store.load(board());
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -173,11 +188,25 @@ void setup() {
 
     // Inizializzazione di ConfigManager
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
-    // Which link to start, from the board capabilities (US-090, ADR 0010 §3)
-    NetBootPlan net_plan = planNetwork({ board().has_wifi, board().has_ethernet }, config_ok, manual_ap_triggered);
+    // Which link to start, from the board capabilities (US-090, ADR 0010 §3) and the W5500
+    // enabled by the user (US-126)
+    const NetBootInput net_input = { board().has_wifi, board().has_ethernet, eth_spi.enabled, config_ok,
+                                     config_ok && config_mgr.getWifiConfig().ssid.length() > 0,
+                                     manual_ap_triggered };
+    NetBootPlan net_plan = planNetwork(net_input);
+    if (net_plan.link == BootLink::ETHERNET && net_plan.fallback != BootLink::NONE) {
+        // US-126: Ethernet first; if the W5500 does not answer or gets no address, Wi-Fi
+        // (or the access point when Wi-Fi is not configured). The probe resets the watchdog
+        AppLogger::log("INFO", "[MAIN] W5500 enabled: trying Ethernet first");
+        network_mgr.setEthernetConfig(toEthConfig(eth_spi));
+        if (network_mgr.probeEthernet(saved_hostname, closeManualApWindow) != EthProbeOutcome::CONNECTED) {
+            net_plan = fallbackPlan(net_plan);
+        }
+    }
     if (net_plan.default_config) {
-        // No Wi-Fi setup page on this board: default NUT settings (no credentials, UPS
-        // name "ups"), the state an S3 reaches after the Wi-Fi setup (US-092)
+        // No Wi-Fi setup page on this link (a board without Wi-Fi, US-092, or an S3 that
+        // joined the network with its W5500 before any setup, US-126): default NUT settings
+        // (no credentials, UPS name "ups"), the state an S3 reaches after the Wi-Fi setup
         AppLogger::log("WARN", "[MAIN] No valid configuration: using the default NUT settings");
         config_mgr.setNutConfig(NutConfig());
         config_ok = config_mgr.save() && config_mgr.begin() && config_mgr.isValid();
@@ -185,6 +214,7 @@ void setup() {
     web_server.setNetwork(&network_mgr);
     web_server.setBoardSettings(&board_settings_store, board_settings);
     web_server.setHostnameStore(&hostname_store, saved_hostname);
+    web_server.setEthSpi(&eth_spi_store, eth_spi);
     web_server.setStatusLed(&diagnostic_led);
     web_server.setAutoShutdown(&auto_shutdown);
     nut_override_store.load(nut_overrides);
@@ -213,7 +243,7 @@ void setup() {
         // Stampa parametri per verifica
         WifiConfig wifi = config_mgr.getWifiConfig();
         NutConfig nut = config_mgr.getNutConfig();
-        if (board().has_wifi) AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
+        if (net_plan.link == BootLink::WIFI_STATION) AppLogger::log("INFO", "[MAIN] Wi-Fi SSID: %s\n", wifi.ssid.c_str());
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
         // Inizializzazione di AppNetworkManager
@@ -289,11 +319,7 @@ void loop() {
     esp_task_wdt_reset();
 
     // Check timer per azzeramento flag manual_ap
-    if (clear_ap_flag_pending && (now - boot_time_ms > 3000)) {
-        boot_prefs.putBool("manual_ap", false);
-        clear_ap_flag_pending = false;
-        AppLogger::log("INFO", "[MAIN] Manual AP trigger window closed.");
-    }
+    closeManualApWindow(now);
 
     web_server.loop();
     network_mgr.loop();

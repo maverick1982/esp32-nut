@@ -37,11 +37,31 @@ void test_initial_settings(void) {
     TEST_ASSERT_TRUE(board().defaults.network_mode == NetworkMode::WIFI);
 }
 
+void test_spi_eth_option(void) {
+    // US-126: the S3 offers a user-wired W5500; the profile lists what it can never give it
+    const SpiEthOption& o = board().spi_eth;
+    TEST_ASSERT_TRUE(o.available);
+    TEST_ASSERT_EQUAL_UINT8(48, o.gpio_max);
+    TEST_ASSERT_EQUAL_UINT8(5, o.reserved_count);
+    TEST_ASSERT_EQUAL_UINT8(19, o.reserved[0].first);
+    TEST_ASSERT_EQUAL_UINT8(20, o.reserved[0].last);
+    TEST_ASSERT_EQUAL_STRING("USB port of the UPS", o.reserved[0].reason);
+    TEST_ASSERT_EQUAL_UINT8(43, o.reserved[4].first);
+    TEST_ASSERT_EQUAL_UINT8(44, o.reserved[4].last);
+    TEST_ASSERT_EQUAL_UINT8(4, o.strapping_count);
+    TEST_ASSERT_EQUAL_UINT8(0, o.strapping[0]);
+    TEST_ASSERT_EQUAL_UINT8(3, o.strapping[1]);
+    TEST_ASSERT_EQUAL_UINT8(45, o.strapping[2]);
+    TEST_ASSERT_EQUAL_UINT8(46, o.strapping[3]);
+    TEST_ASSERT_EQUAL_INT8(-1, board().eth.rst);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_identity_and_capabilities);
     RUN_TEST(test_status_led_pins);
     RUN_TEST(test_usb_default_peripheral);
     RUN_TEST(test_initial_settings);
+    RUN_TEST(test_spi_eth_option);
     return UNITY_END();
 }

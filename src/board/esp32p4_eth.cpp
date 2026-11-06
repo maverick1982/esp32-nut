@@ -12,7 +12,8 @@ static const BoardConfig ESP32P4_ETH = {
     "ESP32-P4 Ethernet (Waveshare ESP32-P4-ETH)",
     false,  // has_wifi
     true,   // has_ethernet
-    { EthType::RMII, EthPhy::IP101, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1 },
+    { EthType::RMII, EthPhy::IP101, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1, -1 },
+    { false, 0, 0, {}, 0, {} },  // no W5500: the board has its own Ethernet port
     { -1, -1 },  // no status LED
     { 1, { { "hs", "USB High-Speed", 0 } } },  // 0 = ESP-IDF default, the High-Speed port
     { "", "", false, 3, 0, NetworkMode::ETHERNET },

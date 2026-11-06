@@ -1554,6 +1554,227 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- W5500 section of the Network page (US-126, docs/mockups/US-126) ---
+    // GET /api/network/eth when the page loads: the section appears only with a 200 answer
+    // and available:true (404 on the P4). POST {enabled, pins} saves; the board restarts.
+    const W5500_PINS = ['sck', 'mosi', 'miso', 'cs', 'irq', 'rst'];
+    const W5500_LABEL = { sck: 'SCK', mosi: 'MOSI', miso: 'MISO', cs: 'CS', irq: 'INT', rst: 'RST' };
+    const W5500_RESTART_S = 15;      // as the Hostname section
+    const W5500_FALLBACK = {
+        no_chip: [{ b: 'The W5500 did not answer at startup.' }, ' Check the wiring and the pins below. The board is using Wi-Fi.'],
+        no_link: [{ b: 'No Ethernet cable link at startup.' }, ' Check the cable and the switch port. The board is using Wi-Fi.'],
+        no_ip: [{ b: 'The router gave no address over Ethernet (DHCP).' }, ' The board is using Wi-Fi.'],
+        '': [{ b: 'The board is not using the W5500 now.' }, ' It started on Wi-Fi or in access point mode.']
+    };
+    const w5500Section = document.getElementById('sec-w5500');
+    const w5500Form = document.getElementById('w5500-form');
+    const w5500Toggle = document.getElementById('w5500-enabled');
+    const btnW5500 = document.getElementById('btn-w5500');
+    const W5500_BTN_IDLE = btnW5500 ? btnW5500.innerHTML : '';
+    let w5500Strapping = [];
+    let w5500NoChangeTimer = null;
+    const w5500Input = (f) => document.getElementById('w5500-' + f);
+    const w5500Cell = (f) => w5500Input(f).closest('.pin-cell');
+
+    // parts: strings and {b: text} for bold, built as text nodes
+    function w5500Text(el, parts) {
+        el.textContent = '';
+        parts.forEach(p => {
+            if (typeof p === 'string') { el.appendChild(document.createTextNode(p)); return; }
+            const s = document.createElement('strong');
+            s.textContent = p.b;
+            el.appendChild(s);
+        });
+    }
+
+    function w5500Badge(state) {
+        const el = document.getElementById('w5500-badge');
+        const b = state === 'active' ? { cls: 'connected', ind: 'success', text: 'Active' }
+            : state === 'fallback' ? { cls: 'connecting', ind: 'warning', text: 'Fallback' }
+                : { cls: 'idle', ind: '', text: 'Off' };
+        el.className = 'link-badge w5500-badge ' + b.cls;
+        el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
+        el.querySelector('.badge-text').textContent = b.text;
+    }
+
+    function setW5500Toggle(on) {
+        w5500Toggle.checked = on;
+        const st = document.getElementById('w5500-state');
+        st.textContent = on ? 'On' : 'Off';
+        st.classList.toggle('on', on);
+        w5500Form.classList.toggle('is-off', !on);
+    }
+
+    function readW5500Pins() {
+        const out = {};
+        W5500_PINS.forEach(f => {
+            const v = w5500Input(f).value.trim();
+            out[f] = v === '' ? null : Number(v);
+        });
+        return out;
+    }
+
+    // Wire glow and strapping note, live while typing (strapping[] of the GET)
+    function refreshW5500Pins() {
+        const pins = readW5500Pins();
+        const straps = [];
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.toggle('is-set', pins[f] !== null);
+            const isStrap = pins[f] !== null && w5500Strapping.includes(pins[f]);
+            w5500Cell(f).classList.toggle('strap', isStrap);
+            if (isStrap) straps.push(`GPIO ${pins[f]} (${W5500_LABEL[f]})`);
+        });
+        const box = document.getElementById('w5500-strapping');
+        if (straps.length) {
+            w5500Text(document.getElementById('w5500-strapping-text'), [
+                { b: `${straps.join(', ')} ${straps.length > 1 ? 'are strapping pins' : 'is a strapping pin'}.` },
+                ' The board may not start if the module pulls it high or low at power-on. It works with most modules; you can still save.'
+            ]);
+            box.hidden = false;
+        } else {
+            box.hidden = true;
+        }
+    }
+
+    // The field a 400 message names: "... for SCK: ...", "... both SCK and CS", "MISO is required ..."
+    function w5500FieldOf(message) {
+        const m = /for (\w+):/.exec(message) || /and (\w+)$/.exec(message) || /^(\w+) is required/.exec(message);
+        if (!m) return null;
+        return W5500_PINS.find(f => W5500_LABEL[f] === m[1]) || null;
+    }
+
+    function showW5500Error(text) {
+        document.getElementById('w5500-error-text').textContent = text;
+        document.getElementById('w5500-error').hidden = false;
+        const f = w5500FieldOf(text);
+        if (f) {
+            w5500Cell(f).classList.add('invalid');
+            w5500Input(f).setAttribute('aria-invalid', 'true');
+        }
+    }
+
+    function hideW5500Error() {
+        document.getElementById('w5500-error').hidden = true;
+        W5500_PINS.forEach(f => {
+            w5500Cell(f).classList.remove('invalid');
+            w5500Input(f).removeAttribute('aria-invalid');
+        });
+    }
+
+    function setW5500Disabled(disabled) {
+        btnW5500.disabled = disabled;
+        w5500Toggle.disabled = disabled;
+        W5500_PINS.forEach(f => { w5500Input(f).disabled = disabled; });
+    }
+
+    function renderW5500(data) {
+        w5500Strapping = Array.isArray(data.strapping) ? data.strapping : [];
+        const status = data.status || {};
+        w5500Badge(status.state);
+        const st = document.getElementById('w5500-status');
+        if (status.state === 'fallback') {
+            w5500Text(document.getElementById('w5500-status-text'), W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+            st.hidden = false;
+        } else {
+            st.hidden = true;
+        }
+        setW5500Toggle(!!data.enabled);
+        const pins = data.pins || {};
+        W5500_PINS.forEach(f => {
+            const v = pins[f];
+            w5500Input(f).value = v === null || v === undefined ? '' : v;
+        });
+        refreshW5500Pins();
+        w5500Section.hidden = false;
+    }
+
+    function showW5500NoChanges() {
+        setW5500Disabled(false);
+        btnW5500.innerHTML = 'No changes';
+        clearTimeout(w5500NoChangeTimer);
+        w5500NoChangeTimer = setTimeout(() => { btnW5500.innerHTML = W5500_BTN_IDLE; }, HOSTNAME_NO_CHANGE_MS);
+    }
+
+    function startW5500Restart() {
+        netRestarting = true;
+        btnW5500.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+        btnW5500.classList.add('is-saved');
+        setW5500Disabled(true);
+        document.getElementById('w5500-success').hidden = false;
+        const indWifi = document.getElementById('ind-wifi');
+        const lblWifi = document.getElementById('lbl-wifi');
+        if (indWifi) indWifi.className = 'status-indicator warning';
+        if (lblWifi) lblWifi.textContent = networkLabel + ': Restarting...';
+        const countdown = document.getElementById('w5500-countdown');
+        let left = W5500_RESTART_S;
+        countdown.textContent = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            countdown.textContent = Math.max(0, left);
+            if (left <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+            }
+        }, 1000);
+    }
+
+    if (w5500Section && w5500Form && btnW5500) {
+        W5500_PINS.forEach(f => w5500Input(f).addEventListener('input', () => {
+            hideW5500Error();
+            refreshW5500Pins();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        }));
+        w5500Toggle.addEventListener('change', () => {
+            setW5500Toggle(w5500Toggle.checked);
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+
+        w5500Form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnW5500.disabled) return;
+            hideW5500Error();
+            const next = { enabled: w5500Toggle.checked, pins: readW5500Pins() };
+            btnW5500.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            setW5500Disabled(true);
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/eth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(next)
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('W5500 save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+                setW5500Disabled(false);
+                showW5500Error(data && typeof data.error === 'string' ? data.error : 'Could not save the W5500 settings.');
+                const f = data && typeof data.error === 'string' ? w5500FieldOf(data.error) : null;
+                if (f) w5500Input(f).focus();
+                return;
+            }
+            // restart:false: the same values were already saved
+            if (data.restart) startW5500Restart();
+            else showW5500NoChanges();
+        });
+
+        apiFetch('/api/network/eth', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => { if (data && data.available === true) renderW5500(data); })
+            .catch(err => console.error('Failed to fetch the W5500 settings:', err));
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())

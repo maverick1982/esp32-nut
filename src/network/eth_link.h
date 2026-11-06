@@ -7,7 +7,8 @@
 #include "board/board.h"
 
 // Ethernet adapter of the net module (ADR 0010, US-092): the only code that calls ETH.*
-// Pins and PHY come from the board profile. Address by DHCP; the ESP-IDF driver and the
+// RMII port with pins and PHY from the board profile, or a W5500 on SPI with the pins set
+// by the user in the Network page (US-126). Address by DHCP; the ESP-IDF driver and the
 // DHCP client reconnect by themselves, the link only reports and logs the changes.
 class EthLink : public INetLink {
 public:
@@ -26,8 +27,16 @@ public:
     void macAddress(uint8_t mac[6]) const override;
     void linkInfo(NetLinkInfo& out) const override;
     String hostname() const override { return m_hostname; }
+    // ETH.begin() succeeded: false when the PHY or the W5500 did not answer
+    bool started() const { return m_started; }
+    // Link up, with or without an address (startup probe, US-126)
+    bool linkUp() const;
+    bool hasIP() const;
 
 private:
+    void beginW5500(const char* hostname);
+    void releaseW5500();
+
     EthConfig m_cfg;
     String m_savedHostname;
     String m_hostname;

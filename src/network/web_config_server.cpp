@@ -107,6 +107,12 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/board", HTTP_POST, guarded([this]() { handleSetBoard(); }));
     // Hostname (US-113), on every board; not public in AuthPolicy, so protected by the login
     server.on("/api/network/hostname", HTTP_POST, guarded([this]() { handleSetHostname(); }));
+    // W5500 wired by the user (US-126), only on boards that offer it (404 on the P4); in AP
+    // and in station, protected by the login like the hostname
+    if (board().spi_eth.available) {
+        server.on("/api/network/eth", HTTP_GET, guarded([this]() { handleGetEthSpi(); }));
+        server.on("/api/network/eth", HTTP_POST, guarded([this]() { handleSetEthSpi(); }));
+    }
     // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
     // so protected by the login
     server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
@@ -382,6 +388,58 @@ void WebConfigServer::handleSetHostname() {
     restart_request_time = millis();
 }
 
+// --- W5500 of the Network page (US-126) ---
+
+void WebConfigServer::setEthSpi(EthSpiStore* store, const EthSpiSettings& settings) {
+    eth_spi_store = store;
+    eth_spi = settings;
+}
+
+void WebConfigServer::handleGetEthSpi() {
+    // off: module disabled; active: the board is on Ethernet; fallback: enabled but the
+    // board is on Wi-Fi or the AP, with the reason of the startup probe
+    const char* state = "off";
+    const char* reason = "";
+    if (eth_spi.enabled) {
+        if (network && strcmp(network->typeName(), "ethernet") == 0) {
+            state = "active";
+        } else {
+            state = "fallback";
+            reason = network ? ethProbeReason(network->ethProbe()) : "";
+        }
+    }
+    server.send(200, "application/json", WebApiJson::ethSpiJson(board(), eth_spi, state, reason));
+}
+
+void WebConfigServer::handleSetEthSpi() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    EthSpiSettings next;
+    bool restart = false;
+    String response;
+    if (int status = WebApiJson::checkEthSpiBody(doc, board(), eth_spi, next, restart, response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!restart) {
+        server.send(200, "application/json", response);
+        return;
+    }
+    if (!eth_spi_store || !eth_spi_store->save(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the W5500 settings\"}");
+        return;
+    }
+    eth_spi = next;
+    server.send(200, "application/json", response);
+    AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s): restarting", next.enabled ? "enabled" : "disabled");
+    should_restart = true;
+    restart_request_time = millis();
+}
+
 // --- Remote logging of the System Logs page (US-116, ADR 0012) ---
 
 void WebConfigServer::setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog) {
@@ -603,7 +661,8 @@ void WebConfigServer::handleGetConfig() {
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
     // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
     doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
-    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board());
+    // US-126: an enabled W5500 adds the Ethernet section on a Wi-Fi board
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(), eth_spi.enabled);
     // Name in use, saved name and default (US-113)
     WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),
                              saved_hostname, network ? network->defaultHostname() : String());
