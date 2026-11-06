@@ -62,6 +62,7 @@ static void buildReferenceDoc(const UsbDiagSnapshot& s, JsonDocument& doc, bool 
     link["dropped_input_reports"] = s.dropped_input_reports;
     link["input_period_ms"] = s.input_period_ms;
     link["input_recoveries"] = s.input_recoveries;
+    link["input_watchdog"] = s.input_watchdog;
     link["port_cycles"] = s.port_cycles;
     link["incomplete_input_reports"] = s.incomplete_input_reports;
     link["ep_in_mps"] = s.ep_in_mps;
@@ -217,6 +218,19 @@ void test_driver_none_and_flags(void) {
     assertSameAsReference(s);
     s.stale = false;
     assertSameAsReference(s);
+}
+
+// US-123: link.input_watchdog is a JSON boolean after input_recoveries
+void test_input_watchdog_flag(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.input_watchdog = true;
+    assertSameAsReference(s);
+    std::string on = writeChunked(s, 64);
+    TEST_ASSERT_TRUE(on.find("\"input_watchdog\": true") != std::string::npos);
+    TEST_ASSERT_TRUE(on.find("\"input_recoveries\"") < on.find("\"input_watchdog\""));
+    s.input_watchdog = false;
+    assertSameAsReference(s);
+    TEST_ASSERT_TRUE(writeChunked(s, 64).find("\"input_watchdog\": false") != std::string::npos);
 }
 
 void test_odd_descriptor_and_line_breaks(void) {
@@ -380,6 +394,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_empty_snapshot_same_bytes);
     RUN_TEST(test_escaped_strings_same_bytes);
     RUN_TEST(test_driver_none_and_flags);
+    RUN_TEST(test_input_watchdog_flag);
     RUN_TEST(test_odd_descriptor_and_line_breaks);
     RUN_TEST(test_reports_edge_cases);
     RUN_TEST(test_numeric_limits);

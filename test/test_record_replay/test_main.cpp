@@ -1124,6 +1124,29 @@ void test_full_poll_reads_only_reports_with_readers(void) {
     TEST_ASSERT_TRUE_MESSAGE(golden.find(" 227/3") == std::string::npos, "report 227 left out of the full poll");
 }
 
+// US-123 (issue #111): on every fixture, with the registry's driver and with GenericDriver, the
+// poll requests every value the driver reads from the INPUT reports, so the INPUT watchdog
+// never acts (as usbhid-ups, which has none). Each INPUT field has a FEATURE twin, but for the
+// CS500 (INPUT report 51, requested with GET_REPORT INPUT) and the Smart-UPS of #22 (vendor
+// INPUT 137, read by no row). The MGE Protection Center of #111 sends one INPUT report a
+// minute and restarted after 5 minutes of silence before this change.
+// The one exception: on the UT850EG CyberPowerDriver reads battery.runtime.low
+// (PowerSummary.RemainingTimeLimit) from report 130, a vendor report acceptPollReport() never
+// requests, so only INPUT report 130 carries it and the watchdog stays active there.
+// GenericDriver requests report 130, so with it the UT850EG is covered too.
+void test_input_values_polled_on_every_fixture(void) {
+    const char* ut850eg = "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json";
+    for (const char* f : kAllFixtures) {
+        std::string msg = std::string(f) + ": every INPUT value polled";
+        bool expected = strcmp(f, ut850eg) != 0;
+        TEST_ASSERT_EQUAL_MESSAGE(expected, FixtureReplayRunner::inputValuesPolled(f, false), msg.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(FixtureReplayRunner::inputValuesPolled(f, true), (msg + " (generic)").c_str());
+    }
+    TEST_ASSERT_TRUE(FixtureReplayRunner::inputValuesPolled(
+        "test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json", false));
+    TEST_ASSERT_FALSE(FixtureReplayRunner::inputValuesPolled(ut850eg, false));
+}
+
 // US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
 // the firmware before the cps_hid2nut migration. After the migration (every value, status
 // flag and command from cpsHid2Nut()) it is the same, key by key: no difference to list. Usages of the descriptors that matter to the
@@ -2264,6 +2287,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
     RUN_TEST(test_full_poll_reads_only_reports_with_readers);
+    RUN_TEST(test_input_values_polled_on_every_fixture);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);
@@ -2323,6 +2347,7 @@ void setup() {
     RUN_TEST(test_golden_generic_all_fixtures);
     RUN_TEST(test_semi_static_reports_skipped_after_first_full_poll);
     RUN_TEST(test_full_poll_reads_only_reports_with_readers);
+    RUN_TEST(test_input_values_polled_on_every_fixture);
     RUN_TEST(test_cyberpower_snapshot_baseline);
     RUN_TEST(test_apc_snapshot_baseline);
     RUN_TEST(test_apc_poll_baseline);

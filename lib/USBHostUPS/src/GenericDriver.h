@@ -57,6 +57,8 @@ public:
     bool resetDriverSideValue(const char* name, String& value) override;
     void invalidateReport(uint8_t report_type, uint8_t report_id) override;
     void noteDataChanged() override { _data_changed = true; }
+    // Computed after every build of the poll lists (US-123): computeInputCoverage()
+    bool inputValuesPolled() const override { return _input_values_polled; }
     // The on-demand read of the export follows the poll's exclusions and spacing (US-119)
     bool acceptDiagReport(uint8_t report_type, uint8_t report_id) const override {
         return acceptPollReport(report_type, report_id);
@@ -214,11 +216,14 @@ private:
     void classifySemiStatic(IHidTransport* host);
     // Builds the lists again once finishInit() has run, and logs the reports left out (US-120)
     void pruneFullPoll(IHidTransport* host);
+    // Sets _input_values_polled from _quick and _full (US-123); called after buildPollLists()
+    void computeInputCoverage(IHidTransport* host);
     bool isSemiStaticAndKnown(const PollItem& item) const;
     static uint8_t typeSlot(uint8_t report_type) { return report_type == 1 ? 0 : 1; }
 
     bool _lists_built;
     bool _lists_pruned;                   // lists built again after finishInit() (US-120)
+    bool _input_values_polled;            // every value read from INPUT is polled too (US-123)
     bool _active_power_checked;           // readsActivePower() looked at since setup()
     std::vector<PollItem> _quick;
     std::vector<PollItem> _full;

@@ -47,6 +47,7 @@ GenericDriver::GenericDriver() :
     _beeper_indexed(false),
     _lists_built(false),
     _lists_pruned(false),
+    _input_values_polled(false),
     _active_power_checked(false),
     _input_twin{},
     _static_report{},
@@ -83,6 +84,7 @@ void GenericDriver::setup() {
     _beeper_indexed = false;
     _lists_built = false;
     _lists_pruned = false;
+    _input_values_polled = false;
     _active_power_checked = false;
     _quick.clear();
     _full.clear();
@@ -208,6 +210,56 @@ void GenericDriver::featureReportsRead(IHidTransport* host, uint32_t out[8]) con
     for (const auto& u : usages) {
         if ((beeper.length() > 0 && strcmp(u.path, beeper.c_str()) == 0) || readsFieldOutsideRows(u)) mark(u);
     }
+}
+
+// US-123 (issue #111): does the poll request every value the driver reads from the INPUT
+// reports? The readers are those of featureReportsRead(): the fields (usage and twin) of each
+// bound row, the active beeper decoded outside the rows, readsFieldOutsideRows(). A reader with
+// an INPUT field depends on the interrupt pipe when none of its fields, INPUT or FEATURE, is in
+// a report of _quick or _full: then a silence freezes it, and the INPUT watchdog must act.
+// The lists count, not the skipping of the semi-static (US-072) and static reports
+// (pollStaticReportsOnce()): those values do not change at run time, so they do not freeze.
+void GenericDriver::computeInputCoverage(IHidTransport* host) {
+    _input_values_polled = false;
+    if (!host || !_nut_bound) return; // nothing known: the watchdog stays active
+
+    std::vector<std::pair<uint8_t, uint8_t>> polled; // (type, id)
+    for (const auto* list : { &_quick, &_full }) {
+        for (const auto& p : *list) {
+            if (p.report_type == 1 || p.report_type == 3) polled.push_back({ p.report_type, p.id });
+        }
+    }
+    auto isPolled = [&](const HIDUsageDef& u) {
+        return std::find(polled.begin(), polled.end(), std::make_pair(u.report_type, u.report_id)) != polled.end();
+    };
+
+    const auto& usages = host->getUsages();
+    // A group of fields read together: true when it has an INPUT field and nothing polled
+    auto dependsOnInput = [&](const std::vector<int>& group) {
+        bool has_input = false;
+        for (int idx : group) {
+            if (idx < 0 || (size_t)idx >= usages.size()) continue;
+            const HIDUsageDef& u = usages[idx];
+            if (u.report_type != 1 && u.report_type != 3) continue;
+            if (isPolled(u)) return false;
+            if (u.report_type == 1) has_input = true;
+        }
+        return has_input;
+    };
+
+    for (const auto& b : _nut_rows) {
+        if (b.info->hidflags & NutTable::HU_FLAG_ABSENT) continue;
+        if (_nut_init_done && (NutTable::isCommandRow(*b.info) || b.role == NutTable::Bound::Role::DEAD)) continue;
+        if (dependsOnInput({ b.idx, b.twin_idx })) return;
+    }
+    String beeper = _beeper_row ? String("") : host->getActiveBeeperPath();
+    std::vector<int> beeper_group;
+    for (size_t i = 0; i < usages.size(); i++) {
+        if (beeper.length() > 0 && strcmp(usages[i].path, beeper.c_str()) == 0) beeper_group.push_back((int)i);
+        if (readsFieldOutsideRows(usages[i]) && dependsOnInput({ (int)i })) return;
+    }
+    if (dependsOnInput(beeper_group)) return;
+    _input_values_polled = true;
 }
 
 void GenericDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& quick, std::vector<PollItem>& full) const {
@@ -480,6 +532,7 @@ void GenericDriver::startCycle(IHidTransport* host, const UPSData& data, bool fu
 void GenericDriver::pruneFullPoll(IHidTransport* host) {
     _lists_pruned = true;
     buildPollLists(host, _quick, _full);
+    computeInputCoverage(host);
     // Logged once: the FEATURE reports of the descriptor that nothing reads and the full poll
     // does not request (the reports acceptPollReport() refuses are not counted)
     uint32_t read[8];
@@ -528,6 +581,7 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
         // FEATURE reports they read (US-120). decodeReport() would bind them at the first report.
         bindNutTable(host);
         buildPollLists(host, _quick, _full);
+        computeInputCoverage(host);
         findInputTwins(host);
         findStaticReports(host);
         _lists_built = true;

@@ -264,6 +264,86 @@ void test_input_jitter_tolerated(void) {
     TEST_ASSERT_TRUE(wd.isPeriodic());
 }
 
+// US-123 (issue #111): the MGE Protection Center sends one INPUT report a minute, every value
+// of which the poll also requests. A silence freezes nothing: no stale data, no recovery, no
+// restart, even after a day.
+void test_input_values_polled_silence_never_acts(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 9, 60000);
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(300000, wd.silenceThresholdMs());
+    wd.setValuesPolled(true);
+    TEST_ASSERT_TRUE(wd.valuesPolled());
+
+    const uint32_t later[] = {300000, 360000, 420000, 3600000, 86400000};
+    for (uint32_t d : later) {
+        TEST_ASSERT_FALSE(wd.isStale(last + d));
+        TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(last + d));
+    }
+    TEST_ASSERT_EQUAL_UINT8(0, wd.recoveries());
+    // The period is still known, for the export
+    TEST_ASSERT_TRUE(wd.isPeriodic());
+    TEST_ASSERT_EQUAL_UINT32(60000, wd.periodMs());
+}
+
+// US-123: one notice per silence, armed again by the next INPUT report
+void test_input_values_polled_notice_once_per_silence(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    uint32_t last = feedBursts(wd, 0, 9, 60000);
+    wd.setValuesPolled(true);
+
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 299999));
+    TEST_ASSERT_TRUE(wd.takeSilenceNotice(last + 300000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 400000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 3600000));
+
+    // The reports come back, then stop again
+    uint32_t back = last + 3600000;
+    wd.onInput(back);
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(back + 1000));
+    TEST_ASSERT_TRUE(wd.takeSilenceNotice(back + 300000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(back + 300001));
+
+    // Values not polled: no notice, the ladder acts instead
+    InputWatchdog plain;
+    plain.reset(0);
+    last = feedBursts(plain, 0, 9, 60000);
+    TEST_ASSERT_FALSE(plain.takeSilenceNotice(last + 300000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == plain.tick(last + 300000));
+}
+
+// US-123: a new device starts with unknown coverage, so the ladder of review A2 applies
+void test_input_values_polled_reset_by_new_device(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    wd.setValuesPolled(true);
+    wd.reset(1000);
+    TEST_ASSERT_FALSE(wd.valuesPolled());
+
+    uint32_t last = feedBursts(wd, 1000, 9, 3000);
+    TEST_ASSERT_TRUE(wd.isStale(last + 30000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::RECOVER == wd.tick(last + 30000));
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(last + 30000));
+}
+
+// US-123: a change-driven device is never periodic, so no notice either
+void test_input_change_driven_polled_no_notice(void) {
+    InputWatchdog wd;
+    wd.reset(0);
+    wd.setValuesPolled(true);
+    const uint32_t gaps[] = {1000, 7000, 2000, 30000, 5000, 1500, 60000, 4000, 9000, 2500};
+    uint32_t t = 0;
+    for (uint32_t g : gaps) {
+        t += g;
+        wd.onInput(t);
+    }
+    TEST_ASSERT_FALSE(wd.isPeriodic());
+    TEST_ASSERT_FALSE(wd.takeSilenceNotice(t + 3600000));
+    TEST_ASSERT_TRUE(LinkMonitor::Action::NONE == wd.tick(t + 3600000));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -286,6 +366,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_input_not_enough_samples_never_acts);
     RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
+    RUN_TEST(test_input_values_polled_silence_never_acts);
+    RUN_TEST(test_input_values_polled_notice_once_per_silence);
+    RUN_TEST(test_input_values_polled_reset_by_new_device);
+    RUN_TEST(test_input_change_driven_polled_no_notice);
     return UNITY_END();
 }
 #else
@@ -309,6 +393,10 @@ void setup() {
     RUN_TEST(test_input_not_enough_samples_never_acts);
     RUN_TEST(test_input_never_fed_never_acts);
     RUN_TEST(test_input_jitter_tolerated);
+    RUN_TEST(test_input_values_polled_silence_never_acts);
+    RUN_TEST(test_input_values_polled_notice_once_per_silence);
+    RUN_TEST(test_input_values_polled_reset_by_new_device);
+    RUN_TEST(test_input_change_driven_polled_no_notice);
     UNITY_END();
 }
 void loop() {}

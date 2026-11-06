@@ -135,6 +135,14 @@ public:
     virtual void noteDataChanged() {}
 
     /**
+     * @brief True when every value the driver reads from the INPUT reports is also requested
+     * by the poll with GET_REPORT (US-123, issue #111). The INPUT watchdog then never makes
+     * the data stale nor asks for a recovery or a restart: a silence freezes nothing. The
+     * default false keeps the watchdog active for a driver that does not compute it.
+     */
+    virtual bool inputValuesPolled() const { return false; }
+
+    /**
      * @brief Parses a received String Descriptor
      * 
      * @param index The string index

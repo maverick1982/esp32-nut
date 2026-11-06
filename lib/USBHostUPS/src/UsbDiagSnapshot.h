@@ -38,6 +38,9 @@ struct UsbDiagSnapshot {
     uint32_t dropped_input_reports = 0;
     uint32_t input_period_ms = 0;
     uint8_t input_recoveries = 0;
+    // An INPUT silence would make the data stale and trigger a recovery, then a restart: some
+    // value comes only from the INPUT reports (US-123). False with QUIRK_NO_INTERRUPT_PIPE.
+    bool input_watchdog = false;
     uint32_t port_cycles = 0;       // USB port power cycles since the boot (US-122)
     uint32_t incomplete_input_reports = 0;
     uint16_t ep_in_mps = 0;

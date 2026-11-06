@@ -472,6 +472,62 @@ void test_engine_load_updates_realpower(void) {
     TEST_ASSERT_EQUAL_STRING("300", ups_data.get("ups.realpower").c_str());
 }
 
+// US-123: a driver that does not request the INPUT reports without a FEATURE twin, as
+// CyberPowerDriver (pollInputReports() false)
+struct NoInputPollDriver : GenericDriver {
+    bool pollInputReports() const override { return false; }
+};
+
+// ACPresent in INPUT report 0x10, RemainingCapacity in FEATURE report 0x11; with_twin adds
+// ACPresent to a FEATURE report 0x10 too
+static void addCoverageDescriptor(bool with_twin) {
+    addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x10, 1, 0, 1);
+    if (with_twin) addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x10, 3, 0, 1);
+    addUsage("UPS.PowerSummary.RemainingCapacity", 0x11, 3, 0, 8);
+}
+
+// US-123 (issue #111): a value read only from an INPUT report the driver never requests
+// depends on the interrupt pipe, so the INPUT watchdog stays active
+void test_input_coverage_value_only_from_input(void) {
+    addCoverageDescriptor(false);
+    NoInputPollDriver drv;
+    drv.setup();
+    TEST_ASSERT_FALSE(drv.inputValuesPolled()); // lists not built yet: unknown
+    drv.loop(&mockHost, ups_data, 1);
+    TEST_ASSERT_FALSE(drv.inputValuesPolled());
+}
+
+// US-123: with the FEATURE twin in the poll, the same value is requested with GET_REPORT
+void test_input_coverage_feature_twin_polled(void) {
+    addCoverageDescriptor(true);
+    NoInputPollDriver drv;
+    drv.setup();
+    drv.loop(&mockHost, ups_data, 1);
+    TEST_ASSERT_TRUE(drv.inputValuesPolled());
+}
+
+// US-123: GenericDriver requests an INPUT report without a FEATURE twin with GET_REPORT INPUT
+// (APC CS500, report 51), so its values are polled too
+void test_input_coverage_input_report_polled(void) {
+    addCoverageDescriptor(false);
+    GenericDriver drv;
+    drv.setup();
+    TEST_ASSERT_FALSE(drv.inputValuesPolled());
+    drv.loop(&mockHost, ups_data, 1);
+    TEST_ASSERT_TRUE(drv.inputValuesPolled());
+}
+
+// US-123: setup() (a new device) forgets the coverage until the lists are built again
+void test_input_coverage_reset_by_setup(void) {
+    addCoverageDescriptor(true);
+    GenericDriver drv;
+    drv.setup();
+    drv.loop(&mockHost, ups_data, 1);
+    TEST_ASSERT_TRUE(drv.inputValuesPolled());
+    drv.setup();
+    TEST_ASSERT_FALSE(drv.inputValuesPolled());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -505,6 +561,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_delay_before_shutdown_sets_only_timer);
     RUN_TEST(test_default_delays_and_shutdown_commands);
     RUN_TEST(test_openups_no_shutdown_commands);
+    RUN_TEST(test_input_coverage_value_only_from_input);
+    RUN_TEST(test_input_coverage_feature_twin_polled);
+    RUN_TEST(test_input_coverage_input_report_polled);
+    RUN_TEST(test_input_coverage_reset_by_setup);
     return UNITY_END();
 }
 #else
@@ -530,6 +590,10 @@ void setup() {
     RUN_TEST(test_delay_before_shutdown_sets_only_timer);
     RUN_TEST(test_default_delays_and_shutdown_commands);
     RUN_TEST(test_openups_no_shutdown_commands);
+    RUN_TEST(test_input_coverage_value_only_from_input);
+    RUN_TEST(test_input_coverage_feature_twin_polled);
+    RUN_TEST(test_input_coverage_input_report_polled);
+    RUN_TEST(test_input_coverage_reset_by_setup);
     UNITY_END();
 }
 void loop() {}

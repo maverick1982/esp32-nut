@@ -1,0 +1,385 @@
+schema: archetipo/plan/v2
+spec_code: US-123
+body: |
+  ---
+  type: plan
+  title: 'US-123: Watchdog degli INPUT report: niente dati stale né riavvio quando il poll rilegge già tutti i valori (#111) — Piano di implementazione'
+  description: 'Piano di implementazione per US-123'
+  tags: [plan, implementation, US-123]
+  ---
+  # US-123: Watchdog degli INPUT report: niente dati stale né riavvio quando il poll rilegge già tutti i valori (#111) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-06
+  **Branch:** da creare all'implementazione, da `main` ed13689 (es. `feature/us-123-input-watchdog-polled`)
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 3 | **Bloccato da:** -
+
+  Il watchdog degli INPUT agisce (dati stale, recovery, riavvio) solo se almeno un valore letto dal driver arriva soltanto dagli INPUT report. Se il poll GET_REPORT rilegge tutti quei valori, un silenzio degli INPUT produce solo una riga di log, come in NUT `usbhid-ups` (ADR 0003).
+
+  ## Contesto verificato nel codice
+
+  - `InputWatchdog` (`lib/USBHostUPS/src/LinkMonitor.h`) impara il periodo degli INPUT. Se il device è periodico, dopo un silenzio di 5 × periodo (almeno 30 s) `isStale()` diventa vero e `tick()` restituisce RECOVER, RECOVER, RESTART. `USBHostUPS::service()` (`USBHostUPS.cpp:358-369`) esegue l'azione, e `isDataStale()` (`USBHostUPS.cpp:876`) somma `_in_wd.isStale()`.
+  - Il poll salta un report solo se l'INPUT gemello è arrivato da meno di `maxReportAgeMs()` (2 s, `GenericDriver::isFreshFromInput`). Quando gli INPUT tacciono, i report delle liste di poll vengono richiesti con GET_REPORT.
+  - `GenericDriver::loop()` costruisce le liste al primo giro (`bindNutTable` → `buildPollLists` → `findInputTwins`, `GenericDriver.cpp:526-534`) e le ricostruisce una volta, potate, in `pruneFullPoll()` (`GenericDriver.cpp:479-482`) dopo l'INIT walk (US-120). Il driver viene ricreato a ogni claim (`USBHostUPS.cpp:540-541`): un flag del driver riparte da zero con il nuovo dispositivo.
+  - **Le fixture:** scansione dei descrittori delle 31 fixture in `test/fixtures` (usage INPUT senza una usage FEATURE con lo stesso percorso). Sono solo due:
+    - APC CS500 (#18): INPUT 51 `ACPresent`. È un report solo INPUT, ma `APCDriver` lo chiede con GET_REPORT INPUT (`pollInputReports()` vero), quindi è coperto;
+    - Smart-UPS 750 pid 0003 (#22): INPUT 137 vendor, sotto `QUIRK_NO_INTERRUPT_PIPE` e senza righe che lo leggono.
+
+    Tutte le altre, MGE della #111 compresa, hanno un FEATURE gemello per ogni usage INPUT. **Su tutte le fixture note il watchdog risulterà quindi inattivo.** Il caso "non coperto" si prova con un descrittore sintetico. La regola resta comunque utile: protegge i dispositivi futuri con valori solo INPUT che il driver non chiede (per esempio con `pollInputReports()` falso, come CyberPower).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il driver, che conosce righe e liste di poll, calcola una volta per lista se ogni valore letto dagli INPUT è anche richiesto dal poll. L'host passa l'informazione al watchdog, che resta logica pura.
+
+  - **`IUPSDriver::inputValuesPolled()`** (nuovo, virtuale, default `false`): "vero quando ogni valore che il driver legge dagli INPUT report è richiesto anche dal poll". Il default falso tiene il comportamento di oggi per qualunque driver che non lo calcola.
+  - **`GenericDriver`**: nuovo membro `bool _input_values_polled = false` e metodo privato `computeInputCoverage(IHidTransport* host)`, chiamato subito dopo **ogni** `buildPollLists(host, _quick, _full)` in `loop()` (costruzione iniziale e `pruneFullPoll()`). Regola:
+    1. Se le righe non sono legate (`!_nut_bound`), il risultato è `false`: non si sa niente, il watchdog resta attivo.
+    2. Si raccolgono i report richiesti: le coppie (tipo, id) di `_quick` ∪ `_full`, con tipo 1 o 3 (le stringhe non contano).
+    3. Si considerano i "lettori" con lo stesso filtro di `featureReportsRead()`:
+       - ogni riga legata non `HU_FLAG_ABSENT`, e dopo `_nut_init_done` né riga di comando né `DEAD`, con le sue usage `idx` e `twin_idx`;
+       - il beeper attivo letto fuori riga (`!_beeper_row`, usage con il percorso di `host->getActiveBeeperPath()`), come gruppo a sé;
+       - le usage di `readsFieldOutsideRows()`, ognuna come gruppo a sé.
+    4. Un gruppo di usage è **dipendente dagli INPUT** se contiene almeno una usage di tipo 1 e nessuna delle sue usage (tipo 1 o 3) ha il proprio (tipo, id) tra i report richiesti.
+    5. `_input_values_polled = (nessun gruppo dipendente)`.
+
+    Il conteggio si basa sulle liste, non sul salto dei report semi-statici (US-072) o statici (`pollStaticReportsOnce`). Quei valori non cambiano a runtime, quindi non si "congelano". Va scritto nel commento del metodo.
+  - **`InputWatchdog`** (logica pura, `LinkMonitor.h`):
+    - `void setValuesPolled(bool polled)`, con il membro `_values_polled` azzerato da `reset()`;
+    - con `_values_polled` vero, `isStale()` restituisce sempre `false` e `tick()` sempre `NONE`, senza toccare `_silent`, `_recoveries` o `_windowStartMs`;
+    - il periodo continua a essere appreso (`input_period_ms` nell'export resta);
+    - nuovo `bool takeSilenceNotice(uint32_t now)`: vero **una sola volta per silenzio**, quando i valori sono coperti, il device è periodico e `now - _lastInputMs >= silenceThresholdMs()`. Un nuovo `onInput()` o un `reset()` lo riarma.
+    - Se il flag passa da vero a falso durante un silenzio (non succede nel firmware, dove la copertura cambia solo con le liste), la scala riparte da `tick()` come oggi.
+  - **`USBHostUPS::service()`**: prima di `_in_wd.tick(now)`, chiamare `_in_wd.setValuesPolled(_driver->inputValuesPolled())` (`_driver` è già garantito non nullo lì). Dopo `tick()`, se `_in_wd.takeSilenceNotice(now)` è vero: `log("INFO", "[USB] No INPUT report for %u s (period %u ms), values still read with GET_REPORT", ...)`. `isDataStale()` non cambia: legge `_in_wd.isStale()`, che con i valori coperti è falso. Il bool del watchdog viene scritto dal task `ups_poll` e letto da `isDataStale()` in altri task, come gli altri campi del watchdog oggi: non serve un lock nuovo.
+  - **Export USB Diagnostics:** `UsbDiagSnapshot` guadagna `bool input_watchdog = false`, scritto in `link` come `"input_watchdog": true|false` subito dopo `input_recoveries`. `USBHostUPS::fillDiagSnapshot` (vicino a `USBHostUPS.cpp:1527`) imposta `s.input_watchdog = _driver && !(_quirks & QUIRK_NO_INTERRUPT_PIPE) && !_driver->inputValuesPolled()`. Vero significa che un silenzio degli INPUT porterebbe a stale, recovery e riavvio.
+  - **QUIRK_NO_INTERRUPT_PIPE** non cambia: `processInputReport()` scarta gli INPUT prima del watchdog, che non viene mai alimentato.
+  - **ADR 0008**: addendum al punto A2 con regola, motivazione (#111, NUT senza watchdog degli INPUT), risultato sulle fixture (watchdog inattivo su tutte) e nuovo campo dell'export.
+
+  ### Alternative scartate
+
+  - **Togliere del tutto `InputWatchdog`:** coincide col risultato sulle fixture note, ma toglierebbe la protezione ai dispositivi con valori solo INPUT non richiesti.
+  - **Tenere una recovery senza escalation quando i valori sono coperti:** nella build v1.12 della #111 proprio la recovery dell'interfaccia ha lasciato l'MGE "Disconnected" fino al distacco del cavo. Non si tocca l'interfaccia se i dati sono buoni.
+  - **Calcolo nell'host invece che nel driver:** l'host non vede righe né liste di poll, e duplicarle violerebbe US-120/ADR 0011.
+
+  ---
+
+  ## Strategia di test
+
+  Test nativi (Unity, `pio test -e native`) su tre livelli. Niente UI, quindi niente e2e né video demo.
+
+  - **`InputWatchdog` puro** (`test/test_link_monitor`):
+    - con i valori coperti, nessuno stale e nessuna azione anche dopo ore di silenzio;
+    - una sola notifica per silenzio, riarmata da un INPUT;
+    - `reset()` riporta `values_polled` a falso;
+    - con i valori non coperti, i test A2 esistenti restano verdi senza modifiche.
+  - **Copertura nel driver**:
+    - `test/test_generic_driver`, con descrittore sintetico nel `MockGenericHost`:
+      - status solo INPUT con driver di prova `pollInputReports()` falso → non coperto;
+      - stesso descrittore con FEATURE gemello → coperto;
+      - prima del `loop()` → falso.
+    - `test/test_record_replay`: su tutte le fixture (driver del registro e GenericDriver), dopo `completeInitialPoll()` e la ricostruzione potata, `inputValuesPolled()` è vero; la fixture MGE della #111 è citata esplicitamente.
+  - **Export**: `test/test_usb_diag_json` controlla la nuova chiave `input_watchdog` nella sezione `link` (ordine, true/false). Gli altri test JSON restano verdi.
+  - **Regressione**: suite nativa intera verde, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` ok (da PowerShell).
+  - **Sul campo** (TASK-08, solo con un sì esplicito dell'utente): sull'Eaton 3S l'export mostra `"input_watchdog": false`, il contatore `[USB] Last 60 s` è invariato e non ci sono riavvii in 15 minuti.
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-11-06_
+tasks:
+  - id: TASK-01
+    title: 'InputWatchdog: valori coperti dal poll (setValuesPolled, takeSilenceNotice)'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** con i valori coperti dal poll, il watchdog non rende stale i dati e non chiede né recovery né riavvio. Notifica una volta il silenzio.
+
+      **Leggi:** `lib/USBHostUPS/src/LinkMonitor.h` (classe `InputWatchdog` e commento di classe).
+
+      **Modifica:**
+      - membro `bool _values_polled`, azzerato in `reset()`;
+      - `void setValuesPolled(bool polled)` e `bool valuesPolled() const`;
+      - `isStale()`: `return !_values_polled && isPeriodic() && ...`;
+      - `tick()`: se `_values_polled`, `return Action::NONE` prima di ogni altra logica, senza toccare `_silent`, `_recoveries` o `_windowStartMs`;
+      - `bool takeSilenceNotice(uint32_t now)`: vero una sola volta quando `_values_polled && isPeriodic() && (now - _lastInputMs) >= silenceThresholdMs()` e la notifica non è già stata data (membro `_noticed`); `onInput()` e `reset()` azzerano `_noticed`.
+
+      **Passi:** aggiornare il commento di classe con la regola US-123: la copertura la decide il driver, e con i valori coperti il silenzio non è un guasto (NUT non ha watchdog degli INPUT).
+
+      **Verifica:** compila nel target nativo (`pio test -e native -f test_link_monitor`, i test esistenti restano verdi).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/LinkMonitor.h — nuova API di InputWatchdog e commento
+
+      ## Criteri di Completamento
+      - [ ] Con `setValuesPolled(true)` `isStale()` è sempre falso e `tick()` restituisce sempre NONE
+      - [ ] `takeSilenceNotice()` è vero una sola volta per silenzio e si riarma con `onInput()` o `reset()`
+      - [ ] `reset()` riporta `valuesPolled()` a falso
+      - [ ] I test A2 esistenti di `test_link_monitor` passano senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di InputWatchdog con i valori coperti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il comportamento di TASK-01 nei test puri.
+
+      **Leggi:** `test/test_link_monitor/test_main.cpp` (sezione "Review A2", helper `feedBursts`).
+
+      **Modifica:** aggiungere i test e i rispettivi `RUN_TEST`:
+      1. `test_input_values_polled_silence_never_acts`: periodo 60 s come l'MGE della #111 (9 burst a 60 s), `setValuesPolled(true)`. A last+300 s, last+3600 s e last+86400 s: `isStale()` falso e `tick()` NONE; `recoveries()` 0.
+      2. `test_input_values_polled_notice_once_per_silence`: `takeSilenceNotice(last+299999)` falso, `(last+300000)` vero, `(last+400000)` falso; dopo `onInput(t)` e un nuovo silenzio, di nuovo vero una volta.
+      3. `test_input_values_polled_reset_by_new_device`: dopo `reset()` `valuesPolled()` è falso, e con 9 burst e silenzio torna la scala RECOVER.
+      4. `test_input_change_driven_polled_no_notice`: con intervalli irregolari e i valori coperti, nessuna notifica.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_link_monitor`.
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - test/test_link_monitor/test_main.cpp — 4 test nuovi
+
+      ## Criteri di Completamento
+      - [ ] I 4 test nuovi passano
+      - [ ] I test esistenti di `test_link_monitor` passano invariati
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Copertura degli INPUT nel driver: IUPSDriver::inputValuesPolled e GenericDriver::computeInputCoverage'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver sa se ogni valore che legge dagli INPUT report è richiesto anche dal poll.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/IUPSDriver.h`;
+      - `lib/USBHostUPS/src/GenericDriver.h` / `.cpp`: `featureReportsRead()` (filtro dei lettori), `buildPollLists()`, `pruneFullPoll()`, `loop()` (righe ~526-534 e la chiamata a `pruneFullPoll`).
+
+      **Modifica:**
+      - `IUPSDriver`: `virtual bool inputValuesPolled() const { return false; }`, con commento (US-123: il default falso tiene attivo il watchdog degli INPUT).
+      - `GenericDriver`: override `bool inputValuesPolled() const override { return _input_values_polled; }`, membro `bool _input_values_polled = false;` e metodo privato `void computeInputCoverage(IHidTransport* host)`.
+      - Chiamare `computeInputCoverage(host)` subito dopo ogni `buildPollLists(host, _quick, _full)`, cioè in `loop()` e in `pruneFullPoll()`.
+
+      **Regola** (vedi il piano):
+      - `!_nut_bound` → false;
+      - set dei report richiesti = (tipo, id) di `_quick` ∪ `_full` con tipo 1 o 3;
+      - gruppi: per ogni riga in `_nut_rows` con lo stesso filtro di `featureReportsRead()`, le usage `{b.idx, b.twin_idx}` valide; il beeper attivo fuori riga quando `!_beeper_row`; ogni usage di `readsFieldOutsideRows()`;
+      - un gruppo è dipendente se ha una usage di tipo 1 e nessuna usage (1 o 3) con (tipo, id) richiesto;
+      - `_input_values_polled = nessun gruppo dipendente`.
+
+      Commento: il calcolo usa le liste e non il salto dei semi-statici o statici (valori che non cambiano).
+
+      **Passi:** nessun log nuovo. PowercomDriver e CyberPowerDriver ereditano tutto (le loro `buildPollLists` riempiono le stesse liste).
+
+      **Verifica:** `pio test -e native` compila. I test di TASK-04 verificano la regola.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — nuovo metodo virtuale
+      - lib/USBHostUPS/src/GenericDriver.h — override, membro, dichiarazione del metodo privato
+      - lib/USBHostUPS/src/GenericDriver.cpp — computeInputCoverage() e le due chiamate
+
+      ## Criteri di Completamento
+      - [ ] `inputValuesPolled()` è falso prima che le liste siano costruite
+      - [ ] Il valore viene ricalcolato dopo la costruzione iniziale e dopo `pruneFullPoll()`
+      - [ ] La regola usa lo stesso filtro dei lettori di `featureReportsRead()`, con beeper fuori riga e `readsFieldOutsideRows()`
+      - [ ] Suite nativa compilata senza errori
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test della copertura: descrittore sintetico e tutte le fixture (MGE #111)'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare la regola nei due versi e fissare il risultato sulle fixture reali.
+
+      **Leggi:**
+      - `test/test_generic_driver/test_main.cpp` (`MockGenericHost`, `addUsage`, test esistenti sulle liste);
+      - `test/test_record_replay/FixtureReplayRunner.h` (`checkFullPollReaders`, `PollListAccess`, `replay`);
+      - `test/test_record_replay/test_main.cpp` (`kAllFixtures`, `test_full_poll_reads_only_reports_with_readers`).
+
+      **Modifica:**
+      1. In `test_generic_driver`, un driver di prova derivato da `GenericDriver` con `pollInputReports()` falso:
+         - descrittore con `UPS.PowerSummary.PresentStatus.ACPresent` solo INPUT (report 0x10) e `RemainingCapacity` FEATURE: dopo `loop()` `inputValuesPolled()` è falso;
+         - aggiungere il FEATURE gemello 0x10 per ACPresent: vero;
+         - con il `GenericDriver` normale (che chiede l'INPUT con GET_REPORT): vero;
+         - prima del primo `loop()`: falso.
+      2. In `FixtureReplayRunner`, helper `static bool inputValuesPolled(const char* filePath, bool forceGeneric)`: replay, `loop()`, `completeInitialPoll()`, un altro `loop()` che fa partire `pruneFullPoll()`, poi il valore.
+      3. In `test_record_replay`, `test_input_values_polled_on_every_fixture`: per ogni file di `kAllFixtures`, con il driver del registro e con GenericDriver, vero. Assert esplicito sulla fixture `test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json`.
+
+      Se una fixture risulta non coperta, non cambiare la regola: elencarla nel test come eccezione attesa con il motivo, e segnalarlo nel report.
+
+      **Verifica:** `pio test -e native -f test_generic_driver -f test_record_replay`.
+
+      **Blocchi:** TASK-03.
+
+      ## File Coinvolti
+      - test/test_generic_driver/test_main.cpp — 4 casi sintetici
+      - test/test_record_replay/FixtureReplayRunner.h — helper inputValuesPolled()
+      - test/test_record_replay/test_main.cpp — test su tutte le fixture e assert sulla MGE
+
+      ## Criteri di Completamento
+      - [ ] Il caso sintetico con valore solo INPUT non chiesto dà falso, gli altri vero o falso come descritto
+      - [ ] Tutte le fixture risultano coperte, oppure le eccezioni sono elencate con il motivo
+      - [ ] La fixture MGE della #111 è verificata esplicitamente
+      - [ ] Golden e test esistenti di `test_record_replay` invariati
+    ref: TASK-04
+  - id: TASK-05
+    title: 'USBHostUPS: copertura al watchdog, riga di log del silenzio e campo input_watchdog nell''export'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare driver e watchdog nel firmware e rendere visibile lo stato nell'export.
+
+      **Leggi:**
+      - `lib/USBHostUPS/src/USBHostUPS.cpp`: `service()` righe ~319-371, `isDataStale()` ~866-877, riempimento dello snapshot ~1515-1535;
+      - `lib/USBHostUPS/src/UsbDiagSnapshot.h`;
+      - `lib/WebApi/src/UsbDiagJson.cpp` (sezione `link`).
+
+      **Modifica:**
+      - In `service()`, subito prima di `switch (_in_wd.tick(now))`: `_in_wd.setValuesPolled(_driver->inputValuesPolled());`.
+      - Dopo lo switch, prima di `logStats(now)`:
+        ```
+        if (_in_wd.takeSilenceNotice(now)) {
+            log("INFO", "[USB] No INPUT report for %u s (period %u ms), values still read with GET_REPORT",
+                (unsigned)(_in_wd.silenceThresholdMs() / 1000), (unsigned)_in_wd.periodMs());
+        }
+        ```
+      - `isDataStale()` non cambia.
+      - `UsbDiagSnapshot`: `bool input_watchdog = false;` con commento. È vero quando un silenzio degli INPUT porterebbe a stale, recovery e riavvio (US-123).
+      - Snapshot: `s.input_watchdog = _driver && !(_quirks & QUIRK_NO_INTERRUPT_PIPE) && !_driver->inputValuesPolled();`.
+      - `UsbDiagJson::write`: `key(w, 2, "input_watchdog", false); raw(w, s.input_watchdog ? "true" : "false");` subito dopo `input_recoveries`.
+
+      **Verifica:** `pio test -e native` compila; build `esp32-s3-standard` da PowerShell.
+
+      **Blocchi:** TASK-01, TASK-03.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — service() e snapshot
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — campo input_watchdog
+      - lib/WebApi/src/UsbDiagJson.cpp — chiave input_watchdog nella sezione link
+
+      ## Criteri di Completamento
+      - [ ] Con i valori coperti un silenzio degli INPUT non rende stale i dati e non chiama né `recoverInterface` né `requestRestart`
+      - [ ] Una sola riga INFO per silenzio
+      - [ ] L'export ha `"input_watchdog"` dopo `input_recoveries`
+      - [ ] La build `esp32-s3-standard` passa
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Test dell''export: chiave input_watchdog nella sezione link'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare formato e posizione del nuovo campo dell'export.
+
+      **Leggi:** `test/test_usb_diag_json/test_main.cpp` (costruzione dell'atteso `link` alle righe ~55-70 e test che impostano `input_period_ms`); `test/test_chunk_writer/test_main.cpp:84` se confronta la sezione `link`.
+
+      **Modifica:**
+      - aggiungere `link["input_watchdog"] = s.input_watchdog;` all'atteso, nell'ordine dell'export;
+      - un test con `s.input_watchdog = true` e uno con `false`, che controllano il valore JSON booleano;
+      - aggiornare gli altri attesi solo dove serve.
+
+      **Verifica:** `pio test -e native -f test_usb_diag_json -f test_chunk_writer`.
+
+      **Blocchi:** TASK-05.
+
+      ## File Coinvolti
+      - test/test_usb_diag_json/test_main.cpp — attesi e due test nuovi
+      - test/test_chunk_writer/test_main.cpp — solo se l'atteso include la sezione link completa
+
+      ## Criteri di Completamento
+      - [ ] La chiave `input_watchdog` è booleana e sta dopo `input_recoveries`
+      - [ ] I test JSON esistenti passano
+    ref: TASK-06
+  - id: TASK-07
+    title: ADR 0008 (addendum A2), suite nativa completa e tre build
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione e verificare la regressione.
+
+      **Leggi:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md` (punto A2 e addendum precedenti, per esempio US-121/US-122); `docs/adr/README.md` (riga 0008).
+
+      **Modifica:**
+      - **ADR 0008:** addendum "US-123: INPUT watchdog only for values the poll does not read (issue #111)", che riporta:
+        - la prova della #111: 1 INPUT/min, 295 GET_REPORT ok/min, "INPUT reports stopped after recovery";
+        - la regola di `computeInputCoverage()`;
+        - la parità con `usbhid-ups`, che non ha un watchdog degli INPUT;
+        - il risultato sulle fixture: watchdog inattivo su tutte, con il CS500 coperto dal GET_REPORT INPUT;
+        - il campo `link.input_watchdog`;
+        - la regola per gli agent: "Agents MUST NOT make INPUT silence stale data or trigger a recovery when inputValuesPolled() is true".
+      - **README degli ADR:** aggiornare la riga 0008 se elenca gli addendum.
+
+      **Verifica:**
+      - `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`, tutto verde;
+      - da PowerShell, `pio run -e esp32-s3-standard`, `-e esp32-p4-eth` e `-e esp32-p4-eth-v1`.
+
+      Riportare i conteggi dei test e l'esito delle build.
+
+      **Blocchi:** TASK-02, TASK-04, TASK-06.
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — addendum US-123
+      - docs/adr/README.md — riga 0008, se serve
+
+      ## Criteri di Completamento
+      - [ ] Addendum scritto con regola, motivazione, risultato sulle fixture e campo dell'export
+      - [ ] Suite nativa completa verde (numero di test riportato)
+      - [ ] Le tre build passano
+    ref: TASK-07
+  - id: TASK-08
+    title: Verifica sulla scheda di test con l'Eaton 3S (solo con un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare sul dispositivo reale che la modifica non cambia niente per un UPS coperto e che l'export mostra lo stato.
+
+      **Prima di iniziare:** chiedere all'utente un sì esplicito per la prova sull'UPS reale. Senza, la task resta TODO e la review lo segnala.
+
+      **Passi:**
+      1. Flash OTA della build `esp32-s3-standard` sulla scheda di test (IP e credenziali come da memoria del progetto; non stampare mai il file delle credenziali).
+      2. Dopo il primo full poll, fare l'Export USB Diagnostics: `link.input_watchdog` deve essere `false` (Eaton 3S coperto, come risulta dalle fixture).
+      3. Lasciare girare 15 minuti e controllare il System Log: nessun riavvio, nessun WARN `[USB] No INPUT report`, contatore `[USB] Last 60 s` simile a quello di prima (circa 214 GET_REPORT/min dopo US-120).
+      4. Salvare export e log in `docs/test-results/US-123/`.
+
+      **Verifica:** file salvati, valori come sopra.
+
+      **Blocchi:** TASK-07; consenso dell'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-123/ — export e log della prova
+
+      ## Criteri di Completamento
+      - [ ] Consenso esplicito dell'utente ricevuto prima della prova
+      - [ ] Export con `"input_watchdog": false`
+      - [ ] 15 minuti senza riavvii e con traffico USB invariato
+    ref: TASK-08

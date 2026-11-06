@@ -355,6 +355,9 @@ void USBHostUPS::service() {
     if (_test_stuck_active) return;
 #endif
 
+    // US-123 (issue #111): when the poll requests every value of the INPUT reports, a silence
+    // freezes nothing, and the watchdog neither makes the data stale nor recovers or restarts
+    _in_wd.setValuesPolled(_driver->inputValuesPolled());
     switch (_in_wd.tick(now)) {
     case LinkMonitor::Action::RECOVER:
         log("WARN", "[USB] No INPUT report for %u s (period %u ms)",
@@ -366,6 +369,10 @@ void USBHostUPS::service() {
         return;
     default:
         break;
+    }
+    if (_in_wd.takeSilenceNotice(now)) {
+        log("INFO", "[USB] No INPUT report for %u s (period %u ms), values still read with GET_REPORT",
+            (unsigned)(_in_wd.silenceThresholdMs() / 1000), (unsigned)_in_wd.periodMs());
     }
 
     logStats(now);
@@ -1526,6 +1533,7 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
     s.dropped_input_reports = (uint32_t)_dropped_events;
     s.input_period_ms = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
     s.input_recoveries = _in_wd.recoveries();
+    s.input_watchdog = _driver && !(_quirks & QUIRK_NO_INTERRUPT_PIPE) && !_driver->inputValuesPolled();
     s.port_cycles = _port_cycles.cyclesSinceBoot();
     s.incomplete_input_reports = _in_reasm.dropped();
     s.ep_in_mps = _ep_in_mps;

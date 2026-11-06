@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-123
+title: 'Watchdog degli INPUT report: niente dati stale né riavvio quando il poll rilegge già tutti i valori (#111)'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 3
+status: DONE
+body: |
+  #### US-123: Watchdog degli INPUT report: niente dati stale né riavvio quando il poll rilegge già tutti i valori (#111)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS che manda pochi INPUT report ma risponde sempre alle GET_REPORT (l'MGE Protection Center di Eric-IOT nella #111),
+  voglio che la scheda non segni i dati come stale e non si riavvii quando gli INPUT report tacciono mentre il poll continua a leggere tutti i valori,
+  in modo che Home Assistant non veda l'UPS "Indisponibile" per minuti e la scheda resti su, come con NUT su un PC.
+
+  **Dimostrazione**
+  Un test nativo usa il descrittore della fixture MGE della #111. Il firmware riconosce che il poll rilegge ogni valore degli INPUT report. Dopo un silenzio degli INPUT molto più lungo della soglia, `isDataStale()` resta falso, non partono né recovery né riavvio, e il System Log ha una sola riga. Con un descrittore in cui un valore arriva solo dagli INPUT, il comportamento resta quello di oggi: stale, recover, recover, restart. Sulla scheda di test, la sezione `link` dell'export USB Diagnostics dice se il watchdog degli INPUT è attivo.
+
+  **Criteri di Accettazione**
+  - [ ] Al claim, e a ogni ricostruzione delle liste di poll, il firmware decide se gli INPUT report portano almeno un valore che il poll non rilegge. Un valore conta se è una usage di un report INPUT letta dalle righe NUT o dal driver fuori riga (stato, beeper) e non ha né un FEATURE gemello nelle liste di poll né un GET_REPORT INPUT. Il confronto usa le stesse liste di `buildPollLists()`, quindi rispetta `acceptPollReport()`, `pollInputReports()` e il full poll di US-120.
+  - [ ] Se tutti i valori sono coperti, un silenzio degli INPUT non rende stale i dati e non chiede né recovery dell'interfaccia né riavvio. Il System Log scrive una riga per ogni silenzio, non a ogni tick: per esempio `[USB] No INPUT report for 300 s, values still read with GET_REPORT`.
+  - [ ] Se almeno un valore dipende solo dagli INPUT, il comportamento resta identico a oggi: soglia 5 × periodo (almeno 30 s), poi recover, recover, restart.
+  - [ ] `QUIRK_NO_INTERRUPT_PIPE` (APC 5G, US-108) non cambia: gli INPUT sono scartati e il watchdog non agisce.
+  - [ ] La sezione `link` dell'export USB Diagnostics dice se il watchdog degli INPUT è attivo. `input_period_ms` resta.
+  - [ ] Test nativi: la fixture MGE della #111 come caso coperto, e almeno un caso non coperto. Il piano cerca un descrittore reale tra le fixture (per esempio un CyberPower, che ha `pollInputReports()` falso) e usa un descrittore sintetico se non ne trova. Suite nativa verde, tre build ok, ADR 0008 aggiornato al punto A2.
+
+  **Assunzioni**
+  - Prove dalla #111 (v1.13.0, 5/11):
+    - il log riporta `[USB] Last 60 s: 1 INPUT reports (1 packets), 295 GET_REPORT ok, 0 failed`;
+    - il riquadro giallo dice "INPUT reports stopped after recovery";
+    - in HA ci sono buchi di 3 minuti (21:07→21:10, 22:19→22:22), compatibili con 300 s di silenzio, due recovery a 60 s e il riavvio;
+    - con la build di test v1.12 lo stesso percorso lasciava l'UPS "Disconnected" fino a quando l'utente staccava il cavo.
+  - Descrittore MGE: gli INPUT 1, 2, 6, 15, 25, 31 e 33 hanno un FEATURE gemello con le stesse usage. L'INPUT 34 (PowerSummary.RunTimeToEmpty) ha un FEATURE 34 con un altro campo, ma lo stesso valore è nel FEATURE 6. Il poll salta un report solo se l'INPUT gemello è arrivato da meno di 2 s (`isFreshFromInput`).
+  - Probabilmente l'MGE manda INPUT solo sulle variazioni (il runtime ricalcolato circa ogni minuto), e il watchdog lo prende per periodico. Non serve stabilirlo: se i valori sono coperti, il silenzio non è un guasto.
+  - NUT `usbhid-ups` non ha un watchdog degli INPUT: un interrupt senza dati è normale e i valori arrivano dal poll (ADR 0003).
+  - Fuori scope: il TASK_WDT su `loopTask` della stessa scheda (#111/#112) e i buchi di 1 minuto in HA, che potrebbero venire da lì.
+  - Le issue restano aperte fino alla release: nelle PR "Refs #111".
+history:
+  - status: TODO
+    at: "2026-11-06T11:26:52Z"
+  - status: PLANNED
+    at: "2026-11-06T11:54:26Z"
+  - status: IN PROGRESS
+    at: "2026-11-06T11:59:27Z"
+  - status: REVIEW
+    at: "2026-11-06T12:49:13Z"
+  - status: DONE
+    at: "2026-11-06T12:51:53Z"

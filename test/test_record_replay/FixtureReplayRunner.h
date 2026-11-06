@@ -663,6 +663,20 @@ public:
         return descriptor.size() - actual.size();
     }
 
+    /**
+     * US-123: IUPSDriver::inputValuesPolled() at steady state. One loop() builds the lists,
+     * completeInitialPoll() ends the INIT walk, and the next loop() builds the pruned lists
+     * (US-120), each time recomputing the coverage, as on the device.
+     */
+    static bool inputValuesPolled(const char* filePath, bool forceGeneric) {
+        ReplaySession s;
+        if (!replay(filePath, s, forceGeneric)) return false;
+        s.driver->loop(&s.host, s.ups_data, 1);
+        if (GenericDriver* drv = dynamic_cast<GenericDriver*>(s.driver)) drv->completeInitialPoll();
+        s.driver->loop(&s.host, s.ups_data, 2);
+        return s.driver->inputValuesPolled();
+    }
+
     // A driver of class D with its poll hooks public (US-076)
     template <class D>
     struct PollListProbe : D {
