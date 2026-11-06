@@ -104,6 +104,7 @@ Sulle schede senza Wi-Fi non c'è la modalità AP del PDR 0001. Al suo posto il 
 - I pin del W5500 (SCK, MOSI, MISO, CS obbligatori; INT e RST facoltativi) sono **un'impostazione della Web UI per qualunque scheda**, modulo esterno o W5500 integrato: non c'è uno schema di pin comune e nel firmware non ci sono preset di schede. La tabella dei pin noti sta nel README e si amplia con una PR.
 - Rispetta D4 perché un errore non chiude fuori l'utente: il profilo elenca i GPIO che non si possono mai dare al modulo (USB verso l'UPS, flash e PSRAM, console seriale, LED di stato), rifiutati dalla pagina e dall'API; i pin di strapping sono ammessi con un avviso. Se all'avvio il W5500 non risponde o non ottiene un indirizzo, la scheda torna al Wi-Fi o all'access point, e il doppio reset avvia sempre l'access point.
 - Con il W5500 attivo l'Ethernet ha la precedenza all'avvio, con un solo link attivo (D3). La scelta manuale del link è una storia separata (US-127).
+- US-127 aggiunge la scelta di D3 nella sezione W5500 (Automatico predefinito, Ethernet, Wi-Fi). In Automatico, mentre la scheda è sul Wi-Fi, il W5500 resta avviato in attesa fuori dal selettore dei link: non è un secondo link attivo (server NUT, Web UI e nome host seguono solo quello selezionato), serve a vedere il ritorno del cavo e a ripassare all'Ethernet entro 30 s. In Ethernet solo un modulo che non risponde porta al Wi-Fi.
 
 ## Limiti accettati
 

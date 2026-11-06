@@ -295,8 +295,8 @@
                         <div class="board-row w5500-toggle-row">
                             <div class="board-label">
                                 <span class="board-name">Use a W5500 module</span>
-                                <span class="board-hint">With the module on, the board tries Ethernet first at
-                                    startup and uses Wi-Fi when it gets no connection.</span>
+                                <span class="board-hint">With the module on, choose below which link the board
+                                    uses: Ethernet, Wi-Fi, or Ethernet with Wi-Fi as the backup.</span>
                             </div>
                             <div class="board-control led-toggle">
                                 <label class="switch">
@@ -307,11 +307,52 @@
                             </div>
                         </div>
 
-                        <!-- status.state = fallback: why the board is on Wi-Fi. Hidden otherwise -->
+                        <!-- Link to use (US-127): "mode" of the GET/POST. Hidden while the switch is off.
+                             Same cards as Board Settings > USB port; arrow keys move between them -->
+                        <div class="w5500-mode-row" id="w5500-mode-row" hidden>
+                            <span class="board-name" id="w5500-mode-title">Link to use</span>
+                            <div class="port-options w5500-mode-options" id="w5500-mode" role="radiogroup"
+                                aria-labelledby="w5500-mode-title">
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="auto">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Automatic</span>
+                                        <span class="port-desc">Ethernet when the cable is connected, otherwise Wi-Fi.
+                                            Switches by itself within 30 s.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="ethernet">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Ethernet</span>
+                                        <span class="port-desc">Cable only. Without a cable the board stays offline; it
+                                            uses Wi-Fi only if the W5500 does not answer.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="wifi">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Wi-Fi</span>
+                                        <span class="port-desc">Wi-Fi only. The W5500 is not used.</span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- status.state = fallback: why the board is on Wi-Fi (amber); standby and
+                             unused (US-127): informative (blue). Hidden otherwise -->
                         <div class="auth-alert warning w5500-status" id="w5500-status" role="status" hidden>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <!-- Triangle for the warnings, "i" in a circle for the informative states -->
+                            <svg class="w5500-icon-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                                 <path d="M12 9v4M12 17h.01" />
+                            </svg>
+                            <svg class="w5500-icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
                             </svg>
                             <span id="w5500-status-text"></span>
                         </div>
@@ -391,8 +432,8 @@
                         <p class="auth-fineprint">Enter the GPIOs your W5500 is wired to. The grey values are a common
                             wiring for an external module; boards with a built-in W5500 use their own pins, see the
                             documentation. GPIO 19-20 (USB), 26-37 (flash and PSRAM), 43-44 (serial console) and the status
-                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi. Saving restarts
-                            the board.</p>
+                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi in every mode.
+                            Saving restarts the board.</p>
                     </div>
                 </section>
 

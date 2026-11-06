@@ -2013,6 +2013,24 @@ void test_inactivity_close_is_logged(void) {
     TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.60", 50060));
 }
 
+// US-127: a switch between Ethernet and Wi-Fi closes every session with one log line
+void test_link_change_closes_all_sessions(void) {
+    openClients(2);
+    server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Network link changed: 2 NUT clients disconnected", logLines[0].c_str());
+    // Every slot is free again
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        String ip = String("10.0.1.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(51000 + i)));
+    }
+}
+
+void test_link_change_without_sessions_logs_nothing(void) {
+    server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
 // --- Custom variables of the NUT Server page (US-115): override.<var> of ups.conf,
 // drivers/main.c storeval (dstate_setinfo + ST_FLAG_IMMUTABLE + dparam_setinfo) ---
 
@@ -2304,6 +2322,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_rejections_are_throttled);
     RUN_TEST(test_clients_summary_only_on_change);
     RUN_TEST(test_inactivity_close_is_logged);
+    RUN_TEST(test_link_change_closes_all_sessions);
+    RUN_TEST(test_link_change_without_sessions_logs_nothing);
     return UNITY_END();
 }
 #else

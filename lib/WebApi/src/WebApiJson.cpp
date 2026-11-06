@@ -506,11 +506,13 @@ static void setEthSpiPin(EthSpiSettings& s, uint8_t index, int8_t pin) {
     }
 }
 
-String WebApiJson::ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, const char* state,
-                              const char* reason) {
+// mode == nullptr: the US-126 reply, without "mode"
+static String ethSpiJsonImpl(const BoardConfig& board, const EthSpiSettings& settings, const NetworkMode* mode,
+                             const char* state, const char* reason) {
     JsonDocument doc;
     doc["available"] = board.spi_eth.available;
     doc["enabled"] = settings.enabled;
+    if (mode) doc["mode"] = networkModeName(*mode);
     JsonObject pins = doc["pins"].to<JsonObject>();
     for (uint8_t i = 0; i < ETH_SPI_PIN_COUNT; i++) {
         const int8_t pin = ethSpiPin(settings, i);
@@ -530,9 +532,33 @@ String WebApiJson::ethSpiJson(const BoardConfig& board, const EthSpiSettings& se
     return String(out.c_str());
 }
 
+String WebApiJson::ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, const char* state,
+                              const char* reason) {
+    return ethSpiJsonImpl(board, settings, nullptr, state, reason);
+}
+
+String WebApiJson::ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, NetworkMode mode,
+                              const char* state, const char* reason) {
+    return ethSpiJsonImpl(board, settings, &mode, state, reason);
+}
+
 int WebApiJson::checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
                                 EthSpiSettings& next, bool& restart, String& response) {
+    // The US-126 contract has no mode: a "mode" key is ignored, so it neither refuses the
+    // request nor asks for a restart that would save nothing
+    JsonDocument pins_only;
+    pins_only.set(body);
+    if (pins_only.is<JsonObject>()) pins_only.remove("mode");
+    NetworkMode next_mode = NetworkMode::AUTO;
+    return checkEthSpiBody(pins_only.as<JsonVariantConst>(), board, current, NetworkMode::AUTO, next, next_mode,
+                           restart, response);
+}
+
+int WebApiJson::checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
+                                NetworkMode current_mode, EthSpiSettings& next, NetworkMode& next_mode,
+                                bool& restart, String& response) {
     next = current;
+    next_mode = current_mode;
     restart = false;
     if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
     JsonVariantConst enabled = body["enabled"];
@@ -560,8 +586,18 @@ int WebApiJson::checkEthSpiBody(JsonVariantConst body, const BoardConfig& board,
     EthPinCheck check;
     if (!checkEthSpiSettings(board, candidate, check)) return sendError(response, 400, check.message);
 
+    // US-127: optional; missing keeps the saved mode, anything but a known name is refused
+    NetworkMode candidate_mode = current_mode;
+    JsonVariantConst mode = body.as<JsonObjectConst>()["mode"];
+    if (!mode.isUnbound()) {
+        if (!mode.is<const char*>() || !parseNetworkMode(mode.as<const char*>(), candidate_mode)) {
+            return sendError(response, 400, INVALID_NETWORK_MODE_ERROR);
+        }
+    }
+
     next = candidate;
-    restart = next != current;
+    next_mode = candidate_mode;
+    restart = next != current || next_mode != current_mode;
     JsonDocument doc;
     doc["success"] = true;
     doc["restart"] = restart;

@@ -1387,6 +1387,127 @@ void test_eth_spi_body_optional_pins_null(void) {
     TEST_ASSERT_TRUE(next == ethSpiDefaults());
 }
 
+// --- US-127: link mode of the W5500 section ---
+
+void test_eth_spi_json_with_mode(void) {
+    String json = WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::ETHERNET, "active", "");
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"available\":true,\"enabled\":true,\"mode\":\"ethernet\",\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,"
+        "\"cs\":10,\"irq\":9,\"rst\":14},\"strapping\":[0,3,45,46],\"status\":{\"state\":\"active\"}}",
+        json.c_str());
+
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::AUTO,
+                                                                  "standby", "")));
+    TEST_ASSERT_EQUAL_STRING("auto", doc["mode"]);
+    TEST_ASSERT_EQUAL_STRING("standby", doc["status"]["state"]);
+    TEST_ASSERT_TRUE(doc["status"]["reason"].isNull());
+
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::WIFI,
+                                                                  "unused", "")));
+    TEST_ASSERT_EQUAL_STRING("wifi", doc["mode"]);
+    TEST_ASSERT_EQUAL_STRING("unused", doc["status"]["state"]);
+}
+
+static int ethModeStatus(const char* json, const EthSpiSettings& current, NetworkMode current_mode,
+                         EthSpiSettings& next, NetworkMode& next_mode, bool& restart, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::checkEthSpiBody(doc, board(), current, current_mode, next, next_mode, restart, out);
+}
+
+#define ETH_EXAMPLE_PINS "\"pins\":{\"sck\":12,\"mosi\":11,\"miso\":13,\"cs\":10,\"irq\":9,\"rst\":14}"
+
+void test_eth_spi_body_mode_change_alone_restarts(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"ethernet\"}", ethExample(),
+                                       NetworkMode::AUTO, next, next_mode, restart, out));
+    TEST_ASSERT_TRUE(restart);
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::ETHERNET);
+    TEST_ASSERT_TRUE(next == ethExample());
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_missing_mode_keeps_it(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS "}", ethExample(), NetworkMode::WIFI,
+                                       next, next_mode, restart, out));
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::WIFI);
+    TEST_ASSERT_FALSE(restart);
+}
+
+void test_eth_spi_body_same_pins_and_mode_do_not_restart(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, ethModeStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"wifi\"}", ethExample(),
+                                       NetworkMode::WIFI, next, next_mode, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":false,\"warnings\":[]}", out.c_str());
+}
+
+void test_eth_spi_body_invalid_mode(void) {
+    const char* bodies[] = { "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"Auto\"}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":5}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":null}",
+                             "{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"\"}" };
+    for (const char* json : bodies) {
+        EthSpiSettings next;
+        NetworkMode next_mode = NetworkMode::AUTO;
+        bool restart = true;
+        String out;
+        TEST_ASSERT_EQUAL_MESSAGE(400, ethModeStatus(json, ethExample(), NetworkMode::ETHERNET, next, next_mode,
+                                                     restart, out),
+                                  json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid network mode\"}", out.c_str(), json);
+        TEST_ASSERT_TRUE_MESSAGE(next_mode == NetworkMode::ETHERNET, json);
+        TEST_ASSERT_TRUE_MESSAGE(next == ethExample(), json);
+        TEST_ASSERT_FALSE_MESSAGE(restart, json);
+    }
+}
+
+void test_eth_spi_body_forbidden_pin_wins_over_a_valid_mode(void) {
+    EthSpiSettings next;
+    NetworkMode next_mode = NetworkMode::AUTO;
+    bool restart = false;
+    String out;
+    TEST_ASSERT_EQUAL(400, ethModeStatus("{\"enabled\":true,\"pins\":{\"sck\":19,\"mosi\":11,\"miso\":13,\"cs\":10},"
+                                         "\"mode\":\"ethernet\"}",
+                                         ethSpiDefaults(), NetworkMode::AUTO, next, next_mode, restart, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"GPIO 19 cannot be used for SCK: USB port of the UPS\"}", out.c_str());
+    TEST_ASSERT_TRUE(next_mode == NetworkMode::AUTO);
+}
+
+void test_eth_spi_json_active_without_connection(void) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::ethSpiJson(board(), ethExample(), NetworkMode::ETHERNET,
+                                                                  "active", "no_link")));
+    TEST_ASSERT_EQUAL_STRING("active", doc["status"]["state"]);
+    TEST_ASSERT_EQUAL_STRING("no_link", doc["status"]["reason"]);
+}
+
+void test_eth_spi_body_us126_overload_ignores_the_mode(void) {
+    EthSpiSettings next;
+    bool restart = true;
+    String out;
+    // Same pins: no restart, whatever the mode says (it would not be saved)
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":\"ethernet\"}", ethExample(),
+                                   next, restart, out));
+    TEST_ASSERT_FALSE(restart);
+    // Not a valid mode either: not refused, the key is not part of this contract
+    TEST_ASSERT_EQUAL(0, ethStatus("{\"enabled\":true," ETH_EXAMPLE_PINS ",\"mode\":5}", ethExample(), next,
+                                   restart, out));
+    TEST_ASSERT_FALSE(restart);
+}
+
 void test_network_links_with_w5500(void) {
     JsonDocument on;
     WebApiJson::networkLinksJson(on["links"].to<JsonArray>(), board(), true);
@@ -1980,6 +2101,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eth_spi_body_duplicate_and_required);
     RUN_TEST(test_eth_spi_body_strapping_warning);
     RUN_TEST(test_eth_spi_body_optional_pins_null);
+    RUN_TEST(test_eth_spi_json_with_mode);
+    RUN_TEST(test_eth_spi_body_mode_change_alone_restarts);
+    RUN_TEST(test_eth_spi_body_missing_mode_keeps_it);
+    RUN_TEST(test_eth_spi_body_same_pins_and_mode_do_not_restart);
+    RUN_TEST(test_eth_spi_body_invalid_mode);
+    RUN_TEST(test_eth_spi_body_forbidden_pin_wins_over_a_valid_mode);
+    RUN_TEST(test_eth_spi_json_active_without_connection);
+    RUN_TEST(test_eth_spi_body_us126_overload_ignores_the_mode);
     RUN_TEST(test_network_links_with_w5500);
     RUN_TEST(test_remote_log_json);
     RUN_TEST(test_remote_log_body_full_update);

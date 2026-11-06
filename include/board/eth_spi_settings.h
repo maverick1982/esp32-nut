@@ -152,6 +152,30 @@ inline EthConfig toEthConfig(const EthSpiSettings& s) {
     return c;
 }
 
+// Link to use on a board with Wi-Fi and the W5500 (US-127): the name saved in NVS and
+// sent by the API. parseNetworkMode() accepts only these exact lower-case names
+inline const char* networkModeName(NetworkMode mode) {
+    switch (mode) {
+        case NetworkMode::ETHERNET: return "ethernet";
+        case NetworkMode::WIFI: return "wifi";
+        default: return "auto";
+    }
+}
+
+inline bool parseNetworkMode(const char* s, NetworkMode& out) {
+    if (s == nullptr) return false;
+    if (strcmp(s, "auto") == 0) {
+        out = NetworkMode::AUTO;
+    } else if (strcmp(s, "ethernet") == 0) {
+        out = NetworkMode::ETHERNET;
+    } else if (strcmp(s, "wifi") == 0) {
+        out = NetworkMode::WIFI;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 // PDR 0002 D4: saved settings the board does not allow (a corrupted NVS entry, a profile
 // that changed) turn the module off; the pins are kept so the user can fix them
 inline EthSpiSettings sanitizeEthSpi(const BoardConfig& b, EthSpiSettings s) {

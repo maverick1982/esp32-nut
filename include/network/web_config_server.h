@@ -44,8 +44,8 @@ public:
     void setAutoShutdown(AutoShutdown* auto_shutdown);
     // Hostname of the Network page (US-113): store and name loaded at boot ("" = default)
     void setHostnameStore(HostnameStore* store, const String& saved);
-    // W5500 of the Network page (US-126): store and settings loaded at boot
-    void setEthSpi(EthSpiStore* store, const EthSpiSettings& settings);
+    // W5500 of the Network page (US-126): store, settings and link mode (US-127) loaded at boot
+    void setEthSpi(EthSpiStore* store, const EthSpiSettings& settings, NetworkMode mode);
     // Custom variables of the NUT Server page (US-115): the list the NUT server reads,
     // replaced after it is saved, in the same task as the NUT server
     void setNutOverrides(NvsNutOverrideStore* store, std::vector<NutOverride>* list);
@@ -80,6 +80,7 @@ private:
     String saved_hostname;
     EthSpiStore* eth_spi_store = nullptr;
     EthSpiSettings eth_spi = { false, -1, -1, -1, -1, -1, -1 };
+    NetworkMode eth_mode = NetworkMode::AUTO;
     void handleGetEthSpi();
     void handleSetEthSpi();
     NvsNutOverrideStore* nut_override_store = nullptr;

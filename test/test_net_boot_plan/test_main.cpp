@@ -79,7 +79,7 @@ void test_default_config_only_without_wifi(void) {
 // --- US-126: W5500 on a Wi-Fi board ---
 
 static NetBootInput s3(bool spi_eth, bool config_valid, bool ssid_set, bool manual) {
-    const NetBootInput in = { true, false, spi_eth, config_valid, ssid_set, manual };
+    const NetBootInput in = { true, false, spi_eth, config_valid, ssid_set, manual, NetworkMode::AUTO };
     return in;
 }
 
@@ -167,8 +167,154 @@ void test_boards_without_wifi_ignore_the_w5500_input(void) {
     }
 }
 
+// --- US-127: link mode (Wi-Fi / Ethernet / Automatic) ---
+
+static const NetworkMode MODES[3] = { NetworkMode::AUTO, NetworkMode::ETHERNET, NetworkMode::WIFI };
+static const EthProbeOutcome OUTCOMES[5] = { EthProbeOutcome::WAITING, EthProbeOutcome::CONNECTED,
+                                             EthProbeOutcome::NO_CHIP, EthProbeOutcome::NO_LINK,
+                                             EthProbeOutcome::NO_IP };
+
+static NetBootInput s3m(NetworkMode mode, bool config_valid, bool ssid_set, bool manual) {
+    NetBootInput in = s3(true, config_valid, ssid_set, manual);
+    in.mode = mode;
+    return in;
+}
+
+static bool samePlan(const NetBootPlan& a, const NetBootPlan& b) {
+    return a.link == b.link && a.captive_portal == b.captive_portal && a.ap_idle_timeout == b.ap_idle_timeout &&
+           a.recovery_window == b.recovery_window && a.default_config == b.default_config &&
+           a.fallback == b.fallback && a.auto_switch == b.auto_switch &&
+           a.fallback_on_no_link == b.fallback_on_no_link;
+}
+
+void test_auto_with_wifi_configured_switches_while_running(void) {
+    NetBootPlan p = planNetwork(s3m(NetworkMode::AUTO, true, true, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_STATION);
+    TEST_ASSERT_TRUE(p.fallback_on_no_link);
+    TEST_ASSERT_TRUE(p.auto_switch);
+    TEST_ASSERT_FALSE(p.default_config);
+}
+
+void test_auto_without_ssid_falls_back_to_ap_without_switching(void) {
+    // Never to or from the access point
+    NetBootPlan p = planNetwork(s3m(NetworkMode::AUTO, true, false, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_ACCESS_POINT);
+    TEST_ASSERT_TRUE(p.fallback_on_no_link);
+    TEST_ASSERT_FALSE(p.auto_switch);
+
+    p = planNetwork(s3m(NetworkMode::AUTO, false, false, false));
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_ACCESS_POINT);
+    TEST_ASSERT_TRUE(p.default_config);
+    TEST_ASSERT_FALSE(p.auto_switch);
+}
+
+void test_ethernet_mode_stays_on_the_cable(void) {
+    NetBootPlan p = planNetwork(s3m(NetworkMode::ETHERNET, true, true, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_STATION);  // only for a silent module
+    TEST_ASSERT_FALSE(p.fallback_on_no_link);
+    TEST_ASSERT_FALSE(p.auto_switch);
+
+    p = planNetwork(s3m(NetworkMode::ETHERNET, false, false, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_ACCESS_POINT);
+    TEST_ASSERT_TRUE(p.default_config);
+    TEST_ASSERT_FALSE(p.fallback_on_no_link);
+    TEST_ASSERT_FALSE(p.auto_switch);
+}
+
+void test_wifi_mode_ignores_the_w5500(void) {
+    for (int valid = 0; valid < 2; valid++) {
+        for (int ssid = 0; ssid < 2; ssid++) {
+            for (int manual = 0; manual < 2; manual++) {
+                NetBootPlan p = planNetwork(s3m(NetworkMode::WIFI, valid, ssid, manual));
+                NetBootPlan without = planNetwork(s3(false, valid, ssid, manual));
+                TEST_ASSERT_TRUE(samePlan(p, without));
+                TEST_ASSERT_TRUE(p.link != BootLink::ETHERNET);
+                TEST_ASSERT_TRUE(p.fallback == BootLink::NONE);
+                TEST_ASSERT_FALSE(p.auto_switch);
+            }
+        }
+    }
+    TEST_ASSERT_TRUE(planNetwork(s3m(NetworkMode::WIFI, true, true, false)).link == BootLink::WIFI_STATION);
+}
+
+void test_double_reset_starts_ap_in_every_mode(void) {
+    for (int m = 0; m < 3; m++) {
+        NetBootPlan p = planNetwork(s3m(MODES[m], true, true, true));
+        TEST_ASSERT_TRUE(p.link == BootLink::WIFI_ACCESS_POINT);
+        TEST_ASSERT_TRUE(p.captive_portal);
+        TEST_ASSERT_TRUE(p.ap_idle_timeout);
+        TEST_ASSERT_TRUE(p.fallback == BootLink::NONE);
+        TEST_ASSERT_FALSE(p.auto_switch);
+    }
+}
+
+void test_needs_fallback_for_every_mode_and_outcome(void) {
+    // expected[mode][outcome]: AUTO, ETHERNET, WIFI x WAITING, CONNECTED, NO_CHIP, NO_LINK, NO_IP
+    static const bool expected[3][5] = {
+        { false, false, true, true, true },
+        { false, false, true, false, false },
+        { false, false, false, false, false },  // no fallback: the W5500 is not used
+    };
+    for (int m = 0; m < 3; m++) {
+        const NetBootPlan p = planNetwork(s3m(MODES[m], true, true, false));
+        for (int o = 0; o < 5; o++) {
+            TEST_ASSERT_EQUAL_MESSAGE(expected[m][o], needsFallback(p, OUTCOMES[o]), "mode x outcome");
+        }
+    }
+    // Same rules towards the access point (no Wi-Fi configured)
+    const NetBootPlan eth_ap = planNetwork(s3m(NetworkMode::ETHERNET, false, false, false));
+    TEST_ASSERT_TRUE(needsFallback(eth_ap, EthProbeOutcome::NO_CHIP));
+    TEST_ASSERT_FALSE(needsFallback(eth_ap, EthProbeOutcome::NO_LINK));
+    const NetBootPlan auto_ap = planNetwork(s3m(NetworkMode::AUTO, false, false, false));
+    TEST_ASSERT_TRUE(needsFallback(auto_ap, EthProbeOutcome::NO_IP));
+}
+
+void test_fallback_plan_keeps_auto_switch_only_towards_the_station(void) {
+    NetBootPlan p = fallbackPlan(planNetwork(s3m(NetworkMode::AUTO, true, true, false)));
+    TEST_ASSERT_TRUE(p.link == BootLink::WIFI_STATION);
+    TEST_ASSERT_TRUE(p.auto_switch);
+    TEST_ASSERT_FALSE(p.fallback_on_no_link);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::NONE);
+
+    p = fallbackPlan(planNetwork(s3m(NetworkMode::AUTO, true, false, false)));
+    TEST_ASSERT_TRUE(p.link == BootLink::WIFI_ACCESS_POINT);
+    TEST_ASSERT_FALSE(p.auto_switch);
+    TEST_ASSERT_FALSE(p.fallback_on_no_link);
+
+    p = fallbackPlan(planNetwork(s3m(NetworkMode::ETHERNET, true, true, false)));
+    TEST_ASSERT_TRUE(p.link == BootLink::WIFI_STATION);
+    TEST_ASSERT_FALSE(p.auto_switch);
+}
+
+void test_boards_without_wifi_ignore_the_mode(void) {
+    for (int m = 0; m < 3; m++) {
+        for (int valid = 0; valid < 2; valid++) {
+            for (int manual = 0; manual < 2; manual++) {
+                const NetBootInput in = { false, true, true, (bool)valid, (bool)valid, (bool)manual, MODES[m] };
+                const NetBootPlan p = planNetwork(in);
+                TEST_ASSERT_TRUE(samePlan(p, planNetwork(ETHERNET_ONLY, valid, manual)));
+                TEST_ASSERT_FALSE(p.auto_switch);
+                TEST_ASSERT_FALSE(needsFallback(p, EthProbeOutcome::NO_CHIP));
+                TEST_ASSERT_FALSE(needsFallback(p, EthProbeOutcome::NO_LINK));
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_auto_with_wifi_configured_switches_while_running);
+    RUN_TEST(test_auto_without_ssid_falls_back_to_ap_without_switching);
+    RUN_TEST(test_ethernet_mode_stays_on_the_cable);
+    RUN_TEST(test_wifi_mode_ignores_the_w5500);
+    RUN_TEST(test_double_reset_starts_ap_in_every_mode);
+    RUN_TEST(test_needs_fallback_for_every_mode_and_outcome);
+    RUN_TEST(test_fallback_plan_keeps_auto_switch_only_towards_the_station);
+    RUN_TEST(test_boards_without_wifi_ignore_the_mode);
     RUN_TEST(test_w5500_with_valid_config_tries_ethernet_then_station);
     RUN_TEST(test_w5500_without_config_tries_ethernet_then_ap);
     RUN_TEST(test_w5500_double_reset_starts_ap);

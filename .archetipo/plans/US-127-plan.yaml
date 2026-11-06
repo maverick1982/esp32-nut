@@ -1,0 +1,489 @@
+schema: archetipo/plan/v2
+spec_code: US-127
+body: |
+  ---
+  type: plan
+  title: "US-127: Scelta del collegamento di rete nella pagina Network (Wi-Fi / Ethernet / Automatico) — Piano di implementazione"
+  description: "Piano di implementazione per US-127"
+  tags: [plan, implementation, US-127]
+  ---
+  # US-127: Scelta del collegamento di rete nella pagina Network (Wi-Fi / Ethernet / Automatico) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-06
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Supporto multi-scheda (ESP32-P4, Ethernet)
+  **Priorità:** MEDIUM | **Punti:** 3 | **Bloccata da:** US-126 (DONE)
+
+  Vedi `.archetipo/specs/US-127.yaml` per user story e criteri di accettazione completi.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi l'unica scheda con due collegamenti è l'ESP32-S3 con il W5500 attivo (US-126): la scelta Wi-Fi / Ethernet / Automatico compare solo lì, nella sezione W5500 della pagina Network, e viaggia con le impostazioni del modulo. La decisione all'avvio resta in `NetBootPlan`, il passaggio a caldo è una nuova macchina a stati pura, e il gestore di rete tiene il W5500 acceso in attesa mentre la scheda è sul Wi-Fi, così vede il cavo che torna.
+
+  - **Modalità (`NetworkMode` di `board.h`, PDR 0002 D3).** Nuove funzioni pure in `include/board/eth_spi_settings.h`: `networkModeName()` ("auto", "ethernet", "wifi") e `parseNetworkMode()`. Salvata nell'NVS `eth` di `EthSpiStore` con la chiave `mode` (stringa); assente o non valida = Automatico. Il profilo non cambia (S3 `network_mode = WIFI` resta il valore delle schede senza W5500).
+  - **Avvio (`NetBootPlan`).** `NetBootInput` riceve `NetworkMode mode` (in fondo). Con Wi-Fi, W5500 attivo e senza doppio reset: `WIFI` → come senza W5500 (il modulo non si avvia); `AUTO` → regola di US-126 (Ethernet, ripiego in stazione o AP su ogni fallimento) più `auto_switch = true` quando il ripiego è la stazione; `ETHERNET` → Ethernet, ripiego al Wi-Fi solo se il chip non risponde (`fallback_on_no_link = false`), nessun passaggio a caldo. Nuova `needsFallback(plan, EthProbeOutcome)`. `fallbackPlan()` mantiene `auto_switch` solo se il ripiego è la stazione. Il doppio reset avvia sempre l'AP.
+  - **Ethernet senza cavo in modalità Ethernet.** La prova non ferma più il W5500 da sola: `main.cpp` decide con `needsFallback()`. Se non serve il ripiego e la scheda non è connessa, resta in Ethernet e lo scrive nel System Log ("Ethernet mode: no connection (no_link), staying on Ethernet. Double reset for the access point").
+  - **Passaggio a caldo (`lib/NetCore/src/NetAutoSwitch.h`, puro).** Ingresso: Ethernet pronta = link e indirizzo. Sull'Ethernet: non pronta per più di `ETH_DOWN_MS = 10000` → `TO_WIFI` (solo con Wi-Fi configurato). Sul Wi-Fi: pronta per più di `ETH_UP_MS = 5000` → `TO_ETHERNET`. Nessun passaggio prima di `HOLD_MS = 15000` dall'ultimo (o dall'avvio): il caso peggiore resta sotto i 30 s del criterio. Aritmetica di `millis()` con sottrazione unsigned.
+  - **Selettore (`NetLinkSelector`).** `activate(link, keep_previous = false)`: con `true` il link precedente non viene fermato (W5500 in attesa mentre la scheda è sul Wi-Fi). Resta un solo link attivo per server, nome e stato; il W5500 in attesa non ha indirizzo finché il cavo è staccato. Quando il cavo torna, per i ~5 s prima del passaggio il W5500 ottiene un indirizzo: il percorso di default resta il Wi-Fi (priorità di `esp_netif`) finché il Wi-Fi non viene spento.
+  - **Link.** `EthLink::begin()` non fa nulla se il modulo è già avviato. `WifiStaLink::end()` spegne davvero il Wi-Fi (`WiFi.disconnect(true)`): oggi fa solo `disconnect()` con la riconnessione automatica attiva.
+  - **Gestore di rete.** Conserva SSID e password per creare la stazione al passaggio; `setAutoSwitch(bool)`, `leaveEthernet(bool standby)`, `ethStandby()`, `linkChanges()` (contatore dei passaggi). In `loop()` esegue `NetAutoSwitch` se il W5500 è avviato, con una riga nel System Log a ogni passaggio.
+  - **Nome host uguale sui due link.** Con una scheda che ha il Wi-Fi, il nome predefinito dell'Ethernet viene dal MAC della stazione Wi-Fi (come la stazione): stesso `esp32-nut-xxxxxx` su cavo e Wi-Fi, e il syslog (che memorizza il nome una volta) resta coerente. Il nome salvato vale già su entrambi. Il P4 non cambia.
+  - **Server NUT.** Nuovo `NUTServer::closeAllSessions()` (motivo `LinkChanged`, una riga di log): `main.cpp` lo chiama quando `linkChanges()` aumenta, così i client si ricollegano subito al nuovo indirizzo. Web server, syslog e NTP ascoltano su tutte le interfacce o seguono il percorso di default: nessuna modifica.
+  - **API.** `GET /api/network/eth` aggiunge `"mode"` e due stati: `standby` (Automatico, scheda sul Wi-Fi, W5500 in attesa del cavo) e `unused` (modalità Wi-Fi). `POST` accetta `"mode"` facoltativo (assente = invariato; non valido → 400 `{"error":"Invalid network mode"}`); un cambio di modalità conta come modifica (`restart:true`). Overload nuovi di `ethSpiJson`/`checkEthSpiBody`, le firme di US-126 restano come wrapper. `network.links` contiene "ethernet" solo se il W5500 è attivo e la modalità non è Wi-Fi.
+  - **Web UI.** Nella sezione W5500, tra l'interruttore e i pin, una riga "Link to use" con tre schede radio (stile `.port-options` della porta USB in Board Settings): Automatic (predefinito), Ethernet, Wi-Fi, ognuna con una riga di spiegazione. Compare solo con l'interruttore acceso. Badge e testi per `standby` e `unused`. Nessun mockup: è una riga in una sezione esistente.
+  - **Fuori ambito:** due link attivi insieme, IP statico, passaggio a caldo da o verso l'access point (cambierebbe la modalità del server web: in AP il ripiego resta fino al riavvio, come in US-126).
+
+  ---
+
+  ## Strategia di test
+
+  La logica sta in header puri testati in nativo; gestore di rete, link e `main.cpp` sono sottili e coperti dalle tre build e dalla prova su hardware dei tester, insieme a US-126 (build di prova unica per la #64).
+
+  - `test_net_boot_plan`: tre modalità × configurazione valida/assente × doppio reset; `needsFallback` per ogni esito; `fallbackPlan` e `auto_switch`. I casi di US-126 restano, con la modalità `AUTO` esplicita nell'helper `s3()` (aggiornamento meccanico).
+  - `test_net_auto_switch` (nuovo): passaggio a 10 s e non a 9,9 s, ritorno a 5 s, attesa minima di 15 s, link che lampeggia, Wi-Fi non configurato, wrap di `millis()`, caso peggiore sotto 30 s.
+  - `test_net_link_selector`: `keep_previous` non ferma il link precedente e il ritorno non lo riavvia.
+  - `test_eth_spi_settings`: `networkModeName`/`parseNetworkMode`.
+  - `test_nut_server`: `closeAllSessions` libera tutti gli slot.
+  - `test_web_api`: `mode` nella GET, stati `standby` e `unused`, `mode` nella POST (valido, assente, non valido, cambio → restart), `network.links` con modalità Wi-Fi.
+  - Regressione: suite nativa completa, `npm run e2e`, build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** Playwright (`e2e/support/webui.ts`, API simulate con `page.route`), in `e2e/eth-spi.spec.ts`.
+  **Video demo:** la Dimostrazione richiede cavo e scheda veri (passaggio a caldo): non è filmabile con le API simulate. Decide `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Scelta della modalità | Con il W5500 attivo l'utente vede "Link to use" con Automatic selezionato, sceglie Ethernet e salva: la POST contiene `mode:"ethernet"` e parte il conto alla rovescia |
+  | Modulo spento | Con l'interruttore spento la scelta non c'è; accendendolo compare con Automatic |
+  | Standby | GET con `state:"standby"`: badge Standby e testo che spiega che la scheda è sul Wi-Fi e torna all'Ethernet col cavo |
+  | Modalità Wi-Fi | GET con `mode:"wifi"`, `state:"unused"`: badge "Not used" e scelta Wi-Fi selezionata |
+  | Solo la modalità cambia | Pin invariati, modalità diversa: la POST la invia e la risposta `restart:true` avvia il conto alla rovescia |
+
+  _Piano generato con ARchetipo Planning — 2026-11-06_
+tasks:
+  - id: TASK-01
+    title: Modalità di rete nel piano di avvio (logica pura)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far decidere a `NetBootPlan` il link di avvio secondo la modalità Wi-Fi / Ethernet / Automatico.
+
+      **Leggere:** `lib/NetCore/src/NetBootPlan.h`, `lib/NetCore/src/EthBootProbe.h`, `include/board/eth_spi_settings.h`, `include/board/board.h` (`NetworkMode`), `test/test_net_boot_plan/test_main.cpp` (helper `s3()`).
+
+      **Modifiche:**
+      1. `eth_spi_settings.h`: `inline const char* networkModeName(NetworkMode)` → "auto", "ethernet", "wifi"; `inline bool parseNetworkMode(const char* s, NetworkMode& out)` (false per null o testo sconosciuto).
+      2. `NetBootPlan.h` (include `EthBootProbe.h`): `NetBootInput` riceve `NetworkMode mode` **in fondo**; `NetBootPlan` riceve `bool auto_switch` e `bool fallback_on_no_link` in fondo (inizializzatori aggregati aggiornati, default false).
+      3. Regole di `planNetwork(const NetBootInput&)` con Wi-Fi, `spi_eth` e senza doppio reset: `mode == WIFI` → stesso ramo di `spi_eth == false`; `AUTO` → come oggi (Ethernet, `fallback` stazione/AP, `default_config = !config_valid`) con `fallback_on_no_link = true` e `auto_switch = (fallback == WIFI_STATION)`; `ETHERNET` → come AUTO ma `fallback_on_no_link = false`, `auto_switch = false`. Il wrapper a 3 argomenti passa `mode = AUTO` (irrilevante con `spi_eth = false`).
+      4. `inline bool needsFallback(const NetBootPlan& p, EthProbeOutcome o)`: `CONNECTED`/`WAITING` → false; `NO_CHIP` → `p.fallback != NONE`; `NO_LINK`/`NO_IP` → `p.fallback != NONE && p.fallback_on_no_link`.
+      5. `fallbackPlan()`: `auto_switch = plan.auto_switch && next.link == WIFI_STATION`, `fallback_on_no_link = false`.
+      6. Aggiornare il commento di testata (US-127) e l'helper `s3()` dei test con `NetworkMode::AUTO` esplicito (aggiornamento meccanico: stesso comportamento verificato).
+
+      **Passi:** header, poi helper dei test, poi compilare `test_net_boot_plan`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/board/eth_spi_settings.h — nome e parsing della modalità
+      - lib/NetCore/src/NetBootPlan.h — `mode`, `auto_switch`, `fallback_on_no_link`, `needsFallback`
+      - test/test_net_boot_plan/test_main.cpp — helper `s3()` con la modalità
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_net_boot_plan` passa con i casi esistenti invariati nel significato
+      - [ ] Nessuna variabile inline (GCC 5.1), solo `<stdint.h>` negli header di NetCore
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi delle modalità all'avvio
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare le regole di avvio per le tre modalità.
+
+      **Leggere:** `test/test_net_boot_plan/test_main.cpp`, `test/test_eth_spi_settings/test_main.cpp`, `lib/NetCore/src/NetBootPlan.h`.
+
+      **Modifiche:**
+      - `test_net_boot_plan`: AUTO con configurazione e SSID → Ethernet, ripiego stazione, `auto_switch` true; AUTO senza SSID → ripiego AP, `auto_switch` false; ETHERNET → Ethernet, `fallback_on_no_link` false, `auto_switch` false; WIFI con W5500 → stazione come senza W5500 (stesso piano di `spi_eth=false`); doppio reset in tutte e tre → AP; `needsFallback` per ogni esito e modalità (ETHERNET+NO_LINK → false, ETHERNET+NO_CHIP → true, AUTO+NO_IP → true, CONNECTED → false); `fallbackPlan` verso stazione conserva `auto_switch`, verso AP lo azzera; schede senza Wi-Fi invariate per ogni modalità.
+      - `test_eth_spi_settings`: `networkModeName` per i tre valori, `parseNetworkMode` di "auto"/"ethernet"/"wifi", rifiuto di "Auto", "", null.
+
+      **Passi:** scrivere, eseguire, correggere TASK-01 solo se un test rivela un errore della logica.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_net_boot_plan/test_main.cpp — casi delle modalità
+      - test/test_eth_spi_settings/test_main.cpp — nome e parsing
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio test -e native -f test_net_boot_plan -f test_eth_spi_settings` passa (PATH del toolchain mingw)
+      - [ ] Ogni combinazione modalità × esito della prova ha almeno un caso
+    ref: TASK-02
+  - id: TASK-03
+    title: Passaggio a caldo puro e selettore con link in attesa
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** decidere in logica pura quando passare tra Ethernet e Wi-Fi in Automatico, e permettere al selettore di lasciare acceso il W5500 mentre la scheda è sul Wi-Fi.
+
+      **Leggere:** `lib/NetCore/src/NetLinkSelector.h`, `lib/NetCore/src/EthBootProbe.h` (stile), `test/test_net_link_selector/test_main.cpp`.
+
+      **Modifiche:**
+      1. Nuovo `lib/NetCore/src/NetAutoSwitch.h`: `enum class AutoLink : uint8_t { ETHERNET, WIFI }`, `enum class AutoAction : uint8_t { NONE, TO_WIFI, TO_ETHERNET }`; classe `NetAutoSwitch` con `static const uint32_t ETH_DOWN_MS = 10000, ETH_UP_MS = 5000, HOLD_MS = 15000;`, `void begin(uint32_t now, AutoLink active, bool wifi_available)`, `AutoAction step(uint32_t now, bool eth_ready)` (eth_ready = link e indirizzo), `void switched(uint32_t now, AutoLink active)`, `AutoLink active() const`. Regole: sull'Ethernet, `eth_ready` falso ininterrottamente per più di `ETH_DOWN_MS` → `TO_WIFI` se `wifi_available`; sul Wi-Fi, `eth_ready` vero ininterrottamente per più di `ETH_UP_MS` → `TO_ETHERNET`; mai prima di `HOLD_MS` da `begin()` o dall'ultimo `switched()`. `step()` non cambia `active`: lo fa `switched()`. Sottrazione unsigned per il wrap. Commento di testata con i tempi e il caso peggiore (25 s < 30 s).
+      2. `NetLinkSelector::activate(INetLink* link, bool keep_previous = false)`: con `keep_previous` il link precedente non riceve `end()`. Commento: serve al W5500 in attesa (US-127), un solo link resta attivo per stato, nome e server.
+
+      **Passi:** header, compilare la suite nativa dei due moduli.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NetCore/src/NetAutoSwitch.h — nuovo
+      - lib/NetCore/src/NetLinkSelector.h — `keep_previous`
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio test -e native -f test_net_link_selector` passa invariato
+      - [ ] Nessuna chiamata di piattaforma, solo `<stdint.h>`
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi del passaggio a caldo e del selettore
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire i tempi del passaggio e il link in attesa.
+
+      **Leggere:** `lib/NetCore/src/NetAutoSwitch.h`, `test/test_eth_boot_probe/test_main.cpp` (stile), `test/test_net_link_selector/test_main.cpp`.
+
+      **Modifiche:**
+      - Nuovo `test/test_net_auto_switch/test_main.cpp`: sull'Ethernet senza cavo da t=20 s → `NONE` a 29,9 s e `TO_WIFI` a 30,1 s; Wi-Fi non configurato → mai `TO_WIFI`; sul Wi-Fi Ethernet pronta da t=40 s → `NONE` a 44,9 s, `TO_ETHERNET` a 45,1 s; subito dopo `switched()` nessun passaggio prima di 15 s anche con la condizione già vera; un'interruzione breve (pronta, non pronta 3 s, pronta) azzera l'attesa; caso peggiore (cavo staccato 1 s dopo un passaggio) entro 30 s; `now` vicino a `UINT32_MAX`; `step()` non cambia `active()`.
+      - `test_net_link_selector`: `activate(&b, true)` non chiama `end()` su `a`; riattivare `a` dopo non chiama `begin()` due volte se il mock lo conta (seguire il mock esistente) e ferma `b`.
+
+      **Passi:** scrivere ed eseguire.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_net_auto_switch/test_main.cpp — nuovo
+      - test/test_net_link_selector/test_main.cpp — casi `keep_previous`
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio test -e native -f test_net_auto_switch -f test_net_link_selector` passa
+      - [ ] I limiti di 10 s, 5 s e 15 s sono provati da entrambi i lati
+    ref: TASK-04
+  - id: TASK-05
+    title: Modalità nell'archivio NVS del W5500
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** salvare la modalità scelta, che resta dopo riavvio e OTA.
+
+      **Leggere:** `src/core/eth_spi_store.h/.cpp`.
+
+      **Modifiche:** in `EthSpiStore`: `NetworkMode loadMode()` (namespace `eth`, chiave `mode`, stringa; assente, namespace inesistente o testo non valido → `NetworkMode::AUTO`, con WARN se il testo c'è ma non è valido) e `bool saveMode(NetworkMode)` con `networkModeName()`. Aggiornare il commento di testata (chiave `mode`, US-127).
+
+      **Passi:** implementare, compilare S3.
+
+      **Blocchi:** nessuno. Non testabile in nativo (Preferences).
+
+      ## File Coinvolti
+      - src/core/eth_spi_store.h — `loadMode`, `saveMode`
+      - src/core/eth_spi_store.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell compila
+      - [ ] Senza chiave salvata la modalità è Automatico
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Gestore di rete: W5500 in attesa, passaggio a caldo, nome host unico'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** eseguire il passaggio a caldo in Automatico tenendo un solo link attivo, e dare lo stesso nome host predefinito su cavo e Wi-Fi.
+
+      **Leggere:** `include/network/network_manager.h`, `src/network/network_manager.cpp`, `src/network/eth_link.h/.cpp`, `src/network/wifi_links.h/.cpp`, `lib/NetCore/src/NetHostname.h`.
+
+      **Modifiche:**
+      1. `EthLink::begin()`: se `m_started` è già true non fa nulla (il W5500 in attesa torna attivo senza riavviarsi).
+      2. `WifiStaLink::end()`: `WiFi.disconnect(true)` (spegne la radio; oggi la riconnessione automatica la riaccenderebbe).
+      3. `AppNetworkManager`:
+         - `begin()` conserva `ssid` e `password` (`m_ssid`, `m_password`) per creare la stazione a un passaggio successivo.
+         - `probeEthernet()` non ferma più il W5500 se la prova fallisce (lo decide `main.cpp`); il WARN "not available" resta.
+         - `void leaveEthernet(bool standby)`: con `standby` il W5500 resta avviato fuori dal selettore (`m_ethStandby = true`, `m_selector` senza link attivo); altrimenti `m_selector.activate(nullptr)` come oggi.
+         - `void setAutoSwitch(bool on)`; in `begin()` con piano `WIFI_STATION` e `m_ethStandby` usa `m_selector.activate(m_sta, true)`.
+         - `loop()`: se `m_autoSwitch` e `m_eth && m_eth->started()`, chiama `NetAutoSwitch::step(millis(), m_eth->linkUp() && m_eth->hasIP())` (begin del NetAutoSwitch con il link attivo e `wifi_available = m_ssid.length() > 0` alla prima chiamata o in `begin()`). `TO_WIFI`: WARN `"[NETWORK] Ethernet lost: switching to Wi-Fi"`, crea `m_sta` se manca, `m_selector.activate(m_sta, true)`, `m_ethStandby = true`. `TO_ETHERNET`: INFO `"[NETWORK] Ethernet back: switching from Wi-Fi to Ethernet"`, `m_selector.activate(m_eth)` (ferma il Wi-Fi), `m_ethStandby = false`. Dopo ogni passaggio `switched()` e `++m_linkChanges`.
+         - `bool ethStandby() const`, `uint32_t linkChanges() const`.
+      4. Nome host: un helper privato `ethHostnameSeed(board)`: se `board.has_wifi` e il nome salvato è vuoto, passa a `EthLink` come nome il default `NetHostname::defaultFor()` del MAC `ESP_MAC_WIFI_STA` (eFuse); altrimenti il nome salvato. `defaultHostname()` sulle schede con Wi-Fi usa sempre il MAC della stazione. P4 invariato.
+
+      **Passi:** link, poi gestore, poi compilare S3 e P4.
+
+      **Blocchi:** se il W5500 in attesa e il Wi-Fi attivo insieme danno problemi di percorso che non si possono verificare senza hardware, segnalarlo nel riepilogo per i tester della #64.
+
+      ## File Coinvolti
+      - src/network/eth_link.cpp — `begin()` idempotente
+      - src/network/wifi_links.cpp — `end()` spegne il Wi-Fi
+      - include/network/network_manager.h — nuove API e membri
+      - src/network/network_manager.cpp — attesa, passaggio, nome host
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio run -e esp32-s3-standard` e `pio run -e esp32-p4-eth` compilano (PowerShell)
+      - [ ] Con passaggio a caldo spento il comportamento è quello di US-126
+      - [ ] Un solo link nel selettore in ogni momento
+    ref: TASK-06
+  - id: TASK-07
+    title: Chiusura delle sessioni NUT al cambio di link
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dopo un passaggio i client NUT si ricollegano subito al nuovo indirizzo invece di aspettare il timeout.
+
+      **Leggere:** `lib/NUTServer/src/NUTServer.h/.cpp` (`closeSession`, `CloseReason`, `resetSessions`), `test/test_nut_server/test_main.cpp`.
+
+      **Modifiche:** `CloseReason::LinkChanged`; `void closeAllSessions(CloseReason reason)` chiude ogni slot occupato (socket compreso) con una sola riga di log `"Network link changed: %u NUT clients disconnected"` se ce n'erano. Nuovo test in `test_nut_server`: due sessioni aperte con `openSession()`, `closeAllSessions(LinkChanged)` → slot liberi e una riga di log.
+
+      **Passi:** implementare seguendo `closeSession`, test, eseguire.
+
+      **Blocchi:** se il log per sessione di `closeSession` produce una riga per client, adattare in modo da avere una sola riga riassuntiva per `LinkChanged`.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — `LinkChanged`, `closeAllSessions`
+      - lib/NUTServer/src/NUTServer.cpp — implementazione
+      - test/test_nut_server/test_main.cpp — nuovo caso
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio test -e native -f test_nut_server` passa
+      - [ ] I casi esistenti non cambiano
+    ref: TASK-07
+  - id: TASK-08
+    title: Collegare modalità e passaggio in main.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** usare la modalità all'avvio, mettere il W5500 in attesa in Automatico e chiudere le sessioni NUT a ogni passaggio.
+
+      **Leggere:** `src/core/main.cpp` (blocco W5500 di `setup()`, `loop()`), `lib/NetCore/src/NetBootPlan.h`.
+
+      **Modifiche:**
+      1. Dopo `eth_spi_store.load()`: `NetworkMode net_mode = eth_spi_store.loadMode();` e `mode` in `NetBootInput`.
+      2. Dopo `probeEthernet()`: `if (needsFallback(net_plan, outcome)) { network_mgr.leaveEthernet(net_plan.auto_switch && outcome != EthProbeOutcome::NO_CHIP); net_plan = fallbackPlan(net_plan); } else if (outcome != EthProbeOutcome::CONNECTED) { log WARN "[MAIN] Ethernet mode: no connection (%s), staying on Ethernet. Double reset for the access point" }`.
+      3. `network_mgr.setAutoSwitch(net_plan.auto_switch)` prima di `network_mgr.begin()`; log INFO se attivo: `"[MAIN] Automatic link choice: Ethernet when the cable is connected, otherwise Wi-Fi"`.
+      4. Log INFO della modalità quando il W5500 è attivo (`"[MAIN] W5500 enabled, link mode %s"`, sostituisce "trying Ethernet first" e vale anche in modalità Wi-Fi, dove la prova non parte).
+      5. `loop()`: `static uint32_t last_changes`; se `network_mgr.linkChanges() != last_changes` → `nut_server.closeAllSessions(NUTServer::CloseReason::LinkChanged)` e aggiorna.
+      6. `web_server.setEthSpi(...)` riceve anche `net_mode` (vedi TASK-09).
+
+      **Passi:** modificare, compilare le tre immagini.
+
+      **Blocchi:** se `nut_server` non è avviato (configurazione non valida), `closeAllSessions` deve essere innocuo: verificarlo nel codice.
+
+      ## File Coinvolti
+      - src/core/main.cpp — modalità, ripiego, attesa, sessioni NUT
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio run -e esp32-s3-standard`, `pio run -e esp32-p4-eth`, `pio run -e esp32-p4-eth-v1` compilano (PowerShell)
+      - [ ] Con W5500 spento il percorso di avvio è identico a US-126
+      - [ ] In modalità Ethernet senza cavo la scheda non passa al Wi-Fi
+    ref: TASK-08
+  - id: TASK-09
+    title: 'API: modalità e stati standby/unused in /api/network/eth'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** leggere e salvare la modalità dalla web UI e mostrare lo stato reale del W5500.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h/.cpp` (`ethSpiJson`, `checkEthSpiBody`, `networkLinksJson`), `src/network/web_config_server.cpp` (`handleGetEthSpi`, `handleSetEthSpi`, `handleGetConfig`), `include/network/web_config_server.h`.
+
+      **Modifiche:**
+      1. `WebApiJson`: overload `ethSpiJson(board, settings, NetworkMode mode, state, reason)` che aggiunge `"mode":"auto|ethernet|wifi"` dopo `"enabled"`; la firma di US-126 resta (senza `mode`). Overload `checkEthSpiBody(body, board, current, NetworkMode current_mode, next, NetworkMode& next_mode, restart, response)`: `"mode"` facoltativo, stringa valida per `parseNetworkMode` (altro tipo o testo → 400 `{"error":"Invalid network mode"}`, dopo i controlli di `enabled` e `pins`); `restart = next != current || next_mode != current_mode`. La firma di US-126 chiama il nuovo con la modalità invariata. Documentare nel header.
+      2. `WebConfigServer`: `setEthSpi(store, settings, NetworkMode mode)`; GET con stati: `off` (spento), `unused` (modalità Wi-Fi), `active` (link attivo Ethernet), `standby` (`network->ethStandby()`), altrimenti `fallback` + motivo. POST: salva pin e modalità (`saveMode`) se cambiano, 500 `"Failed to save the W5500 settings"` se uno dei due fallisce, log INFO con la modalità. `handleGetConfig`: "ethernet" in `network.links` solo con W5500 attivo e modalità diversa da Wi-Fi.
+
+      **Passi:** prima `WebApiJson`, poi il server.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — overload e documentazione
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+      - include/network/web_config_server.h — `setEthSpi` con la modalità
+      - src/network/web_config_server.cpp — stati, salvataggio, links
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio run -e esp32-s3-standard` e `pio run -e esp32-p4-eth` compilano
+      - [ ] I test di US-126 in `test_web_api` passano senza modifiche
+    ref: TASK-09
+  - id: TASK-10
+    title: Test nativi dell'API con la modalità
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare il contratto JSON della modalità.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (casi `eth_spi` di US-126).
+
+      **Modifiche:** nuovi casi: GET con `mode` auto/ethernet/wifi e stati `standby` e `unused`; POST con `mode:"ethernet"` e pin invariati → 0 e `restart` true, `next_mode` ETHERNET; `mode` assente → modalità invariata; `mode:"Auto"`, `mode:5`, `mode:null` → 400 `{"error":"Invalid network mode"}`; stessi pin e stessa modalità → `restart` false; un pin vietato insieme a una modalità valida → il messaggio del pin.
+
+      **Passi:** scrivere ed eseguire.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `pio test -e native -f test_web_api` passa
+      - [ ] I testi degli errori coincidono con quelli dell'e2e (TASK-12)
+    ref: TASK-10
+  - id: TASK-11
+    title: Scelta del collegamento nella sezione W5500
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** permettere all'utente di scegliere Automatic, Ethernet o Wi-Fi e vedere gli stati Standby e Not used.
+
+      **Leggere:** `data/www/index.html` (sezione `#sec-w5500`, scelta della porta USB `#usb-port` in Board Settings), `data/www/bundle.js` (blocco W5500 di US-126, costruzione delle `.port-card` della porta USB), `data/www/bundle.css` (`.port-options`, `.port-card`).
+
+      **Modifiche:**
+      1. `index.html`: nella sezione W5500, tra la riga dell'interruttore e la riga di stato, un blocco `#w5500-mode-row` (nascosto con l'interruttore spento) con titolo "Link to use" e `div.port-options#w5500-mode role="radiogroup"` con tre `.port-card` (stesso markup della porta USB): **Automatic** "Ethernet when the cable is connected, otherwise Wi-Fi. Switches by itself within 30 s."; **Ethernet** "Cable only. Without a cable the board stays offline; it uses Wi-Fi only if the W5500 does not answer."; **Wi-Fi** "Wi-Fi only. The W5500 is not used.". Aggiornare il testo d'aiuto del badge.
+      2. `bundle.js`: la GET compila la scelta da `mode` (assente → auto); accendere l'interruttore mostra la riga con la scelta salvata o Automatic; la POST invia `mode` solo con l'interruttore acceso; il confronto per "No changes" lo lascia al server come oggi. Stati: `standby` → badge "Standby" (classe `connecting`, indicatore `info`) e testo "No Ethernet connection: the board is on Wi-Fi and goes back to Ethernet when the cable is connected."; `unused` → badge "Not used" (classe `idle`) e testo informativo "Wi-Fi mode: the W5500 is not used.". Tastiera: frecce sinistra/destra come la porta USB.
+      3. CSS solo se serve, riusando `.port-options`.
+      4. `python scripts/embed_web.py`.
+
+      **Passi:** markup, logica, rigenerazione, `npx playwright test e2e/eth-spi.spec.ts`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — riga "Link to use"
+      - data/www/bundle.js — scelta, stati, POST
+      - data/www/bundle.css — eventuali ritocchi
+      - data/www/index_inlined.html, include/network/web_assets.h — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `npx playwright test e2e/eth-spi.spec.ts e2e/network-page.spec.ts e2e/hostname.spec.ts` passano invariati
+      - [ ] Con l'interruttore spento la scelta non compare
+      - [ ] Sul P4 (404) nulla cambia
+    ref: TASK-11
+  - id: TASK-12
+    title: Test e2e della scelta del collegamento
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi della scelta con Playwright.
+
+      **Leggere:** `e2e/eth-spi.spec.ts` (helper `openNetwork`, `ethGet`).
+
+      **Modifiche:** in `e2e/eth-spi.spec.ts`, `ethGet` accetta `mode`; nuovi scenari: scelta Ethernet e salvataggio (POST con `mode:"ethernet"` e pin esatti, conto alla rovescia); interruttore spento → nessuna scelta, acceso → Automatic selezionato; `state:"standby"` → badge Standby e testo; `mode:"wifi"` + `state:"unused"` → badge "Not used" e Wi-Fi selezionato; solo la modalità cambia → POST con la modalità e `restart:true`. Aggiornare le attese POST dei test di US-126 con `mode:"auto"` dove l'interruttore è acceso (aggiornamento meccanico: la POST ora porta anche la modalità).
+
+      **Passi:** scrivere, eseguire tre volte.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/eth-spi.spec.ts — nuovi scenari e attese aggiornate
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** `npx playwright test e2e/eth-spi.spec.ts --repeat-each 3` passa
+      - [ ] **Verifica:** `npm run e2e` passa
+    ref: TASK-12
+  - id: TASK-13
+    title: README e PDR 0002 sulla scelta del collegamento
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare le tre modalità.
+
+      **Leggere:** `README.md` e `README.it.md` (sezione "Ethernet with a W5500 module" / "Ethernet con un modulo W5500"), `docs/pdr/0002-supporto-multi-scheda-esp32-p4-ethernet.md` (D3, D7).
+
+      **Modifiche:**
+      1. README EN/IT: sostituire la frase "A manual choice between Wi-Fi and Ethernet will come later" con la scelta **Link to use**: Automatic (predefinito; passa al Wi-Fi entro 30 s se l'Ethernet cade e torna quando il cavo è collegato; solo con Wi-Fi configurato, mai da o verso l'access point), Ethernet (solo cavo; Wi-Fi solo se il W5500 non risponde; doppio reset per l'access point), Wi-Fi (il modulo non viene usato). Nome host uguale sui due link; i client NUT si ricollegano dopo un passaggio. Nessun codice US nel testo.
+      2. PDR 0002 D7: una riga sulla scelta (US-127) e sul W5500 in attesa mentre la scheda è sul Wi-Fi.
+
+      **Passi:** le due lingue in parallelo.
+
+      **Blocchi:** il manuale utente è sul branch `feature/user-manual`: non modificarlo qui, segnalarlo nel riepilogo.
+
+      ## File Coinvolti
+      - README.md — modalità
+      - README.it.md — modalità
+      - docs/pdr/0002-supporto-multi-scheda-esp32-p4-ethernet.md — D7
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** le due versioni descrivono le stesse tre modalità e gli stessi tempi
+      - [ ] Nessun codice US nei README
+    ref: TASK-13
+  - id: TASK-14
+    title: 'Verifica finale: suite, tre build e spazio flash'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-07
+      - TASK-08
+      - TASK-10
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che nulla è cambiato senza W5500 e che le immagini stanno nella partizione.
+
+      **Leggere:** `docs/test-results/US-126/build.md` (formato e numeri di riferimento).
+
+      **Modifiche:** nessuna al codice, salvo correzioni dei problemi trovati.
+
+      **Passi:**
+      1. Suite nativa completa (Git Bash, PATH del toolchain mingw).
+      2. Build da PowerShell di `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; dimensioni confrontate con US-126 (`docs/test-results/US-126/build.md`).
+      3. `npm run e2e`.
+      4. Esito in `docs/test-results/US-127/build.md` con i log.
+
+      **Blocchi:** nessuna prova su UPS o hardware reale senza un sì esplicito dell'utente. La build di prova per la #64 contiene US-126 e US-127 insieme e si pubblica solo con il consenso dell'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-127/ — esiti e dimensioni
+
+      ## Criteri di Completamento
+      - [ ] **Verifica:** suite nativa, e2e e tre build passano
+      - [ ] Dimensioni registrate rispetto a US-126
+      - [ ] Il riepilogo ricorda: build di prova unica US-126 + US-127 nella #64, cosa chiedere nel System Log (passaggi `Ethernet lost` / `Ethernet back`), manuale su `feature/user-manual`
+    ref: TASK-14

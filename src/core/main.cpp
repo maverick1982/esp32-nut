@@ -169,6 +169,8 @@ void setup() {
     String saved_hostname = hostname_store.load();
     // W5500 wired by the user (US-126): off on every board until enabled in the Network page
     EthSpiSettings eth_spi = eth_spi_store.load(board());
+    // Link to use with the W5500 on (US-127): AUTO until the user picks one
+    const NetworkMode net_mode = eth_spi_store.loadMode();
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -188,20 +190,36 @@ void setup() {
 
     // Inizializzazione di ConfigManager
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
-    // Which link to start, from the board capabilities (US-090, ADR 0010 §3) and the W5500
-    // enabled by the user (US-126)
+    // Which link to start, from the board capabilities (US-090, ADR 0010 §3), the W5500
+    // enabled by the user (US-126) and the link mode of the Network page (US-127)
     const NetBootInput net_input = { board().has_wifi, board().has_ethernet, eth_spi.enabled, config_ok,
                                      config_ok && config_mgr.getWifiConfig().ssid.length() > 0,
-                                     manual_ap_triggered };
+                                     manual_ap_triggered, net_mode };
     NetBootPlan net_plan = planNetwork(net_input);
+    if (eth_spi.enabled && board().has_wifi) {
+        AppLogger::log("INFO", "[MAIN] W5500 enabled, link mode %s", networkModeName(net_mode));
+    }
     if (net_plan.link == BootLink::ETHERNET && net_plan.fallback != BootLink::NONE) {
-        // US-126: Ethernet first; if the W5500 does not answer or gets no address, Wi-Fi
-        // (or the access point when Wi-Fi is not configured). The probe resets the watchdog
-        AppLogger::log("INFO", "[MAIN] W5500 enabled: trying Ethernet first");
+        // US-126: Ethernet first. The probe resets the watchdog. Where it falls back to
+        // Wi-Fi (or the access point when Wi-Fi is not configured) depends on the mode
+        // (needsFallback, US-127): a silent module always, a cable without link or address
+        // only in AUTO, where the W5500 stays on standby to come back to Ethernet
         network_mgr.setEthernetConfig(toEthConfig(eth_spi));
-        if (network_mgr.probeEthernet(saved_hostname, closeManualApWindow) != EthProbeOutcome::CONNECTED) {
+        const EthProbeOutcome outcome = network_mgr.probeEthernet(saved_hostname, closeManualApWindow);
+        if (needsFallback(net_plan, outcome)) {
+            network_mgr.leaveEthernet(net_plan.auto_switch && outcome != EthProbeOutcome::NO_CHIP);
             net_plan = fallbackPlan(net_plan);
+            if (outcome == EthProbeOutcome::NO_CHIP) net_plan.auto_switch = false;
+        } else if (outcome != EthProbeOutcome::CONNECTED) {
+            AppLogger::log("WARN",
+                           "[MAIN] Ethernet mode: no connection (%s), staying on Ethernet. Double reset for "
+                           "the access point",
+                           ethProbeReason(outcome));
         }
+    }
+    network_mgr.setAutoSwitch(net_plan.auto_switch);
+    if (net_plan.auto_switch) {
+        AppLogger::log("INFO", "[MAIN] Automatic link choice: Ethernet when the cable is connected, otherwise Wi-Fi");
     }
     if (net_plan.default_config) {
         // No Wi-Fi setup page on this link (a board without Wi-Fi, US-092, or an S3 that
@@ -214,7 +232,7 @@ void setup() {
     web_server.setNetwork(&network_mgr);
     web_server.setBoardSettings(&board_settings_store, board_settings);
     web_server.setHostnameStore(&hostname_store, saved_hostname);
-    web_server.setEthSpi(&eth_spi_store, eth_spi);
+    web_server.setEthSpi(&eth_spi_store, eth_spi, net_mode);
     web_server.setStatusLed(&diagnostic_led);
     web_server.setAutoShutdown(&auto_shutdown);
     nut_override_store.load(nut_overrides);
@@ -407,6 +425,14 @@ void loop() {
         diagnostic_led.update();
         delay(10);
         return;
+    }
+
+    // US-127: after a switch between Ethernet and Wi-Fi the sockets of the NUT clients
+    // point to the old address: close them, the clients reconnect to the new one
+    static uint32_t last_link_changes = 0;
+    if (network_mgr.linkChanges() != last_link_changes) {
+        last_link_changes = network_mgr.linkChanges();
+        nut_server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
     }
 
     nut_server.loop();

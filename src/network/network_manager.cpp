@@ -4,25 +4,40 @@
 #include "core/app_logger.h"
 #include "NetHostname.h"
 #include <esp_task_wdt.h>
+#include <esp_mac.h>
 
 AppNetworkManager::AppNetworkManager()
-    : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr), m_ethCfg(), m_hasEthCfg(false),
-      m_ethProbe(EthProbeOutcome::WAITING) {}
+    : m_sta(nullptr), m_ap(nullptr), m_eth(nullptr), m_ethCfg(), m_hasEthCfg(false), m_hasWifi(false),
+      m_ethProbe(EthProbeOutcome::WAITING), m_autoSwitch(false), m_ethStandby(false), m_linkChanges(0) {}
 
 AppNetworkManager::~AppNetworkManager() {
     m_selector.activate(nullptr);
+    if (m_ethStandby && m_eth) m_eth->end();
     delete m_sta;
     delete m_ap;
     delete m_eth;
 }
 
+String AppNetworkManager::ethHostnameSeed(bool has_wifi) const {
+    if (!has_wifi) return m_savedHostname;
+    // From eFuse, as WifiStaLink: the station need not be running
+    uint8_t mac[6];
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) return m_savedHostname;
+    return NetHostname::effective(m_savedHostname, mac);
+}
+
 void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid,
                               const String& password, const String& saved_hostname) {
     m_savedHostname = saved_hostname;
+    m_hasWifi = board.has_wifi;
+    // Kept for a station created later by the automatic switch (US-127)
+    m_ssid = ssid;
+    m_password = password;
     switch (plan.link) {
     case BootLink::WIFI_STATION:
         if (!m_sta) m_sta = new WifiStaLink(ssid, password, saved_hostname);
-        m_selector.activate(m_sta);
+        // A W5500 in standby (AUTO mode) is outside the selector and keeps running
+        m_selector.activate(m_sta, m_ethStandby);
         break;
     case BootLink::WIFI_ACCESS_POINT:
         if (!m_ap) m_ap = new WifiApLink(board.defaults.ap_ssid, board.defaults.ap_password);
@@ -33,7 +48,7 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         // the link is already active and activate() leaves it as it is
         const EthConfig& cfg = m_hasEthCfg ? m_ethCfg : board.eth;
         if (cfg.type != EthType::NONE) {
-            if (!m_eth) m_eth = new EthLink(cfg, saved_hostname);
+            if (!m_eth) m_eth = new EthLink(cfg, ethHostnameSeed(board.has_wifi));
             m_selector.activate(m_eth);
             break;
         }
@@ -44,6 +59,13 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         m_selector.activate(nullptr);
         break;
     }
+    // US-127: only between Ethernet and the station, with the W5500 started
+    m_autoSwitch = m_autoSwitch && m_eth && m_eth->started() &&
+                   (plan.link == BootLink::ETHERNET || plan.link == BootLink::WIFI_STATION);
+    if (m_autoSwitch) {
+        m_autoSwitcher.begin(millis(), plan.link == BootLink::ETHERNET ? AutoLink::ETHERNET : AutoLink::WIFI,
+                             m_ssid.length() > 0);
+    }
 }
 
 void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
@@ -53,7 +75,8 @@ void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
 
 EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now)) {
     m_savedHostname = saved_hostname;
-    if (!m_eth) m_eth = new EthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), saved_hostname);
+    m_hasWifi = board().has_wifi;
+    if (!m_eth) m_eth = new EthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), ethHostnameSeed(m_hasWifi));
     m_selector.activate(m_eth);
     EthBootProbe probe;
     probe.begin(millis(), m_eth->started());
@@ -67,16 +90,50 @@ EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, v
     }
     m_selector.loop(millis());  // logs the link and the address before going on
     if (outcome != EthProbeOutcome::CONNECTED) {
-        AppLogger::log("WARN", "[NETWORK] Ethernet (W5500) not available (%s): falling back to Wi-Fi",
-                       ethProbeReason(outcome));
-        m_selector.activate(nullptr);
+        // The caller decides whether to fall back (needsFallback(), US-127)
+        AppLogger::log("WARN", "[NETWORK] Ethernet (W5500) not available (%s)", ethProbeReason(outcome));
     }
     m_ethProbe = outcome;
     return outcome;
 }
 
+void AppNetworkManager::leaveEthernet(bool standby) {
+    if (standby && m_eth && m_eth->started() && m_selector.active() == m_eth) {
+        m_selector.activate(nullptr, true);
+        m_ethStandby = true;
+        AppLogger::log("INFO", "[NETWORK] W5500 kept on standby: back to Ethernet when the cable is connected");
+        return;
+    }
+    m_selector.activate(nullptr);
+}
+
+// Carries out an action of NetAutoSwitch: one link in the selector at a time, the W5500
+// stays started (standby) while the board is on Wi-Fi
+void AppNetworkManager::switchLink(AutoAction action) {
+    const uint32_t now = millis();
+    if (action == AutoAction::TO_WIFI) {
+        AppLogger::log("WARN", "[NETWORK] Ethernet lost: switching to Wi-Fi");
+        if (!m_sta) m_sta = new WifiStaLink(m_ssid, m_password, m_savedHostname);
+        m_selector.activate(m_sta, true);
+        m_ethStandby = true;
+        m_autoSwitcher.switched(now, AutoLink::WIFI);
+    } else if (action == AutoAction::TO_ETHERNET) {
+        AppLogger::log("INFO", "[NETWORK] Ethernet back: switching from Wi-Fi to Ethernet");
+        // Stops the station; the W5500 is already running, its begin() does nothing
+        m_selector.activate(m_eth);
+        m_ethStandby = false;
+        m_autoSwitcher.switched(now, AutoLink::ETHERNET);
+    } else {
+        return;
+    }
+    ++m_linkChanges;
+}
+
 void AppNetworkManager::loop() {
     m_selector.loop(millis());
+    if (m_autoSwitch && m_eth && m_eth->started()) {
+        switchLink(m_autoSwitcher.step(millis(), m_eth->linkUp() && m_eth->hasIP()));
+    }
 }
 
 bool AppNetworkManager::isConnected() const {
@@ -135,7 +192,9 @@ String AppNetworkManager::defaultHostname() const {
     const INetLink* link = m_selector.active();
     if (!link) return String();
     uint8_t mac[6];
-    link->macAddress(mac);
+    // US-127: on a board with Wi-Fi the default name comes from the station MAC on every
+    // link, so cable and Wi-Fi give the board the same name
+    if (!m_hasWifi || esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) link->macAddress(mac);
     return NetHostname::defaultFor(mac);
 }
 

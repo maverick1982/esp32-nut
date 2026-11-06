@@ -1587,11 +1587,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Link to use (US-127): informative texts of the states that are not a problem
+    const W5500_INFO = {
+        standby: [{ b: 'No Ethernet connection:' }, ' the board is on Wi-Fi and goes back to Ethernet when the cable is connected.'],
+        unused: [{ b: 'Wi-Fi mode:' }, ' the W5500 is not used.']
+    };
+    const W5500_BADGES = {
+        active: { cls: 'connected', ind: 'success', text: 'Active' },
+        fallback: { cls: 'connecting', ind: 'warning', text: 'Fallback' },
+        standby: { cls: 'connecting', ind: 'info', text: 'Standby' },
+        unused: { cls: 'idle', ind: '', text: 'Not used' },
+        offline: { cls: 'connecting', ind: 'warning', text: 'No connection' }  // active with a reason
+    };
+    // state active with a reason: the board is on Ethernet without a connection. In Ethernet
+    // mode it stays so; in Automatic it moves to Wi-Fi if the cable does not come back
+    const W5500_OFFLINE = {
+        ethernet: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' Ethernet mode: the board stays offline until the cable is connected. Double reset for the access point.'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' Ethernet mode: the board keeps waiting on the cable. Double reset for the access point.']
+        },
+        auto: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' If the cable does not come back, the board moves to Wi-Fi (when configured).'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' If it does not arrive, the board moves to Wi-Fi (when configured).']
+        }
+    };
+    const W5500_MODES = ['auto', 'ethernet', 'wifi'];
+    let w5500SavedMode = 'auto';
+    const w5500ModeRadios = () => Array.from(document.querySelectorAll('input[name="w5500-mode"]'));
+
+    function setW5500Mode(mode) {
+        const m = W5500_MODES.includes(mode) ? mode : 'auto';
+        w5500ModeRadios().forEach(r => { r.checked = r.value === m; });
+    }
+
+    function readW5500Mode() {
+        const r = w5500ModeRadios().find(i => i.checked);
+        return r ? r.value : 'auto';
+    }
+
     function w5500Badge(state) {
         const el = document.getElementById('w5500-badge');
-        const b = state === 'active' ? { cls: 'connected', ind: 'success', text: 'Active' }
-            : state === 'fallback' ? { cls: 'connecting', ind: 'warning', text: 'Fallback' }
-                : { cls: 'idle', ind: '', text: 'Off' };
+        const b = W5500_BADGES[state] || { cls: 'idle', ind: '', text: 'Off' };
         el.className = 'link-badge w5500-badge ' + b.cls;
         el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
         el.querySelector('.badge-text').textContent = b.text;
@@ -1603,6 +1639,8 @@ document.addEventListener('DOMContentLoaded', () => {
         st.textContent = on ? 'On' : 'Off';
         st.classList.toggle('on', on);
         w5500Form.classList.toggle('is-off', !on);
+        // The choice of the link exists only with the module on (US-127)
+        document.getElementById('w5500-mode-row').hidden = !on;
     }
 
     function readW5500Pins() {
@@ -1665,19 +1703,38 @@ document.addEventListener('DOMContentLoaded', () => {
         btnW5500.disabled = disabled;
         w5500Toggle.disabled = disabled;
         W5500_PINS.forEach(f => { w5500Input(f).disabled = disabled; });
+        w5500ModeRadios().forEach(r => { r.disabled = disabled; });
     }
 
     function renderW5500(data) {
         w5500Strapping = Array.isArray(data.strapping) ? data.strapping : [];
         const status = data.status || {};
-        w5500Badge(status.state);
         const st = document.getElementById('w5500-status');
-        if (status.state === 'fallback') {
-            w5500Text(document.getElementById('w5500-status-text'), W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+        const stText = document.getElementById('w5500-status-text');
+        const offline = status.state === 'active' && status.reason
+            ? (W5500_OFFLINE[data.mode === 'ethernet' ? 'ethernet' : 'auto'][status.reason] || null) : null;
+        if (offline) {
+            w5500Badge('offline');
+            w5500Text(stText, offline);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (status.state === 'fallback') {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (W5500_INFO[status.state]) {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_INFO[status.state]);
+            st.className = 'auth-alert info w5500-status';
             st.hidden = false;
         } else {
+            w5500Badge(status.state);
             st.hidden = true;
         }
+        // Missing mode (firmware before US-127): Automatic, the default
+        w5500SavedMode = W5500_MODES.includes(data.mode) ? data.mode : 'auto';
+        setW5500Mode(w5500SavedMode);
         setW5500Toggle(!!data.enabled);
         const pins = data.pins || {};
         W5500_PINS.forEach(f => {
@@ -1728,7 +1785,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }));
         w5500Toggle.addEventListener('change', () => {
+            // Turning the module on shows the saved choice (Automatic the first time)
+            if (w5500Toggle.checked) setW5500Mode(w5500SavedMode);
             setW5500Toggle(w5500Toggle.checked);
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+        document.getElementById('w5500-mode').addEventListener('change', () => {
             hideW5500Error();
             if (!btnW5500.disabled) {
                 clearTimeout(w5500NoChangeTimer);
@@ -1741,6 +1807,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (btnW5500.disabled) return;
             hideW5500Error();
             const next = { enabled: w5500Toggle.checked, pins: readW5500Pins() };
+            // The link to use only with the module on; the server keeps the saved one otherwise
+            if (next.enabled) next.mode = readW5500Mode();
             btnW5500.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
             setW5500Disabled(true);
             let data = null;
