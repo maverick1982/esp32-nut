@@ -76,6 +76,36 @@ void test_loop_and_state_follow_the_active_link(void) {
     TEST_ASSERT_TRUE(s.isConnected());
 }
 
+// US-127: the W5500 stays started while the board is on Wi-Fi in AUTO mode
+void test_keep_previous_does_not_stop_the_previous_link(void) {
+    NetLinkSelector s;
+    FakeLink eth(NetLinkKind::ETHERNET), sta(NetLinkKind::STATION);
+    s.activate(&eth);
+    s.activate(&sta, true);
+    TEST_ASSERT_EQUAL_INT(0, eth.ends);
+    TEST_ASSERT_EQUAL_INT(1, sta.begins);
+    TEST_ASSERT_EQUAL_PTR(&sta, s.active());
+
+    // Only the selected link is looped and counts for the state
+    s.loop(10);
+    TEST_ASSERT_EQUAL_INT(0, eth.loops);
+    eth.connected = true;
+    TEST_ASSERT_FALSE(s.isConnected());
+}
+
+void test_back_to_the_kept_link_stops_the_other(void) {
+    NetLinkSelector s;
+    FakeLink eth(NetLinkKind::ETHERNET), sta(NetLinkKind::STATION);
+    s.activate(&eth);
+    s.activate(&sta, true);
+    s.activate(&eth);
+    TEST_ASSERT_EQUAL_INT(1, sta.ends);
+    TEST_ASSERT_EQUAL_PTR(&eth, s.active());
+    // The selector calls begin() again: the real link ignores it when already started
+    TEST_ASSERT_EQUAL_INT(2, eth.begins);
+    TEST_ASSERT_EQUAL_INT(0, eth.ends);
+}
+
 void test_type_names(void) {
     TEST_ASSERT_EQUAL_STRING("wifi", FakeLink(NetLinkKind::STATION).typeName());
     TEST_ASSERT_EQUAL_STRING("wifi", FakeLink(NetLinkKind::ACCESS_POINT).typeName());
@@ -89,6 +119,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_switching_stops_the_previous_link);
     RUN_TEST(test_reactivating_does_not_restart);
     RUN_TEST(test_loop_and_state_follow_the_active_link);
+    RUN_TEST(test_keep_previous_does_not_stop_the_previous_link);
+    RUN_TEST(test_back_to_the_kept_link_stops_the_other);
     RUN_TEST(test_type_names);
     return UNITY_END();
 }

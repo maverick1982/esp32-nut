@@ -156,6 +156,33 @@ void test_board_without_w5500_refuses_enabling(void) {
     TEST_ASSERT_FALSE(sanitizeEthSpi(p4, example()).enabled);
 }
 
+// --- US-127: link mode ---
+
+void test_network_mode_names(void) {
+    TEST_ASSERT_EQUAL_STRING("auto", networkModeName(NetworkMode::AUTO));
+    TEST_ASSERT_EQUAL_STRING("ethernet", networkModeName(NetworkMode::ETHERNET));
+    TEST_ASSERT_EQUAL_STRING("wifi", networkModeName(NetworkMode::WIFI));
+}
+
+void test_parse_network_mode_accepts_the_three_names(void) {
+    NetworkMode m = NetworkMode::WIFI;
+    TEST_ASSERT_TRUE(parseNetworkMode("auto", m));
+    TEST_ASSERT_TRUE(m == NetworkMode::AUTO);
+    TEST_ASSERT_TRUE(parseNetworkMode("ethernet", m));
+    TEST_ASSERT_TRUE(m == NetworkMode::ETHERNET);
+    TEST_ASSERT_TRUE(parseNetworkMode("wifi", m));
+    TEST_ASSERT_TRUE(m == NetworkMode::WIFI);
+}
+
+void test_parse_network_mode_refuses_other_text(void) {
+    NetworkMode m = NetworkMode::ETHERNET;
+    TEST_ASSERT_FALSE(parseNetworkMode("Auto", m));
+    TEST_ASSERT_FALSE(parseNetworkMode("", m));
+    TEST_ASSERT_FALSE(parseNetworkMode(nullptr, m));
+    TEST_ASSERT_FALSE(parseNetworkMode("wi-fi", m));
+    TEST_ASSERT_TRUE(m == NetworkMode::ETHERNET);  // untouched on failure
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_example_pins_are_valid_without_warnings);
@@ -177,5 +204,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_sanitize_keeps_valid_settings);
     RUN_TEST(test_to_eth_config_copies_the_pins);
     RUN_TEST(test_board_without_w5500_refuses_enabling);
+    RUN_TEST(test_network_mode_names);
+    RUN_TEST(test_parse_network_mode_accepts_the_three_names);
+    RUN_TEST(test_parse_network_mode_refuses_other_text);
     return UNITY_END();
 }

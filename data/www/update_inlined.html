@@ -3253,6 +3253,19 @@ body.auth-page {
 
 .w5500-toggle-row { margin-bottom: 1.25rem; }
 
+/* Link to use (US-127): the USB port cards, three in a row, with a line of explanation */
+.w5500-mode-row { margin-bottom: 1.25rem; }
+.w5500-mode-row[hidden] { display: none; }
+.w5500-mode-row > .board-name { display: block; margin-bottom: 0.6rem; }
+.w5500-mode-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.w5500-mode-options .port-card { align-items: flex-start; }
+.w5500-mode-options .port-radio { margin-top: 0.1rem; }
+.port-desc {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
 /* --- Amber alert: strapping pins and fallback to Wi-Fi (not an error: nothing is refused) --- */
 .auth-alert.warning {
     border-color: rgba(255, 184, 0, 0.45);
@@ -3263,6 +3276,8 @@ body.auth-page {
 .auth-alert strong { color: var(--text-primary); font-weight: 400; }
 .auth-alert code { color: var(--text-primary); font-family: var(--font-mono); }
 .w5500-status { margin-bottom: 1.25rem; }
+.w5500-status.warning .w5500-icon-info,
+.w5500-status.info .w5500-icon-warning { display: none; }
 
 /* --- Form: pin grid, alerts, button --- */
 .w5500-form {
@@ -3382,6 +3397,7 @@ body.auth-page {
     .pin-cell.optional .pin-role { display: inline; }
     .w5500-actions .btn { width: 100%; }
     .panel-header .w5500-badge { margin-left: 0; }
+    .w5500-mode-options { grid-template-columns: 1fr; }
 }
 
 /* OTA Update Styles */

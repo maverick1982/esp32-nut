@@ -127,7 +127,9 @@ public:
     // GET /api/network/eth (US-126): {"available":true,"enabled":bool,"pins":{"sck","mosi",
     // "miso","cs","irq","rst"} (null when not set),"strapping":[strapping GPIOs of the board],
     // "status":{"state":
-    // "off"|"active"|"fallback","reason":"no_chip"|"no_link"|"no_ip"}}; reason absent when ""
+    // "off"|"active"|"fallback","reason":"no_chip"|"no_link"|"no_ip"}}; reason absent when "".
+    // US-127: "active" can carry no_link / no_ip too, when the board is on Ethernet without
+    // a connection (Ethernet mode without a cable, or before the switch to Wi-Fi)
     static String ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, const char* state,
                              const char* reason);
     // POST /api/network/eth (US-126): {"enabled": bool, "pins": {"sck": n|null, ...}}, a pin
@@ -137,6 +139,20 @@ public:
     // object, a pin neither integer nor null) or the message of checkEthSpiSettings()
     static int checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
                                EthSpiSettings& next, bool& restart, String& response);
+
+    // US-127: as ethSpiJson() above, with "mode":"auto"|"ethernet"|"wifi" after "enabled"
+    // (the link to use, PDR 0002 D3) and two more states: "unused" (Wi-Fi mode) and
+    // "standby" (the board is on Wi-Fi in AUTO mode, the W5500 waits for the cable)
+    static String ethSpiJson(const BoardConfig& board, const EthSpiSettings& settings, NetworkMode mode,
+                             const char* state, const char* reason);
+    // US-127: as checkEthSpiBody() above, with an optional "mode": "auto", "ethernet" or
+    // "wifi". Missing keeps current_mode; another text or type (null too) gives 400
+    // INVALID_NETWORK_MODE_ERROR, checked after "enabled" and the pins. restart = the pins
+    // or the mode changed. The US-126 overload ignores a "mode" key
+    static int checkEthSpiBody(JsonVariantConst body, const BoardConfig& board, const EthSpiSettings& current,
+                               NetworkMode current_mode, EthSpiSettings& next, NetworkMode& next_mode,
+                               bool& restart, String& response);
+    static constexpr const char* INVALID_NETWORK_MODE_ERROR = "Invalid network mode";
 
     // Error of POST /api/network/hostname for a name outside NetHostname::isValid (US-113)
     static constexpr const char* INVALID_HOSTNAME_ERROR =

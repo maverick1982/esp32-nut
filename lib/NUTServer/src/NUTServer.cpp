@@ -376,6 +376,18 @@ void NUTServer::closeSession(int slot, CloseReason reason) {
     }
 }
 
+void NUTServer::closeAllSessions(CloseReason reason) {
+    unsigned closed = 0;
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        if (!_clientActive[i]) continue;
+        closeSession(i, reason);
+        closed++;
+    }
+    if (closed > 0 && reason == CloseReason::LinkChanged) {
+        log("INFO", "[NUT] Network link changed: %u NUT clients disconnected", closed);
+    }
+}
+
 // Value as upsd sends it in VAR, RW and ENUM replies: common/state.c val_escape() keeps
 // pconf_encode(raw), a backslash before each character of PCONF_ESCAPE ("#\\\""). The
 // raw value stays in UPSData, NVS and the JSON APIs. pconf_encode() also truncates the

@@ -57,13 +57,18 @@ public:
     void processCommand(Print& client, int slot, const String& cmdLine);
 
     // Motivo della chiusura di una sessione (US-084): solo il timeout va nel System Log
-    enum class CloseReason { PeerClosed, Logout, Inactivity };
+    // LinkChanged (US-127): the board switched between Ethernet and Wi-Fi, the sockets point
+    // to the old address; one summary line for all of them (closeAllSessions)
+    enum class CloseReason { PeerClosed, Logout, Inactivity, LinkChanged };
 
     // Occupa il primo slot libero per un client appena accettato e ne azzera lo stato.
     // -1 se gli slot sono esauriti: il rifiuto va nel System Log, al più una riga ogni
     // NUT_LOG_INTERVAL_MS. loop() ci aggancia il socket; i test la chiamano direttamente
     int openSession(const String& peerIp, uint16_t peerPort);
     void closeSession(int slot, CloseReason reason);
+    // Closes every open session, sockets included, so the clients reconnect at once (US-127).
+    // Harmless with no session or before begin(): the slots start free
+    void closeAllSessions(CloseReason reason);
 
     // Helpers per testing
     // Chiude tutte le sessioni aperte e riparte con il log degli slot da adesso

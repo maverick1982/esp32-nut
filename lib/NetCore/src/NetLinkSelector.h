@@ -9,14 +9,20 @@
  * Pure logic, so it runs in the native unit tests. activate() stops the previous link
  * before starting the new one: the NUT server, the web UI and the hostname always
  * refer to a single address. Without a link every query answers "not connected".
+ *
+ * keep_previous (US-127) leaves the previous link running outside the selector: the
+ * W5500 stays started while the board is on Wi-Fi in AUTO mode, so the network manager
+ * can see the cable come back. Only the selected link counts for the state, the name and
+ * the servers. Activating that link again later calls its begin(), which must then be
+ * harmless on a link that is already running.
  */
 class NetLinkSelector {
 public:
     NetLinkSelector() : _active(nullptr) {}
 
-    void activate(INetLink* link) {
+    void activate(INetLink* link, bool keep_previous = false) {
         if (link == _active) return;
-        if (_active) _active->end();
+        if (_active && !keep_previous) _active->end();
         _active = link;
         if (_active) _active->begin();
     }

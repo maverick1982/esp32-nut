@@ -10,6 +10,7 @@ static const char* kKeyMiso = "miso";
 static const char* kKeyCs = "cs";
 static const char* kKeyIrq = "irq";
 static const char* kKeyRst = "rst";
+static const char* kKeyMode = "mode";  // US-127
 
 EthSpiSettings EthSpiStore::load(const BoardConfig& board) {
     EthSpiSettings s = ethSpiDefaults();
@@ -43,6 +44,30 @@ bool EthSpiStore::save(const EthSpiSettings& settings) {
               prefs.putChar(kKeyCs, settings.cs) > 0 &&
               prefs.putChar(kKeyIrq, settings.irq) > 0 &&
               prefs.putChar(kKeyRst, settings.rst) > 0;
+    prefs.end();
+    return ok;
+}
+
+NetworkMode EthSpiStore::loadMode() {
+    NetworkMode mode = NetworkMode::AUTO;
+    Preferences prefs;
+    if (!prefs.begin(kNamespace, true)) return mode;
+    // isKey() first: getString() of a missing key logs an NVS error
+    if (prefs.isKey(kKeyMode)) {
+        const String text = prefs.getString(kKeyMode, "");
+        if (!parseNetworkMode(text.c_str(), mode)) {
+            mode = NetworkMode::AUTO;
+            AppLogger::log("WARN", "[NETWORK] Saved link mode not valid: using auto");
+        }
+    }
+    prefs.end();
+    return mode;
+}
+
+bool EthSpiStore::saveMode(NetworkMode mode) {
+    Preferences prefs;
+    if (!prefs.begin(kNamespace, false)) return false;
+    const bool ok = prefs.putString(kKeyMode, networkModeName(mode)) > 0;
     prefs.end();
     return ok;
 }

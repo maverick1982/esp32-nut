@@ -390,25 +390,40 @@ void WebConfigServer::handleSetHostname() {
 
 // --- W5500 of the Network page (US-126) ---
 
-void WebConfigServer::setEthSpi(EthSpiStore* store, const EthSpiSettings& settings) {
+void WebConfigServer::setEthSpi(EthSpiStore* store, const EthSpiSettings& settings, NetworkMode mode) {
     eth_spi_store = store;
     eth_spi = settings;
+    eth_mode = mode;
 }
 
 void WebConfigServer::handleGetEthSpi() {
-    // off: module disabled; active: the board is on Ethernet; fallback: enabled but the
-    // board is on Wi-Fi or the AP, with the reason of the startup probe
+    // off: module disabled; unused: Wi-Fi mode (US-127); active: the board is on Ethernet;
+    // standby: on Wi-Fi in AUTO mode, the W5500 waits for the cable (US-127); fallback:
+    // enabled but the board is on Wi-Fi or the AP, with the reason of the startup probe
     const char* state = "off";
     const char* reason = "";
     if (eth_spi.enabled) {
-        if (network && strcmp(network->typeName(), "ethernet") == 0) {
+        if (eth_mode == NetworkMode::WIFI) {
+            state = "unused";
+        } else if (network && strcmp(network->typeName(), "ethernet") == 0) {
             state = "active";
+            // On Ethernet without a connection (Ethernet mode without a cable, or before the
+            // switch to Wi-Fi in AUTO): the live reason, so the page does not just say Active
+            NetLinkInfo info;
+            network->linkInfo(info);
+            if (info.state == NetLinkState::DISCONNECTED) {
+                reason = ethProbeReason(EthProbeOutcome::NO_LINK);
+            } else if (info.state == NetLinkState::CONNECTING) {
+                reason = ethProbeReason(EthProbeOutcome::NO_IP);
+            }
+        } else if (network && network->ethStandby()) {
+            state = "standby";
         } else {
             state = "fallback";
             reason = network ? ethProbeReason(network->ethProbe()) : "";
         }
     }
-    server.send(200, "application/json", WebApiJson::ethSpiJson(board(), eth_spi, state, reason));
+    server.send(200, "application/json", WebApiJson::ethSpiJson(board(), eth_spi, eth_mode, state, reason));
 }
 
 void WebConfigServer::handleSetEthSpi() {
@@ -419,9 +434,11 @@ void WebConfigServer::handleSetEthSpi() {
         return;
     }
     EthSpiSettings next;
+    NetworkMode next_mode = eth_mode;
     bool restart = false;
     String response;
-    if (int status = WebApiJson::checkEthSpiBody(doc, board(), eth_spi, next, restart, response)) {
+    if (int status = WebApiJson::checkEthSpiBody(doc, board(), eth_spi, eth_mode, next, next_mode, restart,
+                                                 response)) {
         server.send(status, "application/json", response);
         return;
     }
@@ -429,13 +446,18 @@ void WebConfigServer::handleSetEthSpi() {
         server.send(200, "application/json", response);
         return;
     }
-    if (!eth_spi_store || !eth_spi_store->save(next)) {
+    // Only what changed: the pins (US-126) and the link mode (US-127)
+    const bool saved = eth_spi_store && (next == eth_spi || eth_spi_store->save(next)) &&
+                       (next_mode == eth_mode || eth_spi_store->saveMode(next_mode));
+    if (!saved) {
         server.send(500, "application/json", "{\"error\":\"Failed to save the W5500 settings\"}");
         return;
     }
     eth_spi = next;
+    eth_mode = next_mode;
     server.send(200, "application/json", response);
-    AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s): restarting", next.enabled ? "enabled" : "disabled");
+    AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s, link mode %s): restarting",
+                   next.enabled ? "enabled" : "disabled", networkModeName(next_mode));
     should_restart = true;
     restart_request_time = millis();
 }
@@ -662,7 +684,9 @@ void WebConfigServer::handleGetConfig() {
     // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
     doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
     // US-126: an enabled W5500 adds the Ethernet section on a Wi-Fi board
-    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(), eth_spi.enabled);
+    // US-127: in Wi-Fi mode the W5500 is not used, so the board has no Ethernet link
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(),
+                                 eth_spi.enabled && eth_mode != NetworkMode::WIFI);
     // Name in use, saved name and default (US-113)
     WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),
                              saved_hostname, network ? network->defaultHostname() : String());

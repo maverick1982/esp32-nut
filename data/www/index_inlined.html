@@ -3258,6 +3258,19 @@ body.auth-page {
 
 .w5500-toggle-row { margin-bottom: 1.25rem; }
 
+/* Link to use (US-127): the USB port cards, three in a row, with a line of explanation */
+.w5500-mode-row { margin-bottom: 1.25rem; }
+.w5500-mode-row[hidden] { display: none; }
+.w5500-mode-row > .board-name { display: block; margin-bottom: 0.6rem; }
+.w5500-mode-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.w5500-mode-options .port-card { align-items: flex-start; }
+.w5500-mode-options .port-radio { margin-top: 0.1rem; }
+.port-desc {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
 /* --- Amber alert: strapping pins and fallback to Wi-Fi (not an error: nothing is refused) --- */
 .auth-alert.warning {
     border-color: rgba(255, 184, 0, 0.45);
@@ -3268,6 +3281,8 @@ body.auth-page {
 .auth-alert strong { color: var(--text-primary); font-weight: 400; }
 .auth-alert code { color: var(--text-primary); font-family: var(--font-mono); }
 .w5500-status { margin-bottom: 1.25rem; }
+.w5500-status.warning .w5500-icon-info,
+.w5500-status.info .w5500-icon-warning { display: none; }
 
 /* --- Form: pin grid, alerts, button --- */
 .w5500-form {
@@ -3387,6 +3402,7 @@ body.auth-page {
     .pin-cell.optional .pin-role { display: inline; }
     .w5500-actions .btn { width: 100%; }
     .panel-header .w5500-badge { margin-left: 0; }
+    .w5500-mode-options { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -3673,8 +3689,8 @@ body.auth-page {
                         <div class="board-row w5500-toggle-row">
                             <div class="board-label">
                                 <span class="board-name">Use a W5500 module</span>
-                                <span class="board-hint">With the module on, the board tries Ethernet first at
-                                    startup and uses Wi-Fi when it gets no connection.</span>
+                                <span class="board-hint">With the module on, choose below which link the board
+                                    uses: Ethernet, Wi-Fi, or Ethernet with Wi-Fi as the backup.</span>
                             </div>
                             <div class="board-control led-toggle">
                                 <label class="switch">
@@ -3685,11 +3701,52 @@ body.auth-page {
                             </div>
                         </div>
 
-                        <!-- status.state = fallback: why the board is on Wi-Fi. Hidden otherwise -->
+                        <!-- Link to use (US-127): "mode" of the GET/POST. Hidden while the switch is off.
+                             Same cards as Board Settings > USB port; arrow keys move between them -->
+                        <div class="w5500-mode-row" id="w5500-mode-row" hidden>
+                            <span class="board-name" id="w5500-mode-title">Link to use</span>
+                            <div class="port-options w5500-mode-options" id="w5500-mode" role="radiogroup"
+                                aria-labelledby="w5500-mode-title">
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="auto">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Automatic</span>
+                                        <span class="port-desc">Ethernet when the cable is connected, otherwise Wi-Fi.
+                                            Switches by itself within 30 s.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="ethernet">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Ethernet</span>
+                                        <span class="port-desc">Cable only. Without a cable the board stays offline; it
+                                            uses Wi-Fi only if the W5500 does not answer.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="w5500-mode" value="wifi">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Wi-Fi</span>
+                                        <span class="port-desc">Wi-Fi only. The W5500 is not used.</span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- status.state = fallback: why the board is on Wi-Fi (amber); standby and
+                             unused (US-127): informative (blue). Hidden otherwise -->
                         <div class="auth-alert warning w5500-status" id="w5500-status" role="status" hidden>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <!-- Triangle for the warnings, "i" in a circle for the informative states -->
+                            <svg class="w5500-icon-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                                 <path d="M12 9v4M12 17h.01" />
+                            </svg>
+                            <svg class="w5500-icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
                             </svg>
                             <span id="w5500-status-text"></span>
                         </div>
@@ -3769,8 +3826,8 @@ body.auth-page {
                         <p class="auth-fineprint">Enter the GPIOs your W5500 is wired to. The grey values are a common
                             wiring for an external module; boards with a built-in W5500 use their own pins, see the
                             documentation. GPIO 19-20 (USB), 26-37 (flash and PSRAM), 43-44 (serial console) and the status
-                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi. Saving restarts
-                            the board.</p>
+                            LED cannot be used. If the W5500 does not answer, the board falls back to Wi-Fi in every mode.
+                            Saving restarts the board.</p>
                     </div>
                 </section>
 
@@ -6318,11 +6375,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Link to use (US-127): informative texts of the states that are not a problem
+    const W5500_INFO = {
+        standby: [{ b: 'No Ethernet connection:' }, ' the board is on Wi-Fi and goes back to Ethernet when the cable is connected.'],
+        unused: [{ b: 'Wi-Fi mode:' }, ' the W5500 is not used.']
+    };
+    const W5500_BADGES = {
+        active: { cls: 'connected', ind: 'success', text: 'Active' },
+        fallback: { cls: 'connecting', ind: 'warning', text: 'Fallback' },
+        standby: { cls: 'connecting', ind: 'info', text: 'Standby' },
+        unused: { cls: 'idle', ind: '', text: 'Not used' },
+        offline: { cls: 'connecting', ind: 'warning', text: 'No connection' }  // active with a reason
+    };
+    // state active with a reason: the board is on Ethernet without a connection. In Ethernet
+    // mode it stays so; in Automatic it moves to Wi-Fi if the cable does not come back
+    const W5500_OFFLINE = {
+        ethernet: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' Ethernet mode: the board stays offline until the cable is connected. Double reset for the access point.'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' Ethernet mode: the board keeps waiting on the cable. Double reset for the access point.']
+        },
+        auto: {
+            no_link: [{ b: 'No Ethernet cable link.' }, ' If the cable does not come back, the board moves to Wi-Fi (when configured).'],
+            no_ip: [{ b: 'The router gives no address over Ethernet (DHCP).' }, ' If it does not arrive, the board moves to Wi-Fi (when configured).']
+        }
+    };
+    const W5500_MODES = ['auto', 'ethernet', 'wifi'];
+    let w5500SavedMode = 'auto';
+    const w5500ModeRadios = () => Array.from(document.querySelectorAll('input[name="w5500-mode"]'));
+
+    function setW5500Mode(mode) {
+        const m = W5500_MODES.includes(mode) ? mode : 'auto';
+        w5500ModeRadios().forEach(r => { r.checked = r.value === m; });
+    }
+
+    function readW5500Mode() {
+        const r = w5500ModeRadios().find(i => i.checked);
+        return r ? r.value : 'auto';
+    }
+
     function w5500Badge(state) {
         const el = document.getElementById('w5500-badge');
-        const b = state === 'active' ? { cls: 'connected', ind: 'success', text: 'Active' }
-            : state === 'fallback' ? { cls: 'connecting', ind: 'warning', text: 'Fallback' }
-                : { cls: 'idle', ind: '', text: 'Off' };
+        const b = W5500_BADGES[state] || { cls: 'idle', ind: '', text: 'Off' };
         el.className = 'link-badge w5500-badge ' + b.cls;
         el.querySelector('.status-indicator').className = 'status-indicator ' + b.ind;
         el.querySelector('.badge-text').textContent = b.text;
@@ -6334,6 +6427,8 @@ document.addEventListener('DOMContentLoaded', () => {
         st.textContent = on ? 'On' : 'Off';
         st.classList.toggle('on', on);
         w5500Form.classList.toggle('is-off', !on);
+        // The choice of the link exists only with the module on (US-127)
+        document.getElementById('w5500-mode-row').hidden = !on;
     }
 
     function readW5500Pins() {
@@ -6396,19 +6491,38 @@ document.addEventListener('DOMContentLoaded', () => {
         btnW5500.disabled = disabled;
         w5500Toggle.disabled = disabled;
         W5500_PINS.forEach(f => { w5500Input(f).disabled = disabled; });
+        w5500ModeRadios().forEach(r => { r.disabled = disabled; });
     }
 
     function renderW5500(data) {
         w5500Strapping = Array.isArray(data.strapping) ? data.strapping : [];
         const status = data.status || {};
-        w5500Badge(status.state);
         const st = document.getElementById('w5500-status');
-        if (status.state === 'fallback') {
-            w5500Text(document.getElementById('w5500-status-text'), W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+        const stText = document.getElementById('w5500-status-text');
+        const offline = status.state === 'active' && status.reason
+            ? (W5500_OFFLINE[data.mode === 'ethernet' ? 'ethernet' : 'auto'][status.reason] || null) : null;
+        if (offline) {
+            w5500Badge('offline');
+            w5500Text(stText, offline);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (status.state === 'fallback') {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_FALLBACK[status.reason || ''] || W5500_FALLBACK['']);
+            st.className = 'auth-alert warning w5500-status';
+            st.hidden = false;
+        } else if (W5500_INFO[status.state]) {
+            w5500Badge(status.state);
+            w5500Text(stText, W5500_INFO[status.state]);
+            st.className = 'auth-alert info w5500-status';
             st.hidden = false;
         } else {
+            w5500Badge(status.state);
             st.hidden = true;
         }
+        // Missing mode (firmware before US-127): Automatic, the default
+        w5500SavedMode = W5500_MODES.includes(data.mode) ? data.mode : 'auto';
+        setW5500Mode(w5500SavedMode);
         setW5500Toggle(!!data.enabled);
         const pins = data.pins || {};
         W5500_PINS.forEach(f => {
@@ -6459,7 +6573,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }));
         w5500Toggle.addEventListener('change', () => {
+            // Turning the module on shows the saved choice (Automatic the first time)
+            if (w5500Toggle.checked) setW5500Mode(w5500SavedMode);
             setW5500Toggle(w5500Toggle.checked);
+            hideW5500Error();
+            if (!btnW5500.disabled) {
+                clearTimeout(w5500NoChangeTimer);
+                btnW5500.innerHTML = W5500_BTN_IDLE;
+            }
+        });
+        document.getElementById('w5500-mode').addEventListener('change', () => {
             hideW5500Error();
             if (!btnW5500.disabled) {
                 clearTimeout(w5500NoChangeTimer);
@@ -6472,6 +6595,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (btnW5500.disabled) return;
             hideW5500Error();
             const next = { enabled: w5500Toggle.checked, pins: readW5500Pins() };
+            // The link to use only with the module on; the server keeps the saved one otherwise
+            if (next.enabled) next.mode = readW5500Mode();
             btnW5500.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
             setW5500Disabled(true);
             let data = null;

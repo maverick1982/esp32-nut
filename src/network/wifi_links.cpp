@@ -40,7 +40,9 @@ void WifiStaLink::begin() {
 }
 
 void WifiStaLink::end() {
-    WiFi.disconnect();
+    // Radio off too (US-127): with only disconnect() the automatic reconnection would
+    // bring the station back while the board is on Ethernet
+    WiFi.disconnect(true);
 }
 
 void WifiStaLink::loop(uint32_t now) {

@@ -18,6 +18,9 @@ EthLink::EthLink(const EthConfig& cfg, const String& saved_hostname)
     : m_cfg(cfg), m_savedHostname(saved_hostname), m_started(false), m_lastConnected(false), m_lastLinkUp(false) {}
 
 void EthLink::begin() {
+    // US-127: a W5500 kept on standby while the board was on Wi-Fi becomes the active link
+    // again without restarting (its link and address are already there)
+    if (m_started) return;
     m_lastConnected = false;
     m_lastLinkUp = false;
     AppLogger::log("INFO", "[NETWORK] Initializing Ethernet...");

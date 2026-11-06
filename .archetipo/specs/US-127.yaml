@@ -6,7 +6,7 @@ epic:
   title: Supporto multi-scheda (ESP32-P4, Ethernet)
 priority: MEDIUM
 points: 3
-status: TODO
+status: DONE
 body: |-
   #### US-127: Scelta del collegamento di rete nella pagina Network (Wi-Fi / Ethernet / Automatico)
 
@@ -33,3 +33,11 @@ body: |-
 history:
   - status: TODO
     at: "2026-11-06T15:43:03Z"
+  - status: PLANNED
+    at: "2026-11-06T17:37:04Z"
+  - status: IN PROGRESS
+    at: "2026-11-06T17:39:29Z"
+  - status: REVIEW
+    at: "2026-11-06T18:24:00Z"
+  - status: DONE
+    at: "2026-11-06T18:40:00Z"
