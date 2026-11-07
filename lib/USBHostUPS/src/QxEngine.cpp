@@ -97,6 +97,7 @@ void QxEngine::reset(const QxSubdriver& sub, const QxOptions& options) {
     memset(_infoval, 0, sizeof(_infoval));
     memset(_prevCommand, 0, sizeof(_prevCommand));
     memset(_prevAnswer, 0, sizeof(_prevAnswer));
+    memset(_ctlValue, 0, sizeof(_ctlValue));
     _status = 0;
     _alarms = "";
     _dataChanged = false;
@@ -310,7 +311,8 @@ bool QxEngine::walk(WalkMode mode) {
                 // Already set
                 if (getinfo(it.info_type)) continue;
                 setinfo(it.info_type, it.dfl ? it.dfl : "");
-                // qx_set_var() (flags, range, enum): US-135
+                // qx_set_var() (flags, range, enum): setvar() reads them from info_rw
+                // (rangeContains, enumContains); publishing them in LIST RW is US-136
                 continue;
             }
             // Allow duplicates for these NUT variables
@@ -332,7 +334,7 @@ bool QxEngine::walk(WalkMode mode) {
             break;
         }
 
-        // Instant commands: dstate_addcmd() upstream, the list of commands is US-135
+        // Instant commands: dstate_addcmd() upstream, here commandOffered() reads the flags
         if (_flags[row] & QX_FLAG_CMD) continue;
 
         // Setvars: the QX_FLAG_NONUT branch (setvar(NULL) + skip) is not needed by the
@@ -372,7 +374,8 @@ bool QxEngine::walk(WalkMode mode) {
             continue;
         }
 
-        // qx_set_var() for retcode == 1 in INIT (flags, range, enum): US-135
+        // qx_set_var() for retcode == 1 in INIT (flags, range, enum): no ported protocol has a
+        // writable row read from the UPS; setvar() checks info_rw itself
     }
 
     // Update battery guesstimation (the runtimecal branch is not ported)
@@ -395,8 +398,9 @@ void QxEngine::initUps() {
 }
 
 // upsdrv_initinfo(), nutdrv_qx.c:3604-3680. Not ported: the ups.conf values ondelay,
-// offdelay and pollfreq (the NUT defaults stay), analyze_mapping_usage() (debug), the
-// load.off/load.on commands (US-135), driver.parameter.pollfreq and the handlers.
+// offdelay and pollfreq (the NUT defaults stay), analyze_mapping_usage() (debug),
+// driver.parameter.pollfreq and the handlers. The load.off/load.on commands of 3644-3656
+// are derived by commandOffered().
 bool QxEngine::initInfo(UPSData& data, uint32_t nowMs) {
     DataScope scope(*this, &data);
 

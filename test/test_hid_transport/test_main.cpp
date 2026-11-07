@@ -192,6 +192,24 @@ void test_control_hook_is_protocol_neutral(void) {
     }
 }
 
+// US-135: the Q* control uses IUpsControlPort only (ADR 0013): no HID or USB header, and the
+// HID accessor of the port is never named
+void test_qx_control_is_protocol_neutral(void) {
+    const char* files[] = { "lib/USBHostUPS/src/QxControl.h", "lib/USBHostUPS/src/QxControl.cpp" };
+    const char* forbidden[] = { "#include \"IHidTransport.h\"", "#include \"IHidControlPort.h\"",
+                                "#include \"HidControl.h\"", "#include \"HIDUsages.h\"", "#include \"HIDParser.h\"",
+                                "#include \"NutTable.h\"", "#include \"IUSBHostUPS.h\"",
+                                "#include \"USBHostUPS.h\"", "#include \"IUpsSource.h\"", "hidPort(" };
+    for (const char* f : files) {
+        std::string text = readSource(f);
+        TEST_ASSERT_TRUE_MESSAGE(text.find("class QxControl") != std::string::npos ||
+                                 text.find("QxControl::") != std::string::npos, f);
+        for (const char* s : forbidden) {
+            TEST_ASSERT_TRUE_MESSAGE(text.find(s) == std::string::npos, (std::string(f) + ": " + s).c_str());
+        }
+    }
+}
+
 // US-131: the hooks of the HID family, which the protocol-neutral core must not name
 static const char* const kHidHooks[] = { "loop", "decodeReport", "postDecode", "planSet", "requestLength",
                                          "acceptDiagReport", "invalidateReport", "inputValuesPolled",
@@ -258,5 +276,6 @@ int main(int argc, char** argv) {
     RUN_TEST(test_command_logic_left_the_usb_host_interface);
     RUN_TEST(test_control_headers_include_no_usb_host);
     RUN_TEST(test_control_hook_is_protocol_neutral);
+    RUN_TEST(test_qx_control_is_protocol_neutral);
     return UNITY_END();
 }

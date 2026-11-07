@@ -1,0 +1,420 @@
+schema: archetipo/plan/v2
+spec_code: US-135
+body: |
+  ---
+  type: plan
+  title: "US-135: Controllo Q*: comandi istantanei e SET VAR come instcmd() e setvar() di nutdrv_qx — Piano di implementazione"
+  description: "Piano di implementazione per US-135"
+  tags: [plan, implementation, US-135]
+  ---
+  # US-135: Controllo Q*: comandi istantanei e SET VAR come instcmd() e setvar() di nutdrv_qx — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utente con un UPS Q*, voglio i comandi istantanei e le variabili scrivibili che NUT offre per il mio protocollo (beeper, test della batteria, spegnimento e riaccensione), in modo da usarli da NUT e dalla Web UI come con un UPS HID, compreso lo spegnimento automatico a batteria scarica.
+
+  **Criteri di Accettazione**
+  - Il controllo Q* implementa `IUpsControl` usando solo `IUpsControlPort`, mai `hidPort()` (verificato da un test come quello di `test_hid_transport`).
+  - I comandi istantanei portano `instcmd()` di `nutdrv_qx.c` e i comandi di `blazer-common` (`beeper.toggle`, `load.off`, `load.on`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `test.battery.start`, `.quick`, `.deep`, `test.battery.stop`), ciascuno solo se il protocollo lo ha, con i preprocess di NUT.
+  - L'esito segue le stringhe `accepted`/`rejected` del protocollo, come in NUT.
+  - SET VAR porta `setvar()` con i controlli di `info_rw` (intervalli ed enumerazioni) per le righe `QX_FLAG_SETVAR`, compresi `ups.delay.shutdown` e `ups.delay.start`.
+  - `supportedCommands()` elenca solo i comandi del protocollo riconosciuto; senza protocollo l'elenco è vuoto.
+  - Test nativi: stringa mandata per ogni comando di `megatec`, comando rifiutato, comando non offerto, SET VAR fuori intervallo.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Logica pura nel modulo `ups-protocol` (`lib/USBHostUPS/src`), compilata in nativo come US-133/134. L'host non cambia comportamento: US-136 collega il driver Q* vero. Sulle immagini ESP32 i file nuovi non sono referenziati, quindi il linker li scarta (la misura della flash resta a US-136).
+
+  Tre strati, ognuno con una responsabilità:
+
+  1. **`QxEngine` (port fedele di NUT).** Nuovi metodi `instcmd()`, `setvar()` e `commandOffered()`, definiti in un file nuovo `QxEngineControl.cpp` per non gonfiare `QxEngine.cpp`. Restituiscono gli stati upstream (`STAT_INSTCMD_*`, `STAT_SET_*`), nessun log, nessun lock, come il resto del motore.
+  2. **`QxControl` (`IUpsControl`, statico, senza stato).** Gira nel task di chi chiama (server NUT, Web UI), quindi non può toccare il motore, che vive nel driver e può essere cancellato dal task di poll (US-105). Passa dalla porta con tre metodi nuovi e neutri di `IUpsControlPort`; gestisce in proprio solo i controlli comuni (non connesso, nome nullo, comando non offerto) e `shutdown.default`, come `HidControl`.
+  3. **Funzioni statiche di `QxControl` che lavorano sul motore** (`commandsOf`, `runCommand`, `runSetVariable`): traducono gli stati upstream nei tipi del progetto. Le chiamerà l'host di US-136 nel task di poll (ADR 0013: mai aspettare una risposta Q* fuori dal task di poll); i test le chiamano attraverso una porta finta.
+
+  ### Metodi nuovi di `IUpsControlPort` (neutri, con default)
+
+  ```cpp
+  // Commands of the attached driver's own protocol (Q*: its QX_FLAG_CMD rows and the derived
+  // ones, US-135), empty when no protocol is recognised. The HID host keeps the default.
+  virtual std::vector<const UPSCommandInfo*> driverCommands() const { return {}; }
+  // Runs one command / SET VAR on the driver's own transport. The host runs it in the poll
+  // task and waits for it (ADR 0013, section 3; US-136); the caller holds no lock.
+  virtual CommandResult runDriverCommand(const char* name, const char* param) { return CommandResult::NOT_SUPPORTED; }
+  virtual NutTable::SetStatus runDriverSetVariable(const char* name, const char* value) { return NutTable::SetStatus::UNKNOWN; }
+  ```
+
+  I default lasciano invariati `USBHostUPS` e le porte finte esistenti. Nessun include nuovo in `IUpsControlPort.h` (`UpsCommands.h` e `UpsVariables.h` ci sono già): il test `test_control_hook_is_protocol_neutral` resta verde.
+
+  ### `QxEngine::instcmd()` — `nutdrv_qx.c:2802-2945`
+
+  ```cpp
+  enum class Instcmd : uint8_t { Handled, Invalid, Failed, ConversionFailed }; // STAT_INSTCMD_*
+  Instcmd instcmd(UPSData& data, const char* cmdname, const char* extradata);
+  ```
+
+  Con `DataScope` per `getinfo()`, nello stesso ordine di NUT:
+  - `beeper.on`/`beeper.off` non si portano: non sono nel catalogo `UpsCommands.h` (stessa regola di `HidControl`).
+  - `findNutInfo(cmdname, QX_FLAG_CMD, QX_FLAG_SKIP)`. Se non trova la riga, i ripieghi: `load.on` → `instcmd("load.on.delay", "0")`; `load.off` → `instcmd("load.off.delay", "0")`; `shutdown.return` → se c'è `ups.start.auto`, `setvar("ups.start.auto", "yes")` deve dare Handled (altrimenti Failed), poi `load.on.delay` con `ups.delay.start` e `load.off.delay` con `ups.delay.shutdown`; `shutdown.stayoff` → `ups.start.auto` = `no`, `load.on.delay` `-1`, `load.off.delay` con `ups.delay.shutdown`. Altrimenti `Invalid`.
+  - `extradata` vuoto vale come assente (upsd manda NULL). Valore = `extradata` oppure `item.dfl` oppure `""`, copiato nel buffer membro `_ctlValue[QX_SMALLBUF]` (non nello stack del task di poll).
+  - Preprocess (`item.preprocess`) che restituisce diverso da 0 → `Failed`. Upstream dà `CONVERSION_FAILED` solo con `errno == EINVAL`, che nessuna funzione portata imposta: si porta `Failed` e si lascia `ConversionFailed` nell'enum per i protocolli futuri, con un commento.
+  - Senza preprocess il valore si svuota. `process(row, strlen(value) ? value : nullptr)` diverso da 0 → `Failed` (così una risposta uguale a `rejected`, per esempio `NAK\r` di innovatae, dà Failed in `processAnswer()`).
+  - `value()` non vuoto: uguale a `accepted` (`equalsIgnoreCase`) → `Handled`, altrimenti `Failed` (l'eco del comando significa rifiuto). Vuoto → `Handled`. Con Handled `_dataChanged = true` (data_has_changed).
+
+  `_ctlValue` è condiviso con `setvar()`: i ripieghi chiamano `setvar()`/`instcmd()` prima di riempire il buffer, quindi gli usi non si sovrappongono (scriverlo nel commento del membro).
+
+  ### `QxEngine::setvar()` — `nutdrv_qx.c:2948-3256`
+
+  ```cpp
+  enum class Setvar : uint8_t { Handled, Unknown, ConversionFailed }; // STAT_SET_*
+  Setvar setvar(UPSData& data, const char* varname, const char* val);
+  ```
+
+  - `findNutInfo(varname, QX_FLAG_SETVAR, QX_FLAG_SKIP)` assente → `Unknown`.
+  - Riga `QX_FLAG_NONUT` (setvar una tantum da `ups.conf`): `Unknown`. Upstream il walk INIT marca queste righe SKIP; nessun protocollo portato ne ha (commento).
+  - `val` nullo o vuoto → `Unknown`. Valore uguale (senza maiuscole) a `getinfo()` → `Handled` senza invio.
+  - `QX_FLAG_RANGE`: non numerico (`strspn("0123456789 .")`) → `Unknown`; `strtol` fuori da tutte le coppie (min, max) di `info_rw` → `Unknown`. Le coppie sono quelle che `qx_set_var()` pubblica (`nutdrv_qx.c`, ramo range): si saltano i valori il cui preprocess `info_rw` fallisce (chiamato su una copia, perché le tabelle sono `const`) e le coppie oltre `INT_MAX`.
+  - `QX_FLAG_ENUM`: valore non presente (senza maiuscole) tra i valori `info_rw` → `Unknown`.
+  - Altrimenti `QX_ST_FLAG_STRING`: lunghezza > `strtol(info_rw[0].value)` → `Unknown`.
+  - Preprocess diverso da 0 → `Unknown` (`blazerProcessSetvar` tronca al minuto, o a multipli di 6 s sotto i 60 s, per `ups.delay.shutdown`).
+  - `QX_FLAG_ABSENT`: `setinfo(info_type, valore preprocessato)` → `Handled`, senza `_dataChanged` (come NUT).
+  - Altrimenti (variabile sul dispositivo, nessuna nei protocolli portati) si manda il comando come `instcmd()`, con lo stesso confronto `accepted`; il rifiuto dà `Unknown`, come upstream.
+
+  Gli stati restano quelli upstream (ADR 0003), compreso `STAT_SET_UNKNOWN` per un valore fuori intervallo. In NUT è `upsd` (netset.c) a rispondere `INVALID-VALUE` prima del driver, grazie all'intervallo pubblicato in LIST RW: pubblicare intervalli ed enumerazioni Q* nel catalogo RW (oggi `RWVariable` non ha intervalli) è un punto aperto per US-136, scritto nelle note.
+
+  ### `QxEngine::commandOffered()` — `dstate_addcmd()` di `nutdrv_qx.c:4604-4608` e `3644-3656`
+
+  Vero per una riga `QX_FLAG_CMD` senza `QX_FLAG_SKIP`; vero per `load.off` (o `load.on`) senza riga propria ma con la riga `load.off.delay` (o `load.on.delay`). Ha senso dopo `initInfo()`: il walk INIT è dove upstream aggiunge i comandi, e le righe SKIP le decide `initups`.
+
+  ### `QxControl` (`QxControl.h` + `QxControl.cpp`)
+
+  ```cpp
+  class QxControl : public IUpsControl {
+  public:
+      static const QxControl& instance();
+      // IUpsControl
+      std::vector<const UPSCommandInfo*> supportedCommands(const IUpsControlPort& port) const override;
+      CommandResult executeCommand(IUpsControlPort& port, const char* name, const char* param) const override;
+      NutTable::SetStatus setVariable(IUpsControlPort& port, const char* name, const char* value) const override;
+      // On the engine, in the poll task (US-136 host; tests through a fake port)
+      static std::vector<const UPSCommandInfo*> commandsOf(const QxEngine& qx);
+      static CommandResult runCommand(QxEngine& qx, UPSData& data, const char* name, const char* param);
+      static NutTable::SetStatus runSetVariable(QxEngine& qx, UPSData& data, const char* name, const char* value);
+  };
+  ```
+
+  - `supportedCommands`: non connesso → `{}`; altrimenti `port.driverCommands()`.
+  - `executeCommand`: nome nullo → NOT_SUPPORTED; non connesso → NOT_CONNECTED; nome assente da `port.driverCommands()` → NOT_SUPPORTED (nulla arriva al driver); `shutdown.default` → sequenza qui sotto; altrimenti `port.runDriverCommand(name, param)`.
+  - `setVariable`: non connesso → NOT_CONNECTED; nome nullo → UNKNOWN; valore nullo → CONVERSION_FAILED; altrimenti `port.runDriverSetVariable()`. `resetVariable` resta quello di default di `IUpsControl`.
+  - `commandsOf`: ordine del catalogo `UpsCommands::table()` (come `HidControl::buildCommands`), un nome per volta con `qx.commandOffered()`, più due aggiunte del progetto:
+    - `shutdown.return` e `shutdown.stayoff` anche quando ci sono solo le righe `load.on.delay` e `load.off.delay` (i ripieghi di `instcmd()`). È una deviazione: `nutdrv_qx` le esegue senza elencarle, mentre `usbhid-ups` le elenca. Serve perché qui un comando non elencato non si esegue. Nessun protocollo portato ne è toccato.
+    - `shutdown.default` quando `upsdrv_shutdown()` può riuscire: righe `ups.delay.start` e `ups.delay.shutdown` presenti (`findNutInfo(..., 0, QX_FLAG_SKIP)`) e `shutdown.return` disponibile.
+  - `runCommand`: `extradata` = `param` se non vuoto, altrimenti nullptr; Handled → OK, Invalid → NOT_SUPPORTED, Failed → FAILED, ConversionFailed → INVALID_ARGUMENT.
+  - `runSetVariable`: Handled → OK, Unknown → UNKNOWN, ConversionFailed → CONVERSION_FAILED.
+  - Beeper: per Q* c'è solo `beeper.toggle` dalla riga del protocollo (`Q\r`), offerto se la riga c'è, come NUT. `port.supportsBeeperToggle()` e `port.setBeeper()` (semantica HID) non si usano.
+
+  ### `shutdown.default` — `upsdrv_shutdown()`, `nutdrv_qx.c:3259-3369`
+
+  Come `HidControl`, ogni tentativo passa da `port.executeCommand()`, così il System Log ha una riga per tentativo:
+  1. `port.noteDefaultShutdown("")`.
+  2. Se `shutdown.stop` è offerto: fino a `QX_MAXTRIES` volte `port.executeCommand("shutdown.stop")`, ci si ferma al primo OK; i fallimenti si ignorano ("No shutdown pending").
+  3. Fino a `QX_MAXTRIES` volte `port.executeCommand("shutdown.return")`: al primo OK `port.noteDefaultShutdown("shutdown.return")` e OK.
+  4. Altrimenti FAILED.
+
+  Deviazioni scritte nel commento: si usano i ritardi in vigore (`ups.delay.*` attuali, anche dopo un SET VAR) invece di riportarli a `dfl` e rileggere `ondelay`/`offdelay` da `ups.conf` (upstream `upsdrv_shutdown()` gira in un processo nuovo `-k`); l'opzione `stayoff` di `ups.conf` non esiste, quindi sempre `shutdown.return`. Lo spegnimento automatico a batteria scarica dell'app chiama già `shutdown.default`: nessuna logica nuova lato app.
+
+  ### File nuovi e modificati
+
+  | File | Contenuto | Origine NUT |
+  |---|---|---|
+  | `lib/USBHostUPS/src/QxEngine.h` | enum `Instcmd`/`Setvar`, `instcmd()`, `setvar()`, `commandOffered()`, membro `_ctlValue`; commenti "US-135" del walk aggiornati | `nutdrv_qx.h` |
+  | `lib/USBHostUPS/src/QxEngineControl.cpp` (nuovo) | i tre metodi e un helper `rangeContains()` | `nutdrv_qx.c:2802-3256`, `qx_set_var()` |
+  | `lib/USBHostUPS/src/QxEngine.cpp` | solo i commenti `// ... US-135` di `walk()`/`initInfo()`: puntano ai metodi nuovi (nessun cambiamento di logica) | — |
+  | `lib/USBHostUPS/src/IUpsControlPort.h` | i tre metodi neutri con default | — |
+  | `lib/USBHostUPS/src/QxControl.h/.cpp` (nuovi) | `QxControl` | `upsdrv_shutdown()` |
+  | `test/mocks/QxFakeControlPort.h` (nuovo) | porta finta che inoltra a `QxControl::commandsOf/runCommand/runSetVariable` e conta le chiamate a `hidPort()`/`setBeeper()` | — |
+  | `test/test_qx_control/test_main.cpp` (nuovo) | suite del controllo Q* | — |
+  | `test/test_hid_transport/test_main.cpp` | `QxControl.h/.cpp` tra i file che non includono header HID | — |
+  | `platformio.ini` | `[env:native]` `build_src_filter`: `QxEngineControl.cpp`, `QxControl.cpp` | — |
+  | `docs/concepts/architecture.md` | una riga sul controllo Q* | — |
+
+  Commenti nel codice in inglese, come il resto di `lib/USBHostUPS`, con le righe di NUT citate dove il comportamento non è ovvio.
+
+  ---
+
+  ## Strategia di test
+
+  Solo test nativi (Unity, `env:native`). Nessuna UI: niente mockup, niente e2e, niente video demo (la dimostrazione è un test nativo con trasporto finto).
+
+  - **Motore (`test_qx_control`, parte instcmd):** megatec con `MEGATEC_TESTING` e `QxTestingTransport`, sequenza claim → initUps → initInfo. Si controlla la stringa esatta mandata (ultimo elemento di `sent`) per ogni comando: `beeper.toggle` `Q\r`; `load.off` `S00R0000\r`; `load.on` `C\r`; `shutdown.return` con i default 30/180 `S.5R0003\r`; `shutdown.stayoff` `S.5R0000\r`; `shutdown.stop` `C\r`; `test.battery.start` senza parametro `T10\r`, con `"120"` `T02\r`; `.quick` `T\r`; `.deep` `TL\r`; `test.battery.stop` `CT\r`. Dopo SET VAR `ups.delay.shutdown=120` e `ups.delay.start=60`, `shutdown.return` manda `S02R0001\r`. Esiti: risposta `ACK` → Handled; risposta vuota → Handled; eco del comando (il trasporto finto fa l'eco dei comandi sconosciuti) → Failed; innovatae con `NAK\r` → Failed. `test.battery.start` con `"30"` → Failed senza invio. Comando non nel protocollo (`shutdown.reboot`) → Invalid senza invio. Dopo un Handled il poll successivo è completo (manda `I\r` anche se sono passati solo 2 s).
+  - **Motore, parte setvar:** `ups.delay.start` `600` → Handled, valore `600`; `90` → `60`; `600000` → Unknown, valore invariato, nessun invio; `abc` e `-5` → Unknown; stesso valore → Handled; `ups.delay.shutdown` `45` → `42`, `11` → Unknown; variabile non scrivibile → Unknown. Un sottodriver di prova definito nel test (non in `src`) copre i rami senza protocollo portato: riga SETVAR ENUM sul dispositivo (accettata, rifiutata per eco, valore fuori enumerazione), riga STRING troppo lunga, ripieghi `load.on`/`load.off` → `load.*.delay` `0`, `shutdown.return`/`shutdown.stayoff` con `ups.start.auto` (sequenza esatta dei comandi mandati) e ripiego che fallisce se `ups.start.auto` è rifiutato.
+  - **Controllo (`test_qx_control`, con `QxFakeControlPort`):** per ogni protocollo di `QX_SUBDRIVER_LIST` l'elenco esatto, in ordine di catalogo: `beeper.toggle`, `test.battery.start`, `test.battery.start.quick`, `test.battery.start.deep`, `test.battery.stop`, `load.off`, `load.on`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `shutdown.default`. Una riga di comando marcata SKIP sparisce dall'elenco. Senza protocollo riconosciuto: elenco vuoto ed esecuzione NOT_SUPPORTED. Non connesso: elenco vuoto, NOT_CONNECTED, nulla mandato. Comando non offerto (`beeper.enable`, `load.off.delay`) → NOT_SUPPORTED senza invio. `shutdown.default`: `C\r` poi `S.5R0003\r` con OK e `noteDefaultShutdown("shutdown.return")`; `shutdown.stop` rifiutato 3 volte e poi `shutdown.return` OK; `shutdown.return` rifiutato 3 volte → FAILED con 3 tentativi. SET VAR tramite la porta: OK, UNKNOWN fuori intervallo, NOT_CONNECTED, valore nullo. `hidPort()` e `setBeeper()` della porta finta mai chiamati (contatori a 0 alla fine di ogni test).
+  - **Sorgenti (`test_hid_transport`):** `QxControl.h`/`QxControl.cpp` senza include HID né USB, e senza `hidPort(` (lo scan esistente su tutta la libreria lo copre già; si aggiunge il controllo esplicito sugli include).
+  - **Regressione:** tutte le suite native verdi senza cambiare le asserzioni esistenti (baseline 1277/1277 dopo US-134), più la compilazione di `esp32-s3-standard`.
+
+  Comando dei test nativi (Git Bash): `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f <suite>`.
+
+  ---
+
+  ## Note e assunzioni
+
+  - US-133 (bloccante) è DONE (93abb98); anche US-134 è DONE (1cda1cf) e fornisce `QX_SUBDRIVER_LIST` e innovatae con `rejected`.
+  - Punti aperti per US-136, fuori da questa storia: implementare i tre metodi neutri della porta in `USBHostUPS`, eseguendo `runDriverCommand`/`runDriverSetVariable` nel task di poll con attesa limitata e senza lock applicativi durante il comando Q* (lo stesso contratto di lock di `updateInfo()`); pubblicare `ups.delay.*` e gli altri SETVAR Q* nel catalogo RW, con intervalli, così che server NUT e Web UI rifiutino prima del driver come `upsd`; salvare i ritardi impostati come valori lato driver (come gli HID, US-067) e riapplicarli dopo l'aggancio, al posto di `ondelay`/`offdelay` di `ups.conf`; usare `beeper.toggle` dalla Web UI per un UPS Q*.
+  - Il doppio `noteDataChanged()` (motore in `instcmd()` e host in `USBHostUPS::executeCommand()`) è innocuo: lo stesso flag.
+  - Modifiche ai file con Edit/Write, non con script inline (memoria di progetto).
+tasks:
+  - id: TASK-01
+    title: QxEngine::instcmd() e commandOffered(), port di instcmd() e dstate_addcmd()
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il motore esegue un comando istantaneo come `instcmd()` di `nutdrv_qx.c` e dice quali comandi offre il protocollo.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c` righe 2802-2945 (instcmd), 3644-3656 (load.off/load.on in initinfo), 4604-4608 (dstate_addcmd nel walk); `lib/USBHostUPS/src/QxEngine.h`, `QxEngine.cpp` (process, processAnswer, walk, DataScope, findNutInfo); `QxBlazerCommon.cpp` (blazerProcessCommand); sezioni "QxEngine::instcmd()" e "QxEngine::commandOffered()" del piano; `platformio.ini` righe 76-120.
+
+      **Modificare:**
+      1. `QxEngine.h`: aggiungere `enum class Instcmd : uint8_t { Handled, Invalid, Failed, ConversionFailed };` con commento `STAT_INSTCMD_*`; dichiarare `Instcmd instcmd(UPSData& data, const char* cmdname, const char* extradata);` e `bool commandOffered(const char* cmdname) const;`, con commenti che citano le righe upstream; membro privato `char _ctlValue[QX_SMALLBUF];` con commento sull'uso condiviso con setvar (TASK-03).
+      2. Creare `lib/USBHostUPS/src/QxEngineControl.cpp` (stessa intestazione di licenza/derivazione degli altri file Qx) con `instcmd()` esattamente nell'ordine del piano: `DataScope`, find_nut_info, ripieghi (`load.on`, `load.off`, `shutdown.return`, `shutdown.stayoff`; i due ultimi chiamano `setvar("ups.start.auto", ...)` solo se `getinfo("ups.start.auto")`: dichiarare `setvar` già in questo task come stub che restituisce `Setvar::Unknown`, completato in TASK-03; per questo dichiarare anche l'enum `Setvar` qui), `extradata` vuoto = nullptr, valore da `extradata`/`dfl`, preprocess → Failed, valore svuotato senza preprocess, `process()`, confronto `accepted`, `_dataChanged = true` sugli Handled.
+      3. `commandOffered()`: riga `QX_FLAG_CMD` senza SKIP (`findNutInfo(name, QX_FLAG_CMD, QX_FLAG_SKIP) >= 0`), oppure `load.off`/`load.on` senza riga propria con la riga `.delay`.
+      4. `QxEngine.cpp`: sostituire i commenti `// ... US-135` di `walk()` (righe sui comandi istantanei) e di `initInfo()` con il rimando a `commandOffered()`; nessun cambiamento di logica.
+      5. `platformio.ini` `[env:native]` `build_src_filter`: aggiungere `+<../lib/USBHostUPS/src/QxEngineControl.cpp>` dopo i file Qx esistenti.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine -f test_qx_protocols -f test_qx_probe` verde (compila, nessuna regressione).
+
+      **Fatto quando:** `instcmd()` e `commandOffered()` compilano in nativo e seguono riga per riga il codice upstream citato; nessun test esistente cambiato.
+
+      **Blocchi:** se un preprocess portato imposta `errno` o se serve un buffer più grande di `QX_SMALLBUF`, fermarsi e chiedere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngine.h — enum Instcmd/Setvar, dichiarazioni, membro _ctlValue
+      - lib/USBHostUPS/src/QxEngineControl.cpp — nuovo: instcmd(), commandOffered(), stub setvar()
+      - lib/USBHostUPS/src/QxEngine.cpp — solo commenti US-135 aggiornati
+      - platformio.ini — QxEngineControl.cpp nel build nativo
+
+      ## Criteri di Completamento
+      - [ ] Ordine dei passi e stati identici a nutdrv_qx.c:2802-2945, con le righe citate
+      - [ ] extradata vuoto trattato come assente; valore in _ctlValue, non nello stack
+      - [ ] Handled imposta _dataChanged
+      - [ ] commandOffered() copre le righe CMD non SKIP e load.off/load.on derivati
+      - [ ] Suite native Qx esistenti verdi
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test nativi di instcmd(): stringhe megatec, accettato, rifiutato, non offerto, ripieghi'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la suite nuova `test_qx_control` prova `QxEngine::instcmd()` e `commandOffered()` con il trasporto finto.
+
+      **Leggere:** `test/test_qx_protocols/test_main.cpp` (setup di un motore megatec: claim, initUps, initInfo), `test/mocks/QxTestingTransport.h` (`sent`, `override`, `failNext`, eco dei comandi sconosciuti), `test/mocks/QxTestingTables.h` (`MEGATEC_TESTING`, tabella innovatae); sezione "Strategia di test", parte motore instcmd, del piano.
+
+      **Modificare:**
+      1. Creare `test/test_qx_control/test_main.cpp` con un helper che costruisce un motore su un sottodriver e una tabella testing e lo porta oltre `initInfo()`.
+      2. Un test per comando megatec con la stringa esatta mandata (ultimo elemento di `sent`) e risposta `ACK` impostata con `override`: `Q\r`, `S00R0000\r`, `C\r`, `S.5R0003\r`, `S.5R0000\r`, `C\r`, `T10\r`, `T02\r` (parametro `"120"`), `T\r`, `TL\r`, `CT\r`.
+      3. Esiti: risposta vuota (`override(cmd, "")`) → Handled; eco → Failed; innovatae con trasporto `rejected` `NAK\r` → Failed; `test.battery.start` `"30"` → Failed senza invio; `shutdown.reboot` → Invalid senza invio; trasporto `failNext(1)` → Failed.
+      4. Data changed: dopo un Handled, `updateInfo(data, now + 2000)` manda `I\r` (poll completo); senza comando, no.
+      5. Sottodriver di prova definito nel file di test (righe `load.on.delay` `C%s\r`-like, `load.off.delay`, `ups.start.auto` ENUM SETVAR sul dispositivo, `ups.delay.*` ABSENT; accepted `ACK`) per i ripieghi: `load.off` → `load.off.delay` con `0`; `shutdown.return` → sequenza esatta `ups.start.auto` yes, on delay, off delay; `shutdown.stayoff` → `no`, `-1`, off delay; `ups.start.auto` rifiutato → Failed e nessun comando di spegnimento mandato. Le righe del sottodriver di prova vanno definite con preprocess di prova che formattano il valore nel comando, in modo che le stringhe attese siano deterministiche.
+      6. `commandOffered()`: i dieci comandi di megatec veri, `load.off.delay` falso; nel sottodriver di prova `load.off` vero solo grazie alla riga `.delay`; riga marcata SKIP (`addFlags`) → falso.
+      7. `platformio.ini`: niente da fare se la suite usa solo file già nel `build_src_filter`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_control` verde.
+
+      **Fatto quando:** ogni comando di megatec ha la sua stringa verificata, e sono provati rifiuto, non offerto e ripieghi.
+
+      **Blocchi:** se una stringa attesa differisce dal calcolo a mano su blazer_process_command upstream, fermarsi e segnalare invece di adattare l'asserzione.
+
+      ## File Coinvolti
+      - test/test_qx_control/test_main.cpp — nuovo: test di instcmd() e commandOffered()
+
+      ## Criteri di Completamento
+      - [ ] Stringa esatta per ciascuno dei 10 comandi megatec (più test.battery.start con parametro)
+      - [ ] Accettato, risposta vuota, eco, NAK, errore del trasporto, preprocess fallito
+      - [ ] Comando non offerto senza invio
+      - [ ] Ripieghi con ups.start.auto e sequenza esatta
+      - [ ] Poll completo dopo un comando riuscito
+    ref: TASK-02
+  - id: TASK-03
+    title: QxEngine::setvar(), port di setvar() con i controlli di info_rw
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il motore esegue un SET VAR come `setvar()` di `nutdrv_qx.c`, con intervalli, enumerazioni e lunghezza da `info_rw`.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c` righe 2948-3256 (setvar) e `qx_set_var()` (cercare `static void	qx_set_var(item_t *item)`, rami enum e range con il controllo `INT_MAX`); `QxTypes.h` (`QxInfoRw`, flag); `QxBlazerCommon.cpp` (`BLAZER_R_ONDELAY`, `BLAZER_R_OFFDELAY`, `blazerProcessSetvar`); `QxEngineControl.cpp` di TASK-01; sezione "QxEngine::setvar()" del piano.
+
+      **Modificare:**
+      1. `QxEngineControl.cpp`: sostituire lo stub con `setvar()` nell'ordine del piano: `DataScope`, find_nut_info SETVAR senza SKIP → Unknown; NONUT → Unknown (commento sul walk INIT upstream); `val` nullo o vuoto → Unknown; uguale a `getinfo()` → Handled; RANGE (non numerico → Unknown; `strtol` fuori intervallo → Unknown); ENUM (non presente → Unknown); STRING (troppo lungo → Unknown); preprocess → Unknown; ABSENT → `setinfo()` e Handled; altrimenti `process(row, ...)` e confronto `accepted` (Handled e `_dataChanged`, altrimenti Unknown).
+      2. Helper statico privato `rangeContains(const QxItem&, long v)`: coppie (min, max) di `info_rw` come in `qx_set_var()`; il preprocess di `info_rw` si chiama su una copia locale (le tabelle sono const); si saltano le coppie con estremi oltre `INT_MAX`. Helper analogo `enumContains(const QxItem&, const char*)` con `equalsIgnoreCase`.
+      3. Usare `_ctlValue` per il valore; aggiornare il commento del membro se serve.
+      4. Commento in testa a `setvar()`: gli stati restano upstream (STAT_SET_UNKNOWN anche per fuori intervallo, ADR 0003); il rifiuto prima del driver con INVALID-VALUE spetta al catalogo RW (US-136).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_control -f test_qx_engine` verde.
+
+      **Fatto quando:** `setvar()` segue riga per riga il codice upstream citato e i test di TASK-02 restano verdi.
+
+      **Blocchi:** se `QxInfoRw::preprocess` di un protocollo portato non è nullptr e modifica il valore in modo non riproducibile su una copia, fermarsi e chiedere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngineControl.cpp — setvar(), rangeContains(), enumContains()
+      - lib/USBHostUPS/src/QxEngine.h — dichiarazioni degli helper privati
+
+      ## Criteri di Completamento
+      - [ ] Ordine dei controlli e stati come nutdrv_qx.c:2948-3256
+      - [ ] Intervalli costruiti come qx_set_var(), con preprocess su copia e controllo INT_MAX
+      - [ ] ABSENT scrive UPSData senza _dataChanged
+      - [ ] Variabile sul dispositivo con confronto accepted
+      - [ ] Suite indicate verdi
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test nativi di setvar(): ritardi, fuori intervallo, enumerazione, stringa'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `test_qx_control` prova `QxEngine::setvar()` sulle righe vere di megatec e sul sottodriver di prova.
+
+      **Leggere:** `test/test_qx_control/test_main.cpp` (helper e sottodriver di prova di TASK-02); sezione "Strategia di test", parte setvar, del piano.
+
+      **Modificare:**
+      1. Megatec: `ups.delay.start` `600` → Handled e `data.get("ups.delay.start") == "600"`; `90` → `60`; `600000` → Unknown, valore invariato, `sent` invariato; `abc` e `-5` → Unknown; stesso valore → Handled senza invio; `ups.delay.shutdown` `45` → `42`, `11` → Unknown, `600` → Handled; `ups.beeper.status` → Unknown; `val` vuoto → Unknown.
+      2. `shutdown.return` dopo `ups.delay.shutdown=120` e `ups.delay.start=60` manda `S02R0001\r`.
+      3. Sottodriver di prova: riga ENUM sul dispositivo accettata (`ACK`, Handled, poll completo dopo), rifiutata per eco (Unknown), valore fuori enumerazione (Unknown senza invio); riga STRING con lunghezza massima 4: `"abcde"` → Unknown; riga RANGE con due coppie (es. 1-5 e 10-20): `7` → Unknown, `12` → Handled.
+      4. Un SET VAR ABSENT non rende completo il poll successivo (niente `_dataChanged`).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_control` verde.
+
+      **Fatto quando:** ogni ramo di `setvar()` ha almeno un test, compreso il fuori intervallo richiesto dalla spec.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_qx_control/test_main.cpp — test di setvar()
+
+      ## Criteri di Completamento
+      - [ ] Ritardi megatec: valori validi, troncati, fuori intervallo, non numerici, invariati
+      - [ ] shutdown.return con i ritardi impostati
+      - [ ] Enumerazione, stringa, intervallo a più coppie
+      - [ ] ABSENT senza poll completo forzato
+    ref: TASK-04
+  - id: TASK-05
+    title: Metodi neutri di IUpsControlPort e QxControl con shutdown.default
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il controllo Q* implementa `IUpsControl` passando solo da `IUpsControlPort`, con l'elenco dei comandi del protocollo e `shutdown.default` come `upsdrv_shutdown()`.
+
+      **Leggere:** `lib/USBHostUPS/src/IUpsControl.h`, `IUpsControlPort.h`, `HidControl.h` (struttura, `instance()`, `PortLock`, ramo `shutdown.default`), `UpsCommands.h`, `UpsVariables.h`; `nut_repo/drivers/nutdrv_qx.c` righe 3259-3369; sezioni "Metodi nuovi di IUpsControlPort", "QxControl" e "shutdown.default" del piano; `test/test_hid_transport/test_main.cpp` righe 140-200.
+
+      **Modificare:**
+      1. `IUpsControlPort.h`: aggiungere `driverCommands()`, `runDriverCommand()`, `runDriverSetVariable()` con i default e i commenti del piano; nessun include nuovo.
+      2. Creare `QxControl.h` (dichiarazione del piano, commento di classe: stateless, static lifetime, mai `hidPort()`, le funzioni statiche girano nel task di poll in US-136) e `QxControl.cpp` (intestazione di licenza/derivazione NUT): `instance()`, `supportedCommands`, `executeCommand` (controlli, `shutdown.default`, inoltro), `setVariable`, `commandsOf` (catalogo + `commandOffered()` + le due aggiunte del progetto con commento di deviazione), `runCommand`, `runSetVariable` (mappature del piano).
+      3. `shutdown.default`: `noteDefaultShutdown("")`; `shutdown.stop` fino a `QX_MAXTRIES` volte se offerto; `shutdown.return` fino a `QX_MAXTRIES` volte; al primo OK `noteDefaultShutdown("shutdown.return")`. Commento con le due deviazioni (ritardi in vigore, niente `stayoff`).
+      4. Include consentiti in `QxControl.*`: `IUpsControl.h`, `UpsCommands.h`, `UpsVariables.h`, `QxEngine.h`, `QxTypes.h`, `UPSData.h`; vietati `IHidControlPort.h`, `HidControl.h`, `IHidTransport.h`, `HIDUsages.h`, `HIDParser.h`, `NutTable.h`, `IUSBHostUPS.h`, `USBHostUPS.h`, `IUpsSource.h`. Mai la stringa `hidPort(`.
+      5. `platformio.ini` `[env:native]`: aggiungere `+<../lib/USBHostUPS/src/QxControl.cpp>`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_hid_transport -f test_hid_control -f test_ups_control_port -f test_driver_dispatch` verde (i default della porta non cambiano nulla per gli HID).
+
+      **Fatto quando:** `QxControl` compila in nativo, la porta ha i tre metodi con default, nessuna suite HID cambia.
+
+      **Blocchi:** se `NutTable::SetStatus` in `IUpsControlPort.h` richiede `NutTable.h` (vietato dallo scan), fermarsi: deve bastare `UpsVariables.h`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUpsControlPort.h — tre metodi neutri con default
+      - lib/USBHostUPS/src/QxControl.h — nuovo: classe QxControl
+      - lib/USBHostUPS/src/QxControl.cpp — nuovo: implementazione e shutdown.default
+      - platformio.ini — QxControl.cpp nel build nativo
+
+      ## Criteri di Completamento
+      - [ ] QxControl usa solo IUpsControlPort, nessun include HID, nessun hidPort(
+      - [ ] commandsOf in ordine di catalogo, con le due aggiunte documentate
+      - [ ] shutdown.default come upsdrv_shutdown(), un tentativo per riga di log tramite port.executeCommand()
+      - [ ] Suite HID indicate verdi senza modifiche
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Porta finta e test del controllo Q*: elenco per protocollo, non offerto, shutdown.default, niente hidPort()'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `test_qx_control` prova `QxControl` attraverso una porta finta che fa da host, e lo scan dei sorgenti copre i file nuovi.
+
+      **Leggere:** `test/test_ups_control_port/test_main.cpp` e `test/test_hid_control/test_main.cpp` (porte finte esistenti); `QxControl.h`; `QxProtocols.h` (`QX_SUBDRIVER_LIST`); `test/mocks/QxTestingTables.h`; sezione "Strategia di test", parte controllo e sorgenti, del piano.
+
+      **Modificare:**
+      1. Creare `test/mocks/QxFakeControlPort.h`: `IUpsControlPort` con riferimento a `QxEngine` e a `UPSData`, flag `connected` e `recognised`; `lock/unlock` vuoti; `driverCommands()` → `recognised ? QxControl::commandsOf(engine) : {}`; `runDriverCommand`/`runDriverSetVariable` → funzioni statiche di `QxControl`; `executeCommand(name, param)` registra la chiamata e richiama `QxControl::instance().executeCommand(*this, ...)` come l'host; `noteDefaultShutdown` registra `via`; override di `hidPort()` (entrambe le versioni) e `setBeeper()` che incrementano contatori. Il file non contiene la stringa `hidPort(` fuori dagli override necessari: è sotto `test/`, fuori dallo scan della libreria.
+      2. Test in `test_qx_control`: per ogni protocollo di `QX_SUBDRIVER_LIST` (con la sua tabella testing) l'elenco esatto di 11 nomi in ordine di catalogo (vedi piano); riga di comando SKIP sparisce; `recognised = false` → elenco vuoto, `executeCommand` NOT_SUPPORTED, `sent` invariato; `connected = false` → elenco vuoto, NOT_CONNECTED; `beeper.enable` e `load.off.delay` → NOT_SUPPORTED senza invio; `beeper.toggle` → OK e `Q\r`; `shutdown.default` nei tre scenari del piano (sequenza esatta di `sent`, `via` registrato, numero di tentativi); `setVariable` OK, UNKNOWN fuori intervallo, NOT_CONNECTED, valore nullo CONVERSION_FAILED. In `tearDown` (o alla fine di ogni test) contatori `hidPort()` e `setBeeper()` a 0.
+      3. `test/test_hid_transport/test_main.cpp`: aggiungere `lib/USBHostUPS/src/QxControl.h` e `QxControl.cpp` a un controllo sugli include vietati (stessa lista di `test_control_hook_is_protocol_neutral`) e controllare l'assenza di `hidPort(`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_control -f test_hid_transport` verde.
+
+      **Fatto quando:** sono provati l'elenco per ogni protocollo portato, il caso senza protocollo, il comando non offerto, `shutdown.default` e l'assenza di chiamate a `hidPort()`.
+
+      **Blocchi:** se l'elenco di un protocollo non è quello atteso perché la sua tabella non ha uno dei dieci comandi, verificare la tabella upstream e correggere l'atteso solo se upstream conferma.
+
+      ## File Coinvolti
+      - test/mocks/QxFakeControlPort.h — nuovo: porta finta che fa da host
+      - test/test_qx_control/test_main.cpp — test di QxControl
+      - test/test_hid_transport/test_main.cpp — QxControl tra i file senza include HID
+
+      ## Criteri di Completamento
+      - [ ] Elenco esatto per i sei protocolli portati
+      - [ ] Senza protocollo: elenco vuoto; non connesso: NOT_CONNECTED
+      - [ ] Comando non offerto senza invio
+      - [ ] shutdown.default nei tre scenari
+      - [ ] hidPort() e setBeeper() mai chiamati; scan dei sorgenti verde
+    ref: TASK-06
+  - id: TASK-07
+    title: Documentazione e regressione completa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** architettura aggiornata e nessuna regressione su nativo e build della scheda.
+
+      **Leggere:** `docs/concepts/architecture.md` (righe aggiunte da US-134 sul motore Q* e sul riconoscimento); sezione "Strategia di test", parte regressione, del piano.
+
+      **Modificare:**
+      1. `docs/concepts/architecture.md`: una riga sul controllo Q*. `QxControl` (`IUpsControl`) passa solo dai metodi neutri di `IUpsControlPort`; `QxEngine::instcmd()`/`setvar()` portano `nutdrv_qx.c`; l'host li eseguirà nel task di poll con US-136.
+      2. Eseguire tutte le suite native e la build `esp32-s3-standard`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` tutto verde (baseline 1277 più i casi nuovi); `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` compila.
+
+      **Fatto quando:** documentazione aggiornata, suite native verdi senza cambiare asserzioni esistenti, build della scheda riuscita.
+
+      **Blocchi:** se una suite esistente fallisce, fermarsi e indagare invece di cambiare l'asserzione.
+
+      ## File Coinvolti
+      - docs/concepts/architecture.md — riga sul controllo Q*
+
+      ## Criteri di Completamento
+      - [ ] Riga di architettura aggiunta
+      - [ ] Tutte le suite native verdi, numero di casi riportato
+      - [ ] Build esp32-s3-standard riuscita
+    ref: TASK-07

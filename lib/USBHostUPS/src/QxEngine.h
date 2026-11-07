@@ -63,6 +63,32 @@ public:
     // the UPS re-established"): as upstream, from 4 failures, one before Stale
     bool reestablished() const { return _reestablished; }
 
+    // --- Commands and SET VAR (US-135, QxEngineControl.cpp) ---------------------------
+    // STAT_INSTCMD_* of NUT
+    enum class Instcmd : uint8_t { Handled, Invalid, Failed, ConversionFailed };
+    // STAT_SET_* of NUT
+    enum class Setvar : uint8_t { Handled, Unknown, ConversionFailed };
+
+    /**
+     * @brief instcmd() of nutdrv_qx.c:2802-2945: the QX_FLAG_CMD row of cmdname, or the
+     * fallbacks load.on/load.off/shutdown.return/shutdown.stayoff on the load.*.delay rows.
+     *
+     * extradata nullptr or "" = none (upsd passes NULL). Handled sets data_has_changed.
+     */
+    Instcmd instcmd(UPSData& data, const char* cmdname, const char* extradata);
+    /**
+     * @brief setvar() of nutdrv_qx.c:2948-3256: the QX_FLAG_SETVAR row of varname, checked
+     * against its info_rw (range, enum or string length); a QX_FLAG_ABSENT row is written
+     * into data, the others are sent to the UPS.
+     */
+    Setvar setvar(UPSData& data, const char* varname, const char* val);
+    /**
+     * @brief dstate_addcmd() of the INIT walk (nutdrv_qx.c:4604-4608) and of
+     * upsdrv_initinfo() (3644-3656): a QX_FLAG_CMD row not skipped, or load.off / load.on
+     * derived from load.off.delay / load.on.delay. Meaningful after initInfo().
+     */
+    bool commandOffered(const char* cmdname) const;
+
     // --- Functions exported by nutdrv_qx.h -------------------------------------------
     // find_nut_info(): the row of varname, or -1
     int findNutInfo(const char* varname, uint32_t flag, uint32_t noflag) const;
@@ -121,6 +147,13 @@ private:
     int battery();
     void initBattery();
     void clearWork();
+    // instcmd()/setvar() with the data already bound (the fallbacks call them again)
+    Instcmd doInstcmd(const char* cmdname, const char* extradata);
+    Setvar doSetvar(const char* varname, const char* val);
+    // The ranges qx_set_var() publishes for a row (pairs of info_rw values)
+    static bool rangeContains(const QxItem& item, long value);
+    // The enum values qx_set_var() publishes for a row
+    static bool enumContains(const QxItem& item, const char* value);
 
     const QxSubdriver* _sub; // never null: set by the constructor and reset()
     IQxTransport& _transport;
@@ -137,6 +170,9 @@ private:
     char _infoval[QX_SMALLBUF];
     char _prevCommand[QX_SMALLBUF]; // previous_item of nutdrv_qx.c
     char _prevAnswer[QX_SMALLBUF];
+    // value[SMALLBUF] of instcmd()/setvar(), shared: the fallbacks of instcmd() call
+    // setvar()/instcmd() before filling it, so the two uses never overlap
+    char _ctlValue[QX_SMALLBUF];
 
     unsigned int _status = 0;
     String _alarms;

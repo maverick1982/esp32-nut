@@ -2,6 +2,7 @@
 #define I_UPS_CONTROL_PORT_H
 
 #include <Arduino.h>
+#include <vector>
 #include "UPSData.h"
 #include "UpsCommands.h"
 #include "UpsVariables.h"
@@ -46,6 +47,16 @@ public:
     // A saved driver-side value erased, the default applied (US-068)
     virtual NutTable::SetStatus resetDriverSideValue(const char* name, String& value) {
         return NutTable::SetStatus::NOT_CONNECTED;
+    }
+
+    // Commands of the attached driver's own protocol (Q*: its QX_FLAG_CMD rows and the derived
+    // ones, US-135), empty when no protocol is recognised. The HID host keeps the default.
+    virtual std::vector<const UPSCommandInfo*> driverCommands() const { return {}; }
+    // Runs one command / SET VAR on the driver's own transport. The host runs it in the poll
+    // task and waits for it (ADR 0013, section 3; US-136); the caller holds no lock.
+    virtual CommandResult runDriverCommand(const char* name, const char* param) { return CommandResult::NOT_SUPPORTED; }
+    virtual NutTable::SetStatus runDriverSetVariable(const char* name, const char* value) {
+        return NutTable::SetStatus::UNKNOWN;
     }
 
     // The HID part of the port, nullptr for a host of another protocol
