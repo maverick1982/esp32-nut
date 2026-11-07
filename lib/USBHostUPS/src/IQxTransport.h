@@ -8,8 +8,9 @@
  * of the USB subdriver *_command() functions of nut_repo/drivers/nutdrv_qx.c.
  *
  * The USB implementations derive from QxUsbTransport (US-136), which gives every command a
- * time budget enforced by the USB primitives; the subdrivers themselves (krauler, fabula,
- * hunnox, ...) fill the QxUsbTransports table with US-137. The native tests use fakes
+ * time budget enforced by the USB primitives; the subdrivers themselves fill the
+ * QxUsbTransports table (krauler, fabula and hunnox in QxUsbKrauler, US-137). The native
+ * tests use fakes
  * (test/mocks/QxTestingTransport.h, test/mocks/QxLoopbackTransport.h).
  */
 class IQxTransport {

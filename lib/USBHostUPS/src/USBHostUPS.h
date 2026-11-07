@@ -26,6 +26,7 @@
 #include "IQxUsbPrimitives.h"
 #include "IQxHostPort.h"
 #include "EventBacklog.h"
+#include "QxRequestBox.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -209,6 +210,7 @@ private:
         int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) override;
         void discardInput() override;
         void setDeadline(uint32_t deadlineMs) override { _deadline = deadlineMs; }
+        void sleepMs(uint32_t ms) override { vTaskDelay(pdMS_TO_TICKS(ms)); }
         uint32_t nowMs() const override { return millis(); }
         const char* lastError() const override { return _error; }
         void lock() const override { _h._mutex.lock(); }
@@ -226,16 +228,31 @@ private:
     };
     friend class QxUsbPort;
 
-    // A command or SET VAR of another task for the Q* driver, served by the poll task
-    struct QxRequest {
-        bool pending = false;
-        bool setvar = false;
-        char name[48] = {0};
-        char value[64] = {0};
-        uint32_t gen = 0;
-        CommandResult cmd = CommandResult::FAILED;
-        NutTable::SetStatus set = NutTable::SetStatus::FAILED;
+    // The Q* request box as the host backs it (US-137): its locks and semaphores, and the
+    // attached Q* driver. run*() in the poll task only.
+    class QxRequestPort : public IQxRequestSync, public IQxRequestTarget {
+    public:
+        explicit QxRequestPort(USBHostUPS& host) : _h(host) {}
+        void lock() override { _h._mutex.lock(); }
+        void unlock() override { _h._mutex.unlock(); }
+        bool ready() const override { return _h._qx_req_mutex && _h._qx_req_done; }
+        bool takeCaller(uint32_t ms) override;
+        void giveCaller() override { xSemaphoreGive(_h._qx_req_mutex); }
+        bool waitDone(uint32_t ms) override;
+        void signalDone() override {
+            if (_h._qx_req_done) xSemaphoreGive(_h._qx_req_done);
+        }
+        void drainDone() override { xSemaphoreTake(_h._qx_req_done, 0); }
+        bool inPollTask() const override { return xTaskGetCurrentTaskHandle() == _h._poll_task_handle; }
+        bool hasDriver() const override;
+        bool readyToPoll() const override { return _h._is_ready_to_poll; }
+        uint32_t waitMs() const override;
+        CommandResult runCommand(const char* name, const char* param) override;
+        NutTable::SetStatus runSetVariable(const char* name, const char* value) override;
+    private:
+        USBHostUPS& _h;
     };
+    friend class QxRequestPort;
     static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
     // Longest wait for the first full poll after a claim: past it the data is served
@@ -329,12 +346,12 @@ private:
     // The IN pipe is started and recovered for this interface: always for HID, for Q* only
     // when the transport reads interrupt IN (US-136)
     bool _in_pipe_wanted = true;
-    // Q* request of another task (US-136): _qx_req under _mutex, callers serialised by
-    // _qx_req_mutex, the poll task gives _qx_req_done when it answered
+    // Q* request of another task (US-136): the box state under _mutex, callers serialised by
+    // _qx_req_mutex, the poll task gives _qx_req_done when it answered (QxRequestBox, US-137)
     SemaphoreHandle_t _qx_req_mutex = NULL;
     SemaphoreHandle_t _qx_req_done = NULL;
-    QxRequest _qx_req;
-    uint32_t _qx_req_gen = 0;
+    QxRequestPort _qx_req_port{*this};
+    QxRequestBox _qx_box{_qx_req_port};
     uint32_t _stat_qx_ok = 0;     // Q* transfers of the traffic summary
     uint32_t _stat_qx_failed = 0;
     // Interface being closed by the loopTask: its synchronous DISCONNECTED is not queued

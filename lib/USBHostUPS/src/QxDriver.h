@@ -86,6 +86,9 @@ private:
     // Makes data equal to the shadow, under the host lock, when the shadow changed
     void publish(UPSData& data);
     void stepPolling(uint32_t now);
+    // A protocol other than the previous one was claimed (US-137): drops the shadow values
+    // except driver.name, ups.vendorid and ups.productid; the first walk fills them again
+    void dropProtocolValues(const char* from, const char* to);
 
     std::unique_ptr<QxUsbTransport> _transport;
     IQxHostPort& _host;
@@ -105,6 +108,9 @@ private:
     uint32_t _walkStartedAt = 0;
     bool _walkStarted = false; // at least one update walk since the init
     uint32_t _heldUntil = 0;
+    // Name (static, of the QxSubdriver) of the protocol claimed last: not reset by setup(), so
+    // a new claim after a recovery or a Held state can tell whether the protocol changed
+    const char* _lastProtocol = nullptr;
 };
 
 #endif // QX_DRIVER_H

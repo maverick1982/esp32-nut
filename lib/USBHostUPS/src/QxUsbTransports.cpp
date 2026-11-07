@@ -1,5 +1,6 @@
 #include "QxUsbTransports.h"
 #include <string.h>
+#include "QxUsbKrauler.h"
 
 namespace {
 
@@ -11,9 +12,17 @@ struct Row {
     uint32_t budgetMs; // the budget of the class, also in the table of QxUsbTransport.h
 };
 
-// US-137 adds krauler, fabula and hunnox here. The sentinel keeps the table valid while it
-// has no row.
+template <typename T>
+std::unique_ptr<QxUsbTransport> make(IQxUsbPrimitives& usb) {
+    return std::unique_ptr<QxUsbTransport>(new T(usb));
+}
+
+// The names of usbsubdriver[] (nut_repo/drivers/nutdrv_qx.c:3376-3392), as the DriverRegistry
+// Q* rows use them. The other subdrivers are added with their ports.
 const Row ROWS[] = {
+    { "krauler", &make<QxKraulerTransport>, QxKraulerTransport::BUDGET_MS }, // US-137
+    { "fabula",  &make<QxFabulaTransport>,  QxFabulaTransport::BUDGET_MS },  // US-137
+    { "hunnox",  &make<QxHunnoxTransport>,  QxHunnoxTransport::BUDGET_MS },  // US-137
     { nullptr, nullptr, 0 }
 };
 
