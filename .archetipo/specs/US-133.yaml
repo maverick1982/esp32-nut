@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-133
+title: 'Motore Q*: tabelle qx2nut, blazer-common e protocolli megatec e q1 con i test di NUT'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-133: Motore Q*: tabelle qx2nut, blazer-common e protocolli megatec e q1 con i test di NUT
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore che porta `nutdrv_qx` (ADR 0013, sezione 4),
+  voglio il motore che esegue le tabelle `qx2nut` come `nutdrv_qx.c`, con `blazer-common` e i protocolli `megatec` e `q1` copiati riga per riga,
+  in modo che i valori ricavati dalle risposte di un UPS Q* siano quelli che darebbe NUT, e che i protocolli successivi costino solo una tabella.
+
+  **Dimostrazione**
+  I test nativi rigiocano le tabelle `testing_t` di `nutdrv_qx_megatec.c` e `nutdrv_qx_q1.c` attraverso un trasporto finto: per ogni risposta di NUT le variabili in `UPSData` e lo `ups.status` calcolato sono quelli attesi, ricavati riga per riga dalle tabelle di NUT.
+
+  **Criteri di Accettazione**
+  - [ ] Le tabelle dei protocolli sono `static const`, copia riga per riga dei `qx2nut` di NUT (variabile, flag, comando, lunghezza minima e carattere iniziale della risposta, `from`/`to`, formato, `qxflags`, funzioni di preprocess); i valori letti (`answer`, `value`) stanno nell'istanza, indicizzati per riga.
+  - [ ] Il motore porta `qx_process()`, `ups_infoval_set()` e la visita delle tabelle con le classi di poll di NUT: righe statiche all'inizio, semi-statiche ogni `pollfreq`, rapide ogni `pollinterval`, con i valori predefiniti di NUT.
+  - [ ] Risposta troppo corta, carattere iniziale sbagliato o preprocess fallito: la riga viene scartata come in NUT, senza valori inventati.
+  - [ ] `blazer-common` è portato una volta sola e condiviso: i bit di stato finiscono negli stessi flag `ups.status.*` dei driver HID, così `UPSData::computeUPSStatusString()` dà lo stesso `ups.status` di upsd per la stessa risposta (OL, OB, LB, BYPASS, CAL, …).
+  - [ ] Protocolli `megatec` e `q1` (fallback) con i nomi e le chiavi di NUT.
+  - [ ] Test nativi da `testing_t` per entrambi i protocolli, più i casi di risposta non valida.
+
+  **Assunzioni**
+  - Logica pura (modulo `ups-protocol`), senza USB: il collegamento all'host arriva con US-136, il riconoscimento per tentativi con US-134, i comandi con US-135.
+  - Niente parser Q1 scritto a mano: solo il motore a tabelle (ADR 0013).
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

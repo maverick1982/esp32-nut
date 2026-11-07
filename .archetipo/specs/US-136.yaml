@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-136
+title: 'Driver Q* nella scheda: percorso Q* dopo l''aggancio, primitive USB, attesa limitata, dati stale e sezione Q* dell''export'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-136: Driver Q* nella scheda: percorso Q* dopo l'aggancio, primitive USB, attesa limitata, dati stale e sezione Q* dell'export
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-132, US-134, US-135
+
+  **User Story**
+  Come sviluppatore che porta i trasporti USB di `nutdrv_qx` (ADR 0013, sezioni 2, 3 e 5),
+  voglio che dopo l'aggancio di un UPS Q* l'host crei il driver Q* sul trasporto della riga trovata, con le primitive USB che servono ai trasporti Q* e un'attesa delle risposte limitata,
+  in modo che ogni trasporto successivo sia solo la copia del suo `*_command()` e che un tester possa mandarci un export diagnostico con gli scambi Q*.
+
+  **Dimostrazione**
+  Un test nativo dell'host con primitive finte e un trasporto Q* finto mostra il ciclo completo: aggancio, riconoscimento del protocollo, primo poll completo, valori in `UPSData`, comandi, dati stale dopo poll falliti, e la sezione Q* dell'export diagnostico. Con un UPS Q* senza trasporto portato la scheda resta su "non ancora supportato" (US-132). Con gli UPS HID non cambia nulla.
+
+  **Criteri di Accettazione**
+  - [ ] Primitive dell'host sull'interfaccia agganciata, senza lock applicativi durante il trasferimento (ADR 0008): SET_REPORT di byte arbitrari; string descriptor con indice e langid espliciti, **senza** la memoria degli indici falliti di `requestStringDescriptor()`; lettura dei pezzi dell'interrupt IN con timeout.
+  - [ ] L'interfaccia di trasporto Q* (un comando, una risposta, come i `*_command()` di NUT) è usata dal driver Q*, che implementa il nucleo di `IUPSDriver` con `hid() == nullptr`.
+  - [ ] Il comando Q* è sincrono nel task di poll: per l'interrupt IN la primitiva prende i pezzi dalla coda degli eventi fino al terminatore o al timeout del trasporto; gli altri eventi letti nel frattempo (scollegamento, errori) restano in ordine e vengono gestiti appena il comando finisce (test nativo).
+  - [ ] Un passo del poll blocca al massimo per i timeout di un comando del trasporto, molto meno dei 30 s del Task WDT; il limite è scritto nel piano per ogni trasporto.
+  - [ ] Monitor del collegamento e scala di ripristino ricevono gli esiti dei trasferimenti come per gli HID; i dati diventano stale dopo i poll falliti consecutivi previsti da `upsdrv_updateinfo()`; `isWaitingFirstData()` è vero fino al protocollo riconosciuto e al primo giro completo.
+  - [ ] Export diagnostico USB, sezione Q*: trasporto, protocollo, esito del riconoscimento e ultimi 20 scambi (comando, risposta grezza in testo ed esadecimale, lunghezza, ora, errore).
+  - [ ] Regressione HID: test nativi, replay ed e2e verdi senza cambiare le asserzioni; misura della flash sull'immagine ESP32 classica da 4 MB (#93) riportata nel PR.
+
+  **Assunzioni**
+  - Nessun trasporto USB reale in questa storia: krauler, fabula e hunnox arrivano con US-137.
+  - Estende l'ADR 0008 solo per il percorso Q*; i tempi del poll HID non cambiano.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

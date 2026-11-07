@@ -15,6 +15,8 @@ epics:
     title: Supporto multi-scheda (ESP32-P4, Ethernet)
   - code: EP-006
     title: 'Architettura modulare: sorgente UPS e trasporto'
+  - code: EP-007
+    title: Supporto UPS Q* (nutdrv_qx)
 order:
   - US-000
   - US-001
@@ -141,3 +143,11 @@ order:
   - US-139
   - US-126
   - US-127
+  - US-131
+  - US-132
+  - US-133
+  - US-134
+  - US-135
+  - US-136
+  - US-137
+  - US-138

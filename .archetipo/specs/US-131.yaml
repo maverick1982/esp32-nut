@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-131
+title: Nucleo neutro di IUPSDriver ed estensione HID raggiungibile solo da hid()
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-131: Nucleo neutro di IUPSDriver ed estensione HID raggiungibile solo da hid()
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore che aggiunge i driver Q* (ADR 0013, sezione 1),
+  voglio che `IUPSDriver` contenga solo ciò che l'host chiede a ogni driver e che i metodi HID stiano in un'estensione raggiungibile solo da `hid()`,
+  in modo che un driver di un'altra famiglia non riceva mai chiamate HID per errore (per esempio il watchdog degli INPUT report, che oggi resta attivo per ogni driver che non restituisce `inputValuesPolled() == true`).
+
+  **Dimostrazione**
+  Un test nativo aggancia all'host un driver finto senza estensione HID (`hid()` restituisce `nullptr`): l'host lo prepara, lo interroga e ne usa il controllo senza mai chiamare un metodo HID, e il watchdog degli INPUT non si attiva. Tutti i driver HID restituiscono la loro estensione e si comportano come prima: test nativi, replay ed e2e verdi senza cambiare le attese.
+
+  **Criteri di Accettazione**
+  - [ ] Il nucleo di `IUPSDriver` contiene solo ciò che l'host chiede a ogni famiglia: nome, `setup()`, poll periodico, `initialPollDone()`, `formatDeviceStrings()`, `control()`, ritardi predefiniti e presenza di `ups.delay.*`, variabili scrivibili e valori lato driver (`setDriverSideValue`, `resetDriverSideValue`, `noteHostValue`), `noteDataChanged()`, `requestSpacingMs()`, più `hid()`.
+  - [ ] Il nucleo non nomina tipi HID: niente `HIDUsageDef`, `HIDParser`, `IHidTransport`, report id o righe `HidInfo`.
+  - [ ] I metodi HID (`decodeReport`, `postDecode`, `planSet`, `requestLength`, `acceptDiagReport`, `invalidateReport`, `inputValuesPolled`, `parseStringDescriptor`, codifiche e capacità del beeper, `commandTable`, `delayPaths` e il poll con `IHidTransport`) passano nell'estensione HID. Un metodo resta nel nucleo solo se l'host lo usa per ogni famiglia; la distribuzione dei casi di confine è scritta nel piano.
+  - [ ] `USBHostUPS` chiama i metodi HID solo attraverso `hid()`; con `hid() == nullptr` non li chiama mai (test nativo con un driver finto).
+  - [ ] `GenericDriver` e i driver derivati restituiscono la loro estensione HID e non cambiano comportamento.
+  - [ ] Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni; tutte le build di `platformio.ini` compilano.
+
+  **Assunzioni**
+  - Refactoring puro (ADR 0010): stesso output NUT, stessa API web, stessi tempi, task e lock dello strato USB (ADR 0008).
+  - Fuori ambito: l'aggancio per famiglia (US-132) e qualsiasi codice Q*.
+  - Stesso schema di `IUpsControlPort::hidPort()` della US-105.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

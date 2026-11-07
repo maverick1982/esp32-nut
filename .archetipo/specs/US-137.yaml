@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-137
+title: Trasporti USB krauler, fabula e hunnox copiati da nutdrv_qx
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-137: Trasporti USB krauler, fabula e hunnox copiati da nutdrv_qx
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-136
+
+  **User Story**
+  Come utente con un UPS Q* dietro un bridge della famiglia krauler (0001:0000, come quelli di #91 e #28),
+  voglio che la scheda parli con il mio UPS come fa NUT, mandando i comandi come indici di string descriptor,
+  in modo che il mio UPS passi da "non ancora supportato" al riconoscimento del protocollo.
+
+  **Dimostrazione**
+  I test nativi con primitive finte controllano, per ogni comando, l'indice di string descriptor e il langid richiesti, i tentativi, la lunghezza del buffer e la risposta ricostruita, compresa la sequenza preliminare di hunnox. Sulla scheda, un UPS che corrisponde alle righe krauler, fabula o fabula_hunnox usa questi trasporti e arriva al riconoscimento del protocollo.
+
+  **Criteri di Accettazione**
+  - [ ] `krauler_command()`, `fabula_command()` e `hunnox_command()` (`nut_repo/drivers/nutdrv_qx.c:1294`, `1427`, `1546`) e la sequenza di `hunnox_protocol()` (`nutdrv_qx.c:1240-1291`) portati fedelmente: tabelle comando → indice, langid (0x0409 per hunnox quando `langid_fix` non è impostato), tentativi, buffer da 102 byte di hunnox, ricostruzione della risposta.
+  - [ ] Le righe Q* krauler, fabula e fabula_hunnox di US-132 usano questi trasporti; le altre righe restano "non ancora supportato".
+  - [ ] Un comando che il trasporto non sa codificare fallisce subito, senza trasferimenti USB, come in NUT.
+  - [ ] Il limite di attesa di ogni trasporto rispetta il criterio di US-136.
+  - [ ] Gli scambi compaiono nella sezione Q* dell'export diagnostico.
+  - [ ] Test nativi per i tre trasporti con primitive finte, compresi errori e risposte vuote.
+
+  **Assunzioni**
+  - `langid_fix` e `noscanlangid` non servono a #91: senza `langid_fix` il trasporto hunnox usa già 0x0409, e la scansione dei langid parte solo con `langid_fix`. Si aggiungono se un tester ne ha bisogno (ADR 0013).
+  - La verifica sull'UPS vero arriva con la build di test di US-138.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"
