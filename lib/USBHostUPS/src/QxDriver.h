@@ -54,6 +54,13 @@ public:
     const QxDriver* qx() const override { return this; }
 
     // --- Q* extension -------------------------------------------------------------------
+    // The protocol and novendor settings of Board Settings (US-138, protocol/novendor of
+    // ups.conf): protocol nullptr or "" for the automatic detection. Before setup() or the
+    // first poll() it only stores them; afterwards the detection starts again with them and
+    // the values of the previous protocol are dropped. Poll task (or before setup()).
+    void configure(const char* protocol, const QxOptions& options);
+    // Name of the claimed protocol ("Megatec 0.10"), "" before a claim. Host lock held
+    const char* claimedProtocol() const;
     // Poll task: a command / SET VAR of QxControl on the engine, between two steps (a walk
     // in progress starts again). NOT_SUPPORTED / UNKNOWN before the first walk.
     CommandResult runCommand(UPSData& data, const char* name, const char* param);
@@ -89,6 +96,8 @@ private:
     // A protocol other than the previous one was claimed (US-137): drops the shadow values
     // except driver.name, ups.vendorid and ups.productid; the first walk fills them again
     void dropProtocolValues(const char* from, const char* to);
+    // Removes from the shadow every key except driver.name, ups.vendorid and ups.productid
+    void dropValuesExceptIdentity();
 
     std::unique_ptr<QxUsbTransport> _transport;
     IQxHostPort& _host;
@@ -111,6 +120,10 @@ private:
     // Name (static, of the QxSubdriver) of the protocol claimed last: not reset by setup(), so
     // a new claim after a recovery or a Held state can tell whether the protocol changed
     const char* _lastProtocol = nullptr;
+    // The settings of configure() (US-138)
+    QxOptions _options;
+    // A poll() ran since setup(): configure() then restarts the detection
+    bool _started = false;
 };
 
 #endif // QX_DRIVER_H

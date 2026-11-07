@@ -79,14 +79,14 @@ void test_selects_megatec_old(void) { assertSelects(MEGATEC_OLD_TESTING, nullptr
 void test_selects_megatec(void) { assertSelects(MEGATEC_TESTING, nullptr, 7, "Megatec 0.10"); }
 // megatec asks I and gets the echo: 3 failed tries, then zinto with Q1 + FW?
 void test_selects_zinto(void) { assertSelects(ZINTO_TESTING, nullptr, 10, "Zinto 0.07"); }
-// megatec fails on the 37-byte I answer, zinto on the NAK to FW?
-void test_selects_innovatae(void) { assertSelects(INNOVATAE_TESTING, "NAK\r", 13, "INNOVATAE 0.01"); }
+// megatec fails on the 37-byte I answer, zinto and hunnox (US-138) on the NAK to FW?
+void test_selects_innovatae(void) { assertSelects(INNOVATAE_TESTING, "NAK\r", 16, "INNOVATAE 0.01"); }
 
 // A unit that answers only Q1: innovatae claims with blazer_claim_light (Q1 only) and comes
 // before the q1 fallback in subdriver_list[] (nutdrv_qx.c:111-116), so NUT picks innovatae
 // too; q1 is reached only with protocol = q1
 void test_q1_only_ups_is_innovatae_as_nut(void) {
-    assertSelects(Q1_TESTING, nullptr, 13, "INNOVATAE 0.01");
+    assertSelects(Q1_TESTING, nullptr, 16, "INNOVATAE 0.01"); // hunnox tries too since US-138
 }
 
 // MAXTRIES inside a protocol: the first two D queries fail, the third one is claimed
@@ -159,8 +159,8 @@ void test_no_answer_backoff(void) {
     int steps = 0;
     uint32_t now = 5000;
     TEST_ASSERT_TRUE(pr.run(now, &steps) == QxProber::Step::NotSupported);
-    TEST_ASSERT_EQUAL_INT(18, steps); // 6 protocols x QX_MAXTRIES
-    TEST_ASSERT_EQUAL_UINT(18, pr.t.sent.size());
+    TEST_ASSERT_EQUAL_INT(21, steps); // 7 protocols x QX_MAXTRIES
+    TEST_ASSERT_EQUAL_UINT(21, pr.t.sent.size());
     assertSingleNotSupportedLine(pr, "No protocol claimed the UPS, next probe in 30 s");
     TEST_ASSERT_EQUAL_UINT32(30000, pr.p.retryDelayMs());
     TEST_ASSERT_EQUAL_UINT(1, pr.p.failedCycles());
@@ -169,7 +169,7 @@ void test_no_answer_backoff(void) {
     // Waiting: nothing sent until the delay is over
     TEST_ASSERT_TRUE(pr.p.step(pr.d, now + 1) == QxProber::Step::Waiting);
     TEST_ASSERT_TRUE(pr.p.step(pr.d, now + 29999) == QxProber::Step::Waiting);
-    TEST_ASSERT_EQUAL_UINT(18, pr.t.sent.size());
+    TEST_ASSERT_EQUAL_UINT(21, pr.t.sent.size());
 
     // Each later cycle doubles the delay up to 10 minutes, without new log lines
     const uint32_t delays[] = { 60000, 120000, 240000, 480000, 600000, 600000 };
@@ -180,7 +180,7 @@ void test_no_answer_backoff(void) {
         TEST_ASSERT_TRUE(pr.p.step(pr.d, now) == QxProber::Step::Probing);
         TEST_ASSERT_EQUAL_UINT(sent + 1, pr.t.sent.size());
         TEST_ASSERT_TRUE(pr.run(now, &steps) == QxProber::Step::NotSupported);
-        TEST_ASSERT_EQUAL_INT(17, steps);
+        TEST_ASSERT_EQUAL_INT(20, steps);
         TEST_ASSERT_EQUAL_UINT32(next, pr.p.retryDelayMs());
         TEST_ASSERT_EQUAL_UINT32(now + next, pr.p.nextProbeAtMs());
         TEST_ASSERT_TRUE(pr.p.step(pr.d, now + next - 1) == QxProber::Step::Waiting);
@@ -268,16 +268,36 @@ void test_forced_name_like_ups_conf(void) {
     TEST_ASSERT_EQUAL_UINT(0, wrong.t.sent.size());
 }
 
-// A protocol not ported (hunnox before US-138): no command, back-off as for a failed cycle
+// A protocol not ported (voltronic): no command, back-off as for a failed cycle
 void test_forced_unknown_protocol(void) {
     Probe pr(MEGATEC_TESTING);
-    pr.p.configure("hunnox", QxOptions());
+    pr.p.configure("voltronic", QxOptions());
     TEST_ASSERT_NULL(pr.p.trying());
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 0) == QxProber::Step::NotSupported);
     TEST_ASSERT_EQUAL_UINT(0, pr.t.sent.size());
     TEST_ASSERT_EQUAL_UINT32(30000, pr.p.retryDelayMs());
-    assertSingleNotSupportedLine(pr, "Protocol hunnox did not claim the UPS");
+    assertSingleNotSupportedLine(pr, "Protocol voltronic did not claim the UPS");
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 1000) == QxProber::Step::Waiting);
+}
+
+// US-138: hunnox is never chosen automatically (zinto has the same claim and comes first, as
+// upstream); forced with novendor it is the only protocol tried, with Q1 only (#91)
+void test_forced_hunnox_tries_only_hunnox(void) {
+    Probe pr(HUNNOX_TESTING);
+    QxOptions opt;
+    opt.novendor = true;
+    pr.p.configure("hunnox", opt);
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", pr.p.trying()->name);
+    int steps = 0;
+    TEST_ASSERT_TRUE(pr.run(0, &steps) == QxProber::Step::Claimed);
+    TEST_ASSERT_EQUAL_INT(1, steps);
+    TEST_ASSERT_EQUAL_UINT(1, pr.t.sent.size());
+    TEST_ASSERT_EQUAL_STRING("Q1\r", pr.t.sent[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", pr.p.claimed()->name);
+}
+
+void test_automatic_never_selects_hunnox(void) {
+    assertSelects(HUNNOX_TESTING, nullptr, 10, "Zinto 0.07");
 }
 
 // Back to automatic: "" (or nullptr) tries the whole list again
@@ -433,6 +453,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_forced_q1_reachable);
     RUN_TEST(test_forced_name_like_ups_conf);
     RUN_TEST(test_forced_unknown_protocol);
+    RUN_TEST(test_forced_hunnox_tries_only_hunnox);
+    RUN_TEST(test_automatic_never_selects_hunnox);
     RUN_TEST(test_configure_back_to_automatic);
     RUN_TEST(test_novendor_reaches_claim);
     RUN_TEST(test_forced_name_truncated);

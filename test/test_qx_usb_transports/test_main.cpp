@@ -451,6 +451,50 @@ void test_hunnox_preamble_skips_the_index_being_asked(void) {
     assertSimpleRead(usb, 0, 0x0c);
 }
 
+// US-138: with novendor step 3 of the preamble reads nothing (hunnox_protocol(),
+// nutdrv_qx.c:1276); the other steps are those of the lock-step above
+void test_hunnox_novendor_skips_0x0c_in_the_preamble(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.stringDevice = true;
+    QxHunnoxTransport t(usb);
+    QxOptions opt;
+    opt.novendor = true;
+    t.setOptions(opt);
+    const uint16_t L = QxHunnoxTransport::PREAMBLE_LANGID;
+
+    send(t, usb, "Q1\r"); // step 0: 0, 0, 1
+    TEST_ASSERT_EQUAL(5, (int)usb.stringCalls.size());
+    usb.stringCalls.clear();
+    send(t, usb, "Q1\r"); // step 1: 0x0d
+    TEST_ASSERT_EQUAL(3, (int)usb.stringCalls.size());
+    assertCall(usb.stringCalls[0], 0x0d, L, 102);
+    usb.stringCalls.clear();
+    send(t, usb, "Q1\r"); // step 2: 0x03 is the command itself
+    TEST_ASSERT_EQUAL(2, (int)usb.stringCalls.size());
+    usb.stringCalls.clear();
+    Run r = send(t, usb, "Q1\r"); // step 3: no 0x0c, only the command
+    TEST_ASSERT_EQUAL(2, (int)usb.stringCalls.size());
+    assertSimpleRead(usb, 0, 0x03);
+    TEST_ASSERT_EQUAL_STRING("(215.0 195.0 230.0 014 49.0 22.7 30.0 00000000\r", r.text.c_str());
+    for (const auto& c : usb.stringCalls) TEST_ASSERT_NOT_EQUAL(0x0c, c.index);
+    usb.stringCalls.clear();
+    send(t, usb, "Q1\r"); // back to step 1
+    assertCall(usb.stringCalls[0], 0x0d, L, 102);
+}
+
+// Without novendor (or with it off again) step 3 reads 0x0c as in US-137
+void test_hunnox_options_default_reads_0x0c(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.stringDevice = true;
+    QxHunnoxTransport t(usb);
+    t.setOptions(QxOptions());
+    for (int i = 0; i < 3; i++) send(t, usb, "Q1\r");
+    usb.stringCalls.clear();
+    send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL(3, (int)usb.stringCalls.size());
+    assertCall(usb.stringCalls[0], 0x0c, QxHunnoxTransport::PREAMBLE_LANGID, 102);
+}
+
 void test_hunnox_battery_charge_index(void) {
     FakeQxUsbPrimitives usb(MEGATEC_TESTING);
     usb.stringDevice = true;
@@ -593,6 +637,8 @@ int main(int, char**) {
     RUN_TEST(test_fabula_mute_ups_stays_within_the_budget);
     RUN_TEST(test_hunnox_preamble_lock_step_over_five_commands);
     RUN_TEST(test_hunnox_preamble_skips_the_index_being_asked);
+    RUN_TEST(test_hunnox_novendor_skips_0x0c_in_the_preamble);
+    RUN_TEST(test_hunnox_options_default_reads_0x0c);
     RUN_TEST(test_hunnox_battery_charge_index);
     RUN_TEST(test_hunnox_unknown_command_is_echoed_before_the_preamble);
     RUN_TEST(test_hunnox_shutdown_encoding);

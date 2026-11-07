@@ -420,7 +420,7 @@ void test_qx_without_driver(void) {
     TEST_ASSERT_TRUE(got.find("\"failed\": 0\r\n  },\r\n  \"qx\": {\r\n    \"transport\": \"krauler\",\r\n"
                               "    \"protocol\": \"\",\r\n    \"probe\": \"\",\r\n    \"tries\": 0,\r\n"
                               "    \"failed_cycles\": 0,\r\n    \"retry_ms\": 0,\r\n    \"forced_protocol\": \"\",\r\n"
-                              "    \"exchanges\": []\r\n  },\r\n  \"scenarios\": [") != std::string::npos);
+                              "    \"novendor\": false,\r\n    \"exchanges\": []\r\n  },\r\n  \"scenarios\": [") != std::string::npos);
     JsonDocument doc;
     TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
     TEST_ASSERT_EQUAL_STRING("krauler", doc["qx"]["transport"]);
@@ -439,6 +439,7 @@ void test_qx_two_exchanges(void) {
     s.qx.failed_cycles = 2;
     s.qx.retry_ms = 30000;
     s.qx.forced_protocol = "megatec";
+    s.qx.novendor = true;
     UsbDiagQxExchange ok = qxExchange("Q1\r", "(229.0 230\r", 11, 12345, 250, "");
     ok.time = "2026-11-07 10:15:42";
     s.qx.exchanges.push_back(ok);
@@ -468,6 +469,9 @@ void test_qx_two_exchanges(void) {
     TEST_ASSERT_EQUAL(2, q["failed_cycles"].as<int>());
     TEST_ASSERT_EQUAL(30000, q["retry_ms"].as<int>());
     TEST_ASSERT_EQUAL_STRING("megatec", q["forced_protocol"]);
+    // US-138: the novendor setting, right after forced_protocol
+    TEST_ASSERT_TRUE(q["novendor"].as<bool>());
+    TEST_ASSERT_TRUE(got.find("\"forced_protocol\": \"megatec\",\r\n    \"novendor\": true,\r\n") != std::string::npos);
     TEST_ASSERT_EQUAL_STRING("(229.0 230\r", q["exchanges"][0]["answer_text"]);
     TEST_ASSERT_TRUE(q["exchanges"][1]["time"].isNull());
     TEST_ASSERT_EQUAL(-7, q["exchanges"][1]["length"].as<int>());

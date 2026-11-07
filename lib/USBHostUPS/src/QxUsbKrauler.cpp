@@ -237,7 +237,7 @@ void QxHunnoxTransport::preamble(int askingFor) {
     // The answers are not used and the results are ignored, as upstream. Upstream reads the
     // first three into a 1030-byte buffer with 1026: the primitive asks at most 255 bytes
     // (hid_host.c caps wLength there) and never writes more, and a string descriptor is never
-    // longer than 255 bytes. The novendor option is not ported (step 3 always reads 0x0c).
+    // longer than 255 bytes. With novendor step 3 reads nothing (US-138).
     uint8_t tmp[255];
     const uint16_t langid = PREAMBLE_LANGID; // langid_fix is not ported
 
@@ -255,7 +255,7 @@ void QxHunnoxTransport::preamble(int askingFor) {
         if (askingFor != 0x03) _usb.getStringDescriptor(0x03, langid, tmp, 102);
         break;
     case 3:
-        if (askingFor != 0x0c) _usb.getStringDescriptor(0x0c, langid, tmp, 102);
+        if (askingFor != 0x0c && !_novendor) _usb.getStringDescriptor(0x0c, langid, tmp, 102);
         break;
     default:
         _step = 0;

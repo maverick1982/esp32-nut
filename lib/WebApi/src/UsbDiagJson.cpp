@@ -137,6 +137,7 @@ void qxSection(ChunkWriter& w, const UsbDiagQx& q) {
     key(w, 2, "failed_cycles", false);   num(w, q.failed_cycles);
     key(w, 2, "retry_ms", false);        num(w, q.retry_ms);
     key(w, 2, "forced_protocol", false); str(w, q.forced_protocol);
+    key(w, 2, "novendor", false);        raw(w, q.novendor ? "true" : "false"); // US-138
     key(w, 2, "exchanges", false);
     if (q.exchanges.empty()) {
         raw(w, "[]");

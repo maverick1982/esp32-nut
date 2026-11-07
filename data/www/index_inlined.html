@@ -4182,6 +4182,70 @@ body.auth-page {
                                 reachable, the UPS is just not seen until you pick the right port here.</p>
                         </section>
 
+                        <!-- US-138: options of the Q* driver (nutdrv_qx), only while a Q* UPS is bound -->
+                        <section class="board-section" id="qx-section" aria-labelledby="qx-title" hidden>
+                            <div class="cred-section" id="qx-title">Q* UPS driver</div>
+
+                            <p class="board-hint">Options of the NUT nutdrv_qx driver, as protocol and novendor in
+                                ups.conf. Change them only if the UPS is not detected, or as NUT needs for your
+                                model. Applied immediately, no restart.</p>
+
+                            <form class="rlog-form" id="qx-form" novalidate>
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Detected protocol</span>
+                                        <span class="board-hint">The protocol that answered the board.</span>
+                                    </div>
+                                    <div class="board-control">
+                                        <span class="led-state" id="qx-detected">Not detected yet</span>
+                                    </div>
+                                </div>
+
+                                <div class="rlog-fields">
+                                    <!-- "Automatic" plus the names of "qx.protocols" of GET /api/board -->
+                                    <div class="form-group">
+                                        <label for="qx-protocol">Protocol</label>
+                                        <div class="set-field" id="f-qx-protocol"><select id="qx-protocol"
+                                                aria-label="Q* protocol"></select></div>
+                                    </div>
+                                </div>
+
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">novendor</span>
+                                        <span class="board-hint">Do not ask the UPS for vendor information (FW? / I),
+                                            as novendor in ups.conf.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="qx-novendor" aria-label="novendor">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="qx-novendor-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <div class="auth-alert" id="qx-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="qx-error-text"></span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-qx" disabled>
+                                        <span class="glow"></span>
+                                        <span class="btn-label">Save</span>
+                                    </button>
+                                    <span class="cmd-result" id="qx-result" aria-live="polite"></span>
+                                </div>
+                            </form>
+
+                            <p class="auth-fineprint">A wrong value leaves the UPS without data, but does not lock you
+                                out of the board: set Automatic again here.</p>
+                        </section>
+
                         <!-- US-114: automatic shutdown on low battery (every board) -->
                         <section class="board-section" id="autosd-section">
                             <div class="cred-section">Automatic shutdown</div>
@@ -8272,6 +8336,170 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tab) tab.click();
         });
 
+        // ---------- US-138: Q* driver options, applied without a restart ----------
+        const qxSelect = B('qx-protocol');
+        const qxSwitch = B('qx-novendor');
+        const btnSaveQx = B('btn-save-qx');
+        const qxResult = B('qx-result');
+        // While the protocol is not detected yet and the Board tab stays open, GET /api/board
+        // again every QX_REFRESH_MS: only "Detected protocol" changes, never the controls
+        const QX_REFRESH_MS = 5000;
+        let qxBusy = false;
+        let qxTimers = [];
+        let qxRefreshTimer = null;
+        let qxRefreshSeq = 0;
+
+        // The "qx" object of GET /api/board, present only while a Q* driver is bound
+        function qxState() {
+            const q = board && board.qx && typeof board.qx === 'object' ? board.qx : null;
+            if (!q) return null;
+            return {
+                protocol: typeof q.protocol === 'string' ? q.protocol : '',
+                novendor: q.novendor === true,
+                protocols: Array.isArray(q.protocols)
+                    ? q.protocols.filter(p => typeof p === 'string' && p !== '') : [],
+                detected: typeof q.detected === 'string' ? q.detected : ''
+            };
+        }
+
+        function qxDirty() {
+            const q = qxState();
+            return !!q && (qxSelect.value !== q.protocol || qxSwitch.checked !== q.novendor);
+        }
+
+        function refreshQxControls() {
+            const on = qxSwitch.checked;
+            B('qx-novendor-state').textContent = on ? 'On' : 'Off';
+            B('qx-novendor-state').classList.toggle('on', on);
+            qxSelect.disabled = qxBusy;
+            qxSwitch.disabled = qxBusy;
+            btnSaveQx.disabled = qxBusy || !qxDirty();
+        }
+
+        // Controls back to the saved values
+        function renderQx() {
+            const q = qxState();
+            B('qx-section').hidden = !q;
+            if (!q) {
+                stopQxRefresh();
+                return;
+            }
+            qxSelect.textContent = '';
+            const auto = document.createElement('option');
+            auto.value = '';
+            auto.textContent = 'Automatic';
+            qxSelect.appendChild(auto);
+            q.protocols.forEach(p => {
+                const o = document.createElement('option');
+                o.value = p;
+                o.textContent = p;
+                qxSelect.appendChild(o);
+            });
+            // A saved name the list does not have (older firmware): shown as automatic
+            qxSelect.value = q.protocols.includes(q.protocol) ? q.protocol : '';
+            qxSwitch.checked = q.novendor;
+            renderQxDetected(q.detected);
+            refreshQxControls();
+            scheduleQxRefresh();
+        }
+
+        function renderQxDetected(detected) {
+            const det = B('qx-detected');
+            det.textContent = detected || 'Not detected yet';
+            det.classList.toggle('on', detected !== '');
+        }
+
+        function stopQxRefresh() {
+            qxRefreshSeq++;
+            if (qxRefreshTimer) clearTimeout(qxRefreshTimer);
+            qxRefreshTimer = null;
+        }
+
+        // Armed after every render of the section: one pending read at most
+        function scheduleQxRefresh() {
+            stopQxRefresh();
+            const q = qxState();
+            if (!q || q.detected !== '' || sessionExpired || boardRestarting) return;
+            const seq = qxRefreshSeq;
+            qxRefreshTimer = setTimeout(() => refreshQxDetected(seq), QX_REFRESH_MS);
+        }
+
+        async function refreshQxDetected(seq) {
+            qxRefreshTimer = null;
+            if (seq !== qxRefreshSeq || sessionExpired || boardRestarting ||
+                !boardContent.classList.contains('active')) return;
+            let data = null;
+            try {
+                const res = await apiFetch('/api/board', { cache: 'no-store' });
+                if (res.ok) data = await res.json();
+            } catch (err) {
+                console.error('Failed to refresh the Q* section:', err);
+            }
+            // Tab left, tab opened again or settings saved meanwhile
+            if (seq !== qxRefreshSeq || !board || !board.qx) return;
+            if (data && typeof data === 'object') {
+                if (!data.qx || typeof data.qx !== 'object') {
+                    // The Q* UPS was unplugged: the section goes away
+                    delete board.qx;
+                    B('qx-section').hidden = true;
+                    return;
+                }
+                board.qx.detected = typeof data.qx.detected === 'string' ? data.qx.detected : '';
+                renderQxDetected(board.qx.detected);
+            }
+            // A failed read just waits for the next one
+            scheduleQxRefresh();
+        }
+
+        function clearQxResult() {
+            qxTimers.forEach(t => clearTimeout(t));
+            qxTimers = [];
+            qxResult.className = 'cmd-result';
+            qxResult.textContent = '';
+        }
+
+        function showQxResult(text) {
+            clearQxResult();
+            qxResult.className = 'cmd-result success';
+            qxResult.textContent = `✓ ${text}`;
+            qxTimers.push(setTimeout(() => qxResult.classList.add('fade'), BOARD_RESULT_MS));
+            qxTimers.push(setTimeout(clearQxResult, BOARD_RESULT_MS + 600));
+        }
+
+        qxSelect.addEventListener('change', () => {
+            B('qx-error').hidden = true;
+            refreshQxControls();
+        });
+        qxSwitch.addEventListener('change', () => {
+            B('qx-error').hidden = true;
+            refreshQxControls();
+        });
+
+        B('qx-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!board || qxBusy || !qxDirty()) return;
+            const payload = { qx_protocol: qxSelect.value, qx_novendor: qxSwitch.checked };
+            B('qx-error').hidden = true;
+            clearQxResult();
+            qxBusy = true;
+            refreshQxControls();
+            const r = await postBoard(payload);
+            qxBusy = false;
+            if (r.ok) {
+                board.qx.protocol = payload.qx_protocol;
+                board.qx.novendor = payload.qx_novendor;
+                // The detection starts again on the board
+                board.qx.detected = '';
+                renderQx();
+                showQxResult('Saved · detecting the protocol again');
+            } else {
+                // The controls go back to the saved values
+                renderQx();
+                B('qx-error-text').textContent = r.message;
+                B('qx-error').hidden = false;
+            }
+        });
+
         // ---------- UPS USB port: saved, then the board restarts ----------
         function setUsbButton(label, spinner) {
             btnSaveUsb.innerHTML = '<span class="glow"></span>' + (spinner ? BOARD_SPINNER : '');
@@ -8414,6 +8642,10 @@ document.addEventListener('DOMContentLoaded', () => {
             B('usb-section').hidden = !hasUsb;
             if (hasUsb) renderUsb(ports);
 
+            // US-138: only while a Q* driver is bound
+            B('qx-error').hidden = true;
+            renderQx();
+
             // US-114: on every board
             B('autosd-error').hidden = true;
             renderAutoShutdown();
@@ -8442,10 +8674,12 @@ document.addEventListener('DOMContentLoaded', () => {
             renderBoard();
         }
 
-        // One read per opening, no periodic requests
+        // One read per opening; the only periodic request is the Q* refresh (US-138), while the
+        // protocol is not detected yet and only with this tab open
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
                 if (tab.getAttribute('data-target') === 'board') loadBoard();
+                else stopQxRefresh();
             });
         });
         if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();

@@ -788,6 +788,70 @@
                                 reachable, the UPS is just not seen until you pick the right port here.</p>
                         </section>
 
+                        <!-- US-138: options of the Q* driver (nutdrv_qx), only while a Q* UPS is bound -->
+                        <section class="board-section" id="qx-section" aria-labelledby="qx-title" hidden>
+                            <div class="cred-section" id="qx-title">Q* UPS driver</div>
+
+                            <p class="board-hint">Options of the NUT nutdrv_qx driver, as protocol and novendor in
+                                ups.conf. Change them only if the UPS is not detected, or as NUT needs for your
+                                model. Applied immediately, no restart.</p>
+
+                            <form class="rlog-form" id="qx-form" novalidate>
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Detected protocol</span>
+                                        <span class="board-hint">The protocol that answered the board.</span>
+                                    </div>
+                                    <div class="board-control">
+                                        <span class="led-state" id="qx-detected">Not detected yet</span>
+                                    </div>
+                                </div>
+
+                                <div class="rlog-fields">
+                                    <!-- "Automatic" plus the names of "qx.protocols" of GET /api/board -->
+                                    <div class="form-group">
+                                        <label for="qx-protocol">Protocol</label>
+                                        <div class="set-field" id="f-qx-protocol"><select id="qx-protocol"
+                                                aria-label="Q* protocol"></select></div>
+                                    </div>
+                                </div>
+
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">novendor</span>
+                                        <span class="board-hint">Do not ask the UPS for vendor information (FW? / I),
+                                            as novendor in ups.conf.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="qx-novendor" aria-label="novendor">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="qx-novendor-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <div class="auth-alert" id="qx-error" role="alert" hidden>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 8v4M12 16h.01" />
+                                    </svg>
+                                    <span id="qx-error-text"></span>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-qx" disabled>
+                                        <span class="glow"></span>
+                                        <span class="btn-label">Save</span>
+                                    </button>
+                                    <span class="cmd-result" id="qx-result" aria-live="polite"></span>
+                                </div>
+                            </form>
+
+                            <p class="auth-fineprint">A wrong value leaves the UPS without data, but does not lock you
+                                out of the board: set Automatic again here.</p>
+                        </section>
+
                         <!-- US-114: automatic shutdown on low battery (every board) -->
                         <section class="board-section" id="autosd-section">
                             <div class="cred-section">Automatic shutdown</div>

@@ -1,0 +1,611 @@
+schema: archetipo/plan/v2
+spec_code: US-138
+body: |
+  ---
+  type: plan
+  title: "US-138: Protocollo hunnox e impostazioni protocol e novendor in Board Settings, con build di test per #91 e #28 — Piano di implementazione"
+  description: "Piano di implementazione per US-138"
+  tags: [plan, implementation, US-138]
+  ---
+  # US-138: Protocollo hunnox e impostazioni protocol e novendor in Board Settings, con build di test per #91 e #28 — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utente con un UPS Q* che NUT fa funzionare solo con `protocol` e `novendor` in `ups.conf` (come tda2806 con il VIDA Armour 1200VA di #91), voglio scegliere il protocollo e attivare `novendor` nella pagina Board Settings, in modo che la scheda parli con il mio UPS come NUT, e che i reporter di #91 e #28 possano provarlo con una build di test.
+
+  **Criteri di Accettazione**
+  - Protocollo `hunnox` portato da `nutdrv_qx_hunnox.c` come in US-133, con i test della sua tabella `testing_t` (compreso `BL` per la carica della batteria).
+  - Board Settings mostra la sezione del driver Q* solo quando è agganciato un UPS Q*; con un UPS HID o senza UPS non compare.
+  - `protocol`: "Automatico" (predefinito) o uno dei protocolli portati, con i nomi di NUT; `novendor` spento per default; valori in NVS, validi dopo un riavvio.
+  - Il salvataggio applica i valori senza riavviare la scheda: il riconoscimento riparte con il protocollo forzato e con `novendor` (niente domanda sul firmware nel claim, niente indice 0x0c nella sequenza di hunnox). Il System Log scrive la modifica e chi l'ha fatta.
+  - Protocollo e opzioni attive nella sezione Q* dell'export diagnostico.
+  - e2e della sezione Board Settings.
+  - Build di test (zip OTA) per #91 e #28 con le istruzioni; "Refs #N"; il supporto Q* va in release solo dopo la conferma di almeno uno dei due.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Tutti i pezzi esistono già (US-133…137): motore, prober con `configure(protocol, options)`, trasporto hunnox, export Q*. US-138 porta l'ultimo protocollo e collega le due impostazioni dalla NVS fino al prober e al trasporto, passando per il task di poll, senza riavvio.
+
+  - **Protocollo hunnox.** `lib/USBHostUPS/src/QxHunnox.cpp` copia riga per riga `nut_repo/drivers/nutdrv_qx_hunnox.c` ("Hunnox 0.03", `blazerClaim`, risposta accettata "UPS No Ack", ritardi `ups.delay.start` "0" e `ups.delay.shutdown` "60" come nella tabella upstream, non i DEFAULT_*), con `hunnoxBatteryCharge()` che legge `qx.answer()` come `hunnox_battery_charge()` legge `item->answer`. In `QX_SUBDRIVER_LIST` prende il posto del commento `// &hunnox_subdriver, (US-138)`, dopo zinto: in automatico non viene mai scelto perché zinto (stesso claim) viene prima, come upstream (ADR 0013).
+  - **Perché serve `novendor` per #91.** `blazerClaim` chiede `FW?` dopo `Q1`, ma la tabella dei comandi del trasporto hunnox non codifica `FW?` (solo Q1, F, I, Q, C, BL): il comando viene restituito come eco e il claim fallisce. Con `novendor` il claim si ferma a `Q1`. È lo stesso motivo per cui tda2806 usa `novendor` con NUT.
+  - **`novendor` nel trasporto.** `QxUsbTransport` riceve `virtual void setOptions(const QxOptions&) {}`; `QxHunnoxTransport` lo ridefinisce e nel passo 3 del preambolo salta l'indice 0x0c con `novendor`, come `hunnox_protocol()` (`nutdrv_qx.c:1276`: `if (asking_for != 0x0c && !testvar("novendor"))`). Il commento "novendor option is not ported" va aggiornato.
+  - **Nomi dei protocolli.** In `QxProtocols.h/.cpp` due funzioni pure: `qxProtocolName(sub, out, outlen)` (nome prima dello spazio, minuscolo: "mustek", "megatec/old", "megatec", "zinto", "hunnox", "innovatae", "q1") e `qxFindProtocol(name, list = QX_SUBDRIVER_LIST)` (via `qxProtocolMatches`, nullptr per null, "" o nome sconosciuto). Costante `QX_PROTOCOL_NAME_MAX = 16`. La lista che vede l'utente segue l'ordine di `QX_SUBDRIVER_LIST`.
+  - **Modello e NVS.** `BoardSettings` (`include/board/board_settings.h`) riceve `char qx_protocol[QX_PROTOCOL_NAME_MAX]` ("" = automatico) e `bool qx_novendor` (false), in fondo alla struct. `sanitize()` riporta a "" un nome che `qxFindProtocol` non conosce (NVS corrotta, protocollo tolto in futuro) e lo riscrive col nome canonico minuscolo: un valore sbagliato non blocca nulla (ADR 0010, PDR 0002 D4). `BoardSettingsStore` usa le chiavi `qx_proto` (stringa) e `qx_novendor` (bool) nel namespace "board".
+  - **Applicazione senza riavvio.** `USBHostUPS::setQxSettings(protocol, novendor)` (qualsiasi task) copia i valori sotto `_mutex` e incrementa una generazione. Il task di poll, prima del passo del driver, confronta la generazione con quella applicata; se cambia e c'è un `QxDriver`, copia i valori sotto lock e chiama `QxDriver::configure()` **senza lock** (ADR 0008). `attachQxDriver()` configura il driver nuovo con i valori correnti prima di `setup()`, così anche un aggancio dopo il riavvio usa la NVS. `main.cpp` chiama `setQxSettings()` con i valori caricati prima di `usb_ups.begin()`.
+  - **`QxDriver::configure(protocol, options)`.** Salva le opzioni, chiama `_prober.configure()` e `_transport->setOptions()`. Se il driver era già partito (stato diverso dal primo Probing dopo `setup()`): butta il motore, torna in Probing, azzera `_firstWalkDone`, `_stale`, `_walkStarted`, `_lastProtocol`, svuota `_commands` sotto lock e toglie dall'ombra tutte le chiavi tranne `driver.name`, `ups.vendorid`, `ups.productid` (come `dropProtocolValues`, con `remove()` così `publish()` le toglie anche dai dati dell'host). Scrive `[Q*] Settings changed (protocol: <nome|auto>, novendor: on|off): detecting the protocol again`. Lato host, `applyQxSettings` rimette `_first_data_ready = false` e `_claimed_at = millis()` come `attachQxDriver()`, così Web UI e server NUT tornano ad "attesa dei primi dati" fino al primo walk del nuovo protocollo (`firstDataWaitBounded()` è false sul Q*: nessun timeout).
+  - **API.** `GET /api/board` aggiunge `"qx":{"protocol":"","novendor":false,"protocols":[...],"detected":"Megatec 0.10"}` **solo** quando è agganciato un `QxDriver` (`detected` vuoto finché nessun protocollo ha fatto il claim). Un UPS Q* con trasporto non ancora portato ("Not supported yet") non ha `QxDriver`: la sezione non compare, perché le impostazioni non avrebbero effetto. `POST /api/board` accetta `qx_protocol` (stringa: "" oppure un nome noto, senza distinzione di maiuscole, salvato in minuscolo; altrimenti 400 "Invalid protocol") e `qx_novendor` (bool, altrimenti 400 "Invalid request"); sono accettati anche senza UPS Q* (sono configurazione della scheda, valgono al prossimo aggancio). La risposta resta `{"success":true,"restart":false}`.
+  - **Log.** `WebConfigServer::handleSetBoard` scrive, solo se i valori Q* cambiano, `[BOARD] Q* driver settings: protocol <nome|auto>, novendor on|off (by '<utente>')` con `webUiUser()`, poi chiama `usb_ups->setQxSettings()` (con `usb_ups` nullo salva soltanto).
+  - **Export.** `UsbDiagQx` riceve `bool novendor`, che `fillDiagnostics()` riempie dalle opzioni del driver; `UsbDiagJson::qxSection` scrive `"novendor"` subito dopo `"forced_protocol"`. Con `qx.present` falso l'export HID non cambia.
+  - **Web UI.** Nuova `section.board-section#qx-section` in `data/www/index.html`, subito dopo `#usb-section`, con lo stile delle sezioni esistenti (`cred-section`, `board-row`, `switch`, `form-actions`, `auth-alert`): titolo "Q* UPS driver", riga "Detected protocol" (`#qx-detected`, "Not detected yet" se vuoto), `select#qx-protocol` ("Automatic" con valore "", poi i nomi di `protocols`), switch `#qx-novendor` con lo stato `#qx-novendor-state`, pulsante `#btn-save-qx` "Save" abilitato solo con modifiche, esito `#qx-result` ("Saved · detecting the protocol again"), errore `#qx-error`/`#qx-error-text`, nota fine che un valore sbagliato lascia l'UPS senza dati ma non blocca la scheda. `renderBoard()` mostra la sezione solo se `board.qx` è un oggetto. Dopo la modifica: `python scripts/inline_web.py` e `python scripts/embed_web.py`.
+  - **Niente mockup:** è una sezione in più dentro una pagina esistente, fatta coi componenti già presenti (select + switch + salva, come la sezione Time).
+  - **Fuori dallo scope:** `langid_fix`, `noscanlangid`, `subdriver`, `norating`, `ignoresab` (ADR 0013: si aggiungono quando servono a un tester); catalogo RW Q*; pubblicazione della release.
+
+  ---
+
+  ## Strategia di test
+
+  Test nativi Unity per ogni pezzo puro, e2e Playwright per la sezione della pagina, build e misura della flash, poi la build di test per i reporter.
+
+  - `test_qx_protocols`: valori della tabella `hunnox_testing` (copiata in `test/mocks/QxTestingTables.h`) con il motore, compreso `BL100` → `battery.charge` 100; risposte `BL101`, `BL-1` e `XX100` → nessun valore (preprocess -1); claim che manda `Q1` e `FW?`, e solo `Q1` con `novendor`; ordine di `QX_SUBDRIVER_LIST` con "Hunnox 0.03" dopo zinto; `qxProtocolMatches(QX_HUNNOX, "HUNNOX")`; `qxProtocolName` e `qxFindProtocol`.
+  - `test_qx_probe`: `test_forced_unknown_protocol` passa a un nome non portato ("voltronic"); `protocol = hunnox` prova solo hunnox.
+  - `test_qx_usb_transports`: con `novendor` il passo 3 del preambolo non legge 0x0c in un intero giro di lock-step; senza, la sequenza resta quella di US-137.
+  - `test_board_settings`: default ("" e false), `sanitize()` di un nome sconosciuto e della forma canonica.
+  - `test_qx_driver`: `configure()` a driver avviato fa ripartire il riconoscimento, toglie le chiavi del protocollo precedente tenendo le tre di identità, scrive la riga di log; `configure()` prima di `setup()` non toglie nulla; `fillDiagnostics()` riporta `forced_protocol` e `novendor`.
+  - `test_usb_diag_json`: chiave `novendor` nell'oggetto `qx`; export HID invariato.
+  - `test_web_api`: `boardSettingsJson` con e senza oggetto `qx`; `checkBoardSettingsBody` per `qx_protocol` ("", "hunnox", "HUNNOX" → "hunnox", "megatec/old", "megatec-old" → 400, numero → 400) e `qx_novendor` (bool, non bool → 400).
+  - Regressione: suite nativa completa (1403 test prima di US-138), suite e2e completa (199), 3 build.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts` con `serveIndex`, mock delle API con `page.route`, come `e2e/board-settings.spec.ts`).
+  **Video demo:** previsto (la sezione Q* in Board Settings è filmabile con le API simulate); lo registra `archetipo-review`, non l'implementazione.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Nessuna sezione senza UPS Q* | L'utente apre la scheda Board con un UPS HID (risposta senza `qx`) e poi senza UPS: la sezione "Q* UPS driver" non c'è, le altre sezioni sì. |
+  | Scelta di hunnox con novendor | Con `qx` nella risposta (protocollo automatico, `detected` vuoto) l'utente vede "Not detected yet", Automatic selezionato, novendor spento e Save disabilitato; sceglie `hunnox`, accende novendor, salva: la POST contiene `{"qx_protocol":"hunnox","qx_novendor":true}`, compare l'esito, nessun conto alla rovescia di riavvio. |
+  | Valori ricaricati | L'utente cambia scheda e torna su Board: la nuova GET restituisce i valori salvati, select e switch li mostrano e Save è disabilitato. |
+  | Errore di salvataggio | La POST risponde 400 "Invalid protocol": compare l'errore e i controlli tornano ai valori salvati. |
+
+  ---
+
+  ## Note e rischi
+
+  - Flash: la S3 di #93 è già fuori dallo slot da 4 MB; si misura e si annota la crescita (attesa ~2-3 KB) in `docs/test-results/US-138/flash.md`, come US-137.
+  - Nessuno dei nostri UPS è Q*: la prova vera la fanno i reporter. La pubblicazione dei commenti e degli zip richiede il sì esplicito dell'utente (lo zip lo allega l'utente modificando il commento); nelle issue "Refs #N", nessuna chiusura.
+  - Il reporter di #28 (fabula) tace da agosto: la conferma potrebbe arrivare solo da tda2806.
+  - L'ADR 0013 parla di "UPS settings": una nota aggiunta registra la scelta di Board Settings (decisione dell'utente del 2026-11-07).
+
+  _Piano generato con ARchetipo Planning — 2026-11-07_
+tasks:
+  - id: TASK-01
+    title: Portare il protocollo hunnox (QxHunnox.cpp) e inserirlo in QX_SUBDRIVER_LIST
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiungere `QX_HUNNOX`, copia riga per riga di `nut_repo/drivers/nutdrv_qx_hunnox.c`, nella posizione upstream della lista dei protocolli.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx_hunnox.c` (tabella `hunnox_qx2nut`, `hunnox_battery_charge`, `hunnox_subdriver`); `lib/USBHostUPS/src/QxZinto.cpp` come modello (stessa struttura, stesse colonne di `QxItem`); `lib/USBHostUPS/src/QxTypes.h`; `lib/USBHostUPS/src/QxProtocols.h/.cpp`; la sezione `[env:native]` di `platformio.ini`.
+
+      **Modificare:**
+      - Creare `lib/USBHostUPS/src/QxHunnox.cpp` con `static const QxItem HUNNOX_QX2NUT[]` (stessi flag upstream: qui le righe di Q1 hanno `QX_FLAG_QUICK_POLL`, diversamente da zinto), `hunnoxBatteryCharge(QxEngine& qx, const QxItem& item, char* value, size_t valuelen)` che legge `qx.answer()` (controllo del prefisso "BL", `atoi`, intervallo 0-100, altrimenti -1), riga `battery.charge` con `"BL\r"`, answer_len 6, leading 'B', from 0, to 0, `"%.0f"`, `QX_FLAG_QUICK_POLL`; ritardi `ups.delay.start` "0" e `ups.delay.shutdown` "60" come upstream; `const QxSubdriver QX_HUNNOX = { "Hunnox 0.03", blazerClaim, HUNNOX_QX2NUT, hunnoxInitups, nullptr, "UPS No Ack", nullptr };`.
+      - `QxProtocols.h`: `extern const QxSubdriver QX_HUNNOX; // nutdrv_qx_hunnox.c, "Hunnox 0.03"` e commento di testa aggiornato.
+      - `QxProtocols.cpp`: sostituire `// &hunnox_subdriver, (US-138)` con `&QX_HUNNOX,` (dopo `&QX_ZINTO`, prima di innovatae).
+      - `platformio.ini` `[env:native]`: `+<../lib/USBHostUPS/src/QxHunnox.cpp>` accanto a QxZinto.
+
+      **Passi:** 1) creare il file copiando l'ordine delle righe upstream e i commenti delle risposte; 2) aggiornare lista e header; 3) aggiungere il file alla build nativa; 4) compilare i test Q*.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols -f test_qx_probe -f test_qx_control` compila; i test che controllano l'ordine della lista e `test_forced_unknown_protocol` falliscono finché non arriva TASK-02 (atteso).
+
+      **Fatto quando:** il protocollo è nella lista, compila in nativo, la tabella coincide con quella upstream colonna per colonna.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxHunnox.cpp — nuovo, porting di nutdrv_qx_hunnox.c
+      - lib/USBHostUPS/src/QxProtocols.h — extern QX_HUNNOX
+      - lib/USBHostUPS/src/QxProtocols.cpp — &QX_HUNNOX nella posizione upstream
+      - platformio.ini — QxHunnox.cpp nella build nativa
+
+      ## Criteri di Completamento
+      - [ ] `QX_HUNNOX` ha nome "Hunnox 0.03", `blazerClaim`, accepted "UPS No Ack"
+      - [ ] La tabella ha le stesse righe, nello stesso ordine e con gli stessi flag di `hunnox_qx2nut`
+      - [ ] `hunnoxBatteryCharge` restituisce -1 per prefisso diverso da "BL" e per valori fuori da 0-100
+      - [ ] `QX_SUBDRIVER_LIST` ha hunnox dopo zinto e prima di innovatae
+      - [ ] La build nativa compila QxHunnox.cpp
+    ref: TASK-01
+  - id: TASK-02
+    title: 'Test del protocollo hunnox: tabella testing_t, BL, claim con e senza novendor, ordine della lista'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare hunnox come gli altri protocolli di US-133/134, con la tabella `hunnox_testing` upstream.
+
+      **Leggere:** `test/mocks/QxTestingTables.h` (forma di `ZINTO_TESTING`); `test/test_qx_protocols/test_main.cpp` (`assertBlazerTestingValues`, `assertClaimSends`, test dell'ordine della lista intorno alla riga 260, test di `qxProtocolMatches`); `test/test_qx_probe/test_main.cpp` (`test_forced_unknown_protocol`, riga ~272); `lib/USBHostUPS/src/QxEngine.cpp` `qx_battery` (riga ~588) per capire quale `battery.charge` resta.
+
+      **Modificare:**
+      - `QxTestingTables.h`: `HUNNOX_TESTING[]`, copia di `hunnox_testing[]` (`nutdrv_qx_hunnox.c`), compreso `{ "BL\r", "BL100\r", -1 }`.
+      - `test_qx_protocols`: `test_hunnox_testing_values` (valori di Q1, F, FW? come zinto, più `battery.charge` = "100" da BL: controllare con upstream, `nutdrv_qx.c:446-477` e `:585`, che il valore di BL prevalga sulla stima; se il port del motore desse un altro risultato, fermarsi e segnalarlo invece di adattare l'asserzione); `test_hunnox_battery_charge_invalid` (BL101, BL-1, XX100 → nessun `battery.charge` dalla riga BL); `test_hunnox_claim_sends_q1_and_fw` (`assertClaimSends(QX_HUNNOX, HUNNOX_TESTING, "Q1\r", "FW?\r")`); `test_hunnox_claim_novendor_sends_only_q1` (`QxOptions` con `novendor = true`); ordine atteso della lista con "Hunnox 0.03" dopo "Zinto 0.07"; `qxProtocolMatches(QX_HUNNOX, "HUNNOX")` vero; comandi istantanei e ritardi "0"/"60" come gli altri test dei comandi, se esiste un test che scorre la lista (`test_qx_control` riga ~526) verificare che passi.
+      - `test_qx_probe`: `test_forced_unknown_protocol` usa "voltronic" (non portato) al posto di "hunnox", stesso messaggio con il nuovo nome; nuovo `test_forced_hunnox_tries_only_hunnox` (con `HUNNOX_TESTING` e `novendor`: il prober manda solo `Q1` e fa il claim di "Hunnox 0.03").
+
+      **Passi:** aggiungere la tabella, poi i test, registrarli in `main()` con `RUN_TEST`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols -f test_qx_probe -f test_qx_control -f test_qx_engine` tutti verdi.
+
+      **Fatto quando:** i quattro gruppi di test passano.
+
+      **Blocchi:** se `battery.charge` non risulta 100 con la tabella upstream, è un caso da discutere con l'utente.
+
+      ## File Coinvolti
+      - test/mocks/QxTestingTables.h — HUNNOX_TESTING
+      - test/test_qx_protocols/test_main.cpp — test di hunnox, ordine della lista
+      - test/test_qx_probe/test_main.cpp — protocollo sconosciuto e protocollo hunnox forzato
+
+      ## Criteri di Completamento
+      - [ ] `HUNNOX_TESTING` coincide con `hunnox_testing[]` upstream
+      - [ ] `BL100` dà `battery.charge` 100; le risposte non valide non danno valore
+      - [ ] Il claim manda Q1 e FW?, e con novendor solo Q1
+      - [ ] Il test dell'ordine di `QX_SUBDRIVER_LIST` include hunnox
+      - [ ] `test_forced_unknown_protocol` usa un nome non portato; hunnox forzato prova solo hunnox
+      - [ ] test_qx_protocols, test_qx_probe, test_qx_control, test_qx_engine verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: 'novendor nel trasporto hunnox: setOptions() e passo 3 del preambolo senza 0x0c, con i test'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il trasporto hunnox salta la lettura dell'indice 0x0c nel passo 3 del preambolo quando `novendor` è attivo, come `hunnox_protocol()` (`nut_repo/drivers/nutdrv_qx.c:1275-1280`).
+
+      **Leggere:** `lib/USBHostUPS/src/QxUsbTransport.h`; `lib/USBHostUPS/src/QxUsbKrauler.h/.cpp` (`QxHunnoxTransport::preamble`, riga ~236); `test/test_qx_usb_transports/test_main.cpp` (test hunnox dalla riga 387); `test/mocks/FakeQxUsbPrimitives.h`.
+
+      **Modificare:**
+      - `QxUsbTransport.h`: `virtual void setOptions(const QxOptions& options) { (void)options; }` con commento "le opzioni di ups.conf che il sottodriver USB legge con testvar(); di base nessuna"; includere `QxTypes.h`.
+      - `QxUsbKrauler.h`: `QxHunnoxTransport` ridefinisce `setOptions()` e salva `bool _novendor = false`; commento di testa: novendor ora portato, langid_fix e noscanlangid no.
+      - `QxUsbKrauler.cpp`: caso 3 `if (askingFor != 0x0c && !_novendor)`; aggiornare il commento "The novendor option is not ported".
+      - `test_qx_usb_transports`: `test_hunnox_novendor_skips_0x0c_in_the_preamble` (cinque comandi Q1 con `novendor`: nessuna GET_DESCRIPTOR su 0x0c nel passo 3, gli altri passi invariati); `test_hunnox_options_default_reads_0x0c` (senza `setOptions`, la sequenza di `test_hunnox_preamble_lock_step_over_five_commands` resta uguale).
+
+      **Passi:** interfaccia, override, condizione, test.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_usb_transports` verde.
+
+      **Fatto quando:** krauler e fabula ignorano le opzioni, hunnox rispetta `novendor`, i test di US-137 restano verdi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxUsbTransport.h — setOptions() virtuale
+      - lib/USBHostUPS/src/QxUsbKrauler.h — override in QxHunnoxTransport, commento
+      - lib/USBHostUPS/src/QxUsbKrauler.cpp — passo 3 condizionato a novendor
+      - test/test_qx_usb_transports/test_main.cpp — due test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Con novendor il passo 3 non legge 0x0c; senza, la sequenza è quella di US-137
+      - [ ] krauler e fabula non cambiano comportamento
+      - [ ] Il commento sulle opzioni non portate è aggiornato
+      - [ ] test_qx_usb_transports verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Nomi dei protocolli (qxProtocolName, qxFindProtocol) e impostazioni qx_protocol/qx_novendor in BoardSettings e NVS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il modello delle due impostazioni nuove, salvate in NVS e ripulite da `sanitize()`.
+
+      **Leggere:** `lib/USBHostUPS/src/QxProtocols.h/.cpp`; `include/board/board_settings.h`; `src/core/board_settings_store.h/.cpp`; `test/test_board_settings/test_main.cpp`.
+
+      **Modificare:**
+      - `QxProtocols.h/.cpp`: `static const size_t QX_PROTOCOL_NAME_MAX = 16;`; `size_t qxProtocolName(const QxSubdriver& sub, char* out, size_t outlen)` (parte di `sub.name` prima del primo spazio, in minuscolo, troncata a outlen-1; restituisce la lunghezza); `const QxSubdriver* qxFindProtocol(const char* name, const QxSubdriver* const* list = QX_SUBDRIVER_LIST)` (primo `sub` con `qxProtocolMatches(*sub, name)`; nullptr se name è null o "").
+      - `board_settings.h`: includere `QxProtocols.h`; in fondo a `BoardSettings` `char qx_protocol[QX_PROTOCOL_NAME_MAX]; // "" = automatic (US-138)` e `bool qx_novendor;`; `defaultsFor()` li mette a "" e false (non più l'inizializzazione con le parentesi a 4 campi: inizializzare la struct e assegnare i campi); `sanitize()`: forza il terminatore, se il nome non è vuoto e `qxFindProtocol` dà nullptr lo svuota, altrimenti lo riscrive con `qxProtocolName` del protocollo trovato (forma canonica). Aggiornare il commento della struct.
+      - `board_settings_store.cpp`: chiavi `qx_proto` (`getString`/`putString`, max 15 caratteri) e `qx_novendor` (`getBool`/`putBool`); `save()` scrive anche queste (una stringa vuota si salva come "": `putString` di "" restituisce 0, quindi per qx_proto controllare l'esito con `isKey` o accettare 0 quando il valore è vuoto, senza far fallire il salvataggio); aggiornare il commento dell'header con le chiavi.
+
+      **Passi:** helpers puri, poi struct e sanitize, poi store.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_board_settings -f test_web_api -f test_qx_protocols` compila e resta verde; `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (da PowerShell) compila.
+
+      **Fatto quando:** default ""/false, nome sconosciuto ripulito, valori salvati e riletti dallo store.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxProtocols.h — QX_PROTOCOL_NAME_MAX, qxProtocolName, qxFindProtocol
+      - lib/USBHostUPS/src/QxProtocols.cpp — implementazione
+      - include/board/board_settings.h — campi qx_protocol/qx_novendor, defaultsFor, sanitize
+      - src/core/board_settings_store.h — commento delle chiavi
+      - src/core/board_settings_store.cpp — chiavi qx_proto e qx_novendor
+
+      ## Criteri di Completamento
+      - [ ] `qxProtocolName` dà "megatec/old", "innovatae", "hunnox", "q1" dai nomi con versione
+      - [ ] `qxFindProtocol` non distingue maiuscole e dà nullptr per null, "" e nomi sconosciuti
+      - [ ] `defaultsFor()` dà protocollo "" e novendor false
+      - [ ] `sanitize()` svuota un nome sconosciuto e rende canonico uno noto
+      - [ ] Lo store legge e scrive `qx_proto` e `qx_novendor`; un protocollo vuoto non fa fallire `save()`
+      - [ ] Build S3 e test nativi indicati compilano
+    ref: TASK-04
+  - id: TASK-05
+    title: Test di nomi dei protocolli e delle impostazioni Q* in BoardSettings
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con test nativi gli helper dei nomi e `defaultsFor()`/`sanitize()` delle impostazioni nuove.
+
+      **Leggere:** `test/test_board_settings/test_main.cpp`; `test/test_qx_protocols/test_main.cpp`.
+
+      **Modificare:**
+      - `test_qx_protocols`: `test_protocol_names_in_list_order` (scorre `QX_SUBDRIVER_LIST` con `qxProtocolName`: mustek, megatec/old, megatec, zinto, hunnox, innovatae, q1); `test_find_protocol` ("HUNNOX" → QX_HUNNOX, "megatec/old" → QX_MEGATEC_OLD, "megatec-old", "", nullptr, "voltronic" → nullptr); troncamento di `qxProtocolName` con outlen piccolo.
+      - `test_board_settings`: `test_qx_settings_default_automatic` ("" e false sul profilo S3); `test_sanitize_qx_protocol` ("voltronic" → "", "HUNNOX" → "hunnox", "q1" resta, novendor non toccato); stringa senza terminatore riempita fino in fondo → sanitize non legge oltre l'array.
+
+      **Passi:** scrivere i test, registrarli.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_board_settings -f test_qx_protocols` verde.
+
+      **Fatto quando:** i test passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_qx_protocols/test_main.cpp — nomi e ricerca dei protocolli
+      - test/test_board_settings/test_main.cpp — default e sanitize delle impostazioni Q*
+
+      ## Criteri di Completamento
+      - [ ] I nomi dei protocolli seguono l'ordine della lista
+      - [ ] `qxFindProtocol` copre maiuscole, nome con slash, nomi sbagliati, null e vuoto
+      - [ ] `sanitize()` provata su nome sconosciuto, maiuscolo e senza terminatore
+      - [ ] test_board_settings e test_qx_protocols verdi
+    ref: TASK-05
+  - id: TASK-06
+    title: QxDriver::configure() che fa ripartire il riconoscimento, novendor nell'export diagnostico
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver Q* riceve protocollo e opzioni in qualsiasi momento e, se era già partito, ricomincia il riconoscimento con i valori nuovi; l'export riporta le opzioni attive.
+
+      **Leggere:** `lib/USBHostUPS/src/QxDriver.h/.cpp` (`setup`, `poll`, `dropProtocolValues`, `fillDiagnostics`); `lib/USBHostUPS/src/QxProbe.h/.cpp` (`configure`, `restart`); `lib/USBHostUPS/src/UsbDiagSnapshot.h` (`UsbDiagQx`); `lib/WebApi/src/UsbDiagJson.cpp` (`qxSection`, riga ~130).
+
+      **Modificare:**
+      - `QxDriver.h/.cpp`: `void configure(const char* protocol, const QxOptions& options);` (thread: task di poll, o prima di `setup()`) e membro `QxOptions _options`. Implementazione: `_options = options; _prober.configure(protocol, options); _transport->setOptions(options);`; se `_started` (nuovo bool messo a true dal primo `poll()` dopo `setup()`, a false in `setup()`): `_engine.reset(); _state = State::Probing; _firstWalkDone = false; _stale = false; _walkStarted = false; _lastProtocol = nullptr;` `_commands.clear()` sotto `HostLock`; togliere dall'ombra con `remove()` tutte le chiavi tranne `driver.name`, `ups.vendorid`, `ups.productid` (estrarre da `dropProtocolValues` una funzione privata `dropValuesExceptIdentity()` usata da entrambe); log INFO `[Q*] Settings changed (protocol: <nome o auto>, novendor: on|off): detecting the protocol again`. Il `publish()` del passo successivo propaga la rimozione.
+      - `UsbDiagSnapshot.h`: `bool novendor = false; // the novendor setting (US-138)` in `UsbDiagQx`, dopo `forced_protocol`.
+      - `QxDriver::fillDiagnostics`: `out.novendor = _options.novendor;`.
+      - `UsbDiagJson.cpp` `qxSection`: `key(w, 2, "novendor", false); raw(w, q.novendor ? "true" : "false");` (o l'helper booleano già usato nel file) subito dopo `forced_protocol`.
+
+      **Passi:** configure e stato, funzione comune di pulizia, export.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver -f test_usb_diag_json` compila (le attese nuove arrivano in TASK-07).
+
+      **Fatto quando:** configure applica i valori al prober e al trasporto, ricomincia se serve, e l'export scrive `novendor`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxDriver.h — configure(), _options, _started
+      - lib/USBHostUPS/src/QxDriver.cpp — implementazione, pulizia comune, fillDiagnostics
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — UsbDiagQx::novendor
+      - lib/WebApi/src/UsbDiagJson.cpp — chiave novendor nell'oggetto qx
+
+      ## Criteri di Completamento
+      - [ ] `configure()` prima di `setup()` o prima del primo poll non toglie dati e non scrive log
+      - [ ] `configure()` a driver avviato riporta lo stato a Probing e toglie le chiavi tranne le tre di identità
+      - [ ] Il log della modifica scrive protocollo (o auto) e novendor
+      - [ ] Le opzioni arrivano a prober e trasporto
+      - [ ] L'export Q* contiene `novendor`
+    ref: TASK-06
+  - id: TASK-07
+    title: Test di QxDriver::configure() e della chiave novendor nell'export
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare in nativo il cambio di impostazioni a caldo e l'export.
+
+      **Leggere:** `test/test_qx_driver/test_main.cpp` (struct `Rig` con trasporto e host finti); `test/test_usb_diag_json/test_main.cpp` (test `qx`, riga ~390-410); `test/mocks/QxTestingTables.h`.
+
+      **Modificare:**
+      - `test_qx_driver`: `test_configure_before_start_keeps_data`; `test_configure_restarts_detection` (driver arrivato a Polling con megatec, poi `configure("zinto", opt)`: stato di nuovo in riconoscimento, `initialPollDone()` falso, chiavi del protocollo tolte anche dai dati pubblicati dopo il poll successivo, `driver.name`/`ups.vendorid`/`ups.productid` restano, una riga di log con "Settings changed (protocol: zinto, novendor: off)"); `test_configure_back_to_automatic_logs_auto`; `test_fill_diagnostics_reports_forced_protocol_and_novendor`; `test_novendor_reaches_the_claim` (con `HUNNOX_TESTING` e `configure("hunnox", novendor)`: il primo scambio registrato è solo Q1 e il protocollo riconosciuto è "Hunnox 0.03").
+      - `test_usb_diag_json`: l'oggetto `qx` atteso contiene `"novendor": true` dopo `forced_protocol`; il test che l'export HID resti uguale con `qx.present` falso continua a passare.
+
+      **Passi:** test del driver, poi del JSON.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver -f test_usb_diag_json` verde.
+
+      **Fatto quando:** i test passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_qx_driver/test_main.cpp — test di configure() e fillDiagnostics
+      - test/test_usb_diag_json/test_main.cpp — chiave novendor
+
+      ## Criteri di Completamento
+      - [ ] Cambio di protocollo a caldo provato fino ai dati pubblicati
+      - [ ] Le tre chiavi di identità restano
+      - [ ] Riga di log verificata nel testo
+      - [ ] novendor arriva al claim (solo Q1)
+      - [ ] Export con novendor ed export HID invariato verdi
+    ref: TASK-07
+  - id: TASK-08
+    title: 'USBHostUPS: setQxSettings() applicato nel task di poll, informazioni Q* per la Web UI, avvio da NVS'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare le impostazioni dalla Web UI al driver Q* senza riavvio e senza tenere lock durante i trasferimenti (ADR 0008).
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.h/.cpp` (`attachQxDriver` riga ~809, passo di poll intorno alle righe 385-420 con `serviceQxRequest(true)` e `_driver->poll`, `_first_data_ready`, `_claimed_at`, `fillUsbDiag` riga ~1750); `src/core/main.cpp` (righe 148-260: caricamento di `board_settings`, `usb_ups.begin()`).
+
+      **Modificare:**
+      - `USBHostUPS.h`: `void setQxSettings(const char* protocol, bool novendor);` (qualsiasi task); `bool qxDriverInfo(String& detected) const;` (vero se `_driver` e `_driver->qx()` esistono; `detected` = nome del protocollo riconosciuto, vuoto prima del claim; sotto `_mutex`); membri `char _qx_protocol[QX_PROTOCOL_NAME_MAX] = ""`, `bool _qx_novendor = false`, `uint32_t _qx_settings_gen = 0`, `uint32_t _qx_settings_applied = 0`. Se `QxDriver` non espone il protocollo riconosciuto, aggiungere `const char* claimedProtocol() const` (nome del `QxSubdriver` di `_prober.claimed()`, "" se nessuno).
+      - `USBHostUPS.cpp`: `setQxSettings` copia sotto `_mutex` e incrementa `_qx_settings_gen`. Nuova `applyQxSettings(uint32_t now)` chiamata nel passo di poll subito prima di `serviceQxRequest(true)`: se `_driver && _driver->qx() && _qx_settings_applied != _qx_settings_gen`, copia protocollo/novendor/gen sotto `_mutex`, chiama `q->configure(...)` fuori dal lock, poi sotto `_mutex` mette `_first_data_ready = false`, `_claimed_at = millis()`, `_qx_settings_applied = gen`. In `attachQxDriver()`, dopo `new QxDriver(...)` e prima di `setup()`, `configure()` con i valori correnti e `_qx_settings_applied = _qx_settings_gen` (siamo già sotto `_mutex`: configure prima di setup non prende lock dell'host? verificare: `configure` prende `HostLock` solo se `_started`, quindi qui no; `_mutex` è ricorsivo comunque).
+      - `main.cpp`: subito dopo `setPeripheralMap(...)`, `usb_ups.setQxSettings(board_settings.qx_protocol, board_settings.qx_novendor);`.
+
+      **Passi:** API e membri, applicazione nel poll, aggancio, main.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell compila; suite nativa completa verde (USBHostUPS.cpp non compila in nativo: rileggere a mano il percorso lock/no-lock).
+
+      **Fatto quando:** le impostazioni salvate valgono all'aggancio e una modifica arriva al driver al passo di poll successivo, senza lock durante configure().
+
+      **Blocchi:** se `_first_data_ready = false` facesse scattare un timeout dei primi dati sul percorso Q*, fermarsi e segnalarlo (atteso: nessun timeout, `firstDataWaitBounded()` falso).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — setQxSettings, qxDriverInfo, membri
+      - lib/USBHostUPS/src/USBHostUPS.cpp — applyQxSettings nel poll, configure in attachQxDriver
+      - lib/USBHostUPS/src/QxDriver.h — claimedProtocol() se serve
+      - src/core/main.cpp — setQxSettings dai valori in NVS prima di begin()
+
+      ## Criteri di Completamento
+      - [ ] Le impostazioni da NVS arrivano al driver al primo aggancio
+      - [ ] Una modifica a caldo viene applicata nel task di poll, mai sotto `_mutex` durante configure()
+      - [ ] `qxDriverInfo()` è vero solo con un `QxDriver` agganciato
+      - [ ] Dopo la modifica host e Web UI tornano ad attendere i primi dati
+      - [ ] Build S3 ok, suite nativa verde
+    ref: TASK-08
+  - id: TASK-09
+    title: 'API /api/board: oggetto qx in GET, qx_protocol e qx_novendor in POST, log con l''utente'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre e salvare le impostazioni Q* dalla pagina Board.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h/.cpp` (`boardSettingsJson` riga ~384, `checkBoardSettingsBody` riga ~415); `src/network/web_config_server.cpp` (`handleGetBoard`, `handleSetBoard`, righe 270-320, `webUiUser()`); `test/test_web_api/test_main.cpp` (chiamate esistenti a righe ~1003-1019).
+
+      **Modificare:**
+      - `WebApiJson.h/.cpp`: struct `BoardQxInfo { const char* detected; }`; `boardSettingsJson(board, settings, auto_shutdown, const BoardQxInfo* qx = nullptr)`: con `qx` non nullo aggiunge `"qx":{"protocol":settings.qx_protocol,"novendor":settings.qx_novendor,"protocols":[nomi da qxProtocolName su QX_SUBDRIVER_LIST],"detected":qx->detected}`. `checkBoardSettingsBody`: `qx_protocol` stringa → "" oppure `qxFindProtocol` non nullo (salvato con `qxProtocolName`), altrimenti 400 "Invalid protocol"; `qx_novendor` bool, altrimenti 400 "Invalid request"; nessun riavvio. Aggiornare i commenti delle due funzioni con i campi nuovi.
+      - `web_config_server.cpp`: `handleGetBoard` chiama `usb_ups->qxDriverInfo(detected)` (se `usb_ups` non è nullo) e passa `&info` solo se vero. `handleSetBoard`: `qx_changed = strcmp(next.qx_protocol, board_settings.qx_protocol) || next.qx_novendor != board_settings.qx_novendor`; dopo il salvataggio, se cambiato: `AppLogger::log("INFO", "[BOARD] Q* driver settings: protocol %s, novendor %s (by '%s')", next.qx_protocol[0] ? next.qx_protocol : "auto", next.qx_novendor ? "on" : "off", webUiUser().c_str());` e `if (usb_ups) usb_ups->setQxSettings(next.qx_protocol, next.qx_novendor);`.
+
+      **Passi:** JSON, validazione, handler.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` compila e i test esistenti restano verdi; build S3 ok.
+
+      **Fatto quando:** GET mostra `qx` solo con un driver Q*, POST valida e salva, il log scrive utente e valori.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — BoardQxInfo, firme e commenti
+      - lib/WebApi/src/WebApiJson.cpp — oggetto qx e validazione
+      - src/network/web_config_server.cpp — GET con info Q*, POST con log e applicazione
+
+      ## Criteri di Completamento
+      - [ ] `qx` presente in GET solo con un QxDriver agganciato
+      - [ ] `protocols` nell'ordine della lista, `detected` vuoto prima del claim
+      - [ ] POST accetta "" e i nomi noti senza distinzione di maiuscole, rifiuta gli altri con 400 "Invalid protocol"
+      - [ ] POST con valori Q* non riavvia la scheda
+      - [ ] Log `[BOARD] Q* driver settings ...` con l'utente, solo se i valori cambiano
+      - [ ] Test esistenti di test_web_api verdi, build S3 ok
+    ref: TASK-09
+  - id: TASK-10
+    title: Test di /api/board per l'oggetto qx e i campi qx_protocol e qx_novendor
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire in nativo JSON e validazione delle impostazioni Q*.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (helper intorno alla riga 1003).
+
+      **Modificare:** test nuovi in `test_web_api`:
+      - `test_board_json_without_qx_has_no_qx_object` (senza info: nessuna chiave `qx`);
+      - `test_board_json_with_qx` (info con detected "Megatec 0.10", impostazioni "hunnox"/true: valori, `protocols` = [mustek, megatec/old, megatec, zinto, hunnox, innovatae, q1], detected);
+      - `test_board_body_qx_protocol_accepts_known_and_empty` ("hunnox", "HUNNOX" → "hunnox", "megatec/old", "");
+      - `test_board_body_qx_protocol_rejects_unknown` ("megatec-old", "voltronic", 3, true → 400 "Invalid protocol");
+      - `test_board_body_qx_novendor` (true/false accettati, "yes" → 400 "Invalid request");
+      - `test_board_body_qx_does_not_restart` (restart resta false).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api` verde.
+
+      **Fatto quando:** i test passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — test dell'oggetto qx e della validazione
+
+      ## Criteri di Completamento
+      - [ ] GET con e senza `qx` provato
+      - [ ] Nomi validi, maiuscoli e vuoto accettati; sconosciuti e non stringa rifiutati
+      - [ ] novendor non booleano rifiutato
+      - [ ] Nessun riavvio per i campi Q*
+      - [ ] test_web_api verde
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Web UI: sezione "Q* UPS driver" nella pagina Board con protocollo, novendor e salvataggio senza riavvio'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la sezione che l'utente usa per scegliere protocollo e novendor, visibile solo con un UPS Q*.
+
+      **Leggere:** `data/www/index.html` (scheda Board dalla riga 490: `#usb-section`, `#autosd-section`, `#time-section` con select e salvataggio); `data/www/bundle.js` (Board dalla riga ~2949: `postBoard`, `renderAutoShutdown`, `renderBoard`, `loadBoard`, `BOARD_RESULT_MS`, `BOARD_SPINNER`); `scripts/inline_web.py`, `scripts/embed_web.py`.
+
+      **Modificare:**
+      - `index.html`: dopo `#usb-section`, `<section class="board-section" id="qx-section" hidden>` con `cred-section` "Q* UPS driver"; testo `board-hint` "Options of the NUT nutdrv_qx driver, as protocol and novendor in ups.conf. Change them only if the UPS is not detected, or as NUT needs for your model."; riga "Detected protocol" con `<span id="qx-detected">`; riga "Protocol" con `<select id="qx-protocol" aria-label="Q* protocol">`; riga "novendor" (hint "Do not ask the UPS for vendor information (FW? / I), as novendor in ups.conf.") con switch `#qx-novendor` e `#qx-novendor-state`; `form-actions` con `button#btn-save-qx` "Save" (disabilitato); `cmd-result#qx-result`; `auth-alert#qx-error` con `#qx-error-text`; `auth-fineprint` "A wrong value leaves the UPS without data, but does not lock you out of the board: set Automatic again here.". Solo classi già esistenti.
+      - `bundle.js`: `renderQx()` (sezione nascosta se `board.qx` non è un oggetto; opzioni del select: "Automatic" con valore "" più `board.qx.protocols` filtrati a stringhe non vuote; valore e switch da `board.qx`; `#qx-detected` = `detected` oppure "Not detected yet"; Save abilitato solo se select o switch differiscono dai valori salvati e nessun salvataggio è in corso); `change` di select e switch → aggiorna Save e lo stato On/Off; click di Save → `postBoard({ qx_protocol, qx_novendor })`; ok: aggiorna `board.qx`, esito "✓ Saved · detecting the protocol again" che sfuma come gli altri (`BOARD_RESULT_MS`); errore: `r.message` in `#qx-error` e controlli riportati ai valori salvati. `renderBoard()` chiama `renderQx()`. Nessun conto alla rovescia di riavvio.
+      - Rigenerare: `python scripts/inline_web.py` poi `python scripts/embed_web.py`.
+
+      **Passi:** markup, logica, rigenerazione, prova manuale con l'e2e di TASK-12.
+
+      **Verifica:** `npx playwright test e2e/board-settings.spec.ts` resta verde; i file inlined e `web_assets.h` (o equivalente generato da embed_web.py) sono aggiornati.
+
+      **Fatto quando:** la sezione compare solo con `qx`, salva senza riavvio e mostra esito ed errori.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — sezione #qx-section
+      - data/www/bundle.js — renderQx, salvataggio, integrazione in renderBoard
+      - data/www/index_inlined.html — rigenerato da scripts/inline_web.py
+      - scripts/embed_web.py — da eseguire, non da modificare
+
+      ## Criteri di Completamento
+      - [ ] Sezione nascosta senza `qx` nella risposta, visibile con `qx`
+      - [ ] Select con Automatic e i protocolli di `protocols`, switch novendor, protocollo rilevato
+      - [ ] Save abilitato solo con modifiche; POST con `qx_protocol` e `qx_novendor`
+      - [ ] Esito senza riavvio; in errore messaggio e valori salvati ripristinati
+      - [ ] Asset rigenerati con inline_web.py ed embed_web.py
+      - [ ] e2e esistente della pagina Board verde
+    ref: TASK-11
+  - id: TASK-12
+    title: e2e Playwright della sezione Q* della pagina Board
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente della sezione Q* con le API finte.
+
+      **Leggere:** `e2e/board-settings.spec.ts` (mock di `/api/board`, `openBoardTab`, `serveIndex`); `e2e/support/webui.ts`; `playwright.config.ts`.
+
+      **Modificare:** nuovo `e2e/board-qx.spec.ts` con mock di GET/POST `/api/board` che conserva i valori salvati:
+      - `no Q* section with a HID UPS or without UPS` (risposta senza `qx`: `#qx-section` nascosta, `#autosd-section` visibile);
+      - `pick hunnox with novendor and save` (risposta con `qx: {protocol: '', novendor: false, protocols: ['mustek','megatec/old','megatec','zinto','hunnox','innovatae','q1'], detected: ''}`: "Not detected yet", Automatic selezionato, switch spento, Save disabilitato; scelta di hunnox e switch acceso; Save → una POST con body `{qx_protocol: 'hunnox', qx_novendor: true}` e content-type JSON; esito con "detecting the protocol again"; nessun `#board-success` di riavvio);
+      - `saved values are loaded again` (cambio scheda e ritorno su Board: seconda GET, select su hunnox, switch acceso, Save disabilitato; con `detected: 'Hunnox 0.03'` il testo lo mostra);
+      - `save error restores the saved values` (POST 400 `{error: 'Invalid protocol'}`: `#qx-error` visibile con il testo, select e switch di nuovo ai valori salvati).
+
+      **Verifica:** `npx playwright test e2e/board-qx.spec.ts` verde, poi la suite completa `npx playwright test` (199 test prima di US-138) verde.
+
+      **Fatto quando:** i quattro scenari passano insieme a tutta la suite.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/board-qx.spec.ts — nuovo, quattro scenari
+
+      ## Criteri di Completamento
+      - [ ] Sezione assente senza `qx`
+      - [ ] Salvataggio di hunnox + novendor con il body atteso e senza riavvio
+      - [ ] Valori ricaricati alla riapertura della scheda
+      - [ ] Errore mostrato e valori ripristinati
+      - [ ] Suite e2e completa verde
+    ref: TASK-12
+  - id: TASK-13
+    title: Documentazione, suite complete, 3 build e misura della flash
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-07
+      - TASK-10
+      - TASK-12
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la parte di codice: documenti, regressione completa, build e flash.
+
+      **Leggere:** `docs/concepts/architecture.md` (paragrafi Motore Q* e Riconoscimento); `docs/adr/0013-qx-ups-support.md` (riga 84 "Upstream options as UPS settings"); `docs/test-results/US-137/flash.md` come modello.
+
+      **Modificare:**
+      - `architecture.md`: protocollo hunnox nella lista, impostazioni `protocol`/`novendor` in Board Settings, percorso NVS → `setQxSettings` → task di poll → `QxDriver::configure()`, riconoscimento che riparte senza riavvio.
+      - ADR 0013: nota breve sotto la decisione "Upstream options": con US-138 `protocol` e `novendor` stanno in Board Settings (configurazione della scheda come ups.conf, decisione dell'utente del 2026-11-07); `langid_fix`, `noscanlangid`, `subdriver` restano da fare quando servono.
+      - `docs/test-results/US-138/flash.md`: dimensione di firmware.bin S3 rispetto a d8d0430 (2 192 816 B).
+
+      **Passi:** 1) suite nativa completa `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`; 2) `npx playwright test`; 3) da PowerShell le 3 build usate da US-137 (`esp32-s3-standard` e le due P4); 4) misura e annotazione della flash; 5) documenti.
+
+      **Verifica:** tutti i test verdi, 3 build ok, file dei risultati scritto.
+
+      **Fatto quando:** regressione completa verde e documenti aggiornati.
+
+      **Blocchi:** un test esistente che fallisce per un motivo estraneo a US-138 va segnalato, non disattivato.
+
+      ## File Coinvolti
+      - docs/concepts/architecture.md — hunnox e impostazioni Q*
+      - docs/adr/0013-qx-ups-support.md — nota su Board Settings
+      - docs/test-results/US-138/flash.md — nuovo, misura della flash
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde (più dei 1403 test di prima)
+      - [ ] Suite e2e completa verde
+      - [ ] 3 build ok
+      - [ ] Crescita della flash S3 annotata
+      - [ ] architecture.md e ADR 0013 aggiornati
+    ref: TASK-13
+  - id: TASK-14
+    title: 'Build di test (zip OTA ESP32-S3) e bozze dei commenti per #91 e #28, da pubblicare solo col sì dell''utente'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-13
+    body: |-
+      ## Descrizione
+      **Obiettivo:** preparare la consegna ai reporter di #91 (tda2806, VIDA Armour 1200VA, hunnox) e #28 (Safire 1500VA, fabula), senza release.
+
+      **Leggere:** la procedura degli zip di prova già usata per `esp32-nut-qx-claim-v1.zip` (README da build di prova nella root); `docs/adr/0013-qx-ups-support.md` sezione 6.
+
+      **Modificare / produrre:**
+      - Build `esp32-s3-standard` con `FIRMWARE_VERSION` `qx-hunnox-v1` e zip OTA `esp32-nut-qx-hunnox-v1.zip` nella root (non tracciato), con README da build di prova.
+      - Bozze in inglese, da mostrare all'utente in chat: per #91: Board → "Q* UPS driver" → Protocol `hunnox`, `novendor` on, Save (nessun riavvio); dopo 10-15 minuti allegare l'export diagnostico USB (contiene la sezione `qx` con scambi, protocollo e opzioni) e il System Log; cosa controllare (battery.charge, input/output voltage, ups.status). Per #28: prima Protocol Automatic, poi se non riconosciuto `megatec` con novendor on, stesso export. Entrambe con "Refs #91" / "Refs #28", nessuna chiusura, distinguere "ESP32-NUT firmware version" dal firmware dell'UPS, avvertenza che un valore sbagliato lascia solo l'UPS senza dati.
+      - Pubblicazione dei commenti solo dopo un sì esplicito dell'utente; lo zip lo allega l'utente modificando il commento.
+      - Facoltativo, solo con il consenso esplicito dell'utente: OTA della build sull'Eaton 3S e controllo che la pagina Board non mostri la sezione Q* e che i dati HID non cambino (risultati in `docs/test-results/US-138/`).
+
+      **Verifica:** zip presente e installabile via OTA (struttura come qx-claim-v1); bozze approvate dall'utente.
+
+      **Fatto quando:** zip pronto e bozze consegnate all'utente (o pubblicate, se l'ha chiesto).
+
+      **Blocchi:** nessun commento, push o prova sull'UPS reale senza il sì dell'utente.
+
+      ## File Coinvolti
+      - esp32-nut-qx-hunnox-v1.zip — nuovo, non tracciato, nella root
+      - docs/test-results/US-138/ — risultati dell'eventuale prova sull'Eaton 3S
+
+      ## Criteri di Completamento
+      - [ ] Zip OTA S3 con FIRMWARE_VERSION qx-hunnox-v1 e README da build di prova
+      - [ ] Bozze per #91 e #28 con impostazioni, export da allegare e "Refs #N"
+      - [ ] Nessuna pubblicazione senza il sì dell'utente
+      - [ ] Supporto Q* fuori dalle release finché un reporter non conferma
+    ref: TASK-14

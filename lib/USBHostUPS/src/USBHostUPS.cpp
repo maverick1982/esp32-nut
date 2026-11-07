@@ -391,6 +391,9 @@ void USBHostUPS::service() {
     }
 #endif
 
+    // US-138: new Board Settings of the Q* driver, before its step
+    applyQxSettings();
+
     // A command or SET VAR of the Q* driver takes the place of this iteration's poll step:
     // one step never waits for more than qxStepBoundMs() of the transport (US-136)
     if (serviceQxRequest(true)) return;
@@ -834,7 +837,13 @@ void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverReg
         _diag.clear();
         _diag_requested = false;
         if (_driver) { delete _driver; _driver = nullptr; }
-        _driver = new QxDriver(std::move(transport), _qx_usb, vid, pid);
+        QxDriver* q = new QxDriver(std::move(transport), _qx_usb, vid, pid);
+        // US-138: the Board Settings in force (before setup(), so nothing is restarted)
+        QxOptions opt;
+        opt.novendor = _qx_novendor;
+        q->configure(_qx_protocol, opt);
+        _qx_settings_applied = _qx_settings_gen;
+        _driver = q;
         _driver->setup();
         _in_pipe_wanted = wants_in;
     }
@@ -873,6 +882,44 @@ void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverReg
 String USBHostUPS::unsupportedDevice() const {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _unsupported_device;
+}
+
+void USBHostUPS::setQxSettings(const char* protocol, bool novendor) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    snprintf(_qx_protocol, sizeof(_qx_protocol), "%s", protocol ? protocol : "");
+    _qx_novendor = novendor;
+    _qx_settings_gen++;
+}
+
+bool USBHostUPS::qxDriverInfo(String& detected) const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    const QxDriver* q = _driver ? _driver->qx() : nullptr;
+    detected = q ? q->claimedProtocol() : "";
+    return q != nullptr;
+}
+
+void USBHostUPS::applyQxSettings() {
+    char protocol[QX_PROTOCOL_NAME_MAX];
+    QxOptions opt;
+    uint32_t gen;
+    QxDriver* q;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        q = _driver ? _driver->qx() : nullptr;
+        if (!q || _qx_settings_applied == _qx_settings_gen) return;
+        memcpy(protocol, _qx_protocol, sizeof(protocol));
+        opt.novendor = _qx_novendor;
+        gen = _qx_settings_gen;
+    }
+    // Poll task, between two steps: the driver is not replaced meanwhile (attach and detach
+    // run here too). configure() takes the host lock only to clear its command list
+    q->configure(protocol, opt);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    _qx_settings_applied = gen;
+    // As after an attach: the values are served again after the first walk of the protocol
+    // (no time limit on the Q* path, firstDataWaitBounded())
+    _first_data_ready = false;
+    _claimed_at = millis();
 }
 
 void USBHostUPS::logOnlineDischarge(uint32_t now) {

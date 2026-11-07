@@ -21,7 +21,7 @@ const QxSubdriver* const QX_SUBDRIVER_LIST[] = {
     &QX_MEGATEC,
     &QX_ZINTO,
     // &masterguard_subdriver,
-    // &hunnox_subdriver, (US-138)
+    &QX_HUNNOX,
     // &ablerex_subdriver,
     // &innovart31_subdriver,
     // &innovart33_subdriver,
@@ -42,4 +42,26 @@ bool qxProtocolMatches(const QxSubdriver& sub, const char* protocol) {
     char name[64];
     snprintf(name, sizeof(name), "%.*s", (int)strcspn(sub.name, " "), sub.name);
     return QxEngine::equalsIgnoreCase(name, protocol);
+}
+
+size_t qxProtocolName(const QxSubdriver& sub, char* out, size_t outlen) {
+    if (!out || outlen == 0) return 0;
+    size_t n = 0;
+    if (sub.name) {
+        size_t len = strcspn(sub.name, " ");
+        for (; n < len && n + 1 < outlen; n++) {
+            char c = sub.name[n];
+            out[n] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        }
+    }
+    out[n] = '\0';
+    return n;
+}
+
+const QxSubdriver* qxFindProtocol(const char* name, const QxSubdriver* const* list) {
+    if (!name || !*name || !list) return nullptr;
+    for (const QxSubdriver* const* s = list; *s; s++) {
+        if (qxProtocolMatches(**s, name)) return *s;
+    }
+    return nullptr;
 }

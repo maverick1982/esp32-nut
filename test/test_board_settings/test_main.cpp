@@ -1,4 +1,6 @@
 #include <unity.h>
+#include <stdio.h>
+#include <string.h>
 #include "board/board_settings.h"
 
 // Board settings: defaults, LED brightness scale and sanitize (US-094)
@@ -65,6 +67,40 @@ void test_auto_shutdown_off_by_default_and_kept(void) {
     TEST_ASSERT_TRUE(sanitize(board(), s).auto_shutdown);
 }
 
+// US-138: the Q* driver detects the protocol by itself and asks the vendor by default
+void test_qx_settings_default_automatic(void) {
+    BoardSettings s = defaultsFor(board());
+    TEST_ASSERT_EQUAL_STRING("", s.qx_protocol);
+    TEST_ASSERT_FALSE(s.qx_novendor);
+    TEST_ASSERT_EQUAL_STRING("", defaultsFor(P4_LIKE).qx_protocol);
+}
+
+// A name the firmware does not know becomes automatic, a known one its canonical form;
+// novendor is kept as saved
+void test_sanitize_qx_protocol(void) {
+    BoardSettings s = defaultsFor(board());
+    s.qx_novendor = true;
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "voltronic");
+    TEST_ASSERT_EQUAL_STRING("", sanitize(board(), s).qx_protocol);
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "HUNNOX");
+    TEST_ASSERT_EQUAL_STRING("hunnox", sanitize(board(), s).qx_protocol);
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "Megatec/Old");
+    TEST_ASSERT_EQUAL_STRING("megatec/old", sanitize(board(), s).qx_protocol);
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "q1");
+    TEST_ASSERT_EQUAL_STRING("q1", sanitize(board(), s).qx_protocol);
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "megatec-old");
+    TEST_ASSERT_EQUAL_STRING("", sanitize(board(), s).qx_protocol);
+    TEST_ASSERT_TRUE(sanitize(board(), s).qx_novendor);
+}
+
+// A corrupted value without NUL (the array full) is not read past its end
+void test_sanitize_qx_protocol_without_terminator(void) {
+    BoardSettings s = defaultsFor(board());
+    memset(s.qx_protocol, 'z', sizeof(s.qx_protocol));
+    BoardSettings out = sanitize(board(), s);
+    TEST_ASSERT_EQUAL_STRING("", out.qx_protocol);
+}
+
 void test_capabilities(void) {
     TEST_ASSERT_TRUE(hasLed(board()));
     TEST_ASSERT_FALSE(hasUsbChoice(board()));
@@ -79,6 +115,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_sanitize_led_level);
     RUN_TEST(test_sanitize_usb_port);
     RUN_TEST(test_auto_shutdown_off_by_default_and_kept);
+    RUN_TEST(test_qx_settings_default_automatic);
+    RUN_TEST(test_sanitize_qx_protocol);
+    RUN_TEST(test_sanitize_qx_protocol_without_terminator);
     RUN_TEST(test_capabilities);
     return UNITY_END();
 }
