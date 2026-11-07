@@ -1,0 +1,439 @@
+schema: archetipo/plan/v2
+spec_code: US-132
+body: |
+  ---
+  type: plan
+  title: "US-132: Aggancio guidato dalla famiglia: righe Q* prima del fallback HID generico, UPS Q* segnalato come non ancora supportato — Piano di implementazione"
+  description: "Piano di implementazione per US-132"
+  tags: [plan, implementation, US-132]
+  ---
+  # US-132: Aggancio guidato dalla famiglia: righe Q* prima del fallback HID generico, UPS Q* segnalato come non ancora supportato — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utente con un UPS Q* (per esempio il VIDA Armour 1200VA di #91, 0001:0000 "MEC0003"), voglio che la scheda riconosca il mio UPS come Q* invece di agganciarlo con il driver HID generico che non riceve dati, in modo da sapere subito che l'UPS è stato riconosciuto e che il supporto non c'è ancora, invece di vedere "Not Detected".
+
+  **Criteri di Accettazione**
+  - Ordine di scelta: (1) righe HID esplicite di oggi; (2) righe Q*, copia fedele di `qx_usb_id[]` (`nut_repo/drivers/nutdrv_qx.c:2704-2727`) con stringhe e ordine di NUT, senza 1a86:7523; (3) fallback HID generico solo con pagine UPS (0x84) o Battery (0x85).
+  - Un'interfaccia che corrisponde a una riga Q* viene tenuta anche senza pagine UPS/Battery; il percorso HID mantiene il controllo delle pagine com'è oggi.
+  - Un UPS Q* agganciato produce una sola riga INFO "Q* UPS recognized (USB transport: <nome>), not supported yet" per aggancio; la Web UI mostra "non ancora supportato"; il server NUT risponde come senza UPS.
+  - Cache dei report, watchdog degli INPUT, ritentativi del descrittore e lettura diagnostica (US-119) solo sul percorso HID; un UPS Q* agganciato non provoca ripristini della porta né riavvii.
+  - Test nativi del registro per #91, #28, APC, Phoenixtec 06da:ffff, VID sconosciuto con e senza pagine.
+  - Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni.
+  - Build di prova su UPS HID reali prima della release.
+
+  ---
+
+  ## Soluzione tecnica
+
+  La famiglia si decide **prima** di leggere il report descriptor, con i soli dati che `hid_host_get_device_info()` dà già oggi (VID, PID, stringhe). `DriverRegistry` riceve una funzione pura `match()` che applica l'ordine dell'ADR 0013, sezione 2; `USBHostUPS::claimInterface()` legge prima le informazioni del dispositivo e poi prende uno di due percorsi: quello HID, identico a oggi, o un nuovo percorso Q* corto che in questa storia si limita a tenere l'interfaccia, scrivere la riga INFO ed esporre lo stato "non ancora supportato". Nessun comando Q* parte verso l'UPS (arriva con US-136).
+
+  ### Registro: `DriverRegistry::match()`
+
+  ```cpp
+  namespace DriverRegistry {
+      enum class Family : uint8_t { HID, QX };
+      struct Match {
+          Family family;
+          bool explicit_hid;        // riga HID esplicita (false: candidato al fallback generico)
+          const char* qx_transport; // nome del sottodriver USB di NUT ("hunnox"), nullptr per HID
+      };
+      Match match(uint16_t vid, uint16_t pid, const char* mfr = "", const char* product = "");
+      bool hasUpsPages(const std::vector<HIDUsageDef>& usages); // pagina 0x84 o 0x85
+      IUPSDriver* create(...);  // invariato: solo HID, usato anche dai replay
+  }
+  ```
+
+  - **Ordine:** (1) righe HID esplicite: la tabella `DRIVERS[]` e il caso Phoenixtec 06da:ffff, con la stessa ricerca di `create()` (estratta in un helper comune, così `create()` non cambia comportamento); (2) tabella `QX_USB_ID[]`; (3) `{HID, false, nullptr}`.
+  - **`QX_USB_ID[]`:** copia riga per riga di `qx_usb_id[]` (`nutdrv_qx.c:2704-2727`), stesso ordine e stesse stringhe, ogni riga con il commento di NUT. Il campo trasporto è il nome della tabella `usbsubdriver[]` di NUT (`nutdrv_qx.c:3376-3390`): `cypress_subdriver`→`cypress`, `ablerex_subdriver_fun`→`ablerex`, `krauler_subdriver`→`krauler`, `phoenixtec_subdriver`→`phoenixtec`, `ippon_subdriver`→`ippon`, `phoenix_subdriver`→`phoenix`, `sgs_subdriver`→`sgs`, `omron_usb_subdriver`→`omron`, `fabula_subdriver`→`fabula`, `fabula_hunnox_subdriver`→`hunnox`, `fuji_subdriver`→`fuji`, `snr_subdriver`→`snr`, `armac_subdriver`→`armac`. La riga 1a86:7523 (handler `NULL`) non si copia; un commento lo dice. La riga `snr` resta anche se irraggiungibile (la precede `krauler` con stringhe `NULL`), come in NUT.
+  - **Confronto delle stringhe come `qx_is_usb_device_supported()`** (`nutdrv_qx.c:2740-2768`): stringa `nullptr` nella riga = qualsiasi; altrimenti `strcasecmp` con la stringa del dispositivo, che se manca (`nullptr` o `""`) non corrisponde. Quindi "MEC"/"MEC0003" → `fabula` (#28), ""/"MEC0003" → `hunnox` (#91), 0001:0000 qualsiasi altro → `krauler`.
+  - **`hasUpsPages()`** è il ciclo di oggi su `getUsages()` (`USBHostUPS.cpp:487-495`) spostato nel registro, così il terzo passo è testabile in nativo.
+  - **Sovrapposizioni:** oggi nessuna riga HID esplicita coincide con una riga Q* (06da:ffff contro 06da:0002…0601; 1cb0:0032/0038 contro 1cb0:0035). Un test lo verifica riga per riga, così una nuova riga HID che ne nasconde una Q* rompe la build dei test.
+  - **Effetto voluto, da scrivere nel commento:** un dispositivo che oggi finisce su `GenericDriver` perché ha pagine UPS ma VID/PID di una riga Q* (#91) passa al percorso Q*. È la correzione dell'ADR, non una regressione.
+
+  ### Aggancio: `USBHostUPS::claimInterface()`
+
+  Nuovo ordine dentro `claimInterface(handle)`:
+
+  1. `hid_host_get_device_info()`, poi quirk e stringhe ASCII esattamente come oggi (`USBHostUPS.cpp:532-547`), spostati in testa.
+  2. Se le informazioni ci sono, `DriverRegistry::match()`. Se `family == QX` → `claimQxInterface(handle, match)` e `return`. Se le informazioni mancano, percorso HID come oggi (oggi l'interfaccia viene comunque presa senza driver: il comportamento resta quello).
+  3. Percorso HID: il codice di oggi, nello stesso ordine (descrittore, `deferClaim`, controllo delle pagine con `DriverRegistry::hasUpsPages()`, sostituzione dell'interfaccia, `DriverRegistry::create()`, avvio della pipe IN). Riusa VID/PID/quirk/stringhe del passo 1 invece di rileggerli; deve azzerare lo stato Q* (`_qx_transport`, `_unsupported_device`).
+
+  `claimQxInterface()` (percorso Q*, poll task, nessun lock applicativo durante chiamate a `hid_host`):
+
+  - **Solo l'interfaccia 0:** NUT apre `usb_subdriver.hid_rep_index`, che per `nutdrv_qx` resta 0 (`nut_repo/drivers/libusb1.c:640`; verificare il default e citarlo). Con `hid_host_device_get_params()` si legge `iface_num`; un'interfaccia diversa da 0 si chiude con `closeInterface()` e una riga `logDebug`.
+  - **Interfaccia già legata ad altro:** come il percorso HID, `closeInterface()` della precedente; in più si azzera lo stato HID con un helper `releaseBoundState()` estratto da `handleDisconnected()` (stesso corpo di oggi: `_is_ready_to_poll=false`, `_ups_data`, `_device_product`, `delete _driver`, parser, cache, `_diag`, `_ol_dischrg_log`). `handleDisconnected()` lo chiama al posto delle righe di oggi, senza cambiare comportamento.
+  - **Stato:** `_hid_dev_handle = handle` (è l'interfaccia legata, per entrambe le famiglie: così `handleDisconnected()` la riconosce e la rilascia come oggi); `_driver = nullptr`; `_is_ready_to_poll = false`; `_qx_transport = match.qx_transport`; `_unsupported_device = "Q* UPS (USB transport: <nome>)"` sotto `_mutex`; `clearDeferredClaim(handle)`; se c'era `_restart_requested`, si annulla con la stessa riga di oggi ("UPS enumerated again"): il dispositivo si è enumerato.
+  - **Niente** `hid_host_device_start()`, niente `_link.reset()`/`_in_wd.reset()`, niente cache dei report o lettura diagnostica: con `_is_ready_to_poll=false` e `_driver=nullptr` `service()` esce prima del link monitor e del watchdog degli INPUT (`USBHostUPS.cpp:320`), `processInputReport()` esce su `!_driver` e `TRANSFER_ERROR` è ignorato perché richiede `_is_ready_to_poll`. Il watchdog dell'enumerazione è soddisfatto da `_enum_seen` (evento CONNECTED). Quindi nessun ripristino della porta e nessun riavvio, per costruzione.
+  - **Log:** una sola riga `log("INFO", "Q* UPS recognized (USB transport: %s), not supported yet", transport)` per aggancio (solo per l'interfaccia tenuta).
+  - **Distacco:** `handleDisconnected()` azzera anche `_qx_transport` e `_unsupported_device` (dentro `releaseBoundState()`).
+
+  ### Consumatori: `IUpsSource` e Web UI
+
+  - `IUpsSource` riceve `virtual String unsupportedDevice() const { return String(); }`: testo del dispositivo riconosciuto ma non supportato, vuoto altrimenti. `USBHostUPS` lo restituisce sotto `_mutex`. `isConnected()` resta `false` per un UPS Q*: server NUT, spegnimento automatico, LED e politica dei riavvii vedono "nessun UPS" senza modifiche.
+  - `WebApiJson::generateUpsVars()`: nel ramo `!isConnected()` aggiunge `"_unsupported": "Q* UPS (USB transport: hunnox)"` quando il testo non è vuoto; il resto del JSON identico.
+  - `/api/system-status`: la logica UPS di `WebConfigServer` (`src/network/web_config_server.cpp:649-663`) passa in un helper `WebApiJson::upsStatusJson(JsonObject ups, IUpsSource*)` testabile in nativo, con uscita identica per i casi di oggi; con UPS Q* scrive `status: "Not supported yet"` e `unsupported: "Q* UPS (USB transport: hunnox)"`.
+  - `data/www/bundle.js`: indicatore "UPS: Not supported yet" in giallo (`warning`) quando `data.ups.unsupported` c'è; nella pagina UPS un banner `#unsupported-ups-banner` con lo stile del `#generic-ups-banner` esistente (`data/www/index.html:869`) ma colore `warning`: "Q* UPS recognized (USB transport: hunnox): not supported yet. Support for Q* UPS units is in progress (GitHub issues #91, #28)." La Web UI è in inglese: "non ancora supportato" della storia diventa "not supported yet". Nessun mockup: è un banner gemello di uno esistente e un'etichetta, non un nuovo layout.
+
+  ### Fuori ambito
+
+  - Comandi Q*, primitive di trasporto, motore e protocolli: US-133…US-136.
+  - Sezione Q* dell'export diagnostico: con un UPS Q* agganciato l'export resta quello di "nessun UPS" (da verificare, non da estendere).
+  - Dispositivi Q* il cui report descriptor fa fallire `hid_host_device_open()` (OPEN_FAILED): restano invisibili come oggi; li tratterà la storia del primo trasporto.
+
+  ### Rischi
+
+  - `claimInterface()` è il cuore dell'aggancio (ADR 0008): il percorso HID deve restare byte per byte nello stesso ordine di chiamate a `hid_host`. Per questo la build di prova su UPS HID reali (ADR 0010, passo 4) è un passo del piano.
+  - Un dispositivo HID vero con VID/PID di una riga Q* passerebbe al percorso Q*: è la scelta dell'ADR (NUT lo assegna a `nutdrv_qx`), ma va scritta nelle note di rilascio.
+  - Commit separato e senza funzioni Q* (ADR 0013, "Impact on Agent Implementation").
+
+  ---
+
+  ## Strategia di test
+
+  La logica nuova è pura e si prova in nativo; il codice di `USBHostUPS.cpp` (non compilato in nativo) si prova con regressione completa, build e prova su UPS HID reali.
+
+  - **Nuova suite `test/test_driver_registry`:** i casi della storia (0001:0000 ""/"MEC0003" → QX `hunnox`; "MEC"/"MEC0003" → QX `fabula`; 051d → HID esplicito, `create()` = APC; 06da:ffff → HID esplicito, `create()` = Liebert; VID sconosciuto → HID non esplicito, con pagina UPS `hasUpsPages()` vero e `create()` = `GenericDriver`; senza pagine `hasUpsPages()` falso), più: ogni riga di `QX_USB_ID[]` dà il trasporto atteso; confronto senza maiuscole/minuscole ("mec"/"mec0003" → `fabula`); "ATCL FOR UPS" → `fuji`; 0001:0000 senza stringhe → `krauler`; 1a86:7523 → HID non esplicito; 1cb0:0035 → QX `krauler` mentre 1cb0:0032/0038 restano Legrand; nessuna riga HID esplicita coincide con una riga Q*; pagina Battery da sola basta.
+  - **`test_web_api`:** `_unsupported` in `/api/ups-vars` e `upsStatusJson()` per scollegato, Q*, collegato, dati vecchi, attesa del primo dato (uscita identica a oggi nei casi esistenti).
+  - **`test_nut_server`:** con una sorgente finta non connessa e `unsupportedDevice()` non vuoto le risposte sono quelle di "nessun UPS".
+  - **Regressione:** suite nativa completa (replay inclusi), e2e completa, le tre build di `platformio.ini`; nessuna asserzione esistente cambia. Flash misurata sulla build classica (#93).
+  - **Prova su UPS HID reali:** build di prova sull'Eaton 3S del banco solo dopo un sì esplicito dell'utente, e build per i tester; aggancio, dati e comandi come prima.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`e2e/`, `npx playwright test`, API simulate con `page.route` e `serveIndex`)
+  **Video demo:** previsto (indicatore e banner con API simulate; lo registra `archetipo-review`, non l'implementazione)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | UPS Q* collegato | L'utente apre la Web UI con `/api/system-status` che risponde `ups: {status: 'Not supported yet', unsupported: 'Q* UPS (USB transport: hunnox)'}`: l'indicatore dice "UPS: Not supported yet" in giallo |
+  | Pagina UPS con UPS Q* | `/api/ups-vars` risponde `{_disconnected: true, 'ups.status': 'Disconnected', _unsupported: 'Q* UPS (USB transport: hunnox)'}`: il banner "Q* UPS recognized (USB transport: hunnox): not supported yet" è visibile e il banner generico no |
+  | UPS scollegato (regressione) | Senza `_unsupported` il banner Q* resta nascosto e l'indicatore resta "UPS: Disconnected" in rosso |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-07_
+tasks:
+  - id: TASK-01
+    title: DriverRegistry::match() con le righe Q* di qx_usb_id[] e hasUpsPages()
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il registro sa dire la famiglia di un dispositivo da VID, PID e stringhe, nell'ordine HID esplicito → Q* → fallback HID, senza cambiare `create()`.
+
+      **Leggere:** `lib/USBHostUPS/src/DriverRegistry.h`, `lib/USBHostUPS/src/DriverRegistry.cpp`, `nut_repo/drivers/nutdrv_qx.c:2655-2768` (tabella e confronto) e `:3370-3393` (nomi dei trasporti), `lib/USBHostUPS/src/USBHostUPS.cpp:484-495` (controllo delle pagine di oggi), sezione "Registro" del piano.
+
+      **Modificare:**
+      1. In `DriverRegistry.h`: `enum class Family`, `struct Match`, `match()` e `hasUpsPages(const std::vector<HIDUsageDef>&)` come nel piano, con commento sull'ordine e citazione dell'ADR 0013 sezione 2. Includere `HIDParser.h` (o la dichiarazione di `HIDUsageDef`) solo dove serve.
+      2. In `DriverRegistry.cpp`: estrarre la ricerca HID esplicita (Phoenixtec 06da:ffff + `DRIVERS[]`) in un helper usato da `create()` e da `match()`; `create()` deve restituire esattamente gli stessi driver di oggi.
+      3. Aggiungere `QX_USB_ID[]` (`static const`): una riga per ogni riga di `qx_usb_id[]` tranne 1a86:7523, stesso ordine, stesse stringhe (`nullptr` dove NUT ha `NULL`), nome del trasporto secondo la mappa del piano, commento di NUT su ogni riga e riferimento a `nutdrv_qx.c:2704-2727`. Un commento spiega perché 1a86:7523 manca e perché `snr` resta.
+      4. Confronto stringhe come `qx_is_usb_device_supported()`: riga `nullptr` = qualsiasi; altrimenti dispositivo `nullptr`/`""` → non corrisponde, poi `strcasecmp` (in nativo MinGW c'è; se serve, un piccolo confronto locale senza dipendenze).
+      5. `hasUpsPages()`: lo stesso ciclo di `USBHostUPS.cpp:487-495`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_liebert_driver -f test_legrand_driver -f test_record_replay`.
+
+      **Fatto quando:** `match()` e `hasUpsPages()` compilano, i test esistenti del registro passano senza modifiche.
+
+      **Blocchi:** se una riga Q* coincide con una riga HID esplicita, fermarsi e segnalarlo (contraddice l'assunzione della storia).
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/DriverRegistry.h — `Family`, `Match`, `match()`, `hasUpsPages()`
+      - lib/USBHostUPS/src/DriverRegistry.cpp — helper HID esplicito, `QX_USB_ID[]`, confronto stringhe
+
+      ## Criteri di Completamento
+      - [ ] `QX_USB_ID[]` ha 21 righe nell'ordine di NUT, senza 1a86:7523, con commenti e riferimento alle righe di `nutdrv_qx.c`
+      - [ ] `match()` applica HID esplicito → Q* → fallback e restituisce il nome del trasporto di NUT
+      - [ ] `create()` restituisce gli stessi driver di prima per ogni VID/PID/stringhe
+      - [ ] I test indicati in Verifica passano senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Suite nativa test_driver_registry per ordine, righe Q* e pagine
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i casi della storia e l'ordine di scelta sono fissati da test nativi.
+
+      **Leggere:** `test/test_liebert_driver/test_main.cpp` (struttura e uso di `DriverRegistry::create`), `test/test_legrand_driver/test_main.cpp:80-95`, sezione "Strategia di test" del piano, `lib/USBHostUPS/src/DriverRegistry.h` dopo TASK-01.
+
+      **Modificare:** creare `test/test_driver_registry/test_main.cpp` (Unity) con:
+      1. 0001:0000 `""`/`"MEC0003"` → `QX`, `hunnox` (#91); `"MEC"`/`"MEC0003"` → `QX`, `fabula` (#28); `"mec"`/`"mec0003"` → `fabula`; `"ATCL FOR UPS"`/`"ATCL FOR UPS"` → `fuji`; senza stringhe → `krauler`.
+      2. 051d:0002 → `HID`, `explicit_hid` vero, `create()` con `getDriverName()` di APC; 06da:ffff → `HID` esplicito, `create()` = Liebert; 1cb0:0032 e 0038 → Legrand esplicito, 1cb0:0035 → `QX` `krauler`.
+      3. Una tabella di casi (VID, PID, stringhe, trasporto atteso) che copre ogni riga di `QX_USB_ID[]`, incluse 06da:0002 con e senza le stringhe "Phoenixtec Power"/"USB Cable (V2.00)" (`phoenixtec` contro `cypress`).
+      4. 1a86:7523 → `HID`, non esplicito. VID sconosciuto 1234:5678 → `HID` non esplicito, `create()` = `GenericDriver`.
+      5. `hasUpsPages()`: vero con un usage di pagina 0x84, vero con solo 0x85, falso con solo pagine 0x01/0xFF00, falso con vettore vuoto.
+      6. Nessuna sovrapposizione: per ogni caso del punto 3, `match()` dà `QX` (cioè nessuna riga HID esplicita lo nasconde).
+
+      Non toccare le altre suite.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_driver_registry`.
+
+      **Fatto quando:** la suite nuova passa e copre tutti i punti sopra.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_driver_registry/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] I sei casi della storia (#91, #28, APC, Phoenixtec, VID sconosciuto con e senza pagine) sono test separati
+      - [ ] Ogni riga di `QX_USB_ID[]` è coperta da un caso
+      - [ ] La suite passa con il comando di Verifica
+    ref: TASK-02
+  - id: TASK-03
+    title: IUpsSource::unsupportedDevice() e JSON della Web UI per l'UPS non supportato
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i consumatori possono sapere che c'è un UPS riconosciuto ma non supportato, senza che `isConnected()` cambi significato.
+
+      **Leggere:** `lib/USBHostUPS/src/IUpsSource.h`, `lib/WebApi/src/WebApiJson.h`, `lib/WebApi/src/WebApiJson.cpp:1-60`, `src/network/web_config_server.cpp:640-670`, sezione "Consumatori" del piano.
+
+      **Modificare:**
+      1. `IUpsSource`: `virtual String unsupportedDevice() const { return String(); }` con commento (testo come "Q* UPS (USB transport: hunnox)", vuoto quando non c'è; con un testo non vuoto `isConnected()` resta falso).
+      2. `WebApiJson::generateUpsVars()`: nel ramo `!isConnected()`, se `unsupportedDevice()` non è vuoto aggiungere `doc["_unsupported"]`; nient'altro cambia.
+      3. Nuovo `WebApiJson::upsStatusJson(JsonObject ups, IUpsSource* src)`: sposta qui la logica di `web_config_server.cpp:649-663` con la stessa uscita (modello o "Unknown Model", "Disconnected", `stale` con le stesse condizioni); se non connesso e `unsupportedDevice()` non vuoto: `status = "Not supported yet"`, `unsupported = <testo>`.
+      4. `WebConfigServer`: sostituire il blocco con `WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), ups_source)`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api -f test_nut_server -f test_ups_source`.
+
+      **Fatto quando:** compila, i test esistenti passano senza modifiche.
+
+      **Blocchi:** se `web_config_server.cpp` non può chiamare il nuovo helper per dipendenze di libreria, segnalarlo invece di duplicare la logica.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUpsSource.h — `unsupportedDevice()`
+      - lib/WebApi/src/WebApiJson.h — dichiarazione di `upsStatusJson()`
+      - lib/WebApi/src/WebApiJson.cpp — `_unsupported` e `upsStatusJson()`
+      - src/network/web_config_server.cpp — usa `upsStatusJson()`
+
+      ## Criteri di Completamento
+      - [ ] `IUpsSource` ha `unsupportedDevice()` con default vuoto
+      - [ ] `/api/ups-vars` aggiunge `_unsupported` solo con UPS non connesso e testo non vuoto
+      - [ ] `/api/system-status` è identico a prima nei casi esistenti e dà "Not supported yet" + `unsupported` per l'UPS Q*
+      - [ ] I test di Verifica passano senza modifiche
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi per JSON Web UI e server NUT con UPS non supportato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il comportamento dei consumatori con un UPS Q* è fissato da test.
+
+      **Leggere:** `test/test_web_api/test_main.cpp:11-170` (`APIMockUSBHost`, test di `generateUpsVars`), `test/test_nut_server/test_main.cpp` (sorgente finta e casi "nessun UPS"), `lib/WebApi/src/WebApiJson.h` dopo TASK-03.
+
+      **Modificare:**
+      1. `test_web_api`: nel mock un campo `unsupported` restituito da `unsupportedDevice()`. Test: scollegato senza testo → JSON di oggi senza `_unsupported`; scollegato con testo → `_disconnected` + `_unsupported`; connesso con testo (caso impossibile ma difensivo) → nessun `_unsupported`.
+      2. `test_web_api`: `upsStatusJson()` per scollegato ("Disconnected"), Q* ("Not supported yet" + `unsupported`), connesso con modello, connesso senza modello ("Unknown Model"), dati vecchi (`stale`), attesa del primo dato (niente `stale`).
+      3. `test_nut_server`: con la sorgente finta non connessa e `unsupportedDevice()` non vuoto, `LIST VAR`, `GET VAR ups.status` e `LIST CMD` rispondono come nel test "nessun UPS" esistente (stesse stringhe attese).
+
+      Nessuna asserzione esistente cambia.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_web_api -f test_nut_server`.
+
+      **Fatto quando:** i test nuovi passano insieme ai vecchi.
+
+      **Blocchi:** se il server NUT risponde diversamente con il testo non vuoto, fermarsi: significa che qualcosa legge `unsupportedDevice()` dove non deve.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — casi `_unsupported` e `upsStatusJson()`
+      - test/test_nut_server/test_main.cpp — caso UPS non supportato = nessun UPS
+
+      ## Criteri di Completamento
+      - [ ] Tre casi `generateUpsVars` e sei casi `upsStatusJson` aggiunti
+      - [ ] Un caso NUT server con UPS non supportato con le stesse risposte di "nessun UPS"
+      - [ ] Suite verdi con il comando di Verifica
+    ref: TASK-04
+  - id: TASK-05
+    title: 'claimInterface(): famiglia prima del descrittore e percorso Q* senza supervisione HID'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'aggancio sceglie la famiglia con `DriverRegistry::match()` prima del report descriptor; il percorso HID resta identico, quello Q* tiene l'interfaccia, scrive una riga INFO ed espone `unsupportedDevice()`.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.cpp:300-420` (`service()`), `:430-475` (`processEvents`), `:473-610` (`claimInterface`), `:640-680` (`handleDisconnected`), `:711-719` (`closeInterface`), `lib/USBHostUPS/src/USBHostUPS.h`, `lib/usb_host_hid/include/usb/hid_host.h:80-90,221` (`iface_num`, `hid_host_device_get_params`), `nut_repo/drivers/libusb1.c:630-645`, sezione "Aggancio" del piano.
+
+      **Modificare:**
+      1. `USBHostUPS.h`: membri `const char* _qx_transport = nullptr;`, `String _unsupported_device;`, dichiarazioni di `claimQxInterface(hid_host_device_handle_t, const DriverRegistry::Match&)`, `releaseBoundState()`, override di `unsupportedDevice()` (sotto `_mutex`).
+      2. `claimInterface()`: in testa `hid_host_get_device_info()`, quirk e stringhe come oggi; se ok, `match()`; `QX` → `claimQxInterface()` e `return`. Il resto è il percorso HID di oggi nello stesso ordine di chiamate a `hid_host`, con il controllo pagine via `DriverRegistry::hasUpsPages()` e riusando VID/PID/quirk/stringhe già letti (stesso risultato: stessi valori). Nel percorso HID azzerare `_qx_transport` e `_unsupported_device` dove oggi si azzera lo stato del dispositivo.
+      3. `releaseBoundState()`: il corpo di reset di `handleDisconnected()` (righe dopo il `log("INFO", "HID Device Disconnected")`) più l'azzeramento dello stato Q*; `handleDisconnected()` lo chiama, senza altre differenze.
+      4. `claimQxInterface()`: come nel piano: solo `iface_num == 0` (altrimenti `closeInterface()` + `logDebug`); se `_hid_dev_handle` è un'altra interfaccia, `closeInterface()` e `releaseBoundState()`; `clearDeferredClaim(handle)`; `_hid_dev_handle = handle`, `_qx_transport`, `_unsupported_device` sotto `_mutex`; annullamento di `_restart_requested` con la riga di oggi; **niente** `hid_host_device_start()`, `_link`, `_in_wd`, cache, `_diag`. Infine `log("INFO", "Q* UPS recognized (USB transport: %s), not supported yet", _qx_transport)`.
+      5. `docs/concepts/architecture.md`: una o due righe sull'ordine di scelta della famiglia (ADR 0013, sezione 2).
+
+      Non aggiungere rami `if (qx)` dentro il percorso HID o in `service()`: la protezione viene da `_is_ready_to_poll=false` e `_driver=nullptr`.
+
+      **Verifica:** build `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell; rileggere a mano che con un UPS Q* legato `service()` esca a `:320`, `processInputReport()` su `!_driver`, `TRANSFER_ERROR` su `_is_ready_to_poll`, e che la richiesta dell'export USB dia l'export di "nessun UPS" (seguire il codice di `requestDiag`/`snapshot`).
+
+      **Fatto quando:** la build compila; `git diff` del percorso HID mostra solo lo spostamento della lettura di device info e `hasUpsPages()`.
+
+      **Blocchi:** se `hid_host_get_device_info()` dipende dal report descriptor o non è disponibile prima di esso, fermarsi e segnalarlo: cambia l'architettura del piano.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — stato Q*, `claimQxInterface`, `releaseBoundState`, `unsupportedDevice()`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `claimInterface`, `claimQxInterface`, `handleDisconnected`
+      - docs/concepts/architecture.md — ordine di scelta della famiglia
+
+      ## Criteri di Completamento
+      - [ ] La famiglia si decide prima di `hid_host_get_report_descriptor()`
+      - [ ] Il percorso HID ha le stesse chiamate a `hid_host` nello stesso ordine di prima
+      - [ ] Un UPS Q* produce una sola riga INFO "Q* UPS recognized (USB transport: <nome>), not supported yet" per aggancio e nessun avvio della pipe IN
+      - [ ] Al distacco lo stato Q* torna vuoto
+      - [ ] La build `esp32-s3-standard` compila
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Web UI: indicatore "Not supported yet" e banner Q* nella pagina UPS'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'utente vede che l'UPS è stato riconosciuto ma non è ancora supportato, invece di "Disconnected".
+
+      **Leggere:** `data/www/bundle.js:1660-1700` (`fetchUpsVars`, banner generico) e `:2437-2480` (`fetchSystemStatus`), `data/www/index.html:865-876` (`#generic-ups-banner`), `scripts/inline_web.py`, `scripts/embed_web.py`, sezione "Consumatori" del piano.
+
+      **Modificare:**
+      1. `index.html`: subito dopo `#generic-ups-banner` un `<div id="unsupported-ups-banner">` con lo stesso stile inline ma `background: var(--warning)` (se la variabile non esiste usare quella usata da `.status-indicator.warning`), nascosto di default, con uno `<span id="unsupported-ups-text">`.
+      2. `bundle.js` in `fetchUpsVars()`: se `data._unsupported` mostra il banner con testo `data._unsupported + ': not supported yet. Support for Q* UPS units is in progress (GitHub issues #91, #28).'` (testo via `textContent`, mai `innerHTML`), altrimenti lo nasconde.
+      3. `bundle.js` in `fetchSystemStatus()`: prima del confronto con `'Disconnected'`, se `data.ups.unsupported` → classe `status-indicator warning`; l'etichetta resta `'UPS: ' + data.ups.status`.
+      4. Rigenerare le pagine: `python scripts/inline_web.py` e poi `python scripts/embed_web.py` (il pre-script di PlatformIO non lo fa).
+
+      **Verifica:** `npx playwright test e2e/system-status.spec.js`; build `esp32-s3-standard` da PowerShell.
+
+      **Fatto quando:** i file generati sono aggiornati e i test e2e esistenti passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — `#unsupported-ups-banner`
+      - data/www/bundle.js — banner e indicatore
+      - data/www/index_inlined.html — rigenerato
+      - file generati da `scripts/embed_web.py` — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Banner Q* visibile solo con `_unsupported`, testo inserito con `textContent`
+      - [ ] Indicatore giallo "UPS: Not supported yet" con `ups.unsupported`
+      - [ ] Pagine inline ed embedded rigenerate
+      - [ ] e2e esistenti verdi
+    ref: TASK-06
+  - id: TASK-07
+    title: Test e2e Playwright per indicatore e banner dell'UPS Q*
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** gli scenari utente del piano sono coperti da Playwright.
+
+      **Leggere:** `e2e/system-status.spec.js`, `e2e/support/webui*` (`serveIndex`), un test che simula `/api/ups-vars` (cercare `api/ups-vars` in `e2e/`), tabella "Test E2E" del piano.
+
+      **Modificare:**
+      1. `e2e/system-status.spec.js`: nuovo caso in `CASES`: `status: { wifi: { status: 'HomeNetwork' }, ups: { status: 'Not supported yet', unsupported: 'Q* UPS (USB transport: hunnox)' } }` → `ups: { label: 'UPS: Not supported yet', level: 'warning' }`.
+      2. Nuovo file `e2e/unsupported-ups.spec.ts` (stile dei file `.ts` esistenti): (a) `/api/ups-vars` con `_disconnected` e `_unsupported` → `#unsupported-ups-banner` visibile e contiene "Q* UPS recognized (USB transport: hunnox)" e "not supported yet", `#generic-ups-banner` nascosto; (b) senza `_unsupported` → banner Q* nascosto, indicatore "UPS: Disconnected" rosso; (c) da Q* a scollegato fra due poll il banner sparisce.
+
+      Nessuna asserzione esistente cambia.
+
+      **Verifica:** `npx playwright test e2e/system-status.spec.js e2e/unsupported-ups.spec.ts`.
+
+      **Fatto quando:** i casi nuovi passano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/system-status.spec.js — caso UPS Q*
+      - e2e/unsupported-ups.spec.ts — nuovo, banner Q*
+
+      ## Criteri di Completamento
+      - [ ] Caso indicatore "UPS: Not supported yet" warning
+      - [ ] Tre scenari del banner coperti
+      - [ ] Comando di Verifica verde
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Regressione completa: nativi, replay, e2e, tre build e flash'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il comportamento HID non cambia (criterio di regressione) e misurare la flash.
+
+      **Leggere:** `platformio.ini` (ambienti `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, `native`).
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (su Windows una suite ERRORED transitoria si rilancia da sola con `-f`).
+      2. `npx playwright test`.
+      3. Da PowerShell: `pio run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`; annotare la dimensione della flash della build classica prima (main) e dopo.
+      4. `git diff main -- test/ e2e/` non deve modificare nessuna asserzione esistente (solo righe aggiunte).
+
+      **Verifica:** i comandi sopra.
+
+      **Fatto quando:** tutto verde e differenza di flash annotata nel riepilogo dell'implementazione.
+
+      **Blocchi:** un test esistente che fallisce si analizza e si corregge il codice, mai l'asserzione.
+
+      ## File Coinvolti
+      - nessun file da modificare (solo esecuzione)
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde (replay inclusi)
+      - [ ] Suite e2e completa verde
+      - [ ] Tre build compilano
+      - [ ] Differenza di flash della build classica annotata
+    ref: TASK-08
+  - id: TASK-09
+    title: Build di prova su UPS HID reali prima della release
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare su hardware che l'aggancio HID, i dati e i comandi sono come prima (ADR 0013 sezione 2, ADR 0010 passo 4).
+
+      **Leggere:** memoria del progetto sulla scheda di test e sulle credenziali OTA (mai stamparle), `docs/test-results/` per il formato dei risultati.
+
+      **Passi:**
+      1. **Chiedere all'utente un sì esplicito** prima di toccare la scheda del banco con l'Eaton 3S.
+      2. Con il consenso: OTA della build `esp32-s3-standard`, poi verificare nel System Log l'aggancio ("UPS interface claimed and ready", nessuna riga Q*), i dati in `/api/ups-vars`, `upsc` dal server NUT e un comando innocuo (per esempio `beeper.disable`/`beeper.enable` se offerto); scollegare e ricollegare l'USB e ripetere.
+      3. Salvare i risultati in `docs/test-results/US-132/`.
+      4. Preparare lo zip di prova per i tester HID (procedura della RC) e annotare che la release aspetta i loro riscontri.
+
+      **Verifica:** log e risultati salvati.
+
+      **Fatto quando:** la prova sull'Eaton 3S è passata (o l'utente ha scelto di saltarla) e la build per i tester è pronta.
+
+      **Blocchi:** senza consenso dell'utente non si tocca la scheda; il task resta aperto e lo si dice nel riepilogo. Non rilasciare prima dei riscontri.
+
+      ## File Coinvolti
+      - docs/test-results/US-132/ — risultati della prova su Eaton 3S
+
+      ## Criteri di Completamento
+      - [ ] Consenso esplicito dell'utente registrato prima della prova
+      - [ ] Aggancio, dati, comandi e ricollegamento dell'Eaton 3S come prima, con log salvati
+      - [ ] Zip di prova per i tester pronto
+    ref: TASK-09

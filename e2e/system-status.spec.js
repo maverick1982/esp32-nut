@@ -4,7 +4,8 @@ import { serveIndex } from './support/webui';
 // Status indicators in the header (fetchSystemStatus in bundle.js). The states are
 // the ones /api/system-status really sends (src/network/web_config_server.cpp):
 // Wi-Fi = SSID, "AP Mode Active" or "Connecting"; UPS = model or "Disconnected",
-// with ups.stale when the attached UPS stops answering.
+// with ups.stale when the attached UPS stops answering, or "Not supported yet" with
+// ups.unsupported for a recognised Q* UPS (US-132, WebApiJson::upsStatusJson).
 const CASES = [
   {
     name: 'connected: SSID and UPS model are green',
@@ -23,6 +24,13 @@ const CASES = [
     status: { wifi: { status: 'Connecting' }, ups: { status: 'Eaton 3S', stale: true } },
     wifi: { label: 'Wi-Fi: Connecting', level: 'warning' },
     ups: { label: 'UPS: Eaton 3S (stale)', level: 'warning' },
+  },
+  {
+    // US-132: Q* UPS recognised but not supported yet
+    name: 'recognised Q* UPS not supported yet is a warning',
+    status: { wifi: { status: 'HomeNetwork' }, ups: { status: 'Not supported yet', unsupported: 'Q* UPS (USB transport: hunnox)' } },
+    wifi: { label: 'Wi-Fi: HomeNetwork', level: 'success' },
+    ups: { label: 'UPS: Not supported yet', level: 'warning' },
   },
 ];
 

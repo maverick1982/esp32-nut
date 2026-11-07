@@ -118,6 +118,11 @@ public:
     // rssi, Ethernet also link_speed and full_duplex. Fields the link does not have now are
     // left out (no gateway in AP mode, no rssi while connecting, ...)
     static void networkStatusJson(JsonObject net, const NetLinkInfo& info);
+    // "ups" of GET /api/system-status: status = ups.model ("Unknown Model" without it) and
+    // stale (attached UPS with stale data, not while waiting for the first poll), or
+    // "Disconnected". US-132: a recognised but unsupported UPS gives status
+    // "Not supported yet" and unsupported = IUpsSource::unsupportedDevice()
+    static void upsStatusJson(JsonObject ups, IUpsSource* src);
     // "network.links" of GET /api/config (US-112): the links of the board profile, "wifi"
     // then "ethernet"
     static void networkLinksJson(JsonArray links, const BoardConfig& board);

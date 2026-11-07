@@ -61,6 +61,12 @@ public:
     bool stale = false;
     bool isDataStale() const override { hostCalls++; return stale; }
 
+    // US-132: first poll pending and recognised-but-unsupported device
+    bool waitingFirstData = false;
+    bool isWaitingFirstData() const override { return waitingFirstData; }
+    String unsupported;
+    String unsupportedDevice() const override { return unsupported; }
+
     // Catalogo LIST RW restituito così com'è
     std::vector<NutTable::RWVariable> rw;
     std::vector<NutTable::RWVariable> getWritableVariables() const override { hostCalls++; return rw; }
@@ -132,6 +138,8 @@ void setUp(void) {
     mockHost.resetDefault = "";
     mockHost.resets.clear();
     mockHost.disconnectOnWrite = false;
+    mockHost.waitingFirstData = false;
+    mockHost.unsupported = "";
 }
 void tearDown(void) {}
 
@@ -168,6 +176,102 @@ void test_api_connected_host_with_data() {
     TEST_ASSERT_EQUAL_STRING("Eaton", doc["ups.mfr"].as<const char*>());
     // The Web UI beeper toggle is gone (US-086): no ups.beeper.switchable even when connected
     TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());
+}
+
+// --- US-132: Q* UPS recognised but not supported yet ---
+
+static const char* QX_TEXT = "Q* UPS (USB transport: hunnox)";
+
+void test_api_disconnected_without_unsupported_text() {
+    mockHost.connected = false;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+    TEST_ASSERT_EQUAL_STRING("{\"_disconnected\":true,\"ups.status\":\"Disconnected\"}", out.c_str());
+}
+
+void test_api_disconnected_with_unsupported_text() {
+    mockHost.connected = false;
+    mockHost.unsupported = QX_TEXT;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    deserializeJson(doc, out);
+    TEST_ASSERT_TRUE(doc["_disconnected"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("Disconnected", doc["ups.status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(QX_TEXT, doc["_unsupported"].as<const char*>());
+}
+
+// Impossible today (a Q* UPS is never connected), but the text must not leak into the data
+void test_api_connected_ignores_unsupported_text() {
+    mockHost.connected = true;
+    mockHost.unsupported = QX_TEXT;
+    mockHost.data.set("ups.mfr", "Eaton");
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    deserializeJson(doc, out);
+    TEST_ASSERT_TRUE(doc["_unsupported"].isNull());
+    TEST_ASSERT_TRUE(doc["_disconnected"].isNull());
+    TEST_ASSERT_EQUAL_STRING("Eaton", doc["ups.mfr"].as<const char*>());
+}
+
+static void upsStatus(JsonDocument& doc, IUpsSource* src) {
+    WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), src);
+}
+
+void test_ups_status_disconnected() {
+    mockHost.connected = false;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Disconnected", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["unsupported"].isNull());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+
+    JsonDocument none;
+    upsStatus(none, nullptr);
+    TEST_ASSERT_EQUAL_STRING("Disconnected", none["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_unsupported_qx() {
+    mockHost.connected = false;
+    mockHost.stale = true; // what the host says with no device bound
+    mockHost.unsupported = QX_TEXT;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Not supported yet", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(QX_TEXT, doc["ups"]["unsupported"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+}
+
+void test_ups_status_connected_with_model() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+    TEST_ASSERT_TRUE(doc["ups"]["unsupported"].isNull());
+}
+
+void test_ups_status_connected_without_model() {
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Unknown Model", doc["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_stale_data() {
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    mockHost.stale = true;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].as<bool>());
+}
+
+void test_ups_status_waiting_first_data_is_not_stale() {
+    mockHost.stale = true;
+    mockHost.waitingFirstData = true;
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
 }
 
 // --- US-059: generateUpsCommands ---
@@ -2013,6 +2117,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_api_null_host);
     RUN_TEST(test_api_disconnected_host);
     RUN_TEST(test_api_connected_host_with_data);
+    RUN_TEST(test_api_disconnected_without_unsupported_text);
+    RUN_TEST(test_api_disconnected_with_unsupported_text);
+    RUN_TEST(test_api_connected_ignores_unsupported_text);
+    RUN_TEST(test_ups_status_disconnected);
+    RUN_TEST(test_ups_status_unsupported_qx);
+    RUN_TEST(test_ups_status_connected_with_model);
+    RUN_TEST(test_ups_status_connected_without_model);
+    RUN_TEST(test_ups_status_stale_data);
+    RUN_TEST(test_ups_status_waiting_first_data_is_not_stale);
     RUN_TEST(test_commands_null_host);
     RUN_TEST(test_commands_disconnected_host);
     RUN_TEST(test_commands_catalog);

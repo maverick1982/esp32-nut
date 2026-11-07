@@ -82,6 +82,10 @@ public:
     bool stale = false;
     bool isDataStale() const override { return stale; }
 
+    // US-132: recognised but unsupported device (Q*), never read by the NUT server
+    String unsupported;
+    String unsupportedDevice() const override { return unsupported; }
+
     // Writable variables reported to LIST RW / GET TYPE / LIST ENUM (US-066)
     std::vector<NutTable::RWVariable> rw;
     std::vector<NutTable::RWVariable> getWritableVariables() const override { return rw; }
@@ -143,6 +147,7 @@ void setUp(void) {
     mockHost.beeperToggleSupported = true;
     mockHost.connected = true;
     mockHost.stale = false;
+    mockHost.unsupported = "";
     mockHost._mockUsages.clear();
     // The beeper field of getActiveBeeperPath(): the beeper commands come from the rows of
     // genericHid2Nut(), which need the field in the descriptor (US-079)
@@ -508,6 +513,40 @@ void test_list_cmd_empty_when_disconnected(void) {
 
     server.processCommand(printer, 0, "LIST CMD testups");
     TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD testups\nEND LIST CMD testups\n", printer.getOutput().c_str());
+}
+
+// US-132: a Q* UPS recognised but not supported yet is "no UPS" for NUT clients: the same
+// answers as test_disconnected_is_stale and test_list_cmd_empty_when_disconnected
+void test_unsupported_ups_answers_as_no_ups(void) {
+    server.setAuthenticated(0, true);
+    mockHost.data = UPSData();
+    mockHost.statusString = "UNKNOWN";
+    mockHost.connected = false;
+    mockHost.stale = true;
+    mockHost.unsupported = "Q* UPS (USB transport: hunnox)";
+    mockHost._mockUsages.push_back(featureUsage("UPS.BatterySystem.Battery.Test", 0x00840058));
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST VAR testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "GET VAR testups ups.status");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("ERR DATA-STALE\n", printer.getOutput().c_str());
+
+    // Within the boot grace (not stale yet), as test_list_cmd_empty_when_disconnected
+    mockHost.stale = false;
+    printer.clear();
+    server.processCommand(printer, 0, "LIST CMD testups");
+    TEST_ASSERT_EQUAL_STRING("BEGIN LIST CMD testups\nEND LIST CMD testups\n", printer.getOutput().c_str());
+
+    printer.clear();
+    server.processCommand(printer, 0, "LIST UPS");
+    TEST_ASSERT_TRUE(printer.getOutput().find("UPS testups ") != std::string::npos);
 }
 
 // Beeper not controllable (e.g. EcoFlow): the other commands are still listed
@@ -2252,6 +2291,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_internal_status_keys_are_not_variables);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_unsupported_ups_answers_as_no_ups);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
     RUN_TEST(test_cmddesc_known_and_unknown);
     RUN_TEST(test_instcmd_battery_test_writes_value);
@@ -2353,6 +2393,7 @@ void setup() {
     RUN_TEST(test_internal_status_keys_are_not_variables);
     RUN_TEST(test_list_cmd_from_descriptor);
     RUN_TEST(test_list_cmd_empty_when_disconnected);
+    RUN_TEST(test_unsupported_ups_answers_as_no_ups);
     RUN_TEST(test_list_cmd_without_controllable_beeper);
     RUN_TEST(test_cmddesc_known_and_unknown);
     RUN_TEST(test_instcmd_battery_test_writes_value);

@@ -48,6 +48,10 @@ public:
     virtual bool isDataStale() const { return false; }
     // True while a device is attached but its first full poll has not completed yet
     virtual bool isWaitingFirstData() const { return false; }
+    // Device recognised but not supported yet, as "Q* UPS (USB transport: hunnox)" (US-132,
+    // ADR 0013); empty when there is none. With a non-empty text isConnected() stays false:
+    // the NUT server, the auto shutdown and the LED see no UPS. Only the web UI shows it.
+    virtual String unsupportedDevice() const { return String(); }
 
     // Commands, SET VAR and reset go through the control of the attached driver (US-105).
     // NUT instant commands the attached device supports, empty when no UPS is connected
