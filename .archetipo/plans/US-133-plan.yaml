@@ -1,0 +1,587 @@
+schema: archetipo/plan/v2
+spec_code: US-133
+body: |
+  ---
+  type: plan
+  title: "US-133: Motore Q*: tabelle qx2nut, blazer-common e protocolli megatec e q1 con i test di NUT — Piano di implementazione"
+  description: "Piano di implementazione per US-133"
+  tags: [plan, implementation, US-133]
+  ---
+  # US-133: Motore Q*: tabelle qx2nut, blazer-common e protocolli megatec e q1 con i test di NUT — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che porta `nutdrv_qx` (ADR 0013, sezione 4), voglio il motore che esegue le tabelle `qx2nut` come `nutdrv_qx.c`, con `blazer-common` e i protocolli `megatec` e `q1` copiati riga per riga, in modo che i valori ricavati dalle risposte di un UPS Q* siano quelli che darebbe NUT, e che i protocolli successivi costino solo una tabella.
+
+  **Criteri di Accettazione**
+  - Tabelle `static const`, copia riga per riga dei `qx2nut` di NUT; i valori letti stanno nell'istanza, indicizzati per riga.
+  - Il motore porta `qx_process()`, `ups_infoval_set()` e la visita delle tabelle con le classi di poll di NUT e i valori predefiniti di NUT.
+  - Risposta troppo corta, carattere iniziale sbagliato o preprocess fallito: riga scartata come in NUT, senza valori inventati.
+  - `blazer-common` portato una volta sola e condiviso; i bit di stato finiscono nei flag `ups.status.*`, così `UPSData::computeUPSStatusString()` dà lo stesso `ups.status` di upsd.
+  - Protocolli `megatec` e `q1` con i nomi e le chiavi di NUT.
+  - Test nativi da `testing_t` per entrambi i protocolli, più i casi di risposta non valida.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Tutto è logica pura nel modulo `ups-protocol` (`lib/USBHostUPS/src`), compilata anche in nativo. Nessun file USB, nessun cambiamento all'host: il motore viene creato dall'host solo con US-136; il riconoscimento per tentativi (`subdriver_matcher()`) è US-134; `instcmd()`/`setvar()` e l'elenco dei comandi sono US-135. In questa storia ogni file nuovo è raggiungibile solo dai test, quindi sulle immagini ESP32 il linker lo scarta: la misura della flash vera si fa con US-136.
+
+  ### File nuovi
+
+  | File | Contenuto | Origine NUT |
+  |---|---|---|
+  | `QxTypes.h` | flag `QX_FLAG_*`, `MAXTRIES`, bit di stato, `QxInfoRw`, `QxItem`, `QxSubdriver`, `QxOptions`, `QX_SMALLBUF` | `nutdrv_qx.h` |
+  | `IQxTransport.h` | un comando, una risposta: `int command(const char* cmd, size_t cmdlen, char* buf, size_t buflen)`, -1 su errore, altrimenti i byte letti | firma dei `*_command()` / `qx_command()` |
+  | `QxEngine.h/.cpp` | motore: `find_nut_info`, `qx_process`, `qx_process_answer`, `ups_infoval_set`, `update_status`, `qx_ups_walk`, `upsdrv_initinfo`/`upsdrv_updateinfo` (parte dati), `ups_status_set`/`ups_alarm_set`, stima della batteria, `qx_multiply_*` | `nutdrv_qx.c` |
+  | `QxBlazerCommon.h/.cpp` | `blazer_r_ondelay/offdelay`, `blazer_claim`, `blazer_claim_light`, `blazer_initups(_light)`, `blazer_process_setvar`, `blazer_process_command`, `blazer_process_status_bits` | `nutdrv_qx_blazer-common.c` |
+  | `QxProtocols.h`, `QxMegatec.cpp`, `QxQ1.cpp` | `extern const QxSubdriver QX_MEGATEC, QX_Q1;` con le tabelle | `nutdrv_qx_megatec.c`, `nutdrv_qx_q1.c` |
+  | `test/mocks/QxTestingTransport.h` | trasporto finto che porta il ramo `TESTING` di `qx_command()` | `nutdrv_qx.c:4240-4285` |
+
+  I nomi seguono i file esistenti (cartella piatta, prefisso `Qx`). Commenti in inglese come il resto di `lib/USBHostUPS`, con citazione delle righe di NUT quando il comportamento non è ovvio.
+
+  ### Tabelle costanti, stato nell'istanza
+
+  ```cpp
+  struct QxInfoRw { const char* value; int (*preprocess)(char* value, size_t len); };
+  class QxEngine;
+  struct QxItem {
+      const char* info_type; int info_flags; const QxInfoRw* info_rw; const char* command;
+      size_t answer_len; char leading; int from; int to; const char* dfl; uint32_t qxflags;
+      int (*preprocess_command)(QxEngine& qx, const QxItem& item, char* command, size_t commandlen);
+      int (*preprocess_answer)(QxEngine& qx, const QxItem& item, int len);
+      int (*preprocess)(QxEngine& qx, const QxItem& item, char* value, size_t valuelen);
+  };
+  struct QxSubdriver {
+      const char* name;                    // MEGATEC_VERSION = `Megatec 0.10`, Q1_VERSION = `Q1 0.08`
+      bool (*claim)(QxEngine& qx);
+      const QxItem* qx2nut;                // terminata da una riga con info_type nullptr, come in NUT
+      void (*initups)(QxEngine& qx);
+      void (*initinfo)(QxEngine& qx);      // nullptr per megatec e q1
+      const char* accepted;                // ACK
+      const char* rejected;                // nullptr
+  };
+  struct QxOptions { bool novendor = false; bool norating = false; bool ignoresab = false; };
+  ```
+
+  - **Riga per riga:** le righe hanno le colonne di `item_t` nello stesso ordine, **senza** le due colonne di runtime `answer` e `value` (in NUT sempre `""` nelle tabelle). Un commento in testa a ogni tabella lo dice, così un diff con il file di NUT resta leggibile. `makevartable` non si porta (le opzioni arrivano da `QxOptions`, US-138).
+  - **Stato per riga:** `std::vector<uint32_t> _flags`, copia dei `qxflags` della tabella fatta nel costruttore. Tutta la logica legge e scrive `_flags[row]` (in NUT `item->qxflags |= QX_FLAG_SKIP`, `QX_FLAG_MAPPING_HANDLED`; i protocolli voltronic tolgono anche `QX_FLAG_SKIP`), mai `item.qxflags`.
+  - **`answer` e `value`:** in NUT `qx_ups_walk()` li azzera dopo ogni riga e nessuna funzione dei protocolli portati (né di quelli previsti da US-134/138) legge `answer`/`value` di un'altra riga. Si tiene quindi **una sola coppia di buffer di lavoro** nell'istanza (`_answer[QX_SMALLBUF]`, `_value[QX_SMALLBUF]`, la riga corrente), più `previous_item` (`command`, `answer`) e i buffer temporanei di `qx_process()` (comando e ricezione), tutti membri e non sullo stack del task di poll. `QX_SMALLBUF = 512` come `SMALLBUF` di NUT (`include/common.h:780`), per avere gli stessi troncamenti. Circa 2,5 KB per istanza, allocati solo quando c'è un UPS Q*. Un protocollo futuro che legga il `value` di un'altra riga (per esempio `voltronic`, `nutdrv_qx_voltronic.c:2692`) richiederà buffer per riga: lo dice un commento.
+  - `IUpsControl` può girare dopo la cancellazione del driver (US-105): le tabelle e le funzioni dei protocolli sono dati statici, nessuna di esse tiene puntatori all'istanza.
+
+  ### API del motore
+
+  ```cpp
+  class QxEngine {
+  public:
+      static const uint32_t DEFAULT_POLLFREQ_S = 30;    // DEFAULT_POLLFREQ, nutdrv_qx.h
+      static const uint32_t DEFAULT_POLLINTERVAL_S = 2; // poll_interval, main.c:102 (cadenza dell'host, US-136)
+      enum class Update : uint8_t { Ok, Failed, Stale };
+
+      QxEngine(const QxSubdriver& sub, IQxTransport& transport, const QxOptions& opt = QxOptions());
+
+      // Fasi di NUT, nell'ordine in cui le usa l'host: claim -> initUps -> initInfo -> updateInfo...
+      bool claim(UPSData& data);                        // sub.claim (US-134 la chiama per tentativi)
+      void initUps();                                   // sub.initups, fine di upsdrv_initups()
+      bool initInfo(UPSData& data, uint32_t nowMs);     // false = fatalx di upsdrv_initinfo()
+      Update updateInfo(UPSData& data, uint32_t nowMs); // upsdrv_updateinfo()
+      void noteDataChanged();                           // data_has_changed = TRUE (US-135)
+      bool reestablished() const;                       // ultimo Ok dopo retry > MAXTRIES (log in US-136)
+
+      // Funzioni esportate da nutdrv_qx.h, per blazer-common e i protocolli
+      int findNutInfo(const char* name, uint32_t flag, uint32_t noflag) const; // riga o -1
+      int process(int row, const char* command = nullptr);                    // qx_process()
+      int infovalSet(int row);                                                // ups_infoval_set()
+      void updateStatus(const char* nutvalue);                                // update_status()
+      void alarmSet(const char* text);                                        // alarm_set()
+      unsigned int status() const;                                            // qx_status()
+
+      // Accesso per i preprocess (al posto di item->value, dstate_*, testvar)
+      const QxSubdriver& subdriver() const; size_t rowCount() const; const QxItem& item(int row) const;
+      uint32_t flags(int row) const; void addFlags(int row, uint32_t f); void clearFlags(int row, uint32_t f);
+      const char* value() const; char* answer();
+      const char* getinfo(const char* name) const; // nullptr se manca (dstate_getinfo)
+      void setinfo(const char* name, const char* value); void delinfo(const char* name);
+      const QxOptions& options() const;
+  };
+  ```
+
+  `claim()`, `initInfo()` e `updateInfo()` legano `UPSData` per la durata della chiamata (puntatore membro azzerato all'uscita); `getinfo/setinfo/delinfo` fuori da una di queste chiamate non fanno nulla. Il lock dei dati resta all'host (US-136). `setinfo` scrive solo se il valore cambia (`valueEquals`), come il resto del codice (ADR 0007). Il confronto senza maiuscole è ASCII, come `equalsIgnoreCase()` di `DriverRegistry.cpp:111` (in un header comune o una copia locale `qxEqualsIgnoreCase`).
+
+  ### Elaborazione di una riga (`nutdrv_qx.c:4869-5072`)
+
+  - `process(row, cmd)`: copia il comando (o `item.command`), chiama `preprocess_command` se c'è (-1 = errore), azzera il buffer di ricezione, `transport.command()`, `len < 0` = errore; copia in `_answer`; `preprocess_answer` se c'è (su errore azzera `_answer`); poi `qx_process_answer()`.
+  - `qx_process_answer()`: risposta uguale a `rejected` (strcasecmp) = errore; `answer_len && len < answer_len` = risposta corta; `leading && _answer[0] != leading` = carattere sbagliato; `to && to < from` = errore; `_value` = `answer[from..to]`, oppure fino a `\r` quando `to == 0`; risposta vuota = `_value` vuoto. `errno` non si porta (in NUT serve solo ai messaggi di debug).
+  - `infovalSet(row)`: con `preprocess`: errore -> -1; `ups.status*` -> `updateStatus(value)` se non vuoto, ritorna 0; `ups.alarm*` -> `alarmSet(value)` se non vuoto, ritorna 0. Senza: copia `_value`, `QX_FLAG_TRIM` toglie `#` e spazi ai due lati (`str_trim_m(value, "# ")`), se `dfl` non è `%s` il valore deve contenere solo `0123456789 .` e viene riformattato con `dfl` su `strtod()`. `QX_FLAG_NONUT` -> 1 senza scrivere; valore vuoto -> -1; altrimenti `addFlags(QX_FLAG_MAPPING_HANDLED)`, `setinfo()`, e `battery.charge`/`battery.runtime` aggiornano lo stato della stima batteria; ritorna 1.
+  - Il `dfl` è un formato preso dalla tabella costante: `snprintf(value, size, dfl, strtod(...))`. Un test controlla che ogni `dfl` delle tabelle portate sia `%s`, un solo `%.Nf`/`%f`, oppure (righe `QX_FLAG_ABSENT`) un valore predefinito senza `%`.
+
+  ### Visita delle tabelle (`qx_ups_walk()`, `nutdrv_qx.c:4489-4783`)
+
+  Porting fedele delle tre modalità:
+  - **INIT:** righe `QX_FLAG_ABSENT` -> se la variabile manca la si scrive con `dfl` (le range/enum di `qx_set_var()` sono US-135) e si passa oltre; righe `ups.status`/`ups.alarm` sempre; le altre solo se la variabile non esiste ancora (quelle già lette dal claim si saltano).
+  - **QUICK:** solo `QX_FLAG_QUICK_POLL`.
+  - **FULL:** salta `ABSENT | CMD | SETVAR | STATIC`; `SEMI_STATIC` solo se `data_has_changed`.
+  - Righe `CMD` e `SETVAR`: nessun I/O (l'elenco comandi è US-135; il ramo `SETVAR | NONUT` con `setvar(NULL)` non serve ai protocolli portati: commento e niente codice).
+  - **Riuso della risposta:** se la riga precedente aveva lo stesso comando (strcasecmp) e una risposta non vuota, si riusa `previous_item.answer` senza mandare il comando. Una risposta `Q1\r` vale per tutte le sue righe: un solo comando per giro.
+  - **Errori:** `process()` fallito -> si azzerano i buffer; riga `QUICK_POLL` -> la visita ritorna false; in INIT la riga prende `QX_FLAG_SKIP` per sempre; altrimenti si continua. `infovalSet() == -1` -> `QUICK_POLL` ritorna false, altrimenti si continua.
+  - In FULL la visita azzera prima la stima della batteria e alla fine chiama `qx_battery()` (ramo senza `runtimecal`).
+
+  ### `initInfo()` e `updateInfo()` (`nutdrv_qx.c:3525-3680`)
+
+  - `initInfo`: `setinfo(driver.version.data, sub.name)`, visita INIT (false -> ritorna false), `qx_initbattery()`, `sub.initinfo` se c'è, `lastpoll = now`. Le parti che dipendono da `ups.conf` (`ondelay`, `offdelay`, `pollfreq`, `runtimecal`, `battery_voltage_reports_one_pack`) e l'aggiunta di `load.off`/`load.on` (US-135) non si portano: un commento le elenca. `driver.name` e `driver.parameter.*` restano all'host (US-136).
+  - `updateInfo`: FULL se `(now - lastpoll) > pollfreq * 1000` (ms, sicuro rispetto al giro di `millis()`; NUT confronta secondi interi con `>`) oppure `data_has_changed`; FULL azzera `ups_status` e il buffer degli allarmi; QUICK no (un bit come `TRIM` resta fino al FULL successivo, come in NUT). Su visita fallita: `retry <= MAXTRIES` -> `retry++`, `Update::Failed`; altrimenti `Update::Stale` (cioè dal quinto fallimento consecutivo, come `dstate_datastale()`), senza toccare i dati. Su visita riuscita: FULL -> `lastpoll = now`, `data_has_changed = false`, allarmi applicati; poi stato scritto in `UPSData`; `reestablished` vero se `retry > MAXTRIES`; `retry = 0`; `Update::Ok`.
+
+  ### Bit di stato -> flag di `UPSData`
+
+  `ups_status_set()` diventa la scrittura dei 12 bit nei flag che `computeUPSStatusString()` già legge, sempre `1` o `0` e solo quando cambiano:
+
+  | Bit Q* | Chiave | Token |
+  |---|---|---|
+  | OL | `ups.status.ac_present` | OL, altrimenti OB |
+  | LB | `ups.status.battery_low` | LB |
+  | RB | `ups.status.replace_battery` | RB + allarme `Replace battery!` |
+  | CHRG | `ups.status.charging` | CHRG (vedi nota) |
+  | DISCHRG | `ups.status.discharging` | DISCHRG |
+  | BYPASS | `ups.status.bypass` (**nuova**) | BYPASS, senza allarme |
+  | CALIB | `ups.status.cal` | CAL |
+  | OFF | `ups.status.off` | OFF |
+  | OVER | `ups.status.overload` | OVER |
+  | TRIM | `ups.status.trim` | TRIM |
+  | BOOST | `ups.status.boost` | BOOST |
+  | FSD | `ups.status.fsd` (**nuova**) | FSD + allarme `Shutdown imminent!` |
+
+  - **Due chiavi nuove in `UPSData`:** i flag HID più vicini hanno un'altra semantica. `bypassauto`/`bypassman` aggiungono l'allarme `Automatic/Manual bypass mode!`, che `ups_alarm_set()` di nutdrv_qx non ha; `shutdown_imminent` dà LB e mai FSD (issue #65), mentre nutdrv_qx scrive il token `FSD` (`nutdrv_qx.c:4835`). Quindi `computeUPSStatusString()` aggiunge `ups.status.bypass` alla condizione di BYPASS e `FSD ` in coda dopo OFF; `alarmText()` aggiunge `{ ups.status.fsd, Shutdown imminent! }` subito dopo `shutdown_imminent`. Nessuna tabella HID scrive queste chiavi (da verificare con grep): per gli HID nulla cambia.
+  - **Allarmi:** come in NUT si azzerano e si applicano solo nel FULL: `alarmSet()` accumula i testi del protocollo (es. `UPS selftest failed!` del bit 41) separati da spazio, poi `data.applyAlarmVariables(vendor)`; RB e FSD li aggiunge `alarmText()` nello stesso ordine di `ups_alarm_set()`. Il prefisso `ALARM` di `ups.status` segue.
+  - **Differenze note, scritte nei commenti e nei test:** (1) `CAL`: nutdrv_qx lo scrive dopo `OFF`, la funzione comune (ordine di usbhid-ups) lo mette per primo: stesso insieme di token, ordine diverso solo con CAL; (2) `CHRG`: nutdrv_qx lo scrive senza condizioni, `computeUPSStatusString()` lo qualifica con `fully_charged`/`battery.charge`; nessun protocollo di questa storia (né di US-134/138) imposta CHRG, si sistemerà con il primo protocollo che lo fa.
+
+  ### Stima della batteria (`nutdrv_qx.c:446-680`, `4694-4781`)
+
+  `megatec` non dà `battery.charge`: NUT la stima dalla tensione e la pubblica. Si porta `qx_initbattery()` e `qx_battery()` senza i rami delle opzioni di `ups.conf` (`runtimecal`, `battery_voltage_reports_one_pack`; `battery.packs` letto da `UPSData` se c'è, come `dstate_getinfo`): se mancano `battery.voltage.low/high` ma c'è `battery.voltage.nominal`, `low = 104*nom/120`, `high = 130*nom/120` pubblicati con `%.2f`; autodetect dei pacchi con l'elenco `{120, 100, …, 0.5}`; `battery.charge` = `100*(act-low)/(high-low)` limitata a 0..100, `%.0f`. Le righe `LOG_INFO` di NUT diventano commenti (i log del driver arrivano con US-136). `qx_multiply_battvolt`, `qx_multiply_x1000`, `qx_multiply_m2s` sono funzioni pubbliche del motore con la firma dei preprocess.
+
+  ### blazer-common (`nutdrv_qx_blazer-common.c`)
+
+  Portato tutto, una volta, perché le righe delle tabelle puntano alle sue funzioni: range `blazer_r_ondelay` (0..599940) e `blazer_r_offdelay` (12..600); `blazer_claim` (stato con `input.voltage`, poi `ups.firmware` salvo `novendor`, con `delinfo(input.voltage)` sui fallimenti); `blazer_claim_light`; `blazer_initups`/`_light` (`norating`, `novendor`, `ignoresab` da `QxOptions` -> `addFlags(QX_FLAG_SKIP)`); `blazer_process_setvar` (troncamento al minuto, o a 6 s sotto i 60 s); `blazer_process_command` (`shutdown.return`, `shutdown.stayoff`, `test.battery.start`, letture di `ups.delay.*` con `getinfo`, formato del comando di riga: `%s` con `snprintf`, `%d`/`%02d` con un `int`, comando senza conversioni copiato così com'è); `blazer_process_status_bits` (bit 38-45, soglie 0.5/0.95/1.05/1.5 su `output.voltage`/`input.voltage`; una `getinfo` mancante vale `0`, dove NUT andrebbe in crash con `strtod(NULL)`). L'uso di claim nel riconoscimento è US-134, quello dei comandi e del setvar in `instcmd()`/`setvar()` è US-135.
+
+  ### Build nativa
+
+  `platformio.ini`, `[env:native]`, `build_src_filter`: aggiungere `QxEngine.cpp`, `QxBlazerCommon.cpp`, `QxMegatec.cpp`, `QxQ1.cpp`. Le immagini ESP32 compilano la libreria intera: le tre build devono restare verdi.
+
+  ---
+
+  ## Strategia di test
+
+  Solo test nativi Unity (nessuna UI, nessun e2e: la storia non tocca Web UI, server NUT né host USB).
+
+  - **`test/mocks/QxTestingTransport.h`:** porta il ramo `TESTING` di `qx_command()` (`nutdrv_qx.c:4240-4285`): cerca il comando nella tabella `testing_t` senza maiuscole; trovato -> la risposta (con `answer_len` per le risposte con `\0` interni); non trovato -> la stringa `rejected` del protocollo, altrimenti l'eco del comando. In più registra i comandi ricevuti e può essere messo in errore (-1) o caricato con risposte di sostituzione per i casi non validi.
+  - **`test/test_qx_engine`:** tabella sintetica nel test (pochi `QxItem` scritti a mano, un protocollo finto con `rejected`) per la semantica del motore: risposta corta, carattere iniziale sbagliato, `to < from`, risposta uguale a `rejected`, preprocess fallito, valore non numerico, trim, `to == 0`, `NONUT`; classi di poll (STATIC solo in INIT, SEMI_STATIC solo dopo `noteDataChanged()`, QUICK a ogni chiamata, FULL dopo più di 30 s); riuso di `previous_item` (un solo comando per giro); `QX_FLAG_SKIP` in INIT per righe non QUICK; QUICK fallita -> `Failed` senza scrivere; `Stale` al quinto fallimento consecutivo, `reestablished()` al ritorno; persistenza di un bit fino al FULL; allarmi applicati solo nel FULL.
+  - **`test/test_qx_protocols`:** le tabelle `testing_t` di `nutdrv_qx_megatec.c:118-133` e `nutdrv_qx_q1.c:93-106` copiate riga per riga nel test, rigiocate in sequenza claim -> initUps -> initInfo -> updateInfo; valori attesi ricavati dalle posizioni `from`/`to` di NUT (sono nel task); stati OL, OB, OB LB, TRIM, BYPASS, BOOST, CAL, FSD con allarme, `ups.alarm`; stima della batteria; stringhe di `blazer_process_command` che riproducono i comandi di `testing_t` (`S03`, `S02R0005`, `S.5R0000`, `T04`); troncamenti di `blazer_process_setvar`; claim fallito con risposte non valide; `novendor`/`ignoresab`; controllo dei `dfl`.
+  - **`test/test_ups_status`:** casi nuovi per `ups.status.bypass` e `ups.status.fsd`; i casi esistenti invariati.
+  - **Regressione:** suite nativa completa e le tre build ESP32 (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`).
+
+  ### Demo
+
+  La `Dimostrazione` della storia è l'esecuzione dei test nativi: nessun video da registrare in review.
+
+  ---
+
+  ## Note e assunzioni
+
+  - Le due chiavi nuove `ups.status.bypass` e `ups.status.fsd` sono l'unico cambiamento fuori dai file Q*; motivo nella sezione dei bit di stato.
+  - `answer`/`value` in una sola coppia di buffer di lavoro invece che per riga: lettura del criterio sull'istanza giustificata dalla RAM (circa 2,5 KB contro circa 35 KB per protocollo) e dal fatto che NUT li azzera dopo ogni riga; i flag di runtime sono invece per riga.
+  - Le opzioni di `ups.conf` non portate (`pollfreq`, `ondelay`, `offdelay`, `runtimecal`, `battery_voltage_reports_one_pack`, `norating`, `ignoresab` come impostazioni) restano ai valori predefiniti di NUT; `novendor` diventa un'impostazione con US-138.
+tasks:
+  - id: TASK-01
+    title: Tipi Q* (QxTypes.h), IQxTransport e trasporto finto QxTestingTransport
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esistono i tipi che descrivono una tabella `qx2nut` costante, l'interfaccia di trasporto un comando / una risposta e il trasporto finto che i test di US-133, US-134 e US-135 useranno.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.h` (tutto: `item_t`, `subdriver_t`, flag, `MAXTRIES`, `status_bit_t`, `testing_t`), `nut_repo/drivers/nutdrv_qx.c:4240-4285` (ramo `TESTING` di `qx_command()`), sezioni "Tabelle costanti, stato nell'istanza" e "Strategia di test" del piano, `test/mocks/Arduino.h`.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxTypes.h`: `QX_SMALLBUF = 512`; `QX_FLAG_STATIC` … `QX_FLAG_MAPPING_HANDLED` con gli stessi valori di `nutdrv_qx.h`; `QX_MAXTRIES = 3`; `ST_FLAG_RW`/`ST_FLAG_STRING` con i valori di NUT (`nut_repo/include/extstate.h:39-40`: 0x0001, 0x0002); enum dei bit di stato `QX_OL … QX_FSD` nell'ordine di `status_bit_t` e macro/funzione `QX_STATUS(x)`; `QxInfoRw`, `QxItem`, `QxSubdriver`, `QxOptions` come nel piano (dichiarazione anticipata di `QxEngine`). Commento: colonne di `item_t` senza `answer`/`value`.
+      2. Creare `lib/USBHostUPS/src/IQxTransport.h`: classe astratta con `virtual int command(const char* cmd, size_t cmdlen, char* buf, size_t buflen) = 0;` e distruttore virtuale; commento sul contratto (-1 errore, altrimenti byte letti, come `qx_command()`); il trasporto USB reale arriva con US-136.
+      3. Creare `test/mocks/QxTestingTransport.h` (header-only): `struct QxTesting { const char* cmd; const char* answer; int answer_len; };` e una classe che implementa `IQxTransport` portando il ramo `TESTING`: confronto ASCII senza maiuscole, `answer_len > 0 && strlen(answer) < answer_len` -> copia binaria, altrimenti `snprintf`; non trovato -> `rejected` se non nullo, altrimenti eco del comando. Aggiunte per i test: `std::vector<std::string> sent` con i comandi ricevuti, `failNext(n)` che fa tornare -1, `override(cmd, answer)` che sostituisce la risposta di un comando.
+
+      **Verifica:** compila includendolo da un test vuoto, oppure aspettare TASK-03; `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_driver_registry` resta verde.
+
+      **Fatto quando:** i tre header esistono e compilano in nativo; nessun file esistente modificato.
+
+      **Blocchi:** se `ST_FLAG_*` non si trovano in `nut_repo`, fermarsi e chiedere invece di inventare i valori.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxTypes.h — nuovo: flag, tipi della tabella, opzioni
+      - lib/USBHostUPS/src/IQxTransport.h — nuovo: interfaccia un comando / una risposta
+      - test/mocks/QxTestingTransport.h — nuovo: ramo TESTING di qx_command() con registrazione dei comandi
+
+      ## Criteri di Completamento
+      - [ ] Valori dei flag identici a `nutdrv_qx.h`, con citazione
+      - [ ] `QxItem` ha le colonne di `item_t` nello stesso ordine, senza `answer`/`value`
+      - [ ] Il trasporto finto riproduce trovato / rejected / eco come `nutdrv_qx.c:4240-4285`
+      - [ ] Nessun file esistente toccato
+    ref: TASK-01
+  - id: TASK-02
+    title: Chiavi ups.status.bypass e ups.status.fsd in UPSData con test di computeUPSStatusString
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `computeUPSStatusString()` e `alarmText()` sanno esprimere i bit BYPASS e FSD di nutdrv_qx senza cambiare nulla per gli HID.
+
+      **Leggere:** `lib/USBHostUPS/src/UPSData.h:100-235`, `nut_repo/drivers/nutdrv_qx.c:4786-4838` (`ups_alarm_set`, `ups_status_set`), `test/test_ups_status/test_main.cpp`, sezione "Bit di stato -> flag di UPSData" del piano.
+
+      **Modificare:**
+      1. `grep -rnE 'ups\.status\.(bypass|fsd)([^a-z_]|$)' lib src data test` deve dare zero risultati prima della modifica; altrimenti fermarsi.
+      2. In `computeUPSStatusString()`: la condizione di `BYPASS ` diventa `bypassauto || bypassman || bypass`; dopo `OFF ` aggiungere `if (flagSet(d, "ups.status.fsd")) status += "FSD ";` con commento: token di nutdrv_qx (`ups_status_set()`, `nutdrv_qx.c:4835`), mai scritto dagli HID (issue #65).
+      3. In `alarmText()`: nuova voce `{ "ups.status.fsd", "Shutdown imminent!" }` subito dopo `shutdown_imminent`, commento con `ups_alarm_set()` di nutdrv_qx (`nutdrv_qx.c:4786-4794`).
+      4. In `test/test_ups_status/test_main.cpp` aggiungere: `ac_present=1, bypass=1` -> `OL BYPASS` e nessun `ups.alarm` dopo `applyAlarmVariables("")`; `ac_present=1, fsd=1` + `applyAlarmVariables("")` -> `ups.alarm` = `Shutdown imminent!` e stato `ALARM OL FSD`; `ac_present=0, battery_low=1, fsd=1` -> `ALARM OB LB FSD`; `bypass=0` e `fsd=0` scritti come `0` non cambiano `OL`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ups_status -f test_nut_server -f test_ups_source`.
+
+      **Fatto quando:** i casi nuovi passano e quelli esistenti passano senza cambiare le asserzioni.
+
+      **Blocchi:** se un test esistente cambia risultato, fermarsi: vuol dire che una tabella HID usa già una delle chiavi.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — BYPASS anche da `ups.status.bypass`, token FSD, allarme di `ups.status.fsd`
+      - test/test_ups_status/test_main.cpp — casi nuovi
+
+      ## Criteri di Completamento
+      - [ ] Grep preliminare vuoto
+      - [ ] `OL BYPASS` senza allarme, `ALARM OL FSD` con `Shutdown imminent!`
+      - [ ] Suite indicate in Verifica verdi senza modificare asserzioni esistenti
+    ref: TASK-02
+  - id: TASK-03
+    title: 'QxEngine: find_nut_info, qx_process, qx_process_answer, ups_infoval_set, update_status'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il motore elabora una riga come NUT: manda il comando, controlla la risposta, estrae il valore e lo scrive in `UPSData` o nei bit di stato.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:150-200` (stato globale), `:4290-4318` (`update_status`), `:4840-4867` (`find_nut_info`), `:4869-5077` (`qx_process_answer`, `qx_process`, `ups_infoval_set`, `qx_status`), sezioni "API del motore" ed "Elaborazione di una riga" del piano, `lib/USBHostUPS/src/DriverRegistry.cpp:111-119`, `lib/USBHostUPS/src/UPSData.h:20-60`.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxEngine.h` con la classe del piano (tutti i metodi dichiarati; `initInfo`/`updateInfo`/stima batteria possono essere dichiarati qui e implementati in TASK-05/07). Membri: riferimenti a subdriver, trasporto, opzioni; `std::vector<uint32_t> _flags`; `_rows`; buffer `_answer`, `_value`, `_cmd`, `_rx`, `_prevCommand`, `_prevAnswer` da `QX_SMALLBUF`; `unsigned int _status`; `UPSData* _data`; stringa allarmi; stato di poll (`_lastPollMs`, `_dataChanged`, `_retry`, `_reestablished`).
+      2. Creare `lib/USBHostUPS/src/QxEngine.cpp`: costruttore (conta le righe fino a `info_type == nullptr`, copia i flag); `findNutInfo` (strcasecmp ASCII, filtri `flag`/`noflag`); `process`; `qx_process_answer` privato; `infovalSet`; `updateStatus` con la tabella `status_info[]` (`OL, LB, RB, CHRG, DISCHRG, BYPASS, CAL, OFF, OVER, TRIM, BOOST, FSD`) e il prefisso `!`; `alarmSet` (append con spazio); `getinfo/setinfo/delinfo` sul `UPSData` legato (setinfo solo se cambia); helper di trim `# `; un piccolo guard RAII che lega `_data` per la durata di una chiamata pubblica. Ogni funzione cita le righe di NUT che porta.
+      3. Aggiungere `+<../lib/USBHostUPS/src/QxEngine.cpp>` a `build_src_filter` di `[env:native]` in `platformio.ini`.
+
+      Niente `malloc` per comando: i buffer sono membri. Nessun log (US-136).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_ups_status` (compila la nuova unità nel binario di test).
+
+      **Fatto quando:** il motore compila in nativo e i metodi di questa parte sono implementati; il test arriva con TASK-04.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngine.h — nuovo: classe del motore
+      - lib/USBHostUPS/src/QxEngine.cpp — nuovo: elaborazione di una riga
+      - platformio.ini — QxEngine.cpp nel build_src_filter nativo
+
+      ## Criteri di Completamento
+      - [ ] Risposta `rejected`, corta, con carattere iniziale sbagliato o con `to < from` -> -1 senza valore
+      - [ ] `to == 0` prende fino a `\r`; `QX_FLAG_TRIM` toglie `#` e spazi ai lati
+      - [ ] `dfl` diverso da `%s`: solo `0123456789 .` ammessi, poi formato su `strtod`
+      - [ ] Status e allarmi passano da `updateStatus`/`alarmSet` e ritornano 0
+      - [ ] Nessun buffer da 512 byte sullo stack
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test nativi test_qx_engine: elaborazione di una riga e risposte non valide'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la semantica di `process()`/`infovalSet()` è fissata su una tabella sintetica, compresi i casi in cui NUT scarta la riga.
+
+      **Leggere:** `lib/USBHostUPS/src/QxEngine.h`, `test/mocks/QxTestingTransport.h`, `test/test_driver_registry/test_main.cpp` (stile Unity), `nut_repo/drivers/nutdrv_qx.c:4869-5072`.
+
+      **Modificare:** creare `test/test_qx_engine/test_main.cpp` con una tabella sintetica `static const QxItem` (comando `X1\r`, risposta di riferimento `(123.4 05 ABC  #\r`, righe numeriche `%.1f`/`%.0f`, una stringa `%s` con `QX_FLAG_TRIM`, una riga `to = 0`, una riga `QX_FLAG_NONUT`, una riga `ups.status` con un preprocess di test che restituisce `OL`/`!OL`, una riga `ups.alarm`) e un `QxSubdriver` con `rejected = "NAK\r"`. Casi:
+      1. Risposta valida: valori formattati con `dfl` in `UPSData`, trim, `to = 0` fino a `\r`.
+      2. Risposta corta (meno di `answer_len`): `process()` -1, nessuna chiave scritta.
+      3. Carattere iniziale sbagliato: -1, nessuna chiave scritta.
+      4. Risposta `NAK\r` (anche in minuscolo): -1.
+      5. Valore non numerico per `dfl` `%.1f`: `infovalSet` -1, chiave non scritta.
+      6. Preprocess che fallisce: -1, chiave non scritta.
+      7. `NONUT`: ritorna 1, nessuna chiave.
+      8. Trasporto in errore (`failNext`): -1.
+      9. `updateStatus("OL")` poi `updateStatus("!OL")` e `"ol"`: bit come in `update_status()`; valore sconosciuto ignorato.
+      10. `findNutInfo` con `flag`/`noflag` e nome inesistente (-1).
+      11. `setinfo` con lo stesso valore non aumenta `UPSData::writes()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`.
+
+      **Fatto quando:** la suite passa e copre i punti sopra.
+
+      **Blocchi:** se un caso mostra una differenza da NUT, correggere `QxEngine.cpp` (TASK-03), non l'asserzione.
+
+      ## File Coinvolti
+      - test/test_qx_engine/test_main.cpp — nuovo: tabella sintetica e casi di elaborazione
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-11 presenti e verdi
+      - [ ] Ogni caso non valido verifica che nessun valore sia stato inventato in `UPSData`
+    ref: TASK-04
+  - id: TASK-05
+    title: 'QxEngine: visita delle tabelle, initInfo, updateInfo, scrittura di stato e allarmi'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il motore fa il giro delle tabelle con le classi di poll di NUT e pubblica lo stato in `UPSData` come `upsdrv_updateinfo()`.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:3525-3680` (`upsdrv_updateinfo`, `upsdrv_initinfo`), `:4489-4700` (`qx_ups_walk` fino alla stima della batteria esclusa), `:4786-4838`, sezioni "Visita delle tabelle", "initInfo() e updateInfo()" e "Bit di stato -> flag di UPSData" del piano, `lib/USBHostUPS/src/UPSData.h:220-235`.
+
+      **Modificare (`QxEngine.cpp`):**
+      1. `walk(mode)` privato con le tre modalità, il riuso di `previous_item`, le regole di errore e `QX_FLAG_SKIP` in INIT, esattamente come nel piano e in `qx_ups_walk()`. Lasciare due punti di aggancio vuoti per la stima della batteria (azzeramento all'inizio del FULL, `qx_battery()` alla fine) che TASK-07 riempie.
+      2. `claim(UPSData&)`: lega i dati e chiama `sub.claim(*this)` (false se `claim` è nullo). `initUps()`: `sub.initups(*this)` se c'è.
+      3. `initInfo(data, nowMs)`: `setinfo("driver.version.data", sub.name)`, `walk(INIT)`, punto di aggancio per `qx_initbattery()`, `sub.initinfo`, `_lastPollMs = nowMs`; commento con le parti di NUT non portate.
+      4. `updateInfo(data, nowMs)`: scelta FULL/QUICK con `(uint32_t)(nowMs - _lastPollMs) > DEFAULT_POLLFREQ_S * 1000UL || _dataChanged`; FULL azzera `_status` e gli allarmi; retry / `Failed` / `Stale` / `reestablished` come nel piano; su successo FULL applica `data.applyAlarmVariables(allarmi)`; poi `commitStatus()`.
+      5. `commitStatus()`: i 12 bit nelle chiavi della tabella del piano, valore `1`/`0`, scritti solo se diversi dal valore attuale.
+      6. `noteDataChanged()`, `reestablished()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`.
+
+      **Fatto quando:** compila e i test di TASK-04 restano verdi; i test della visita arrivano con TASK-06.
+
+      **Blocchi:** se `applyAlarmVariables` non basta a riprodurre l'ordine di `ups_alarm_set()`, fermarsi e segnalarlo invece di duplicare la logica degli allarmi.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngine.cpp — walk, claim, initUps, initInfo, updateInfo, commitStatus
+      - lib/USBHostUPS/src/QxEngine.h — eventuali membri privati aggiunti
+
+      ## Criteri di Completamento
+      - [ ] INIT/QUICK/FULL filtrano le righe come `qx_ups_walk()`
+      - [ ] Un solo comando per gruppo di righe consecutive con lo stesso comando
+      - [ ] `Stale` solo dal quinto fallimento consecutivo; dati non toccati sui fallimenti
+      - [ ] Allarmi azzerati e applicati solo nel FULL; stato scritto solo su visita riuscita
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Test nativi test_qx_engine: classi di poll, riuso della risposta, stale e allarmi'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la visita e il ciclo `initInfo`/`updateInfo` sono fissati da test, con i valori predefiniti di NUT.
+
+      **Leggere:** `test/test_qx_engine/test_main.cpp` (TASK-04), `lib/USBHostUPS/src/QxEngine.h`, sezioni "Visita delle tabelle" e "initInfo() e updateInfo()" del piano.
+
+      **Modificare:** estendere `test/test_qx_engine/test_main.cpp` con una seconda tabella sintetica che abbia righe `STATIC`, `SEMI_STATIC`, `QUICK_POLL` (stato), normali, `ABSENT` con `dfl` e `CMD`, su due comandi diversi. Casi:
+      1. `initInfo`: scrive `driver.version.data`; riga `ABSENT` col `dfl` solo se la chiave manca; righe già presenti in `UPSData` saltate (nessun comando mandato per loro); riga `CMD` senza I/O.
+      2. Riuso: un giro manda un solo comando per gruppo (controllo su `transport.sent`).
+      3. Riga non QUICK fallita in INIT -> mai più richiesta nei giri successivi (`QX_FLAG_SKIP`).
+      4. `updateInfo` subito dopo `initInfo` è QUICK (solo righe QUICK_POLL); a +30 000 ms ancora QUICK; a +30 001 ms FULL; STATIC mai nel FULL; SEMI_STATIC solo dopo `noteDataChanged()`, che forza anche il FULL.
+      5. QUICK fallita -> `Failed`, `UPSData::writes()` invariato; 4 fallimenti -> `Failed`, il quinto -> `Stale`; poi un successo -> `Ok` e `reestablished()` vero, il successivo falso.
+      6. Bit di stato: con `OL` -> `ups.status.ac_present` = `1` e `computeUPSStatusString` = `OL`; con `!OL` -> `OB`; un bit messo in QUICK resta fino al FULL successivo, che lo azzera se la risposta non lo rimette.
+      7. Allarme da riga `ups.alarm` visibile in `ups.alarm` solo dopo un FULL, e stato `ALARM ...`.
+      8. Giro di `millis()`: `_lastPollMs` vicino a `UINT32_MAX` e `now` dopo il giro -> scelta FULL/QUICK corretta.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`.
+
+      **Fatto quando:** tutti i casi passano.
+
+      **Blocchi:** come TASK-04: una differenza da NUT si corregge nel motore.
+
+      ## File Coinvolti
+      - test/test_qx_engine/test_main.cpp — casi della visita e del ciclo di poll
+
+      ## Criteri di Completamento
+      - [ ] Casi 1-8 presenti e verdi
+      - [ ] Soglia FULL verificata a 30 000 / 30 001 ms
+      - [ ] Stale al quinto fallimento consecutivo
+    ref: TASK-06
+  - id: TASK-07
+    title: 'QxEngine: stima della batteria (qx_initbattery, qx_battery) e qx_multiply_*'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** come NUT, il motore stima `battery.charge` dalla tensione quando il protocollo non la dà, e offre i preprocess comuni `qx_multiply_*`.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:210-300` (dati batteria, `qx_multiply_*`), `:444-680` (`qx_battery`, `qx_load`, `qx_initbattery`), `:4489-4500` e `:4694-4781` (azzeramento e aggiornamento nella visita), sezione "Stima della batteria" del piano.
+
+      **Modificare:**
+      1. In `QxEngine.h/.cpp`: struttura `batt` e flag `battery_voltage_reports_one_pack(_considered)` come membri, con i valori iniziali di NUT (`packs = 1`, `chrg.act = -1`, `volt.* = -1`, `chrg.time = 43200`).
+      2. Funzioni statiche pubbliche con la firma dei preprocess: `qxMultiplyBattvolt`, `qxMultiplyX1000`, `qxMultiplyM2s` (porting 1:1, usano `qx.value()`; `qxMultiplyBattvolt` imposta `considered`).
+      3. `qx_battery()` e `qx_initbattery()` private: rami di `runtimecal` e `battery_voltage_reports_one_pack` omessi con commento; `battery.packs` letto con `getinfo` se c'è e numerico; guesstimation di low/high pubblicata con `%.2f`; autodetect dei pacchi con l'elenco di NUT; `battery.charge` con `%.0f`. Le righe `upslogx` diventano commenti.
+      4. Riempire i punti di aggancio di TASK-05: inizio FULL (`runt.act = chrg.act = -1`, `considered = 0`), fine FULL (`qx_battery()` se `runt.act` o `chrg.act` valgono -1), `initInfo` (`qx_initbattery()`); `infovalSet` aggiorna `chrg.act`/`runt.act` per `battery.charge`/`battery.runtime`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`; i valori sono controllati in TASK-10 (megatec: `battery.charge` = `37`).
+
+      **Fatto quando:** compila, `test_qx_engine` resta verde, nessun uso di `pow()` (serve solo a `runtimecal`, non portato).
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngine.h — stato batteria, dichiarazioni qxMultiply*
+      - lib/USBHostUPS/src/QxEngine.cpp — qx_battery, qx_initbattery, qxMultiply*, agganci nella visita
+
+      ## Criteri di Completamento
+      - [ ] Formule e soglie identiche a NUT (104/120, 130/120, 1.25 e 0.8, limite 0..100)
+      - [ ] `battery.charge` non stimata quando il protocollo la fornisce
+      - [ ] Rami delle opzioni di ups.conf omessi e citati in un commento
+    ref: TASK-07
+  - id: TASK-08
+    title: 'QxBlazerCommon: porting di nutdrv_qx_blazer-common.c'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le funzioni comuni ai protocolli Megatec-derivati esistono una volta sola, con la semantica di NUT, pronte per le tabelle e per US-134/US-135.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx_blazer-common.c` (tutto), `nut_repo/drivers/nutdrv_qx_blazer-common.h`, sezione "blazer-common" del piano, `lib/USBHostUPS/src/QxEngine.h`.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxBlazerCommon.h`: `extern const QxInfoRw BLAZER_R_ONDELAY[]`, `BLAZER_R_OFFDELAY[]` (terminate da `{"", nullptr}` come in NUT), dichiarazioni di `blazerClaim`, `blazerClaimLight`, `blazerInitups`, `blazerInitupsLight`, `blazerProcessSetvar`, `blazerProcessCommand`, `blazerProcessStatusBits` con le firme di `QxTypes.h`. Le due `initups` hanno la firma di `QxSubdriver::initups` (la tabella si ottiene da `qx`).
+      2. Creare `lib/USBHostUPS/src/QxBlazerCommon.cpp`, porting riga per riga con citazioni: `testvar(...)` -> `qx.options()`; `dstate_delinfo` -> `qx.delinfo`; `dstate_getinfo` -> `qx.getinfo` (nullptr trattato come stringa vuota, commento sul crash di NUT con `strtod(NULL)`); `item->qxflags |= QX_FLAG_SKIP` -> `qx.addFlags(row, QX_FLAG_SKIP)`; `item->value` -> `qx.value()`; `snprintf_dynamic(value, len, item->command, "%s", buf)` -> `snprintf` con il formato della riga; per `test.battery.start`: comando con una conversione intera -> `(int)delay`, senza conversioni -> copia, altrimenti `long` (helper locale che riconosce le conversioni `%d`/`%Nd`/`%0Nd`).
+      3. Aggiungere `+<../lib/USBHostUPS/src/QxBlazerCommon.cpp>` al `build_src_filter` nativo.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`.
+
+      **Fatto quando:** compila; i comportamenti sono provati in TASK-10.
+
+      **Blocchi:** se un comportamento di NUT richiede una funzione del motore non prevista, aggiungerla a `QxEngine` con la citazione, senza duplicarla qui.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxBlazerCommon.h — nuovo: range e funzioni comuni
+      - lib/USBHostUPS/src/QxBlazerCommon.cpp — nuovo: porting di nutdrv_qx_blazer-common.c
+      - platformio.ini — QxBlazerCommon.cpp nel build_src_filter nativo
+
+      ## Criteri di Completamento
+      - [ ] Tutte le funzioni di `nutdrv_qx_blazer-common.c` portate, nello stesso ordine del file
+      - [ ] Soglie 0.5/0.95/1.05/1.5 e testi di stato identici a NUT
+      - [ ] Nessun riferimento a HID o a `hidPort()`
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Protocolli megatec e q1: tabelle qx2nut costanti e subdriver'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `megatec` e `q1` sono le tabelle di NUT riga per riga, con i loro nomi, versioni, claim e initups.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx_megatec.c:28-173`, `nut_repo/drivers/nutdrv_qx_q1.c:30-123`, `nut_repo/drivers/nutdrv_qx.h:43-47` (`DEFAULT_ONDELAY` 180, `DEFAULT_OFFDELAY` 30), sezione "Tabelle costanti, stato nell'istanza" del piano.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxProtocols.h` con `extern const QxSubdriver QX_MEGATEC;` e `extern const QxSubdriver QX_Q1;` e un commento: i protocolli successivi (US-134, US-138) si aggiungono qui, uno per file.
+      2. Creare `lib/USBHostUPS/src/QxMegatec.cpp`: `static const QxItem MEGATEC_QX2NUT[]` con tutte le righe di `megatec_qx2nut[]` nello stesso ordine e con gli stessi commenti (inclusi gli esempi di risposta e le note su `I\r` e `ups.firmware`), colonne senza `answer`/`value`; funzioni: `blazerProcessStatusBits`, `qxMultiplyBattvolt`, `blazerProcessCommand`, `blazerProcessSetvar`; range `BLAZER_R_ONDELAY`/`OFFDELAY`; `dfl` `"180"`/`"30"` per le righe `ups.delay.*`; riga terminale nulla. `megatec_initups` -> `blazerInitups`. `QX_MEGATEC = { "Megatec 0.10", blazerClaim, MEGATEC_QX2NUT, megatecInitups, nullptr, "ACK", nullptr }`. Riferimento al file e alle righe di NUT in testa.
+      3. Creare `lib/USBHostUPS/src/QxQ1.cpp` allo stesso modo da `q1_qx2nut[]`: `QX_Q1 = { "Q1 0.08", blazerClaimLight, Q1_QX2NUT, q1Initups (-> blazerInitupsLight), nullptr, "ACK", nullptr }`.
+      4. Aggiungere i due `.cpp` al `build_src_filter` nativo.
+
+      Non copiare le tabelle `testing_t` nel firmware: stanno nel test (TASK-10).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine`; confronto visivo riga per riga con i file di NUT (stesso numero di righe: megatec 36 righe dati, q1 27, più la riga terminale).
+
+      **Fatto quando:** le due tabelle compilano come `static const` e corrispondono riga per riga a NUT.
+
+      **Blocchi:** se il conteggio delle righe non coincide con NUT, ricontare prima di andare avanti.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxProtocols.h — nuovo: subdriver esportati
+      - lib/USBHostUPS/src/QxMegatec.cpp — nuovo: tabella megatec
+      - lib/USBHostUPS/src/QxQ1.cpp — nuovo: tabella q1
+      - platformio.ini — i due file nel build_src_filter nativo
+
+      ## Criteri di Completamento
+      - [ ] Righe, ordine, comandi, lunghezze, caratteri iniziali, from/to, formati, flag e funzioni identici a NUT
+      - [ ] Nomi `Megatec 0.10` e `Q1 0.08`, `accepted` = `ACK`, `rejected` nullo
+      - [ ] Tabelle `static const`, nessuno stato di runtime nei file dei protocolli
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Test nativi test_qx_protocols: testing_t di megatec e q1, stati, batteria, blazer-common e risposte non valide'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rigiocando le tabelle `testing_t` di NUT, i valori in `UPSData` e `ups.status` sono quelli di NUT; i casi non validi non inventano valori.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx_megatec.c:118-133`, `nut_repo/drivers/nutdrv_qx_q1.c:93-106`, `test/mocks/QxTestingTransport.h`, `lib/USBHostUPS/src/QxProtocols.h`, `QxBlazerCommon.h`, `QxEngine.h`, sezione "Strategia di test" del piano.
+
+      **Modificare:** creare `test/test_qx_protocols/test_main.cpp`; copiare `megatec_testing[]` e `q1_testing[]` riga per riga con citazione. Sequenza NUT: `claim(data)` -> `initUps()` -> `initInfo(data, 0)` -> `updateInfo(data, 2000)`. Valori attesi (dalle posizioni di NUT):
+      1. **megatec:** claim vero; `input.voltage` `215.0`, `input.voltage.fault` `195.0`, `output.voltage` `230.0`, `ups.load` `14`, `input.frequency` `49.0`, `battery.voltage` `22.7` (passa da `qxMultiplyBattvolt` invariato), `ups.temperature` `30.0`, `ups.type` `online`, `ups.beeper.status` `disabled`, `input.voltage.nominal` `230`, `input.current.nominal` `0.0`, `battery.voltage.nominal` `24.0`, `input.frequency.nominal` `50`, `device.mfr` `NOT_A_L`, `ups.serial` `IVE_UPS ` (spazio finale, nessun trim), `device.model` `TESTI`, `battery.runtime` `NG` (formato `%s`, comportamento di NUT), `ups.firmware` `TESTING`, `ups.delay.start` `180`, `ups.delay.shutdown` `30`, `driver.version.data` `Megatec 0.10`; stima: `battery.voltage.low` `20.80`, `battery.voltage.high` `26.00`, `battery.charge` `37`; `ups.status` = `OL`, nessun `ups.alarm`. Commento accanto a ogni gruppo con la stringa e le posizioni.
+      2. **q1:** claim (light) vero; stessi valori di `Q1`; nessuna variabile da `F`/`I`; nessuna `battery.charge` (manca il nominale); `driver.version.data` `Q1 0.08`; `ups.status` `OL`.
+      3. **Stati** (risposta `Q1` sostituita con `override`, poi `updateInfo` FULL): bit `10000000` -> `OB`; `11000000` -> `OB LB`; `00100000` con 215/230 -> `OL BOOST`; con 230/230 -> `OL BYPASS`; con 240/220 -> `OL TRIM`; con output < metà dell'input -> visita fallita (`Failed`); `00000100` -> `CAL OL` (commento: in NUT `OL CAL`, differenza d'ordine nota); `00000010` -> `ALARM OL FSD` con `ups.alarm` `Shutdown imminent!`; `00010000` -> `ups.alarm` `UPS selftest failed!` e `ALARM OL`; `00000001` -> `ups.beeper.status` `enabled`; `00001000` -> `ups.type` `offline / line interactive` solo in INIT (riga STATIC).
+      4. **Risposte non valide:** `Q1` corta -> claim falso e nessuna `input.voltage`; carattere iniziale `#` -> claim falso; bit di stato `x` -> `updateInfo` `Failed` e `ups.status.*` invariati; `I` assente (eco del comando) -> `blazerClaim` falso e `input.voltage` cancellata (`delinfo`); con `novendor` lo stesso claim è vero e le righe `I\r` hanno `QX_FLAG_SKIP` dopo `initUps()`; `ignoresab` -> la riga del bit 44 saltata.
+      5. **blazer-common, stringhe di `testing_t`:** `blazerProcessCommand` con `ups.delay.shutdown` `180` e `ups.delay.start` `0` per `shutdown.return` -> `S03\r`; con `120`/`300` -> `S02R0005\r`; `shutdown.stayoff` con `30` -> `S.5R0000\r`; `test.battery.start` con valore `240` -> `T04\r`, con `30` -> -1, vuoto -> `T10\r`; con i valori predefiniti 30/180 `shutdown.return` -> `S.5R0003\r`.
+      6. **`blazerProcessSetvar`:** `ups.delay.start` `250` -> `240`; `ups.delay.shutdown` `59` -> `54`, `125` -> `120`; `-1` e vuoto -> -1.
+      7. **Guardia dei `dfl`:** per ogni riga delle due tabelle, `dfl` nullo, `%s`, un solo `%.Nf`, oppure (righe `ABSENT`) senza `%`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols`.
+
+      **Fatto quando:** tutti i casi passano; nessun valore atteso è stato adattato al codice senza ricontarlo sulla stringa di NUT.
+
+      **Blocchi:** se un valore atteso non torna, ricontare le posizioni sulla stringa di `testing_t`; se il conto è giusto il difetto è nel motore o nella tabella.
+
+      ## File Coinvolti
+      - test/test_qx_protocols/test_main.cpp — nuovo: replay di testing_t, stati, batteria, blazer-common, casi non validi
+
+      ## Criteri di Completamento
+      - [ ] `megatec_testing[]` e `q1_testing[]` copiate riga per riga e rigiocate
+      - [ ] Valori del punto 1 e 2 verificati uno per uno
+      - [ ] Stati OL, OB, LB, BOOST, BYPASS, TRIM, CAL, FSD e allarmi verificati
+      - [ ] Stringhe `S03`, `S02R0005`, `S.5R0000`, `T04` riprodotte da `blazerProcessCommand`
+      - [ ] Casi non validi senza valori inventati
+    ref: TASK-10
+  - id: TASK-11
+    title: 'Regressione: suite nativa completa e build delle tre immagini ESP32'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il codice nuovo non rompe nulla e compila anche per le schede.
+
+      **Leggere:** `platformio.ini` (env), memoria del progetto sui comandi di build (le build ESP32 vanno lanciate da PowerShell).
+
+      **Modificare:** niente codice, salvo correzioni di compilazione emerse dalle build ESP32 (per esempio avvisi `-Wformat-nonliteral` sui `dfl`: silenziarli localmente con un commento, non disattivarli globalmente).
+      1. Bash: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`.
+      2. PowerShell: `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, poi `-e esp32-p4-eth` e `-e esp32-p4-eth-v1`.
+      3. Annotare nel resoconto il numero di test nativi e la flash dell'S3 (attesa invariata: il motore non è ancora referenziato dall'host, il linker lo scarta; la misura vera è di US-136).
+
+      **Verifica:** i comandi sopra.
+
+      **Fatto quando:** tutti i test nativi passano (i vecchi senza modifiche alle asserzioni, salvo i casi aggiunti in `test_ups_status`) e le tre build riescono.
+
+      **Blocchi:** un test esistente che fallisce va capito, non adattato.
+
+      ## File Coinvolti
+      - platformio.ini — solo se serve una correzione di compilazione
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] Build esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1 riuscite
+      - [ ] Numero dei test e flash S3 riportati
+    ref: TASK-11

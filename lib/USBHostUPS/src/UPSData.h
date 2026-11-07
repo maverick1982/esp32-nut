@@ -163,10 +163,19 @@ public:
         if (d.getBool("ups.status.replace_battery") || noBattery) status += "RB ";
         if (flagSet(d, "ups.status.trim")) status += "TRIM ";
         if (flagSet(d, "ups.status.boost")) status += "BOOST ";
-        if (flagSet(d, "ups.status.bypassauto") || flagSet(d, "ups.status.bypassman")) status += "BYPASS ";
+        // ups.status.bypass is the BYPASS bit of nutdrv_qx (US-133): the same token, without
+        // the "bypass mode" alarms of bypassauto/bypassman, which ups_alarm_set() of
+        // nutdrv_qx does not have (nutdrv_qx.c:4786-4794)
+        if (flagSet(d, "ups.status.bypassauto") || flagSet(d, "ups.status.bypassman") ||
+            flagSet(d, "ups.status.bypass")) status += "BYPASS ";
         // ups.status.ecomode / essmode give no token: upstream puts ECO and ESS in
         // experimental.ups.mode.buzzwords (buzzmode_set), out of US-107.
         if (flagSet(d, "ups.status.off")) status += "OFF ";
+        // FSD bit of nutdrv_qx (US-133): ups_status_set() writes the FSD token
+        // (nutdrv_qx.c:4834-4836). No HID table writes ups.status.fsd: for the HID drivers
+        // ShutdownImminent stays LB, never FSD (issue #65). Upstream nutdrv_qx writes CAL
+        // after OFF; here CAL stays first, in the usbhid-ups order (same tokens).
+        if (flagSet(d, "ups.status.fsd")) status += "FSD ";
         // CommunicationLost is an internal fault bit upstream (commfault ->
         // ups.alarm), not a status token: COMM_LOST is not NUT vocabulary (issue #65).
         // Every table reads it as commfault (US-079: genericHid2Nut() too).
@@ -190,6 +199,8 @@ public:
         static const struct { const char* key; const char* text; } bits[] = {
             { "ups.status.replace_battery", "Replace battery!" },
             { "ups.status.shutdown_imminent", "Shutdown imminent!" },
+            // FSD of nutdrv_qx: ups_alarm_set() after RB (nutdrv_qx.c:4786-4794, US-133)
+            { "ups.status.fsd", "Shutdown imminent!" },
             { "ups.status.fanfail", "Fan failure!" },
             { "ups.status.no_battery", "No battery installed!" },
             { "ups.status.battvoltlo", "Battery voltage too low!" },
