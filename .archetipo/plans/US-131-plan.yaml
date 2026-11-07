@@ -1,0 +1,418 @@
+schema: archetipo/plan/v2
+spec_code: US-131
+body: |
+  ---
+  type: plan
+  title: "US-131: Nucleo neutro di IUPSDriver ed estensione HID raggiungibile solo da hid() — Piano di implementazione"
+  description: "Piano di implementazione per US-131"
+  tags: [plan, implementation, US-131]
+  ---
+  # US-131: Nucleo neutro di IUPSDriver ed estensione HID raggiungibile solo da hid() — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che aggiunge i driver Q* (ADR 0013, sezione 1), voglio che `IUPSDriver` contenga solo ciò che l'host chiede a ogni driver e che i metodi HID stiano in un'estensione raggiungibile solo da `hid()`, in modo che un driver di un'altra famiglia non riceva mai chiamate HID per errore.
+
+  **Criteri di Accettazione**
+  - Nucleo con solo i metodi chiesti a ogni famiglia, più `hid()`.
+  - Il nucleo non nomina tipi HID (`HIDUsageDef`, `HIDParser`, `IHidTransport`, report id, `HidInfo`).
+  - Metodi HID nell'estensione; distribuzione dei casi di confine scritta qui sotto.
+  - `USBHostUPS` chiama i metodi HID solo attraverso `hid()`; con `hid() == nullptr` mai (test nativo con driver finto).
+  - `GenericDriver` e derivati restituiscono la loro estensione e non cambiano comportamento.
+  - Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni; tutte le build di `platformio.ini` compilano.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Stesso schema di `IUpsControlPort::hidPort()` (US-105): `IUPSDriver` diventa il nucleo neutro e una nuova interfaccia `IHidDriver : public IUPSDriver` (file `lib/USBHostUPS/src/IHidDriver.h`) raccoglie i metodi HID e implementa `hid()` restituendo `this`. `GenericDriver` passa da `IUPSDriver` a `IHidDriver`; i driver derivati non cambiano. L'host raggiunge i metodi HID solo attraverso un nuovo header `DriverDispatch.h`, l'unico punto in cui si scrive `hid()`, testabile in nativo (USBHostUPS.cpp non compila nell'env `native`: `lib_ignore = USBHostUPS`).
+
+  ### Nucleo `IUPSDriver` (dopo la US)
+
+  | Metodo | Perché nel nucleo |
+  |---|---|
+  | `getDriverName()` | export diagnostico, `driver.name` |
+  | `setup()` | aggancio e riavvio del ciclo di poll |
+  | `poll(UPSData&, uint32_t now)` **nuovo, puro** | poll periodico senza trasporto nella firma; ogni famiglia riceve il suo trasporto per altra via |
+  | `initialPollDone()` | primo dato servito (#60) |
+  | `formatDeviceStrings(UPSData&)` | stringhe del dispositivo |
+  | `control()` | comandi e SET VAR (US-105) |
+  | `shutdownCommandsSupported()` | letto dalla porta neutra `IUpsControlPort::shutdownCommandsSupported()` ed è il default di `delayVariablesSupported()` |
+  | `defaultOffDelay()`, `defaultOnDelay()`, `delayVariablesSupported()` | ritardi predefiniti e presenza di `ups.delay.*` |
+  | `writableVariables()` | LIST RW |
+  | `setDriverSideValue()`, `resetDriverSideValue()`, `noteHostValue()` | valori lato driver |
+  | `noteDataChanged()` | dopo una scrittura sull'UPS (US-072) |
+  | `requestSpacingMs()` | distanza minima fra richieste |
+  | `hid()` / `hid() const` **nuovi** | `nullptr` di default |
+
+  ### Estensione `IHidDriver`
+
+  `loop(IHidTransport*, UPSData&, now)`, `decodeReport`, `postDecode`, `parseStringDescriptor`, `planSet(..., const std::vector<HIDUsageDef>&, ...)`, `requestLength`, `acceptDiagReport`, `invalidateReport`, `inputValuesPolled`, `encodeBeeperValue`, `beeperControllable`, `beeperMuteSupported`, `beeperFieldRead(const IHidTransport*)`, `commandTable`, `delayPaths`, più `bindTransport(IHidTransport*)` (nuovo) e l'implementazione di `poll()` del nucleo.
+
+  ### Casi di confine (regola: nel nucleo solo ciò che l'host usa per ogni famiglia)
+
+  | Metodo | Dove | Motivo |
+  |---|---|---|
+  | `encodeBeeperValue` | HID | codifica di un campo HID (`bit_size`) |
+  | `beeperControllable` | HID | l'host lo usa solo per il SET_REPORT del beeper HID e per `supportsBeeperToggle()`, che cerca il percorso `AudibleAlarmControl`; un driver Q* espone il beeper dal suo `IUpsControl` |
+  | `beeperMuteSupported` | HID | letto solo da `HidControl` tramite la porta; con `hid() == nullptr` la porta restituisce `true` (default di `IUpsControlPort`) |
+  | `beeperFieldRead` | HID | stato del report del campo beeper |
+  | `commandTable` | HID | righe `HidInfo` |
+  | `delayPaths` | HID | percorsi di usage HID |
+  | `shutdownCommandsSupported` | **nucleo** | esposto dalla porta neutra a ogni `IUpsControl`; da esso dipende il default di `delayVariablesSupported()` |
+  | `requestSpacingMs` | **nucleo** | richiesto dal criterio; vale per ogni trasporto a richiesta/risposta |
+  | `delayAux` | **`GenericDriver`** (virtuale pubblica) | l'host non lo chiama mai: è l'`info_len` delle righe HID usato solo in `GenericDriver::writableVariables()`; `PowercomDriver` continua a sovrascriverlo |
+
+  ### Poll e trasporto
+
+  - `IHidDriver` tiene un `IHidTransport* _transport = nullptr` protetto; `bindTransport(t)` lo imposta; `poll(data, now)` chiama `loop(_transport, data, now)` solo se `_transport != nullptr`. `loop(IHidTransport*, ...)` resta nell'estensione con la firma di oggi, così i test che lo chiamano direttamente non cambiano.
+  - L'host lega il trasporto subito dopo `DriverRegistry::create()` (`DriverDispatch::attach(_driver, this)`), prima di `setup()`. `USBHostUPS` è il trasporto e vive più a lungo del driver che possiede: nessun problema di durata.
+  - Un driver Q* (US-136) riceverà il suo trasporto nel costruttore; il nucleo non nomina nessuno dei due.
+
+  ### `DriverDispatch.h` (header-only, `lib/USBHostUPS/src/`)
+
+  Funzioni `inline` in un `namespace DriverDispatch`, ognuna con `IUPSDriver*`/`const IUPSDriver*` che può essere `nullptr`. Con `hid() == nullptr` restituiscono il valore neutro senza chiamare nulla di HID:
+
+  | Funzione | HID | `hid() == nullptr` |
+  |---|---|---|
+  | `hidOf(d)` | `d->hid()` | `nullptr` (anche con `d == nullptr`) |
+  | `attach(d, IHidTransport*)` | `bindTransport` | niente |
+  | `decode(d, t, id, type, data, len, ups)` | `decodeReport` poi `postDecode` | niente |
+  | `parseString(d, t, idx, data, len, ups)` | `parseStringDescriptor` | niente |
+  | `inputValuesPolled(d)` | `inputValuesPolled()` | `true`: il watchdog degli INPUT non rende stale e non chiede ripristini né riavvii (`InputWatchdog::setValuesPolled(true)`) |
+  | `inputWatchdogActive(d, no_interrupt_pipe)` | `!quirk && !inputValuesPolled()` | `false` (export diagnostico) |
+  | `requestLength(d, type, id, expected)` | `requestLength()` | `expected` |
+  | `acceptDiagReport(d, type, id)` | `acceptDiagReport()` | `false` (nessuna richiesta) |
+  | `invalidateReport(d, type, id)` | `invalidateReport()` | niente |
+  | `planSet(d, data, usages, name, value, plan)` | `planSet()` | `SetStatus::UNKNOWN` |
+  | `commandTable(d, n)` | `commandTable()` | `n = 0`, `nullptr` |
+  | `beeperFieldRead(d, t)` | `beeperFieldRead()` | `false` |
+  | `beeperControllable(d)` | `beeperControllable()` | `true` (come oggi con `_driver == nullptr`: il blocco resta solo per i driver che lo negano) |
+  | `beeperMuteSupported(d)` | `beeperMuteSupported()` | `true` |
+  | `applyDefaultDelays(d, ups, usages, saved)` | `NutTable::applyDefaultDelays(..., hid->delayPaths(), saved)` come oggi | `NutTable::applyDelayValues(ups, off, on, vars, vars, saved)` con `vars = delayVariablesSupported()` |
+
+  `NutTable::applyDefaultDelays()` viene spezzata senza cambiare risultato: la parte che applica i valori salvati e scrive `ups.delay.shutdown`/`ups.delay.start` diventa `applyDelayValues(UPSData&, int32_t off, int32_t on, bool sd, bool st, const saved*)`; `applyDefaultDelays()` calcola `sd`/`st` dai percorsi e la chiama.
+
+  ### Punti di chiamata in `USBHostUPS.cpp` (riferimenti alle righe attuali)
+
+  - 360 `_in_wd.setValuesPolled(_driver->inputValuesPolled())` → `DriverDispatch::inputValuesPolled(_driver)`.
+  - 385 `_driver->loop(this, _ups_data, now)` → `_driver->poll(_ups_data, now)`.
+  - 549 dopo `DriverRegistry::create()` → `DriverDispatch::attach(_driver, this)` prima di `_driver->setup()`.
+  - 655-657 e 912-913 → `DriverDispatch::decode(...)`.
+  - 961 lambda della lettura diagnostica → `DriverDispatch::acceptDiagReport(drv, type, id)`.
+  - 980, 1234, 1436 → `DriverDispatch::requestLength(...)`.
+  - 1079 → `DriverDispatch::parseString(...)` (resta seguita da `_driver->formatDeviceStrings()`).
+  - 1124, 1130, 1136, 1333, 1346 → `commandTable`, `beeperFieldRead`, `beeperControllable`, `beeperMuteSupported` di `DriverDispatch`.
+  - 1196 `BeeperLogic::manipulateBeeperBuffer(..., _driver)` → `..., DriverDispatch::hidOf(_driver)`; il parametro di `manipulateBeeperBuffer` diventa `const IHidDriver*` (`test_beeper_logic` compila senza modifiche: passa `PowercomDriver*` e `nullptr`).
+  - 1355-1357 → `DriverDispatch::applyDefaultDelays(_driver, _ups_data, _hid_parser.getUsages(), &_saved_vars)`.
+  - 1398 → `DriverDispatch::planSet(...)`.
+  - 1443 → `DriverDispatch::invalidateReport(...)`.
+  - 1536 → `s.input_watchdog = DriverDispatch::inputWatchdogActive(_driver, _quirks & QUIRK_NO_INTERRUPT_PIPE)`.
+
+  Restano dirette (nucleo): `setup`, `initialPollDone`, `formatDeviceStrings`, `requestSpacingMs`, `noteHostValue`, `noteDataChanged`, `control`, `shutdownCommandsSupported`, `setDriverSideValue`, `resetDriverSideValue`, `writableVariables`, `getDriverName`.
+
+  ### Vincoli
+
+  - Refactoring puro (ADR 0010): con un driver HID ogni chiamata arriva allo stesso metodo, con gli stessi argomenti e nello stesso ordine; nessun cambio di task, lock o tempi dello strato USB (ADR 0008). `DriverDispatch` non prende lock: i chiamanti mantengono quelli di oggi.
+  - Nessun `if (qx)` né codice Q*; l'aggancio per famiglia è US-132.
+  - `IUPSDriver.h` può continuare a includere `NutTable.h` (serve `NutTable::RWVariable`), ma il suo testo non nomina tipi HID: lo controlla un test sul sorgente.
+  - Niente modifiche ai file con script Python inline: usare Edit/Write.
+
+  ---
+
+  ## Strategia di test
+
+  Il comportamento HID è già coperto da test nativi, replay ed e2e: devono restare verdi con le stesse asserzioni. I test nuovi coprono il percorso senza estensione HID e il confine fra nucleo ed estensione.
+
+  - **`test/test_driver_dispatch` (nuovo, nativo):** `SpyHidDriver : IHidDriver` registra ogni chiamata HID e del nucleo; una variante sovrascrive `hid()` per restituire `nullptr`. Con `hid() == nullptr`: sequenza dell'host (attach, `setup`, ritardi, `formatDeviceStrings`, `poll`, `initialPollDone`, `control()`) più tutte le funzioni di `DriverDispatch` → zero chiamate HID e i valori neutri della tabella; `InputWatchdog` con `setValuesPolled(DriverDispatch::inputValuesPolled(d))` dopo un periodo appreso e un silenzio lungo: `isStale()` falso e `tick()` sempre `NONE`. Con `hid() == this`: ogni funzione inoltra gli stessi argomenti; `attach` + `poll` arrivano a `loop()` con il trasporto legato; `decode` chiama `decodeReport` poi `postDecode`. Ritardi: driver neutro con `delayVariablesSupported()` vero → `ups.delay.*` ai default e al valore salvato; falso → assenti. Tutti i 9 driver HID: `d->hid() == d`.
+  - **`test_hid_transport` (esteso, controllo dei sorgenti):** `IUPSDriver.h` non contiene `HIDUsageDef`, `HIDParser`, `IHidTransport`, `report_id`, `HidInfo` né i nomi dei metodi HID; `USBHostUPS.cpp` non contiene `_driver->` o `drv->` seguiti da un metodo HID; `IHidDriver.h` e `DriverDispatch.h` entrano nell'elenco dei file che non includono l'host USB.
+  - **`test_nut_table`:** `applyDelayValues()` con e senza valori salvati e `applyDefaultDelays()` invariata.
+  - **Regressione:** tutta la suite nativa (compresi `test_record_replay` e `test_poll_cycle`), `npm run e2e` (Playwright, nessuna modifica alla UI), build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`. Gli adattamenti consentiti nei test esistenti sono solo di tipo (`IUPSDriver&` → `IHidDriver&`, `->hid()->`), mai di asserzione.
+
+  Nessuna superficie utente nuova: niente mockup, niente scenari e2e nuovi, niente video demo (la dimostrazione è il test nativo).
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-07_
+tasks:
+  - id: TASK-01
+    title: Separare IUPSDriver nel nucleo neutro e creare l'estensione IHidDriver
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `IUPSDriver` contiene solo il nucleo neutro più `poll()` e `hid()`; i metodi HID passano nella nuova `IHidDriver : public IUPSDriver`; `GenericDriver` eredita da `IHidDriver`.
+
+      **Leggere:** `lib/USBHostUPS/src/IUPSDriver.h`, `IHidControlPort.h` (schema da imitare), `GenericDriver.h`/`.cpp`, `PowercomDriver.h`, `LegrandDriver.h`, `EcoFlowDriver.h`, `BeeperLogic.h`; sezioni "Nucleo", "Estensione", "Casi di confine" e "Poll e trasporto" del piano.
+
+      **Modificare:**
+      1. `IUPSDriver.h`: togliere `loop`, `decodeReport`, `postDecode`, `planSet`, `requestLength`, `acceptDiagReport`, `invalidateReport`, `inputValuesPolled`, `parseStringDescriptor`, `encodeBeeperValue`, `beeperControllable`, `beeperMuteSupported`, `beeperFieldRead`, `commandTable`, `delayPaths`, `delayAux` e la forward declaration `class IHidTransport;`. Aggiungere `virtual void poll(UPSData& data, uint32_t now) = 0;` e `class IHidDriver;` con `virtual IHidDriver* hid() { return nullptr; }` e `virtual const IHidDriver* hid() const { return nullptr; }`. Commenti e doc dei metodi rimasti invariati; nessun nome di tipo HID nel testo (anche nei commenti: per esempio il commento di `requestSpacingMs` non deve citare report).
+      2. Nuovo `IHidDriver.h`: include `IUPSDriver.h`, `IHidTransport.h`, `HIDParser.h`, `NutTable.h`; dichiara i metodi tolti (stesse firme, default e commenti, `delayAux` escluso), `hid()` che restituisce `this` (due overload), `void bindTransport(IHidTransport* t) { _transport = t; }`, `void poll(UPSData& data, uint32_t now) override { if (_transport) loop(_transport, data, now); }`, membro protetto `IHidTransport* _transport = nullptr;`.
+      3. `GenericDriver.h`: `class GenericDriver : public IHidDriver`, include `IHidDriver.h`; `delayAux()` diventa `virtual uint8_t delayAux() const { return 10; }` pubblica di `GenericDriver` (commento spostato). Gli `override` esistenti restano validi.
+      4. `BeeperLogic.h`: include `IHidDriver.h` e il parametro di `manipulateBeeperBuffer` diventa `const IHidDriver* driver`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_generic_driver -f test_beeper_logic -f test_powercom_driver -f test_legrand_driver` (i test che usano `IUPSDriver&` per metodi HID si sistemano in TASK-02).
+
+      **Fatto quando:** i driver compilano senza toccare i `.cpp` derivati, `IUPSDriver.h` non nomina tipi HID.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IUPSDriver.h — nucleo neutro, `poll()`, `hid()`
+      - lib/USBHostUPS/src/IHidDriver.h — nuovo, estensione HID con `bindTransport` e `poll()`
+      - lib/USBHostUPS/src/GenericDriver.h — eredita da `IHidDriver`, ospita `delayAux()`
+      - lib/USBHostUPS/src/BeeperLogic.h — parametro `const IHidDriver*`
+
+      ## Criteri di Completamento
+      - [ ] `IUPSDriver.h` contiene solo i metodi della tabella "Nucleo" del piano più `poll()` e `hid()`
+      - [ ] `IHidDriver.h` contiene i metodi HID con firme e default di oggi, `bindTransport()` e `hid()` che restituisce `this`
+      - [ ] `GenericDriver` eredita da `IHidDriver`; `PowercomDriver::delayAux()` sovrascrive ancora quello di `GenericDriver`
+      - [ ] I test indicati in Verifica compilano e passano
+    ref: TASK-01
+  - id: TASK-02
+    title: Adattare i tipi nei test nativi esistenti senza cambiare asserzioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** tutta la suite nativa compila e passa dopo TASK-01, con modifiche solo di tipo.
+
+      **Leggere:** i punti dove un `IUPSDriver` chiama un metodo HID: `test/test_cyberpower_driver/test_main.cpp:565`, `test/test_eaton_driver/test_main.cpp:598`, `test/test_poll_cycle/test_main.cpp:25,95,456,465,541,732,752`, `test/test_record_replay/FixtureReplayRunner.h:67,98,141,247,360` e le chiamate `driver->decodeReport/postDecode/loop/parseStringDescriptor/commandTable/beeperFieldRead/beeperMuteSupported/delayPaths`.
+
+      **Modificare:**
+      1. Riferimenti locali usati per metodi HID: `const IUPSDriver& d` → `const IHidDriver& d` (cyberpower, eaton, poll_cycle), `IUPSDriver& d` → `IHidDriver& d`.
+      2. `test_poll_cycle`: `IUPSDriver* _driver` di `MockPollHost` e `runLoop(IUPSDriver& drv, ...)` → `IHidDriver`.
+      3. `FixtureReplayRunner.h`: `ReplaySession::driver` e `_answer_driver` → `IHidDriver*`; all'assegnazione da `DriverRegistry::create()` usare `->hid()` tenendo il puntatore originale per il `delete` (o un `TEST_ASSERT_NOT_NULL` sul risultato di `hid()`); `listRW()` può restare con `const IUPSDriver*`.
+      4. Aggiungere gli `#include "IHidDriver.h"` necessari.
+
+      Non cambiare nessun `TEST_ASSERT_*`, nessun valore atteso, nessuna fixture.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native`; su Windows una suite ERRORED transitoria va rilanciata da sola con `-f`.
+
+      **Fatto quando:** suite nativa verde e `git diff test/` mostra solo righe di tipo, include e `->hid()`.
+
+      **Blocchi:** se un test chiama un metodo HID su un oggetto che può non essere HID, fermarsi e segnalarlo invece di cambiare l'asserzione.
+
+      ## File Coinvolti
+      - test/test_cyberpower_driver/test_main.cpp — tipo del riferimento
+      - test/test_eaton_driver/test_main.cpp — tipo del riferimento
+      - test/test_poll_cycle/test_main.cpp — tipi di `MockPollHost`, `runLoop` e riferimenti locali
+      - test/test_record_replay/FixtureReplayRunner.h — `IHidDriver*` nella sessione di replay
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` verde
+      - [ ] Nessuna asserzione, valore atteso o fixture modificati
+      - [ ] Il replay di tutte le fixture passa come prima
+    ref: TASK-02
+  - id: TASK-03
+    title: Creare DriverDispatch.h e spezzare NutTable::applyDefaultDelays
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** un solo punto, header-only e testabile in nativo, dove l'host raggiunge i metodi HID del driver con `hid()`, con i valori neutri quando `hid() == nullptr`.
+
+      **Leggere:** sezione "DriverDispatch.h" del piano (tabella delle funzioni e dei valori neutri), `lib/USBHostUPS/src/NutTable.h:1660-1690` (`applyDefaultDelays`, `parseDelayParam`), `LinkMonitor.h:136-260` (`InputWatchdog`).
+
+      **Modificare:**
+      1. `NutTable.h`: estrarre `inline void applyDelayValues(UPSData& data, int32_t off_delay, int32_t on_delay, bool sd, bool st, const std::vector<std::pair<String, String>>* saved = nullptr)` con il ciclo dei valori salvati e le due `data.set`; `applyDefaultDelays()` mantiene firma e controllo `if (!delay_vars || !paths) return;`, calcola `sd`/`st` e chiama `applyDelayValues`. Risultato identico.
+      2. Nuovo `lib/USBHostUPS/src/DriverDispatch.h`: include `IHidDriver.h`, `NutTable.h`, `UPSData.h`; `namespace DriverDispatch` con le funzioni `inline` della tabella del piano (`hidOf`, `attach`, `decode`, `parseString`, `inputValuesPolled`, `inputWatchdogActive`, `requestLength`, `acceptDiagReport`, `invalidateReport`, `planSet`, `commandTable`, `beeperFieldRead`, `beeperControllable`, `beeperMuteSupported`, `applyDefaultDelays`). Ogni funzione tollera `d == nullptr` restituendo lo stesso valore neutro. Nessun lock, nessun log. Commento in testa: è l'unico posto dell'host dove si chiama `hid()` (ADR 0013, sezione 1).
+
+      **Verifica:** compila nella suite di TASK-04; `pio test -e native -f test_nut_table`.
+
+      **Fatto quando:** l'header compila da solo (incluso in un test) e `test_nut_table` resta verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/DriverDispatch.h — nuovo
+      - lib/USBHostUPS/src/NutTable.h — `applyDelayValues()` estratta da `applyDefaultDelays()`
+
+      ## Criteri di Completamento
+      - [ ] Tutte le funzioni della tabella del piano esistono con i valori neutri indicati
+      - [ ] `applyDefaultDelays()` dà lo stesso risultato di prima
+      - [ ] `DriverDispatch.h` non include `USBHostUPS.h`, `IUSBHostUPS.h` né header di `hid_host`
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativo test_driver_dispatch con driver finto senza estensione HID
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare in nativo che con `hid() == nullptr` l'host non chiama mai un metodo HID e il watchdog degli INPUT non si attiva, e che con un driver HID ogni chiamata arriva invariata.
+
+      **Leggere:** `DriverDispatch.h`, `IHidDriver.h`, `LinkMonitor.h` (`InputWatchdog`), `test/test_hid_control/test_main.cpp` (stile e driver istanziati), sezione "Strategia di test" del piano.
+
+      **Modificare:** nuovo `test/test_driver_dispatch/test_main.cpp` (Unity), con:
+      - `SpyHidDriver : public IHidDriver`: contatori per ogni metodo HID e del nucleo, ultimi argomenti ricevuti, `control()` che restituisce un `IUpsControl` finto statico; flag `neutral` che fa restituire `nullptr` a entrambi gli overload di `hid()`.
+      - `FakeTransport : IHidTransport` minimo (stub).
+      - `test_neutral_driver_never_reaches_hid`: sequenza dell'host (`attach`, `setup`, `applyDefaultDelays`, `formatDeviceStrings`, `poll` più volte, `initialPollDone`, `control()`) e poi ogni altra funzione di `DriverDispatch`; asserire zero chiamate HID e i valori neutri (`requestLength == expected`, `acceptDiagReport` falso, `planSet == UNKNOWN`, `commandTable` nullo con `n == 0`, `beeperFieldRead` falso, `beeperControllable` e `beeperMuteSupported` veri, `hidOf == nullptr`).
+      - `test_neutral_driver_keeps_input_watchdog_inert`: `InputWatchdog` con 8 burst periodici, `setValuesPolled(DriverDispatch::inputValuesPolled(&neutral))`, silenzio oltre `silenceThresholdMs()`: `isStale()` falso e `tick()` sempre `NONE`; `inputWatchdogActive(&neutral, false)` falso.
+      - `test_neutral_driver_delays`: `delayVariablesSupported()` vero → `ups.delay.shutdown`/`start` ai default; con valore salvato valido → quello; falso → assenti.
+      - `test_hid_driver_forwards_every_call`: stesso spy con `hid() == this`: ogni funzione inoltra gli stessi argomenti una volta; `decode` chiama `decodeReport` prima di `postDecode`; `attach(d, &t)` e `poll()` arrivano a `loop(&t, ...)`; senza `attach` `poll()` non chiama `loop`.
+      - `test_every_hid_driver_returns_its_extension`: Generic, APC, CyberPower, Eaton, EcoFlow, Legrand, Liebert, OpenUPS, Powercom: `d.hid() == &d` (come `IUPSDriver&`).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_driver_dispatch`. Mutazione manuale (poi annullata): far chiamare `inputValuesPolled()` di HID anche con `hid() == nullptr` o restituire `false` → il test deve fallire.
+
+      **Fatto quando:** suite verde e mutazione catturata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_driver_dispatch/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] Con `hid() == nullptr` zero chiamate HID su tutta la sequenza e su ogni funzione di `DriverDispatch`
+      - [ ] Watchdog degli INPUT inerte per il driver neutro
+      - [ ] Con un driver HID ogni chiamata è inoltrata con gli stessi argomenti e nello stesso ordine
+      - [ ] Tutti i 9 driver HID restituiscono la loro estensione
+      - [ ] La mutazione descritta in Verifica fa fallire il test
+    ref: TASK-04
+  - id: TASK-05
+    title: Instradare le chiamate HID di USBHostUPS attraverso DriverDispatch
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `USBHostUPS` chiama i metodi HID del driver solo attraverso `DriverDispatch` (cioè `hid()`), con lo stesso comportamento per i driver HID.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.cpp` ai punti elencati nella sezione "Punti di chiamata" del piano (righe 360, 385, 549, 655-657, 912-913, 961, 980, 1079, 1124, 1130, 1136, 1196, 1234, 1333, 1346, 1355-1357, 1398, 1436, 1443, 1536), `USBHostUPS.h`.
+
+      **Modificare:**
+      1. `#include "DriverDispatch.h"` in `USBHostUPS.cpp`.
+      2. Sostituire ogni chiamata HID su `_driver`/`drv` con la funzione di `DriverDispatch` indicata nel piano, mantenendo lock, ordine e condizioni (`if (_driver)`, `_driver ? ... : ...`).
+      3. In `claimInterface()` subito dopo `DriverRegistry::create()`: `DriverDispatch::attach(_driver, this);` prima di `_driver->setup();`.
+      4. Poll: `_driver->loop(this, _ups_data, now)` → `_driver->poll(_ups_data, now)`.
+      5. `setBeeperLocked`: `BeeperLogic::manipulateBeeperBuffer(..., DriverDispatch::hidOf(_driver))`.
+      6. Nessun altro cambiamento: niente log nuovi, niente rami per famiglia, niente modifiche a task, lock o tempi.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`; `grep -nE "(_driver|drv)->(loop|decodeReport|postDecode|planSet|requestLength|acceptDiagReport|invalidateReport|inputValuesPolled|parseStringDescriptor|encodeBeeperValue|beeperControllable|beeperMuteSupported|beeperFieldRead|commandTable|delayPaths)\(" lib/USBHostUPS/src/USBHostUPS.cpp` non trova nulla.
+
+      **Fatto quando:** la build S3 compila e il grep è vuoto.
+
+      **Blocchi:** se un punto di chiamata richiede di cambiare l'ordine o un lock per compilare, fermarsi e segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — chiamate HID via `DriverDispatch`, `attach` e `poll()`
+      - lib/USBHostUPS/src/USBHostUPS.h — solo se serve un include o una forward declaration
+
+      ## Criteri di Completamento
+      - [ ] Nessuna chiamata HID diretta su `_driver` o `drv` in `USBHostUPS.cpp`
+      - [ ] Trasporto legato prima di `setup()`; poll con `_driver->poll()`
+      - [ ] `pio run -e esp32-s3-standard` compila
+    ref: TASK-05
+  - id: TASK-06
+    title: Controlli sui sorgenti del confine nucleo/estensione in test_hid_transport
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** rendere verificabili in nativo i criteri sul testo (nucleo senza tipi HID, host che non chiama HID fuori da `hid()`), dato che `USBHostUPS.cpp` non compila nell'env `native`.
+
+      **Leggere:** `test/test_hid_transport/test_main.cpp` (funzioni `projectPath`, `readSource`, `test_driver_sources_include_no_usb_host`, `test_command_logic_left_the_usb_host_interface`).
+
+      **Modificare:**
+      1. Aggiungere `lib/USBHostUPS/src/IHidDriver.h` e `lib/USBHostUPS/src/DriverDispatch.h` all'elenco dei file di `test_driver_sources_include_no_usb_host`.
+      2. Nuovo `test_driver_core_names_no_hid_type`: il testo di `IUPSDriver.h` non contiene `HIDUsageDef`, `HIDParser`, `IHidTransport`, `report_id`, `HidInfo` né i nomi dei metodi HID (`decodeReport`, `postDecode`, `planSet`, `requestLength`, `acceptDiagReport`, `invalidateReport`, `inputValuesPolled`, `parseStringDescriptor`, `encodeBeeperValue`, `beeperControllable`, `beeperMuteSupported`, `beeperFieldRead`, `commandTable`, `delayPaths`); contiene `hid()`.
+      3. Nuovo `test_usb_host_reaches_hid_only_through_dispatch`: in `USBHostUPS.cpp` nessuna occorrenza di `_driver->X(` o `drv->X(` per X nell'elenco dei metodi HID più `loop`; `DriverDispatch::` presente.
+      4. Registrare i test in `RUN_TEST`.
+
+      **Verifica:** `pio test -e native -f test_hid_transport`; mutazione manuale (poi annullata): rimettere `_driver->inputValuesPolled()` in `USBHostUPS.cpp` → il test fallisce.
+
+      **Fatto quando:** suite verde e mutazione catturata.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_hid_transport/test_main.cpp — due test nuovi ed elenco dei file esteso
+
+      ## Criteri di Completamento
+      - [ ] Il test fallisce se `IUPSDriver.h` nomina un tipo o un metodo HID
+      - [ ] Il test fallisce se `USBHostUPS.cpp` chiama un metodo HID direttamente sul driver
+      - [ ] `IHidDriver.h` e `DriverDispatch.h` non includono l'host USB
+    ref: TASK-06
+  - id: TASK-07
+    title: Aggiornare la documentazione dell'architettura
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la documentazione descrive il nucleo `IUPSDriver`, l'estensione `IHidDriver` e `DriverDispatch`.
+
+      **Leggere:** `docs/concepts/architecture.md` (righe 31 e 144), `docs/adr/0013-qx-ups-support.md` sezione 1.
+
+      **Modificare:**
+      1. `docs/concepts/architecture.md`: nel diagramma e nella tabella dei moduli citare `IUPSDriver` (nucleo neutro) e `IHidDriver` (estensione HID raggiunta con `hid()`), più una frase su `DriverDispatch.h` come unico punto dell'host che chiama `hid()`.
+      2. Nessuna modifica all'ADR 0013 (resta la decisione; il nome di lavoro `IHidDriver` è confermato) e nessuna nota di rilascio (si scrivono prima della release).
+
+      **Verifica:** rilettura; i nomi coincidono con il codice.
+
+      **Fatto quando:** i due punti della pagina citano nucleo ed estensione.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/concepts/architecture.md — diagramma e tabella dei moduli
+
+      ## Criteri di Completamento
+      - [ ] `architecture.md` cita `IUPSDriver`, `IHidDriver`, `hid()` e `DriverDispatch.h`
+      - [ ] Nessuna nota di rilascio aggiunta
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Regressione completa: suite nativa, replay, e2e e tutte le build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che il refactoring non cambia il comportamento.
+
+      **Leggere:** `platformio.ini` (env `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, `native`), `package.json` (`npm run e2e`).
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (rilanciare da sola con `-f` una suite ERRORED transitoria).
+      2. `npm run e2e`.
+      3. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`; annotare RAM e flash dell'S3 rispetto a `main` (atteso: differenza di pochi byte).
+      4. `git diff --stat` e `git diff test/`: nei test esistenti solo adattamenti di tipo (TASK-02) e i test nuovi.
+
+      **Verifica:** i quattro passi senza errori.
+
+      **Fatto quando:** tutto verde e i numeri riportati nel riepilogo dell'implementazione.
+
+      **Blocchi:** un fallimento di replay o e2e è un cambio di comportamento: correggere il codice, mai le attese. Nessuna prova sull'UPS reale in questa storia (non tocca l'aggancio né i tempi; la build di prova su hardware è prevista per US-132).
+
+      ## File Coinvolti
+      - platformio.ini — solo lettura (env da compilare)
+      - package.json — solo lettura (`npm run e2e`)
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` verde, compreso `test_record_replay`
+      - [ ] `npm run e2e` verde
+      - [ ] Le tre build di `platformio.ini` compilano; RAM/flash S3 annotate
+      - [ ] Nessuna asserzione dei test esistenti cambiata
+    ref: TASK-08

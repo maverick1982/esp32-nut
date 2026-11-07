@@ -562,7 +562,7 @@ void test_cyberpower_driver_name(void) {
 // US-119: the on-demand read of the export never asks the reports that hang CyberPower
 // firmwares (6 and the vendor reports >= 130), and keeps the poll's spacing
 void test_cyberpower_diag_read_follows_poll_exclusions(void) {
-    const IUPSDriver& d = driver;
+    const IHidDriver& d = driver;
     TEST_ASSERT_FALSE(d.acceptDiagReport(3, 6));
     TEST_ASSERT_FALSE(d.acceptDiagReport(3, 130));
     TEST_ASSERT_FALSE(d.acceptDiagReport(3, 134));

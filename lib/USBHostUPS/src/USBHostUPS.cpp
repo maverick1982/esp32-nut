@@ -2,6 +2,7 @@
 #include "DeviceStrings.h"
 #include "USBHostUPS.h"
 #include "IUPSDriver.h"
+#include "DriverDispatch.h"
 #include "DriverRegistry.h"
 #include <stdarg.h>
 #include <math.h>
@@ -366,7 +367,7 @@ void USBHostUPS::service() {
 
     // US-123 (issue #111): when the poll requests every value of the INPUT reports, a silence
     // freezes nothing, and the watchdog neither makes the data stale nor recovers or restarts
-    _in_wd.setValuesPolled(_driver->inputValuesPolled());
+    _in_wd.setValuesPolled(DriverDispatch::inputValuesPolled(_driver));
     switch (_in_wd.tick(now)) {
     case LinkMonitor::Action::RECOVER:
         log("WARN", "[USB] No INPUT report for %u s (period %u ms)",
@@ -391,7 +392,7 @@ void USBHostUPS::service() {
     // only knows the time of its own steps.
     bool diag_spacing = _diag.state() == DiagSweep::State::Reading &&
                         (now - _diag_last_at) < _driver->requestSpacingMs();
-    if (!diag_spacing) _driver->loop(this, _ups_data, now);
+    if (!diag_spacing) _driver->poll(_ups_data, now); // on this transport (DriverDispatch::attach)
     logOnlineDischarge(now);
     // After the poll, so the poll goes first when both are due
     serviceDiagRead();
@@ -555,6 +556,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
 
         if (_driver) { delete _driver; _driver = nullptr; }
         _driver = DriverRegistry::create(_vid, _pid, mfr, product);
+        DriverDispatch::attach(_driver, this); // the HID transport poll() runs on (US-131)
         _driver->setup();
         applySavedDriverValues();
         populateStringsFromDeviceInfo(dev_info, _quirks, _ups_data);
@@ -661,9 +663,8 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
         cached.report_type = 1;
         cached.data.assign(data, data + length);
     }
-    _driver->decodeReport(this, r_id, 1, data, length, _ups_data);
-    // The NUT table writes its variables last (US-066)
-    _driver->postDecode(this, r_id, 1, data, length, _ups_data);
+    // decodeReport(), then the NUT table writes its variables last (US-066)
+    DriverDispatch::decode(_driver, this, r_id, 1, data, length, _ups_data);
 }
 
 void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
@@ -923,10 +924,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
         cached.report_type = report_type;
         cached.data.assign(_request_buffer, _request_buffer + length);
 
-        if (_driver) {
-            _driver->decodeReport(this, report_id, report_type, _request_buffer, length, _ups_data);
-            _driver->postDecode(this, report_id, report_type, _request_buffer, length, _ups_data);
-        }
+        DriverDispatch::decode(_driver, this, report_id, report_type, _request_buffer, length, _ups_data);
         return true;
     }
 
@@ -973,7 +971,7 @@ void USBHostUPS::serviceDiagRead() {
             for (const auto& kv : _cached_reports) cached.insert(kv.first);
             const IUPSDriver* drv = _driver;
             _diag.start(_hid_parser.getUsages(), cached, [drv](uint8_t type, uint8_t id) {
-                return drv->acceptDiagReport(type, id);
+                return DriverDispatch::acceptDiagReport(drv, type, id);
             });
             if (_diag.state() == DiagSweep::State::Done) logDiagReadEnd();
         }
@@ -992,7 +990,7 @@ void USBHostUPS::serviceDiagRead() {
     if (!_diag.next(item)) return;
     uint16_t expected = _hid_parser.getExpectedLength(item.id, item.type);
     size_t length = 0;
-    DiagSweep::Result r = readReportRaw(item.id, item.type, _driver->requestLength(item.type, item.id, expected), length);
+    DiagSweep::Result r = readReportRaw(item.id, item.type, DriverDispatch::requestLength(_driver, item.type, item.id, expected), length);
     _diag_last_at = millis();
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
@@ -1091,7 +1089,7 @@ bool USBHostUPS::requestStringDescriptor(uint8_t string_index) {
 
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (_driver) {
-        _driver->parseStringDescriptor(this, string_index, _request_buffer, len, _ups_data);
+        DriverDispatch::parseString(_driver, this, string_index, _request_buffer, len, _ups_data);
         if (string_index == _iProduct) _device_product = _ups_data.get("ups.model");
         _driver->formatDeviceStrings(_ups_data);
         applyDefaultDelays();
@@ -1136,19 +1134,19 @@ const NutTable::HidInfo* USBHostUPS::commandTable(size_t& n) const {
     // Same lock as beeperMuteSupported(): _driver is deleted under _mutex. The table is static.
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     n = 0;
-    return _driver ? _driver->commandTable(n) : nullptr;
+    return DriverDispatch::commandTable(_driver, n);
 }
 
 bool USBHostUPS::beeperFieldRead() const {
     // Same lock as commandTable(): _driver is deleted under _mutex
     std::lock_guard<std::recursive_mutex> lock(_mutex);
-    return _driver && _driver->beeperFieldRead(this);
+    return DriverDispatch::beeperFieldRead(_driver, this);
 }
 
 bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     // Devices that ignore the beeper commands must not be written to at all
-    if (_driver && !_driver->beeperControllable()) return false;
+    if (!DriverDispatch::beeperControllable(_driver)) return false;
     if (!_link.canPoll(millis())) return false;
 
     HIDUsageDef def;
@@ -1208,7 +1206,8 @@ bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
         if (def.report_id != 0) _request_buffer[0] = def.report_id;
     }
 
-    fetched_len = BeeperLogic::manipulateBeeperBuffer(enable, &def, _request_buffer, fetched_len, _driver);
+    fetched_len = BeeperLogic::manipulateBeeperBuffer(enable, &def, _request_buffer, fetched_len,
+                                                      DriverDispatch::hidOf(_driver));
     if (fetched_len == 0) return false;
 
     // STEP 3: Write back
@@ -1246,8 +1245,7 @@ bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         expected_length = _hid_parser.getExpectedLength(def.report_id, HID_REPORT_TYPE_FEATURE);
         // wLength as the poll asks it (APC Back-UPS BX: at least 8 bytes)
-        request_length = _driver ? _driver->requestLength(HID_REPORT_TYPE_FEATURE, def.report_id, expected_length)
-                                 : expected_length;
+        request_length = DriverDispatch::requestLength(_driver, HID_REPORT_TYPE_FEATURE, def.report_id, expected_length);
         shared_report = BeeperLogic::reportHasOtherFields(_hid_parser.getUsages(), def);
     }
     if (expected_length > sizeof(_request_buffer)) expected_length = sizeof(_request_buffer);
@@ -1345,7 +1343,7 @@ bool USBHostUPS::supportsBeeperToggle() const {
     // A device that ignores the beeper commands (e.g. EcoFlow) still reports
     // ups.beeper.status, but must not advertise the toggle. Checked under _mutex:
     // handleDisconnected() deletes _driver with the same lock held.
-    if (_driver && !_driver->beeperControllable()) return false;
+    if (!DriverDispatch::beeperControllable(_driver)) return false;
     return getActiveBeeperPath() != "";
 }
 
@@ -1358,7 +1356,7 @@ bool USBHostUPS::shutdownCommandsSupported() const {
 bool USBHostUPS::beeperMuteSupported() const {
     // Same lock as supportsBeeperToggle(): _driver is deleted under _mutex
     std::lock_guard<std::recursive_mutex> lock(_mutex);
-    return _driver ? _driver->beeperMuteSupported() : true;
+    return DriverDispatch::beeperMuteSupported(_driver);
 }
 
 void USBHostUPS::applyDefaultDelays() {
@@ -1366,10 +1364,7 @@ void USBHostUPS::applyDefaultDelays() {
     // the device (US-058). Right after formatDeviceStrings(); _mutex is recursive and
     // the callers already hold it.
     std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (!_driver) return;
-    NutTable::applyDefaultDelays(_ups_data, _hid_parser.getUsages(), _driver->defaultOffDelay(),
-                                 _driver->defaultOnDelay(), _driver->delayVariablesSupported(),
-                                 _driver->delayPaths(), &_saved_vars);
+    DriverDispatch::applyDefaultDelays(_driver, _ups_data, _hid_parser.getUsages(), &_saved_vars);
 }
 
 void USBHostUPS::applySavedDriverValues() {
@@ -1410,7 +1405,7 @@ NutTable::SetStatus USBHostUPS::planSet(const char* name, const char* value, Nut
     // The driver decides what to write, without I/O (setvar() of usbhid-ups)
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (!_driver) return NutTable::SetStatus::NOT_CONNECTED;
-    return _driver->planSet(_ups_data, _hid_parser.getUsages(), name, value, plan);
+    return DriverDispatch::planSet(_driver, _ups_data, _hid_parser.getUsages(), name, value, plan);
 }
 
 NutTable::SetStatus USBHostUPS::saveDriverSideValue(const NutTable::SetPlan& plan) {
@@ -1448,14 +1443,14 @@ NutTable::SetStatus USBHostUPS::writePlannedValue(const NutTable::SetPlan& plan)
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
             request_length = _hid_parser.getExpectedLength(plan.def.report_id, HID_REPORT_TYPE_FEATURE);
-            if (_driver) request_length = _driver->requestLength(HID_REPORT_TYPE_FEATURE, plan.def.report_id, request_length);
+            request_length = DriverDispatch::requestLength(_driver, HID_REPORT_TYPE_FEATURE, plan.def.report_id, request_length);
         }
         if (!requestReport(plan.def.report_id, HID_REPORT_TYPE_FEATURE, request_length)) {
             // Also when static reports are read once (APC Back-UPS BX): the next full poll
             // must not skip the report it still holds the old values of
             {
                 std::lock_guard<std::recursive_mutex> lock(_mutex);
-                if (_driver) _driver->invalidateReport(HID_REPORT_TYPE_FEATURE, plan.def.report_id);
+                DriverDispatch::invalidateReport(_driver, HID_REPORT_TYPE_FEATURE, plan.def.report_id);
             }
             log("WARN", "Variable %s written, read back failed: next full poll reads it", plan.name);
         }
@@ -1548,7 +1543,7 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
     s.dropped_input_reports = (uint32_t)_dropped_events;
     s.input_period_ms = _in_wd.isPeriodic() ? _in_wd.periodMs() : 0;
     s.input_recoveries = _in_wd.recoveries();
-    s.input_watchdog = _driver && !(_quirks & QUIRK_NO_INTERRUPT_PIPE) && !_driver->inputValuesPolled();
+    s.input_watchdog = DriverDispatch::inputWatchdogActive(_driver, (_quirks & QUIRK_NO_INTERRUPT_PIPE) != 0);
     s.port_cycles = _port_cycles.cyclesSinceBoot();
     s.incomplete_input_reports = _in_reasm.dropped();
     s.ep_in_mps = _ep_in_mps;

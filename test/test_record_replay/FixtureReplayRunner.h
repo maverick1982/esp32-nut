@@ -12,6 +12,7 @@
 #include <ArduinoJson.h>
 
 #include "IHidTransport.h"
+#include "IHidDriver.h"
 #include "UPSData.h"
 #include "HIDParser.h"
 #include "Quirks.h"
@@ -64,7 +65,7 @@ public:
     // decoded by _answer_driver into *_answer_data as USBHostUPS does, for fixtures with only
     // the descriptor
     bool _answer_all = false;
-    IUPSDriver* _answer_driver = nullptr;
+    IHidDriver* _answer_driver = nullptr;
     UPSData* _answer_data = nullptr;
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
@@ -95,7 +96,7 @@ struct ReplayedReport {
 struct ReplaySession {
     ReplayMockHost host;
     UPSData ups_data;
-    IUPSDriver* driver = nullptr;
+    IHidDriver* driver = nullptr;
     std::vector<ReplayedReport> reports;
 
     ReplaySession() {}
@@ -242,9 +243,10 @@ public:
 
         // 3. Dispatch Driver
         // The strings tell apart the subdrivers of a shared VID/PID, as on the device (US-097)
-        s.driver = forceGeneric ? new GenericDriver()
-                                : DriverRegistry::create(vid, pid, doc["manufacturer"] | "", doc["product"] | "");
-        IUPSDriver* driver = s.driver;
+        IUPSDriver* created = forceGeneric ? new GenericDriver()
+                                           : DriverRegistry::create(vid, pid, doc["manufacturer"] | "", doc["product"] | "");
+        s.driver = created ? created->hid() : nullptr; // every registry driver is HID (US-131)
+        IHidDriver* driver = s.driver;
 
         // Match quirks
         host._quirks = 0;
@@ -357,7 +359,7 @@ public:
         if (!replay(filePath, s)) return;
         ReplayMockHost& host = s.host;
         UPSData& ups_data = s.ups_data;
-        IUPSDriver* driver = s.driver;
+        IHidDriver* driver = s.driver;
 
         if (expectedCommands) {
             TEST_ASSERT_EQUAL_STRING_MESSAGE(expectedCommands, listCmd(s).c_str(), "supported NUT commands");

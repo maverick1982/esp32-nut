@@ -1304,6 +1304,63 @@ void test_rows_never_bind_output_usages(void) {
     }
 }
 
+// US-131: applyDelayValues(), the part of applyDefaultDelays() without HID paths, sets only
+// the variables it is asked for, with the defaults or the saved values still valid
+void test_apply_delay_values_sets_only_requested(void) {
+    UPSData sd_only, st_only, none;
+    NutTable::applyDelayValues(sd_only, 20, 30, true, false);
+    TEST_ASSERT_EQUAL_STRING("20", sd_only.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(sd_only.hasKey("ups.delay.start"));
+    NutTable::applyDelayValues(st_only, 20, 30, false, true);
+    TEST_ASSERT_FALSE(st_only.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_EQUAL_STRING("30", st_only.get("ups.delay.start").c_str());
+    NutTable::applyDelayValues(none, 20, 30, false, false);
+    TEST_ASSERT_FALSE(none.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(none.hasKey("ups.delay.start"));
+}
+
+void test_apply_delay_values_saved_rules(void) {
+    // Valid saved values replace the defaults
+    std::vector<std::pair<String, String>> valid = { { "ups.delay.shutdown", "45" }, { "ups.delay.start", "0" } };
+    UPSData a;
+    NutTable::applyDelayValues(a, 20, 30, true, true, &valid);
+    TEST_ASSERT_EQUAL_STRING("45", a.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("0", a.get("ups.delay.start").c_str());
+
+    // -1 (accepted by parseDelayParam, never a delay) and text are ignored: the default stays
+    std::vector<std::pair<String, String>> invalid = { { "ups.delay.shutdown", "-1" }, { "ups.delay.start", "abc" } };
+    UPSData b;
+    NutTable::applyDelayValues(b, 20, 30, true, true, &invalid);
+    TEST_ASSERT_EQUAL_STRING("20", b.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL_STRING("30", b.get("ups.delay.start").c_str());
+
+    // A saved value never creates a variable the call does not set
+    UPSData c;
+    NutTable::applyDelayValues(c, 20, 30, true, false, &valid);
+    TEST_ASSERT_EQUAL_STRING("45", c.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(c.hasKey("ups.delay.start"));
+}
+
+// applyDefaultDelays() is applyDelayValues() on the paths the device has, as before US-131
+void test_apply_default_delays_follows_paths(void) {
+    std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.DelayBeforeShutdown", 0x00840057, 3) };
+    std::vector<std::pair<String, String>> saved = { { "ups.delay.shutdown", "60" }, { "ups.delay.start", "90" } };
+    UPSData viaPaths, direct;
+    NutTable::applyDefaultDelays(viaPaths, usages, 20, 30, true, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDelayValues(direct, 20, 30, true, false, &saved);
+    TEST_ASSERT_EQUAL_STRING("60", viaPaths.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_FALSE(viaPaths.hasKey("ups.delay.start"));
+    TEST_ASSERT_EQUAL_STRING(direct.get("ups.delay.shutdown").c_str(), viaPaths.get("ups.delay.shutdown").c_str());
+    TEST_ASSERT_EQUAL(direct.hasKey("ups.delay.start"), viaPaths.hasKey("ups.delay.start"));
+
+    // Not declared by the subdriver, or no paths: nothing
+    UPSData off, nopaths;
+    NutTable::applyDefaultDelays(off, usages, 20, 30, false, NutTable::mgeDelayPaths(), &saved);
+    NutTable::applyDefaultDelays(nopaths, usages, 20, 30, true, nullptr, &saved);
+    TEST_ASSERT_FALSE(off.hasKey("ups.delay.shutdown"));
+    TEST_ASSERT_FALSE(nopaths.hasKey("ups.delay.shutdown"));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_generic_rows_publish_only_standard_names);
@@ -1376,5 +1433,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_alarm_rows_of_mge_table);
     RUN_TEST(test_vendor_alarms_in_table_order);
     RUN_TEST(test_rows_never_bind_output_usages);
+    RUN_TEST(test_apply_delay_values_sets_only_requested);
+    RUN_TEST(test_apply_delay_values_saved_rules);
+    RUN_TEST(test_apply_default_delays_follows_paths);
     return UNITY_END();
 }
