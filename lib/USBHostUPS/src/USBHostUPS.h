@@ -22,6 +22,7 @@
 #include "DiagSweep.h"
 #include "EnumWatchdog.h"
 #include "PortCyclePolicy.h"
+#include "DriverRegistry.h"
 #include <atomic>
 #include <map>
 #include <vector>
@@ -79,6 +80,8 @@ public:
     bool setBeeper(bool enable) override;
     bool isConnected() const override;
     bool isDataStale() const override;
+    // "Q* UPS (USB transport: hunnox)" while a Q* UPS is bound (US-132), empty otherwise
+    String unsupportedDevice() const override;
     bool supportsBeeperToggle() const override;
     bool shutdownCommandsSupported() const override;
     bool beeperMuteSupported() const override;
@@ -200,6 +203,14 @@ private:
     void service();
     void processEvents();
     void claimInterface(hid_host_device_handle_t handle);
+    // Q* path of claimInterface() (US-132, ADR 0013 section 2): keeps interface 0, logs
+    // that the UPS is recognised but not supported yet. No IN pipe, cache or diagnostics.
+    // vid, pid, quirks and product go to the USB diagnostics export, so a report names the
+    // device that is bound instead of the previous one
+    void claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
+                          uint16_t vid, uint16_t pid, uint32_t quirks, const char* product);
+    // Drops the state of the bound device, HID or Q* (body of handleDisconnected())
+    void releaseBoundState();
     bool deferClaim(hid_host_device_handle_t handle, uint32_t now);
     void clearDeferredClaim(hid_host_device_handle_t handle);
     void processInputReport(const HidEvent& ev);
@@ -248,6 +259,10 @@ private:
     // Product string as the device sent it, before formatDeviceStrings() splits it
     // (APC "FW:"): the dump must carry it, or a replay cannot rebuild ups.firmware
     String _device_product;
+    // Q* UPS bound but not supported yet (US-132): NUT USB subdriver name and the text of
+    // unsupportedDevice(); nullptr / empty on the HID path and without a device
+    const char* _qx_transport = nullptr;
+    String _unsupported_device;
     uint16_t _vid;
     uint16_t _pid;
     bool _initialized;

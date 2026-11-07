@@ -1974,6 +1974,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
+            // UPS recognised but not supported yet (Q*, issues #91 and #28): _unsupported is
+            // "Q* UPS (USB transport: hunnox)", shown as "Q* UPS recognized (USB transport: ...)"
+            const unsupportedBanner = document.getElementById('unsupported-ups-banner');
+            if (unsupportedBanner) {
+                if (data._unsupported) {
+                    const device = String(data._unsupported).replace(/^(.*?) \(/, '$1 recognized (');
+                    document.getElementById('unsupported-ups-text').textContent = device +
+                        ': not supported yet. Support for Q* UPS units is in progress (GitHub issues #91, #28).';
+                    unsupportedBanner.style.display = 'block';
+                } else {
+                    unsupportedBanner.style.display = 'none';
+                }
+            }
+
 
             // Update primary metrics (telemetry and commands pages)
             renderMetrics(data, TELEMETRY_METRIC_IDS);
@@ -2758,6 +2772,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (lblUps && data.ups) {
                 lblUps.textContent = 'UPS: ' + data.ups.status + (data.ups.stale ? ' (stale)' : '');
                 if (data.ups.stale) {
+                    indUps.className = 'status-indicator warning';
+                } else if (data.ups.unsupported) {
+                    // Q* UPS recognised but not supported yet (US-132): "UPS: Not supported yet"
                     indUps.className = 'status-indicator warning';
                 } else if (data.ups.status === 'Connecting') {
                     indUps.className = 'status-indicator warning';

@@ -480,6 +480,36 @@ void USBHostUPS::processEvents() {
 }
 
 void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
+    // The family is chosen before the report descriptor (US-132, ADR 0013 section 2), from
+    // what hid_host_get_device_info() copies out of the descriptors read at enumeration:
+    // no transfer goes out for it.
+    hid_host_dev_info_t dev_info;
+    const bool have_info = hid_host_get_device_info(handle, &dev_info) == ESP_OK;
+    uint32_t quirks = 0;
+    char mfr[HID_STR_DESC_MAX_LENGTH + 1] = {0};
+    char product[HID_STR_DESC_MAX_LENGTH + 1] = {0};
+    if (have_info) {
+        // Quirks first: the strings the registry looks at need QUIRK_INVERT_STRINGS
+        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+            if (UPS_QUIRKS[q].vid == dev_info.VID && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == dev_info.PID)) {
+                quirks |= UPS_QUIRKS[q].flags;
+            }
+        }
+
+        // Some VID/PID are shared by subdrivers that tell the devices apart by their
+        // strings, as usbhid-ups does (US-097, Phoenixtec 06da:ffff), and so does nutdrv_qx
+        const bool invert = (quirks & QUIRK_INVERT_STRINGS) != 0;
+        DeviceStrings::toAscii(dev_info.iManufacturer, HID_STR_DESC_MAX_LENGTH, invert, mfr, sizeof(mfr));
+        DeviceStrings::toAscii(dev_info.iProduct, HID_STR_DESC_MAX_LENGTH, invert, product, sizeof(product));
+
+        DriverRegistry::Match match = DriverRegistry::match(dev_info.VID, dev_info.PID, mfr, product);
+        if (match.family == DriverRegistry::Family::QX) {
+            claimQxInterface(handle, match, dev_info.VID, dev_info.PID, quirks, product);
+            return;
+        }
+    }
+
+    // HID path: without device information the interface is taken as before, with no driver
     size_t desc_len = 0;
     uint8_t *desc = hid_host_get_report_descriptor(handle, &desc_len);
 
@@ -496,17 +526,12 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     }
     clearDeferredClaim(handle);
 
-    bool is_ups = false;
     HIDParser temp_parser;
     temp_parser.parseReportDescriptor(desc, desc_len);
-    for (const auto& u : temp_parser.getUsages()) {
-        if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {
-            is_ups = true;
-            break;
-        }
-    }
 
-    if (!is_ups) {
+    // Explicit HID rows and the generic fallback alike: only an interface with UPS or
+    // Battery pages is a UPS
+    if (!DriverRegistry::hasUpsPages(temp_parser.getUsages())) {
         // Not a UPS! Close it!
         log("INFO", "Ignoring non-UPS interface.");
         closeInterface(handle);
@@ -521,6 +546,8 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
 
     _hid_dev_handle = handle;
+    _qx_transport = nullptr;
+    _unsupported_device = "";
     _hid_parser = temp_parser;
     _cached_reports.clear();
     _diag.clear();
@@ -533,26 +560,11 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         _cached_report_descriptor_hex += hex;
     }
 
-    hid_host_dev_info_t dev_info;
-    if (hid_host_get_device_info(handle, &dev_info) == ESP_OK) {
+    if (have_info) {
+        // Device information, quirks and strings read at the top of claimInterface()
         _vid = dev_info.VID;
         _pid = dev_info.PID;
-
-        // Quirks first: the strings the registry looks at need QUIRK_INVERT_STRINGS
-        _quirks = 0;
-        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
-            if (UPS_QUIRKS[q].vid == _vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == _pid)) {
-                _quirks |= UPS_QUIRKS[q].flags;
-            }
-        }
-
-        // Some VID/PID are shared by subdrivers that tell the devices apart by their
-        // strings, as usbhid-ups does (US-097, Phoenixtec 06da:ffff)
-        const bool invert = (_quirks & QUIRK_INVERT_STRINGS) != 0;
-        char mfr[HID_STR_DESC_MAX_LENGTH + 1];
-        char product[HID_STR_DESC_MAX_LENGTH + 1];
-        DeviceStrings::toAscii(dev_info.iManufacturer, HID_STR_DESC_MAX_LENGTH, invert, mfr, sizeof(mfr));
-        DeviceStrings::toAscii(dev_info.iProduct, HID_STR_DESC_MAX_LENGTH, invert, product, sizeof(product));
+        _quirks = quirks;
 
         if (_driver) { delete _driver; _driver = nullptr; }
         _driver = DriverRegistry::create(_vid, _pid, mfr, product);
@@ -675,6 +687,10 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     if (_hid_dev_handle != handle) return;
 
     log("INFO", "HID Device Disconnected");
+    releaseBoundState();
+}
+
+void USBHostUPS::releaseBoundState() {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     _hid_dev_handle = NULL;
     _is_ready_to_poll = false;
@@ -687,6 +703,60 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     _diag.clear();
     _diag_requested = false;
     _ol_dischrg_log = OnlineDischargeLog();
+    _qx_transport = nullptr;
+    _unsupported_device = "";
+}
+
+void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
+                                  uint16_t vid, uint16_t pid, uint32_t quirks, const char* product) {
+    // nutdrv_qx claims usb_subdriver.hid_rep_index, LIBUSB_DEFAULT_INTERFACE = 0 unless the
+    // usb_hid_rep_index option is given (nut_repo/drivers/libusb1.c:244-245, nut_libusb.h:41)
+    hid_host_dev_params_t params;
+    if (hid_host_device_get_params(handle, &params) != ESP_OK || params.iface_num != 0) {
+        logDebug("[USB] Q* UPS: interface other than 0 dropped");
+        closeInterface(handle);
+        return;
+    }
+
+    if (_hid_dev_handle != NULL && _hid_dev_handle != handle) {
+        // Replace the previously bound interface: its DISCONNECTED is not queued
+        // (closeInterface()), so its state goes here
+        closeInterface(_hid_dev_handle);
+        releaseBoundState();
+    }
+    clearDeferredClaim(handle);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        // The bound interface for both families: handleDisconnected() releases it as usual.
+        // _is_ready_to_poll stays false and _driver nullptr, so service() stops before the
+        // link monitor, the INPUT watchdog and the export read, processInputReport() drops
+        // everything and TRANSFER_ERROR is ignored: no port reset, no restart (US-132).
+        _hid_dev_handle = handle;
+        _qx_transport = match.qx_transport;
+        _unsupported_device = String("Q* UPS (USB transport: ") + match.qx_transport + ")";
+        // What the USB diagnostics export shows: this device, not the one bound before it.
+        // No report descriptor is read on this path, and _ups_data stays empty (no UPS for
+        // the consumers): the product string goes only to the export.
+        _vid = vid;
+        _pid = pid;
+        _quirks = quirks;
+        _device_product = product;
+        _cached_report_descriptor_hex = "";
+    }
+    if (_restart_requested) {
+        // The UPS enumerated again: whatever needed the restart is gone (review A7)
+        log("INFO", "[USB] UPS enumerated again: restart request cancelled");
+        _restart_requested = false;
+        _restart_reason = "";
+    }
+
+    log("INFO", "Q* UPS recognized (USB transport: %s), not supported yet", match.qx_transport);
+}
+
+String USBHostUPS::unsupportedDevice() const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _unsupported_device;
 }
 
 void USBHostUPS::logOnlineDischarge(uint32_t now) {

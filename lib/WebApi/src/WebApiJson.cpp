@@ -13,6 +13,9 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
     if (!usb_ups->isConnected()) {
         doc["_disconnected"] = true;
         doc["ups.status"] = "Disconnected";
+        // A Q* UPS recognised but not supported yet (US-132)
+        String unsupported = usb_ups->unsupportedDevice();
+        if (unsupported.length() > 0) doc["_unsupported"] = unsupported;
         std::string out_std;
         serializeJson(doc, out_std);
         return String(out_std.c_str());
@@ -57,6 +60,27 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
     std::string out_std;
     serializeJson(doc, out_std);
     return String(out_std.c_str());
+}
+
+void WebApiJson::upsStatusJson(JsonObject ups, IUpsSource* src) {
+    if (src && src->isConnected()) {
+        {
+            auto data = src->getUPSData();
+            ups["status"] = data->hasKey("ups.model") ? data->get("ups.model") : String("Unknown Model");
+        }
+        // The stale banner is for an attached UPS, and not for the first seconds after the
+        // claim, while the first full poll runs
+        if (src->isDataStale() && !src->isWaitingFirstData()) ups["stale"] = true;
+        return;
+    }
+    String unsupported = src ? src->unsupportedDevice() : String();
+    if (unsupported.length() > 0) {
+        // US-132: a Q* UPS recognised but not supported yet
+        ups["status"] = "Not supported yet";
+        ups["unsupported"] = unsupported;
+        return;
+    }
+    ups["status"] = "Disconnected";
 }
 
 String WebApiJson::generateUpsCommands(IUpsSource* usb_ups) {

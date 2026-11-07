@@ -729,21 +729,8 @@ void WebConfigServer::handleSystemStatus() {
     if (network) network->linkInfo(link_info);
     WebApiJson::networkStatusJson(doc["network"].to<JsonObject>(), link_info);
     
-    // UPS status
-    String ups_status_str = "Disconnected";
-    if (ups_source && ups_source->isConnected()) {
-        auto data = ups_source->getUPSData();
-        String model = data->hasKey("ups.model") ? data->get("ups.model") : "Unknown Model";
-        ups_status_str = model;
-    } else {
-        ups_status_str = "Disconnected";
-    }
-    doc["ups"]["status"] = ups_status_str;
-    // A missing UPS is already "Disconnected": the stale banner is for an attached one,
-    // and not for the first seconds after the claim, while the first full poll runs
-    if (ups_source && ups_source->isConnected() && ups_source->isDataStale() && !ups_source->isWaitingFirstData()) {
-        doc["ups"]["stale"] = true;
-    }
+    // UPS status: model, "Disconnected" or "Not supported yet" (US-132)
+    WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), ups_source);
 
     CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
 
