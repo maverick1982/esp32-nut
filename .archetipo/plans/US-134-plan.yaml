@@ -1,0 +1,402 @@
+schema: archetipo/plan/v2
+spec_code: US-134
+body: |-
+  ---
+  type: plan
+  title: "US-134: Protocolli mustek, megatec-old, zinto e innovatae e riconoscimento del protocollo per tentativi come NUT — Piano di implementazione"
+  description: "Piano di implementazione per US-134"
+  tags: [plan, implementation, US-134]
+  ---
+  # US-134: Protocolli mustek, megatec-old, zinto e innovatae e riconoscimento del protocollo per tentativi come NUT — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utente con un UPS Q*, voglio che la scheda trovi da sola il protocollo del mio UPS provando i protocolli nello stesso ordine di NUT, in modo che il mio UPS sia riconosciuto dallo stesso protocollo che sceglierebbe NUT, senza configurare nulla quando NUT non ne ha bisogno.
+
+  **Criteri di Accettazione**
+  - Protocolli `mustek`, `megatec-old`, `zinto` e `innovatae` portati come in US-133, ciascuno con i test della sua tabella `testing_t`.
+  - Il riconoscimento prova i protocolli portati nell'ordine di `subdriver_list[]` (`nutdrv_qx.c:95-117`), ciascuno fino a `MAXTRIES` volte, con la sua funzione di claim; un protocollo non portato si salta, l'ordine non cambia.
+  - Al massimo un tentativo di claim per passo della macchina a stati del poll.
+  - Nessun protocollo riconosce l'UPS: una riga "Device not supported" per aggancio, poi nuovi tentativi distanziati (primo dopo 30 s, intervallo raddoppiato fino a 10 minuti), mai in un ciclo stretto.
+  - Protocollo forzato (nome come `protocol` di `ups.conf`): si prova solo quello; serve all'impostazione di US-138.
+  - Protocollo riconosciuto: una riga INFO con il nome e la versione del protocollo di NUT.
+  - Test nativi: scelta del protocollo per ogni risposta tipo; nessuna risposta; ripetizione distanziata; protocollo forzato.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Tutto è logica pura nel modulo `ups-protocol` (`lib/USBHostUPS/src`), compilata anche in nativo, come US-133. Nessun file USB e nessun cambiamento all'host: il riconoscimento viene chiamato dal poll solo con US-136, che passa il trasporto vero, il dato sotto lock e la funzione di log. Sulle immagini ESP32 i file nuovi sono compilati ma non referenziati, quindi il linker li scarta: la misura della flash resta a US-136.
+
+  ### File nuovi e modificati
+
+  | File | Contenuto | Origine NUT |
+  |---|---|---|
+  | `QxMustek.cpp` | `QX_MUSTEK`, "Mustek 0.08", claim `blazerClaimLight` (`QS`), initups `blazerInitups` | `nutdrv_qx_mustek.c` |
+  | `QxMegatecOld.cpp` | `QX_MEGATEC_OLD`, "Megatec/old 0.08", claim `blazerClaimLight` (`D`), initups `blazerInitups` | `nutdrv_qx_megatec-old.c` |
+  | `QxZinto.cpp` | `QX_ZINTO`, "Zinto 0.07", claim `blazerClaim` (`Q1` + `FW?`), initups `blazerInitups` | `nutdrv_qx_zinto.c` |
+  | `QxInnovatae.cpp` | `QX_INNOVATAE`, "INNOVATAE 0.01", claim `blazerClaimLight` (`Q1`), initups `blazerInitupsLight`, rejected `"NAK\r"`, riga statica `device.mfr` = `Ippon` | `nutdrv_qx_innovatae.c` |
+  | `QxProtocols.h` + `QxProtocols.cpp` (nuovo) | `extern` dei sei protocolli; `QX_SUBDRIVER_LIST[]` nell'ordine di `subdriver_list[]`; `qxProtocolMatches()` | `nutdrv_qx.c:95-117`, `4321-4345` |
+  | `QxProbe.h/.cpp` (nuovo) | `QxProber`: `subdriver_matcher()` spezzato in passi, con ripetizione distanziata e protocollo forzato | `nutdrv_qx.c:4321-4373` |
+  | `test/mocks/QxTestingTables.h` (nuovo) | le sei tabelle `testing_t` upstream, condivise da `test_qx_protocols` e `test_qx_probe` | `*_testing[]` dei sei file |
+  | `platformio.ini` | `[env:native]` `build_src_filter`: i sei `.cpp` nuovi | — |
+
+  Tabelle copiate riga per riga con lo stesso formato di `QxMegatec.cpp` (colonne di `item_t` senza `answer`/`value`, `QxEngine::qxMultiplyBattvolt`, `blazerProcessStatusBits`, `blazerProcessCommand`, `blazerProcessSetvar`, `BLAZER_R_ONDELAY`/`BLAZER_R_OFFDELAY`, `"180"`/`"30"`). La riga `device.mfr` di innovatae ha comando `""` upstream: si copia `""` (non `nullptr`), con `answer_len` 0, `leading` 0 e `QX_FLAG_STATIC | QX_FLAG_ABSENT`; il ramo INIT di `walk()` gestisce le righe ABSENT prima di guardare il comando.
+
+  ### Ordine dei protocolli
+
+  ```cpp
+  // subdriver_list[] of nut_repo/drivers/nutdrv_qx.c:95-117, same order; protocols not
+  // ported yet stay as comments in their upstream position, so a port only uncomments a line
+  const QxSubdriver* const QX_SUBDRIVER_LIST[] = {
+      // &omron_subdriver, &voltronic_subdriver, &voltronic_axpert_subdriver,
+      // &voltronic_qs_subdriver, &voltronic_qs_hex_subdriver,
+      &QX_MUSTEK,
+      &QX_MEGATEC_OLD,
+      // &bestups_subdriver, &mecer_subdriver,
+      &QX_MEGATEC,
+      &QX_ZINTO,
+      // &masterguard_subdriver,
+      // &hunnox_subdriver (US-138),
+      // &ablerex_subdriver, &innovart31_subdriver, &innovart33_subdriver,
+      &QX_INNOVATAE,
+      // &q2_subdriver, &q6_subdriver, &gtec_subdriver,
+      &QX_Q1, // fallback
+      nullptr
+  };
+  ```
+
+  `qxProtocolMatches(const QxSubdriver& sub, const char* protocol)`: confronto ASCII senza maiuscole tra `protocol` e il nome del protocollo fino al primo spazio (`snprintf("%.*s", strcspn(name, " "), name)` + `strcasecmp`, `nutdrv_qx.c:4332-4343`). I nomi da usare sono quindi `mustek`, `megatec/old` (con la barra, non `megatec-old`), `megatec`, `zinto`, `innovatae`, `q1`: gli stessi di `protocol` in `ups.conf`. US-138 riusa la lista e la funzione per il menu di Board Settings.
+
+  **Conseguenza dell'ordine upstream, da non correggere.** `innovatae` (2025) usa `blazer_claim_light` con il solo `Q1` e viene prima di `q1`: un UPS che risponde solo a `Q1` viene riconosciuto come `INNOVATAE 0.01` (con `device.mfr` = `Ippon` dalla riga statica), esattamente come fa `subdriver_matcher()` di NUT oggi; `q1` si raggiunge solo con `protocol = q1`. ADR 0013: niente riordini né euristiche che NUT non ha. I test lo fissano con un commento che cita le righe upstream.
+
+  ### QxProber: `subdriver_matcher()` a passi
+
+  ```cpp
+  using QxLogFn = void (*)(void* ctx, const char* level, const char* text);
+
+  class QxProber {
+  public:
+      static const uint32_t FIRST_RETRY_MS = 30000;  // first new probe after 30 s
+      static const uint32_t MAX_RETRY_MS = 600000;   // doubled up to 10 minutes
+
+      enum class Step : uint8_t {
+          Probing,      // one claim attempt done and failed, more attempts in this cycle
+          Claimed,      // the claim of this step succeeded: engine ready
+          NotSupported, // the last attempt of the cycle failed: back-off scheduled
+          Waiting,      // back-off running, nothing sent
+          Idle          // already claimed earlier, nothing sent
+      };
+
+      QxProber(IQxTransport& transport, const QxSubdriver* const* list = QX_SUBDRIVER_LIST,
+               QxLogFn log = nullptr, void* logCtx = nullptr);
+
+      // protocol: nullptr or "" = automatic; otherwise the ups.conf name (copied, max 31 chars).
+      // Stores both and calls restart() (US-138 applies the settings this way).
+      void configure(const char* protocol, const QxOptions& options);
+      // New attach: first protocol, first try, back-off and "not supported" line reset, engine dropped
+      void restart();
+      // At most one claim attempt (1-2 Q* commands); claims write into data as upstream
+      Step step(UPSData& data, uint32_t nowMs);
+      // The engine of the claimed protocol (claim already run, initUps() NOT yet: the caller
+      // runs initUps/initInfo as upsdrv_initups()/upsdrv_initinfo() do after the matcher)
+      std::unique_ptr<QxEngine> takeEngine();
+
+      // Diagnostics (US-136 export) and tests
+      const QxSubdriver* claimed() const;      // nullptr until Claimed
+      const QxSubdriver* trying() const;       // protocol of the next attempt, nullptr in back-off/claimed
+      int tryCount() const;                    // attempts already made on trying(), 0..QX_MAXTRIES-1
+      uint16_t failedCycles() const;           // full cycles without a claim since restart()
+      uint32_t retryDelayMs() const;           // delay of the running back-off, 0 if none
+      uint32_t nextProbeAtMs() const;
+      const char* protocol() const;            // "" when automatic
+  };
+  ```
+
+  Regole (decisioni di piano):
+
+  - **Un claim per passo.** `step()` crea, se serve, il `QxEngine` del protocollo corrente (`std::unique_ptr<QxEngine>(new QxEngine(*sub, transport, options))`), chiama `engine->claim(data)` una volta e avanza: claim fallito -> `tryCount + 1`; arrivato a `QX_MAXTRIES` passa al protocollo successivo che il filtro accetta (motore distrutto, il prossimo lo ricrea). Lo stesso motore resta per i `MAXTRIES` tentativi di un protocollo, come la tabella globale di NUT; un solo motore in memoria alla volta (circa 3,5 KB di buffer, allocazione solo al cambio di protocollo).
+  - **Filtro del protocollo forzato** come `nutdrv_qx.c:4329-4345`: con `protocol` non vuoto si saltano i protocolli il cui nome non corrisponde. Un nome che non corrisponde a nessun protocollo portato (per esempio `hunnox` prima di US-138) dà subito `NotSupported` al primo passo, senza comandi.
+  - **Fine ciclo senza claim:** `NotSupported`, `failedCycles + 1`, ritardo 30 s al primo ciclo fallito, poi raddoppiato a ogni ciclo fallito (30, 60, 120, 240, 480, 600, 600 … s), `nextProbeAtMs = nowMs + ritardo`. Finché `(int32_t)(nowMs - nextProbeAtMs) < 0` -> `Waiting` senza comandi (confronto con overflow come `DescriptorRetry`). Scaduto il ritardo il ciclo riparte dal primo protocollo.
+  - **Log** tramite `QxLogFn` (nullptr = nessun log), livelli come `USBHostUPS::log()`:
+    - `INFO`  `[Q*] Using protocol: Megatec 0.10` al `Claimed` (testo di `upslogx(LOG_INFO, "Using protocol: %s")`, nome completo con versione).
+    - `ERROR` `[Q*] Device not supported! No protocol claimed the UPS, next probe in 30 s` solo al primo ciclo fallito dopo `restart()`; con protocollo forzato `[Q*] Device not supported! Protocol <nome> did not claim the UPS, next probe in 30 s`. I cicli falliti successivi non scrivono (il numero è in `failedCycles()` per l'export). Le righe `upsdebugx(2, "Trying protocol ...")` non si portano: riempirebbero il System Log.
+  - **Dopo `Claimed`** `step()` restituisce `Idle` senza comandi finché non si chiama `restart()`/`configure()`; `takeEngine()` consegna il motore (dopo, `claimed()` resta valido, il motore è nullo).
+  - **Dati:** il claim scrive in `data` come in NUT (`input.voltage`, e `ups.firmware` con `blazer_claim`; `blazer_claim` fallito sul firmware cancella `input.voltage`). Il chiamante (US-136) tiene il lock dei dati intorno a `step()`, come per le altre chiamate del motore.
+  - **Nessun log, nessun tempo, nessun USB dentro la classe**: `nowMs` e la funzione di log arrivano da fuori, quindi tutto è testabile in nativo.
+
+  ### Fuori ambito
+
+  - Chiamata dal poll, limite di attesa per passo, sezione Q* dell'export: US-136.
+  - `instcmd()`/`setvar()` e i comandi dei nuovi protocolli: US-135 (le righe `QX_FLAG_CMD`/`QX_FLAG_SETVAR` si copiano comunque, sono parte della tabella).
+  - `hunnox` e l'impostazione `protocol`/`novendor` in Board Settings: US-138 (qui solo `configure()`).
+
+  ---
+
+  ## Strategia di test
+
+  Solo test nativi (Unity, `env:native`), nessuna UI: niente e2e né mockup, niente video demo (la dimostrazione è un test nativo con trasporto finto).
+
+  - **Protocolli (`test_qx_protocols`):** replay della `testing_t` upstream di ciascun protocollo nuovo con `QxTestingTransport` nell'ordine claim -> initUps -> initInfo -> updateInfo; valori attesi ricavati dalle posizioni `from`/`to` delle tabelle sulle risposte di test, con il commento della colonna come nei test di megatec. Comandi mandati dal claim (`QS`; `D`; `Q1` + `FW?`; `Q1`). Numero di righe (mustek, megatec-old e zinto 34, innovatae 33: da verificare contando le righe upstream). Il controllo dei formati `dfl` passa da `{megatec, q1}` a tutta `QX_SUBDRIVER_LIST`. Caso innovatae notevole: la risposta di test a `I` è lunga 37 byte, meno di `answer_len` 38, quindi `ups.firmware` non c'è dopo il replay (riga scartata e saltata come in NUT), mentre `device.mfr` vale `Ippon`.
+  - **Riconoscimento (`test_qx_probe`, nuovo):** un trasporto finto per ogni tipo di UPS (tabelle `testing_t`, con il `rejected` del protocollo di quell'UPS come nel ramo TESTING), passi chiamati in ciclo con un orologio finto. Per ognuno si controllano il protocollo scelto e il numero di passi, che misura `MAXTRIES` e l'ordine: mustek 1 passo, megatec/old 4, megatec 7, zinto 10, innovatae 13, UPS solo `Q1` 13 -> `INNOVATAE 0.01`. Al massimo 2 comandi per passo (crescita di `sent`). Nessuna risposta: 18 passi, una sola riga ERROR, `Waiting` fino a 30 s, poi ritardi 60, 120, 240, 480, 600, 600 s senza nuove righe; `restart()` azzera e riscrive la riga. Protocollo forzato: solo quello provato, nomi senza maiuscole e con `megatec/old`, `q1` raggiungibile, nome sconosciuto senza comandi. `novendor` arriva al claim. Motore consegnato che completa initInfo/updateInfo. Orologio vicino all'overflow di `uint32_t`.
+  - **Regressione:** tutte le suite native verdi senza cambiare asserzioni esistenti (salvo la correzione segnalata in TASK-02), più la compilazione di `esp32-s3-standard` per verificare che i file nuovi compilino con la toolchain della scheda.
+
+  Comando dei test nativi (Git Bash): `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f <suite>`.
+
+  ---
+
+  ## Note e assunzioni
+
+  - US-133 (bloccante) è DONE: `QxEngine`, `QxBlazerCommon`, `QxTestingTransport` esistono; baseline `test_qx_engine` + `test_qx_protocols` verde (53 casi) il 2026-11-07.
+  - Nel test esistente `test_megatec_claim_sends_status_then_vendor` l'ultima asserzione (`sent[1] != "I\r"`) contraddice `blazer_claim`, che manda `I\r` dopo `Q1\r` (verificato in pianificazione con un test temporaneo: `sent = [Q1\r, I\r]`). TASK-02 la sostituisce con l'asserzione della sequenza esatta.
+  - Commenti nel codice in inglese, come il resto di `lib/USBHostUPS`; citazione delle righe di NUT dove il comportamento non è ovvio.
+  - Modifiche ai file con Edit/Write, non con script inline (memoria di progetto).
+tasks:
+  - id: TASK-01
+    title: Protocolli mustek, megatec-old, zinto e innovatae copiati riga per riga
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** i quattro protocolli esistono come `const QxSubdriver` con le tabelle copiate riga per riga da NUT, compilati in nativo.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx_mustek.c`, `nutdrv_qx_megatec-old.c`, `nutdrv_qx_zinto.c`, `nutdrv_qx_innovatae.c` (tutti); `lib/USBHostUPS/src/QxMegatec.cpp` (modello di formato), `QxTypes.h`, `QxBlazerCommon.h`, `QxProtocols.h`; sezione "File nuovi e modificati" del piano; `platformio.ini` righe 76-110.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxMustek.cpp`, `QxMegatecOld.cpp`, `QxZinto.cpp`, `QxInnovatae.cpp` con lo stesso schema di `QxMegatec.cpp`: commento di testa con file e righe upstream e versione; tabella `static const QxItem <NOME>_QX2NUT[]` con le righe nello stesso ordine e con i commenti di posizione upstream; `ST_FLAG_RW` -> `QX_ST_FLAG_RW`; `DEFAULT_ONDELAY`/`DEFAULT_OFFDELAY` -> `"180"`/`"30"`; `qx_multiply_battvolt` -> `QxEngine::qxMultiplyBattvolt`; `blazer_*` -> le funzioni di `QxBlazerCommon.h`; riga di chiusura tutta nulla.
+      2. Initups e interfaccia: mustek, megatec-old, zinto -> `blazerInitups`; innovatae -> `blazerInitupsLight`. Claim: mustek, megatec-old, innovatae -> `blazerClaimLight`; zinto -> `blazerClaim`. Nomi: `"Mustek 0.08"`, `"Megatec/old 0.08"`, `"Zinto 0.07"`, `"INNOVATAE 0.01"`. `accepted` `"ACK"` per tutti; `rejected` `nullptr` tranne innovatae `"NAK\r"`.
+      3. Innovatae: prima riga `{ "device.mfr", 0, nullptr, "", 0, 0, 0, 0, "Ippon", QX_FLAG_STATIC | QX_FLAG_ABSENT, nullptr, nullptr, nullptr }` (comando `""` come upstream); `ups.firmware` con `answer_len` 38, `from` 28, `to` 35, solo `QX_FLAG_STATIC` (niente TRIM).
+      4. `QxProtocols.h`: aggiungere `extern const QxSubdriver QX_MUSTEK, QX_MEGATEC_OLD, QX_ZINTO, QX_INNOVATAE;` con commento del file upstream; aggiornare il commento di testa (US-134 fatto, hunnox con US-138).
+      5. `platformio.ini`, `[env:native]` `build_src_filter`: aggiungere i quattro `.cpp` dopo `QxQ1.cpp`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols -f test_qx_engine` verde (compila e i test esistenti passano). Confronto visivo riga per riga con `diff` mentale sul file upstream: stesse colonne, stesso ordine.
+
+      **Fatto quando:** i quattro file compilano in nativo, le tabelle hanno le righe upstream nello stesso ordine, nessun file esistente cambiato oltre `QxProtocols.h` e `platformio.ini`.
+
+      **Blocchi:** se una colonna upstream non ha corrispondenza in `QxItem` (diversa da `answer`/`value`), fermarsi e chiedere invece di adattare.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxMustek.cpp — nuovo: tabella e subdriver mustek
+      - lib/USBHostUPS/src/QxMegatecOld.cpp — nuovo: tabella e subdriver megatec/old
+      - lib/USBHostUPS/src/QxZinto.cpp — nuovo: tabella e subdriver zinto
+      - lib/USBHostUPS/src/QxInnovatae.cpp — nuovo: tabella e subdriver innovatae
+      - lib/USBHostUPS/src/QxProtocols.h — extern dei quattro protocolli
+      - platformio.ini — quattro file nel build_src_filter nativo
+
+      ## Criteri di Completamento
+      - [ ] Righe, colonne, flag e funzioni identici ai file upstream, con citazione delle righe
+      - [ ] Claim, initups, nomi, accepted/rejected come upstream
+      - [ ] Riga statica `device.mfr` di innovatae con comando `""`
+      - [ ] Suite native indicate verdi
+    ref: TASK-01
+  - id: TASK-02
+    title: Tabelle testing_t condivise e test di replay dei quattro protocolli
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ogni protocollo nuovo è verificato con la sua tabella `testing_t` di NUT, come megatec e q1 in US-133, e le tabelle di test sono riusabili dal test del riconoscimento.
+
+      **Leggere:** `test/test_qx_protocols/test_main.cpp` (tutto: tabelle, `Run`, `test_megatec_testing_values`, `test_table_row_counts`, `test_dfl_formats_are_safe`, `test_megatec_claim_sends_status_then_vendor`), `test/mocks/QxTestingTransport.h`, le tabelle `*_testing[]` dei quattro file upstream, sezione "Strategia di test" e "Note e assunzioni" del piano.
+
+      **Modificare:**
+      1. Creare `test/mocks/QxTestingTables.h` (header-only, include guard): `MEGATEC_TESTING`, `Q1_TESTING` spostate da `test_qx_protocols` senza cambiarle, più `MUSTEK_TESTING`, `MEGATEC_OLD_TESTING`, `ZINTO_TESTING`, `INNOVATAE_TESTING` copiate dai file upstream (citare le righe), come `static const QxTesting[]` terminate da `{ nullptr, nullptr, 0 }`. Includerlo da `test_qx_protocols` e togliere le copie locali.
+      2. Per ciascun protocollo nuovo un test `test_<nome>_testing_values` con `Run r(QX_<NOME>, <NOME>_TESTING)`: `r.start()` vero, `driver.version.data` = nome completo, tutti i valori di stato, F e I con il commento della colonna (stessa risposta `(215.0 195.0 230.0 014 49.0 22.7 30.0 00000000` di megatec: stessi valori), `ups.delay.start` 180, `ups.delay.shutdown` 30, stato `OL`. Mustek/megatec-old/zinto: `device.mfr` `NOT_A_LIVE_UPS`, `device.model` `TESTING`, `ups.firmware` `TESTING` (posizioni 1-15, 17-26, 28-37 con TRIM). Innovatae: `device.mfr` `Ippon`, `input.current.nominal` `4.0`, `ups.firmware` assente (risposta `I` di 37 byte < 38: riga saltata come in NUT, commento).
+      3. Per ciascuno un test dei comandi del claim: mustek `[QS\r]`, megatec-old `[D\r]`, zinto `[Q1\r, FW?\r]`, innovatae `[Q1\r]` (sequenza esatta di `t.sent` dopo `e.claim(d)`).
+      4. `test_table_row_counts`: aggiungere i conteggi dei quattro (attesi 34, 34, 34, 33: contare le righe upstream senza la chiusura e usare il numero contato).
+      5. `test_dfl_formats_are_safe`: iterare sui sei protocolli (lista locale ora; TASK-03 la sostituisce con `QX_SUBDRIVER_LIST`).
+      6. `test_megatec_claim_sends_status_then_vendor`: sostituire l'ultima asserzione con il controllo esatto `sent.size() == 2`, `sent[0] == "Q1\r"`, `sent[1] == "I\r"` e correggere il commento (blazer_claim chiede stato e firmware).
+      7. Registrare i test nuovi in `main()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols -f test_qx_engine` verde.
+
+      **Fatto quando:** i test nuovi passano, i test esistenti passano senza cambiare asserzioni tranne quella del punto 6.
+
+      **Blocchi:** se un valore atteso non torna con le posizioni upstream, non correggere il valore atteso a occhio: controllare prima la riga copiata in TASK-01 contro il file upstream; se la riga è identica e il motore dà un altro valore, fermarsi e segnalarlo (sarebbe un difetto di US-133). Se l'asserzione corretta del punto 6 fallisce, fermarsi e indagare.
+
+      ## File Coinvolti
+      - test/mocks/QxTestingTables.h — nuovo: sei tabelle testing_t upstream
+      - test/test_qx_protocols/test_main.cpp — replay dei quattro protocolli, conteggi, dfl, correzione dell'asserzione del claim megatec
+
+      ## Criteri di Completamento
+      - [ ] Replay completo dei quattro protocolli con valori commentati per colonna
+      - [ ] Comandi del claim verificati per ciascun protocollo
+      - [ ] Innovatae: `Ippon` presente, `ups.firmware` assente con spiegazione
+      - [ ] Asserzione del claim megatec corretta e verde
+      - [ ] Suite verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: QX_SUBDRIVER_LIST nell'ordine di subdriver_list[] e confronto del nome di protocol
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esiste un'unica lista dei protocolli portati nell'ordine di NUT, con i protocolli non portati come commenti al loro posto, e la funzione che confronta un nome `protocol` come `subdriver_matcher()`.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:95-117` (`subdriver_list[]`) e `4321-4345` (filtro di `protocol`), `lib/USBHostUPS/src/QxProtocols.h`, `QxEngine.h` (`equalsIgnoreCase`), sezione "Ordine dei protocolli" del piano.
+
+      **Modificare:**
+      1. `QxProtocols.h`: dichiarare `extern const QxSubdriver* const QX_SUBDRIVER_LIST[];` (terminata da `nullptr`) e `bool qxProtocolMatches(const QxSubdriver& sub, const char* protocol);` con commenti (nomi come `protocol` di `ups.conf`: `megatec/old`, non `megatec-old`).
+      2. Creare `lib/USBHostUPS/src/QxProtocols.cpp`: la lista esattamente come nel piano (commenti per omron, voltronic, voltronic_axpert, voltronic_qs, voltronic_qs_hex, bestups, mecer, masterguard, hunnox (US-138), ablerex, innovart31, innovart33, q2, q6, gtec nelle loro posizioni) e `qxProtocolMatches()`: copia del nome fino al primo spazio in un buffer `char[QX_SMALLBUF]` con `snprintf("%.*s", (int)strcspn(sub.name, " "), sub.name)` e `QxEngine::equalsIgnoreCase(buf, protocol)`; `protocol` nullo -> false.
+      3. `platformio.ini` `[env:native]`: aggiungere `QxProtocols.cpp`.
+      4. `test/test_qx_protocols/test_main.cpp`: `test_dfl_formats_are_safe` itera su `QX_SUBDRIVER_LIST`; nuovo `test_subdriver_list_order` che controlla i nomi nell'ordine `Mustek 0.08`, `Megatec/old 0.08`, `Megatec 0.10`, `Zinto 0.07`, `INNOVATAE 0.01`, `Q1 0.08` e il `nullptr` finale (commento con le righe upstream); nuovo `test_protocol_name_match`: `mustek`, `MUSTEK`, `megatec/old` corrispondono; `megatec-old`, `megatec` contro megatec/old, `Megatec 0.10`, `""` e nullptr no; `megatec` corrisponde solo a `Megatec 0.10`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols` verde.
+
+      **Fatto quando:** la lista e il confronto esistono, i due test nuovi passano.
+
+      **Blocchi:** nessuno previsto; non aggiungere protocolli né cambiare l'ordine rispetto a `subdriver_list[]`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxProtocols.h — dichiarazioni di lista e confronto
+      - lib/USBHostUPS/src/QxProtocols.cpp — nuovo: lista nell'ordine upstream, qxProtocolMatches
+      - platformio.ini — QxProtocols.cpp nel build nativo
+      - test/test_qx_protocols/test_main.cpp — ordine della lista, confronto dei nomi, dfl su tutta la lista
+
+      ## Criteri di Completamento
+      - [ ] Ordine identico a `subdriver_list[]`, protocolli non portati come commenti al loro posto
+      - [ ] Confronto fino al primo spazio, senza maiuscole, come `nutdrv_qx.c:4332-4343`
+      - [ ] Test verdi
+    ref: TASK-03
+  - id: TASK-04
+    title: 'QxProber: subdriver_matcher() a passi con MAXTRIES, protocollo forzato e ripetizione distanziata'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il riconoscimento del protocollo come `subdriver_matcher()` di NUT, eseguito un claim per passo, con il protocollo forzato, la riga "Device not supported" una volta per aggancio e i nuovi tentativi distanziati.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:4321-4373` (`subdriver_matcher()`) e `3955-3975` (chi lo chiama e cosa segue: `initups`); `lib/USBHostUPS/src/QxEngine.h` (costruttore, `claim()`), `QxProtocols.h`, `DescriptorRetry.h` (stile delle classi di politica e confronto dei tempi con overflow); sezione "QxProber" del piano (interfaccia e regole: seguirle alla lettera).
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/QxProbe.h` con `QxLogFn` e la classe `QxProber` dell'interfaccia del piano (commento di classe: port di `subdriver_matcher()`, un claim per passo, nessun USB/log/tempo interno, il chiamante tiene il lock dei dati, US-136 la chiama dal poll).
+      2. Creare `lib/USBHostUPS/src/QxProbe.cpp`:
+         - stato: lista, trasporto, opzioni, `char _protocol[32]`, indice corrente nella lista, `_tries`, `std::unique_ptr<QxEngine> _engine`, `const QxSubdriver* _claimed`, `_failedCycles`, `_retryDelayMs`, `_nextProbeAtMs`, `_backoff` (bool), `_notSupportedLogged`, log e contesto.
+         - `restart()`: indice al primo protocollo accettato dal filtro, `_tries = 0`, motore e `_claimed` azzerati, back-off spento, `_failedCycles = 0`, `_retryDelayMs = 0`, `_notSupportedLogged = false`.
+         - `configure(protocol, options)`: copia troncata del nome (nullptr -> ""), opzioni, `restart()`.
+         - `step()`: se `_claimed` -> `Idle`; se back-off attivo e `(int32_t)(nowMs - _nextProbeAtMs) < 0` -> `Waiting`; se scaduto, ricomincia il ciclo dal primo protocollo. Se nessun protocollo è accettato dal filtro -> fine ciclo subito. Altrimenti crea il motore se manca, `if (_engine->claim(data))` -> `_claimed`, log INFO `[Q*] Using protocol: <nome completo>`, `Claimed`. Claim fallito: `++_tries`; se `< QX_MAXTRIES` -> `Probing`; altrimenti motore distrutto, `_tries = 0`, prossimo protocollo accettato; se c'è -> `Probing`, se la lista è finita -> fine ciclo.
+         - fine ciclo: `++_failedCycles`; `_retryDelayMs = _retryDelayMs ? min(2 * _retryDelayMs, MAX_RETRY_MS) : FIRST_RETRY_MS`; `_nextProbeAtMs = nowMs + _retryDelayMs`; back-off attivo; se `!_notSupportedLogged` scrive la riga ERROR del piano (automatico o forzato, con i secondi del ritardo) e alza il flag; restituisce `NotSupported`.
+         - filtro: protocollo accettato se `_protocol[0] == 0` oppure `qxProtocolMatches(*sub, _protocol)`.
+         - `takeEngine()` restituisce `std::move(_engine)` solo se `_claimed`, altrimenti nullptr; accessori di diagnostica del piano.
+         - Il costruttore chiama `restart()`. Il motore si crea con `std::unique_ptr<QxEngine>(new QxEngine(*sub, _transport, _options))`.
+      3. `platformio.ini` `[env:native]`: aggiungere `QxProbe.cpp`.
+
+      **Verifica:** compilazione con TASK-05; nel frattempo `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_protocols` resta verde.
+
+      **Fatto quando:** la classe compila, un `step()` fa al massimo una chiamata a `claim()`, nessuna dipendenza da Arduino oltre a quelle già usate da `QxEngine`.
+
+      **Blocchi:** non aggiungere euristiche, pause tra i tentativi di un ciclo né riordini; se serve una regola non scritta nel piano (per esempio un livello di log diverso), fermarsi e chiedere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxProbe.h — nuovo: QxLogFn, QxProber
+      - lib/USBHostUPS/src/QxProbe.cpp — nuovo: macchina a stati del riconoscimento
+      - platformio.ini — QxProbe.cpp nel build nativo
+
+      ## Criteri di Completamento
+      - [ ] Ordine della lista, `QX_MAXTRIES` tentativi per protocollo, un claim per passo
+      - [ ] Protocollo forzato filtrato come `nutdrv_qx.c:4329-4345`
+      - [ ] Ritardi 30 s raddoppiati fino a 600 s, confronto dei tempi con overflow
+      - [ ] Riga ERROR una volta per `restart()`, riga INFO con nome e versione al claim
+      - [ ] Motore consegnato con `takeEngine()` senza `initUps()`
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Test nativi del riconoscimento: scelta per ogni UPS tipo, nessuna risposta, ripetizione distanziata, protocollo forzato'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la dimostrazione di US-134 come test nativo: per ogni risposta tipo il riconoscimento sceglie il protocollo che sceglierebbe NUT tra quelli portati, nei passi attesi, e i casi di errore si comportano come da criteri.
+
+      **Leggere:** `lib/USBHostUPS/src/QxProbe.h`, `test/mocks/QxTestingTables.h`, `test/mocks/QxTestingTransport.h`, `test/test_qx_protocols/test_main.cpp` (struttura e `main()`), sezioni "Ordine dei protocolli", "QxProber" e "Strategia di test" del piano.
+
+      **Modificare:** creare `test/test_qx_probe/test_main.cpp` con:
+      - un raccoglitore di log (`QxLogFn` che salva livello e testo in un vettore) e un helper `runUntilDone(prober, data, now, maxSteps)` che chiama `step()` finché il risultato è `Probing`, conta i passi e controlla che ogni passo faccia crescere `transport.sent` di al massimo 2.
+      - `test_selects_mustek` (`MUSTEK_TESTING`): `Claimed` al passo 1, `Mustek 0.08`.
+      - `test_selects_megatec_old`: 4 passi, `Megatec/old 0.08`.
+      - `test_selects_megatec`: 7 passi, `Megatec 0.10`.
+      - `test_selects_zinto`: 10 passi, `Zinto 0.07`.
+      - `test_selects_innovatae`: 13 passi, `INNOVATAE 0.01`.
+      - `test_q1_only_ups_is_innovatae_as_nut` (`Q1_TESTING`): 13 passi, `INNOVATAE 0.01`, commento: innovatae usa `blazer_claim_light` con `Q1` e precede q1 in `subdriver_list[]` (`nutdrv_qx.c:111-116`), quindi NUT fa lo stesso.
+      - Il fake di ogni UPS si costruisce con il `rejected` del protocollo di quell'UPS (`nullptr` o `"NAK\r"` per innovatae).
+      - `test_claim_on_third_try`: `MEGATEC_OLD_TESTING` con `failNext(5)` (3 QS di mustek + 2 D falliti): `Claimed` al passo 6 su `Megatec/old 0.08`.
+      - `test_info_line_on_claim`: una sola riga `INFO` `[Q*] Using protocol: Megatec 0.10`; dopo il claim altri `step()` danno `Idle` e non mandano comandi.
+      - `test_no_answer_backoff`: trasporto che torna sempre -1 (`failNext` molto grande): `NotSupported` al passo 18, una riga `ERROR` che contiene `Device not supported!` e `30 s`; `step()` a +29 999 ms -> `Waiting` senza comandi; a +30 000 ms riparte (`Probing`, comandi mandati); secondo ciclo fallito -> ritardo 60 s e nessuna nuova riga; poi 120, 240, 480, 600, 600 s (`retryDelayMs()`), `failedCycles()` corretto; sempre una sola riga di log.
+      - `test_restart_resets`: dopo un ciclo fallito, `restart()` -> `retryDelayMs()` 0, primo passo manda comandi subito, al nuovo ciclo fallito una seconda riga `ERROR`.
+      - `test_backoff_across_uint32_wrap`: primo ciclo fallito con `now = 0xFFFFF000`: `Waiting` prima della scadenza e nuovo ciclo dopo, anche se il tempo ha superato lo zero.
+      - `test_forced_protocol_only`: `configure("zinto", {})` con `MEGATEC_TESTING`: solo `Q1\r`/`FW?\r` in `sent` (mai `QS`, `D`, `I`), 3 passi poi `NotSupported`, riga `ERROR` con `Protocol zinto`.
+      - `test_forced_q1_reachable`: `configure("Q1", {})` con `Q1_TESTING`: `Claimed` al passo 1 su `Q1 0.08`.
+      - `test_forced_name_like_ups_conf`: `configure("MEGATEC/OLD", {})` con `MEGATEC_OLD_TESTING` -> claimed al passo 1; `configure("megatec-old", {})` -> `NotSupported` al passo 1 senza comandi.
+      - `test_forced_unknown_protocol`: `configure("hunnox", {})`: `NotSupported` al primo passo, `sent` vuoto, back-off 30 s.
+      - `test_novendor_reaches_claim`: `configure("megatec", novendor=true)` con `MEGATEC_NO_VENDOR` (solo Q1 e F; spostarla in `QxTestingTables.h` se serve): `Claimed` al passo 1, `sent == [Q1\r]`.
+      - `test_taken_engine_completes_start`: dopo `Claimed` su megatec, `takeEngine()` non nullo, `initUps()`, `initInfo(d, 0)` vero, `updateInfo(d, 2000) == Ok`, `driver.version.data` `Megatec 0.10`, `ups.firmware` `TESTING`; una seconda `takeEngine()` dà nullptr.
+      - `main()` con tutti i `RUN_TEST`, come gli altri test.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_probe -f test_qx_protocols -f test_qx_engine` verde.
+
+      **Fatto quando:** tutti i casi passano senza modificare `QxProber` per adattarlo ai test in modo diverso dal piano.
+
+      **Blocchi:** se un numero di passi non torna, non cambiare l'atteso: ricontare da ordine e `MAXTRIES` (3 tentativi per ogni protocollo che precede) e, se il conto è giusto, correggere `QxProber`. Se un UPS tipo viene preso da un protocollo diverso da quello del piano, verificare a mano con `subdriver_matcher()` e le tabelle upstream prima di toccare codice o atteso, e segnalarlo.
+
+      ## File Coinvolti
+      - test/test_qx_probe/test_main.cpp — nuovo: test del riconoscimento
+      - test/mocks/QxTestingTables.h — eventuale MEGATEC_NO_VENDOR condivisa
+
+      ## Criteri di Completamento
+      - [ ] Scelta e numero di passi per mustek, megatec/old, megatec, zinto, innovatae, UPS solo Q1
+      - [ ] Al massimo 2 comandi per passo in ogni test
+      - [ ] Nessuna risposta: una riga ERROR, ritardi 30-60-120-240-480-600-600 s, `Waiting` senza comandi
+      - [ ] Protocollo forzato: solo quello, nomi come `ups.conf`, nome sconosciuto senza comandi
+      - [ ] Motore consegnato che completa initInfo/updateInfo
+    ref: TASK-05
+  - id: TASK-06
+    title: Regressione nativa completa e compilazione dell'immagine ESP32-S3
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** nessuna regressione nelle altre suite e i file nuovi compilano con la toolchain della scheda (in `lib/USBHostUPS` sono compilati anche se non ancora usati).
+
+      **Leggere:** `platformio.ini` (ambienti), memoria di progetto sui comandi di build e test.
+
+      **Modificare:** nulla, salvo correzioni a errori trovati qui (warning o errori di compilazione dei file Q* nuovi con la toolchain Xtensa, per esempio `std::unique_ptr` senza `#include <memory>`).
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (tutte le suite).
+      2. `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`: compilazione senza errori e senza warning nuovi nei file `Qx*`.
+      3. Riportare nel riepilogo dell'implementazione il numero di casi nativi e l'esito della build; la misura della flash non serve qui (i file non sono referenziati, il linker li scarta: misura con US-136).
+
+      **Verifica:** i due comandi sopra terminano con successo.
+
+      **Fatto quando:** tutte le suite native passano senza cambiare asserzioni esistenti (salvo quella corretta in TASK-02) e l'immagine ESP32-S3 compila.
+
+      **Blocchi:** se fallisce una suite non Q*, fermarsi e segnalarla: questa storia non tocca codice condiviso, quindi sarebbe un problema preesistente da capire prima di procedere.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxProbe.cpp — solo eventuali correzioni di compilazione
+      - lib/USBHostUPS/src/QxProtocols.cpp — solo eventuali correzioni di compilazione
+
+      ## Criteri di Completamento
+      - [ ] `pio test -e native` verde
+      - [ ] `pio run -e esp32-s3-standard` verde senza warning nuovi nei file Q*
+      - [ ] Esiti riportati nel riepilogo
+    ref: TASK-06
