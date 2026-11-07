@@ -1895,48 +1895,11 @@ void USBHostUPS::QxUsbPort::discardInput() {
 }
 
 void USBHostUPS::answerQxRequest(CommandResult cmd, NutTable::SetStatus set, uint32_t gen) {
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (!_qx_req.pending || (gen != 0 && _qx_req.gen != gen)) return;
-    _qx_req.cmd = cmd;
-    _qx_req.set = set;
-    _qx_req.pending = false;
-    if (_qx_req_done) xSemaphoreGive(_qx_req_done);
+    _qx_box.answer(cmd, set, gen);
 }
 
 bool USBHostUPS::serviceQxRequest(bool can_run) {
-    QxRequest req;
-    QxDriver* q;
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (!_qx_req.pending) return false;
-        req = _qx_req;
-        q = _driver ? _driver->qx() : nullptr;
-    }
-    if (!q) {
-        answerQxRequest(CommandResult::NOT_CONNECTED, NutTable::SetStatus::NOT_CONNECTED, req.gen);
-        return false;
-    }
-    if (!can_run) {
-        answerQxRequest(CommandResult::FAILED, NutTable::SetStatus::FAILED, req.gen);
-        return false;
-    }
-    // _driver is deleted only by this task: q stays valid without the lock, which the driver
-    // takes itself to publish (no lock during the Q* command, ADR 0008)
-    CommandResult cmd = CommandResult::FAILED;
-    NutTable::SetStatus set = NutTable::SetStatus::FAILED;
-    if (req.setvar) {
-        set = q->runSetVariable(_ups_data, req.name, req.value);
-    } else {
-        cmd = q->runCommand(_ups_data, req.name, req.value[0] ? req.value : nullptr);
-    }
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (_qx_req.pending && _qx_req.gen == req.gen) {
-        _qx_req.cmd = cmd;
-        _qx_req.set = set;
-        _qx_req.pending = false;
-        xSemaphoreGive(_qx_req_done);
-    }
-    return true;
+    return _qx_box.service(can_run, _qx_req_port);
 }
 
 // Takes s within ms, feeding the Task WDT of the caller every second: a Q* request waits up to
@@ -1955,54 +1918,41 @@ static bool takeFeedingWdt(SemaphoreHandle_t s, uint32_t ms) {
 }
 
 bool USBHostUPS::postQxRequest(QxRequest& req) {
-    uint32_t wait_ms;
-    QxDriver* q;
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        q = _driver ? _driver->qx() : nullptr;
-        if (!q || !_is_ready_to_poll) {
-            req.cmd = CommandResult::NOT_CONNECTED;
-            req.set = NutTable::SetStatus::NOT_CONNECTED;
-            return true;
-        }
-        // The step running when the request arrives, then the request itself; each step may
-        // end one control transfer timeout after its budget (a transfer started just before
-        // the deadline), so a late answer is not taken for an abandoned request
-        wait_ms = (qxStepBoundMs(q->transportBudgetMs()) + QX_CTRL_TIMEOUT_MS) * 2 + 1000;
-    }
-    if (xTaskGetCurrentTaskHandle() == _poll_task_handle) {
-        // From the poll task itself (no caller does it today): run at once, no wait. Outside
-        // the lock (ADR 0008): only this task deletes _driver, so q stays valid
-        if (req.setvar) req.set = q->runSetVariable(_ups_data, req.name, req.value);
-        else req.cmd = q->runCommand(_ups_data, req.name, req.value[0] ? req.value : nullptr);
-        return true;
-    }
-    if (!_qx_req_mutex || !_qx_req_done) return false;
-    if (!takeFeedingWdt(_qx_req_mutex, wait_ms)) return false;
-    xSemaphoreTake(_qx_req_done, 0); // a give left by an abandoned request
-    uint32_t gen;
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        gen = ++_qx_req_gen;
-        _qx_req = req;
-        _qx_req.gen = gen;
-        _qx_req.pending = true;
-    }
-    takeFeedingWdt(_qx_req_done, wait_ms);
-    bool answered;
-    {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        answered = _qx_req.gen == gen && !_qx_req.pending;
-        if (answered) {
-            req.cmd = _qx_req.cmd;
-            req.set = _qx_req.set;
-        } else {
-            _qx_req.pending = false; // abandoned: the poll task drops its result
-        }
-    }
-    xSemaphoreTake(_qx_req_done, 0);
-    xSemaphoreGive(_qx_req_mutex);
-    return answered;
+    return _qx_box.post(req, _qx_req_port);
+}
+
+bool USBHostUPS::QxRequestPort::takeCaller(uint32_t ms) {
+    return takeFeedingWdt(_h._qx_req_mutex, ms);
+}
+
+bool USBHostUPS::QxRequestPort::waitDone(uint32_t ms) {
+    return takeFeedingWdt(_h._qx_req_done, ms);
+}
+
+bool USBHostUPS::QxRequestPort::hasDriver() const {
+    return _h._driver && _h._driver->qx();
+}
+
+uint32_t USBHostUPS::QxRequestPort::waitMs() const {
+    // Under _mutex, with a driver (QxRequestBox::post()): the step running when the request
+    // arrives, then the request itself; each step may end one control transfer timeout after
+    // its budget (a transfer started just before the deadline), so a late answer is not taken
+    // for an abandoned request
+    return (qxStepBoundMs(_h._driver->qx()->transportBudgetMs()) + QX_CTRL_TIMEOUT_MS) * 2 + 1000;
+}
+
+// In the poll task, without _mutex (ADR 0008): _driver is deleted only by this task, so it
+// stays valid for the whole command; the driver takes the lock itself to publish
+CommandResult USBHostUPS::QxRequestPort::runCommand(const char* name, const char* param) {
+    QxDriver* q = _h._driver ? _h._driver->qx() : nullptr;
+    if (!q) return CommandResult::NOT_CONNECTED;
+    return q->runCommand(_h._ups_data, name, param);
+}
+
+NutTable::SetStatus USBHostUPS::QxRequestPort::runSetVariable(const char* name, const char* value) {
+    QxDriver* q = _h._driver ? _h._driver->qx() : nullptr;
+    if (!q) return NutTable::SetStatus::NOT_CONNECTED;
+    return q->runSetVariable(_h._ups_data, name, value);
 }
 
 std::vector<const UPSCommandInfo*> USBHostUPS::driverCommands() const {

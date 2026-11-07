@@ -31,8 +31,9 @@ inline uint32_t qxStepBoundMs(uint32_t budgetMs) { return 2 * budgetMs + QX_CTRL
  *
  * Budgets per transport (US-136 plan; the poll step bound is qxStepBoundMs(budget)):
  *   test loopback (test/mocks)              2000 ms -> 5.5 s
- *   krauler, fabula (US-137)                3000 ms -> 7.5 s   one GET_DESCRIPTOR <= 1.5 s
- *   hunnox (US-137)                         4500 ms -> 10.5 s  preamble up to 3 GET_DESCRIPTOR
+ *   krauler, fabula (US-137)                3000 ms -> 7.5 s   2 GET_DESCRIPTOR per command
+ *                                                              (langid + index), each <= 1.5 s
+ *   hunnox (US-137)                         4500 ms -> 10.5 s  preamble up to 3 GET_DESCRIPTOR + 2
  *   SET_REPORT + interrupt IN (cypress...) <= 4500 ms, set when ported
  */
 class QxUsbTransport : public IQxTransport {

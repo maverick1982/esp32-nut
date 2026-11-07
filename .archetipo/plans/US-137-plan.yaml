@@ -1,0 +1,536 @@
+schema: archetipo/plan/v2
+spec_code: US-137
+body: |
+  ---
+  type: plan
+  title: "US-137: Trasporti USB krauler, fabula e hunnox copiati da nutdrv_qx — Piano di implementazione"
+  description: "Piano di implementazione per US-137"
+  tags: [plan, implementation, US-137]
+  ---
+  # US-137: Trasporti USB krauler, fabula e hunnox copiati da nutdrv_qx — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utente con un UPS Q* dietro un bridge della famiglia krauler (0001:0000, come quelli di #91 e #28), voglio che la scheda parli con il mio UPS come fa NUT, mandando i comandi come indici di string descriptor, in modo che il mio UPS passi da "non ancora supportato" al riconoscimento del protocollo.
+
+  **Criteri di Accettazione**
+  - `krauler_command()`, `fabula_command()` e `hunnox_command()` (`nut_repo/drivers/nutdrv_qx.c:1294`, `1427`, `1546`) e la sequenza di `hunnox_protocol()` (`nutdrv_qx.c:1240-1291`) portati fedelmente: tabelle comando → indice, langid (0x0409 per hunnox quando `langid_fix` non è impostato), tentativi, buffer da 102 byte di hunnox, ricostruzione della risposta.
+  - Le righe Q* krauler, fabula e fabula_hunnox di US-132 usano questi trasporti; le altre righe restano "non ancora supportato".
+  - Un comando che il trasporto non sa codificare fallisce subito, senza trasferimenti USB, come in NUT.
+  - Il limite di attesa di ogni trasporto rispetta il criterio di US-136.
+  - Gli scambi compaiono nella sezione Q* dell'export diagnostico.
+  - Test nativi per i tre trasporti con primitive finte, compresi errori e risposte vuote.
+  - Dalla revisione di US-136: test nativi della casella dei comandi Q* (logica estratta in una classe pura) e svuotamento dei dati ombra quando viene riconosciuto un protocollo diverso dal precedente.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Le tre funzioni di NUT diventano tre classi su `QxUsbTransport` (US-136) in un file nuovo, puro e compilato anche in nativo. L'host cambia solo per una primitiva in più (`sleepMs()`, l'`usleep(10000)` di hunnox) e per la casella dei comandi Q*, che passa in una classe pura senza cambiare comportamento. Motore, protocolli e riconoscimento non si toccano: con un trasporto registrato, `claimQxInterface()` crea già il driver Q* (US-136).
+
+  ### 1. La lettura di NUT senza `langid_fix`: `usb_get_string_simple()`
+
+  - Senza `langid_fix` i tre trasporti leggono la risposta con `usb_get_string_simple()`, cioè `libusb_get_string_descriptor_ascii()` (`nut_repo/drivers/usb-common.h:352-371`). Si porta come funzione libera `int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buflen)`:
+    1. `index == 0` → `QX_USB_ERR_INVALID_PARAM` (-2, LIBUSB_ERROR_INVALID_PARAM) senza traffico;
+    2. GET_DESCRIPTOR(stringa 0, langid 0, 255 byte) in un buffer locale `uint8_t tbuf[255]`: errore < 0 → ritornato; meno di 4 byte → `QX_USB_ERR_IO`; `langid = tbuf[2] | (tbuf[3] << 8)`;
+    3. GET_DESCRIPTOR(index, langid, 255 byte) in `tbuf`: errore < 0 → ritornato; `tbuf[1] != 0x03` o `tbuf[0] > ricevuti` → `QX_USB_ERR_IO`;
+    4. da `si = 2` a `si < tbuf[0]` a passi di 2: se `di >= buflen - 1` stop; `(tbuf[si] & 0x80) || tbuf[si + 1]` → `'?'`, altrimenti `tbuf[si]`; `buf[di] = 0`; ritorna `di`.
+  - Come libusb, la lista dei langid si rilegge a ogni comando: due GET_DESCRIPTOR per comando, nessuna cache.
+  - Scelta registrata nel commento: si copia la forma con il buffer da 255 byte anche per la stringa 0 (libusb 1.0.2x). Le versioni più recenti di libusb chiedono solo 4 byte per la stringa 0: se un tester mostra un errore su quella lettura si passa a 4.
+  - Il `buflen` dei trasporti limita solo i caratteri ASCII copiati, non il wLength (sempre 255): è così anche in NUT senza `langid_fix`. Il "buffer da 102 byte" di hunnox vuol dire quindi una risposta di al massimo 101 caratteri; le letture della sequenza preliminare invece chiedono davvero 102 byte (`usb_get_string()` diretto).
+
+  ### 2. I trasporti: `lib/USBHostUPS/src/QxUsbKrauler.h/.cpp`
+
+  - **`QxKraulerTransport`** ("krauler", 3000 ms), copia di `nutdrv_qx.c:1294-1424`: tabella comando → (indice, prefisso) di `1300-1317` (`Q1\r` 0x03 `(`, `F\r` 0x0d `#`, `I\r` 0x0c `#`, `T\r` 0x04 `\r`, `TL\r` 0x05 `\r`, `Q\r` 0x07 `\r`, `C\r` 0x0b `\r`, `CT\r` 0x0b `\r`); confronto `strncmp(cmd, str, cmdlen)` identico (è un confronto di prefisso, va lasciato così); fino a 10 tentativi; `ret <= 0` → ritorna `ret`; `\r` aggiunto se manca e se `ret < buflen - 1`; `"UPS No Ack"` (10 caratteri prima del `\r`, senza maiuscole/minuscole) → tentativo successivo; poi `buf[0] = prefisso` e ritorna `ret`; dopo 10 No Ack ritorna 0.
+  - **`QxFabulaTransport`** ("fabula", 3000 ms), copia di `1427-1541`: tabella `Q1` 0x03, `F` 0x0d, `I` 0x0c, `Q` 0x07, `C` 0x0a; spegnimenti con `sscanf(cmd, "S%lfR%d\r", ...) == 2 || sscanf(cmd, "S%lf\r", ...) == 1` e la formula di `1474-1491` (`round()` di `math.h`, conversioni double → int come in C, `val2` iniziale -1 quindi `S<n>` senza R dà +8); lettura con `qxGetStringAscii`; `\r` aggiunto se manca; `"UPS No Ack"` → `memset(buf, 0, buflen)` e ritorna 0.
+  - **`QxHunnoxTransport`** ("hunnox", 4500 ms), copia di `1546-1711`: tabella di fabula più `BL` 0xf3; un comando sconosciuto fa l'eco **prima** della sequenza preliminare (lo step non avanza); poi `hunnoxProtocol(index)` = `hunnox_protocol()` di `1240-1291` con langid 0x0409 costante, letture con `getStringDescriptor()` diretto ed esiti ignorati: step 0 legge stringa 0, stringa 0, stringa 1 con 1026 byte (la primitiva chiede 255, limite di `lib/usb_host_hid/hid_host.c:2098`: un string descriptor non supera mai 255 byte) e poi `sleepMs(10)`; step 1 legge 0x0d se l'indice non è 0x0d, step 2 legge 0x03 se l'indice non è 0x03, step 3 legge 0x0c se l'indice non è 0x0c (`novendor` considerato non impostato), tutte con 102 byte; poi `step++`, oltre 3 torna a 1. Quindi `buflen = min(buflen, 102)`, `qxGetStringAscii`, **nessun** `\r` aggiunto (hunnox non lo fa), `"UPS No Ack"` → buffer azzerato e ritorna 0.
+  - Un comando che il trasporto non sa codificare restituisce l'eco `snprintf(buf, buflen, "%s", cmd)` senza trasferimenti, come NUT; è il motore a trattarlo come fallimento (risposta non valida per le interrogazioni, eco = comando rifiutato per `instcmd()`, `nutdrv_qx.c:2920-2923`).
+  - Lo step di hunnox è un membro inizializzato a 0, come lo `static` di NUT: vive quanto il trasporto, cioè un aggancio. `recoverInterface()` richiama `setup()` sullo stesso trasporto e non lo azzera, come in NUT una ripresa della comunicazione non azzera lo static.
+  - `langid_fix`, `noscanlangid` e `novendor` non portati (assunzione della storia): i rami `langid_fix != -1` sono omessi con un commento che indica le righe upstream da cui ripartire.
+  - Niente `upsdebugx`: comandi, risposte ed errori sono già registrati da `QxDriver::Recorder` nell'export.
+
+  ### 3. Primitive
+
+  - `IQxUsbPrimitives::sleepMs(uint32_t ms)` (l'`usleep()` di hunnox). Host: `vTaskDelay(pdMS_TO_TICKS(ms))` nel task di poll, senza lock (ADR 0008). Fake: `clock += ms` e registro delle attese.
+  - `QX_USB_ERR_INVALID_PARAM = -2` accanto agli altri codici di `IQxUsbPrimitives.h`.
+  - `QxUsbPort::getStringDescriptor()` dell'host non cambia.
+
+  ### 4. Registrazione e limiti di attesa
+
+  - `QxUsbTransports.cpp`, tabella `ROWS`: `krauler` 3000, `fabula` 3000, `hunnox` 4500. Sono i nomi di `usbsubdriver[]` (`nutdrv_qx.c:3376-3392`) e delle righe di `DriverRegistry.cpp:84-106`: `fabula` (MEC/MEC0003), `hunnox` (la fabula_hunnox della storia, prodotto MEC0003), `krauler` sia per 0001:0000 senza stringhe sia per 1CB0:0035 (Legrand Daker), come in NUT. Le altre righe restano "non ancora supportato".
+  - Limiti (criterio di US-136): `qxStepBoundMs(3000)` = 7,5 s, `qxStepBoundMs(4500)` = 10,5 s, entrambi ≤ `QX_STEP_BOUND_MAX_MS` (12 s). La scadenza del comando ferma i 10 tentativi di krauler e le letture preliminari di hunnox (le primitive rifiutano i trasferimenti oltre la scadenza). Il commento della tabella in `QxUsbTransport.h` diventa: krauler e fabula 2 GET_DESCRIPTOR per comando (langid + indice); hunnox fino a 3 letture preliminari + 2.
+
+  ### 5. Export diagnostico
+
+  - Nessun cambio di formato: `QxDriver::Recorder` registra già ogni comando, compresa l'eco (durata 0) e gli errori con `lastError()` della primitiva. Un test con il trasporto krauler lo verifica.
+
+  ### 6. Revisione di US-136, punto 1: la casella dei comandi in `QxRequestBox`
+
+  - Nuovo header puro `lib/USBHostUPS/src/QxRequestBox.h` (come `EventBacklog.h`): `struct QxRequest` si sposta qui da `USBHostUPS.h`; due interfacce:
+    - `IQxRequestSync`: `lock()`/`unlock()` (il `_mutex` ricorsivo dell'host), `takeCaller(ms)`/`giveCaller()` (`_qx_req_mutex` con `takeFeedingWdt`), `waitDone(ms)` (`_qx_req_done` con `takeFeedingWdt`), `signalDone()`, `drainDone()` (`xSemaphoreTake(done, 0)`), `inPollTask()`, `ready()` (i semafori esistono);
+    - `IQxRequestTarget`: `hasDriver()` (c'è un driver Q*), `readyToPoll()`, `waitMs()` (la formula di oggi con `qxStepBoundMs(transportBudgetMs())`), `runCommand(name, param)`, `runSetVariable(name, value)`.
+  - `class QxRequestBox`: `bool post(QxRequest&, IQxRequestTarget&)`, `bool service(bool canRun, IQxRequestTarget&)`, `void answer(CommandResult, NutTable::SetStatus, uint32_t gen = 0)`, `void abandon(uint32_t gen)` (la coda di `post()` quando l'attesa scade: pubblica per poter simulare nei test l'intreccio con il task di poll). Logica identica a `postQxRequest()`/`serviceQxRequest()`/`answerQxRequest()` di oggi: generazione, abbandono, NOT_CONNECTED senza driver, FAILED con il link in pausa, esecuzione diretta dal task di poll.
+  - `USBHostUPS`: membro `QxRequestBox` e classe interna `QxRequestPort` che implementa le due interfacce (come `QxUsbPort`); i tre metodi diventano deleghe di una riga, `takeFeedingWdt()` resta nell'host. I `run*()` del target leggono `_driver->qx()` senza lock: solo il task di poll cancella `_driver` e solo lui li chiama (come oggi).
+
+  ### 7. Revisione di US-136, punto 2: dati del protocollo precedente
+
+  - `QxDriver`: membro `const char* _lastProtocol = nullptr` (il nome statico di `QxSubdriver`). Al passaggio Probing → claim, prima di `initUps()`: se `_lastProtocol` non è nullo e `strcmp(_lastProtocol, claimed->name) != 0`, `dropProtocolValues()` toglie con `_shadow.remove()` ogni chiave tranne `driver.name`, `ups.vendorid`, `ups.productid` e scrive nel log INFO `[Q*] Protocol changed from <vecchio> to <nuovo>: previous values dropped`; poi `_lastProtocol = claimed->name`.
+  - Si usa `remove()` e non un nuovo `UPSData`: `remove()` incrementa `writes()`, quindi `publish()` toglie le chiavi anche ai client NUT; un oggetto nuovo azzererebbe `writes()` e `publish()` potrebbe saltare il giro.
+  - Stesso protocollo: comportamento invariato (i dati ombra restano, test esistente `test_setup_after_a_recovery_probes_again_and_keeps_the_values`). Il primo giro completo ripopola le chiavi prima che il dato sia servito (`isWaitingFirstData()`).
+
+  ---
+
+  ## Strategia di test
+
+  Tutto in nativo: i trasporti sono puri e la casella dei comandi lo diventa. Nessuna superficie utente nuova, quindi niente e2e né video dimostrativo; la prova sull'UPS reale arriva con la build di test di US-138 (assunzione della storia: non abbiamo un UPS della famiglia krauler).
+
+  - **`test/test_qx_usb_transports`** (suite nuova), con `FakeQxUsbPrimitives` in modalità script: per ogni trasporto indice, langid e wLength di ogni GET_DESCRIPTOR, numero di tentativi, risposta ricostruita (prefisso krauler, `\r` aggiunto o no, conversione UTF-16 con `'?'`), eco senza trasferimenti, errori (timeout, STALL, stringa 0 corta, tipo sbagliato, bLength oltre i byte ricevuti, indice 0), risposte vuote, `UPS No Ack`, formula degli spegnimenti di fabula/hunnox, sequenza preliminare di hunnox su più comandi con langid 0x0409, 1026 → 255 e 102 byte, attesa di 10 ms, limite di 101 caratteri, scadenza del budget con il dispositivo muto.
+  - **`test/test_qx_driver`**: tre rig completi (krauler, fabula, hunnox su un dispositivo finto a string descriptor con le risposte di `MEGATEC_TESTING`) arrivano al protocollo riconosciuto e al primo giro; l'export contiene gli scambi; ogni passo resta entro `qxStepBoundMs()` con l'UPS muto; cambio di protocollo Megatec → Q1 dopo un ripristino.
+  - **`test/test_qx_request_box`** (suite nuova): generazione, abbandono, risposta tardiva scartata, NOT_CONNECTED allo stacco, FAILED con il link in pausa, richiesta dal task di poll senza semafori.
+  - **Regressione:** suite nativa completa senza cambiare asserzioni esistenti (tranne `test_no_transport_ported_yet`, che per definizione cambia), build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, dimensione del firmware S3 confrontata con `130dfe0` e con lo slot da 4 MB di #93 (0x1F0000 = 2 031 616 byte).
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-11-07_
+tasks:
+  - id: TASK-01
+    title: 'Primitive Q*: sleepMs() e QX_USB_ERR_INVALID_PARAM; FakeQxUsbPrimitives con un dispositivo a string descriptor'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare ai trasporti della famiglia krauler l'attesa di hunnox e ai test un dispositivo finto che risponde ai GET_DESCRIPTOR, senza cambiare il comportamento dei test esistenti.
+
+      **Leggere:** `lib/USBHostUPS/src/IQxUsbPrimitives.h`, `lib/USBHostUPS/src/USBHostUPS.h` (classe `QxUsbPort`, righe ~204-227), `lib/USBHostUPS/src/USBHostUPS.cpp:1780-1880` (primitive dell'host), `test/mocks/FakeQxUsbPrimitives.h`, `test/mocks/QxTestingTransport.h`, sezione 3 del piano.
+
+      **Modificare:**
+      1. `IQxUsbPrimitives.h`: `static const int QX_USB_ERR_INVALID_PARAM = -2;` (commento: LIBUSB_ERROR_INVALID_PARAM, indice 0 di `qxGetStringAscii`); metodo virtuale puro `virtual void sleepMs(uint32_t ms) = 0;` con commento (usleep() dei trasporti, hunnox; nel task di poll, senza lock).
+      2. `USBHostUPS.h`/`.cpp`: `QxUsbPort::sleepMs()` = `vTaskDelay(pdMS_TO_TICKS(ms))`.
+      3. `FakeQxUsbPrimitives.h`:
+         - `struct StringCall { uint8_t index; uint16_t langid; size_t buflen; uint32_t atMs; }; std::vector<StringCall> stringCalls;` (solo i trasferimenti partiti, non i rifiuti per scadenza);
+         - `struct StringReply { int ret; std::vector<uint8_t> bytes; }; std::deque<StringReply> stringScript;`: se non vuota, `getStringDescriptor` prende la testa: `ret < 0` → errore (con `QX_USB_ERR_TIMEOUT` il clock avanza di `QX_CTRL_TIMEOUT_MS`), altrimenti copia `min(bytes.size(), buflen)` byte e ritorna quel numero;
+         - `bool stringDevice = false; uint16_t langidList = 0x0409;`: con la coda vuota e `stringDevice` vero, indice 0 → `{4, 0x03, lo, hi}` di `langidList`; altri indici → comando dalla mappa propria del fake (0x03 `Q1\r`, 0x0d `F\r`, 0x0c `I\r`, 0x07 `Q\r`, 0x0a e 0x0b `C\r`, 0x04 `T\r`, 0x05 `TL\r`, 0xf3 `BL\r`), risposta da `device.command()` codificata come string descriptor (al massimo 126 caratteri); indice fuori mappa → `QX_USB_ERR_PIPE`;
+         - `muted` vale anche qui (timeout di `QX_CTRL_TIMEOUT_MS` sul clock), la scadenza pure (`"budget"`, nessun `StringCall`); ogni trasferimento riuscito fa avanzare il clock di 2 ms;
+         - helper statici `std::vector<uint8_t> stringDescriptor(const char* ascii)` e `langidDescriptor(uint16_t)` per gli script dei test;
+         - `sleepMs()`: `clock += ms; sleeps.push_back(ms);`;
+         - con coda vuota e `stringDevice` falso resta `QX_USB_ERR_PIPE` come oggi.
+      4. Ogni altra implementazione di `IQxUsbPrimitives` nei test (cercare con grep `IQxUsbPrimitives` in `test/`) riceve `sleepMs()`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver -f test_qx_interrupt_read` verde senza cambiare i test.
+
+      **Fatto quando:** l'interfaccia ha `sleepMs()`, l'host la implementa e il fake risponde ai string descriptor in modalità script e dispositivo.
+
+      **Blocchi:** se un'altra classe di produzione implementa `IQxUsbPrimitives` oltre a `QxUsbPort`, aggiungere `sleepMs()` anche lì e segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IQxUsbPrimitives.h — sleepMs(), QX_USB_ERR_INVALID_PARAM
+      - lib/USBHostUPS/src/USBHostUPS.h — dichiarazione di QxUsbPort::sleepMs()
+      - lib/USBHostUPS/src/USBHostUPS.cpp — QxUsbPort::sleepMs()
+      - test/mocks/FakeQxUsbPrimitives.h — script, dispositivo a string descriptor, registri
+
+      ## Criteri di Completamento
+      - [ ] `sleepMs()` nell'interfaccia, nell'host e nel fake
+      - [ ] il fake registra indice, langid e buflen di ogni GET_DESCRIPTOR partito
+      - [ ] modalità script e modalità dispositivo funzionanti, PIPE di default
+      - [ ] test_qx_driver e test_qx_interrupt_read verdi senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: qxGetStringAscii() e QxKraulerTransport in QxUsbKrauler.h/.cpp
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare `usb_get_string_simple()` e `krauler_command()` così come sono in NUT.
+
+      **Leggere:** `nut_repo/drivers/usb-common.h:325-371`, `nut_repo/drivers/nutdrv_qx.c:1294-1424`, `lib/USBHostUPS/src/QxUsbTransport.h`, sezioni 1 e 2 del piano.
+
+      **Modificare:**
+      1. Nuovo `lib/USBHostUPS/src/QxUsbKrauler.h`: commento di testa (trasporti della famiglia krauler, ADR 0013 sezione 3, comando = indice di string descriptor); dichiarazione di `int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buflen);`; `class QxKraulerTransport : public QxUsbTransport` con `name()` "krauler", `commandBudgetMs()` 3000, `doCommand()`.
+      2. Nuovo `lib/USBHostUPS/src/QxUsbKrauler.cpp`:
+         - `qxGetStringAscii()` come nella sezione 1 del piano (passi 1-4), con il commento sulla scelta dei 255 byte per la stringa 0 (libusb 1.0.2x; le versioni recenti chiedono 4 byte);
+         - helper locale `bool isUpsNoAck(const char* buf)` = `strcspn(buf, "\r") == 10 && strncasecmp(buf, "UPS No Ack", 10) == 0` (scrivere un confronto ASCII senza maiuscole se `strncasecmp` non è disponibile in nativo con mingw: `_strnicmp`, oppure un ciclo locale come `equalsIgnoreCase` di `DriverRegistry.cpp`);
+         - `QxKraulerTransport::doCommand()`: tabella di `nutdrv_qx.c:1300-1317` in un array locale `static const`; cap di `buflen` a `INT_MAX - 1`; ciclo con `strncmp(cmd, str, cmdlen)`; 10 tentativi; `ret = qxGetStringAscii(_usb, index, buf, buflen)`; `ret <= 0` → `return ret`; `\r` aggiunto se `memchr(buf, '\r', ret) == NULL` e `(size_t)ret < buflen - 1`; No Ack → `continue`; `buf[0] = prefix; return ret;`; dopo il ciclo `return 0`; nessuna riga → `return snprintf(buf, buflen, "%s", cmd);`.
+         - Commento dove NUT ha i rami `langid_fix != -1` (`nutdrv_qx.c:1338-1342`, `1358-1382`): non portati, assunzione di US-137 / ADR 0013.
+      3. `platformio.ini`, `[env:native]` `build_src_filter`: `+<../lib/USBHostUPS/src/QxUsbKrauler.cpp>` accanto a `QxUsbTransports.cpp`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver` compila e passa.
+
+      **Fatto quando:** helper e trasporto krauler compilano in nativo con la logica riga per riga di NUT.
+
+      **Blocchi:** nessuno noto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxUsbKrauler.h — nuovo: qxGetStringAscii, QxKraulerTransport
+      - lib/USBHostUPS/src/QxUsbKrauler.cpp — nuovo: implementazioni
+      - platformio.ini — sorgente nel filtro nativo
+
+      ## Criteri di Completamento
+      - [ ] `qxGetStringAscii()` segue i 4 passi di libusb_get_string_descriptor_ascii()
+      - [ ] tabella, tentativi, CR, No Ack e prefisso di krauler come upstream
+      - [ ] eco senza trasferimenti per i comandi fuori tabella
+      - [ ] il nuovo file compila in nativo
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di qxGetStringAscii() e del trasporto krauler (test_qx_usb_transports)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare la lettura ASCII e krauler con primitive finte, compresi errori e risposte vuote.
+
+      **Leggere:** `test/test_qx_driver/test_main.cpp` (struttura Unity), `test/mocks/FakeQxUsbPrimitives.h` (TASK-01), `lib/USBHostUPS/src/QxUsbKrauler.h`.
+
+      **Modificare:** nuova suite `test/test_qx_usb_transports/test_main.cpp` con almeno:
+      1. `qxGetStringAscii`: due chiamate registrate `(0, 0x0000, 255)` e `(3, 0x0409, 255)`; con `langidList = 0x0407` la seconda usa 0x0407; carattere con byte alto o con `0x80` → `'?'`; troncamento a `buflen - 1` con NUL; indice 0 → -2 senza `stringCalls`; stringa 0 di 2 byte → -1 e una sola chiamata; tipo 0x02 → -1; bLength maggiore dei byte ricevuti → -1; timeout sulla stringa 0 → -7; descriptor vuoto `{2, 3}` → 0.
+      2. krauler: `Q1\r` → indice 0x03, risposta con il primo byte sostituito da `(` e `\r` aggiunto se manca; `F\r` → `#`; `T\r` → 0x04 e primo byte `\r`; `C\r` e `CT\r` → 0x0b.
+      3. krauler, tentativi: 3 risposte `UPS No Ack` poi una valida → 4 coppie di letture e risposta valida; 10 No Ack → ritorna 0 dopo 20 GET_DESCRIPTOR; risposta vuota → 0 al primo tentativo; STALL → -9 al primo tentativo.
+      4. krauler, comando sconosciuto (`QS\r`, `T05\r`): ritorna la sua lunghezza, `buf` = il comando, `stringCalls` vuoto.
+      5. krauler, budget: dispositivo muto → `command()` dura al massimo 3000 + `QX_CTRL_TIMEOUT_MS` ms sul clock e ritorna un errore.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_usb_transports` verde.
+
+      **Fatto quando:** tutti i casi elencati passano.
+
+      **Blocchi:** se un caso mostra una differenza dal codice di NUT, correggere il trasporto, non il test.
+
+      ## File Coinvolti
+      - test/test_qx_usb_transports/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] indici, langid e wLength controllati per ogni lettura
+      - [ ] tentativi, No Ack, risposte vuote ed errori di krauler provati
+      - [ ] eco senza trasferimenti provata
+      - [ ] budget con dispositivo muto provato
+    ref: TASK-03
+  - id: TASK-04
+    title: QxFabulaTransport e QxHunnoxTransport con la sequenza preliminare di hunnox_protocol()
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare `fabula_command()`, `hunnox_command()` e `hunnox_protocol()` così come sono in NUT.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:1240-1291` e `1427-1711`, `lib/USBHostUPS/src/QxUsbKrauler.cpp` (TASK-02), sezione 2 del piano.
+
+      **Modificare:** in `QxUsbKrauler.h/.cpp`:
+      1. Helper locale `int fabulaIndex(const char* cmd, size_t cmdlen, const Cmd* table)`: ricerca con `strncmp(cmd, str, cmdlen)`; se 0, spegnimenti con i due `sscanf` di `1474-1477` (`double val1 = -1; int val2 = -1;`), `delay` limitato a [.5, 10], `index = 16 + round((delay - .5) * 10) * 16` sotto 1, altrimenti `96 + (delay - 1) * 16` (assegnazioni a `int` come in C), `+8` se `val2 != 0`; ritorna 0 se il comando non è codificabile.
+      2. `QxFabulaTransport` ("fabula", 3000): tabella `Q1` 0x03, `F` 0x0d, `I` 0x0c, `Q` 0x07, `C` 0x0a; indice 0 → eco; `ret = qxGetStringAscii(_usb, index, buf, buflen)`; `ret <= 0` → `return ret`; `\r` aggiunto se manca e c'è spazio; No Ack → `memset(buf, 0, buflen); return 0;`; altrimenti `return ret`.
+      3. `QxHunnoxTransport` ("hunnox", 4500): tabella di fabula + `BL` 0xf3; membro `int _step = 0;`; indice 0 → eco (prima della sequenza); `hunnoxProtocol(index)` privato, copia dello switch di `1250-1290` con `HUNNOX_LANGID = 0x0409`, buffer locale `uint8_t tmp[255]`, `_usb.getStringDescriptor(i, 0x0409, tmp, 1026 o 102)` (la primitiva limita a 255: commento con il riferimento a hid_host.c:2098 e al fatto che un descriptor non supera 255 byte), esiti ignorati, `_usb.sleepMs(10)` dopo lo step 0, `novendor` non portato (commento), avanzamento `_step++; if (_step > 3) _step = 1;` e `default: _step = 0` come upstream; poi `if (buflen > 102) buflen = 102;`, `qxGetStringAscii`, `ret <= 0` → `return ret`; nessun `\r` aggiunto; No Ack → azzerato e 0.
+      4. Commento sui rami `langid_fix` omessi (`1649-1655`, `1664-1690`) e sullo step che vive quanto il trasporto (un aggancio), come lo static di NUT.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_usb_transports` compila e resta verde.
+
+      **Fatto quando:** i due trasporti compilano con la logica riga per riga di NUT.
+
+      **Blocchi:** se `round()` o `sscanf` con `%lf` non compilano in nativo, includere `<math.h>`/`<stdio.h>`; non sostituire la formula.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxUsbKrauler.h — QxFabulaTransport, QxHunnoxTransport
+      - lib/USBHostUPS/src/QxUsbKrauler.cpp — implementazioni e hunnoxProtocol()
+
+      ## Criteri di Completamento
+      - [ ] formula degli spegnimenti identica a upstream
+      - [ ] sequenza preliminare di hunnox con langid 0x0409 e step come lo static di NUT
+      - [ ] buffer di hunnox limitato a 102, nessun CR aggiunto
+      - [ ] No Ack → buffer azzerato e 0 per fabula e hunnox
+    ref: TASK-04
+  - id: TASK-05
+    title: Test nativi di fabula e hunnox (test_qx_usb_transports)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare indici, sequenza preliminare, buffer di hunnox, errori e risposte vuote.
+
+      **Leggere:** `test/test_qx_usb_transports/test_main.cpp` (TASK-03), `nut_repo/drivers/nutdrv_qx.c:1474-1491` e `1240-1291`.
+
+      **Modificare:** aggiungere alla suite:
+      1. fabula, indici: `Q1\r` 0x03, `F\r` 0x0d, `I\r` 0x0c, `Q\r` 0x07, `C\r` 0x0a; spegnimenti `S.5R0000\r` → 0x10, `S.7R0000\r` → 0x30, `S01R0001\r` → 0x68, `S03R0002\r` → 0x88, `S10R0000\r` → 0xF0, `S.3\r` → 0x18 (delay .5, val2 -1); `S20R0000\r` → 0xF0 (limite 10).
+      2. fabula, risposte: `\r` aggiunto se manca; `UPS No Ack\r` → 0 e buffer tutto a zero; vuota → 0; timeout → -7; sconosciuto (`T\r`) → eco senza `stringCalls`.
+      3. hunnox, sequenza su 5 comandi `Q1\r`: letture preliminari `[0,0,1]` (langid 0x0409, buflen 1026 passato alla primitiva) + attesa 10 ms, poi `[0x0d]`, `[]` (indice 0x03 uguale), `[0x0c]`, `[0x0d]` (buflen 102), ognuna seguita dalle due letture di `qxGetStringAscii` (stringa 0 con langid 0, poi 0x03 con il langid della lista).
+      4. hunnox: `BL\r` → 0xf3; `FW?\r` → eco, nessuna lettura e lo step non avanza (il comando dopo fa ancora lo step 0 se è il primo); risposta di 150 caratteri → 101 caratteri; nessun `\r` aggiunto; No Ack → 0 e buffer azzerato; errori della sequenza preliminare ignorati (STALL nelle prime 3 letture, poi risposta valida).
+      5. budget: dispositivo muto, primo comando hunnox → durata al massimo 4500 + `QX_CTRL_TIMEOUT_MS` ms; fabula muto → al massimo 3000 + `QX_CTRL_TIMEOUT_MS`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_usb_transports` verde.
+
+      **Fatto quando:** tutti i casi elencati passano.
+
+      **Blocchi:** se un valore atteso della formula non torna, ricalcolarlo a mano dal codice C di NUT prima di toccare il trasporto.
+
+      ## File Coinvolti
+      - test/test_qx_usb_transports/test_main.cpp — casi fabula e hunnox
+
+      ## Criteri di Completamento
+      - [ ] indici e spegnimenti di fabula provati
+      - [ ] sequenza preliminare di hunnox provata su 5 comandi
+      - [ ] limite di 101 caratteri e assenza del CR aggiunto provati
+      - [ ] errori, risposte vuote, No Ack e budget provati
+    ref: TASK-05
+  - id: TASK-06
+    title: Registrare krauler, fabula e hunnox in QxUsbTransports e aggiornare il test delle righe
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** far usare i tre trasporti alle righe Q* krauler, fabula e hunnox; le altre restano "non ancora supportato".
+
+      **Leggere:** `lib/USBHostUPS/src/QxUsbTransports.cpp`, `lib/USBHostUPS/src/QxUsbTransport.h` (commento della tabella dei budget), `lib/USBHostUPS/src/IQxTransport.h`, `test/test_qx_driver/test_main.cpp:303-317`.
+
+      **Modificare:**
+      1. `QxUsbTransports.cpp`: `#include "QxUsbKrauler.h"`; tre factory locali; `ROWS` = `{ "krauler", ..., 3000 }`, `{ "fabula", ..., 3000 }`, `{ "hunnox", ..., 4500 }` più la sentinella; aggiornare il commento (niente più "US-137 adds").
+      2. `QxUsbTransport.h`: nel commento dei budget, krauler e fabula "2 GET_DESCRIPTOR per comando (langid + indice), ognuno <= 1.5 s"; hunnox "fino a 3 letture preliminari + 2".
+      3. `IQxTransport.h`: commento aggiornato (i trasporti portati sono in QxUsbKrauler).
+      4. `test/test_qx_driver/test_main.cpp`: rinominare `test_no_transport_ported_yet` in `test_transports_of_the_registry_rows`: `krauler`, `fabula`, `hunnox` danno un trasporto con `name()` uguale e `commandBudgetMs()` 3000/3000/4500; `cypress`, `ablerex`, `phoenixtec`, `ippon`, `phoenix`, `sgs`, `omron`, `fuji`, `snr`, `armac` danno nullptr; il ciclo sui limiti resta; `RUN_TEST` aggiornato.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver -f test_driver_registry` verde.
+
+      **Fatto quando:** la tabella ha le tre righe e il test delle righe lo verifica.
+
+      **Blocchi:** se `test_driver_registry` asserisce che le righe krauler/fabula/hunnox finiscono su "non ancora supportato", aggiornare solo quell'asserzione e scriverlo nel PR.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxUsbTransports.cpp — tre righe
+      - lib/USBHostUPS/src/QxUsbTransport.h — commento dei budget
+      - lib/USBHostUPS/src/IQxTransport.h — commento
+      - test/test_qx_driver/test_main.cpp — test delle righe
+
+      ## Criteri di Completamento
+      - [ ] `create("krauler"|"fabula"|"hunnox")` restituisce il trasporto giusto
+      - [ ] le altre righe restano senza trasporto
+      - [ ] ogni budget registrato rispetta `QX_STEP_BOUND_MAX_MS`
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Test del driver Q* sui tre trasporti: riconoscimento, primo giro, export e limite del passo'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la dimostrazione in nativo: un UPS dietro krauler, fabula o hunnox arriva al riconoscimento del protocollo, al primo giro e all'export.
+
+      **Leggere:** `test/test_qx_driver/test_main.cpp` (struct `Rig`, `test_full_cycle_attach_detect_first_walk_values`, `test_diagnostics_keep_the_last_20_exchanges`, `test_poll_step_stays_within_the_bound_with_a_mute_ups`), `test/mocks/QxTestingTables.h`, `lib/USBHostUPS/src/QxDriver.h` (`fillDiagnostics`).
+
+      **Modificare:** in `test/test_qx_driver/test_main.cpp`:
+      1. `struct StringRig` (o un costruttore di `Rig` con il nome del trasporto): `FakeQxUsbPrimitives usb{MEGATEC_TESTING, QX_MEGATEC.rejected}` con `stringDevice = true`, driver con `QxUsbTransports::create(name, usb)`, VID:PID 0001:0000, `lockFlag` collegato.
+      2. `test_krauler_family_reaches_the_protocol_and_first_walk`: per `krauler`, `fabula`, `hunnox`, `runUntilFirstData()` vero, protocollo dell'export `Megatec 0.10` (come `test_full_cycle...`), `ups.status` presente, `callsUnderLock == 0`, `longestStep <= qxStepBoundMs(budget)`.
+      3. `test_krauler_exchanges_in_the_export`: dopo il primo giro, `fillDiagnostics()` ha `transport == "krauler"` e uno scambio `Q1\r` con la risposta che inizia con `(`; un comando sconosciuto mandato con un `instcmd` non codificabile (o direttamente un probe che lo usa, es. `QS\r` di mustek) compare con la sua eco e durata 0.
+      4. `test_krauler_family_step_bound_with_a_mute_ups`: per i tre trasporti, `usb.muted = true` dall'inizio, 60 s di `runFor()`, `longestStep <= qxStepBoundMs(budget)`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver` verde.
+
+      **Fatto quando:** i tre trasporti arrivano al protocollo e al primo giro, l'export li mostra e il passo resta nel limite.
+
+      **Blocchi:** se un protocollo diverso da Megatec reclama il dispositivo, controllare l'ordine di `subdriver_list[]` di NUT con le stesse risposte (eco per i comandi non codificabili) prima di cambiare l'attesa, e scriverlo nel PR.
+
+      ## File Coinvolti
+      - test/test_qx_driver/test_main.cpp — rig a string descriptor e tre test
+
+      ## Criteri di Completamento
+      - [ ] krauler, fabula e hunnox arrivano al protocollo riconosciuto e al primo giro
+      - [ ] gli scambi compaiono nell'export, eco compresa
+      - [ ] nessuna primitiva chiamata con il lock dell'host
+      - [ ] passo entro `qxStepBoundMs()` con l'UPS muto
+    ref: TASK-07
+  - id: TASK-08
+    title: 'QxDriver: svuotare i dati ombra quando viene riconosciuto un protocollo diverso'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dopo un ripristino o uno stato Held, le chiavi del protocollo precedente non restano pubblicate se il nuovo protocollo è diverso (revisione di US-136, punto 2).
+
+      **Leggere:** `lib/USBHostUPS/src/QxDriver.h`, `lib/USBHostUPS/src/QxDriver.cpp` (`setup()`, `poll()` caso `Probing`, `publish()`), `lib/USBHostUPS/src/UPSData.h` (`remove()`, `writes()`, `getAll()`), `lib/USBHostUPS/src/QxProbe.h` (`claimed()`), sezione 7 del piano.
+
+      **Modificare:**
+      1. `QxDriver.h`: `const char* _lastProtocol = nullptr;` con commento (nome statico del QxSubdriver dell'ultimo riconoscimento; non azzerato da `setup()`); metodo privato `void dropProtocolValues(const char* from, const char* to);`.
+      2. `QxDriver.cpp`, caso `Probing` quando `step()` dà `Claimed`: prima di `takeEngine()`, `const QxSubdriver* c = _prober.claimed();`; se `c && _lastProtocol && strcmp(_lastProtocol, c->name) != 0` → `dropProtocolValues(_lastProtocol, c->name)`; poi `if (c) _lastProtocol = c->name;`.
+      3. `dropProtocolValues()`: raccoglie in un vettore le chiavi di `_shadow.getAll()` diverse da `driver.name`, `ups.vendorid`, `ups.productid` e le toglie con `_shadow.remove()` (non ricreare `UPSData`: azzererebbe `writes()` e `publish()` potrebbe saltare); log `INFO` `[Q*] Protocol changed from <from> to <to>: previous values dropped`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver` verde senza toccare i test esistenti.
+
+      **Fatto quando:** un protocollo diverso svuota i dati ombra tenendo le tre chiavi, lo stesso protocollo li conserva.
+
+      **Blocchi:** se `claimed()` non è più valido dopo `takeEngine()`, leggerlo prima (come indicato) e non cambiare `QxProber`.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxDriver.h — _lastProtocol, dropProtocolValues()
+      - lib/USBHostUPS/src/QxDriver.cpp — controllo al riconoscimento
+
+      ## Criteri di Completamento
+      - [ ] protocollo diverso: restano solo driver.name, ups.vendorid, ups.productid fino al nuovo giro
+      - [ ] stesso protocollo: dati ombra invariati
+      - [ ] `remove()` usato, `writes()` cresce
+      - [ ] test_qx_driver esistente verde
+    ref: TASK-08
+  - id: TASK-09
+    title: Test del cambio di protocollo Megatec → Q1 dopo un ripristino
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che le chiavi del vecchio protocollo spariscono dai dati dell'host e che il nuovo giro le ripopola.
+
+      **Leggere:** `test/test_qx_driver/test_main.cpp` (`Rig`, `test_setup_after_a_recovery_probes_again_and_keeps_the_values`), `test/mocks/QxTestingTransport.h`, `test/mocks/QxTestingTables.h` (`MEGATEC_TESTING`, `Q1_TESTING`), `test/mocks/QxLoopbackTransport.h`.
+
+      **Modificare:**
+      1. `test/mocks/QxTestingTransport.h`: metodo `void setTable(const QxTesting* table, const char* rejected)` per cambiare il dispositivo finto in corsa (commento: US-137, cambio di protocollo).
+      2. `test/test_qx_driver/test_main.cpp`, `test_protocol_change_drops_the_previous_values`: rig Megatec fino al primo giro (`ups.mfr` o un'altra chiave che solo Megatec pubblica, dal comando `I`, presente); `usb.device.setTable(Q1_TESTING, QX_Q1.rejected)` (nome della costante del protocollo Q1 come in `QxProtocols.h`); `driver.setup()` (ripristino); passi fino al riconoscimento: export con protocollo Q1, chiave Megatec sparita da `r.data`, `driver.name`, `ups.vendorid`, `ups.productid` presenti; dopo il primo giro le chiavi di Q1 presenti; log con `Protocol changed from`.
+      3. Controllare che il test esistente con lo stesso protocollo resti verde senza modifiche.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver -f test_qx_probe -f test_qx_engine` verde.
+
+      **Fatto quando:** il cambio di protocollo è provato su un dispositivo finto che passa dalla tabella Megatec a quella Q1.
+
+      **Blocchi:** se con `Q1_TESTING` reclama un protocollo diverso da Q1, usare quello che NUT reclamerebbe con quelle risposte e scriverlo nel test; il controllo resta "protocollo diverso dal precedente".
+
+      ## File Coinvolti
+      - test/mocks/QxTestingTransport.h — setTable()
+      - test/test_qx_driver/test_main.cpp — test del cambio di protocollo
+
+      ## Criteri di Completamento
+      - [ ] chiavi Megatec tolte dai dati dell'host dopo il nuovo riconoscimento
+      - [ ] driver.name, ups.vendorid, ups.productid conservate
+      - [ ] chiavi Q1 presenti dopo il primo giro
+    ref: TASK-09
+  - id: TASK-10
+    title: Estrarre la casella dei comandi Q* in QxRequestBox e farla usare dall'host
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** spostare la logica di `postQxRequest()`/`serviceQxRequest()`/`answerQxRequest()` in una classe pura, con attese e semafori dietro interfacce, senza cambiare comportamento (revisione di US-136, punto 1).
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.h` (struct `QxRequest`, righe ~230-238; membri `_qx_req*`, ~332-337; `QxUsbPort` come modello di classe interna), `lib/USBHostUPS/src/USBHostUPS.cpp:70-85` (creazione dei semafori), `318-390` (chiamate a `serviceQxRequest`), `745-752` (risposta allo stacco), `1882-2020`, `lib/USBHostUPS/src/EventBacklog.h` (stile di un header puro), sezione 6 del piano.
+
+      **Modificare:**
+      1. Nuovo `lib/USBHostUPS/src/QxRequestBox.h`, solo header, include `UpsCommands.h`/`NutTable.h` (quelli che oggi danno `CommandResult` e `NutTable::SetStatus`):
+         - `struct QxRequest` spostata qui, identica;
+         - `class IQxRequestSync { lock(); unlock(); bool ready(); bool takeCaller(uint32_t ms); void giveCaller(); bool waitDone(uint32_t ms); void signalDone(); void drainDone(); bool inPollTask(); }`;
+         - `class IQxRequestTarget { bool hasDriver(); bool readyToPoll(); uint32_t waitMs(); CommandResult runCommand(const char* name, const char* param); NutTable::SetStatus runSetVariable(const char* name, const char* value); }`;
+         - `class QxRequestBox` con `explicit QxRequestBox(IQxRequestSync&)`, `post()`, `service()`, `answer()`, `abandon(uint32_t gen)`, stato privato `QxRequest _req; uint32_t _gen = 0;` e un accessor `const QxRequest& current() const` per i test. Corpi = quelli di oggi con: `_mutex` → `lock()/unlock()` (RAII locale), `q` → target, `wait_ms` → `target.waitMs()`, `xTaskGetCurrentTaskHandle() == _poll_task_handle` → `inPollTask()`, semafori → metodi di sync; la coda di `post()` a tempo scaduto chiama `abandon(gen)`.
+      2. `USBHostUPS.h`: rimuovere `QxRequest`, `_qx_req`, `_qx_req_gen`; aggiungere `class QxRequestPort : public IQxRequestSync, public IQxRequestTarget` interna (riferimento all'host, come `QxUsbPort`), membri `QxRequestPort _qx_req_port{*this}; QxRequestBox _qx_box{_qx_req_port};`; i semafori restano nell'host.
+      3. `USBHostUPS.cpp`: `serviceQxRequest(can_run)` → `return _qx_box.service(can_run, _qx_req_port);`; `answerQxRequest(...)` → `_qx_box.answer(...)`; `postQxRequest(req)` → `return _qx_box.post(req, _qx_req_port);`; `runDriverCommand`/`runDriverSetVariable` invariati salvo il tipo spostato; implementazione di `QxRequestPort` con `takeFeedingWdt()` per `takeCaller`/`waitDone`, `std::recursive_mutex` dell'host per `lock`/`unlock`, `_driver ? _driver->qx() : nullptr` per i metodi del target (commento: chiamati solo dal task di poll o sotto il lock, solo il task di poll cancella `_driver`).
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` (da PowerShell) compila; `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` verde.
+
+      **Fatto quando:** l'host delega alla classe pura e il comportamento della casella è identico, riga per riga.
+
+      **Blocchi:** se un passo di oggi non si esprime con le due interfacce senza cambiare l'ordine di lock e semafori, fermarsi e segnalarlo invece di cambiare l'ordine.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxRequestBox.h — nuovo: QxRequest, interfacce, QxRequestBox
+      - lib/USBHostUPS/src/USBHostUPS.h — QxRequestPort, membri, rimozioni
+      - lib/USBHostUPS/src/USBHostUPS.cpp — deleghe e implementazione di QxRequestPort
+
+      ## Criteri di Completamento
+      - [ ] `QxRequestBox.h` compila in nativo senza FreeRTOS
+      - [ ] i tre metodi dell'host sono deleghe
+      - [ ] ordine di lock, semafori e generazioni invariato
+      - [ ] build S3 e suite nativa verdi
+    ref: TASK-10
+  - id: TASK-11
+    title: Test nativi della casella dei comandi Q* (test_qx_request_box)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire i casi che in US-136 erano rimasti senza test: generazione, abbandono, risposta allo stacco, link in pausa, richiesta dal task di poll.
+
+      **Leggere:** `lib/USBHostUPS/src/QxRequestBox.h` (TASK-10), `test/test_qx_driver/test_main.cpp` (stile Unity).
+
+      **Modificare:** nuova suite `test/test_qx_request_box/test_main.cpp` con:
+      - `FakeSync`: contatori di `takeCaller/giveCaller/drainDone/signalDone`, flag `pollTask`, semaforo `done` simulato (bool), `std::function<void()> onWait` eseguita dentro `waitDone()` prima di leggere `done` (simula il task di poll), `waitResult` forzabile;
+      - `FakeTarget`: flag `driver`, `ready`, `waitMs` fisso, risultati scelti, `std::function<void()> onRun` dentro `runCommand`/`runSetVariable`, contatore delle esecuzioni.
+
+      Casi:
+      1. comando risposto: `onWait` chiama `box.service(true, target)` → `post()` vero, `req.cmd` = risultato del target, una sola esecuzione, `giveCaller` chiamato una volta.
+      2. SET VAR risposto: idem con `setvar = true` e `req.set`.
+      3. nessun driver o non pronto: `post()` vero con NOT_CONNECTED, nessun `takeCaller`.
+      4. abbandono: `onWait` non fa nulla e `waitDone` falso → `post()` falso, `current().pending` falso; un `service()` dopo ritorna falso senza eseguire.
+      5. risposta tardiva: `onWait` chiama `service()` e `onRun` chiama `box.abandon(gen)` (il chiamante scaduto) → il risultato non viene scritto, `post()` falso.
+      6. generazione: una `answer(..., genVecchia)` non tocca la richiesta corrente.
+      7. stacco: con una richiesta pendente, `answer(NOT_CONNECTED, NOT_CONNECTED)` (gen 0) la chiude con NOT_CONNECTED e chiama `signalDone()`.
+      8. link in pausa: `service(false, target)` → FAILED/FAILED, nessuna esecuzione, ritorna falso.
+      9. driver sparito durante l'attesa: `service()` con `hasDriver()` falso → NOT_CONNECTED.
+      10. dal task di poll: `pollTask = true` → esecuzione diretta, nessun `takeCaller`, `waitDone` o `drainDone`.
+      11. `takeCaller` falso (un'altra richiesta non finisce) → `post()` falso senza toccare lo stato.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_request_box` verde.
+
+      **Fatto quando:** gli 11 casi passano.
+
+      **Blocchi:** se un caso rivela un comportamento diverso dall'host di oggi (`USBHostUPS.cpp:1882-1990` prima di TASK-10), correggere `QxRequestBox`, non il test.
+
+      ## File Coinvolti
+      - test/test_qx_request_box/test_main.cpp — nuova suite
+
+      ## Criteri di Completamento
+      - [ ] generazione, abbandono e risposta tardiva provati
+      - [ ] NOT_CONNECTED allo stacco e FAILED con il link in pausa provati
+      - [ ] richiesta dal task di poll senza semafori provata
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build delle tre schede e misura della flash (#93)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che il resto non cambia e misurare la flash per il PR.
+
+      **Leggere:** `platformio.ini` (ambienti), `docs/test-results/US-136/flash.md` se presente (formato della misura precedente).
+
+      **Passi:**
+      1. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` verde; nessuna asserzione esistente cambiata salvo il test delle righe di TASK-06.
+      2. Build da PowerShell: `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`.
+      3. e2e della web UI (`npx playwright test`) verde: l'export non cambia formato.
+      4. Flash: dimensione di `.pio/build/esp32-s3-standard/firmware.bin` confrontata con `130dfe0` (build in un worktree) e con lo slot OTA da 4 MB di #93 (0x1F0000 = 2 031 616 byte); numeri e margine in `docs/test-results/US-137/flash.md` per il testo del PR.
+      5. Nessuna prova sull'UPS reale: non abbiamo un UPS della famiglia krauler, la verifica arriva con la build di test di US-138.
+
+      **Verifica:** comandi dei passi 1-3 verdi; `docs/test-results/US-137/flash.md` scritto.
+
+      **Fatto quando:** regressione verde e flash misurata.
+
+      **Blocchi:** se la build S3 supera lo slot da 4 MB o il margine scende sotto quello di US-136 di più di 10 KB, segnalarlo prima del PR.
+
+      ## File Coinvolti
+      - docs/test-results/US-137/flash.md — misura della flash
+
+      ## Criteri di Completamento
+      - [ ] suite nativa completa verde
+      - [ ] build esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1 riuscite
+      - [ ] e2e verde
+      - [ ] flash S3 confrontata con 130dfe0 e con lo slot da 4 MB
+    ref: TASK-12

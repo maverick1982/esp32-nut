@@ -71,6 +71,10 @@ void QxDriver::poll(UPSData& data, uint32_t now) {
     switch (_state) {
     case State::Probing:
         if (_prober.step(_shadow, now) == QxProber::Step::Claimed) {
+            // The values of another protocol must not stay published to the NUT clients
+            const QxSubdriver* c = _prober.claimed();
+            if (c && _lastProtocol && strcmp(_lastProtocol, c->name) != 0) dropProtocolValues(_lastProtocol, c->name);
+            if (c) _lastProtocol = c->name;
             _engine = _prober.takeEngine();
             // End of upsdrv_initups() after the matcher
             if (_engine) {
@@ -146,6 +150,21 @@ void QxDriver::stepPolling(uint32_t now) {
         _stale = true;
         break;
     }
+}
+
+void QxDriver::dropProtocolValues(const char* from, const char* to) {
+    // remove() and not a new UPSData: remove() counts in writes(), so publish() drops the
+    // keys from the host data too; a new object would restart writes() and publish() could
+    // skip the change
+    std::vector<String> gone;
+    for (const auto& p : _shadow.getAll()) {
+        if (p.key == "driver.name" || p.key == "ups.vendorid" || p.key == "ups.productid") continue;
+        gone.push_back(p.key);
+    }
+    for (const auto& k : gone) _shadow.remove(k);
+    char line[128];
+    snprintf(line, sizeof(line), "[Q*] Protocol changed from %s to %s: previous values dropped", from, to);
+    _host.log("INFO", line);
 }
 
 void QxDriver::publish(UPSData& data) {

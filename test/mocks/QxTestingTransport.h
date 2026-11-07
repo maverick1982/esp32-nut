@@ -32,6 +32,12 @@ public:
     // The next n commands return -1 (still recorded in sent)
     void failNext(int n) { _fail = n; }
 
+    // Another fake UPS from now on (US-137: a protocol change after a recovery)
+    void setTable(const QxTesting* table, const char* rejected) {
+        _table = table;
+        _rejected = rejected;
+    }
+
     // Replaces (or adds) the answer of cmd; answer nullptr removes the replacement
     void override(const char* cmd, const char* answer) {
         for (size_t i = 0; i < _overrides.size(); i++) {

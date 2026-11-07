@@ -7,6 +7,8 @@
 // Errors of the Q* USB primitives: negative, with the values of libusb, so the ported
 // *_command() functions keep the upstream checks (ret <= 0)
 static const int QX_USB_ERR_IO = -1;
+// LIBUSB_ERROR_INVALID_PARAM: string index 0 asked to qxGetStringAscii() (US-137)
+static const int QX_USB_ERR_INVALID_PARAM = -2;
 static const int QX_USB_ERR_NO_DEVICE = -4;
 static const int QX_USB_ERR_TIMEOUT = -7;
 static const int QX_USB_ERR_PIPE = -9;
@@ -28,7 +30,8 @@ public:
 
     /**
      * @brief GET_DESCRIPTOR(STRING, index, langid): the raw descriptor (bLength, 0x03,
-     * UTF-16LE), at most 255 bytes, into buf.
+     * UTF-16LE), at most 255 bytes, into buf. wLength is min(buflen, 255) and no more than 255
+     * bytes are ever written, whatever buflen (hunnox passes 1026 as upstream, US-137).
      *
      * No memory of the failed indices, unlike IHidTransport::requestStringDescriptor()
      * (review M5): for the krauler family the index is the command.
@@ -50,6 +53,9 @@ public:
      * interrupt waits are cut to it. 0 = no budget.
      */
     virtual void setDeadline(uint32_t deadlineMs) = 0;
+
+    // usleep() of the transports (hunnox_protocol(), 10 ms): in the poll task, no lock held
+    virtual void sleepMs(uint32_t ms) = 0;
 
     virtual uint32_t nowMs() const = 0;
 

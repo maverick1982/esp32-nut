@@ -53,12 +53,46 @@ public:
     }
 
     int getStringDescriptor(uint8_t index, uint16_t langid, uint8_t* buf, size_t buflen) override {
-        (void)index;
-        (void)langid;
-        (void)buf;
-        (void)buflen;
         checkLock();
-        return fail(QX_USB_ERR_PIPE, "ESP_ERR_NOT_SUPPORTED");
+        if (pastDeadline()) return fail(QX_USB_ERR_TIMEOUT, "budget");
+        if (stringScript.empty() && !stringDevice) {
+            return fail(QX_USB_ERR_PIPE, "ESP_ERR_NOT_SUPPORTED");
+        }
+        // A transfer starts: the host asks at most 255 bytes (hid_host.c)
+        stringCalls.push_back(StringCall{index, langid, buflen, clock});
+        if (muted) {
+            clock += QX_CTRL_TIMEOUT_MS;
+            return fail(QX_USB_ERR_TIMEOUT, "ESP_ERR_TIMEOUT");
+        }
+        std::vector<uint8_t> bytes;
+        if (!stringScript.empty()) {
+            StringReply r = stringScript.front();
+            stringScript.pop_front();
+            if (r.ret < 0) {
+                clock += r.ret == QX_USB_ERR_TIMEOUT ? QX_CTRL_TIMEOUT_MS : stringTransferMs;
+                return fail(r.ret, "scripted");
+            }
+            bytes = r.bytes;
+        } else if (index == 0) {
+            bytes = langidDescriptor(langidList);
+        } else {
+            const char* cmd = kraulerCommandOf(index);
+            if (!cmd) {
+                clock += stringTransferMs;
+                return fail(QX_USB_ERR_PIPE, "ESP_ERR_INVALID_RESPONSE");
+            }
+            char answer[512] = {0};
+            int n = device.command(cmd, strlen(cmd), answer, sizeof(answer));
+            if (n < 0) n = 0;
+            answer[n] = '\0';
+            bytes = stringDescriptor(answer);
+        }
+        clock += stringTransferMs;
+        size_t max = buflen < 255 ? buflen : 255;
+        size_t n = bytes.size() < max ? bytes.size() : max;
+        if (n > 0) memcpy(buf, bytes.data(), n);
+        _error = "";
+        return (int)n;
     }
 
     int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) override {
@@ -86,11 +120,81 @@ public:
     }
 
     void setDeadline(uint32_t deadlineMs) override { _deadline = deadlineMs; }
+    void sleepMs(uint32_t ms) override {
+        checkLock();
+        clock += ms;
+        sleeps.push_back(ms);
+    }
     uint32_t nowMs() const override { return clock; }
     const char* lastError() const override { return _error; }
 
     // Commands the device received, as QxTestingTransport recorded them
     const std::vector<std::string>& received() const { return device.sent; }
+
+    // --- String descriptors (krauler family, US-137) ---
+
+    // One GET_DESCRIPTOR(STRING) that started (not the ones refused past the deadline)
+    struct StringCall {
+        uint8_t index;
+        uint16_t langid;
+        size_t buflen; // as the transport passed it to the primitive
+        uint32_t atMs;
+    };
+    // A scripted answer: ret < 0 is the error, otherwise bytes are the descriptor
+    struct StringReply {
+        int ret;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<StringCall> stringCalls;
+    std::deque<StringReply> stringScript; // used first while not empty
+    // With the script empty: a krauler-family device. Index 0 is the list with langidList,
+    // the other indices are the Megatec commands of kraulerCommandOf(), answered from the
+    // testing_t table; an index outside the map STALLs. False: every request STALLs.
+    bool stringDevice = false;
+    uint16_t langidList = 0x0409;
+    uint32_t stringTransferMs = 2; // fake time of one answered GET_DESCRIPTOR
+    std::vector<uint32_t> sleeps;
+
+    void script(const std::vector<uint8_t>& bytes) { stringScript.push_back(StringReply{(int)bytes.size(), bytes}); }
+    void scriptError(int ret) { stringScript.push_back(StringReply{ret, {}}); }
+    // The two reads of usb_get_string_simple(): the langid list, then the answer
+    void scriptAnswer(const char* ascii) {
+        script(langidDescriptor(langidList));
+        script(stringDescriptor(ascii));
+    }
+
+    // String descriptor of an ASCII text: bLength, 0x03, UTF-16LE (at most 126 characters)
+    static std::vector<uint8_t> stringDescriptor(const char* ascii) {
+        size_t n = strlen(ascii);
+        if (n > 126) n = 126;
+        std::vector<uint8_t> d;
+        d.push_back((uint8_t)(2 + 2 * n));
+        d.push_back(0x03);
+        for (size_t i = 0; i < n; i++) {
+            d.push_back((uint8_t)ascii[i]);
+            d.push_back(0);
+        }
+        return d;
+    }
+    // String descriptor 0 with one langid
+    static std::vector<uint8_t> langidDescriptor(uint16_t langid) {
+        return std::vector<uint8_t>{4, 0x03, (uint8_t)(langid & 0xFF), (uint8_t)(langid >> 8)};
+    }
+    // The fake's own map index -> Megatec command (the krauler, fabula and hunnox tables)
+    static const char* kraulerCommandOf(uint8_t index) {
+        switch (index) {
+        case 0x03: return "Q1\r";
+        case 0x0d: return "F\r";
+        case 0x0c: return "I\r";
+        case 0x07: return "Q\r";
+        case 0x0a:
+        case 0x0b: return "C\r";
+        case 0x04: return "T\r";
+        case 0x05: return "TL\r";
+        case 0xf3: return "BL\r";
+        default:   return nullptr;
+        }
+    }
 
 private:
     void checkLock() {
