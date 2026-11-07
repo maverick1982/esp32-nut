@@ -7,7 +7,7 @@ tags: [piano, analisi, nutdrv_qx, megatec, usb, driver]
 # Supporto agli UPS Q* (`nutdrv_qx`)
 
 **Data:** 2026-10-20  
-**Stato:** Analisi preliminare, non ancora pianificata  
+**Stato:** Analisi preliminare; decisioni architetturali in [ADR 0013](../adr/0013-qx-ups-support.md) (Accepted, 2026-11-07)  
 **Obiettivo:** Raccogliere le considerazioni fatte finora per decidere se e come portare il driver NUT `nutdrv_qx` (protocolli Megatec/Q*) in ESP32-NUT, che oggi supporta solo gli UPS USB HID (`usbhid-ups`).
 
 ---
