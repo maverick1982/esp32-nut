@@ -1,0 +1,38 @@
+schema: archetipo/spec/v2
+code: US-134
+title: Protocolli mustek, megatec-old, zinto e innovatae e riconoscimento del protocollo per tentativi come NUT
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-134: Protocolli mustek, megatec-old, zinto e innovatae e riconoscimento del protocollo per tentativi come NUT
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-133
+
+  **User Story**
+  Come utente con un UPS Q*,
+  voglio che la scheda trovi da sola il protocollo del mio UPS provando i protocolli nello stesso ordine di NUT,
+  in modo che il mio UPS sia riconosciuto dallo stesso protocollo che sceglierebbe NUT, senza configurare nulla quando NUT non ne ha bisogno.
+
+  **Dimostrazione**
+  Con un trasporto finto che risponde come un UPS `mustek`, `megatec-old`, `megatec`, `zinto`, `innovatae` o `q1`, il riconoscimento sceglie lo stesso protocollo di `subdriver_matcher()` di NUT tra quelli portati. Con un trasporto che non risponde, il System Log scrive una volta "Device not supported" e il riconoscimento riprova più tardi. Con un protocollo forzato si prova solo quello.
+
+  **Criteri di Accettazione**
+  - [ ] Protocolli `mustek`, `megatec-old`, `zinto` e `innovatae` portati come in US-133, ciascuno con i test della sua tabella `testing_t`.
+  - [ ] Il riconoscimento prova i protocolli portati nell'ordine di `subdriver_list[]` (`nutdrv_qx.c:95-117`), ciascuno fino a `MAXTRIES` volte, con la sua funzione di claim (`blazer_claim` con `Q1` + `I`/`FW?`, `blazer_claim_light` con il solo comando di stato); un protocollo non portato si salta, l'ordine non cambia.
+  - [ ] Al massimo un tentativo di claim per passo della macchina a stati del poll.
+  - [ ] Nessun protocollo riconosce l'UPS: una riga "Device not supported" per aggancio, poi nuovi tentativi distanziati (primo dopo 30 s, intervallo raddoppiato fino a 10 minuti), mai in un ciclo stretto.
+  - [ ] Protocollo forzato (nome come `protocol` di `ups.conf`): si prova solo quello; serve all'impostazione di US-138.
+  - [ ] Protocollo riconosciuto: una riga INFO con il nome e la versione del protocollo di NUT.
+  - [ ] Test nativi: scelta del protocollo per ogni risposta tipo; nessuna risposta; ripetizione distanziata; protocollo forzato.
+
+  **Assunzioni**
+  - Logica pura con trasporto finto; sull'UPS vero arriva con US-136.
+  - `hunnox` arriva con US-138: usa lo stesso claim di `zinto` (`Q1` + `FW?`), che viene prima, quindi anche in NUT si sceglie solo con `protocol`.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-138
+title: 'Protocollo hunnox e impostazioni protocol e novendor in Board Settings, con build di test per #91 e #28'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-138: Protocollo hunnox e impostazioni protocol e novendor in Board Settings, con build di test per #91 e #28
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-134, US-137
+
+  **User Story**
+  Come utente con un UPS Q* che NUT fa funzionare solo con `protocol` e `novendor` in `ups.conf` (come tda2806 con il VIDA Armour 1200VA di #91),
+  voglio scegliere il protocollo e attivare `novendor` nella pagina Board Settings,
+  in modo che la scheda parli con il mio UPS come NUT, e che i reporter di #91 e #28 possano provarlo con una build di test.
+
+  **Dimostrazione**
+  Con un UPS Q* collegato, Board Settings mostra la sezione del driver Q* con il protocollo ("Automatico" o uno dei protocolli portati) e il flag `novendor`. Scegliendo `hunnox` con `novendor` e salvando, il riconoscimento riparte senza riavviare la scheda e prova solo `hunnox`. La build di test (zip OTA, ESP32-S3) va ai reporter di #91 e #28.
+
+  **Criteri di Accettazione**
+  - [ ] Protocollo `hunnox` portato da `nutdrv_qx_hunnox.c` come in US-133, con i test della sua tabella `testing_t` (compreso `BL` per la carica della batteria).
+  - [ ] Board Settings mostra la sezione del driver Q* solo quando è agganciato un UPS Q* (riconosciuto o no dal protocollo); con un UPS HID o senza UPS non compare.
+  - [ ] `protocol`: "Automatico" (predefinito) oppure uno dei protocolli portati, con i nomi di NUT; `novendor`: spento per default. Valori salvati in NVS e validi anche dopo un riavvio.
+  - [ ] Il salvataggio applica i valori senza riavviare la scheda: il riconoscimento riparte con il protocollo forzato (US-134) e con `novendor`, che salta la domanda sul firmware nel claim e l'indice 0x0c nella sequenza di hunnox, come in NUT. Il System Log scrive la modifica e chi l'ha fatta.
+  - [ ] Il protocollo e le opzioni attive compaiono nella sezione Q* dell'export diagnostico.
+  - [ ] e2e della sezione Board Settings: visibile solo con un UPS Q*, salvataggio, valori ricaricati.
+  - [ ] Build di test (zip OTA) consegnata ai reporter di #91 (tda2806) e #28 con le istruzioni (impostazioni da usare, export diagnostico da allegare); nelle issue si scrive "Refs #N", e il supporto Q* va in release solo dopo la conferma di almeno uno dei due.
+
+  **Assunzioni**
+  - Board Settings e non UPS Settings: il protocollo è una configurazione della scheda (in NUT sta in `ups.conf`), non una variabile dell'UPS (decisione dell'utente, 2026-11-07).
+  - Un valore sbagliato lascia l'UPS senza dati ma non blocca l'accesso alla scheda (regola dell'ADR 0010).
+  - Il reporter di #28 non scrive da agosto: la conferma potrebbe arrivare solo da tda2806.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

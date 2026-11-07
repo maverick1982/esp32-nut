@@ -1,0 +1,37 @@
+schema: archetipo/spec/v2
+code: US-135
+title: 'Controllo Q*: comandi istantanei e SET VAR come instcmd() e setvar() di nutdrv_qx'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-135: Controllo Q*: comandi istantanei e SET VAR come instcmd() e setvar() di nutdrv_qx
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** US-133
+
+  **User Story**
+  Come utente con un UPS Q*,
+  voglio i comandi istantanei e le variabili scrivibili che NUT offre per il mio protocollo (beeper, test della batteria, spegnimento e riaccensione),
+  in modo da usarli da NUT e dalla Web UI come con un UPS HID, compreso lo spegnimento automatico a batteria scarica.
+
+  **Dimostrazione**
+  I test nativi eseguono i comandi con un trasporto finto e controllano le stringhe esatte mandate all'UPS (per esempio `shutdown.return` con i ritardi di `ups.delay.shutdown` e `ups.delay.start` nel formato di NUT), l'esito con le risposte di accettazione e rifiuto del protocollo, e l'elenco dei comandi offerti per ogni protocollo portato.
+
+  **Criteri di Accettazione**
+  - [ ] Il controllo Q* implementa `IUpsControl` usando solo `IUpsControlPort`, mai `hidPort()` (verificato da un test come quello di `test_hid_transport`).
+  - [ ] I comandi istantanei portano `instcmd()` di `nutdrv_qx.c` e i comandi di `blazer-common`: `beeper.toggle`, `load.off`, `load.on`, `shutdown.return`, `shutdown.stayoff`, `shutdown.stop`, `test.battery.start`, `test.battery.start.quick`, `test.battery.start.deep`, `test.battery.stop`, ciascuno solo se il protocollo lo ha, con i preprocess del comando di NUT.
+  - [ ] L'esito segue le stringhe `accepted`/`rejected` del protocollo, come in NUT.
+  - [ ] SET VAR porta `setvar()` con i controlli di `info_rw` (intervalli ed enumerazioni) per le righe `QX_FLAG_SETVAR` dei protocolli portati, compresi `ups.delay.shutdown` e `ups.delay.start`.
+  - [ ] `supportedCommands()` elenca solo i comandi del protocollo riconosciuto; senza protocollo riconosciuto l'elenco è vuoto.
+  - [ ] Test nativi: stringa mandata per ogni comando di `megatec`, comando rifiutato, comando non offerto, SET VAR fuori intervallo.
+
+  **Assunzioni**
+  - Logica pura con trasporto finto; sull'UPS vero arriva con US-136.
+  - Lo spegnimento automatico a batteria scarica usa `shutdown.default` come per gli HID: nessuna logica nuova lato app.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"

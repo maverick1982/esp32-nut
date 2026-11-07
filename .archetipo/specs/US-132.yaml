@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-132
+title: 'Aggancio guidato dalla famiglia: righe Q* prima del fallback HID generico, UPS Q* segnalato come non ancora supportato'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 5
+status: TODO
+body: |
+  #### US-132: Aggancio guidato dalla famiglia: righe Q* prima del fallback HID generico, UPS Q* segnalato come non ancora supportato
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** US-131
+
+  **User Story**
+  Come utente con un UPS Q* (per esempio il VIDA Armour 1200VA di #91, 0001:0000 "MEC0003"),
+  voglio che la scheda riconosca il mio UPS come Q* invece di agganciarlo con il driver HID generico che non riceve dati,
+  in modo da sapere subito che l'UPS è stato riconosciuto e che il supporto non c'è ancora, invece di vedere "Not Detected".
+
+  **Dimostrazione**
+  Il registro dei driver sceglie la famiglia prima del controllo delle pagine HID (ADR 0013, sezione 2): prima le righe HID esplicite, poi le righe Q* (copia di `qx_usb_id[]` di NUT), poi il fallback HID generico. Collegando un UPS Q* noto, il System Log scrive "Q* UPS recognized (USB transport: hunnox), not supported yet" e la Web UI mostra "non ancora supportato". Con gli UPS HID non cambia nulla: lo confermano i test esistenti e una build di prova su UPS HID reali.
+
+  **Criteri di Accettazione**
+  - [ ] Ordine di scelta: (1) righe HID esplicite di oggi (VID/PID, più le stringhe per gli ID condivisi); (2) righe Q*, copia fedele di `qx_usb_id[]` (`nut_repo/drivers/nutdrv_qx.c:2704-2727`) con stringhe produttore/prodotto e ordine di NUT, senza le righe che in NUT non hanno un trasporto (1a86:7523); (3) fallback HID generico, solo per un'interfaccia con pagine UPS (0x84) o Battery (0x85).
+  - [ ] Un'interfaccia che corrisponde a una riga Q* viene tenuta anche senza pagine UPS/Battery; il percorso HID mantiene il controllo delle pagine com'è oggi.
+  - [ ] Un UPS Q* agganciato produce una sola riga INFO "Q* UPS recognized (USB transport: <nome>), not supported yet" per aggancio; la Web UI mostra "non ancora supportato" al posto di "Not Detected"; il server NUT risponde come quando non c'è un UPS.
+  - [ ] Cache dei report, watchdog degli INPUT, ritentativi del descrittore e lettura diagnostica (US-119) girano solo sul percorso HID; un UPS Q* agganciato non provoca ripristini della porta né riavvii.
+  - [ ] Test nativi del registro: 0001:0000 ""/"MEC0003" → Q* fabula_hunnox (#91); "MEC"/"MEC0003" → Q* fabula (#28); 051d → APC; 06da:ffff → driver HID Phoenixtec di oggi; VID sconosciuto con pagina UPS → `GenericDriver`; VID sconosciuto senza pagine → ignorato come oggi.
+  - [ ] Regressione: test nativi, replay ed e2e verdi senza cambiare le asserzioni.
+  - [ ] Build di prova su UPS HID reali (Eaton 3S del banco, solo con il consenso dell'utente, e UPS dei tester) prima della release: aggancio, dati e comandi come prima.
+
+  **Assunzioni**
+  - Oggi le righe HID esplicite e le righe Q* non hanno VID/PID in comune (06da:ffff contro 06da:0002…0601; 1cb0:0032/0038 contro 1cb0:0035).
+  - Tocca l'aggancio dello strato USB ma non i tempi delle richieste (ADR 0008); per questo la build di prova (ADR 0010, passo 4).
+  - Il driver Q* vero arriva con US-136; questa storia non manda comandi Q* all'UPS.
+history:
+  - status: TODO
+    at: "2026-11-07T10:29:11Z"
