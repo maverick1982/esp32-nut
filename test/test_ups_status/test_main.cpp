@@ -448,6 +448,48 @@ void test_alarm_gives_alarm_status(void) {
     TEST_ASSERT_EQUAL_STRING("ALARM OL RB", UPSData::computeUPSStatusString(data).c_str());
 }
 
+// --- Q* bits (US-133): BYPASS and FSD of nutdrv_qx ups_status_set()/ups_alarm_set() ---
+
+// BYPASS of nutdrv_qx: the token without the bypass mode alarms of the HID flags
+void test_status_qx_bypass_without_alarm(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.bypass", "1");
+    data.applyAlarmVariables(String());
+    TEST_ASSERT_NULL(data.find("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("OL BYPASS", UPSData::computeUPSStatusString(data).c_str());
+}
+
+// FSD of nutdrv_qx: token FSD (last) and alarm "Shutdown imminent!", no LB
+void test_status_qx_fsd_token_and_alarm(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.fsd", "1");
+    data.applyAlarmVariables(String());
+    TEST_ASSERT_EQUAL_STRING("Shutdown imminent!", data.get("ups.alarm").c_str());
+    TEST_ASSERT_EQUAL_STRING("ALARM OL FSD", UPSData::computeUPSStatusString(data).c_str());
+}
+
+void test_status_qx_fsd_on_battery_low(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "0");
+    data.set("ups.status.battery_low", "1");
+    data.set("ups.status.fsd", "1");
+    data.applyAlarmVariables(String());
+    TEST_ASSERT_EQUAL_STRING("ALARM OB LB FSD", UPSData::computeUPSStatusString(data).c_str());
+}
+
+// The engine writes every bit as 1 or 0: the Q* keys at 0 give nothing
+void test_status_qx_keys_at_zero(void) {
+    UPSData data;
+    data.set("ups.status.ac_present", "1");
+    data.set("ups.status.bypass", "0");
+    data.set("ups.status.fsd", "0");
+    data.applyAlarmVariables(String());
+    TEST_ASSERT_NULL(data.find("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(data).c_str());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -537,6 +579,10 @@ void setup() {
     RUN_TEST(test_alarm_published_and_removed);
     RUN_TEST(test_transfer_reason);
     RUN_TEST(test_alarm_gives_alarm_status);
+    RUN_TEST(test_status_qx_bypass_without_alarm);
+    RUN_TEST(test_status_qx_fsd_token_and_alarm);
+    RUN_TEST(test_status_qx_fsd_on_battery_low);
+    RUN_TEST(test_status_qx_keys_at_zero);
     UNITY_END();
 }
 void loop() {}
