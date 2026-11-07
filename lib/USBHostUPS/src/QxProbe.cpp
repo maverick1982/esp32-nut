@@ -65,7 +65,7 @@ QxProber::Step QxProber::step(UPSData& data, uint32_t nowMs) {
     const QxSubdriver* sub = _list[_index];
     // A fresh engine state for each protocol, kept for its QX_MAXTRIES attempts as the
     // global table of the upstream subdriver. One engine is allocated per attach and reset
-    // for the next protocols, so a probing cycle does not allocate and free ~3.5 KB per
+    // for the next protocols, so a probing cycle does not allocate and free ~4 KB per
     // protocol on the heap of the board.
     if (_tries == 0) {
         if (_engine) _engine->reset(*sub, _options);

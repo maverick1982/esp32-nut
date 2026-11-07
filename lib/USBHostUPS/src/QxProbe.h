@@ -27,7 +27,7 @@ using QxLogFn = void (*)(void* ctx, const char* level, const char* text);
  * claim is not fatal: "Device not supported!" is logged once per restart() and a new cycle
  * starts after a back-off (30 s, doubled up to 10 minutes), never in a tight loop.
  *
- * Memory: one QxEngine (~3.5 KB) is allocated at the first attempt after construction or
+ * Memory: one QxEngine (~4 KB) is allocated at the first attempt after construction or
  * after takeEngine(), then reset for every other protocol and cycle (QxEngine::reset()).
  *
  * Pure logic: no USB, no clock, no lock. The caller (the poll task, US-136) passes the time,
