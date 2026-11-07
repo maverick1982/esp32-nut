@@ -6,7 +6,7 @@
 #include <string.h>
 #include <vector>
 #include "HIDParser.h"
-#include "IUPSDriver.h"
+#include "IHidDriver.h"
 
 class BeeperLogic {
 public:
@@ -37,7 +37,7 @@ public:
         return !shared_report || (fetched && fetched_len >= requiredLength(def));
     }
 
-    static size_t manipulateBeeperBuffer(bool enable, const HIDUsageDef* def, uint8_t* buffer, size_t fetched_len, IUPSDriver* driver) {
+    static size_t manipulateBeeperBuffer(bool enable, const HIDUsageDef* def, uint8_t* buffer, size_t fetched_len, const IHidDriver* driver) {
         if (!def || !buffer) return 0;
         // Encode device-specific value
         uint32_t val = driver ? driver->encodeBeeperValue(enable, def->bit_size) : (def->bit_size == 1 ? (enable ? 1 : 0) : (enable ? 2 : 1));

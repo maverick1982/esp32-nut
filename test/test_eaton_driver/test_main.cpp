@@ -595,7 +595,7 @@ void test_eaton_realpower_follows_load(void) {
 // US-119: the on-demand read of the export never asks the reports that freeze Eaton
 // devices, and keeps the poll's spacing
 void test_eaton_diag_read_follows_poll_exclusions(void) {
-    const IUPSDriver& d = driver;
+    const IHidDriver& d = driver;
     TEST_ASSERT_FALSE(d.acceptDiagReport(3, 254));
     TEST_ASSERT_FALSE(d.acceptDiagReport(3, 255));
     TEST_ASSERT_TRUE(d.acceptDiagReport(3, 0x01));

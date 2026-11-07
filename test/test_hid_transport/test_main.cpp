@@ -99,7 +99,8 @@ static std::string projectPath(const char* rel) {
 void test_driver_sources_include_no_usb_host(void) {
     const char* drivers[] = { "Generic", "APC", "CyberPower", "Eaton", "EcoFlow", "Legrand", "Liebert", "OpenUPS",
                               "Powercom" };
-    std::vector<std::string> files = { "lib/USBHostUPS/src/IUPSDriver.h" };
+    std::vector<std::string> files = { "lib/USBHostUPS/src/IUPSDriver.h", "lib/USBHostUPS/src/IHidDriver.h",
+                                       "lib/USBHostUPS/src/DriverDispatch.h" };
     for (const char* d : drivers) {
         files.push_back(std::string("lib/USBHostUPS/src/") + d + "Driver.h");
         files.push_back(std::string("lib/USBHostUPS/src/") + d + "Driver.cpp");
@@ -191,8 +192,67 @@ void test_control_hook_is_protocol_neutral(void) {
     }
 }
 
+// US-131: the hooks of the HID family, which the protocol-neutral core must not name
+static const char* const kHidHooks[] = { "loop", "decodeReport", "postDecode", "planSet", "requestLength",
+                                         "acceptDiagReport", "invalidateReport", "inputValuesPolled",
+                                         "parseStringDescriptor", "encodeBeeperValue", "beeperControllable",
+                                         "beeperMuteSupported", "beeperFieldRead", "commandTable", "delayPaths" };
+
+// US-131 (ADR 0013, section 1): the driver core names no HID type and no HID hook
+void test_driver_core_names_no_hid_type(void) {
+    std::string core = readSource("lib/USBHostUPS/src/IUPSDriver.h");
+    // Nor does it include the HID -> NUT tables: RWVariable comes from UpsVariables.h
+    const char* types[] = { "HIDUsageDef", "HIDParser", "IHidTransport", "report_id", "HidInfo", "HIDUsages.h",
+                            "DelayPaths", "#include \"NutTable.h\"" };
+    for (const char* t : types) {
+        TEST_ASSERT_TRUE_MESSAGE(core.find(t) == std::string::npos, t);
+    }
+    for (const char* h : kHidHooks) {
+        TEST_ASSERT_TRUE_MESSAGE(core.find(std::string(h) + "(") == std::string::npos, h);
+    }
+    TEST_ASSERT_TRUE(core.find("hid()") != std::string::npos);
+    TEST_ASSERT_TRUE(core.find("poll(") != std::string::npos);
+}
+
+// US-131: USBHostUPS reaches the HID hooks of its driver only through DriverDispatch (hid()),
+// checked on the source since the host is not built natively; hid() is called only there
+void test_usb_host_reaches_hid_only_through_dispatch(void) {
+    std::string host = readSource("lib/USBHostUPS/src/USBHostUPS.cpp");
+    for (const char* h : kHidHooks) {
+        for (const char* recv : { "_driver->", "drv->", "driver->" }) {
+            std::string call = std::string(recv) + h + "(";
+            TEST_ASSERT_TRUE_MESSAGE(host.find(call) == std::string::npos, call.c_str());
+        }
+    }
+    TEST_ASSERT_TRUE(host.find("DriverDispatch::") != std::string::npos);
+
+    const char* owners[] = { "lib/USBHostUPS/src/IUPSDriver.h", "lib/USBHostUPS/src/IHidDriver.h",
+                             "lib/USBHostUPS/src/DriverDispatch.h" };
+    DIR* dir = opendir(projectPath("lib/USBHostUPS/src").c_str());
+    TEST_ASSERT_NOT_NULL_MESSAGE(dir, "lib/USBHostUPS/src");
+    std::vector<std::string> sources;
+    for (struct dirent* e = readdir(dir); e; e = readdir(dir)) {
+        std::string name = e->d_name;
+        size_t dot = name.rfind('.');
+        std::string ext = dot == std::string::npos ? "" : name.substr(dot);
+        if (ext == ".h" || ext == ".cpp") sources.push_back("lib/USBHostUPS/src/" + name);
+    }
+    closedir(dir);
+    TEST_ASSERT_TRUE(sources.size() > 20);
+    for (const std::string& f : sources) {
+        bool owner = false;
+        for (const char* o : owners) owner = owner || f == o;
+        if (owner) continue;
+        std::string text = readSource(f.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(text.find("->hid()") == std::string::npos, (f + ": ->hid()").c_str());
+        TEST_ASSERT_TRUE_MESSAGE(text.find(".hid()") == std::string::npos, (f + ": .hid()").c_str());
+    }
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_driver_core_names_no_hid_type);
+    RUN_TEST(test_usb_host_reaches_hid_only_through_dispatch);
     RUN_TEST(test_transport_alone_drives_a_driver);
     RUN_TEST(test_driver_sources_include_no_usb_host);
     RUN_TEST(test_command_logic_left_the_usb_host_interface);

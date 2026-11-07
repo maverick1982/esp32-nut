@@ -1,7 +1,7 @@
 #ifndef GENERIC_DRIVER_H
 #define GENERIC_DRIVER_H
 
-#include "IUPSDriver.h"
+#include "IHidDriver.h"
 #include <Arduino.h>
 #include <vector>
 #include <utility>
@@ -34,7 +34,7 @@
  * received. Derived drivers only change the policy through the hooks below instead of
  * copying the state machine.
  */
-class GenericDriver : public IUPSDriver {
+class GenericDriver : public IHidDriver {
 public:
     const char* getDriverName() const override { return "GenericDriver"; }
     // HidControl: commands and SET VAR built on the HID usages (US-105)
@@ -80,6 +80,9 @@ public:
     const NutTable::HidInfo* commandTable(size_t& n) const override { return NutTable::genericHid2Nut(n); }
     bool beeperFieldRead(const IHidTransport* host) const override;
     const NutTable::DelayPaths* delayPaths() const override { return NutTable::genericDelayPaths(); }
+    // Maximum length of ups.delay.* in LIST RW (info_len of the upstream rows: 10 in mge-hid,
+    // apc-hid and cps-hid); only writableVariables() reads it, the host never does (US-131)
+    virtual uint8_t delayAux() const { return 10; }
     // Rows bound to the attached device; built on the first decoded report
     const std::vector<NutTable::Bound>& nutBindings() const { return _nut_rows; }
 

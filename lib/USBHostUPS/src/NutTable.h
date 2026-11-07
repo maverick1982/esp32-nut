@@ -1662,12 +1662,15 @@ inline bool parseDelayParam(const char* text, int32_t& out) {
  * defaultOnDelay). Only when the driver's subdriver declares them (delay_vars, see
  * IUPSDriver::delayVariablesSupported) and the device has one of their paths in any report
  * type, as upstream; what the device reports in DelayBeforeShutdown/Startup is ups.timer.*.
- * paths: the subdriver's own paths (IUPSDriver::delayPaths, US-066), genericDelayPaths() for
+ * paths: the subdriver's own paths (IHidDriver::delayPaths, US-066), genericDelayPaths() for
  * the brands without one (US-079); nullptr sets nothing.
  * saved: the values written with SET VAR (IDriverVarStore, US-067). A saved value replaces
  * the default only for a variable set by this call, and only while it is still an integer
  * >= 0; the host calls this again after each string descriptor, so it never falls back.
  */
+inline void applyDelayValues(UPSData& data, int32_t off_delay, int32_t on_delay, bool sd, bool st,
+                             const std::vector<std::pair<String, String>>* saved = nullptr);
+
 inline void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& usages,
                                int32_t off_delay, int32_t on_delay, bool delay_vars,
                                const DelayPaths* paths,
@@ -1675,6 +1678,15 @@ inline void applyDefaultDelays(UPSData& data, const std::vector<HIDUsageDef>& us
     if (!delay_vars || !paths) return;
     bool sd = hasAnyPath(usages, paths->shutdown, paths->n_shutdown, paths->any_index);
     bool st = hasAnyPath(usages, paths->startup, paths->n_startup, paths->any_index);
+    applyDelayValues(data, off_delay, on_delay, sd, st, saved);
+}
+
+/**
+ * The part of applyDefaultDelays() that needs no HID path (US-131): sets ups.delay.shutdown
+ * when sd and ups.delay.start when st, to the default or to the saved value (same rules).
+ */
+inline void applyDelayValues(UPSData& data, int32_t off_delay, int32_t on_delay, bool sd, bool st,
+                             const std::vector<std::pair<String, String>>* saved) {
     if (saved) {
         for (const auto& kv : *saved) {
             int32_t v = 0;

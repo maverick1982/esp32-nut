@@ -28,7 +28,7 @@ graph TB
         PARSER["HIDParser<br/><i>(Decodifica Report Descriptor & Usages)</i>"]
         DATA_MODEL["UPSData<br/><i>(Single Source of Truth Telemetria)</i>"]
 
-        subgraph Subdrivers ["Subdriver Specifici (IUPSDriver)"]
+        subgraph Subdrivers ["Subdriver Specifici (IUPSDriver nucleo neutro, IHidDriver estensione HID via hid())"]
             GENERIC_D["GenericDriver<br/><i>(PDC Standard & Polling loop)</i>"]
             APC_D["APCDriver"]
             CYBER_D["CyberPowerDriver"]
@@ -141,8 +141,10 @@ sequenceDiagram
 | Livello | Responsabilità Principali | Componenti Chiave |
 | :--- | :--- | :--- |
 | **1. Hardware** | Connettività fisica USB Host, modulo radio Wi-Fi, pinout GPIO LED, memoria Flash non volatile. | ESP32-S3 SoC, NVS, GPIO LED |
-| **2. USB Host & Driver** | Gestione stack USB host ESP-IDF, enumerazione periferiche, parsing alberi HID, elaborazione quirks, driver specializzati per marca/modello e memorizzazione telemetria. | `USBHostUPS`, `HIDParser`, `IUPSDriver`, `UPSData` |
+| **2. USB Host & Driver** | Gestione stack USB host ESP-IDF, enumerazione periferiche, parsing alberi HID, elaborazione quirks, driver specializzati per marca/modello e memorizzazione telemetria. | `USBHostUPS`, `HIDParser`, `IUPSDriver`, `IHidDriver`, `DriverDispatch`, `UPSData` |
 | **3. Core & Orchestrazione** | Ciclo di vita applicativo, fallback fail-safe (Access Point / Station), log di sistema su ring buffer RAM e indicazione visiva tramite LED diagnostico. | `main.cpp`, `ConfigManager`, `AppLogger`, `DiagnosticLED` |
 | **4. Servizi di Rete** | Gestione interfaccia di rete (Wi-Fi STA o SoftAP con Captive Portal), server conforme al protocollo Network UPS Tools (NUT) su TCP 3493 e Web Server di configurazione/diagnostica su porta 80. | `AppNetworkManager`, `NUTServer`, `WebConfigServer` |
 | **5. Client Esterni** | Dispositivi UPS monitorati, piattaforme di domotica e automazione (Home Assistant), NAS (Synology, QNAP, TrueNAS), client CLI `upsc` e browser web dell'utente. | Client NUT, Dashboard Web, UPS |
+
+**Driver: nucleo ed estensioni per famiglia (ADR 0013, US-131).** `IUPSDriver` contiene solo ciò che l'host chiede a ogni driver, di qualunque famiglia di protocollo: nome, `setup()`, `poll()`, primo poll completo, stringhe del dispositivo, `control()`, ritardi e valori lato driver. I metodi della famiglia HID (decodifica dei report, piano dei SET VAR, lunghezze delle richieste, watchdog degli INPUT, beeper, righe dei comandi, percorsi di `ups.delay.*`) stanno in `IHidDriver`, raggiunta solo con `hid()`, che vale `nullptr` per un driver di un'altra famiglia. `USBHostUPS` arriva a quei metodi solo attraverso `DriverDispatch.h`, l'unico punto dell'host che chiama `hid()`: un driver non HID non riceve mai una chiamata HID.
 

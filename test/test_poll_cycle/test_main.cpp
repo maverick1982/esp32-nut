@@ -22,7 +22,7 @@ public:
     std::vector<uint8_t> _strings;
     uint32_t _quirks = 0;
     // Optional answers to GET_REPORT, decoded by _driver into *_data
-    IUPSDriver* _driver = nullptr;
+    IHidDriver* _driver = nullptr;
     UPSData* _data = nullptr;
     std::vector<std::pair<uint8_t, std::vector<uint8_t>>> _answers;
     bool _paused = false;
@@ -92,7 +92,7 @@ static void standardDevice() {
 }
 
 // Runs loop() every 60 ms from t0 to t1
-static void runLoop(IUPSDriver& drv, uint32_t t0, uint32_t t1) {
+static void runLoop(IHidDriver& drv, uint32_t t0, uint32_t t1) {
     for (uint32_t t = t0; t <= t1; t += 60) drv.loop(&host, data, t);
 }
 
@@ -444,7 +444,7 @@ void test_apc_other_models_request_declared_length(void) {
 }
 
 // US-067: the host asks the same wLength for the SET VAR read-modify-write and read back,
-// through the public IUPSDriver::requestLength()
+// through the public IHidDriver::requestLength()
 static uint16_t hostRequestLength(const char* model, uint16_t expected) {
     host = MockPollHost();
     data = UPSData();
@@ -453,7 +453,7 @@ static uint16_t hostRequestLength(const char* model, uint16_t expected) {
     APCDriver drv;
     drv.setup();
     runLoop(drv, 1000, 1000); // onLoop() reads the model
-    const IUPSDriver& d = drv;
+    const IHidDriver& d = drv;
     return d.requestLength(3, 12, expected);
 }
 
@@ -462,7 +462,7 @@ void test_apc_back_ups_bx_request_length_public(void) {
     TEST_ASSERT_EQUAL_UINT16(64, hostRequestLength("Back-UPS BX750MI", 64)); // never less than declared
     TEST_ASSERT_EQUAL_UINT16(2, hostRequestLength("Back-UPS CS 650", 2));
     GenericDriver gen;
-    const IUPSDriver& d = gen;
+    const IHidDriver& d = gen;
     TEST_ASSERT_EQUAL_UINT16(2, d.requestLength(3, 12, 2));
 }
 
@@ -538,7 +538,7 @@ void test_apc_back_ups_bx_invalidated_static_report_requested_again(void) {
     runLoop(drv, 31000, 31500);
     TEST_ASSERT_EQUAL(2, host._reports.size()); // 37 known: left out
 
-    IUPSDriver& d = drv;
+    IHidDriver& d = drv;
     // INPUT 37 is another report: FEATURE 37 stays known. From here on 50 is not asked either:
     // its only row was never answered in the first full poll, finishInit() dropped it (DEAD),
     // and nothing else reads the report (US-120)
@@ -729,7 +729,7 @@ void test_semi_static_reports_read_again_after_data_change(void) {
     runFirstMinuteHalf(drv);
     runLoop(drv, 31000, 31500);
     host._reports.clear();
-    IUPSDriver& d = drv;
+    IHidDriver& d = drv;
     d.noteDataChanged();
     runLoop(drv, 40000, 40500); // 9 s after the last full poll
     TEST_ASSERT_EQUAL_STRING("1 2 3 4 6", requestedIds().c_str());
@@ -749,7 +749,7 @@ void test_semi_static_change_during_full_poll_reads_next_cycle(void) {
     runFirstMinuteHalf(drv);
     host._reports.clear();
     runLoop(drv, 31000, 31000); // first request of the full poll
-    IUPSDriver& d = drv;
+    IHidDriver& d = drv;
     d.noteDataChanged();
     runLoop(drv, 31060, 31500);
     TEST_ASSERT_EQUAL_STRING("1 4 1 2 3 4 6", requestedIds().c_str());
