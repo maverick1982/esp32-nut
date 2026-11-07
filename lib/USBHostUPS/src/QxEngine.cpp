@@ -106,6 +106,11 @@ void QxEngine::reset(const QxSubdriver& sub, const QxOptions& options) {
     _reestablished = false;
     _batt = Batt();
     _battVoltageReportsOnePackConsidered = false;
+    _walkMode = WalkMode::INIT;
+    _walkRow = 0;
+    _walkActive = false;
+    _walkFull = false;
+    _initStarted = false;
 }
 
 // --- dstate access ---------------------------------------------------------------------
@@ -284,8 +289,22 @@ void QxEngine::clearWork() {
     memset(_value, 0, sizeof(_value));
 }
 
-// qx_ups_walk(), nutdrv_qx.c:4489-4783
+// qx_ups_walk(), nutdrv_qx.c:4489-4783, split into steps (US-136): beginWalk() is the head
+// of the upstream function, walkStep() its loop, resumed at _walkRow.
 bool QxEngine::walk(WalkMode mode) {
+    beginWalk(mode);
+    WalkStep s;
+    do {
+        s = walkStep();
+    } while (s == WalkStep::Pending);
+    return s == WalkStep::Done;
+}
+
+void QxEngine::beginWalk(WalkMode mode) {
+    _walkMode = mode;
+    _walkRow = 0;
+    _walkActive = true;
+
     // Clear batt.{chrg,runt}.act for guesstimation
     if (mode == WalkMode::FULL_UPDATE) {
         _batt.runtAct = -1;
@@ -296,8 +315,17 @@ bool QxEngine::walk(WalkMode mode) {
     // Clear data from previous_item
     memset(_prevCommand, 0, sizeof(_prevCommand));
     memset(_prevAnswer, 0, sizeof(_prevAnswer));
+}
 
-    for (size_t r = 0; r < _rows; r++) {
+void QxEngine::abortWalk() {
+    _walkActive = false;
+    _initStarted = false;
+    clearWork();
+}
+
+QxEngine::WalkStep QxEngine::walkStep() {
+    const WalkMode mode = _walkMode;
+    for (size_t r = _walkRow; r < _rows; r++) {
         const int row = (int)r;
         const QxItem& it = item(row);
 
@@ -342,6 +370,7 @@ bool QxEngine::walk(WalkMode mode) {
         if (_flags[row] & QX_FLAG_SETVAR) continue;
 
         int retcode;
+        bool sent = false; // a command went to the transport for this row
         // Check whether the previous item uses the same command and then use its answer
         if (strlen(_prevCommand) > 0 && strlen(_prevAnswer) > 0 && it.command &&
             equalsIgnoreCase(_prevCommand, it.command)) {
@@ -350,6 +379,7 @@ bool QxEngine::walk(WalkMode mode) {
         } else {
             // ..otherwise: execute command to get answer from the UPS
             retcode = process(row);
+            sent = true;
         }
 
         // Record item as previous_item
@@ -358,10 +388,17 @@ bool QxEngine::walk(WalkMode mode) {
 
         if (retcode) {
             clearWork();
-            if (_flags[row] & QX_FLAG_QUICK_POLL) return false;
+            if (_flags[row] & QX_FLAG_QUICK_POLL) {
+                _walkActive = false;
+                return WalkStep::Failed;
+            }
             // Skip this item from now on
             if (mode == WalkMode::INIT) _flags[row] |= QX_FLAG_SKIP;
             // Don't know what happened, try again later...
+            if (sent) {
+                _walkRow = r + 1;
+                return WalkStep::Pending; // one Q* command per step (US-136)
+            }
             continue;
         }
 
@@ -370,20 +407,29 @@ bool QxEngine::walk(WalkMode mode) {
         clearWork();
 
         if (retcode == -1) {
-            if (_flags[row] & QX_FLAG_QUICK_POLL) return false;
-            continue;
+            if (_flags[row] & QX_FLAG_QUICK_POLL) {
+                _walkActive = false;
+                return WalkStep::Failed;
+            }
         }
 
         // qx_set_var() for retcode == 1 in INIT (flags, range, enum): no ported protocol has a
         // writable row read from the UPS; setvar() checks info_rw itself
+
+        if (sent) {
+            _walkRow = r + 1;
+            return WalkStep::Pending; // one Q* command per step (US-136)
+        }
     }
+
+    _walkActive = false;
 
     // Update battery guesstimation (the runtimecal branch is not ported)
     if (mode == WalkMode::FULL_UPDATE && (dEqual(_batt.runtAct, -1) || dEqual(_batt.chrgAct, -1))) {
         battery();
     }
 
-    return true;
+    return WalkStep::Done;
 }
 
 // --- Phases ----------------------------------------------------------------------------
@@ -402,12 +448,27 @@ void QxEngine::initUps() {
 // driver.parameter.pollfreq and the handlers. The load.off/load.on commands of 3644-3656
 // are derived by commandOffered().
 bool QxEngine::initInfo(UPSData& data, uint32_t nowMs) {
+    Phase p;
+    do {
+        p = initInfoStep(data, nowMs);
+    } while (p == Phase::Pending);
+    return p == Phase::Ok;
+}
+
+QxEngine::Phase QxEngine::initInfoStep(UPSData& data, uint32_t nowMs) {
     DataScope scope(*this, &data);
 
-    setinfo("driver.version.data", _sub->name);
+    if (!_initStarted || !_walkActive || _walkMode != WalkMode::INIT) {
+        _initStarted = true;
+        setinfo("driver.version.data", _sub->name);
+        // Initialise data
+        beginWalk(WalkMode::INIT);
+    }
 
-    // Initialise data
-    if (!walk(WalkMode::INIT)) return false;
+    WalkStep s = walkStep();
+    if (s == WalkStep::Pending) return Phase::Pending;
+    _initStarted = false;
+    if (s == WalkStep::Failed) return Phase::Failed;
 
     // Init battery guesstimation
     initBattery();
@@ -417,7 +478,7 @@ bool QxEngine::initInfo(UPSData& data, uint32_t nowMs) {
     // Subdriver initinfo
     if (_sub->initinfo) _sub->initinfo(*this);
 
-    return true;
+    return Phase::Ok;
 }
 
 QxEngine::Update QxEngine::walkFailed() {
@@ -431,24 +492,43 @@ QxEngine::Update QxEngine::walkFailed() {
 
 // upsdrv_updateinfo(), nutdrv_qx.c:3525-3601
 QxEngine::Update QxEngine::updateInfo(UPSData& data, uint32_t nowMs) {
-    DataScope scope(*this, &data);
-    _reestablished = false;
+    Update u;
+    do {
+        u = updateInfoStep(data, nowMs);
+    } while (u == Update::Pending);
+    return u;
+}
 
-    // Do a full update (polling) every pollfreq or upon data change (i.e. setvar/instcmd).
-    // Upstream compares whole seconds (now > lastpoll + pollfreq); here milliseconds, safe
-    // across the millis() wrap.
-    bool full = (uint32_t)(nowMs - _lastPollMs) > DEFAULT_POLLFREQ_S * 1000UL || _dataChanged;
+QxEngine::Update QxEngine::updateInfoStep(UPSData& data, uint32_t nowMs) {
+    DataScope scope(*this, &data);
+
+    if (!_walkActive || _walkMode == WalkMode::INIT) {
+        _reestablished = false;
+
+        // Do a full update (polling) every pollfreq or upon data change (i.e. setvar/instcmd).
+        // Upstream compares whole seconds (now > lastpoll + pollfreq); here milliseconds, safe
+        // across the millis() wrap.
+        _walkFull = (uint32_t)(nowMs - _lastPollMs) > DEFAULT_POLLFREQ_S * 1000UL || _dataChanged;
+
+        if (_walkFull) {
+            // Clear ups_status and the alarms (alarm_init())
+            _status = 0;
+            _alarms = "";
+            beginWalk(WalkMode::FULL_UPDATE);
+        } else {
+            // Quick poll data only to see if the UPS is still connected
+            beginWalk(WalkMode::QUICK_UPDATE);
+        }
+    }
+
+    const bool full = _walkFull;
+    WalkStep s = walkStep();
+    if (s == WalkStep::Pending) return Update::Pending;
+    if (s == WalkStep::Failed) return walkFailed();
 
     if (full) {
-        // Clear ups_status and the alarms (alarm_init())
-        _status = 0;
-        _alarms = "";
-        if (!walk(WalkMode::FULL_UPDATE)) return walkFailed();
         _lastPollMs = nowMs;
         _dataChanged = false;
-    } else {
-        // Quick poll data only to see if the UPS is still connected
-        if (!walk(WalkMode::QUICK_UPDATE)) return walkFailed();
     }
 
     // ups_status_set() + status_commit()

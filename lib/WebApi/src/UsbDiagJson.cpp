@@ -84,6 +84,90 @@ void reportData(ChunkWriter& w, const std::vector<uint8_t>& data) {
     w.write(']');
 }
 
+void snum(ChunkWriter& w, int32_t v) {
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%ld", static_cast<long>(v));
+    raw(w, buf);
+}
+
+// Raw Q* bytes as a JSON string (US-136): quotes, backslash, \r \n \t by name, every other
+// byte below 0x20 or from 0x7F as \u00XX, so any answer gives valid JSON
+void textBytes(ChunkWriter& w, const uint8_t* data, size_t len) {
+    w.write('"');
+    for (size_t i = 0; i < len; ++i) {
+        const uint8_t c = data[i];
+        switch (c) {
+            case '"':  raw(w, "\\\""); continue;
+            case '\\': raw(w, "\\\\"); continue;
+            case '\r': raw(w, "\\r"); continue;
+            case '\n': raw(w, "\\n"); continue;
+            case '\t': raw(w, "\\t"); continue;
+            default: break;
+        }
+        if (c < 0x20 || c >= 0x7F) {
+            char esc[7];
+            snprintf(esc, sizeof(esc), "\\u%04X", static_cast<unsigned>(c));
+            raw(w, esc);
+        } else {
+            w.write(c);
+        }
+    }
+    w.write('"');
+}
+
+// "28 32 33 0D": two upper case digits per byte, separated by a space
+void hexBytes(ChunkWriter& w, const uint8_t* data, size_t len) {
+    w.write('"');
+    for (size_t i = 0; i < len; ++i) {
+        char h[4];
+        snprintf(h, sizeof(h), i > 0 ? " %02X" : "%02X", static_cast<unsigned>(data[i]));
+        raw(w, h);
+    }
+    w.write('"');
+}
+
+// The "qx" object (US-136): transport, protocol, probing outcome and the last exchanges
+void qxSection(ChunkWriter& w, const UsbDiagQx& q) {
+    key(w, 1, "qx", false);
+    w.write('{');
+    key(w, 2, "transport", true);        str(w, q.transport);
+    key(w, 2, "protocol", false);        str(w, q.protocol);
+    key(w, 2, "probe", false);           str(w, q.probe);
+    key(w, 2, "tries", false);           num(w, q.tries);
+    key(w, 2, "failed_cycles", false);   num(w, q.failed_cycles);
+    key(w, 2, "retry_ms", false);        num(w, q.retry_ms);
+    key(w, 2, "forced_protocol", false); str(w, q.forced_protocol);
+    key(w, 2, "exchanges", false);
+    if (q.exchanges.empty()) {
+        raw(w, "[]");
+    } else {
+        w.write('[');
+        for (size_t i = 0; i < q.exchanges.size(); ++i) {
+            const UsbDiagQxExchange& e = q.exchanges[i];
+            if (i > 0) w.write(',');
+            newline(w, 3);
+            w.write('{');
+            key(w, 4, "uptime_ms", true);
+            num(w, e.uptime_ms);
+            if (e.time.length() > 0) { key(w, 4, "time", false); str(w, e.time); }
+            key(w, 4, "command", false);
+            textBytes(w, reinterpret_cast<const uint8_t*>(e.command.c_str()), e.command.length());
+            key(w, 4, "answer_text", false); textBytes(w, e.answer.data(), e.answer.size());
+            key(w, 4, "answer_hex", false);  hexBytes(w, e.answer.data(), e.answer.size());
+            key(w, 4, "length", false);      snum(w, e.length);
+            key(w, 4, "duration_ms", false); num(w, e.duration_ms);
+            key(w, 4, "truncated", false);   raw(w, e.truncated ? "true" : "false");
+            key(w, 4, "error", false);       str(w, e.error);
+            newline(w, 3);
+            w.write('}');
+        }
+        newline(w, 2);
+        w.write(']');
+    }
+    newline(w, 1);
+    w.write('}');
+}
+
 // "state" of "export_read": an export without a read says so (a client that only calls
 // GET /api/usb/dump)
 const char* exportReadState(DiagSweep::State st) {
@@ -134,6 +218,9 @@ void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
     key(w, 2, "failed", false);    num(w, s.export_read.failed);
     newline(w, 1);
     w.write('}');
+
+    // Q* section (US-136), only with a Q* UPS: the HID export stays byte for byte as before
+    if (s.qx.present) qxSection(w, s.qx);
 
     // scenarios: un solo oggetto, quindi l'array non è mai vuoto
     key(w, 1, "scenarios", false);

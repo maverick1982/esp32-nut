@@ -1,0 +1,670 @@
+schema: archetipo/plan/v2
+spec_code: US-136
+body: |
+  ---
+  type: plan
+  title: "US-136: Driver Q* nella scheda: percorso Q* dopo l'aggancio, primitive USB, attesa limitata, dati stale e sezione Q* dell'export — Piano di implementazione"
+  description: "Piano di implementazione per US-136"
+  tags: [plan, implementation, US-136]
+  ---
+  # US-136: Driver Q* nella scheda: percorso Q* dopo l'aggancio, primitive USB, attesa limitata, dati stale e sezione Q* dell'export — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-07
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che porta i trasporti USB di `nutdrv_qx` (ADR 0013, sezioni 2, 3 e 5), voglio che dopo l'aggancio di un UPS Q* l'host crei il driver Q* sul trasporto della riga trovata, con le primitive USB che servono ai trasporti Q* e un'attesa delle risposte limitata, in modo che ogni trasporto successivo sia solo la copia del suo `*_command()` e che un tester possa mandarci un export diagnostico con gli scambi Q*.
+
+  **Criteri di Accettazione**
+  - Primitive dell'host sull'interfaccia agganciata, senza lock applicativi durante il trasferimento (ADR 0008): SET_REPORT di byte arbitrari; string descriptor con indice e langid espliciti, senza la memoria degli indici falliti di `requestStringDescriptor()`; lettura dei pezzi dell'interrupt IN con timeout.
+  - L'interfaccia di trasporto Q* (un comando, una risposta, come i `*_command()` di NUT) è usata dal driver Q*, che implementa il nucleo di `IUPSDriver` con `hid() == nullptr`.
+  - Il comando Q* è sincrono nel task di poll: per l'interrupt IN la primitiva prende i pezzi dalla coda degli eventi fino al terminatore o al timeout del trasporto; gli altri eventi letti nel frattempo restano in ordine e vengono gestiti appena il comando finisce (test nativo).
+  - Un passo del poll blocca al massimo per i timeout di un comando del trasporto, molto meno dei 30 s del Task WDT; il limite è scritto nel piano per ogni trasporto.
+  - Monitor del collegamento e scala di ripristino ricevono gli esiti dei trasferimenti come per gli HID; dati stale dopo i poll falliti consecutivi di `upsdrv_updateinfo()`; `isWaitingFirstData()` vero fino al protocollo riconosciuto e al primo giro completo.
+  - Export diagnostico USB, sezione Q*: trasporto, protocollo, esito del riconoscimento e ultimi 20 scambi (comando, risposta grezza in testo ed esadecimale, lunghezza, ora, errore).
+  - Regressione HID: test nativi, replay ed e2e verdi senza cambiare le asserzioni; misura della flash sull'immagine da 4 MB (#93) riportata nel PR.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il lavoro sta quasi tutto in codice nuovo e puro (compilato anche in nativo), con un solo innesto nell'host: `USBHostUPS` offre le primitive e la supervisione, il driver Q* (`QxDriver`) mette insieme trasporto, riconoscimento (`QxProber`, US-134), motore (`QxEngine`, US-133) e controllo (`QxControl`, US-135). Nessun trasporto USB reale: il registro dei trasporti è vuoto, quindi con un UPS Q* vero la scheda resta sul percorso "non ancora supportato" di US-132 finché US-137 non aggiunge krauler, fabula e hunnox. Con gli UPS HID non cambia nulla.
+
+  ### 1. Primitive USB dell'host — `IQxUsbPrimitives.h` (nuovo)
+
+  Interfaccia pura, implementata dall'host e finta nei test:
+
+  ```cpp
+  class IQxUsbPrimitives {
+  public:
+      // SET_REPORT(type, id) di len byte sull'interfaccia agganciata: byte mandati o errore < 0
+      virtual int setReport(uint8_t reportType, uint8_t reportId, const uint8_t* data, size_t len) = 0;
+      // GET_DESCRIPTOR(STRING, index, langid): descrittore grezzo (bLength, 0x03, UTF-16LE),
+      // al massimo 255 byte. Nessuna memoria degli indici falliti (a differenza di
+      // requestStringDescriptor(), review M5): per krauler l'indice è il comando
+      virtual int getStringDescriptor(uint8_t index, uint16_t langid, uint8_t* buf, size_t buflen) = 0;
+      // Un pezzo dell'interrupt IN dell'interfaccia agganciata (usb_interrupt_read()):
+      // lunghezza, oppure QX_USB_ERR_TIMEOUT dopo timeoutMs
+      virtual int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) = 0;
+      // Scarta i pezzi interrupt IN arrivati fuori da un comando (gli altri eventi restano)
+      virtual void discardInput() = 0;
+      // Budget del comando in corso: dopo deadline nessun trasferimento nuovo parte
+      // (QX_USB_ERR_TIMEOUT senza traffico) e le attese interrupt sono accorciate; 0 = nessuno
+      virtual void setDeadline(uint32_t deadlineMs) = 0;
+      virtual uint32_t nowMs() const = 0;
+      // Testo dell'ultimo errore per l'export ("ESP_ERR_TIMEOUT", "budget", "no device")
+      virtual const char* lastError() const = 0;
+  };
+  ```
+
+  Codici di errore negativi come quelli di libusb (`QX_USB_ERR_IO`, `_TIMEOUT`, `_NO_DEVICE`, `_PIPE`), così i trasporti portati restano vicini al codice upstream (`ret <= 0`). L'host implementa le primitive in un adattatore interno (membro di `USBHostUPS`, non una base in più): chiama `hid_class_request_set_report()` (copia in `_request_buffer`, l'API vuole un puntatore non const) e `hid_host_device_get_string_descriptor()` senza tenere `_mutex` né altri lock applicativi, rifiuta i trasferimenti quando `!_link.canPoll(now)` come `requestReport()`, passa ogni esito da `noteControlResult()` (monitor del collegamento, ADR 0008) e conta i successi in `_get_ok_since_claim` (`isControlPipeProven()`, politica di riavvio e attesa dopo il ciclo della porta valgono anche per Q*). Contatori propri per la riga di statistica (", N Q* transfers ok, M failed" solo se non nulli: la riga HID resta identica).
+
+  ### 2. Trasporto USB Q* — `QxUsbTransport.h`, `QxUsbTransports.h/.cpp` (nuovi)
+
+  ```cpp
+  static const uint32_t QX_CTRL_TIMEOUT_MS = 1500;     // USBUPS_CTRL_TIMEOUT_MS di hid_host.c
+  static const uint32_t QX_STEP_BOUND_MAX_MS = 12000;  // limite di un passo, < 30 s del Task WDT
+  inline uint32_t qxStepBoundMs(uint32_t budgetMs) { return 2 * budgetMs + QX_CTRL_TIMEOUT_MS; }
+
+  class QxUsbTransport : public IQxTransport {
+  public:
+      explicit QxUsbTransport(IQxUsbPrimitives& usb) : _usb(usb) {}
+      // Template method: deadline = now + commandBudgetMs(), doCommand(), deadline tolta
+      int command(const char* cmd, size_t cmdlen, char* buf, size_t buflen) final;
+      virtual const char* name() const = 0;          // nome del sottodriver USB di NUT
+      virtual uint32_t commandBudgetMs() const = 0;  // limite scritto nel piano per ogni trasporto
+      virtual bool needsInterruptIn() const { return false; }
+      const char* lastError() const { return _usb.lastError(); }
+  protected:
+      virtual int doCommand(const char* cmd, size_t cmdlen, char* buf, size_t buflen) = 0; // il *_command() portato
+      IQxUsbPrimitives& _usb;
+  };
+  ```
+
+  `QxUsbTransports::create(name, usb)` restituisce `std::unique_ptr<QxUsbTransport>` da una tabella `{nome, fabbrica}` **vuota** in questa storia (commento: US-137 aggiunge `krauler`, `fabula`, `hunnox`): per ogni nome di `qx_usb_id[]` restituisce `nullptr`.
+
+  ### 3. Limite di attesa di un passo del poll (criterio 4)
+
+  Regole che lo garantiscono per costruzione:
+  - **Un comando Q* per passo del walk.** `QxEngine` guadagna un walk a passi (sezione 4): ogni chiamata del poll manda al massimo un comando al trasporto; le righe che riusano la risposta precedente (`previous_item`) non contano.
+  - **Il claim e i ripieghi di `instcmd()` al massimo due comandi**, il secondo solo dopo una risposta del primo (`blazer_claim`: `Q1` poi `I`/`FW?`; ripieghi `load.*.delay`). Per questo il limite è `2 × budget + QX_CTRL_TIMEOUT_MS` (un trasferimento partito poco prima della scadenza finisce entro il suo timeout).
+  - **Budget per comando** imposto dalle primitive con la deadline del template method: un trasporto che ripete (krauler fino a 10 volte su risposte corrotte) si ferma alla scadenza. Deviazione da NUT solo quando il dispositivo non risponde o risponde male fino alla scadenza: il comando sarebbe fallito comunque.
+  - **Una richiesta di comando/SET VAR prende il posto del passo di poll** in quell'iterazione del task.
+
+  | Trasporto | Storia | Budget per comando | Passo massimo (`qxStepBoundMs`) | Motivo |
+  |---|---|---|---|---|
+  | finto dei test (`QxLoopbackTransport`) | US-136 | 2 000 ms | 5,5 s | SET_REPORT a blocchi di 8 byte + pezzi interrupt fino a `\r` |
+  | krauler, fabula | US-137 | 3 000 ms | 7,5 s | 1 GET_DESCRIPTOR ≤ 1,5 s; con errore `ret <= 0` ritorno subito; ripetizioni solo su risposte arrivate |
+  | hunnox | US-137 | 4 500 ms | 10,5 s | preambolo `hunnox_protocol()` fino a 3 GET_DESCRIPTOR (passo 0) + il comando, errori del preambolo ignorati come in NUT |
+  | SET_REPORT + interrupt IN (cypress, phoenix, ippon, sgs) | dopo US-137 | ≤ 4 500 ms, fissato al porting | ≤ 10,5 s | scritture a blocchi da 8 byte + letture da 1 000 ms fino a `\r` |
+
+  Un test nativo controlla che ogni trasporto registrato rispetti `qxStepBoundMs(budget) <= QX_STEP_BOUND_MAX_MS` (oggi vuoto, protegge US-137) e, con un orologio finto, che un passo del driver sul trasporto finto non superi il suo limite neanche con un dispositivo muto.
+
+  ### 4. Walk a passi in `QxEngine` (modifica di US-133)
+
+  `walk(mode)` diventa `beginWalk(mode)` + `walkStep()` con cursore di riga (`_walkRow`, `_walkMode`, `_walkActive`); `walkStep()` ritorna dopo la prima riga che ha chiamato `process()` oppure a fine tabella (stima della batteria a fine walk FULL, come oggi) oppure al fallimento di una riga `QX_FLAG_QUICK_POLL`. API nuove:
+
+  ```cpp
+  enum class Phase : uint8_t { Pending, Ok, Failed };
+  Phase initInfoStep(UPSData& data, uint32_t nowMs);    // upsdrv_initinfo() un comando alla volta
+  Update updateInfoStep(UPSData& data, uint32_t nowMs); // upsdrv_updateinfo(); Update::Pending finché il walk non finisce
+  void abortWalk();                                     // un comando gira tra due passi: il walk riparte
+  bool walkPending() const;
+  ```
+
+  Le operazioni di inizio (scelta full/quick, azzeramento di stato e allarmi, `driver.version.data`) avvengono al primo passo, quelle di fine (`commitStatus()`, allarmi, `_lastPollMs`, `_retry`, `walkFailed()`) all'ultimo. `initInfo()` e `updateInfo()` restano sincroni come wrapper che ciclano sui passi: `test_qx_engine`, `test_qx_protocols`, `test_qx_probe`, `test_qx_control` non cambiano.
+
+  ### 5. Driver Q* — `QxDriver.h/.cpp`, `QxExchangeLog.h` (nuovi), `IQxHostPort.h` (nuovo)
+
+  `IQxHostPort` è ciò che il driver vede dell'host: `lock()`, `unlock()` (il `_mutex` ricorsivo dei dati) e `log(level, text)`. `QxDriver : IUPSDriver` con `hid() == nullptr`:
+
+  - **Stato:** `Probing` → `Init` → `Polling`. `setup()` (aggancio e ogni ripristino della scala) riporta tutto a `Probing`: `QxProber::restart()`, motore rilasciato, dati ombra svuotati con `driver.name = nutdrv_qx`, `ups.vendorid`/`ups.productid` in `%04x` (`nutdrv_qx.c:3920-3921`).
+  - **`poll(data, now)`**, un passo: in `Probing` `QxProber::step()`; a `Claimed` `takeEngine()` + `initUps()`; in `Init` `initInfoStep()` (a `Failed`, il `fatalx("Can't initialise data")` di NUT, log ERROR e ritorno a `Probing` con `setup()`); in `Polling` `updateInfoStep()` ogni `DEFAULT_POLLINTERVAL_S` (2 s) dall'inizio del walk precedente, e a ogni passo finché il walk è in corso.
+  - **Dati ombra, nessun lock durante i trasferimenti:** motore e prober scrivono in un `UPSData _shadow` del driver, senza lock; alla fine di ogni passo che ha cambiato qualcosa il driver prende `host.lock()` e rende i dati dell'host uguali all'ombra (scrive le chiavi cambiate con `valueEquals`, toglie quelle sparite). Sul percorso Q* l'host non scrive altre chiavi in `UPSData`. I consumatori vedono un walk completo alla volta.
+  - **Registro degli scambi:** un decoratore `IQxTransport` interno avvolge il `QxUsbTransport` e passa a prober e motore; dopo ogni comando, sotto `host.lock()`, scrive in `QxExchangeLog` (anello di 20 voci a dimensione fissa: comando fino a 32 byte, risposta grezza fino a 128 byte con flag `truncated`, risultato, `uptime_ms` d'inizio, durata, errore da `lastError()` se risultato < 0).
+  - **Log:** le righe del prober (`[Q*] Using protocol: ...`, `[Q*] Device not supported!`) vanno al log dell'host; a `Update::Stale` una volta WARN `[Q*] Communications with the UPS lost: status read failed!`; al primo `Ok` dopo, con `reestablished()`, INFO `[Q*] Communications with the UPS re-established` (`nutdrv_qx.c:3525-3601`).
+  - **Hook del nucleo:** `initialPollDone()` vero solo dopo `initInfo` riuscito e il primo `updateInfoStep() == Ok`; `dataStale()` vero da `Update::Stale` al successivo `Ok`; `firstDataWaitBounded()` falso; `control()` = `QxControl::instance()`; `qx()` = `this`.
+  - **Comandi (nel task di poll):** `runCommand(data, name, param)` e `runSetVariable(data, name, value)` fanno `abortWalk()`, chiamano `QxControl::runCommand/runSetVariable` sull'ombra, pubblicano. `commands()` restituisce, sotto lock dell'host, una cache calcolata nel task di poll con `QxControl::commandsOf()` alla fine di `Init` (il motore non si legge mai da un altro task).
+  - **Diagnostica:** `fillDiagnostics(UsbDiagQx&)`, chiamata sotto lock: trasporto, protocollo (`nome versione` del claim), stato del riconoscimento (`probing`, `claimed`, `not_supported`, `waiting`), tentativi, giri falliti, protocollo forzato, scambi dal più vecchio.
+
+  ### 6. Nucleo di `IUPSDriver` (aggiunte neutre, default = comportamento HID di oggi)
+
+  ```cpp
+  virtual bool dataStale() const { return false; }           // l'host lo aggiunge a isDataStale()
+  virtual bool firstDataWaitBounded() const { return true; } // FIRST_DATA_MAX_MS vale solo se vero
+  virtual QxDriver* qx() { return nullptr; }                 // estensione Q*, come hid()
+  virtual const QxDriver* qx() const { return nullptr; }
+  ```
+
+  Servono all'host per ogni famiglia (regola dell'ADR 0013, sezione 1); `qx()` segue il modello di `hid()`. La decisione "primo dato pronto" esce da `service()` in una funzione pura `FirstData.h` (`firstDataReady(initialPollDone, statusKnown, bounded, elapsedMs)`), identica per gli HID e provata in nativo.
+
+  ### 7. Interrupt IN nel task di poll — `EventBacklog.h` (nuovo, template header-only)
+
+  `EventBacklog<Ev, N>`: FIFO a dimensione fissa (N = 8) degli eventi letti durante un comando. `readInterruptChunk(source, backlog, bound, buf, buflen, got, timeoutMs, dropped)`: riceve dalla coda fino al primo pezzo INPUT dell'interfaccia agganciata (→ `Chunk`) o al timeout (→ `Timeout`); un DISCONNECTED o TRANSFER_ERROR dell'interfaccia agganciata va nel backlog e chiude l'attesa (→ `Gone`/`Error`); ogni altro evento va nel backlog, tranne gli INPUT di altre interfacce, scartati e contati; backlog pieno → `Error` senza togliere altro dalla coda (l'ordine resta). `discardInputChunks()` fa lo stesso con attesa 0. Template sul tipo di evento e sulla sorgente (`receive(ev, waitMs)`, `now()`), così il test nativo usa eventi e coda finti. `USBHostUPS::processEvents()` gestisce prima il backlog e poi la coda, con il corpo del `switch` spostato in `handleEvent()`; per gli HID il backlog è sempre vuoto.
+
+  ### 8. Innesto in `USBHostUPS`
+
+  - **Aggancio:** `claimQxInterface()` chiama `QxUsbTransports::create(match.qx_transport, _qx_usb)`. `nullptr` → percorso di US-132 invariato. Altrimenti, sotto `_mutex`: `_driver = new QxDriver(...)`, `_driver->setup()`, `_unsupported_device = ""`, `_link.reset()`, `_first_data_ready = false`, `_claimed_at`, `_get_ok_since_claim = 0`, `_in_pipe_wanted = transport->needsInterruptIn()` (pipe IN avviata solo allora, con il ritentativo di oggi), `_is_ready_to_poll = true`. Il ramo HID imposta `_in_pipe_wanted = true` e non cambia.
+  - **Supervisione condivisa:** `service()` non cambia ordine: monitor del collegamento, controllo del trasferimento bloccato, ciclo della porta e riavvio valgono per Q* come per gli HID; il watchdog degli INPUT resta inerte (`DriverDispatch::inputValuesPolled()` vero senza HID). `recoverInterface()` con `_in_pipe_wanted == false` salta stop/clear halt/start della pipe IN e fa solo `setup()` del driver (riparte il riconoscimento). `processInputReport()` esce subito senza estensione HID (`DriverDispatch::hidOf(_driver) == nullptr`). `isDataStale()` aggiunge `_driver->dataStale()`; il primo dato usa `firstDataReady()` con `_driver->firstDataWaitBounded()`.
+  - **Comandi da altri task:** i tre metodi neutri di `IUpsControlPort` (US-135). `driverCommands()` = `qx()->commands()` sotto `_mutex`. `runDriverCommand()`/`runDriverSetVariable()` mettono la richiesta in una casella unica (serializzata da un mutex FreeRTOS proprio, mai `_op_mutex`, che il task di poll tiene durante `service()`), poi aspettano un semaforo binario fino a `qxStepBoundMs(budget) × 2 + 1 s`; scaduto il tempo la richiesta è abbandonata (numero di generazione) e l'esito è `FAILED`. `service()` la serve subito dopo `processEvents()` e la supervisione: se il poll non può girare (riavvio chiesto, pipe in ripristino, `!_link.canPoll()`, driver non Q* o non pronto) risponde `FAILED`/`NOT_CONNECTED` senza trasferimenti; altrimenti esegue `qx()->runCommand/runSetVariable` al posto del passo di poll di quell'iterazione. Il log "Command X: OK" resta quello di `USBHostUPS::executeCommand()`.
+  - **Export:** `snapshotUSBDiagnostics()` riempie `s.qx` con `qx()->fillDiagnostics()` quando c'è un driver Q*; con US-132 (nessun driver) solo `present` e `transport`.
+
+  ### 9. Sezione Q* dell'export — `UsbDiagSnapshot.h`, `UsbDiagJson.cpp`
+
+  `UsbDiagSnapshot` guadagna `UsbDiagQx qx` (`present`, `transport`, `protocol`, `probe`, `tries`, `failed_cycles`, `forced_protocol`, `exchanges`, più `epoch_ms`/`uptime_ms` della scheda all'istante dell'export). `UsbDiagJson` scrive l'oggetto `"qx"` dopo `"export_read"` **solo se `present`**: l'export HID resta identico byte per byte. Ogni scambio: `uptime_ms`, `time` (solo con l'ora della scheda valida, calcolata con `boardEpochMs()` come le righe del System Log, `src/network/web_config_server.cpp:536`), `command` (testo con escape JSON), `answer_text`, `answer_hex` (due cifre maiuscole separate da spazio), `length` (risultato del trasporto), `duration_ms`, `truncated`, `error`.
+
+  ### Fuori da questa storia (da una spec successiva)
+
+  Punti lasciati aperti da US-135 che i criteri di US-136 non chiedono: catalogo RW delle variabili Q* con intervalli (oggi un SET VAR Q* da NUT o Web UI risponde READONLY, perché `checkSetValue()` non trova la variabile nel catalogo; `runDriverSetVariable()` è comunque implementato e provato), salvataggio di `ups.delay.*` come valori lato driver, `beeper.toggle` dalla Web UI. Un UPS Q* che nessun protocollo riconosce resta "in attesa dei primi dati" (stale) e il System Log scrive `Device not supported!` una volta.
+
+  ### Note
+
+  - #93 riguarda l'ESP32-S3 con 4 MB (slot OTA massimo 0x1F0000 = 2 031 616 byte): in questo branch non c'è un ambiente classico, la misura si fa sull'immagine `esp32-s3-standard` rispetto a quello slot e a `cf910d2`.
+  - ADR 0013 vieta rami di famiglia dentro la logica HID: le decisioni passano da `qx()`/`hid()` e da proprietà (`_in_pipe_wanted`), non da `if (qx)` sparsi.
+  - Modifiche ai file con Edit/Write, non con script inline (memoria di progetto).
+
+  ---
+
+  ## Strategia di test
+
+  La "dimostrazione" è un test nativo del driver Q* con primitive finte e un trasporto finto; l'host vero (`USBHostUPS.cpp`, non compilabile in nativo) si verifica con la regressione completa, la build e, con il consenso dell'utente, una prova di fumo sull'Eaton 3S.
+
+  - **`test_qx_engine` (casi nuovi):** il walk a passi produce gli stessi `UPSData` del walk sincrono su tutte le tabelle `testing_t` portate; un comando al trasporto per passo; `abortWalk()` e ripartenza; `Update::Pending`; nessun test esistente cambiato.
+  - **`test_qx_interrupt_read` (nuovo):** ordine degli eventi conservato nel backlog, pezzo dell'interfaccia agganciata restituito, timeout, DISCONNECTED/TRANSFER_ERROR che chiudono l'attesa e restano in coda, INPUT di altre interfacce scartati e contati, backlog pieno, `discardInputChunks()`.
+  - **`test_qx_driver` (nuovo, la dimostrazione):** `FakeQxUsbPrimitives` (orologio finto, trasferimenti registrati, controllo che nessuna primitiva giri con il lock finto dell'host preso) + `QxLoopbackTransport` (SET_REPORT a blocchi di 8 byte, risposta in pezzi interrupt fino a `\r`, risposte dalla tabella `testing_t` di megatec) + `FakeQxHostPort`. Ciclo completo: aggancio (`setup`), riconoscimento di `megatec`, `Init` in più passi, primo giro completo (`initialPollDone()` passa a vero solo allora), valori in `UPSData` dell'host (`ups.status`, `input.voltage`, `driver.name`, `ups.vendorid`), comandi tramite `QxControl` e una porta che inoltra a `QxDriver::runCommand` (stringa mandata per `beeper.toggle`, `shutdown.return`), dispositivo muto → `dataStale()` dopo i fallimenti consecutivi di NUT e riga di log una volta, ritorno → `re-established`, registro degli ultimi 20 scambi (il 21° scaccia il primo), `fillDiagnostics()`. Limite di attesa: con risposte che scadono, ogni `poll()` resta entro `qxStepBoundMs(budget)` sull'orologio finto. `FirstData.h`: HID invariato (limite di 30 s) e Q* senza limite. Registro dei trasporti: `nullptr` per ogni nome di `qx_usb_id[]`, limite rispettato da ogni riga registrata.
+  - **`test_usb_diag_json` (casi nuovi):** export HID identico senza `qx`; oggetto `qx` con scambi, esadecimale, escape dei byte di controllo, `time` presente solo con l'ora valida, `truncated`.
+  - **Regressione:** suite nativa completa (replay inclusi), e2e completa (`npx playwright test`), build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; nessuna asserzione esistente cambia; dimensione del firmware S3 confrontata con `cf910d2` e con lo slot da 4 MB di #93.
+  - **Prova di fumo HID (solo con sì esplicito dell'utente):** Eaton 3S, 30 minuti, nessun WARN nuovo rispetto alla build di US-132, stessi valori.
+
+  Nessuna modifica alla Web UI: niente mockup e niente e2e nuovi; il video dimostrativo non è previsto (nessun incremento visibile all'utente).
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-07_
+tasks:
+  - id: TASK-01
+    title: 'QxEngine: walk a passi (un comando Q* per passo) con initInfoStep, updateInfoStep e abortWalk'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il motore Q* può fare un walk un comando alla volta, così un passo del poll aspetta al massimo un comando; i wrapper sincroni restano identici.
+
+      **Leggere:** `lib/USBHostUPS/src/QxEngine.h`, `QxEngine.cpp` (righe 280-460: `walk()`, `initInfo()`, `walkFailed()`, `updateInfo()`, `commitStatus()`), sezione 4 "Walk a passi" del piano; `nut_repo/drivers/nutdrv_qx.c:4489-4783` (qx_ups_walk) e `3525-3601` (upsdrv_updateinfo).
+
+      **Modificare:**
+      1. `QxEngine.h`: `Update` guadagna `Pending` (commento: walk non finito, un comando mandato); nuovo `enum class Phase : uint8_t { Pending, Ok, Failed };`; metodi pubblici `Phase initInfoStep(UPSData&, uint32_t)`, `Update updateInfoStep(UPSData&, uint32_t)`, `void abortWalk()`, `bool walkPending() const`; membri privati `WalkMode _walkMode`, `size_t _walkRow`, `bool _walkActive`, `bool _walkFull`, `bool _initStarted`; metodi privati `void beginWalk(WalkMode)` e `enum class WalkStep { Pending, Done, Failed } walkStep()`.
+      2. `QxEngine.cpp`: spostare il corpo del ciclo di `walk()` in `walkStep()`, che riparte da `_walkRow`, e ritorna `Pending` subito dopo una riga che ha chiamato `process()` (non dopo una riga che ha riusato `_prevAnswer`), `Failed` dove oggi `walk()` ritorna false, `Done` a fine tabella dopo la stima della batteria (solo FULL). `beginWalk()` contiene l'azzeramento iniziale di oggi (batt, `_prevCommand`, `_prevAnswer`). `walk(mode)` = `beginWalk` + ciclo su `walkStep` finché `Pending`.
+      3. `initInfoStep()`: al primo passo `setinfo("driver.version.data", ...)` e `beginWalk(INIT)`; a `Done` la coda di oggi (`initBattery`, `_lastPollMs`, `initinfo` del sottodriver) e `Phase::Ok`; a `Failed` `Phase::Failed`. `initInfo()` = ciclo su `initInfoStep` finché `Pending`.
+      4. `updateInfoStep()`: al primo passo di un walk la scelta full/quick e l'azzeramento di stato e allarmi di oggi, salvati in `_walkFull`; a `Done` la coda di oggi (`_lastPollMs`, `_dataChanged`, `commitStatus`, allarmi, `_retry`, `_reestablished`); a `Failed` `walkFailed()`; altrimenti `Update::Pending`. `updateInfo()` = ciclo su `updateInfoStep` finché `Pending`. `_reestablished = false` solo al primo passo.
+      5. `abortWalk()`: `_walkActive = false`, `_initStarted = false`, `clearWork()`; `reset()` azzera i campi nuovi (commento in `reset()`: ogni campo nuovo va azzerato qui).
+      6. Ogni `DataScope` resta per chiamata pubblica.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine -f test_qx_protocols -f test_qx_probe -f test_qx_control` verde senza toccare i test.
+
+      **Fatto quando:** i wrapper sincroni danno gli stessi risultati di prima e le API a passi esistono.
+
+      **Blocchi:** se un sottodriver portato chiama `process()` dentro un preprocess durante il walk (più comandi per riga), fermarsi e segnalarlo: cambia il conteggio per passo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxEngine.h — Phase, Update::Pending, API a passi, stato del walk
+      - lib/USBHostUPS/src/QxEngine.cpp — walkStep/beginWalk, wrapper sincroni
+
+      ## Criteri di Completamento
+      - [ ] `walk()`, `initInfo()`, `updateInfo()` sono wrapper sui passi
+      - [ ] `walkStep()` si ferma dopo ogni riga che chiama `process()`
+      - [ ] `reset()` azzera lo stato del walk
+      - [ ] le quattro suite Q* esistenti passano senza modifiche
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del walk a passi in test_qx_engine
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che il walk a passi equivale a quello sincrono e manda un solo comando per passo.
+
+      **Leggere:** `test/test_qx_engine/test_main.cpp`, `test/mocks/QxTestingTransport.h`, `test/mocks/QxTestingTables.h`, `lib/USBHostUPS/src/QxProtocols.h` (`QX_SUBDRIVER_LIST`).
+
+      **Modificare:**
+      1. Aggiungere a `test/test_qx_engine/test_main.cpp` (senza cambiare i casi esistenti):
+         - per ogni protocollo con tabella `testing_t`: claim, poi `initInfoStep` in ciclo e `updateInfoStep` in ciclo su un motore, `initInfo`/`updateInfo` su un altro; `UPSData` e `status()` uguali;
+         - un solo `command()` al trasporto per chiamata di `initInfoStep`/`updateInfoStep` (contatore del trasporto finto; se manca, aggiungere un contatore a `QxTestingTransport` senza cambiare il suo comportamento);
+         - righe con lo stesso comando consecutive: nessun comando in più (riuso di `previous_item`);
+         - `abortWalk()` a metà `Init`: il passo dopo ricomincia e il risultato finale è uguale;
+         - trasporto che fallisce sullo stato: `Update::Failed` fino a `Stale` come il wrapper sincrono.
+      2. Registrare i casi in `main`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_engine` verde.
+
+      **Fatto quando:** i casi nuovi passano e i vecchi sono intatti.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_qx_engine/test_main.cpp — casi del walk a passi
+      - test/mocks/QxTestingTransport.h — solo un contatore dei comandi, se manca
+
+      ## Criteri di Completamento
+      - [ ] equivalenza passi/sincrono su tutti i protocolli portati
+      - [ ] un comando per passo verificato
+      - [ ] abortWalk e Stale provati
+    ref: TASK-02
+  - id: TASK-03
+    title: Primitive USB Q*, QxUsbTransport con budget, registro dei trasporti vuoto e hook neutri del nucleo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le interfacce su cui poggeranno i trasporti portati (US-137) e gli hook del nucleo che l'host userà per ogni famiglia.
+
+      **Leggere:** sezioni 1, 2, 3 e 6 del piano; `lib/USBHostUPS/src/IQxTransport.h`, `IUPSDriver.h`, `IHidTransport.h`; `lib/usb_host_hid/hid_host.c:75-84` (timeout); `lib/USBHostUPS/src/DriverRegistry.cpp` (nomi dei trasporti delle righe Q*); `platformio.ini` `[env:native]`.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/IQxUsbPrimitives.h` con l'interfaccia del piano e i codici `QX_USB_ERR_IO = -1`, `QX_USB_ERR_NO_DEVICE = -4`, `QX_USB_ERR_TIMEOUT = -7`, `QX_USB_ERR_PIPE = -9` (commento: valori di libusb).
+      2. Creare `lib/USBHostUPS/src/QxUsbTransport.h` (+ `.cpp` solo se serve) con `QX_CTRL_TIMEOUT_MS`, `QX_STEP_BOUND_MAX_MS`, `qxStepBoundMs()` e la classe del piano; `command()` final: `_usb.setDeadline(_usb.nowMs() + commandBudgetMs())`, `doCommand()`, `_usb.setDeadline(0)`, ritorna il risultato. Commento di classe con la tabella dei budget del piano.
+      3. Creare `lib/USBHostUPS/src/QxUsbTransports.h/.cpp`: `namespace QxUsbTransports { std::unique_ptr<QxUsbTransport> create(const char* name, IQxUsbPrimitives& usb); size_t count(); const char* nameAt(size_t i); uint32_t budgetAt(size_t i); }` su una tabella statica vuota (commento: US-137 aggiunge krauler, fabula, hunnox; una riga = nome di NUT + fabbrica + budget del piano). Con la tabella vuota usare una sentinella, non un array di dimensione zero.
+      4. `IUPSDriver.h`: forward declaration `class QxDriver;`, aggiungere `dataStale()`, `firstDataWaitBounded()`, `qx()` const e non const con i default del piano e commenti (ADR 0013 sezione 2: stale e primo dato per ogni famiglia; `qx()` come `hid()`).
+      5. `platformio.ini` `[env:native]`: `+<../lib/USBHostUPS/src/QxUsbTransports.cpp>` (e `QxUsbTransport.cpp` se creato).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` compila e resta verde (gli hook hanno default, nessun driver cambia).
+
+      **Fatto quando:** le interfacce compilano in nativo e nessun comportamento HID cambia.
+
+      **Blocchi:** se `hid_class_request_set_report()` non permette report type OUTPUT/FEATURE arbitrari, segnalarlo prima di proseguire.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IQxUsbPrimitives.h — nuovo
+      - lib/USBHostUPS/src/QxUsbTransport.h — nuovo
+      - lib/USBHostUPS/src/QxUsbTransports.h — nuovo
+      - lib/USBHostUPS/src/QxUsbTransports.cpp — nuovo, tabella vuota
+      - lib/USBHostUPS/src/IUPSDriver.h — dataStale, firstDataWaitBounded, qx()
+      - platformio.ini — file nuovi in native
+
+      ## Criteri di Completamento
+      - [ ] interfaccia delle primitive con i codici di errore
+      - [ ] `QxUsbTransport::command()` imposta e toglie la deadline
+      - [ ] registro vuoto che restituisce nullptr
+      - [ ] hook del nucleo con default HID e suite nativa verde
+    ref: TASK-03
+  - id: TASK-04
+    title: 'QxDriver: driver Q* sul nucleo di IUPSDriver con dati ombra, registro degli scambi, comandi e diagnostica'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il driver che l'host crea dopo l'aggancio di un UPS Q*: riconoscimento, init, poll a passi, stale, comandi e dati per l'export, senza lock durante i trasferimenti.
+
+      **Leggere:** sezioni 3, 5 e 9 del piano; `lib/USBHostUPS/src/QxProbe.h/.cpp`, `QxEngine.h`, `QxControl.h/.cpp`, `IUPSDriver.h`, `UPSData.h` (`find`, `set`, `remove`, `valueEquals`, `getAll`), `GenericDriver.cpp:566-569` (`driver.name`), `UsbDiagSnapshot.h`; `nut_repo/drivers/nutdrv_qx.c:3525-3601`, `3920-3921`.
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/IQxHostPort.h`: `lock()`, `unlock()`, `log(const char* level, const char* text)`.
+      2. Creare `lib/USBHostUPS/src/QxExchangeLog.h`: `struct QxExchange { char command[33]; uint8_t answer[128]; uint8_t answerLen; bool truncated; int32_t result; uint32_t atMs; uint32_t durationMs; char error[24]; }`; classe ad anello da 20 (`CAPACITY`), `add()`, `size()`, `at(i)` dal più vecchio, `clear()`.
+      3. In `UsbDiagSnapshot.h` aggiungere le struct `UsbDiagQxExchange` (String/vector come il resto della snapshot) e `UsbDiagQx` del piano (sezione 9) e il campo `UsbDiagQx qx;` in fondo a `UsbDiagSnapshot` (il writer JSON arriva con TASK-10).
+      4. Creare `lib/USBHostUPS/src/QxDriver.h/.cpp` come da sezione 5: costruttore `QxDriver(std::unique_ptr<QxUsbTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid, const QxSubdriver* const* list = QX_SUBDRIVER_LIST)`; decoratore privato di `IQxTransport` che registra gli scambi (sotto `host.lock()`, durata dall'orologio delle primitive tramite il trasporto: aggiungere `uint32_t nowMs() const` a `QxUsbTransport` che inoltra a `_usb.nowMs()`); `QxProber` costruito sul decoratore con un `QxLogFn` che inoltra a `host.log`; stati `Probing/Init/Polling`; `setup()`, `poll()`, `initialPollDone()`, `dataStale()`, `firstDataWaitBounded() == false`, `control()`, `qx()`, `getDriverName() == "nutdrv_qx"`; `runCommand()`, `runSetVariable()`, `commands()`, `fillDiagnostics()`, `needsInterruptIn()`, `transportBudgetMs()`; pubblicazione ombra → dati dell'host sotto lock (cambiate con `valueEquals`, tolte quelle assenti dall'ombra), solo nei passi che hanno cambiato l'ombra.
+      5. Poll in `Polling`: nuovo walk quando `now - _walkStartedAt >= QxEngine::DEFAULT_POLLINTERVAL_S * 1000` oppure quando `walkPending()`; log WARN a `Stale` (una volta) e INFO `re-established` come da piano.
+      6. Nessun include HID in `QxDriver.*` (`IHidDriver.h`, `IHidTransport.h`, `HIDParser.h`, `NutTable.h`, `IUSBHostUPS.h`, `USBHostUPS.h`); mai `hidPort(`.
+      7. `platformio.ini` `[env:native]`: `+<../lib/USBHostUPS/src/QxDriver.cpp>`.
+
+      **Verifica:** suite nativa compila e resta verde; `grep -n "hidPort(\|IHid" lib/USBHostUPS/src/QxDriver.*` vuoto.
+
+      **Fatto quando:** `QxDriver` compila in nativo con l'interfaccia del piano; i test arrivano con TASK-05.
+
+      **Blocchi:** se `QxProber` non permette di riavviare con lo stesso trasporto dopo `takeEngine()` senza riallocare, o se `UPSData` non offre un modo di togliere una chiave, segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/IQxHostPort.h — nuovo
+      - lib/USBHostUPS/src/QxExchangeLog.h — nuovo
+      - lib/USBHostUPS/src/QxDriver.h — nuovo
+      - lib/USBHostUPS/src/QxDriver.cpp — nuovo
+      - lib/USBHostUPS/src/QxUsbTransport.h — nowMs()
+      - lib/USBHostUPS/src/UsbDiagSnapshot.h — UsbDiagQx
+      - platformio.ini — QxDriver.cpp in native
+
+      ## Criteri di Completamento
+      - [ ] `QxDriver` implementa il nucleo con `hid() == nullptr` e `qx() == this`
+      - [ ] motore e prober lavorano su dati ombra, pubblicati sotto lock solo a fine passo
+      - [ ] registro di 20 scambi scritto sotto lock
+      - [ ] cache dei comandi calcolata nel task di poll
+      - [ ] nessun include o chiamata HID
+    ref: TASK-04
+  - id: TASK-05
+    title: Test nativo del ciclo Q* completo con primitive finte e trasporto finto (dimostrazione)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il test della dimostrazione: aggancio, riconoscimento, primo giro, valori, comandi, stale, export e limite di attesa, con nessuna primitiva chiamata sotto lock.
+
+      **Leggere:** sezione "Strategia di test" del piano; `test/mocks/QxTestingTransport.h`, `QxTestingTables.h`, `QxFakeControlPort.h`; `test/test_qx_probe/test_main.cpp` (struttura); `nut_repo/drivers/nutdrv_qx_megatec.c` (tabella `testing_t`).
+
+      **Modificare:**
+      1. Creare `test/mocks/FakeQxUsbPrimitives.h`: orologio finto (`advance()`), coda di pezzi interrupt programmabile, registro di SET_REPORT/GET_DESCRIPTOR, modalità "muto" in cui ogni chiamata consuma il suo timeout sull'orologio (SET_REPORT/descrittore 1 500 ms, interrupt il timeout chiesto), rispetto della deadline (`QX_USB_ERR_TIMEOUT` senza traffico dopo la scadenza), `lastError()`, e un puntatore a un flag di lock: ogni primitiva chiamata con il lock preso fa fallire il test.
+      2. Creare `test/mocks/FakeQxHostPort.h`: `lock()/unlock()` che alzano il flag, righe di log registrate.
+      3. Creare `test/mocks/QxLoopbackTransport.h`: `QxUsbTransport` di test (budget 2 000 ms, `needsInterruptIn() == true`, nome `loopback`): `discardInput()`, il comando in blocchi da 8 byte con `setReport(0x02, 0, ...)`, poi `readInterrupt(…, 1000)` fino a `\r`; il finto risponde ai blocchi con i pezzi della risposta presa da una tabella comando → risposta (megatec `testing_t`). Commento: trasporto di test, non un port di NUT.
+      4. Creare `test/test_qx_driver/test_main.cpp` con i casi: ciclo completo fino a `initialPollDone()`; `isWaitingFirstData` simulato con `firstDataReady()` di TASK-06 se già presente, altrimenti con `initialPollDone()`; valori dell'host (`ups.status` calcolato, `input.voltage`, `driver.name == nutdrv_qx`, `driver.version.data`, `ups.vendorid`); `hid() == nullptr`, `qx() == &driver`; comandi tramite `QxControl::instance()` e una porta finta che inoltra `runDriverCommand/runDriverSetVariable/driverCommands` al driver (stringa mandata per `beeper.toggle` e `shutdown.return`, comando non offerto → `NOT_SUPPORTED`, comando durante un walk → walk ripartito e dati coerenti); dispositivo muto → `dataStale()` dopo i fallimenti consecutivi di NUT (`QX_MAXTRIES + 1`) con WARN una volta, ritorno → INFO `re-established` e `dataStale() == false`; ogni `poll()` con dispositivo muto entro `qxStepBoundMs(2000)` sull'orologio finto; 21 scambi → 20 nel registro, il primo scacciato; `fillDiagnostics()` (trasporto, protocollo, `probe`, scambi con risposta grezza ed errore); `setup()` dopo un ripristino → di nuovo `probing`; registro dei trasporti: `QxUsbTransports::create()` restituisce `nullptr` per ogni nome Q* di `DriverRegistry` e ogni riga registrata rispetta `QX_STEP_BOUND_MAX_MS`.
+      5. Nessuna primitiva sotto lock in tutti i casi (il finto lo verifica).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_driver` verde.
+
+      **Fatto quando:** tutti i casi della dimostrazione passano.
+
+      **Blocchi:** se la tabella `testing_t` di megatec non copre un comando usato dal ciclo, aggiungere la risposta nel finto citando la riga upstream.
+
+      ## File Coinvolti
+      - test/mocks/FakeQxUsbPrimitives.h — nuovo
+      - test/mocks/FakeQxHostPort.h — nuovo
+      - test/mocks/QxLoopbackTransport.h — nuovo
+      - test/test_qx_driver/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] ciclo completo aggancio → riconoscimento → primo giro → valori
+      - [ ] comandi via QxControl, stale e re-established provati
+      - [ ] limite di attesa per passo verificato con orologio finto
+      - [ ] nessuna primitiva chiamata con il lock preso
+    ref: TASK-05
+  - id: TASK-06
+    title: EventBacklog e lettura dei pezzi interrupt IN dalla coda degli eventi; FirstData.h
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la logica pura che permette alla primitiva interrupt di leggere i pezzi dalla coda degli eventi del task di poll senza perdere né riordinare gli altri eventi, e la decisione del primo dato condivisa da HID e Q*.
+
+      **Leggere:** sezioni 6 e 7 del piano; `lib/USBHostUPS/src/USBHostUPS.h` (struct `HidEvent`, `EVENT_QUEUE_LEN`, `EVENT_QUEUE_RESERVED`), `USBHostUPS.cpp:391-402` (primo dato) e `429-471` (`processEvents`).
+
+      **Modificare:**
+      1. Creare `lib/USBHostUPS/src/EventBacklog.h` (header-only, niente FreeRTOS): `template <typename Ev, size_t N> class EventBacklog { bool push(const Ev&); bool pop(Ev&); size_t size() const; bool full() const; void clear(); }`; `enum class ChunkRead : uint8_t { Chunk, Timeout, Gone, Error };`; `template <typename Traits, typename Source, size_t N> ChunkRead readInterruptChunk(Source& src, EventBacklog<typename Traits::Event, N>& backlog, typename Traits::Handle bound, uint8_t* buf, size_t buflen, size_t& got, uint32_t timeoutMs, uint32_t& dropped)` e `discardInputChunks(...)` con le regole della sezione 7. `Traits` espone `Event`, `Handle`, `isInput(ev)`, `isDisconnect(ev)`, `isTransferError(ev)`, `handle(ev)`, `data(ev)`, `length(ev)`; `Source` espone `bool receive(Event&, uint32_t waitMs)` e `uint32_t now()`. Il pezzo copiato è troncato a `buflen`.
+      2. Creare `lib/USBHostUPS/src/FirstData.h`: `inline bool firstDataReady(bool initialPollDone, bool statusKnown, bool bounded, uint32_t elapsedMs, uint32_t maxMs, bool& timedOut)` che riproduce la regola di `service()` (pronto se `initialPollDone && statusKnown`, oppure se `bounded && elapsedMs >= maxMs`, con `timedOut` per il livello del log).
+
+      **Verifica:** suite nativa compila (gli header non sono ancora usati dall'host).
+
+      **Fatto quando:** i due header esistono con le API del piano.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EventBacklog.h — nuovo
+      - lib/USBHostUPS/src/FirstData.h — nuovo
+
+      ## Criteri di Completamento
+      - [ ] backlog FIFO a dimensione fissa
+      - [ ] lettura del pezzo con le regole di ordine, timeout, Gone/Error e scarto
+      - [ ] `firstDataReady()` equivalente alla regola di oggi
+    ref: TASK-06
+  - id: TASK-07
+    title: Test nativi di EventBacklog, readInterruptChunk e firstDataReady
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il test nativo richiesto dal criterio 3: eventi letti durante un comando restano in ordine e vengono gestiti dopo.
+
+      **Leggere:** `lib/USBHostUPS/src/EventBacklog.h`, `FirstData.h`; struttura di un test esistente (`test/test_link_monitor/test_main.cpp`).
+
+      **Modificare:**
+      1. Creare `test/test_qx_interrupt_read/test_main.cpp` con un evento finto (tipo, handle, dati, lunghezza), i suoi `Traits` e una coda finta con orologio:
+         - pezzo dell'interfaccia agganciata → `Chunk`, byte e lunghezza giusti, troncato a `buflen`;
+         - CONNECTED e INPUT di un'altra interfaccia prima del pezzo → il primo nel backlog, il secondo scartato e contato;
+         - DISCONNECTED dell'interfaccia agganciata → `Gone`, evento nel backlog dopo quelli letti prima (ordine);
+         - TRANSFER_ERROR → `Error`, nel backlog;
+         - coda vuota → `Timeout` dopo il tempo chiesto sull'orologio finto;
+         - backlog pieno → `Error`, l'evento successivo resta nella coda;
+         - `discardInputChunks()`: toglie i pezzi dell'interfaccia agganciata e conserva gli altri eventi in ordine;
+         - svuotamento: `pop()` restituisce gli eventi nell'ordine di arrivo.
+      2. Nello stesso file, casi di `firstDataReady()`: HID (`bounded`) pronto per stato noto e per scadenza dei 30 s con `timedOut`; Q* (`!bounded`) mai pronto per scadenza, pronto solo con `initialPollDone && statusKnown`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_qx_interrupt_read` verde.
+
+      **Fatto quando:** tutti i casi passano.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_qx_interrupt_read/test_main.cpp — nuovo
+
+      ## Criteri di Completamento
+      - [ ] ordine degli eventi conservato
+      - [ ] Gone/Error/Timeout/backlog pieno provati
+      - [ ] firstDataReady per HID e Q*
+    ref: TASK-07
+  - id: TASK-08
+    title: 'USBHostUPS: primitive Q* senza lock, backlog degli eventi in processEvents, contatori'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'host implementa le primitive Q* sull'interfaccia agganciata, con gli esiti al monitor del collegamento e la lettura interrupt dalla coda degli eventi.
+
+      **Leggere:** sezioni 1 e 7 del piano; `lib/USBHostUPS/src/USBHostUPS.h`, `USBHostUPS.cpp` (`processEvents` 429-471, `noteControlResult` 791-801, `requestReport` 961-996, `requestStringDescriptor` 1109-1153, `logStats` 405-427); `lib/usb_host_hid/include/usb/hid_host.h` (`hid_class_request_set_report`, `hid_host_device_get_string_descriptor`).
+
+      **Modificare:**
+      1. `USBHostUPS.h`: classe annidata privata `QxUsbPort : public IQxUsbPrimitives, public IQxHostPort` con riferimento all'host; membro `QxUsbPort _qx_usb{*this};`; `EventBacklog<HidEvent, 8> _event_backlog;` con `struct HidEventTraits`; `uint32_t _qx_deadline = 0;`, `const char* _qx_last_error = "";`, contatori `_stat_qx_ok`, `_stat_qx_failed`; metodo privato `void handleEvent(const HidEvent& ev);`.
+      2. `processEvents()`: prima `while (_event_backlog.pop(ev)) handleEvent(ev);`, poi la coda come oggi; il corpo dello `switch` va in `handleEvent()` senza cambiamenti.
+      3. Primitive (poll task, nessun lock applicativo preso):
+         - `setReport`: rifiuta se `!_is_ready_to_poll || !_hid_dev_handle`, se `!_link.canPoll(millis())` o se la deadline è passata (`QX_USB_ERR_TIMEOUT`, errore "budget"); copia in `_request_buffer`, `hid_class_request_set_report()`, `noteControlResult()`, contatori, `_get_ok_since_claim++` sul successo; esito ESP mappato sui codici `QX_USB_ERR_*` e `_qx_last_error = esp_err_to_name(err)`.
+         - `getStringDescriptor`: come sopra con `hid_host_device_get_string_descriptor(handle, index, langid, buf, min(buflen,255), &len)`; nessun accesso a `_failed_strings` né a `_lang_id`.
+         - `readInterrupt`: timeout accorciato alla deadline; `readInterruptChunk<HidEventTraits>()` su una sorgente che usa `xQueueReceive(_event_queue, &ev, pdMS_TO_TICKS(wait))` e `millis()`; gli scarti si sommano a `_dropped_events`; `Gone` → `QX_USB_ERR_NO_DEVICE`, `Error` → `QX_USB_ERR_IO`, `Timeout` → `QX_USB_ERR_TIMEOUT`. I timeout interrupt non vanno al monitor del collegamento (in NUT sono un comando senza risposta).
+         - `discardInput`, `setDeadline`, `nowMs` (`millis()`), `lastError`; `lock/unlock` su `_mutex`; `log` su `log()` dell'host.
+      4. `logStats()`: aggiungere ", %u Q* transfers ok, %u failed" solo se uno dei due contatori è non nullo (riga HID identica) e azzerarli.
+      5. Commento di thread model in testa alla classe: le primitive Q* girano solo nel task di poll, senza `_mutex`; gli eventi letti durante un comando passano dal backlog.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` da PowerShell compila; suite nativa verde.
+
+      **Fatto quando:** le primitive esistono e il percorso HID è invariato (backlog sempre vuoto).
+
+      **Blocchi:** se `hid_class_request_set_report()` usa un timeout diverso da `CTRL_REQUEST_TIMEOUT_MS`, aggiornare `QX_CTRL_TIMEOUT_MS` e la tabella del piano prima di proseguire.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — QxUsbPort, backlog, contatori
+      - lib/USBHostUPS/src/USBHostUPS.cpp — primitive, handleEvent, logStats
+
+      ## Criteri di Completamento
+      - [ ] SET_REPORT, string descriptor e interrupt IN senza lock applicativi
+      - [ ] esiti dei control transfer a `noteControlResult()`
+      - [ ] eventi letti durante un comando gestiti dopo, in ordine
+      - [ ] riga di statistica HID invariata
+      - [ ] build S3 verde
+    ref: TASK-08
+  - id: TASK-09
+    title: 'USBHostUPS: aggancio del driver Q*, supervisione condivisa, stale/primo dato e comandi nel task di poll'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dopo l'aggancio di un UPS Q* con trasporto disponibile l'host crea `QxDriver` e lo supervisiona come un HID; senza trasporto resta il percorso di US-132; comandi e SET VAR Q* girano nel task di poll.
+
+      **Leggere:** sezione 8 del piano; `lib/USBHostUPS/src/USBHostUPS.cpp` (`service` 297-403, `claimInterface` 473-610, `claimQxInterface` 701-746, `releaseBoundState` 684-699, `recoverInterface` 803-827, `retryInterfaceStart` 829-847, `isDataStale` 944-955, `processInputReport` 631-671, `snapshotUSBDiagnostics` 1583-1621); `IUpsControlPort.h` (metodi neutri); `DriverDispatch.h`.
+
+      **Modificare:**
+      1. `claimQxInterface()`: dopo il controllo dell'interfaccia 0 e il rilascio della precedente, `auto t = QxUsbTransports::create(match.qx_transport, _qx_usb);`. Con `nullptr` tutto come oggi. Altrimenti, sotto `_mutex`: `_driver = new QxDriver(std::move(t), _qx_usb, vid, pid)`, `_driver->setup()`, `_unsupported_device = ""`, `_qx_transport`, `_vid/_pid/_quirks/_device_product`, `_link.reset(millis())`, `_first_data_ready = false`, `_claimed_at`, `_get_ok_since_claim = 0`, `_in_restart_pending = false`, `_in_recoveries = 0`, `_event_backlog.clear()`, `_in_pipe_wanted = _driver->qx()->needsInterruptIn()`; se vero `hid_host_device_start()` con lo stesso ritentativo di `claimInterface()`; poi `_is_ready_to_poll = true`; log INFO "Q* UPS attached (USB transport: %s): probing the protocol".
+      2. `claimInterface()` (ramo HID): `_in_pipe_wanted = true` accanto agli altri azzeramenti; nient'altro.
+      3. `recoverInterface()`: se `!_in_pipe_wanted`, solo `setup()` del driver e `applySavedDriverValues()`, niente stop/clear halt/start e niente `_in_restart_pending`. `processInputReport()`: `if (... || !DriverDispatch::hidOf(_driver)) return;`.
+      4. `service()`: sostituire il blocco del primo dato con `firstDataReady(_driver->initialPollDone(), statusKnown, _driver->firstDataWaitBounded(), now - _claimed_at, FIRST_DATA_MAX_MS, timedOut)` (stesso log); `statusKnown` calcolato come oggi sotto `_mutex` e solo se `initialPollDone()`. `isDataStale()`: `|| (_driver && _driver->dataStale())` sotto `_mutex`.
+      5. Casella dei comandi: membri `SemaphoreHandle_t _qx_req_mutex, _qx_req_done` (creati in `begin()`, liberati in `end()`), struct `QxRequest { bool pending; bool setvar; char name[48]; char value[64]; uint32_t gen; CommandResult cmd; NutTable::SetStatus set; }` sotto `_mutex`. Override di `driverCommands()` (`qx()->commands()` sotto `_mutex`, vuoto senza driver Q*), `runDriverCommand()`, `runDriverSetVariable()` come da piano: prendono `_qx_req_mutex`, scrivono la richiesta, aspettano `_qx_req_done` fino a `qxStepBoundMs(budget) * 2 + 1000` ms, a scadenza abbandonano (generazione) e restituiscono `FAILED`; nome o valore troppo lunghi → `NOT_SUPPORTED`/`CONVERSION_FAILED` senza richiesta. Mai `_op_mutex`.
+      6. `service()`: nuova `serviceQxRequest(now)` chiamata dopo la supervisione del collegamento e prima del watchdog INPUT/poll; se il poll non può girare (vedi piano) risponde subito `FAILED` (o `NOT_CONNECTED` senza driver); altrimenti esegue `qx()->runCommand/runSetVariable(_ups_data, ...)`, salta `_driver->poll()` in quell'iterazione, scrive l'esito sotto `_mutex` se la generazione coincide e dà il semaforo. Anche i rami di uscita anticipata di `service()` (riavvio chiesto, pipe in ripristino, ciclo della porta) rispondono a una richiesta in attesa.
+      7. `releaseBoundState()`: risponde `NOT_CONNECTED` a una richiesta in attesa e svuota il backlog.
+      8. `snapshotUSBDiagnostics()`: `s.qx.present = _qx_transport != nullptr`; `s.qx.transport`; con `_driver && _driver->qx()` `fillDiagnostics(s.qx)`; `s.qx.uptime_ms = millis()` (l'ora della scheda la mette il server web, TASK-10).
+      9. Nessun `if (qx)` nella logica HID oltre ai punti elencati (proprietà `_in_pipe_wanted`, `hidOf()`, `qx()`).
+
+      **Verifica:** build `esp32-s3-standard` da PowerShell; suite nativa completa verde (replay inclusi).
+
+      **Fatto quando:** l'host compila con il percorso Q* completo e con registro vuoto si comporta come US-132.
+
+      **Blocchi:** se un comando Q* può arrivare dal task di poll stesso (per esempio dallo spegnimento automatico), la casella andrebbe in stallo: verificare chi chiama `executeCommand()` (`src/`) e, se è il task di poll, eseguire direttamente invece di aspettare; segnalarlo.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — casella dei comandi, `_in_pipe_wanted`, override dei metodi neutri
+      - lib/USBHostUPS/src/USBHostUPS.cpp — claimQxInterface, service, recoverInterface, isDataStale, snapshot
+
+      ## Criteri di Completamento
+      - [ ] registro vuoto → comportamento di US-132 invariato
+      - [ ] con trasporto: `QxDriver` creato, supervisione condivisa, watchdog INPUT inerte
+      - [ ] stale da `dataStale()`, primo dato senza scadenza per Q*
+      - [ ] comandi e SET VAR eseguiti nel task di poll con attesa limitata, mai `_op_mutex`
+      - [ ] build S3 e suite nativa verdi
+    ref: TASK-09
+  - id: TASK-10
+    title: Sezione Q* dell'export diagnostico USB in UsbDiagJson e ora della scheda
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** l'export `/api/usb/dump` contiene l'oggetto `qx` con trasporto, protocollo, esito del riconoscimento e ultimi 20 scambi; l'export HID resta identico byte per byte.
+
+      **Leggere:** sezione 9 del piano; `lib/WebApi/src/UsbDiagJson.h/.cpp` (regole di formattazione: CRLF, rientro di 2 spazi, escape), `lib/USBHostUPS/src/UsbDiagSnapshot.h`, `lib/TimeCore/src/BoardTime.h`, `src/network/web_config_server.cpp` (righe ~520-540 per l'ora delle righe di log, e il gestore di `/api/usb/dump`).
+
+      **Modificare:**
+      1. `UsbDiagJson.cpp`: dopo l'oggetto `export_read`, se `s.qx.present` scrivere `"qx": { "transport", "protocol", "probe", "tries", "failed_cycles", "forced_protocol", "exchanges": [ { "uptime_ms", "time" (solo se `s.qx.epoch_ms > 0`, ISO 8601 UTC con millisecondi da `boardEpochMs(s.qx.epoch_ms, s.qx.uptime_ms, e.uptime_ms)`), "command", "answer_text", "answer_hex", "length", "duration_ms", "truncated", "error" } ] }` con le stesse regole di escape del file (byte di controllo come `\\u00XX`, `\\r` come `\\r`).
+      2. Aggiornare il commento di testa di `UsbDiagJson.h` (US-136: oggetto `qx` solo con un UPS Q*).
+      3. `src/network/web_config_server.cpp`, gestore dell'export: se l'ora della scheda è valida, `s.qx.epoch_ms` = epoca corrente in ms e `s.qx.uptime_ms = millis()` subito dopo `snapshotUSBDiagnostics()`, con la stessa fonte dell'ora usata per le righe del System Log.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_usb_diag_json` verde (i casi esistenti invariati).
+
+      **Fatto quando:** l'oggetto `qx` è scritto solo con `present` e il formato rispetta il piano.
+
+      **Blocchi:** se il formato dell'ora delle righe di log non è ISO 8601, usare quello delle righe di log e annotarlo nel piano.
+
+      ## File Coinvolti
+      - lib/WebApi/src/UsbDiagJson.cpp — oggetto qx
+      - lib/WebApi/src/UsbDiagJson.h — commento
+      - src/network/web_config_server.cpp — ora della scheda nella snapshot
+
+      ## Criteri di Completamento
+      - [ ] oggetto `qx` dopo `export_read` solo con un UPS Q*
+      - [ ] risposta in testo ed esadecimale, lunghezza, ora, errore per ogni scambio
+      - [ ] export HID identico
+    ref: TASK-10
+  - id: TASK-11
+    title: Test della sezione Q* in test_usb_diag_json
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare il formato dell'oggetto `qx` e che l'export HID non cambia.
+
+      **Leggere:** `test/test_usb_diag_json/test_main.cpp`, `lib/WebApi/src/UsbDiagJson.cpp`.
+
+      **Modificare:**
+      1. Casi nuovi in `test/test_usb_diag_json/test_main.cpp` (senza toccare i vecchi):
+         - snapshot HID esistente con `qx.present == false` → uscita identica a quella attesa oggi;
+         - snapshot Q* senza driver (US-132): solo `transport`, scambi vuoti;
+         - snapshot Q* con due scambi: uno riuscito (`Q1\\r` → `(229.0 ...\\r`), uno fallito (`length` -7, `error` "ESP_ERR_TIMEOUT"); controllo di `answer_text` con escape di `\\r`, `answer_hex` maiuscolo separato da spazi, `truncated`;
+         - `time` assente con `epoch_ms == 0`, presente e calcolato con l'ora valida.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_usb_diag_json` verde.
+
+      **Fatto quando:** i casi nuovi passano e i vecchi sono intatti.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_usb_diag_json/test_main.cpp — casi Q*
+
+      ## Criteri di Completamento
+      - [ ] export HID invariato
+      - [ ] formato di `qx` e degli scambi verificato
+      - [ ] `time` solo con l'ora valida
+    ref: TASK-11
+  - id: TASK-12
+    title: Regressione completa, build, misura della flash (#93) e documentazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-07
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare che gli HID non cambiano, misurare la flash per il PR e documentare il percorso Q* dell'host.
+
+      **Leggere:** `docs/concepts/architecture.md` (paragrafi Q*, righe ~151-157), `docs/adr/0013-qx-ups-support.md` sezioni 2, 3, 5; `platformio.ini`.
+
+      **Modificare:**
+      1. Suite nativa completa: `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (replay inclusi) verde; nessuna asserzione esistente cambiata (`git diff cf910d2 -- test/` mostra solo file/casi nuovi e, al più, il contatore di `QxTestingTransport`).
+      2. e2e completa: `npx playwright test` verde.
+      3. Build da PowerShell: `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+      4. Flash: dimensione di `.pio/build/esp32-s3-standard/firmware.bin` confrontata con quella di `cf910d2` (build in un worktree) e con lo slot OTA da 4 MB di #93 (0x1F0000 = 2 031 616 byte); scrivere numeri e margine in `docs/test-results/US-136/flash.md` per il testo del PR.
+      5. `docs/concepts/architecture.md`: paragrafo "Driver Q* nell'host (ADR 0013 sezioni 2, 3 e 5, US-136)": primitive senza lock, `QxUsbTransport` con budget e tabella dei limiti per trasporto, walk a passi, dati ombra, casella dei comandi nel task di poll, backlog degli eventi, stale/primo dato, sezione `qx` dell'export; aggiornare le frasi "l'host la userà con US-136" dei paragrafi Q* esistenti.
+      6. Aggiornare il commento di `IQxTransport.h` (le implementazioni USB derivano da `QxUsbTransport`) e i commenti "US-136" ormai superati in `QxProbe.h`, `QxEngine.h`, `QxControl.h`, `IUpsControlPort.h`, `QxBlazerCommon.cpp`, `QxEngineControl.cpp`.
+
+      **Verifica:** i comandi dei passi 1-3 verdi; `docs/test-results/US-136/flash.md` scritto.
+
+      **Fatto quando:** regressione verde, flash misurata, documentazione aggiornata.
+
+      **Blocchi:** se un test HID o di replay cambia esito, fermarsi: è una regressione da capire, non un'asserzione da aggiornare.
+
+      ## File Coinvolti
+      - docs/concepts/architecture.md — paragrafo sul driver Q* nell'host
+      - docs/test-results/US-136/flash.md — misura della flash (non tracciato da git)
+      - lib/USBHostUPS/src/IQxTransport.h — commento
+      - lib/USBHostUPS/src/QxProbe.h — commenti US-136
+      - lib/USBHostUPS/src/QxEngine.h — commenti US-136
+      - lib/USBHostUPS/src/QxControl.h — commenti US-136
+      - lib/USBHostUPS/src/IUpsControlPort.h — commento US-136
+
+      ## Criteri di Completamento
+      - [ ] suite nativa, replay ed e2e verdi senza asserzioni cambiate
+      - [ ] tre build verdi
+      - [ ] flash S3 confrontata con cf910d2 e con lo slot da 4 MB
+      - [ ] architecture.md aggiornato
+    ref: TASK-12
+  - id: TASK-13
+    title: Prova di fumo HID sull'Eaton 3S (solo con consenso esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare sull'UPS vero che il percorso HID non cambia dopo le modifiche a `processEvents()`, `recoverInterface()` e al primo dato.
+
+      **Leggere:** memoria di progetto (consenso per le prove sul campo, scheda su COM5, IP 192.168.1.126, credenziali in file da non stampare); `docs/test-results/US-132/field-eaton3s.md` come modello.
+
+      **Modificare:**
+      1. Chiedere all'utente un sì esplicito prima di flashare la scheda: senza, saltare il task e scriverlo nel PR.
+      2. Con il consenso: flash della build `esp32-s3-standard` (write_flash senza erase, NVS conservato), 30 minuti di funzionamento, System Log ed export USB salvati.
+      3. Confrontare con la prova di US-132: stessi valori NUT, nessun WARN/ERROR nuovo, riga di statistica senza la parte Q*, export senza oggetto `qx`.
+      4. Scrivere l'esito in `docs/test-results/US-136/field-eaton3s.md`.
+
+      **Verifica:** file dell'esito scritto, oppure nota "prova non fatta: consenso non dato" nel PR.
+
+      **Fatto quando:** esito documentato.
+
+      **Blocchi:** nessun flash senza sì esplicito dell'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-136/field-eaton3s.md — esito (non tracciato da git)
+
+      ## Criteri di Completamento
+      - [ ] consenso chiesto prima del flash
+      - [ ] nessuna differenza HID rispetto alla build di US-132, oppure prova saltata e motivata
+    ref: TASK-13

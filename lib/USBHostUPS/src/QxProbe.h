@@ -30,8 +30,9 @@ using QxLogFn = void (*)(void* ctx, const char* level, const char* text);
  * Memory: one QxEngine (~4 KB) is allocated at the first attempt after construction or
  * after takeEngine(), then reset for every other protocol and cycle (QxEngine::reset()).
  *
- * Pure logic: no USB, no clock, no lock. The caller (the poll task, US-136) passes the time,
- * holds the data lock around step() and gives the log sink.
+ * Pure logic: no USB, no clock, no lock. The caller (QxDriver in the poll task, US-136)
+ * passes the time and the log sink; it runs step() on its shadow data, so no lock is held
+ * across the transfer, and publishes the data under the host lock afterwards.
  */
 class QxProber {
 public:

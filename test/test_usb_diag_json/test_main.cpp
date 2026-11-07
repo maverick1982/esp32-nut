@@ -385,6 +385,121 @@ void test_interrupted_and_reading_states(void) {
     TEST_ASSERT_TRUE(writeChunked(s, 64).find("\"state\": \"reading\"") != std::string::npos);
 }
 
+// --- Sezione Q* (US-136) ---
+
+static UsbDiagQxExchange qxExchange(const char* cmd, const char* answer, int32_t length,
+                                    uint32_t uptime, uint32_t duration, const char* error) {
+    UsbDiagQxExchange e;
+    e.command = cmd;
+    e.answer.assign(answer, answer + strlen(answer));
+    e.length = length;
+    e.uptime_ms = uptime;
+    e.duration_ms = duration;
+    e.error = error;
+    return e;
+}
+
+// Con qx.present falso l'export HID resta byte per byte quello di prima, anche se i campi
+// della sezione sono pieni
+void test_qx_absent_keeps_hid_export(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.qx.transport = "cypress";
+    s.qx.exchanges.push_back(qxExchange("Q1\r", "(229.0\r", 7, 10, 20, ""));
+    assertSameAsReference(s);
+    TEST_ASSERT_TRUE(writeChunked(s, 64).find("\"qx\"") == std::string::npos);
+}
+
+// UPS Q* riconosciuto dalla tabella ma senza trasporto portato (US-132): solo il trasporto,
+// nessuno scambio
+void test_qx_without_driver(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.driver = "none";
+    s.qx.present = true;
+    s.qx.transport = "krauler";
+    std::string got = writeChunked(s, 7);
+    TEST_ASSERT_TRUE(got.find("\"failed\": 0\r\n  },\r\n  \"qx\": {\r\n    \"transport\": \"krauler\",\r\n"
+                              "    \"protocol\": \"\",\r\n    \"probe\": \"\",\r\n    \"tries\": 0,\r\n"
+                              "    \"failed_cycles\": 0,\r\n    \"retry_ms\": 0,\r\n    \"forced_protocol\": \"\",\r\n"
+                              "    \"exchanges\": []\r\n  },\r\n  \"scenarios\": [") != std::string::npos);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("krauler", doc["qx"]["transport"]);
+    TEST_ASSERT_EQUAL(0, (int)doc["qx"]["exchanges"].size());
+}
+
+// Uno scambio riuscito e uno in timeout: escape di \r, esadecimale maiuscolo separato da
+// spazi, lunghezza negativa, "time" solo quando il server l'ha calcolata
+void test_qx_two_exchanges(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.qx.present = true;
+    s.qx.transport = "cypress";
+    s.qx.protocol = "Megatec 0.10";
+    s.qx.probe = "claimed";
+    s.qx.tries = 1;
+    s.qx.failed_cycles = 2;
+    s.qx.retry_ms = 30000;
+    s.qx.forced_protocol = "megatec";
+    UsbDiagQxExchange ok = qxExchange("Q1\r", "(229.0 230\r", 11, 12345, 250, "");
+    ok.time = "2026-11-07 10:15:42";
+    s.qx.exchanges.push_back(ok);
+    s.qx.exchanges.push_back(qxExchange("F\r", "", -7, 15000, 2000, "ESP_ERR_TIMEOUT"));
+
+    std::string got = writeChunked(s, 1);
+    TEST_ASSERT_TRUE(got.find("    \"exchanges\": [\r\n      {\r\n        \"uptime_ms\": 12345,\r\n"
+                              "        \"time\": \"2026-11-07 10:15:42\",\r\n"
+                              "        \"command\": \"Q1\\r\",\r\n"
+                              "        \"answer_text\": \"(229.0 230\\r\",\r\n"
+                              "        \"answer_hex\": \"28 32 32 39 2E 30 20 32 33 30 0D\",\r\n"
+                              "        \"length\": 11,\r\n        \"duration_ms\": 250,\r\n"
+                              "        \"truncated\": false,\r\n        \"error\": \"\"\r\n      },\r\n"
+                              "      {\r\n        \"uptime_ms\": 15000,\r\n        \"command\": \"F\\r\",\r\n"
+                              "        \"answer_text\": \"\",\r\n        \"answer_hex\": \"\",\r\n"
+                              "        \"length\": -7,\r\n        \"duration_ms\": 2000,\r\n"
+                              "        \"truncated\": false,\r\n        \"error\": \"ESP_ERR_TIMEOUT\"\r\n"
+                              "      }\r\n    ]\r\n  },") != std::string::npos);
+    // Stessa uscita con ogni dimensione del buffer
+    for (size_t cap : BUFFER_SIZES) TEST_ASSERT_TRUE(writeChunked(s, cap) == got);
+
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+    JsonObject q = doc["qx"];
+    TEST_ASSERT_EQUAL_STRING("Megatec 0.10", q["protocol"]);
+    TEST_ASSERT_EQUAL_STRING("claimed", q["probe"]);
+    TEST_ASSERT_EQUAL(2, q["failed_cycles"].as<int>());
+    TEST_ASSERT_EQUAL(30000, q["retry_ms"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("megatec", q["forced_protocol"]);
+    TEST_ASSERT_EQUAL_STRING("(229.0 230\r", q["exchanges"][0]["answer_text"]);
+    TEST_ASSERT_TRUE(q["exchanges"][1]["time"].isNull());
+    TEST_ASSERT_EQUAL(-7, q["exchanges"][1]["length"].as<int>());
+    // L'oggetto qx sta tra export_read e scenarios
+    TEST_ASSERT_TRUE(got.find("\"export_read\"") < got.find("\"qx\""));
+    TEST_ASSERT_TRUE(got.find("\"qx\"") < got.find("\"scenarios\""));
+}
+
+// Ogni byte di controllo o non ASCII della risposta dà JSON valido; truncated si vede
+void test_qx_control_bytes_and_truncated(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.qx.present = true;
+    s.qx.transport = "cypress";
+    UsbDiagQxExchange e;
+    e.command = "I\r";
+    const uint8_t answer[] = {0x00, 0x01, '"', '\\', '\n', '\t', 0x1F, 0x7F, 0x80, 0xFF, 'A'};
+    e.answer.assign(answer, answer + sizeof(answer));
+    e.length = 200;
+    e.truncated = true;
+    s.qx.exchanges.push_back(e);
+
+    std::string got = writeChunked(s, 64);
+    TEST_ASSERT_TRUE(got.find("\"answer_text\": \"\\u0000\\u0001\\\"\\\\\\n\\t\\u001F\\u007F\\u0080\\u00FFA\"")
+                     != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"answer_hex\": \"00 01 22 5C 0A 09 1F 7F 80 FF 41\"") != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"length\": 200,") != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("\"truncated\": true,") != std::string::npos);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+    TEST_ASSERT_TRUE(doc["qx"]["exchanges"][0]["truncated"].as<bool>());
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -403,5 +518,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_empty_on_demand_report);
     RUN_TEST(test_on_demand_reports_merged_by_key);
     RUN_TEST(test_interrupted_and_reading_states);
+    RUN_TEST(test_qx_absent_keeps_hid_export);
+    RUN_TEST(test_qx_without_driver);
+    RUN_TEST(test_qx_two_exchanges);
+    RUN_TEST(test_qx_control_bytes_and_truncated);
     return UNITY_END();
 }

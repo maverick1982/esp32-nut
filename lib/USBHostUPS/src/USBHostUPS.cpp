@@ -4,6 +4,9 @@
 #include "IUPSDriver.h"
 #include "DriverDispatch.h"
 #include "DriverRegistry.h"
+#include "FirstData.h"
+#include "QxDriver.h"
+#include "QxUsbTransports.h"
 #include <stdarg.h>
 #include <math.h>
 #include "esp_task_wdt.h"
@@ -70,6 +73,12 @@ bool USBHostUPS::begin() {
             log("ERROR", "USB operation mutex allocation failed");
             return false;
         }
+    }
+    if (!_qx_req_mutex) _qx_req_mutex = xSemaphoreCreateMutex();
+    if (!_qx_req_done) _qx_req_done = xSemaphoreCreateBinary();
+    if (!_qx_req_mutex || !_qx_req_done) {
+        log("ERROR", "Q* request semaphores allocation failed");
+        return false;
     }
 
     usb_host_config_t host_config = {
@@ -317,16 +326,28 @@ void USBHostUPS::service() {
     // The export read stops when the recovery takes over the link (US-119, ADR 0008)
     if (_restart_requested || _in_restart_pending) interruptDiagRead();
 
-    if (_restart_requested) return;
+    // A Q* request of another task is answered at once, without transfers, when the poll
+    // cannot run (US-136)
+    if (_restart_requested) {
+        serviceQxRequest(false);
+        return;
+    }
 
     if (_in_restart_pending) {
+        serviceQxRequest(false);
         retryInterfaceStart(now);
         return;
     }
 
-    if (servicePortCycleWait(now)) return;
+    if (servicePortCycleWait(now)) {
+        serviceQxRequest(false);
+        return;
+    }
 
-    if (!_is_ready_to_poll || !_driver) return;
+    if (!_is_ready_to_poll || !_driver) {
+        serviceQxRequest(false);
+        return;
+    }
 
 #if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
     // Test build (US-122): TEST_STUCK_EVERY_MS after the pipe is proven, act as if a control
@@ -349,9 +370,11 @@ void USBHostUPS::service() {
 #endif
     switch (_link.tick(now, ctrl_stuck)) {
     case LinkMonitor::Action::RECOVER:
+        serviceQxRequest(false);
         recoverInterface("control pipe not answering", now);
         return;
     case LinkMonitor::Action::RESTART:
+        serviceQxRequest(false);
         if (ctrl_stuck) {
             recoverStuckTransfer(now);
         } else {
@@ -362,8 +385,15 @@ void USBHostUPS::service() {
         break;
     }
 #if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
-    if (_test_stuck_active) return;
+    if (_test_stuck_active) {
+        serviceQxRequest(false);
+        return;
+    }
 #endif
+
+    // A command or SET VAR of the Q* driver takes the place of this iteration's poll step:
+    // one step never waits for more than qxStepBoundMs() of the transport (US-136)
+    if (serviceQxRequest(true)) return;
 
     // US-123 (issue #111): when the poll requests every value of the INPUT reports, a silence
     // freezes nothing, and the watchdog neither makes the data stale nor recovers or restarts
@@ -398,15 +428,19 @@ void USBHostUPS::service() {
     serviceDiagRead();
 
     if (!_first_data_ready) {
-        bool done = false;
-        if (_driver->initialPollDone()) {
+        const bool polled = _driver->initialPollDone();
+        bool status_known = false;
+        if (polled) {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
-            done = UPSData::computeUPSStatusString(_ups_data) != "Unknown";
+            status_known = UPSData::computeUPSStatusString(_ups_data) != "Unknown";
         }
-        if (done || (now - _claimed_at) >= FIRST_DATA_MAX_MS) {
+        // The Q* driver waits without limit (firstDataWaitBounded(), US-136)
+        bool timed_out = false;
+        if (firstDataReady(polled, status_known, _driver->firstDataWaitBounded(), now - _claimed_at,
+                           FIRST_DATA_MAX_MS, timed_out)) {
             _first_data_ready = true;
-            log(done ? "INFO" : "WARN", "[USB] First full poll %s after %u ms: data served",
-                done ? "done" : "not done", (unsigned)(now - _claimed_at));
+            log(timed_out ? "WARN" : "INFO", "[USB] First full poll %s after %u ms: data served",
+                timed_out ? "not done" : "done", (unsigned)(now - _claimed_at));
         }
     }
 }
@@ -414,7 +448,7 @@ void USBHostUPS::service() {
 void USBHostUPS::logStats(uint32_t now) {
     if ((now - _stat_since) < STATS_PERIOD_MS) return;
     if (_stat_input || _stat_in_packets || _stat_get_ok || _stat_get_failed || _stat_diag_empty ||
-        _stat_port_cycles) {
+        _stat_port_cycles || _stat_qx_ok || _stat_qx_failed) {
         // The empty answers of the export read (US-119) are not failures: their own count,
         // written only when there are some, so the line stays as before without an export.
         // Same for the USB port power cycles of a stuck transfer (US-122).
@@ -426,56 +460,70 @@ void USBHostUPS::logStats(uint32_t now) {
         if (_stat_port_cycles) {
             snprintf(cycles, sizeof(cycles), ", %u USB port power cycles", (unsigned)_stat_port_cycles);
         }
-        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed%s%s",
+        // And the transfers of the Q* driver (US-136)
+        char qx[48] = "";
+        if (_stat_qx_ok || _stat_qx_failed) {
+            snprintf(qx, sizeof(qx), ", %u Q* transfers ok, %u failed", (unsigned)_stat_qx_ok,
+                     (unsigned)_stat_qx_failed);
+        }
+        log("INFO", "[USB] Last %u s: %u INPUT reports (%u packets), %u GET_REPORT ok, %u failed%s%s%s",
             (unsigned)((now - _stat_since) / 1000), (unsigned)_stat_input, (unsigned)_stat_in_packets,
-            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed, empty, cycles);
+            (unsigned)_stat_get_ok, (unsigned)_stat_get_failed, empty, cycles, qx);
     }
     _stat_since = now;
     _stat_input = _stat_in_packets = _stat_get_ok = _stat_get_failed = _stat_diag_empty = 0;
     _stat_port_cycles = 0;
+    _stat_qx_ok = _stat_qx_failed = 0;
 }
 
 void USBHostUPS::processEvents() {
     if (!_event_queue) return;
 
     HidEvent ev;
+    // First the events a Q* command read while it waited (US-136): they came before the
+    // ones still in the queue. Always empty on the HID path.
+    while (_event_backlog.pop(ev)) handleEvent(ev);
     for (UBaseType_t i = 0; i < EVENT_QUEUE_LEN && xQueueReceive(_event_queue, &ev, 0) == pdTRUE; i++) {
-        switch (ev.type) {
-        case HidEvent::CONNECTED:
-            _enum_seen = true;
-            log("INFO", "HID Device Connected event");
-            claimInterface(ev.handle);
-            break;
-        case HidEvent::OPEN_FAILED:
-            _enum_seen = true; // enumerated: the HID driver saw it
-            log("ERROR", "hid_host_device_open failed");
-            break;
-        case HidEvent::INPUT_REPORT:
-            processInputReport(ev);
-            break;
-        case HidEvent::DISCONNECTED:
-            handleDisconnected(ev.handle);
-            break;
-        case HidEvent::TRANSFER_ERROR:
-            if (ev.handle == _hid_dev_handle && (_quirks & QUIRK_NO_INTERRUPT_PIPE)) {
-                // US-108: upstream never reads this pipe (usbhid-ups.c:1432), so its errors
-                // are not a fault and must not climb to a restart
-                logDebug("[USB] INPUT transfer error ignored: interrupt pipe disabled");
-            } else if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending && !_restart_requested) {
-                if (++_in_recoveries > MAX_IN_RECOVERIES) {
-                    requestRestart("INPUT transfer keeps failing");
-                } else {
-                    recoverInterface("INPUT transfer error", millis(), true);
-                }
-            }
-            break;
-        }
+        handleEvent(ev);
     }
 
     uint32_t dropped = _dropped_events;
     if (dropped != _reported_dropped_events) {
         log("WARN", "HID event queue full: %u INPUT reports dropped so far", (unsigned)dropped);
         _reported_dropped_events = dropped;
+    }
+}
+
+void USBHostUPS::handleEvent(const HidEvent& ev) {
+    switch (ev.type) {
+    case HidEvent::CONNECTED:
+        _enum_seen = true;
+        log("INFO", "HID Device Connected event");
+        claimInterface(ev.handle);
+        break;
+    case HidEvent::OPEN_FAILED:
+        _enum_seen = true; // enumerated: the HID driver saw it
+        log("ERROR", "hid_host_device_open failed");
+        break;
+    case HidEvent::INPUT_REPORT:
+        processInputReport(ev);
+        break;
+    case HidEvent::DISCONNECTED:
+        handleDisconnected(ev.handle);
+        break;
+    case HidEvent::TRANSFER_ERROR:
+        if (ev.handle == _hid_dev_handle && (_quirks & QUIRK_NO_INTERRUPT_PIPE)) {
+            // US-108: upstream never reads this pipe (usbhid-ups.c:1432), so its errors
+            // are not a fault and must not climb to a restart
+            logDebug("[USB] INPUT transfer error ignored: interrupt pipe disabled");
+        } else if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending && !_restart_requested) {
+            if (++_in_recoveries > MAX_IN_RECOVERIES) {
+                requestRestart("INPUT transfer keeps failing");
+            } else {
+                recoverInterface("INPUT transfer error", millis(), true);
+            }
+        }
+        break;
     }
 }
 
@@ -548,6 +596,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     _hid_dev_handle = handle;
     _qx_transport = nullptr;
     _unsupported_device = "";
+    _in_pipe_wanted = true;
     _hid_parser = temp_parser;
     _cached_reports.clear();
     _diag.clear();
@@ -638,7 +687,9 @@ void USBHostUPS::clearDeferredClaim(hid_host_device_handle_t handle) {
 }
 
 void USBHostUPS::processInputReport(const HidEvent& ev) {
-    if (ev.handle != _hid_dev_handle || !_driver) return;
+    // A driver without the HID extension (Q*, US-136) reads its interrupt IN chunks inside its
+    // commands; one arriving outside a command is stale and dropped
+    if (ev.handle != _hid_dev_handle || !DriverDispatch::hidOf(_driver)) return;
     // disable_interrupt_pipe of apc-hid.c:51-62 (US-108): on the APC 5G the interrupt pipe
     // carries a proprietary protocol. Its transfers are dropped before the statistics and the
     // InputWatchdog, which is never fed and never acts: no INPUT is not a failure here.
@@ -705,6 +756,8 @@ void USBHostUPS::releaseBoundState() {
     _ol_dischrg_log = OnlineDischargeLog();
     _qx_transport = nullptr;
     _unsupported_device = "";
+    // A Q* request waiting for the driver just deleted (US-136)
+    answerQxRequest(CommandResult::NOT_CONNECTED, NutTable::SetStatus::NOT_CONNECTED);
 }
 
 void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
@@ -725,6 +778,14 @@ void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverR
         releaseBoundState();
     }
     clearDeferredClaim(handle);
+
+    // The ported USB transport of the row (US-136): with one, the Q* driver; without, the
+    // UPS stays "not supported yet" (US-132)
+    std::unique_ptr<QxUsbTransport> transport = QxUsbTransports::create(match.qx_transport, _qx_usb);
+    if (transport) {
+        attachQxDriver(handle, match, std::move(transport), vid, pid, quirks, product);
+        return;
+    }
 
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
@@ -752,6 +813,61 @@ void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverR
     }
 
     log("INFO", "Q* UPS recognized (USB transport: %s), not supported yet", match.qx_transport);
+}
+
+void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
+                                std::unique_ptr<QxUsbTransport> transport, uint16_t vid, uint16_t pid,
+                                uint32_t quirks, const char* product) {
+    const bool wants_in = transport->needsInterruptIn();
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _hid_dev_handle = handle;
+        _qx_transport = match.qx_transport;
+        _unsupported_device = "";
+        _vid = vid;
+        _pid = pid;
+        _quirks = quirks;
+        _device_product = product;
+        _cached_report_descriptor_hex = "";
+        _hid_parser = HIDParser();
+        _cached_reports.clear();
+        _diag.clear();
+        _diag_requested = false;
+        if (_driver) { delete _driver; _driver = nullptr; }
+        _driver = new QxDriver(std::move(transport), _qx_usb, vid, pid);
+        _driver->setup();
+        _in_pipe_wanted = wants_in;
+    }
+
+    // Shared supervision as on the HID path (ADR 0013 section 2): link monitor, recovery
+    // ladder, first data; the INPUT watchdog stays inert without the HID extension
+    _link.reset(millis());
+    _in_wd.reset(millis());
+    _in_reasm.reset();
+    _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
+    _in_restart_pending = false;
+    _in_recoveries = 0;
+    _first_data_ready = false;
+    _claimed_at = millis();
+    _get_ok_since_claim = 0;
+    if (_restart_requested) {
+        // The UPS enumerated again: whatever needed the restart is gone (review A7)
+        log("INFO", "[USB] UPS enumerated again: restart request cancelled");
+        _restart_requested = false;
+        _restart_reason = "";
+    }
+    if (_in_pipe_wanted) {
+        esp_err_t start_err = hid_host_device_start(_hid_dev_handle);
+        if (start_err != ESP_OK) {
+            log("WARN", "[USB] INPUT pipe not started: %s, retrying", esp_err_to_name(start_err));
+            _in_restart_pending = true;
+            _in_start_attempts = 0;
+            _in_restart_at = millis() + 50;
+        }
+    }
+    _is_ready_to_poll = true;
+
+    log("INFO", "Q* UPS attached (USB transport: %s): probing the protocol", match.qx_transport);
 }
 
 String USBHostUPS::unsupportedDevice() const {
@@ -810,6 +926,16 @@ void USBHostUPS::noteControlResult(esp_err_t err, uint32_t now) {
 }
 
 void USBHostUPS::recoverInterface(const char* why, uint32_t now, bool clear_in_halt) {
+    if (!_in_pipe_wanted) {
+        // A Q* transport without interrupt IN (US-136): no IN pipe to stop, clear or start,
+        // only the driver starts again (the protocol is detected again)
+        log("WARN", "[USB] Restarting the Q* driver: %s", why);
+        if (_driver) {
+            _driver->setup();
+            applySavedDriverValues();
+        }
+        return;
+    }
     log("WARN", "[USB] Restarting HID interface: %s", why);
     esp_err_t err = hid_host_device_stop(_hid_dev_handle); // halt + flush + clear of the IN endpoint
     if (err != ESP_OK) log("WARN", "[USB] hid_host_device_stop failed: %s", esp_err_to_name(err));
@@ -966,7 +1092,11 @@ bool USBHostUPS::isDataStale() const {
     if (!_first_data_ready) return true;
     // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
     if (_restart_requested) return true;
-    return _link.isStale(now) || _in_wd.isStale(now);
+    if (_link.isStale(now) || _in_wd.isStale(now)) return true;
+    // The driver's own judgement: the Q* driver after the failed polls of
+    // upsdrv_updateinfo() (US-136). _driver is deleted under _mutex
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _driver && _driver->dataStale();
 }
 
 bool USBHostUPS::isControlPipeProven() const {
@@ -1633,6 +1763,274 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
     // pending read has no results yet: the old ones are about to be dropped.
     if (!_diag_requested) addOnDemandReports(s.reports, _diag.results());
     s.ups_data = _ups_data.getAll();
+
+    // Q* section (US-136): only with a Q* UPS bound, so the HID export does not change
+    s.qx = UsbDiagQx();
+    if (_qx_transport) {
+        s.qx.present = true;
+        s.qx.transport = _qx_transport;
+        if (const QxDriver* q = _driver ? _driver->qx() : nullptr) q->fillDiagnostics(s.qx);
+    }
+    s.qx.uptime_ms = millis();
+}
+
+// ---------------------------------------------------------------------------
+// Q* driver (US-136): primitives on the bound interface and requests of the other tasks
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The poll task's event queue as readInterruptChunk() reads it
+struct QxQueueSource {
+    QueueHandle_t q;
+    template <typename Ev>
+    bool receive(Ev& ev, uint32_t waitMs) {
+        return q && xQueueReceive(q, &ev, pdMS_TO_TICKS(waitMs)) == pdTRUE;
+    }
+    uint32_t now() { return millis(); }
+};
+
+} // namespace
+
+int USBHostUPS::QxUsbPort::refuse(uint32_t now) {
+    if (!_h._is_ready_to_poll || !_h._hid_dev_handle) {
+        _error = "no device";
+        return QX_USB_ERR_NO_DEVICE;
+    }
+    if (!_h._link.canPoll(now)) {
+        _error = "link paused";
+        return QX_USB_ERR_IO;
+    }
+    if (_deadline != 0 && (int32_t)(now - _deadline) >= 0) {
+        _error = "budget";
+        return QX_USB_ERR_TIMEOUT;
+    }
+    return 0;
+}
+
+int USBHostUPS::QxUsbPort::result(esp_err_t err) {
+    // Every Q* control transfer feeds the link monitor, as the HID requests (ADR 0013 s. 2)
+    _h.noteControlResult(err, millis());
+    if (err == ESP_OK) {
+        _h._stat_qx_ok++;
+        _h._get_ok_since_claim++; // isControlPipeProven(): restart policy, port cycle wait
+        _error = "";
+        return 0;
+    }
+    _h._stat_qx_failed++;
+    _error = esp_err_to_name(err);
+    switch (err) {
+    case ESP_ERR_TIMEOUT:          return QX_USB_ERR_TIMEOUT;
+    case ESP_ERR_INVALID_RESPONSE: return QX_USB_ERR_PIPE; // STALL
+    case ESP_ERR_INVALID_STATE:
+    case ESP_ERR_NOT_FOUND:        return QX_USB_ERR_NO_DEVICE;
+    default:                       return QX_USB_ERR_IO;
+    }
+}
+
+int USBHostUPS::QxUsbPort::setReport(uint8_t reportType, uint8_t reportId, const uint8_t* data, size_t len) {
+    if (int r = refuse(millis())) return r;
+    if (len > sizeof(_h._request_buffer)) {
+        _error = "report too long";
+        return QX_USB_ERR_IO;
+    }
+    // The API takes a non-const buffer
+    memcpy(_h._request_buffer, data, len);
+    // Blocking control transfer: no application lock held (ADR 0008)
+    esp_err_t err = hid_class_request_set_report(_h._hid_dev_handle, reportType, reportId, _h._request_buffer, len);
+    if (int r = result(err)) return r;
+    return (int)len;
+}
+
+int USBHostUPS::QxUsbPort::getStringDescriptor(uint8_t index, uint16_t langid, uint8_t* buf, size_t buflen) {
+    if (int r = refuse(millis())) return r;
+    // No _failed_strings, no _lang_id: the index is the command (krauler family)
+    size_t got = 0;
+    size_t max = buflen < 255 ? buflen : 255;
+    esp_err_t err = hid_host_device_get_string_descriptor(_h._hid_dev_handle, index, langid, buf, max, &got);
+    if (int r = result(err)) return r;
+    return (int)got;
+}
+
+int USBHostUPS::QxUsbPort::readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) {
+    const uint32_t now = millis();
+    if (!_h._is_ready_to_poll || !_h._hid_dev_handle) {
+        _error = "no device";
+        return QX_USB_ERR_NO_DEVICE;
+    }
+    if (_deadline != 0) {
+        if ((int32_t)(now - _deadline) >= 0) {
+            _error = "budget";
+            return QX_USB_ERR_TIMEOUT;
+        }
+        const uint32_t left = _deadline - now;
+        if (left < timeoutMs) timeoutMs = left;
+    }
+    QxQueueSource src{_h._event_queue};
+    size_t got = 0;
+    uint32_t foreign = 0; // INPUT of another interface: not ours, dropped
+    switch (readInterruptChunk<HidEventTraits>(src, _h._event_backlog, _h._hid_dev_handle, buf, buflen, got,
+                                               timeoutMs, foreign)) {
+    case ChunkRead::Chunk:
+        _error = "";
+        return (int)got;
+    case ChunkRead::Timeout:
+        _error = "timeout";
+        return QX_USB_ERR_TIMEOUT;
+    case ChunkRead::Gone:
+        _error = "disconnected";
+        return QX_USB_ERR_NO_DEVICE;
+    case ChunkRead::Error:
+        break;
+    }
+    _error = "transfer error";
+    return QX_USB_ERR_IO;
+}
+
+void USBHostUPS::QxUsbPort::discardInput() {
+    if (!_h._hid_dev_handle) return;
+    QxQueueSource src{_h._event_queue};
+    uint32_t foreign = 0;
+    discardInputChunks<HidEventTraits>(src, _h._event_backlog, _h._hid_dev_handle, foreign);
+}
+
+void USBHostUPS::answerQxRequest(CommandResult cmd, NutTable::SetStatus set, uint32_t gen) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_qx_req.pending || (gen != 0 && _qx_req.gen != gen)) return;
+    _qx_req.cmd = cmd;
+    _qx_req.set = set;
+    _qx_req.pending = false;
+    if (_qx_req_done) xSemaphoreGive(_qx_req_done);
+}
+
+bool USBHostUPS::serviceQxRequest(bool can_run) {
+    QxRequest req;
+    QxDriver* q;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_qx_req.pending) return false;
+        req = _qx_req;
+        q = _driver ? _driver->qx() : nullptr;
+    }
+    if (!q) {
+        answerQxRequest(CommandResult::NOT_CONNECTED, NutTable::SetStatus::NOT_CONNECTED, req.gen);
+        return false;
+    }
+    if (!can_run) {
+        answerQxRequest(CommandResult::FAILED, NutTable::SetStatus::FAILED, req.gen);
+        return false;
+    }
+    // _driver is deleted only by this task: q stays valid without the lock, which the driver
+    // takes itself to publish (no lock during the Q* command, ADR 0008)
+    CommandResult cmd = CommandResult::FAILED;
+    NutTable::SetStatus set = NutTable::SetStatus::FAILED;
+    if (req.setvar) {
+        set = q->runSetVariable(_ups_data, req.name, req.value);
+    } else {
+        cmd = q->runCommand(_ups_data, req.name, req.value[0] ? req.value : nullptr);
+    }
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (_qx_req.pending && _qx_req.gen == req.gen) {
+        _qx_req.cmd = cmd;
+        _qx_req.set = set;
+        _qx_req.pending = false;
+        xSemaphoreGive(_qx_req_done);
+    }
+    return true;
+}
+
+// Takes s within ms, feeding the Task WDT of the caller every second: a Q* request waits up to
+// two step bounds (25 s with the 12 s ceiling), and shutdown.default sends up to six of them
+// from the loopTask, whose TWDT is 30 s (src/core/main.cpp). Every wait stays bounded, so the
+// WDT still catches a real hang. esp_task_wdt_reset() does nothing for a task not subscribed.
+static bool takeFeedingWdt(SemaphoreHandle_t s, uint32_t ms) {
+    const uint32_t SLICE_MS = 1000;
+    for (;;) {
+        const uint32_t slice = ms < SLICE_MS ? ms : SLICE_MS;
+        if (xSemaphoreTake(s, pdMS_TO_TICKS(slice)) == pdTRUE) return true;
+        esp_task_wdt_reset();
+        ms -= slice;
+        if (ms == 0) return false;
+    }
+}
+
+bool USBHostUPS::postQxRequest(QxRequest& req) {
+    uint32_t wait_ms;
+    QxDriver* q;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        q = _driver ? _driver->qx() : nullptr;
+        if (!q || !_is_ready_to_poll) {
+            req.cmd = CommandResult::NOT_CONNECTED;
+            req.set = NutTable::SetStatus::NOT_CONNECTED;
+            return true;
+        }
+        // The step running when the request arrives, then the request itself; each step may
+        // end one control transfer timeout after its budget (a transfer started just before
+        // the deadline), so a late answer is not taken for an abandoned request
+        wait_ms = (qxStepBoundMs(q->transportBudgetMs()) + QX_CTRL_TIMEOUT_MS) * 2 + 1000;
+    }
+    if (xTaskGetCurrentTaskHandle() == _poll_task_handle) {
+        // From the poll task itself (no caller does it today): run at once, no wait. Outside
+        // the lock (ADR 0008): only this task deletes _driver, so q stays valid
+        if (req.setvar) req.set = q->runSetVariable(_ups_data, req.name, req.value);
+        else req.cmd = q->runCommand(_ups_data, req.name, req.value[0] ? req.value : nullptr);
+        return true;
+    }
+    if (!_qx_req_mutex || !_qx_req_done) return false;
+    if (!takeFeedingWdt(_qx_req_mutex, wait_ms)) return false;
+    xSemaphoreTake(_qx_req_done, 0); // a give left by an abandoned request
+    uint32_t gen;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        gen = ++_qx_req_gen;
+        _qx_req = req;
+        _qx_req.gen = gen;
+        _qx_req.pending = true;
+    }
+    takeFeedingWdt(_qx_req_done, wait_ms);
+    bool answered;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        answered = _qx_req.gen == gen && !_qx_req.pending;
+        if (answered) {
+            req.cmd = _qx_req.cmd;
+            req.set = _qx_req.set;
+        } else {
+            _qx_req.pending = false; // abandoned: the poll task drops its result
+        }
+    }
+    xSemaphoreTake(_qx_req_done, 0);
+    xSemaphoreGive(_qx_req_mutex);
+    return answered;
+}
+
+std::vector<const UPSCommandInfo*> USBHostUPS::driverCommands() const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    const QxDriver* q = _driver ? _driver->qx() : nullptr;
+    return q ? q->commands() : std::vector<const UPSCommandInfo*>();
+}
+
+CommandResult USBHostUPS::runDriverCommand(const char* name, const char* param) {
+    QxRequest req;
+    if (!name || strlen(name) >= sizeof(req.name)) return CommandResult::NOT_SUPPORTED;
+    if (param && strlen(param) >= sizeof(req.value)) return CommandResult::INVALID_ARGUMENT;
+    req.setvar = false;
+    snprintf(req.name, sizeof(req.name), "%s", name);
+    snprintf(req.value, sizeof(req.value), "%s", param ? param : "");
+    if (!postQxRequest(req)) return CommandResult::FAILED;
+    return req.cmd;
+}
+
+NutTable::SetStatus USBHostUPS::runDriverSetVariable(const char* name, const char* value) {
+    QxRequest req;
+    if (!name || strlen(name) >= sizeof(req.name)) return NutTable::SetStatus::UNKNOWN;
+    if (!value || strlen(value) >= sizeof(req.value)) return NutTable::SetStatus::CONVERSION_FAILED;
+    req.setvar = true;
+    snprintf(req.name, sizeof(req.name), "%s", name);
+    snprintf(req.value, sizeof(req.value), "%s", value);
+    if (!postQxRequest(req)) return NutTable::SetStatus::FAILED;
+    return req.set;
 }
 
 void USBHostUPS::usb_host_lib_task(void *arg) {
