@@ -76,10 +76,20 @@ bool QxEngine::equalsIgnoreCase(const char* a, const char* b) {
 }
 
 QxEngine::QxEngine(const QxSubdriver& sub, IQxTransport& transport, const QxOptions& options)
-    : _sub(sub), _transport(transport), _options(options) {
+    : _sub(&sub), _transport(transport), _options(options) {
+    reset(sub, options);
+}
+
+void QxEngine::reset(const QxSubdriver& sub, const QxOptions& options) {
+    _sub = &sub;
+    _options = options;
+    _rows = 0;
     for (const QxItem* it = sub.qx2nut; it && it->info_type; it++) _rows++;
+    // clear() keeps the capacity: no allocation when the new table is not longer
+    _flags.clear();
     _flags.reserve(_rows);
     for (size_t i = 0; i < _rows; i++) _flags.push_back(sub.qx2nut[i].qxflags);
+    _data = nullptr;
     memset(_cmd, 0, sizeof(_cmd));
     memset(_rx, 0, sizeof(_rx));
     memset(_answer, 0, sizeof(_answer));
@@ -87,6 +97,14 @@ QxEngine::QxEngine(const QxSubdriver& sub, IQxTransport& transport, const QxOpti
     memset(_infoval, 0, sizeof(_infoval));
     memset(_prevCommand, 0, sizeof(_prevCommand));
     memset(_prevAnswer, 0, sizeof(_prevAnswer));
+    _status = 0;
+    _alarms = "";
+    _dataChanged = false;
+    _lastPollMs = 0;
+    _retry = 0;
+    _reestablished = false;
+    _batt = Batt();
+    _battVoltageReportsOnePackConsidered = false;
 }
 
 // --- dstate access ---------------------------------------------------------------------
@@ -112,7 +130,7 @@ void QxEngine::delinfo(const char* name) {
 // find_nut_info(), nutdrv_qx.c:4840-4867
 int QxEngine::findNutInfo(const char* varname, uint32_t flag, uint32_t noflag) const {
     for (size_t row = 0; row < _rows; row++) {
-        if (!equalsIgnoreCase(_sub.qx2nut[row].info_type, varname)) continue;
+        if (!equalsIgnoreCase(_sub->qx2nut[row].info_type, varname)) continue;
         if (flag && ((_flags[row] & flag) != flag)) continue;
         if (noflag && (_flags[row] & noflag)) continue;
         return (int)row;
@@ -147,7 +165,7 @@ int QxEngine::processAnswer(int row, size_t len) {
     const QxItem& it = item(row);
 
     // Query rejected by the UPS
-    if (_sub.rejected && equalsIgnoreCase(_answer, _sub.rejected)) return -1;
+    if (_sub->rejected && equalsIgnoreCase(_answer, _sub->rejected)) return -1;
 
     // Short reply
     if (it.answer_len && len < it.answer_len) return -1;
@@ -369,11 +387,11 @@ bool QxEngine::walk(WalkMode mode) {
 
 bool QxEngine::claim(UPSData& data) {
     DataScope scope(*this, &data);
-    return _sub.claim ? _sub.claim(*this) : false;
+    return _sub->claim ? _sub->claim(*this) : false;
 }
 
 void QxEngine::initUps() {
-    if (_sub.initups) _sub.initups(*this);
+    if (_sub->initups) _sub->initups(*this);
 }
 
 // upsdrv_initinfo(), nutdrv_qx.c:3604-3680. Not ported: the ups.conf values ondelay,
@@ -382,7 +400,7 @@ void QxEngine::initUps() {
 bool QxEngine::initInfo(UPSData& data, uint32_t nowMs) {
     DataScope scope(*this, &data);
 
-    setinfo("driver.version.data", _sub.name);
+    setinfo("driver.version.data", _sub->name);
 
     // Initialise data
     if (!walk(WalkMode::INIT)) return false;
@@ -393,7 +411,7 @@ bool QxEngine::initInfo(UPSData& data, uint32_t nowMs) {
     _lastPollMs = nowMs;
 
     // Subdriver initinfo
-    if (_sub.initinfo) _sub.initinfo(*this);
+    if (_sub->initinfo) _sub->initinfo(*this);
 
     return true;
 }

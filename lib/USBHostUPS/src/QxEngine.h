@@ -39,6 +39,15 @@ public:
 
     QxEngine(const QxSubdriver& sub, IQxTransport& transport, const QxOptions& options = QxOptions());
 
+    /**
+     * @brief Back to the state of a newly built engine, on sub with options (same transport).
+     *
+     * The probing (QxProber, US-134) reuses one engine for every protocol it tries instead
+     * of allocating one per protocol. Every field of the state is set here, and the
+     * constructor uses it: a new field must be reset here too.
+     */
+    void reset(const QxSubdriver& sub, const QxOptions& options);
+
     // --- Phases of NUT ---------------------------------------------------------------
     // subdriver->claim(): true when the device is covered by the protocol (US-134 probes)
     bool claim(UPSData& data);
@@ -74,10 +83,10 @@ public:
     static int qxMultiplyM2s(QxEngine& qx, const QxItem& item, char* value, size_t valuelen);
 
     // --- Access for the subdriver functions (item->..., dstate_*, testvar) -------------
-    const QxSubdriver& subdriver() const { return _sub; }
+    const QxSubdriver& subdriver() const { return *_sub; }
     const QxOptions& options() const { return _options; }
     size_t rowCount() const { return _rows; }
-    const QxItem& item(int row) const { return _sub.qx2nut[row]; }
+    const QxItem& item(int row) const { return _sub->qx2nut[row]; }
     uint32_t flags(int row) const { return _flags[row]; }
     void addFlags(int row, uint32_t f) { _flags[row] |= f; }
     void clearFlags(int row, uint32_t f) { _flags[row] &= ~f; }
@@ -113,7 +122,7 @@ private:
     void initBattery();
     void clearWork();
 
-    const QxSubdriver& _sub;
+    const QxSubdriver* _sub; // never null: set by the constructor and reset()
     IQxTransport& _transport;
     QxOptions _options;
     size_t _rows = 0;
@@ -137,7 +146,7 @@ private:
     bool _reestablished = false;
 
     // batt of nutdrv_qx.c, the fields used without runtimecal
-    struct {
+    struct Batt {
         double packs = 1;
         double runtAct = -1;
         double voltAct = -1;

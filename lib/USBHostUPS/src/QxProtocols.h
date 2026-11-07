@@ -5,12 +5,32 @@
 
 /**
  * The ported Q* protocol subdrivers (ADR 0013, section 4), one file each, each a row by row
- * copy of its nut_repo/drivers/nutdrv_qx_<name>.c. The next protocols (mustek, megatec-old,
- * zinto, innovatae with US-134, hunnox with US-138) are added here the same way; the probing
- * order is the one of subdriver_list[] (nutdrv_qx.c:95-117), set by US-134.
+ * copy of its nut_repo/drivers/nutdrv_qx_<name>.c. The next protocols (hunnox with US-138,
+ * then others on user request) are added here the same way and get their place in
+ * QX_SUBDRIVER_LIST, the probing order of subdriver_list[] (nutdrv_qx.c:95-117).
  */
 
-extern const QxSubdriver QX_MEGATEC; // nutdrv_qx_megatec.c, "Megatec 0.10"
-extern const QxSubdriver QX_Q1;      // nutdrv_qx_q1.c, "Q1 0.08" (fallback)
+extern const QxSubdriver QX_MUSTEK;      // nutdrv_qx_mustek.c, "Mustek 0.08"
+extern const QxSubdriver QX_MEGATEC_OLD; // nutdrv_qx_megatec-old.c, "Megatec/old 0.08"
+extern const QxSubdriver QX_MEGATEC;     // nutdrv_qx_megatec.c, "Megatec 0.10"
+extern const QxSubdriver QX_ZINTO;       // nutdrv_qx_zinto.c, "Zinto 0.07"
+extern const QxSubdriver QX_INNOVATAE;   // nutdrv_qx_innovatae.c, "INNOVATAE 0.01"
+extern const QxSubdriver QX_Q1;          // nutdrv_qx_q1.c, "Q1 0.08" (fallback)
+
+/**
+ * The ported protocols in the order of subdriver_list[] (nutdrv_qx.c:95-117), ended by
+ * nullptr. The protocols not ported yet are comments in their upstream position: the
+ * probing skips them but never reorders the others (ADR 0013).
+ */
+extern const QxSubdriver* const QX_SUBDRIVER_LIST[];
+
+/**
+ * @brief The protocol filter of subdriver_matcher() (nutdrv_qx.c:4329-4345): the protocol
+ * name up to the first space, compared case-insensitively with protocol.
+ *
+ * The names are the ones of protocol in ups.conf: "mustek", "megatec/old" (with the slash,
+ * not "megatec-old"), "megatec", "zinto", "innovatae", "q1". A null protocol never matches.
+ */
+bool qxProtocolMatches(const QxSubdriver& sub, const char* protocol);
 
 #endif // QX_PROTOCOLS_H
