@@ -19,7 +19,7 @@ class QxEngine;
  * It handles itself what does not need the UPS: not connected, command not offered, and
  * shutdown.default, whose attempts go through port.executeCommand() to be logged one by one.
  *
- * The static functions taking a QxEngine are what the host runs in the poll task, on the
+ * The static functions taking a QxEngine are what QxDriver runs in the poll task, on the
  * engine of the attached driver (US-136): instcmd()/setvar() of nutdrv_qx.c and the list of
  * commands, with the results mapped onto the project types.
  */

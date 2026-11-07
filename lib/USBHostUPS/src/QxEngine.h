@@ -15,7 +15,8 @@
  * A port of qx_process(), qx_process_answer(), ups_infoval_set(), update_status(),
  * find_nut_info(), qx_ups_walk(), the data part of upsdrv_initinfo()/upsdrv_updateinfo(),
  * ups_status_set()/ups_alarm_set() and the battery guesstimation. Pure logic: no USB, no
- * log, no lock (the host holds the data lock around the calls, US-136).
+ * log, no lock: QxDriver (US-136) calls it in the poll task on shadow data and publishes the
+ * changes under the host lock, so no lock is held across a transfer.
  *
  * State: the tables are static const; the per-row runtime flags are copied into _flags; the
  * runtime answer/value of upstream item_t live in one pair of work buffers, because
@@ -32,10 +33,14 @@ public:
     static const uint32_t DEFAULT_POLLINTERVAL_S = 2; // poll_interval, main.c:102 (host cadence)
 
     enum class Update : uint8_t {
-        Ok,     // status read, data written
-        Failed, // walk failed, data untouched, not yet stale
-        Stale   // walk failed more than QX_MAXTRIES + 1 times in a row (dstate_datastale())
+        Ok,      // status read, data written
+        Failed,  // walk failed, data untouched, not yet stale
+        Stale,   // walk failed more than QX_MAXTRIES + 1 times in a row (dstate_datastale())
+        Pending  // updateInfoStep() only: walk not finished, one Q* command sent (US-136)
     };
+
+    // Outcome of initInfoStep() (US-136)
+    enum class Phase : uint8_t { Pending, Ok, Failed };
 
     QxEngine(const QxSubdriver& sub, IQxTransport& transport, const QxOptions& options = QxOptions());
 
@@ -57,6 +62,17 @@ public:
     bool initInfo(UPSData& data, uint32_t nowMs);
     // upsdrv_updateinfo(): full walk every DEFAULT_POLLFREQ_S or after noteDataChanged()
     Update updateInfo(UPSData& data, uint32_t nowMs);
+
+    // --- The same phases one Q* command at a time (US-136, ADR 0013 section 3) --------
+    // The poll task waits for at most one command per call; initInfo()/updateInfo() loop on
+    // these. A row that reuses the answer of the previous one (previous_item) sends nothing.
+    // upsdrv_initinfo(): Pending until the INIT walk ends
+    Phase initInfoStep(UPSData& data, uint32_t nowMs);
+    // upsdrv_updateinfo(): Pending until the walk ends, then Ok, Failed or Stale
+    Update updateInfoStep(UPSData& data, uint32_t nowMs);
+    // Drops a walk in progress (a command runs between two steps): the next step starts a new one
+    void abortWalk();
+    bool walkPending() const { return _walkActive; }
     // data_has_changed = TRUE after an instcmd/setvar (US-135)
     void noteDataChanged() { _dataChanged = true; }
     // The last Ok came after more than QX_MAXTRIES failures in a row ("Communications with
@@ -140,8 +156,15 @@ private:
         UPSData* _prev;
     };
 
+    enum class WalkStep : uint8_t { Pending, Done, Failed };
+
     int processAnswer(int row, size_t len);
+    // Whole walk (beginWalk + walkStep until done)
     bool walk(WalkMode mode);
+    // Head of qx_ups_walk(): resets previous_item and, for FULL_UPDATE, the guesstimation
+    void beginWalk(WalkMode mode);
+    // Loop of qx_ups_walk() from _walkRow: returns after the first row that sent a command
+    WalkStep walkStep();
     void commitStatus();
     Update walkFailed();
     int battery();
@@ -180,6 +203,13 @@ private:
     uint32_t _lastPollMs = 0;
     int _retry = 0;
     bool _reestablished = false;
+
+    // Walk in progress (US-136): reset() clears these too
+    WalkMode _walkMode = WalkMode::INIT;
+    size_t _walkRow = 0;
+    bool _walkActive = false;
+    bool _walkFull = false;    // the running update walk is a full one
+    bool _initStarted = false; // initInfoStep() began the INIT walk
 
     // batt of nutdrv_qx.c, the fields used without runtimecal
     struct Batt {

@@ -23,8 +23,12 @@
 #include "EnumWatchdog.h"
 #include "PortCyclePolicy.h"
 #include "DriverRegistry.h"
+#include "IQxUsbPrimitives.h"
+#include "IQxHostPort.h"
+#include "EventBacklog.h"
 #include <atomic>
 #include <map>
+#include <memory>
 #include <vector>
 
 struct CachedReport {
@@ -36,6 +40,7 @@ struct CachedReport {
 typedef void (*LogCallback)(const char* level, const char* msg);
 
 class IUPSDriver;
+class QxUsbTransport;
 
 /**
  * Threading model (issue #47, ADR 0008; review A5b):
@@ -53,6 +58,12 @@ class IUPSDriver;
  * - The on-demand read of the diagnostics export (US-119) runs in the poll task too:
  *   requestDiagRead() only raises a flag, service() then asks one report per iteration,
  *   requestSpacingMs() after any other control request, without decoding it.
+ * - Q* path (US-136, ADR 0013 section 3): the Q* driver sends its commands from the poll
+ *   task through the primitives of _qx_usb, with no application lock held. An interrupt IN
+ *   answer is read from _event_queue; the other events read meanwhile wait in
+ *   _event_backlog and are handled first by the next processEvents(). Commands and SET VAR
+ *   of the other tasks go through a one-slot request served by the poll task (never under
+ *   _op_mutex, which the poll task holds during service()).
  */
 class USBHostUPS : public IUSBHostUPS {
 public:
@@ -131,6 +142,11 @@ public:
     const UPSData& upsData() const override { return _ups_data; }
     CommandResult executeCommand(const char* name, const char* param = nullptr) override;
     NutTable::SetStatus setVariable(const char* name, const char* value) override;
+    // The neutral methods of IUpsControlPort for the Q* driver (US-135, US-136): the list
+    // under _mutex, the command and the SET VAR run by the poll task while the caller waits
+    std::vector<const UPSCommandInfo*> driverCommands() const override;
+    CommandResult runDriverCommand(const char* name, const char* param) override;
+    NutTable::SetStatus runDriverSetVariable(const char* name, const char* value) override;
     NutTable::SetStatus resetVariable(const char* name) override;
     // Store of the driver-side SET VAR values (US-067): loaded once, call it before begin()
     void setDriverVarStore(IDriverVarStore* store);
@@ -169,6 +185,57 @@ private:
     static const UBaseType_t EVENT_QUEUE_LEN = 48;
     // Slots kept free for connect/disconnect/error events: INPUT reports are dropped first
     static const UBaseType_t EVENT_QUEUE_RESERVED = 2;
+
+    struct HidEventTraits {
+        using Event = HidEvent;
+        using Handle = hid_host_device_handle_t;
+        static bool isInput(const Event& e) { return e.type == HidEvent::INPUT_REPORT; }
+        static bool isDisconnect(const Event& e) { return e.type == HidEvent::DISCONNECTED; }
+        static bool isTransferError(const Event& e) { return e.type == HidEvent::TRANSFER_ERROR; }
+        static Handle handle(const Event& e) { return e.handle; }
+        static const uint8_t* data(const Event& e) { return e.data; }
+        static size_t length(const Event& e) { return e.length; }
+    };
+    // Events read while a Q* command waited for an interrupt IN chunk (US-136)
+    static const size_t EVENT_BACKLOG_LEN = 8;
+
+    // The host as the Q* driver and its transport see it (US-136): the USB primitives on the
+    // bound interface and the data lock with the log. Poll task only for the primitives.
+    class QxUsbPort : public IQxUsbPrimitives, public IQxHostPort {
+    public:
+        explicit QxUsbPort(USBHostUPS& host) : _h(host) {}
+        int setReport(uint8_t reportType, uint8_t reportId, const uint8_t* data, size_t len) override;
+        int getStringDescriptor(uint8_t index, uint16_t langid, uint8_t* buf, size_t buflen) override;
+        int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) override;
+        void discardInput() override;
+        void setDeadline(uint32_t deadlineMs) override { _deadline = deadlineMs; }
+        uint32_t nowMs() const override { return millis(); }
+        const char* lastError() const override { return _error; }
+        void lock() const override { _h._mutex.lock(); }
+        void unlock() const override { _h._mutex.unlock(); }
+        void log(const char* level, const char* text) const override { _h.log(level, "%s", text); }
+        bool pollingPaused() const override { return _h.isPollingPaused(); }
+    private:
+        // QX_USB_ERR_* when no control transfer may start now (no device, link back-off,
+        // budget over), 0 otherwise
+        int refuse(uint32_t now);
+        int result(esp_err_t err);
+        USBHostUPS& _h;
+        uint32_t _deadline = 0;
+        const char* _error = "";
+    };
+    friend class QxUsbPort;
+
+    // A command or SET VAR of another task for the Q* driver, served by the poll task
+    struct QxRequest {
+        bool pending = false;
+        bool setvar = false;
+        char name[48] = {0};
+        char value[64] = {0};
+        uint32_t gen = 0;
+        CommandResult cmd = CommandResult::FAILED;
+        NutTable::SetStatus set = NutTable::SetStatus::FAILED;
+    };
     static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
     // Longest wait for the first full poll after a claim: past it the data is served
@@ -202,6 +269,16 @@ private:
     static void poll_task(void *arg);
     void service();
     void processEvents();
+    // One event of the queue or of the backlog (the body of processEvents())
+    void handleEvent(const HidEvent& ev);
+    // Serves a pending Q* request: true when it ran on the driver (the poll step is skipped).
+    // can_run false answers it without any transfer.
+    bool serviceQxRequest(bool can_run);
+    // Answers a pending Q* request with result (no driver, link not usable). gen != 0 answers
+    // only that request: one posted after the caller abandoned it keeps waiting for its turn.
+    void answerQxRequest(CommandResult cmd, NutTable::SetStatus set, uint32_t gen = 0);
+    // Posts a request and waits for the poll task; false when it timed out
+    bool postQxRequest(QxRequest& req);
     void claimInterface(hid_host_device_handle_t handle);
     // Q* path of claimInterface() (US-132, ADR 0013 section 2): keeps interface 0, logs
     // that the UPS is recognised but not supported yet. No IN pipe, cache or diagnostics.
@@ -209,6 +286,10 @@ private:
     // device that is bound instead of the previous one
     void claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
                           uint16_t vid, uint16_t pid, uint32_t quirks, const char* product);
+    // claimQxInterface() with a ported transport (US-136): the Q* driver on interface 0
+    void attachQxDriver(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
+                        std::unique_ptr<QxUsbTransport> transport, uint16_t vid, uint16_t pid,
+                        uint32_t quirks, const char* product);
     // Drops the state of the bound device, HID or Q* (body of handleDisconnected())
     void releaseBoundState();
     bool deferClaim(hid_host_device_handle_t handle, uint32_t now);
@@ -242,6 +323,20 @@ private:
     void log(const char* level, const char* fmt, ...) const;
 
     QueueHandle_t _event_queue;
+    // Events read during a Q* command, handled first by processEvents() (poll task only)
+    EventBacklog<HidEvent, EVENT_BACKLOG_LEN> _event_backlog;
+    QxUsbPort _qx_usb{*this};
+    // The IN pipe is started and recovered for this interface: always for HID, for Q* only
+    // when the transport reads interrupt IN (US-136)
+    bool _in_pipe_wanted = true;
+    // Q* request of another task (US-136): _qx_req under _mutex, callers serialised by
+    // _qx_req_mutex, the poll task gives _qx_req_done when it answered
+    SemaphoreHandle_t _qx_req_mutex = NULL;
+    SemaphoreHandle_t _qx_req_done = NULL;
+    QxRequest _qx_req;
+    uint32_t _qx_req_gen = 0;
+    uint32_t _stat_qx_ok = 0;     // Q* transfers of the traffic summary
+    uint32_t _stat_qx_failed = 0;
     // Interface being closed by the loopTask: its synchronous DISCONNECTED is not queued
     volatile hid_host_device_handle_t _self_close_handle;
     volatile uint32_t _dropped_events;

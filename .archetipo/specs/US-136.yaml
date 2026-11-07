@@ -6,7 +6,7 @@ epic:
   title: Supporto UPS Q* (nutdrv_qx)
 priority: MEDIUM
 points: 5
-status: TODO
+status: DONE
 body: |
   #### US-136: Driver Q* nella scheda: percorso Q* dopo l'aggancio, primitive USB, attesa limitata, dati stale e sezione Q* dell'export
 
@@ -36,3 +36,11 @@ body: |
 history:
   - status: TODO
     at: "2026-11-07T10:29:11Z"
+  - status: PLANNED
+    at: "2026-11-07T15:55:18Z"
+  - status: IN PROGRESS
+    at: "2026-11-07T15:57:57Z"
+  - status: REVIEW
+    at: "2026-11-07T17:36:15Z"
+  - status: DONE
+    at: "2026-11-07T17:47:24Z"

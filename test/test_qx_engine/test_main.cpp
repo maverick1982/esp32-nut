@@ -4,6 +4,8 @@
 #include <string>
 #include "QxEngine.h"
 #include "QxTestingTransport.h"
+#include "QxTestingTables.h"
+#include "QxProtocols.h"
 
 // US-133: the Q* engine on hand-written tables. The semantics are those of
 // nut_repo/drivers/nutdrv_qx.c: qx_process()/qx_process_answer()/ups_infoval_set()
@@ -420,6 +422,131 @@ void test_pollfreq_across_millis_wrap(void) {
     TEST_ASSERT_EQUAL_STRING("99", f.d.get("ups.load").c_str()); // full
 }
 
+// --- Walk one Q* command at a time (US-136) ----------------------------------------------
+
+static void assertSameData(const UPSData& a, const UPSData& b, const char* what) {
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(a.getAll().size(), b.getAll().size(), what);
+    for (const auto& p : a.getAll()) {
+        const String* v = b.find(p.key.c_str());
+        TEST_ASSERT_NOT_NULL_MESSAGE(v, p.key.c_str());
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(p.value.c_str(), v->c_str(), p.key.c_str());
+    }
+}
+
+// Runs initInfoStep() until done, checking that each call sends at most one command
+static QxEngine::Phase initBySteps(QxEngine& e, QxTestingTransport& t, UPSData& d, uint32_t now, int& steps) {
+    QxEngine::Phase p;
+    steps = 0;
+    do {
+        size_t before = t.sent.size();
+        p = e.initInfoStep(d, now);
+        TEST_ASSERT_TRUE(t.sent.size() - before <= 1);
+        steps++;
+    } while (p == QxEngine::Phase::Pending && steps < 100);
+    return p;
+}
+
+static QxEngine::Update updateBySteps(QxEngine& e, QxTestingTransport& t, UPSData& d, uint32_t now) {
+    QxEngine::Update u;
+    int steps = 0;
+    do {
+        size_t before = t.sent.size();
+        u = e.updateInfoStep(d, now);
+        TEST_ASSERT_TRUE(t.sent.size() - before <= 1);
+        steps++;
+    } while (u == QxEngine::Update::Pending && steps < 100);
+    return u;
+}
+
+void test_steps_match_the_whole_walk_on_every_ported_protocol(void) {
+    struct P { const QxSubdriver* sub; const QxTesting* table; } protocols[] = {
+        { &QX_MEGATEC, MEGATEC_TESTING }, { &QX_Q1, Q1_TESTING }, { &QX_MUSTEK, MUSTEK_TESTING },
+        { &QX_MEGATEC_OLD, MEGATEC_OLD_TESTING }, { &QX_ZINTO, ZINTO_TESTING },
+        { &QX_INNOVATAE, INNOVATAE_TESTING },
+    };
+    for (const auto& p : protocols) {
+        QxTestingTransport ta(p.table, p.sub->rejected), tb(p.table, p.sub->rejected);
+        QxEngine a(*p.sub, ta), b(*p.sub, tb);
+        UPSData da, db;
+        TEST_ASSERT_TRUE_MESSAGE(a.claim(da), p.sub->name);
+        TEST_ASSERT_TRUE_MESSAGE(b.claim(db), p.sub->name);
+        a.initUps();
+        b.initUps();
+        TEST_ASSERT_TRUE_MESSAGE(a.initInfo(da, 0), p.sub->name);
+        int steps = 0;
+        TEST_ASSERT_TRUE_MESSAGE(initBySteps(b, tb, db, 0, steps) == QxEngine::Phase::Ok, p.sub->name);
+        TEST_ASSERT_TRUE_MESSAGE(steps > 1, p.sub->name);
+        TEST_ASSERT_FALSE(b.walkPending());
+        // Quick, then full (after pollfreq)
+        const uint32_t times[] = { 2000, 40000 };
+        for (uint32_t now : times) {
+            TEST_ASSERT_TRUE_MESSAGE(a.updateInfo(da, now) == QxEngine::Update::Ok, p.sub->name);
+            TEST_ASSERT_TRUE_MESSAGE(updateBySteps(b, tb, db, now) == QxEngine::Update::Ok, p.sub->name);
+        }
+        assertSameData(da, db, p.sub->name);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(a.status(), b.status(), p.sub->name);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(ta.sent.size(), tb.sent.size(), p.sub->name);
+    }
+}
+
+void test_init_step_sends_one_command_per_group(void) {
+    Fixture2 f;
+    // A, B, C: three commands, three steps with a command; rows sharing A send nothing more
+    TEST_ASSERT_TRUE(f.e.initInfoStep(f.d, 1000) == QxEngine::Phase::Pending);
+    TEST_ASSERT_EQUAL_UINT(1, f.t.sent.size());
+    TEST_ASSERT_EQUAL_STRING("A\r", f.t.sent[0].c_str());
+    TEST_ASSERT_TRUE(f.e.walkPending());
+    TEST_ASSERT_TRUE(f.e.initInfoStep(f.d, 1000) == QxEngine::Phase::Pending);
+    TEST_ASSERT_EQUAL_UINT(2, f.t.sent.size());
+    TEST_ASSERT_EQUAL_STRING("B\r", f.t.sent[1].c_str());
+    QxEngine::Phase p;
+    do {
+        p = f.e.initInfoStep(f.d, 1000);
+    } while (p == QxEngine::Phase::Pending);
+    TEST_ASSERT_TRUE(p == QxEngine::Phase::Ok);
+    TEST_ASSERT_EQUAL_UINT(3, f.t.sent.size());
+    TEST_ASSERT_EQUAL_STRING("25", f.d.get("ups.load").c_str());
+    TEST_ASSERT_EQUAL_STRING("FW1", f.d.get("ups.firmware").c_str());
+}
+
+void test_update_step_is_pending_until_the_walk_ends(void) {
+    Fixture2 f;
+    f.init(1000);
+    f.e.noteDataChanged(); // full walk with the semi-static B
+    TEST_ASSERT_TRUE(f.e.updateInfoStep(f.d, 2000) == QxEngine::Update::Pending);
+    // Nothing committed yet: the status is written at the end of the walk
+    TEST_ASSERT_NULL(f.d.find("ups.status.ac_present"));
+    TEST_ASSERT_TRUE(updateBySteps(f.e, f.t, f.d, 2000) == QxEngine::Update::Ok);
+    TEST_ASSERT_EQUAL_STRING("OL", f.status().c_str());
+    TEST_ASSERT_EQUAL_UINT(1, countSent(f.t, "B\r"));
+}
+
+void test_abort_walk_restarts_init_with_the_same_result(void) {
+    Fixture2 a;
+    TEST_ASSERT_TRUE(a.e.initInfo(a.d, 1000));
+    Fixture2 b;
+    TEST_ASSERT_TRUE(b.e.initInfoStep(b.d, 1000) == QxEngine::Phase::Pending);
+    TEST_ASSERT_TRUE(b.e.initInfoStep(b.d, 1000) == QxEngine::Phase::Pending);
+    b.e.abortWalk();
+    TEST_ASSERT_FALSE(b.e.walkPending());
+    int steps = 0;
+    TEST_ASSERT_TRUE(initBySteps(b.e, b.t, b.d, 1000, steps) == QxEngine::Phase::Ok);
+    assertSameData(a.d, b.d, "abort");
+}
+
+void test_update_steps_go_stale_like_the_whole_walk(void) {
+    Fixture2 f;
+    f.init();
+    TEST_ASSERT_TRUE(updateBySteps(f.e, f.t, f.d, 1000) == QxEngine::Update::Ok);
+    f.t.failNext(5);
+    for (int i = 0; i < 4; i++) {
+        TEST_ASSERT_TRUE(updateBySteps(f.e, f.t, f.d, 1000) == QxEngine::Update::Failed);
+    }
+    TEST_ASSERT_TRUE(updateBySteps(f.e, f.t, f.d, 1000) == QxEngine::Update::Stale);
+    TEST_ASSERT_TRUE(updateBySteps(f.e, f.t, f.d, 1000) == QxEngine::Update::Ok);
+    TEST_ASSERT_TRUE(f.e.reestablished());
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -449,6 +576,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_quick_bit_persists_until_full_update);
     RUN_TEST(test_alarm_applied_by_full_update_only);
     RUN_TEST(test_pollfreq_across_millis_wrap);
+    RUN_TEST(test_steps_match_the_whole_walk_on_every_ported_protocol);
+    RUN_TEST(test_init_step_sends_one_command_per_group);
+    RUN_TEST(test_update_step_is_pending_until_the_walk_ends);
+    RUN_TEST(test_abort_walk_restarts_init_with_the_same_result);
+    RUN_TEST(test_update_steps_go_stale_like_the_whole_walk);
     return UNITY_END();
 }
 #endif

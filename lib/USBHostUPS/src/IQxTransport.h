@@ -7,8 +7,10 @@
  * @brief One Q* command, one answer (ADR 0013, section 3): the shape of qx_command() and
  * of the USB subdriver *_command() functions of nut_repo/drivers/nutdrv_qx.c.
  *
- * The USB implementations (krauler, fabula, hunnox, ...) arrive with US-136/US-137; the
- * native tests use a fake (test/mocks/QxTestingTransport.h).
+ * The USB implementations derive from QxUsbTransport (US-136), which gives every command a
+ * time budget enforced by the USB primitives; the subdrivers themselves (krauler, fabula,
+ * hunnox, ...) fill the QxUsbTransports table with US-137. The native tests use fakes
+ * (test/mocks/QxTestingTransport.h, test/mocks/QxLoopbackTransport.h).
  */
 class IQxTransport {
 public:

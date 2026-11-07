@@ -103,7 +103,8 @@ QxEngine::Setvar QxEngine::setvar(UPSData& data, const char* varname, const char
 
 // nutdrv_qx.c:2948-3256. The results stay those of upstream (ADR 0003), also STAT_SET_UNKNOWN
 // for a value out of range ("TODO: HANDLED but FAILED, not UNKNOWN!"): in NUT upsd refuses it
-// first with INVALID-VALUE, from the range published in LIST RW (US-136 for Q*).
+// first with INVALID-VALUE, from the range published in LIST RW (not yet published for Q*:
+// the Q* variables are not in the RW catalog, so SET VAR on them answers READONLY first).
 QxEngine::Setvar QxEngine::doSetvar(const char* varname, const char* val) {
     if (!varname) return Setvar::Unknown;
 

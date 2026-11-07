@@ -33,6 +33,10 @@ static String loggableText(const String& raw, size_t max_len) {
     return out;
 }
 
+// Ora della scheda di una riga del System Log (US-118), definita più sotto; usata anche per
+// gli scambi Q* dell'export USB (US-136)
+static bool boardTimeOf(void* ctx, uint32_t row_uptime_ms, uint32_t list_uptime_ms, char* out, size_t len);
+
 // Username tentato in un body di login, solo per il log: caratteri non stampabili
 // sostituiti e lunghezza limitata, così il client non può sporcare il log
 static String loggableUsername(const String& body) {
@@ -138,6 +142,14 @@ void WebConfigServer::begin(bool isAPMode) {
         // API classica e non chunkWrite(): sendContent() usa il chunked solo con HTTP/1.1
         UsbDiagSnapshot snap;
         usb_ups->snapshotUSBDiagnostics(snap);
+        // Ora della scheda degli scambi Q* (US-136), nel formato delle righe del System Log
+        WallClock ref;
+        if (ntp_clock && ntp_clock->reference(ref)) {
+            for (auto& e : snap.qx.exchanges) {
+                char t[BOARD_TIME_LEN + 1];
+                if (boardTimeOf(&ref, e.uptime_ms, snap.qx.uptime_ms, t, sizeof(t))) e.time = t;
+            }
+        }
         server.sendHeader("Content-Disposition", "attachment; filename=\"usb_diagnostics.json\"");
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");

@@ -7,7 +7,8 @@
 // Port of nut_repo/drivers/nutdrv_qx_blazer-common.c, in the order of that file.
 // testvar() -> qx.options(), dstate_getinfo()/dstate_delinfo() -> qx.getinfo()/qx.delinfo(),
 // item->value -> qx.value(), item->qxflags |= QX_FLAG_SKIP -> qx.addFlags(row, ...).
-// The upslogx()/upsdebugx() messages are kept as comments: the driver logs arrive with US-136.
+// The upslogx()/upsdebugx() messages are kept as comments: QxDriver (US-136) logs the outcomes
+// (protocol, communications lost and re-established) and the host logs every command.
 
 namespace {
 

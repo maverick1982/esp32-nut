@@ -9,6 +9,7 @@
 
 class IUpsControl;
 class IHidDriver;
+class QxDriver;
 
 /**
  * @brief What the host needs from every driver, whatever its protocol family (ADR 0013,
@@ -137,6 +138,24 @@ public:
      */
     virtual IHidDriver* hid() { return nullptr; }
     virtual const IHidDriver* hid() const { return nullptr; }
+
+    /**
+     * @brief The data are stale for the driver itself (US-136, ADR 0013 section 2): the Q*
+     * driver after the consecutive failed polls of upsdrv_updateinfo() (dstate_datastale()).
+     * The host adds it to its own checks; false for the HID drivers, judged by the host.
+     */
+    virtual bool dataStale() const { return false; }
+
+    /**
+     * @brief True when the host may serve the data FIRST_DATA_MAX_MS after the claim even
+     * without a first full poll (issue #60). The Q* driver waits without limit: until the
+     * protocol is recognised and the first walk is done the data stay stale (US-136).
+     */
+    virtual bool firstDataWaitBounded() const { return true; }
+
+    // The Q* extension (US-136), nullptr for a driver of another family, as hid()
+    virtual QxDriver* qx() { return nullptr; }
+    virtual const QxDriver* qx() const { return nullptr; }
 };
 
 #endif // I_UPS_DRIVER_H

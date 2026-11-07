@@ -32,6 +32,11 @@ body: |
   **Assunzioni**
   - `langid_fix` e `noscanlangid` non servono a #91: senza `langid_fix` il trasporto hunnox usa già 0x0409, e la scansione dei langid parte solo con `langid_fix`. Si aggiungono se un tester ne ha bisogno (ADR 0013).
   - La verifica sull'UPS vero arriva con la build di test di US-138.
+
+  **Da includere nel piano (revisione di US-136, 2026-11-07)**
+  Punti lasciati aperti all'approvazione di US-136, da trasformare in task di questa storia:
+  1. **Test nativi della casella dei comandi Q*.** `postQxRequest()` / `serviceQxRequest()` / `answerQxRequest()` in `lib/USBHostUPS/src/USBHostUPS.cpp` (generazione, abbandono, risposta NOT_CONNECTED allo stacco, risposta FAILED con il link in pausa, richiesta dal task di poll stesso) non hanno test perché stanno nell'host, che non si compila in nativo. Estrarre la logica in una classe pura, come `EventBacklog.h`, con le attese e i semafori dietro un'interfaccia, e provarla in nativo. È la strada di `shutdown.default`.
+  2. **Dati del protocollo precedente dopo un nuovo riconoscimento.** `QxDriver::setup()` (`lib/USBHostUPS/src/QxDriver.cpp`) tiene i dati ombra, così un ripristino del collegamento non mostra "Unknown". Se dopo un ripristino o uno stato Held viene riconosciuto un protocollo diverso, le chiavi del vecchio protocollo restano pubblicate ai client NUT. Correzione prevista: al riconoscimento, se il protocollo è diverso dal precedente, svuotare i dati ombra tenendo `driver.name`, `ups.vendorid` e `ups.productid`. Il primo giro completo li ripopola prima che il dato sia servito, e `publish()` toglie già le chiavi assenti. Test: dispositivo finto che passa dalla tabella Megatec a quella Q1.
 history:
   - status: TODO
     at: "2026-11-07T10:29:11Z"

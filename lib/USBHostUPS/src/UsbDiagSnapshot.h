@@ -21,6 +21,35 @@ struct UsbDiagReport {
     bool empty = false;
 };
 
+// One Q* exchange of the "qx" object (US-136)
+struct UsbDiagQxExchange {
+    String command;
+    std::vector<uint8_t> answer; // raw bytes, at most QxExchange::ANSWER_MAX
+    int32_t length = 0;          // return value of the transport: length, or an error < 0
+    uint32_t uptime_ms = 0;      // when the command started
+    uint32_t duration_ms = 0;
+    bool truncated = false;
+    String error;
+    // Board time of the command in the format of the System Log lines (US-118), set by the
+    // web server when the board clock is valid; empty otherwise
+    String time;
+};
+
+// "qx" object of the export (US-136): written only when present (a Q* UPS is bound), so the
+// HID export does not change
+struct UsbDiagQx {
+    bool present = false;
+    String transport;       // NUT USB subdriver of the DriverRegistry row
+    String protocol;        // "Megatec 0.10" once claimed, empty before
+    String probe;           // "probing", "claimed", "not_supported"; empty without a driver
+    uint8_t tries = 0;      // attempts on the protocol being tried
+    uint16_t failed_cycles = 0;
+    uint32_t retry_ms = 0;  // back-off after the last cycle without a claim
+    String forced_protocol; // the protocol setting, empty when automatic
+    std::vector<UsbDiagQxExchange> exchanges; // oldest first
+    uint32_t uptime_ms = 0; // uptime of the snapshot, the reference of the exchange times
+};
+
 struct UsbDiagSnapshot {
     String firmware_version;
     String vid;
@@ -49,6 +78,7 @@ struct UsbDiagSnapshot {
     // The single "Live ESP32 dump" scenario
     std::vector<UsbDiagReport> reports;    // by key (type << 8) | id, as the report cache
     std::vector<UPSParameter> ups_data;    // expected_ups_data, in UPSData order
+    UsbDiagQx qx;                          // Q* section (US-136)
 };
 
 // Adds the reports of the on-demand read (US-119) whose key the poll's reports do not hold,

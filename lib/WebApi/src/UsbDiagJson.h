@@ -13,6 +13,9 @@
 // formattazione storica (a capo LF).
 // US-119 aggiunge l'oggetto "export_read" dopo "link" e, solo nei report letti su richiesta,
 // le chiavi "on_demand" ed "empty": i report del poll restano come prima.
+// US-136 aggiunge l'oggetto "qx" dopo "export_read", solo con un UPS Q* agganciato: trasporto,
+// protocollo, esito del riconoscimento e ultimi 20 scambi (risposta in testo con escape JSON
+// valido per ogni byte di controllo, ed esadecimale). L'export HID non cambia.
 // Lo verifica test/test_usb_diag_json.
 class UsbDiagJson {
 public:
