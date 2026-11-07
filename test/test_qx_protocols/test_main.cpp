@@ -153,6 +153,9 @@ void test_table_row_counts(void) {
     TEST_ASSERT_EQUAL_UINT(34, mo.rowCount());
     TEST_ASSERT_EQUAL_UINT(34, z.rowCount());
     TEST_ASSERT_EQUAL_UINT(33, in.rowCount());
+    // US-138: the zinto rows plus BL
+    QxEngine h(QX_HUNNOX, t);
+    TEST_ASSERT_EQUAL_UINT(35, h.rowCount());
 }
 
 // --- US-134: mustek, megatec/old, zinto, innovatae ---------------------------------------
@@ -210,6 +213,100 @@ void test_zinto_testing_values(void) {
     assertBlazerTestingValues(QX_ZINTO, ZINTO_TESTING, "Zinto 0.07");
 }
 
+// --- US-138: hunnox ----------------------------------------------------------------------
+
+// The commands a claim sends with the given options (assertClaimSends below without options)
+static void assertClaimSendsOpt(const QxSubdriver& sub, const QxTesting* table, const QxOptions& opt,
+                                const char* first, const char* second) {
+    Run r(sub, table, opt);
+    TEST_ASSERT_TRUE_MESSAGE(r.e.claim(r.d), sub.name);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(second ? 2 : 1, r.t.sent.size(), sub.name);
+    TEST_ASSERT_EQUAL_STRING(first, r.t.sent[0].c_str());
+    if (second) TEST_ASSERT_EQUAL_STRING(second, r.t.sent[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage"));
+}
+
+// hunnox_testing: the zinto answers plus BL100. The delays of the hunnox table are "0" and
+// "60" (not DEFAULT_ONDELAY/DEFAULT_OFFDELAY), and battery.charge comes from BL, so
+// qx_initbattery() does not guesstimate it (nutdrv_qx.c:585)
+void test_hunnox_testing_values(void) {
+    Run r(QX_HUNNOX, HUNNOX_TESTING);
+    TEST_ASSERT_TRUE(r.start());
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", r.get("driver.version.data"));
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage"));
+    TEST_ASSERT_EQUAL_STRING("195.0", r.get("input.voltage.fault"));
+    TEST_ASSERT_EQUAL_STRING("230.0", r.get("output.voltage"));
+    TEST_ASSERT_EQUAL_STRING("14", r.get("ups.load"));
+    TEST_ASSERT_EQUAL_STRING("49.0", r.get("input.frequency"));
+    TEST_ASSERT_EQUAL_STRING("22.7", r.get("battery.voltage"));
+    TEST_ASSERT_EQUAL_STRING("30.0", r.get("ups.temperature"));
+    TEST_ASSERT_EQUAL_STRING("online", r.get("ups.type"));
+    TEST_ASSERT_EQUAL_STRING("disabled", r.get("ups.beeper.status"));
+    TEST_ASSERT_EQUAL_STRING("0", r.get("ups.delay.start"));
+    TEST_ASSERT_EQUAL_STRING("60", r.get("ups.delay.shutdown"));
+    TEST_ASSERT_EQUAL_STRING("OL", r.status().c_str());
+    TEST_ASSERT_NULL(r.d.find("ups.alarm"));
+    TEST_ASSERT_EQUAL_STRING("230", r.get("input.voltage.nominal"));
+    TEST_ASSERT_EQUAL_STRING("0.0", r.get("input.current.nominal"));
+    TEST_ASSERT_EQUAL_STRING("24.0", r.get("battery.voltage.nominal"));
+    TEST_ASSERT_EQUAL_STRING("50", r.get("input.frequency.nominal"));
+    TEST_ASSERT_EQUAL_STRING("NOT_A_LIVE_UPS", r.get("device.mfr"));
+    TEST_ASSERT_EQUAL_STRING("TESTING", r.get("device.model"));
+    TEST_ASSERT_EQUAL_STRING("TESTING", r.get("ups.firmware"));
+    // BL100\r, hunnox_battery_charge()
+    TEST_ASSERT_EQUAL_STRING("100", r.get("battery.charge"));
+}
+
+// hunnox_battery_charge() returns -1 without the "BL" prefix or outside 0-100: no value
+void test_hunnox_battery_charge_invalid(void) {
+    const char* bad[] = { "BL101\r", "BL-1\r", "XX100\r" };
+    for (const char* answer : bad) {
+        Run r(QX_HUNNOX, HUNNOX_TESTING);
+        r.t.override("BL\r", answer);
+        TEST_ASSERT_TRUE_MESSAGE(r.e.claim(r.d), answer);
+        r.e.initUps();
+        r.e.initInfo(r.d, 0);
+        int row = r.e.findNutInfo("battery.charge", 0, 0);
+        TEST_ASSERT_TRUE(row >= 0);
+        TEST_ASSERT_EQUAL_STRING("BL\r", r.e.item(row).command);
+        // The guesstimation of qx_initbattery() may fill it, but never from the BL row
+        r.e.process(row);
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(1, r.e.infovalSet(row), answer);
+    }
+}
+
+// As upstream: answer_len of the BL row is 6 ("BL100\r"), so "BL50\r" is a short reply
+// (qx_process_answer(), nutdrv_qx.c:4884) and, the row being QX_FLAG_QUICK_POLL, the whole
+// walk fails (qx_ups_walk(), nutdrv_qx.c:4655). Kept for fidelity, to check with #91
+void test_hunnox_short_bl_answer_fails_the_walk_as_upstream(void) {
+    Run r(QX_HUNNOX, HUNNOX_TESTING);
+    r.t.override("BL\r", "BL50\r");
+    TEST_ASSERT_TRUE(r.e.claim(r.d));
+    r.e.initUps();
+    TEST_ASSERT_FALSE(r.e.initInfo(r.d, 0));
+    // A full-length answer below 100 is accepted
+    Run ok(QX_HUNNOX, HUNNOX_TESTING);
+    ok.t.override("BL\r", "BL050\r");
+    TEST_ASSERT_TRUE(ok.start());
+    TEST_ASSERT_EQUAL_STRING("50", ok.get("battery.charge"));
+}
+
+// blazer_claim: Q1 then FW?; with novendor only Q1. The hunnox USB transport does not
+// encode FW? (it echoes it), so #91 needs novendor as with NUT
+void test_hunnox_claim_commands(void) {
+    assertClaimSendsOpt(QX_HUNNOX, HUNNOX_TESTING, QxOptions(), "Q1\r", "FW?\r");
+    QxOptions nv;
+    nv.novendor = true;
+    assertClaimSendsOpt(QX_HUNNOX, HUNNOX_TESTING, nv, "Q1\r", nullptr);
+}
+
+void test_hunnox_name_match(void) {
+    TEST_ASSERT_TRUE(qxProtocolMatches(QX_HUNNOX, "hunnox"));
+    TEST_ASSERT_TRUE(qxProtocolMatches(QX_HUNNOX, "HUNNOX"));
+    TEST_ASSERT_FALSE(qxProtocolMatches(QX_HUNNOX, "zinto"));
+    TEST_ASSERT_EQUAL_STRING("UPS No Ack", QX_HUNNOX.accepted);
+}
+
 void test_innovatae_testing_values(void) {
     Run r(QX_INNOVATAE, INNOVATAE_TESTING);
     TEST_ASSERT_TRUE(r.start());
@@ -232,12 +329,7 @@ void test_innovatae_testing_values(void) {
 // The commands each claim sends: blazer_claim_light only the status query, blazer_claim
 // the status and the vendor query
 static void assertClaimSends(const QxSubdriver& sub, const QxTesting* table, const char* first, const char* second) {
-    Run r(sub, table);
-    TEST_ASSERT_TRUE_MESSAGE(r.e.claim(r.d), sub.name);
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(second ? 2 : 1, r.t.sent.size(), sub.name);
-    TEST_ASSERT_EQUAL_STRING(first, r.t.sent[0].c_str());
-    if (second) TEST_ASSERT_EQUAL_STRING(second, r.t.sent[1].c_str());
-    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage"));
+    assertClaimSendsOpt(sub, table, QxOptions(), first, second);
 }
 
 void test_new_protocols_claim_commands(void) {
@@ -260,7 +352,7 @@ void test_innovatae_nak_rejected(void) {
 // subdriver_list[] of nutdrv_qx.c:95-117 restricted to the ported protocols
 void test_subdriver_list_order(void) {
     const char* expected[] = { "Mustek 0.08", "Megatec/old 0.08", "Megatec 0.10", "Zinto 0.07",
-                               "INNOVATAE 0.01", "Q1 0.08" };
+                               "Hunnox 0.03", "INNOVATAE 0.01", "Q1 0.08" };
     size_t n = sizeof(expected) / sizeof(expected[0]);
     for (size_t i = 0; i < n; i++) {
         TEST_ASSERT_NOT_NULL(QX_SUBDRIVER_LIST[i]);
@@ -291,6 +383,37 @@ void test_protocol_name_match(void) {
         }
     }
     TEST_ASSERT_EQUAL_INT(1, matches);
+}
+
+// US-138: the names of Board Settings, in the order of the list
+void test_protocol_names_in_list_order(void) {
+    const char* expected[] = { "mustek", "megatec/old", "megatec", "zinto", "hunnox", "innovatae", "q1" };
+    char name[QX_PROTOCOL_NAME_MAX];
+    size_t i = 0;
+    for (const QxSubdriver* const* s = QX_SUBDRIVER_LIST; *s; s++, i++) {
+        TEST_ASSERT_TRUE(i < sizeof(expected) / sizeof(expected[0]));
+        size_t n = qxProtocolName(**s, name, sizeof(name));
+        TEST_ASSERT_EQUAL_STRING(expected[i], name);
+        TEST_ASSERT_EQUAL_UINT(strlen(expected[i]), n);
+    }
+    TEST_ASSERT_EQUAL_UINT(sizeof(expected) / sizeof(expected[0]), i);
+    // Truncated to the buffer, always terminated
+    char small[5];
+    TEST_ASSERT_EQUAL_UINT(4, qxProtocolName(QX_MEGATEC_OLD, small, sizeof(small)));
+    TEST_ASSERT_EQUAL_STRING("mega", small);
+    TEST_ASSERT_EQUAL_UINT(0, qxProtocolName(QX_MEGATEC_OLD, small, 0));
+}
+
+void test_find_protocol(void) {
+    TEST_ASSERT_TRUE(qxFindProtocol("HUNNOX") == &QX_HUNNOX);
+    TEST_ASSERT_TRUE(qxFindProtocol("hunnox") == &QX_HUNNOX);
+    TEST_ASSERT_TRUE(qxFindProtocol("megatec/old") == &QX_MEGATEC_OLD);
+    TEST_ASSERT_TRUE(qxFindProtocol("megatec") == &QX_MEGATEC);
+    TEST_ASSERT_TRUE(qxFindProtocol("q1") == &QX_Q1);
+    TEST_ASSERT_NULL(qxFindProtocol("megatec-old"));
+    TEST_ASSERT_NULL(qxFindProtocol("voltronic"));
+    TEST_ASSERT_NULL(qxFindProtocol(""));
+    TEST_ASSERT_NULL(qxFindProtocol(nullptr));
 }
 
 // --- Status (blazer_process_status_bits) -------------------------------------------------
@@ -573,11 +696,18 @@ int main(int argc, char **argv) {
     RUN_TEST(test_mustek_testing_values);
     RUN_TEST(test_megatec_old_testing_values);
     RUN_TEST(test_zinto_testing_values);
+    RUN_TEST(test_hunnox_testing_values);
+    RUN_TEST(test_hunnox_battery_charge_invalid);
+    RUN_TEST(test_hunnox_short_bl_answer_fails_the_walk_as_upstream);
+    RUN_TEST(test_hunnox_claim_commands);
+    RUN_TEST(test_hunnox_name_match);
     RUN_TEST(test_innovatae_testing_values);
     RUN_TEST(test_new_protocols_claim_commands);
     RUN_TEST(test_innovatae_nak_rejected);
     RUN_TEST(test_subdriver_list_order);
     RUN_TEST(test_protocol_name_match);
+    RUN_TEST(test_protocol_names_in_list_order);
+    RUN_TEST(test_find_protocol);
     RUN_TEST(test_status_on_battery);
     RUN_TEST(test_status_on_battery_low);
     RUN_TEST(test_status_boost);

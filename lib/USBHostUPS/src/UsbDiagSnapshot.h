@@ -46,6 +46,7 @@ struct UsbDiagQx {
     uint16_t failed_cycles = 0;
     uint32_t retry_ms = 0;  // back-off after the last cycle without a claim
     String forced_protocol; // the protocol setting, empty when automatic
+    bool novendor = false;  // the novendor setting (US-138)
     std::vector<UsbDiagQxExchange> exchanges; // oldest first
     uint32_t uptime_ms = 0; // uptime of the snapshot, the reference of the exchange times
 };

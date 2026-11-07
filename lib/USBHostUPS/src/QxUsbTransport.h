@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "IQxTransport.h"
 #include "IQxUsbPrimitives.h"
+#include "QxTypes.h"
 
 // Timeout of one control transfer of hid_host (USBUPS_CTRL_TIMEOUT_MS, hid_host.c:81-84)
 static const uint32_t QX_CTRL_TIMEOUT_MS = 1500;
@@ -53,6 +54,9 @@ public:
     virtual uint32_t commandBudgetMs() const = 0;
     // True when the answers come on the interrupt IN endpoint: the host starts the IN pipe
     virtual bool needsInterruptIn() const { return false; }
+    // The ups.conf options the USB subdriver reads with testvar() (US-138): none by default,
+    // novendor for hunnox. Called by QxDriver::configure() in the poll task, between commands
+    virtual void setOptions(const QxOptions& options) { (void)options; }
 
     const char* lastError() const { return _usb.lastError(); }
     uint32_t nowMs() const { return _usb.nowMs(); }

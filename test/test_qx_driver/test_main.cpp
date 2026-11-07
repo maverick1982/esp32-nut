@@ -386,6 +386,110 @@ void test_protocol_change_drops_the_previous_values(void) {
     TEST_ASSERT_EQUAL(0, r.usb.callsUnderLock);
 }
 
+// --- US-138: protocol and novendor from Board Settings ---
+
+// Before the first poll configure() only stores the settings: nothing dropped, nothing logged
+void test_configure_before_start_keeps_data(void) {
+    Rig r;
+    QxOptions opt;
+    opt.novendor = true;
+    r.driver.configure("megatec", opt);
+    TEST_ASSERT_EQUAL(0, r.host.count("Settings changed"));
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    UsbDiagQx d;
+    r.driver.fillDiagnostics(d);
+    TEST_ASSERT_EQUAL_STRING("megatec", d.forced_protocol.c_str());
+    TEST_ASSERT_TRUE(d.novendor);
+    TEST_ASSERT_EQUAL_STRING("Megatec 0.10", r.driver.claimedProtocol());
+}
+
+// A change while polling: the detection starts again with the new protocol, the values of the
+// previous one leave the host data, the identity keys stay
+void test_configure_restarts_detection(void) {
+    Rig r;
+    TEST_ASSERT_EQUAL_STRING("", r.driver.claimedProtocol());
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    TEST_ASSERT_TRUE(r.data.find("ups.serial") != nullptr);
+    TEST_ASSERT_FALSE(r.driver.commands().empty());
+
+    const size_t sentBefore = r.usb.received().size();
+    r.driver.configure("zinto", QxOptions()); // the megatec fake does not answer FW?
+    TEST_ASSERT_EQUAL(1, r.host.count("[Q*] Settings changed (protocol: zinto, novendor: off): detecting the protocol again"));
+    TEST_ASSERT_FALSE(r.driver.initialPollDone());
+    TEST_ASSERT_TRUE(r.driver.commands().empty());
+    TEST_ASSERT_EQUAL_STRING("", r.driver.claimedProtocol());
+    r.step();
+    TEST_ASSERT_NULL(r.data.find("ups.serial"));
+    TEST_ASSERT_NULL(r.data.find("input.voltage"));
+    TEST_ASSERT_NULL(r.data.find("driver.version.data"));
+    TEST_ASSERT_EQUAL_STRING("nutdrv_qx", r.get("driver.name").c_str());
+    TEST_ASSERT_EQUAL_STRING("0665", r.get("ups.vendorid").c_str());
+    TEST_ASSERT_EQUAL_STRING("5161", r.get("ups.productid").c_str());
+    UsbDiagQx d;
+    r.driver.fillDiagnostics(d);
+    TEST_ASSERT_EQUAL_STRING("zinto", d.forced_protocol.c_str());
+    TEST_ASSERT_FALSE(d.novendor);
+    // Only zinto is tried: no claim, so no first data
+    r.runFor(5000);
+    TEST_ASSERT_FALSE(r.driver.initialPollDone());
+    TEST_ASSERT_TRUE(r.usb.received().size() > sentBefore);
+    for (size_t i = sentBefore; i < r.usb.received().size(); i++) {
+        const std::string& c = r.usb.received()[i];
+        TEST_ASSERT_TRUE_MESSAGE(c == "Q1\r" || c == "FW?\r", c.c_str());
+    }
+    TEST_ASSERT_EQUAL(0, r.usb.callsUnderLock);
+}
+
+// Back to automatic: the line says "auto" and megatec is found again
+void test_configure_back_to_automatic(void) {
+    Rig r;
+    r.driver.configure("zinto", QxOptions());
+    r.runFor(1000);
+    r.driver.configure("", QxOptions());
+    TEST_ASSERT_EQUAL(1, r.host.count("[Q*] Settings changed (protocol: auto, novendor: off)"));
+    TEST_ASSERT_TRUE(r.runUntilFirstData(2000));
+    TEST_ASSERT_EQUAL_STRING("Megatec 0.10", r.get("driver.version.data").c_str());
+    UsbDiagQx d;
+    r.driver.fillDiagnostics(d);
+    TEST_ASSERT_EQUAL_STRING("", d.forced_protocol.c_str());
+}
+
+// The demonstration of #91 on the fake: a hunnox device behind the hunnox transport is claimed
+// by protocol = hunnox with novendor (Q1 only, no 0x0c in the preamble), and reaches the
+// first walk with battery.charge from BL
+void test_hunnox_with_novendor_reaches_the_first_walk(void) {
+    Rig r("hunnox");
+    r.usb.device.setTable(HUNNOX_TESTING, QX_HUNNOX.rejected);
+    QxOptions opt;
+    opt.novendor = true;
+    r.driver.configure("hunnox", opt);
+    TEST_ASSERT_TRUE(r.runUntilFirstData(2000));
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", r.get("driver.version.data").c_str());
+    TEST_ASSERT_EQUAL_STRING("100", r.get("battery.charge").c_str());
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("Q1\r", r.usb.received().front().c_str());
+    for (const auto& c : r.usb.stringCalls) TEST_ASSERT_NOT_EQUAL(0x0c, c.index);
+    UsbDiagQx d;
+    r.driver.fillDiagnostics(d);
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", d.protocol.c_str());
+    TEST_ASSERT_EQUAL_STRING("hunnox", d.forced_protocol.c_str());
+    TEST_ASSERT_TRUE(d.novendor);
+    TEST_ASSERT_EQUAL(0, r.usb.callsUnderLock);
+}
+
+// Without novendor the same device is not claimed: FW? is echoed by the transport (#91)
+void test_hunnox_without_novendor_is_not_claimed(void) {
+    Rig r("hunnox");
+    r.usb.device.setTable(HUNNOX_TESTING, QX_HUNNOX.rejected);
+    r.driver.configure("hunnox", QxOptions());
+    r.runFor(20000);
+    TEST_ASSERT_FALSE(r.driver.initialPollDone());
+    UsbDiagQx d;
+    r.driver.fillDiagnostics(d);
+    TEST_ASSERT_EQUAL_STRING("", d.protocol.c_str());
+    TEST_ASSERT_EQUAL(1, r.host.count("Protocol hunnox did not claim the UPS"));
+}
+
 // --- US-137: the krauler family on the driver ---
 
 namespace {
@@ -496,6 +600,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_transports_of_the_registry_rows);
     RUN_TEST(test_deadline_of_the_command_is_set_and_cleared);
     RUN_TEST(test_protocol_change_drops_the_previous_values);
+    RUN_TEST(test_configure_before_start_keeps_data);
+    RUN_TEST(test_configure_restarts_detection);
+    RUN_TEST(test_configure_back_to_automatic);
+    RUN_TEST(test_hunnox_with_novendor_reaches_the_first_walk);
+    RUN_TEST(test_hunnox_without_novendor_is_not_claimed);
     RUN_TEST(test_krauler_family_reaches_the_protocol_and_first_walk);
     RUN_TEST(test_krauler_exchanges_in_the_export);
     RUN_TEST(test_krauler_family_step_bound_with_a_mute_ups);

@@ -303,6 +303,7 @@ void setup() {
     }
 
     usb_ups.setPeripheralMap(board().usb.ports[board_settings.usb_port].peripheral_map);
+    usb_ups.setQxSettings(board_settings.qx_protocol, board_settings.qx_novendor); // US-138
     usb_ups.setAutomaticRestartCount(CrashDiag::consecutiveRestarts()); // US-121
     if (!usb_ups.begin()) {
         AppLogger::log("ERROR", "[MAIN] ERROR: USBHostUPS initialization failed!");

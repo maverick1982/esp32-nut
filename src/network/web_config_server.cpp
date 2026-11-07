@@ -279,8 +279,14 @@ AutoShutdownAvailability WebConfigServer::autoShutdownAvailability() const {
 }
 
 void WebConfigServer::handleGetBoard() {
+    // US-138: the Q* driver section only while a Q* driver is bound
+    String detected;
+    BoardQxInfo qx = { nullptr };
+    bool has_qx = usb_ups && usb_ups->qxDriverInfo(detected);
+    qx.detected = detected.c_str();
     server.send(200, "application/json",
-                WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability()));
+                WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability(),
+                                              has_qx ? &qx : nullptr));
 }
 
 void WebConfigServer::handleSetBoard() {
@@ -304,7 +310,16 @@ void WebConfigServer::handleSetBoard() {
     }
     bool led_changed = next.led_on != board_settings.led_on || next.led_level != board_settings.led_level;
     bool sd_changed = next.auto_shutdown != board_settings.auto_shutdown;
+    bool qx_changed = strcmp(next.qx_protocol, board_settings.qx_protocol) != 0 ||
+                      next.qx_novendor != board_settings.qx_novendor;
     board_settings = next;
+    if (qx_changed) {
+        // US-138: applied by the poll task, the detection starts again without a restart
+        AppLogger::log("INFO", "[BOARD] Q* driver settings: protocol %s, novendor %s (by '%s')",
+                       next.qx_protocol[0] ? next.qx_protocol : "auto", next.qx_novendor ? "on" : "off",
+                       webUiUser().c_str());
+        if (usb_ups) usb_ups->setQxSettings(next.qx_protocol, next.qx_novendor);
+    }
     if (sd_changed) {
         if (auto_shutdown) auto_shutdown->setEnabled(next.auto_shutdown);
         AppLogger::log("INFO", "[BOARD] Automatic shutdown %s", next.auto_shutdown ? "enabled" : "disabled");

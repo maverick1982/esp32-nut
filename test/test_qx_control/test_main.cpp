@@ -511,6 +511,7 @@ static const QxTesting* testingOf(const QxSubdriver* sub) {
     if (sub == &QX_MEGATEC_OLD) return MEGATEC_OLD_TESTING;
     if (sub == &QX_MEGATEC) return MEGATEC_TESTING;
     if (sub == &QX_ZINTO) return ZINTO_TESTING;
+    if (sub == &QX_HUNNOX) return HUNNOX_TESTING;
     if (sub == &QX_INNOVATAE) return INNOVATAE_TESTING;
     if (sub == &QX_Q1) return Q1_TESTING;
     return nullptr;
@@ -531,7 +532,7 @@ void test_commands_of_every_ported_protocol(void) {
         TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, joined(c.names()).c_str(), (*s)->name);
         c.checkNoHid();
     }
-    TEST_ASSERT_EQUAL(6, n);
+    TEST_ASSERT_EQUAL(7, n);
 }
 
 void test_commands_of_the_fallbacks(void) {

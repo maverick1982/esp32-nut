@@ -10,8 +10,9 @@
  * Megatec command is encoded as a string descriptor index, the answer is that string.
  *
  * Ports of krauler_command(), fabula_command(), hunnox_command() and hunnox_protocol() of
- * nut_repo/drivers/nutdrv_qx.c:1240-1711, without the langid_fix, noscanlangid and novendor
- * options (ADR 0013: added when a tester needs them). Without langid_fix the three read the
+ * nut_repo/drivers/nutdrv_qx.c:1240-1711, without the langid_fix and noscanlangid options
+ * (ADR 0013: added when a tester needs them); novendor is read by hunnox_protocol() since
+ * US-138 (QxUsbTransport::setOptions()). Without langid_fix the three read the
  * answer with usb_get_string_simple(), ported as qxGetStringAscii().
  */
 
@@ -64,6 +65,8 @@ public:
 
     const char* name() const override { return "hunnox"; }
     uint32_t commandBudgetMs() const override { return BUDGET_MS; }
+    // testvar("novendor") of hunnox_protocol() (US-138)
+    void setOptions(const QxOptions& options) override { _novendor = options.novendor; }
 
 protected:
     int doCommand(const char* cmd, size_t cmdlen, char* buf, size_t buflen) override;
@@ -76,6 +79,7 @@ private:
     // restart of the Q* driver on the same attach (recoverInterface()) does not reset it,
     // as a reconnection in NUT does not reset the static
     int _step = 0;
+    bool _novendor = false;
 };
 
 #endif // QX_USB_KRAULER_H

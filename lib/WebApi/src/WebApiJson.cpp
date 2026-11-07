@@ -382,7 +382,7 @@ int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
 }
 
 String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
-                                     AutoShutdownAvailability auto_shutdown) {
+                                     AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx) {
     JsonDocument doc;
     doc["id"] = board.name;
     doc["label"] = board.label;
@@ -407,6 +407,19 @@ String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettin
     sd["available"] = auto_shutdown == AutoShutdownAvailability::AVAILABLE;
     if (auto_shutdown == AutoShutdownAvailability::NO_UPS) sd["reason"] = "no_ups";
     if (auto_shutdown == AutoShutdownAvailability::NO_COMMAND) sd["reason"] = "no_command";
+    // US-138: the Q* driver section, only with a Q* driver bound
+    if (qx) {
+        JsonObject q = doc["qx"].to<JsonObject>();
+        q["protocol"] = settings.qx_protocol;
+        q["novendor"] = settings.qx_novendor;
+        JsonArray names = q["protocols"].to<JsonArray>();
+        char name[QX_PROTOCOL_NAME_MAX];
+        for (const QxSubdriver* const* s = QX_SUBDRIVER_LIST; *s; s++) {
+            qxProtocolName(**s, name, sizeof(name));
+            names.add(String(name));
+        }
+        q["detected"] = qx->detected ? qx->detected : "";
+    }
     std::string out;
     serializeJson(doc, out);
     return String(out.c_str());
@@ -462,6 +475,25 @@ int WebApiJson::checkBoardSettingsBody(JsonVariantConst body, const BoardConfig&
             return sendError(response, 400, "The UPS offers no shutdown command");
         }
         next.auto_shutdown = on;
+    }
+
+    // US-138: protocol and novendor of the Q* driver, board configuration as ups.conf
+    JsonVariantConst proto = obj["qx_protocol"];
+    if (!proto.isUnbound()) {
+        if (!proto.is<const char*>()) return sendError(response, 400, "Invalid protocol");
+        const char* name = proto.as<const char*>();
+        if (*name == '\0') {
+            next.qx_protocol[0] = '\0';
+        } else {
+            const QxSubdriver* p = qxFindProtocol(name);
+            if (!p) return sendError(response, 400, "Invalid protocol");
+            qxProtocolName(*p, next.qx_protocol, sizeof(next.qx_protocol));
+        }
+    }
+    JsonVariantConst novendor = obj["qx_novendor"];
+    if (!novendor.isUnbound()) {
+        if (!novendor.is<bool>()) return sendError(response, 400, "Invalid request");
+        next.qx_novendor = novendor.as<bool>();
     }
     return 0;
 }

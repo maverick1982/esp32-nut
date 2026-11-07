@@ -90,6 +90,24 @@ static const QxTesting ZINTO_TESTING[] = {
     { nullptr, nullptr, 0 }
 };
 
+// hunnox_testing[], nut_repo/drivers/nutdrv_qx_hunnox.c:130-146
+static const QxTesting HUNNOX_TESTING[] = {
+    { "Q1\r", "(215.0 195.0 230.0 014 49.0 22.7 30.0 00000000\r", -1 },
+    { "F\r", "#230.0 000 024.0 50.0\r", -1 },
+    { "FW?\r", "#NOT_A_LIVE_UPS  TESTING    TESTING   \r", -1 },
+    { "Q\r", "", -1 },
+    { "S03\r", "", -1 },
+    { "C\r", "", -1 },
+    { "S02R0005\r", "", -1 },
+    { "S.5R0000\r", "", -1 },
+    { "T04\r", "", -1 },
+    { "TL\r", "", -1 },
+    { "T\r", "", -1 },
+    { "CT\r", "", -1 },
+    { "BL\r", "BL100\r", -1 },
+    { nullptr, nullptr, 0 }
+};
+
 // innovatae_testing[], nut_repo/drivers/nutdrv_qx_innovatae.c:112-126
 static const QxTesting INNOVATAE_TESTING[] = {
     { "Q1\r", "(215.0 195.0 230.0 014 49.0 22.7 30.0 00000000\r", -1 },

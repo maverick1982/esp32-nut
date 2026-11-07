@@ -27,6 +27,12 @@ struct TimeStatusView {
     uint32_t since_sync_s;
 };
 
+// The bound Q* driver for GET /api/board (US-138): detected is the claimed protocol
+// ("Megatec 0.10"), "" before a claim
+struct BoardQxInfo {
+    const char* detected;
+};
+
 class WebApiJson {
 public:
     // Lunghezza massima del body di POST /api/ups/command, /api/ups/variable e
@@ -101,14 +107,18 @@ public:
     // GET /api/board (US-094): {"id","label","led":{present,on,level,levels},
     // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"
     // absent on a board without LED. US-114: reason "no_ups" / "no_command", absent when
-    // available
+    // available. US-138: "qx":{"protocol","novendor","protocols":[names in probing order],
+    // "detected"} only with qx (a Q* driver bound); protocol "" = automatic
     static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
-                                    AutoShutdownAvailability auto_shutdown);
+                                    AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx = nullptr);
     // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id),
-    // auto_shutdown (bool, US-114: false always, true only when available).
+    // auto_shutdown (bool, US-114: false always, true only when available), qx_protocol
+    // ("" or a protocol name, case-insensitive, saved lower case) and qx_novendor (bool)
+    // (US-138, accepted also without a Q* UPS, never a restart).
     // 0 with next filled and restart true when the USB port changes; otherwise 400
     // {"error"}: "Invalid request", "Invalid LED level", "Invalid USB port",
-    // "No status LED on this board", "UPS not connected", "The UPS offers no shutdown command"
+    // "No status LED on this board", "UPS not connected", "The UPS offers no shutdown command",
+    // "Invalid protocol"
     static int checkBoardSettingsBody(JsonVariantConst body, const BoardConfig& board,
                                       const BoardSettings& current, AutoShutdownAvailability auto_shutdown,
                                       BoardSettings& next, bool& restart, String& response);

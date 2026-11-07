@@ -1095,6 +1095,92 @@ void test_board_body_auto_shutdown_refused(void) {
     }
 }
 
+// --- US-138: the Q* driver section of /api/board ---
+
+void test_board_json_without_qx_has_no_qx_object(void) {
+    BoardSettings s = defaultsFor(board());
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "hunnox");
+    String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE);
+    TEST_ASSERT_TRUE(json.indexOf("\"qx\"") < 0);
+    TEST_ASSERT_TRUE(json.indexOf("hunnox") < 0);
+}
+
+void test_board_json_with_qx(void) {
+    BoardSettings s = defaultsFor(board());
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "hunnox");
+    s.qx_novendor = true;
+    BoardQxInfo qx = { "Megatec 0.10" };
+    String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE, &qx);
+    TEST_ASSERT_TRUE(json.endsWith(
+        ",\"qx\":{\"protocol\":\"hunnox\",\"novendor\":true,"
+        "\"protocols\":[\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
+        "\"detected\":\"Megatec 0.10\"}}"));
+    // Automatic, nothing claimed yet
+    BoardQxInfo none = { "" };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(board(), defaultsFor(board()),
+                                                       AutoShutdownAvailability::AVAILABLE, &none));
+    TEST_ASSERT_EQUAL_STRING("", doc["qx"]["protocol"]);
+    TEST_ASSERT_FALSE(doc["qx"]["novendor"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("", doc["qx"]["detected"]);
+    TEST_ASSERT_EQUAL(7, (int)doc["qx"]["protocols"].size());
+}
+
+void test_board_body_qx_protocol_accepts_known_and_empty(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"hunnox\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"HUNNOX\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"Megatec/Old\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("megatec/old", next.qx_protocol);
+    snprintf(cur.qx_protocol, sizeof(cur.qx_protocol), "%s", "zinto");
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"\"}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("", next.qx_protocol);
+    // Absent: the saved value stays, the other settings too
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"led_level\":2}", board(), cur, next, restart, out));
+    TEST_ASSERT_EQUAL_STRING("zinto", next.qx_protocol);
+    // Also with no UPS at all: board configuration, valid at the next Q* attach
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"q1\"}", board(), cur, next, restart, out,
+                                    AutoShutdownAvailability::NO_UPS));
+    TEST_ASSERT_EQUAL_STRING("q1", next.qx_protocol);
+}
+
+void test_board_body_qx_protocol_rejects_unknown(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart;
+    String out;
+    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic\"}",
+                          "{\"qx_protocol\":3}", "{\"qx_protocol\":true}", "{\"qx_protocol\":null}",
+                          "{\"qx_protocol\":\"megatec_with_a_very_long_name\"}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid protocol\"}", out.c_str());
+    }
+}
+
+void test_board_body_qx_novendor(void) {
+    BoardSettings cur = defaultsFor(board()), next;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_protocol\":\"hunnox\",\"qx_novendor\":true}", board(), cur, next,
+                                    restart, out));
+    TEST_ASSERT_TRUE(next.qx_novendor);
+    TEST_ASSERT_EQUAL_STRING("hunnox", next.qx_protocol);
+    TEST_ASSERT_FALSE(restart);
+    cur.qx_novendor = true;
+    TEST_ASSERT_EQUAL(0, checkBoard("{\"qx_novendor\":false}", board(), cur, next, restart, out));
+    TEST_ASSERT_FALSE(next.qx_novendor);
+    const char* bad[] = { "{\"qx_novendor\":\"yes\"}", "{\"qx_novendor\":1}" };
+    for (const char* b : bad) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, checkBoard(b, board(), cur, next, restart, out), b);
+        TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+    }
+}
+
 void test_board_body_led(void) {
     BoardSettings cur = defaultsFor(board()), next;
     bool restart = true;
@@ -2192,6 +2278,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_board_json_auto_shutdown);
     RUN_TEST(test_board_body_auto_shutdown);
     RUN_TEST(test_board_body_auto_shutdown_refused);
+    RUN_TEST(test_board_json_without_qx_has_no_qx_object);
+    RUN_TEST(test_board_json_with_qx);
+    RUN_TEST(test_board_body_qx_protocol_accepts_known_and_empty);
+    RUN_TEST(test_board_body_qx_protocol_rejects_unknown);
+    RUN_TEST(test_board_body_qx_novendor);
     RUN_TEST(test_network_status_wifi_connected);
     RUN_TEST(test_network_status_wifi_connecting);
     RUN_TEST(test_network_status_access_point);

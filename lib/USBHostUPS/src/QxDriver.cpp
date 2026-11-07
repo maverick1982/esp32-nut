@@ -52,6 +52,7 @@ void QxDriver::setup() {
     _state = State::Probing;
     _firstWalkDone = false;
     _walkStarted = false;
+    _started = false;
     {
         HostLock lock(_host);
         _commands.clear();
@@ -68,6 +69,7 @@ void QxDriver::setup() {
 
 void QxDriver::poll(UPSData& data, uint32_t now) {
     if (_host.pollingPaused()) return;
+    _started = true;
     switch (_state) {
     case State::Probing:
         if (_prober.step(_shadow, now) == QxProber::Step::Claimed) {
@@ -152,7 +154,7 @@ void QxDriver::stepPolling(uint32_t now) {
     }
 }
 
-void QxDriver::dropProtocolValues(const char* from, const char* to) {
+void QxDriver::dropValuesExceptIdentity() {
     // remove() and not a new UPSData: remove() counts in writes(), so publish() drops the
     // keys from the host data too; a new object would restart writes() and publish() could
     // skip the change
@@ -162,9 +164,48 @@ void QxDriver::dropProtocolValues(const char* from, const char* to) {
         gone.push_back(p.key);
     }
     for (const auto& k : gone) _shadow.remove(k);
+}
+
+void QxDriver::dropProtocolValues(const char* from, const char* to) {
+    dropValuesExceptIdentity();
     char line[128];
     snprintf(line, sizeof(line), "[Q*] Protocol changed from %s to %s: previous values dropped", from, to);
     _host.log("INFO", line);
+}
+
+void QxDriver::configure(const char* protocol, const QxOptions& options) {
+    {
+        // Under the host lock: fillDiagnostics() and claimedProtocol() read these fields from
+        // other tasks. No USB transfer here (ADR 0008 forbids the lock only around transfers)
+        HostLock lock(_host);
+        _options = options;
+        _prober.configure(protocol, options); // restart(): first protocol, nothing claimed
+        _transport->setOptions(options);
+    }
+    if (!_started) return;
+
+    // Settings changed while running (US-138): as a restart of the NUT driver with the new
+    // ups.conf, the protocol is detected again and nothing of the previous one stays published
+    _engine.reset();
+    _state = State::Probing;
+    _firstWalkDone = false;
+    _stale = false;
+    _walkStarted = false;
+    _lastProtocol = nullptr;
+    {
+        HostLock lock(_host);
+        _commands.clear();
+    }
+    dropValuesExceptIdentity();
+    char line[128];
+    snprintf(line, sizeof(line), "[Q*] Settings changed (protocol: %s, novendor: %s): detecting the protocol again",
+             (protocol && *protocol) ? protocol : "auto", options.novendor ? "on" : "off");
+    _host.log("INFO", line);
+}
+
+const char* QxDriver::claimedProtocol() const {
+    const QxSubdriver* c = _prober.claimed();
+    return c ? c->name : "";
 }
 
 void QxDriver::publish(UPSData& data) {
@@ -212,6 +253,7 @@ void QxDriver::fillDiagnostics(UsbDiagQx& out) const {
     out.failed_cycles = _prober.failedCycles();
     out.retry_ms = _prober.retryDelayMs();
     out.forced_protocol = _prober.protocol();
+    out.novendor = _options.novendor;
     out.exchanges.clear();
     out.exchanges.reserve(_exchanges.size());
     for (size_t i = 0; i < _exchanges.size(); i++) {

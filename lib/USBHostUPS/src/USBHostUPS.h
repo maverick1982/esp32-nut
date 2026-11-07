@@ -27,6 +27,7 @@
 #include "IQxHostPort.h"
 #include "EventBacklog.h"
 #include "QxRequestBox.h"
+#include "QxProtocols.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -108,6 +109,13 @@ public:
     // Consecutive controlled restarts before this boot (CrashDiag, RTC memory); call before
     // begin(). Above 0, a UPS that does not enumerate gets its port power-cycled (US-121)
     void setAutomaticRestartCount(uint8_t count) { _auto_restart_count = count; }
+    // protocol and novendor of the Q* driver from Board Settings (US-138), any task: protocol
+    // "" for the automatic detection. Applied by the poll task to the bound Q* driver (the
+    // detection starts again, no restart of the board) and to every later Q* attach
+    void setQxSettings(const char* protocol, bool novendor);
+    // True while a Q* driver is bound (Board Settings shows its section); detected is the
+    // claimed protocol ("Megatec 0.10"), empty before a claim
+    bool qxDriverInfo(String& detected) const;
     void logDebug(const String& msg) const override;
 
     // Set when in-place recovery failed: the owner must restart the system (never from an ISR)
@@ -354,6 +362,15 @@ private:
     QxRequestBox _qx_box{_qx_req_port};
     uint32_t _stat_qx_ok = 0;     // Q* transfers of the traffic summary
     uint32_t _stat_qx_failed = 0;
+    // Board Settings of the Q* driver (US-138), under _mutex: setQxSettings() bumps the
+    // generation, the poll task applies it to the bound driver (applyQxSettings())
+    char _qx_protocol[QX_PROTOCOL_NAME_MAX] = "";
+    bool _qx_novendor = false;
+    uint32_t _qx_settings_gen = 0;
+    uint32_t _qx_settings_applied = 0;
+    // Poll task: a new generation of the settings reaches the Q* driver, with no lock held
+    // during QxDriver::configure() (ADR 0008)
+    void applyQxSettings();
     // Interface being closed by the loopTask: its synchronous DISCONNECTED is not queued
     volatile hid_host_device_handle_t _self_close_handle;
     volatile uint32_t _dropped_events;
