@@ -47,7 +47,7 @@ USBHostUPS::USBHostUPS() :
     _ep_in_mps(0), _uses_report_ids(false), _lang_id(0), _failed_strings{},
     _input_ts{}, _input_seen{},
     _stat_since(0), _stat_input(0), _stat_in_packets(0), _stat_get_ok(0), _stat_get_failed(0),
-    _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0), _in_recoveries(0),
+    _in_restart_pending(false), _in_start_attempts(0), _in_restart_at(0),
     _restart_requested(false), _restart_reason(""),
     _driver(nullptr), _log_cb(nullptr), _var_store(nullptr), _quirks(0)
 {
@@ -325,12 +325,22 @@ void USBHostUPS::service() {
     serviceEnumWatchdog(now);
 
     // The export read stops when the recovery takes over the link (US-119, ADR 0008)
-    if (_restart_requested || _in_restart_pending) interruptDiagRead();
+    if (_restart_requested || _in_restart_pending || _in_errors.pending()) interruptDiagRead();
 
     // A Q* request of another task is answered at once, without transfers, when the poll
     // cannot run (US-136)
     if (_restart_requested) {
         serviceQxRequest(false);
+        return;
+    }
+
+    // IN pipe error (issue #36): no request goes out until the interface restart
+    if (_in_errors.pending()) {
+        serviceQxRequest(false);
+        if (_in_errors.due(now)) {
+            _in_errors.onRecoveryStarted();
+            recoverInterface("INPUT transfer error", now, true);
+        }
         return;
     }
 
@@ -544,11 +554,17 @@ void USBHostUPS::handleEvent(const HidEvent& ev) {
             // US-108: upstream never reads this pipe (usbhid-ups.c:1432), so its errors
             // are not a fault and must not climb to a restart
             logDebug("[USB] INPUT transfer error ignored: interrupt pipe disabled");
-        } else if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending && !_restart_requested) {
-            if (++_in_recoveries > MAX_IN_RECOVERIES) {
+        } else if (ev.handle == _hid_dev_handle && _is_ready_to_poll && !_in_restart_pending &&
+                   !_in_errors.pending() && !_restart_requested) {
+            // Issue #36: the restart waits, with a growing delay. A UPS dropping off the
+            // bus raises these errors before the disconnection, which then clears them.
+            uint32_t now = millis();
+            if (_in_errors.onError(now) == InputErrorBackoff::Action::RESTART) {
                 requestRestart("INPUT transfer keeps failing");
             } else {
-                recoverInterface("INPUT transfer error", millis(), true);
+                log("WARN", "[USB] INPUT transfer error (%u in %u ms): interface restart in %u ms",
+                    (unsigned)_in_errors.recoveries(), (unsigned)_in_errors.streakMs(now),
+                    (unsigned)_in_errors.delayMs());
             }
         }
         break;
@@ -684,7 +700,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     memset(_failed_strings, 0, sizeof(_failed_strings));
     memset(_input_seen, 0, sizeof(_input_seen));
     _in_restart_pending = false;
-    _in_recoveries = 0;
+    _in_errors.reset();
     // Stale until the first full poll: the values are partial (issue #60)
     _first_data_ready = false;
     _claimed_at = millis();
@@ -737,7 +753,7 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
     // InputWatchdog, which is never fed and never acts: no INPUT is not a failure here.
     if (_quirks & QUIRK_NO_INTERRUPT_PIPE) return;
 
-    _in_recoveries = 0;
+    _in_errors.onInput();
     _stat_in_packets++;
     _in_wd.onInput(ev.ts);
     _in_silence.onInput(ev.ts);
@@ -789,6 +805,7 @@ void USBHostUPS::releaseBoundState() {
     _hid_dev_handle = NULL;
     _is_ready_to_poll = false;
     _in_restart_pending = false;
+    _in_errors.reset();
     _ups_data = UPSData();
     _ups_data.setCustomPowerNominals(_custom_real_w, _custom_apparent_va); // US-146
     _device_product = "";
@@ -938,7 +955,7 @@ void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverReg
     _in_reasm.reset();
     _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
     _in_restart_pending = false;
-    _in_recoveries = 0;
+    _in_errors.reset();
     _first_data_ready = false;
     _claimed_at = millis();
     _get_ok_since_claim = 0;
