@@ -1,5 +1,6 @@
 #include "core/board_settings_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 
 static const char* kNamespace = "board";
 static const char* kKeyLedOn = "led_on";
@@ -11,7 +12,7 @@ BoardSettings BoardSettingsStore::load(const BoardConfig& board) {
     BoardSettings s = defaultsFor(board);
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return s;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return s;
     s.led_on = prefs.getBool(kKeyLedOn, s.led_on);
     s.led_level = prefs.getUChar(kKeyLedLevel, s.led_level);
     s.usb_port = prefs.getUChar(kKeyUsbPort, s.usb_port);

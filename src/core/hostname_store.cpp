@@ -1,5 +1,6 @@
 #include "core/hostname_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 #include "NetHostname.h"
 #include "core/app_logger.h"
 
@@ -9,7 +10,7 @@ static const char* kKeyHostname = "hostname";
 String HostnameStore::load() {
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return String();
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return String();
     String name = prefs.getString(kKeyHostname, "");
     prefs.end();
     if (name.length() > 0 && !NetHostname::isValid(name.c_str())) {

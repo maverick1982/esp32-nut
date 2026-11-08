@@ -188,6 +188,8 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 
 L'installer ha un pulsante per le schede ESP32-S3 e due per le schede ESP32-P4, uno per revisione del chip (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
+Se l'installer trova la scheda ma si ferma con "Failed to initialize", la scheda non è entrata da sola in modalità download: tieni premuto il pulsante **BOOT** mentre clicchi **Install** (o mentre colleghi il cavo USB) e rilascialo quando l'installer si collega. Se non basta, scrivi il pacchetto della release con esptool (vedi **Pacchetti delle release** qui sotto). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+
 **Opzione B: Compilazione Manuale tramite PlatformIO**
 1. Clona questo repository.
 2. Apri la cartella del progetto in VSCode con l'estensione PlatformIO installata.
@@ -202,7 +204,7 @@ Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip pe
 ### 2. Primo Avvio e Configurazione
 
 > [!NOTE]
-> **ESP32-P4 (Ethernet):** non ci sono access point né configurazione del Wi-Fi. Collega il cavo di rete: la scheda prende l'indirizzo via DHCP e parte con le impostazioni NUT predefinite (nessuna credenziale NUT, nome UPS `ups`). Trovala nel router come `esp32-nut-xxxxxx`, apri il suo indirizzo nel browser e prosegui con il login alla Web UI qui sotto. Se perdi le credenziali web, un doppio reset (spegni e riaccendi la scheda entro 3 secondi) apre una finestra di 10 minuti in cui la Web UI permette di crearne di nuove senza la password attuale.
+> **ESP32-P4 (Ethernet):** non ci sono access point né configurazione del Wi-Fi. Collega il cavo di rete: senza, la scheda non ha alcuna rete e resta in attesa del link (il log seriale ripete `No Ethernet link for N s` ogni minuto). Con il cavo, la scheda prende l'indirizzo via DHCP e parte con le impostazioni NUT predefinite (nessuna credenziale NUT, nome UPS `ups`). Trovala nel router come `esp32-nut-xxxxxx`, apri il suo indirizzo nel browser e prosegui con il login alla Web UI qui sotto. Se perdi le credenziali web, un doppio reset (spegni e riaccendi la scheda entro 3 secondi) apre una finestra di 10 minuti in cui la Web UI permette di crearne di nuove senza la password attuale.
 
 1. Al primo avvio (o in assenza di una configurazione Wi-Fi salvata), l'ESP32 creerà un Access Point chiamato **`NUT_ESP32_Config`** (Password: `12345678`).
    > **Nota:** Per forzare manualmente l'avvio in modalità Access Point (ad esempio per cambiare rete Wi-Fi), collega l'ESP32 all'alimentazione e scollegalo entro 3 secondi. Al successivo avvio, l'ESP32 entrerà in modalità Access Point. (L'AP non si attiva più in automatico alla perdita del segnale). Se la configurazione salvata è valida e nessun dispositivo resta collegato all'access point per 10 minuti, la scheda riparte da sola in modalità normale; finché un dispositivo è collegato resta in modalità Access Point.

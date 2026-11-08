@@ -1,6 +1,7 @@
 #include "AuthPlatform.h"
 #include "network/auth_platform.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 #include <esp_random.h>
 #include <mbedtls/pkcs5.h>
 #include <mbedtls/sha256.h>
@@ -44,7 +45,7 @@ void EspAuthCrypto::randomBytes(uint8_t* buf, size_t len) {
 bool NvsAuthStorage::loadCredentials(CredentialRecord& record) {
     Preferences prefs;
     // Sola lettura: se il namespace non esiste ancora begin() fallisce (stato TOFU)
-    if (!prefs.begin(kNamespace, true)) return false;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return false;
 
     uint8_t buf[kCredMaxSize];
     size_t len = prefs.isKey(kKeyCred) ? prefs.getBytesLength(kKeyCred) : 0;
@@ -92,7 +93,7 @@ bool NvsAuthStorage::loadSessions(PersistentSession* out, size_t max, size_t& co
     count = 0;
     Preferences prefs;
     // Namespace assente (nessuna credenziale né sessione salvata): nessuna sessione
-    if (!prefs.begin(kNamespace, true)) return true;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return true;
     if (!prefs.isKey(kKeySessions)) {
         prefs.end();
         return true;

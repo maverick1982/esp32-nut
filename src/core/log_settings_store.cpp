@@ -1,5 +1,6 @@
 #include "core/log_settings_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 
 static const char* kNamespace = "logout";
 static const char* kKeyOn = "sl_on";
@@ -14,7 +15,7 @@ SyslogSettings LogSettingsStore::loadSyslog() {
     SyslogSettings s = syslogDefaults();
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return s;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return s;
     s.enabled = prefs.getBool(kKeyOn, s.enabled);
     s.host = prefs.getString(kKeyHost, s.host);
     s.port = prefs.getUShort(kKeyPort, s.port);

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "INetLink.h"
+#include "LinkWaitReminder.h"
 #include "board/board.h"
 
 // Ethernet adapter of the net module (ADR 0010, US-092): the only code that calls ETH.*
@@ -33,6 +34,8 @@ private:
     bool m_started;
     bool m_lastConnected;
     bool m_lastLinkUp;
+    // "No Ethernet link" repeated while the cable is missing (issue #136)
+    LinkWaitReminder m_linkWait;
 };
 
 #endif // ETH_LINK_H
