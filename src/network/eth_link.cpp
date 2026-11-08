@@ -54,6 +54,7 @@ void EthLink::begin() {
         AppLogger::log("ERROR", "[NETWORK] Ethernet initialization failed: check the PHY pins of the board profile");
         return;
     }
+    m_linkWait.begin(millis());
     // The netif exists only after ETH.begin(): before it setHostname() fails. DHCP starts
     // when the link comes up, so the first request already carries the name
     if (ETH.setHostname(hostname)) {
@@ -72,10 +73,15 @@ void EthLink::end() {
     m_started = false;
 }
 
-void EthLink::loop(uint32_t) {
+void EthLink::loop(uint32_t now) {
     if (!m_started) return;
     bool link_up = ETH.linkUp();
     bool connected = isConnected();
+    // Link down from the start never changes state: without this the log stays silent
+    if (uint32_t waited_s = m_linkWait.update(link_up, now)) {
+        AppLogger::log("WARN", "[NETWORK] No Ethernet link for %lu s: check the cable and the switch port",
+                       (unsigned long)waited_s);
+    }
     if (link_up != m_lastLinkUp) {
         if (link_up) {
             AppLogger::log("INFO", "[NETWORK] Ethernet link up: %u Mbps, %s duplex", (unsigned)ETH.linkSpeed(),

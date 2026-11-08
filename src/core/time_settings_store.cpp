@@ -1,5 +1,6 @@
 #include "core/time_settings_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 
 static const char* kNamespace = "time";
 static const char* kKeyNtp = "ntp";
@@ -10,7 +11,7 @@ TimeSettings TimeSettingsStore::load() {
     TimeSettings s = timeDefaults();
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return s;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return s;
     s.ntp = prefs.getBool(kKeyNtp, s.ntp);
     s.server = prefs.getString(kKeyServer, s.server);
     s.zone = prefs.getString(kKeyZone, s.zone);

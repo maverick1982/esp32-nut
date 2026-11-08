@@ -1,5 +1,6 @@
 #include "core/driver_var_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 
 static const char* kNamespace = "nutrw";
 static const char* kKeyVars = "vars";
@@ -13,7 +14,7 @@ bool NvsDriverVarStore::load(std::vector<std::pair<String, String>>& out) {
     out.clear();
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return true;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return true;
     String json = readJson(prefs);
     prefs.end();
     if (json.length() == 0) return true;

@@ -1,5 +1,6 @@
 #include "core/nut_override_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 #include "core/app_logger.h"
 
 static const char* kNamespace = "nutovr";
@@ -9,7 +10,7 @@ void NvsNutOverrideStore::load(std::vector<NutOverride>& out) {
     out.clear();
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return;
     size_t len = prefs.isKey(kKeyList) ? prefs.getBytesLength(kKeyList) : 0;
     String json;
     if (len > 0) {

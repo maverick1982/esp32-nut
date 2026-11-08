@@ -188,6 +188,10 @@ You can install the firmware directly from your browser without downloading any 
 
 The installer has one button for ESP32-S3 boards and two for ESP32-P4 boards, one per chip revision (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
+If the installer finds the board but stops with "Failed to initialize":
+- **ESP32-P4 v3.1 or later**: the installer cannot flash these chips yet. Its flashing library (esptool-js 0.6, inside ESP Web Tools 10.4.0) does not power on their flash memory in download mode. Write the release package with esptool instead (see **Release packages** below). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+- **Other boards**: the board did not enter download mode by itself. Hold the **BOOT** button while you click **Install** (or while you plug in the USB cable) and release it once the installer connects. If it still fails, use esptool.
+
 **Option B: Manual Build via PlatformIO**
 1. Clone this repository.
 2. Open the project folder in VSCode with the PlatformIO extension.
@@ -202,7 +206,7 @@ Every [release](https://github.com/maverick1982/esp32-nut/releases) has one zip 
 ### 2. First Boot & Configuration
 
 > [!NOTE]
-> **ESP32-P4 (Ethernet):** there is no access point and no Wi-Fi setup. Plug in the network cable: the board gets its address by DHCP and starts with the default NUT settings (no NUT credentials, UPS name `ups`). Find it in your router as `esp32-nut-xxxxxx`, open its address in the browser and continue with the Web UI login below. If you lose the web credentials, a double reset (power the board off and on again within 3 seconds) opens a 10-minute window in which the Web UI lets you create new ones without the current password.
+> **ESP32-P4 (Ethernet):** there is no access point and no Wi-Fi setup. Plug in the network cable: without it the board has no network at all and just waits for the link (the serial log repeats `No Ethernet link for N s` every minute). With the cable, the board gets its address by DHCP and starts with the default NUT settings (no NUT credentials, UPS name `ups`). Find it in your router as `esp32-nut-xxxxxx`, open its address in the browser and continue with the Web UI login below. If you lose the web credentials, a double reset (power the board off and on again within 3 seconds) opens a 10-minute window in which the Web UI lets you create new ones without the current password.
 
 1. On first boot (or if no valid Wi-Fi configuration is saved), the ESP32 will create an Access Point named **`NUT_ESP32_Config`** (Password: `12345678`).
    > **Note:** To manually force Access Point mode (e.g., to change Wi-Fi settings), plug in the ESP32 and unplug it within 3 seconds. On the next boot, the ESP32 will start in Access Point mode. (The AP no longer activates automatically upon signal loss). If the saved configuration is valid and no device stays connected to the access point for 10 minutes, the board restarts in normal mode by itself; while a device is connected it stays in Access Point mode.
