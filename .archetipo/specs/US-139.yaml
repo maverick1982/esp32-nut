@@ -1,0 +1,48 @@
+schema: archetipo/spec/v2
+code: US-139
+title: Riprovare l'enumerazione anche dopo un avvio non automatico quando l'UPS non si presenta (#78)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 2
+status: DONE
+body: |
+  #### US-139: Riprovare l'enumerazione anche dopo un avvio non automatico quando l'UPS non si presenta (#78)
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS che a volte non si presenta al primo collegamento (per esempio i Smart-UPS 750 di miskor-bgd nella #78),
+  voglio che la scheda riprovi da sola a collegare l'UPS anche dopo un'accensione, un aggiornamento OTA o un salvataggio delle impostazioni,
+  in modo da non restare per ore senza dati sul server NUT finché qualcuno non stacca e riattacca il cavo USB.
+
+  **Dimostrazione**
+  - **Test nativo:** dopo un avvio non automatico senza nessun UPS enumerato, la logica di recupero chiede due cicli della porta USB root, a 1 e a 2 minuti dall'avvio dell'host USB, e poi nient'altro. Un'enumerazione riuscita annulla i cicli rimasti.
+  - **Sulla scheda:** con l'UPS collegato, il System Log mostra le due righe INFO se l'UPS non si presenta, e l'UPS torna senza staccare il cavo. Senza UPS collegato si vedono solo le due righe INFO, senza riavvii né banner.
+
+  **Criteri di Accettazione**
+  - [ ] Dopo un avvio non automatico (contatore dei riavvii consecutivi a 0: accensione, reset dal pin EN, OTA, salvataggio delle impostazioni), se nessun UPS si è enumerato, il firmware spegne e riaccende la porta USB root con `usb_host_lib_set_root_port_power()` a 1 e a 2 minuti dall'avvio dell'host USB. Al massimo due cicli in tutto.
+  - [ ] Un'enumerazione riuscita prima di un ciclo lo annulla, e annulla anche quelli successivi. Un UPS che si stacca più tardi non riattiva i cicli: per i distacchi durante il funzionamento non cambia niente.
+  - [ ] Nessun riavvio della scheda, nessun banner nella web UI e nessun nuovo campo nella diagnostica. Ogni ciclo lascia nel System Log una riga INFO, per esempio "No UPS enumerated N min after boot: power-cycling the USB port (N/2)".
+  - [ ] Dopo un riavvio automatico (contatore > 0) resta il comportamento di US-121 senza modifiche: cicli della porta, poi la scala dei riavvii e il banner "Unplug and replug".
+  - [ ] Test nativi per i nuovi casi della logica pura (esistente o nuova, lo decide il piano). Suite nativa verde e tre build ok.
+
+  **Assunzioni**
+  - **Prova dalla #78** (v1.14.0, log seriale del 6-7/11): avvio delle 18:56 con `rst:0x1 (POWERON)`. Lo Smart-UPS 750 non si è mai enumerato per 2 h 50 min, senza errori ENUM e senza tentativi di recupero, perché EnumWatchdog si arma solo se `consecutiveRestarts() > 0`. Ricollegato il cavo, è tornato in circa 3 s.
+  - **Causa** (verificata per US-121 nei sorgenti di ESP-IDF): un'enumerazione annullata disabilita la porta root, e lo stack non riprova senza un distacco.
+  - **Niente riavvii né banner** per non disturbare chi accende la scheda senza UPS collegato: un ciclo su una porta vuota non ha effetti visibili. Questo affina la decisione del 6/11 (niente cicli né riavvii per chi stacca l'UPS apposta), che riguardava i distacchi durante il funzionamento.
+  - **Fuori scope:** la causa dei transfer bloccati sui Smart-UPS, già gestiti con i cicli della porta di US-122.
+  - Issue aperte fino alla release ("Refs #78").
+history:
+  - status: TODO
+    at: "2026-11-07T21:58:08Z"
+  - status: PLANNED
+    at: "2026-11-08T17:50:00Z"
+  - status: IN PROGRESS
+    at: "2026-11-08T17:51:46Z"
+  - status: REVIEW
+    at: "2026-11-08T18:44:55Z"
+  - status: DONE
+    at: "2026-11-08T18:49:13Z"

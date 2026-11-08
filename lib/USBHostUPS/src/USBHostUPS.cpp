@@ -116,20 +116,29 @@ bool USBHostUPS::begin() {
         return false;
     }
 
-    // US-121: after a controlled restart, a UPS that does not enumerate gets its root port
-    // power-cycled, then a new restart (ESP-IDF does not retry a cancelled enumeration).
+    // A UPS that does not enumerate gets its root port power-cycled (ESP-IDF does not retry a
+    // cancelled enumeration). After a controlled restart a new restart follows (US-121); after
+    // any other boot (power on, OTA, settings saved) only the two cycles (US-139, #78).
     // Armed before the poll task starts: the task reads the watchdog without a lock.
 #if defined(NUT_TEST_ENUM_WATCHDOG) && NUT_TEST_ENUM_WATCHDOG
     if (_auto_restart_count == 0 && !_poll_task_handle) {
-        log("WARN", "[TEST] Enumeration watchdog armed on a normal boot, enumerations ignored "
-                    "(NUT_TEST_ENUM_WATCHDOG)");
-        _enum_wd.arm(millis());
+#if NUT_TEST_ENUM_WATCHDOG == 2
+        log("WARN", "[TEST] Enumeration watchdog of a normal boot, enumerations ignored "
+                    "(NUT_TEST_ENUM_WATCHDOG=2)");
+        _enum_wd.arm(millis(), EnumWatchdog::Mode::AFTER_NORMAL_BOOT);
+#else
+        log("WARN", "[TEST] Enumeration watchdog of an automatic restart armed on a normal boot, "
+                    "enumerations ignored (NUT_TEST_ENUM_WATCHDOG=1)");
+        _enum_wd.arm(millis(), EnumWatchdog::Mode::AFTER_AUTO_RESTART);
+#endif
     }
 #endif
-    if (_auto_restart_count > 0 && !_poll_task_handle) {
-        log("INFO", "[USB] Automatic restart #%u: waiting for the UPS to enumerate",
-            (unsigned)_auto_restart_count);
-        _enum_wd.arm(millis());
+    if (!_enum_wd.armed() && !_poll_task_handle) {
+        if (_auto_restart_count > 0) {
+            log("INFO", "[USB] Automatic restart #%u: waiting for the UPS to enumerate",
+                (unsigned)_auto_restart_count);
+        }
+        _enum_wd.arm(millis(), EnumWatchdog::modeFor(_auto_restart_count));
     }
 
     if (!_poll_task_handle) {
@@ -795,9 +804,15 @@ void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
 #endif
     switch (_enum_wd.tick(enumerated, now)) {
     case EnumWatchdog::Action::CYCLE_PORT:
-        log("WARN", "[USB] UPS not enumerated %u min after the automatic restart: "
-                    "power-cycling the USB port (attempt %u of %u)",
-            (unsigned)(now / 60000), (unsigned)_enum_wd.cycles(), (unsigned)EnumWatchdog::MAX_PORT_CYCLES);
+        if (_enum_wd.mode() == EnumWatchdog::Mode::AFTER_NORMAL_BOOT) {
+            // INFO: a board powered on without a UPS goes through here too (US-139)
+            log("INFO", "[USB] No UPS enumerated %u min after boot: power-cycling the USB port (%u/%u)",
+                (unsigned)(now / 60000), (unsigned)_enum_wd.cycles(), (unsigned)EnumWatchdog::MAX_PORT_CYCLES);
+        } else {
+            log("WARN", "[USB] UPS not enumerated %u min after the automatic restart: "
+                        "power-cycling the USB port (attempt %u of %u)",
+                (unsigned)(now / 60000), (unsigned)_enum_wd.cycles(), (unsigned)EnumWatchdog::MAX_PORT_CYCLES);
+        }
         cycleRootPort();
         break;
     case EnumWatchdog::Action::REQUEST_RESTART:

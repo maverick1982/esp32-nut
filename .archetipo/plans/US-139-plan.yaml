@@ -1,0 +1,296 @@
+schema: archetipo/plan/v2
+spec_code: US-139
+body: |
+  ---
+  type: plan
+  title: 'US-139: Riprovare l enumerazione anche dopo un avvio non automatico quando l UPS non si presenta (#78) — Piano di implementazione'
+  description: 'Piano di implementazione per US-139'
+  tags: [plan, implementation, US-139]
+  ---
+  # US-139: Riprovare l'enumerazione anche dopo un avvio non automatico quando l'UPS non si presenta (#78) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-08
+  **Branch:** da creare all'implementazione, da `main` 72879ad (es. `feature/us-139-enum-retry-every-boot`). Spec e backlog di US-139 sono ancora da committare su main.
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 2 | **Bloccato da:** -
+
+  Dopo un avvio non automatico (contatore dei riavvii consecutivi a 0: accensione, pin EN, OTA, salvataggio delle impostazioni), se nessun UPS si enumera, il firmware spegne e riaccende la porta USB root a 1 e a 2 minuti dall'avvio dell'host USB, e poi si ferma. Niente riavvio, niente banner, niente diagnostica nuova: solo una riga INFO per ciclo. Dopo un riavvio automatico resta US-121 com'è.
+
+  ## Contesto verificato nel codice
+
+  - `EnumWatchdog` (`lib/USBHostUPS/src/EnumWatchdog.h`, US-121) fa già i due cicli a 1 e 2 min e poi `REQUEST_RESTART` a 3 min. Si disarma alla prima enumerazione.
+  - Si arma solo in `USBHostUPS::begin()` (`lib/USBHostUPS/src/USBHostUPS.cpp`, ~riga 129) con `_auto_restart_count > 0`. Il contatore arriva da `src/core/main.cpp:258` (`setAutomaticRestartCount(CrashDiag::consecutiveRestarts())`), prima di `begin()`. È la causa della #78: avvio `POWERON`, contatore 0, nessun recupero per 2 h 50 min.
+  - `serviceEnumWatchdog()` (poll task, `_op_mutex` preso) considera enumerato `_enum_seen` oppure `usb_host_lib_info().num_devices > 0`, logga un WARN e chiama `cycleRootPort()` (off, 500 ms, on). `REQUEST_RESTART` → `requestRestart(NOT_ENUMERATED_REASON)`, che alimenta `isNotEnumeratedRestart()` e il banner "Unplug and replug" in degraded mode.
+  - `cycleRootPort()` su porta vuota: `hub_root_stop()` / `hub_root_start()` di IDF 5.5 (ADR 0008, addendum US-121). Con la porta accesa ma senza device lo stop è ammesso e dopo l'accensione la porta torna `DISCONNECTED`: un UPS collegato più tardi si enumera normalmente. Sul banco è stato provato solo con il device collegato; la porta vuota va confermata sulla scheda (TASK-06).
+  - Build di prova esistente `NUT_TEST_ENUM_WATCHDOG=1`: al boot con contatore 0 arma il watchdog in modalità US-121 e ignora le enumerazioni.
+
+  ## Soluzione tecnica
+
+  Si estende `EnumWatchdog` con una modalità, invece di una seconda classe: tempi, disarmo all'enumerazione e servizio nel poll task sono identici, cambia solo cosa succede dopo l'ultimo ciclo.
+
+  ### 1. `EnumWatchdog`: modalità e scelta della modalità
+
+  - `enum class Mode : uint8_t { AFTER_AUTO_RESTART, AFTER_NORMAL_BOOT };`
+  - `void arm(uint32_t now, Mode mode = Mode::AFTER_AUTO_RESTART)`: il default tiene compilati e invariati i test di US-121.
+  - `static Mode modeFor(uint8_t consecutiveRestarts)`: 0 → `AFTER_NORMAL_BOOT`, > 0 → `AFTER_AUTO_RESTART`. La scelta diventa logica pura, testabile in native (criteri 1 e 4).
+  - `tick()`: in `AFTER_NORMAL_BOOT`, il secondo `CYCLE_PORT` disarma subito il watchdog (`_armed = false`), quindi mai `REQUEST_RESTART` e da lì sempre `NONE`. In `AFTER_AUTO_RESTART` nessuna modifica.
+  - `Mode mode() const` per il messaggio di log. `cycles()` resta valido dopo il disarmo (serve al testo "(2/2)").
+  - Commento di classe aggiornato: le due modalità, la #78 (avvio POWERON), la decisione di non riavviare né mostrare banner dopo un avvio non automatico.
+
+  ### 2. `USBHostUPS`: armo su ogni avvio e riga INFO
+
+  - `begin()`: con `!_poll_task_handle` il watchdog si arma sempre, con `EnumWatchdog::modeFor(_auto_restart_count)`. La riga INFO "Automatic restart #N: waiting for the UPS to enumerate" resta solo per il contatore > 0; per l'avvio normale nessuna riga in più (l'utente senza UPS vede solo le due righe dei cicli).
+  - `serviceEnumWatchdog()`, caso `CYCLE_PORT`:
+    - `AFTER_NORMAL_BOOT`: INFO `[USB] No UPS enumerated N min after boot: power-cycling the USB port (n/2)`, poi `cycleRootPort()`;
+    - `AFTER_AUTO_RESTART`: il WARN di oggi, invariato.
+    - N = `now / 60000` come oggi (millis dall'avvio; l'host parte a ~3 s, quindi 1 e 2).
+  - `REQUEST_RESTART` non può arrivare in `AFTER_NORMAL_BOOT`: nessuna modifica a `requestRestart()`, `NOT_ENUMERATED_REASON`, `isNotEnumeratedRestart()`, `CrashDiag`, `/api/system-status` e web UI (criterio 3).
+  - Un UPS che si stacca più tardi non riattiva niente: il watchdog si arma solo in `begin()` e la prima enumerazione lo disarma per sempre (criterio 2). I cicli di US-122 per i transfer bloccati non cambiano.
+  - Build di prova: `NUT_TEST_ENUM_WATCHDOG=2` arma al boot con contatore 0 in `AFTER_NORMAL_BOOT` e ignora le enumerazioni (come =1, che resta per US-121). Con l'Eaton collegato si vedono le due righe INFO, l'UPS si stacca e si riattacca due volte e la scheda non si riavvia. Serve perché la prova sul campo senza cavo USB richiederebbe di staccarlo a mano.
+
+  ### 3. Documentazione
+
+  - ADR 0008: nuovo addendum "UPS not enumerated after a boot that was not automatic (US-139, issue #78, 2026-11-08)": prova del log POWERON, modalità `AFTER_NORMAL_BOOT`, riga INFO, niente riavvio né banner e perché (chi accende la scheda senza UPS non deve vedere effetti; un ciclo su porta vuota non ha effetti visibili), build di prova `=2`, rischio aperto (porta vuota da confermare, efficacia sul Smart-UPS da confermare dal reporter). Nell'addendum US-121 la frase "With a count of 0 (a board powered without a UPS) nothing changes" rimanda al nuovo addendum.
+  - Note di rilascio: non in questo piano, si scrivono prima della release (solo `#78`, nessun codice US nel testo).
+  - PR con "Refs #78", mai "Closes".
+
+  ### Casi limite
+
+  - UPS collegato durante un ciclo (enumerazione in corso, `num_devices` ancora 0): il ciclo la interrompe, alla riaccensione la porta vede di nuovo il device e lo enumera. Nessun danno.
+  - UPS collegato dopo i 2 min: watchdog già disarmato, il collegamento passa per il percorso normale (porta `DISCONNECTED`, non disabilitata).
+  - Device non HID: conta come enumerato via `num_devices`, come in US-121.
+  - Degraded mode o contatore > 0: modalità `AFTER_AUTO_RESTART`, comportamento di US-121 identico.
+  - `begin()` chiamato di nuovo: la guardia `!_poll_task_handle` impedisce un secondo armo.
+
+  ## Strategia di test
+
+  Logica pura in native, integrazione con le build e una prova sulla scheda solo con un sì esplicito.
+
+  - **Native (`test/test_enum_watchdog/test_main.cpp`):**
+    - `modeFor(0)` → `AFTER_NORMAL_BOOT`, `modeFor(1..255)` → `AFTER_AUTO_RESTART`;
+    - avvio normale senza UPS (Dimostrazione): armato a 3000 ms, `CYCLE_PORT` esattamente a `t0 + FIRST` e `t0 + FIRST + STEP`, poi `NONE` per un'ora, mai `REQUEST_RESTART`, `armed()` falso dopo il secondo ciclo, `cycles() == 2`;
+    - enumerazione prima del primo ciclo e tra i due: annulla tutto, anche se il device sparisce dopo;
+    - tick in ritardo: due `CYCLE_PORT` in due chiamate, poi `NONE`;
+    - wrap di `millis()` in `AFTER_NORMAL_BOOT`;
+    - scenario con `RestartPolicy(0)`: in un'ora nessuna decisione `RESTART`/`DEGRADED`;
+    - regressione: i test esistenti di US-121 passano senza modifiche (default `AFTER_AUTO_RESTART`), più un test esplicito con `arm(t0, Mode::AFTER_AUTO_RESTART)` che arriva ancora a `REQUEST_RESTART`.
+  - **Suite native completa** verde e **tre build** (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`), più la build con `-DNUT_TEST_ENUM_WATCHDOG=2` su `esp32-s3-standard`.
+  - **Sulla scheda (Eaton 3S, solo con un sì esplicito dell'utente):** build `=2` caricata via OTA (contatore 0): due righe INFO a ~1 e ~2 min, l'UPS si stacca e torna ogni volta, nessun riavvio, nessun banner, contatore dei riavvii a 0. Poi build normale: riavvio da salvataggio delle impostazioni con UPS collegato, nessuna riga dei cicli. Risultati in `docs/test-results/US-139/`.
+  - **E2E web:** non servono, la web UI non cambia (nessun banner, nessun campo nuovo). Nessun mockup. Nessuna demo video: la Dimostrazione è un test nativo e una prova sulla scheda.
+tasks:
+  - id: TASK-01
+    title: 'EnumWatchdog: modalità AFTER_NORMAL_BOOT senza richiesta di riavvio e modeFor()'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare a `EnumWatchdog` una modalità per l'avvio non automatico: due cicli della porta a 1 e 2 min, poi si disarma, mai `REQUEST_RESTART`.
+
+      **Leggere:** `lib/USBHostUPS/src/EnumWatchdog.h` (intero), sezione 1 della soluzione tecnica.
+
+      **Modificare:** `lib/USBHostUPS/src/EnumWatchdog.h`:
+      - `enum class Mode : uint8_t { AFTER_AUTO_RESTART, AFTER_NORMAL_BOOT };`
+      - membro `_mode`, inizializzato a `AFTER_AUTO_RESTART` nel costruttore;
+      - `void arm(uint32_t now, Mode mode = Mode::AFTER_AUTO_RESTART)` che salva anche la modalità;
+      - `static Mode modeFor(uint8_t consecutiveRestarts)`: 0 → `AFTER_NORMAL_BOOT`, altrimenti `AFTER_AUTO_RESTART`;
+      - in `tick()`, dopo `_cycles++`: se `_mode == AFTER_NORMAL_BOOT && _cycles >= MAX_PORT_CYCLES` allora `_armed = false`, poi `return Action::CYCLE_PORT`;
+      - `Mode mode() const`;
+      - commento di classe in inglese: le due modalità, #78 (avvio POWERON senza recupero), perché dopo un avvio non automatico niente riavvio né banner.
+
+      **Passi:** 1) aggiungere modalità e metodi; 2) aggiornare il commento; 3) verificare che i test esistenti compilino senza modifiche.
+
+      **Verifica:** `pio test -e native -f test_enum_watchdog` verde senza toccare i test esistenti.
+
+      **Fatto:** il comportamento di `AFTER_AUTO_RESTART` è identico byte per byte nella logica; solo `<stdint.h>` come dipendenza.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/EnumWatchdog.h — modalità, `modeFor()`, disarmo dopo l'ultimo ciclo in `AFTER_NORMAL_BOOT`
+
+      ## Criteri di Completamento
+      - [ ] `arm()` senza modalità si comporta come in US-121
+      - [ ] In `AFTER_NORMAL_BOOT` due `CYCLE_PORT` a 1 e 2 min, poi disarmato e sempre `NONE`
+      - [ ] `modeFor(0)` dà `AFTER_NORMAL_BOOT`, `modeFor(n > 0)` dà `AFTER_AUTO_RESTART`
+    ref: TASK-01
+  - id: TASK-02
+    title: Test native della modalità AFTER_NORMAL_BOOT e regressione di US-121
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire i nuovi casi della logica pura e dimostrare la riga "Test nativo" della Dimostrazione.
+
+      **Leggere:** `test/test_enum_watchdog/test_main.cpp` (helper `expectDisarmedForGood`, `simulateBootWithoutUps`, `RUN_TEST` in fondo), sezione Strategia di test del piano.
+
+      **Modificare:** `test/test_enum_watchdog/test_main.cpp`, nuovi test:
+      - `test_mode_for_counter`: `modeFor(0)` → `AFTER_NORMAL_BOOT`; 1, 2, `RestartPolicy::MAX_RESTARTS`, 255 → `AFTER_AUTO_RESTART`;
+      - `test_normal_boot_two_cycles_then_nothing`: `arm(3000, AFTER_NORMAL_BOOT)`, `NONE` a `t0 + FIRST - 1`, `CYCLE_PORT` a `t0 + FIRST` e `t0 + FIRST + STEP`, `armed()` falso, `cycles() == 2`, poi `NONE` ogni secondo per un'ora, mai `REQUEST_RESTART`, `restartRequested()` falso;
+      - `test_normal_boot_enumeration_cancels_before_cycles` e `..._between_cycles` (con `expectDisarmedForGood`);
+      - `test_normal_boot_late_tick`: due `CYCLE_PORT` in due chiamate allo stesso istante in ritardo, poi `NONE`;
+      - `test_normal_boot_millis_wrap`;
+      - `test_normal_boot_never_reaches_restart_policy`: `RestartPolicy(0)` con il watchdog in `AFTER_NORMAL_BOOT` per un'ora, nessuna decisione `RESTART` o `DEGRADED`;
+      - `test_auto_restart_mode_explicit`: `arm(t0, AFTER_AUTO_RESTART)` arriva ancora a `REQUEST_RESTART` a `t0 + FIRST + 2 * STEP`.
+      - Aggiornare il commento in testa al file (US-121 e US-139) e quello di `test_not_armed_never_acts` (ora il proprietario arma sempre: il test resta per la classe non armata).
+      - Registrare i test con `RUN_TEST`.
+
+      **Passi:** 1) scrivere i test; 2) eseguire la suite; 3) eseguire la suite completa.
+
+      **Verifica:** con `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH"`, `~/.platformio/penv/Scripts/pio.exe test -e native -f test_enum_watchdog` verde, poi `pio test -e native` verde.
+
+      **Fatto:** i test esistenti di US-121 non sono stati modificati nella logica.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_enum_watchdog/test_main.cpp — nuovi test per `AFTER_NORMAL_BOOT` e `modeFor()`
+
+      ## Criteri di Completamento
+      - [ ] I casi del criterio 1, 2 e 4 della spec hanno un test nativo
+      - [ ] Suite `test_enum_watchdog` verde, test di US-121 invariati
+      - [ ] Suite native completa verde
+    ref: TASK-02
+  - id: TASK-03
+    title: 'USBHostUPS: armo su ogni avvio, riga INFO e build di prova NUT_TEST_ENUM_WATCHDOG=2'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** armare il watchdog anche con contatore 0 e scrivere la riga INFO della spec a ogni ciclo, senza toccare il percorso di US-121.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.cpp` (`begin()` ~righe 119-133, `serviceEnumWatchdog()` ~righe 785-810, `cycleRootPort()`), `lib/USBHostUPS/src/USBHostUPS.h` (`_auto_restart_count`, `NOT_ENUMERATED_REASON`), sezione 2 della soluzione tecnica.
+
+      **Modificare:** `lib/USBHostUPS/src/USBHostUPS.cpp`:
+      - in `begin()`, al posto dell'armo solo con contatore > 0:
+        - build di prova: `NUT_TEST_ENUM_WATCHDOG == 1` arma come oggi (`AFTER_AUTO_RESTART`) con contatore 0; `NUT_TEST_ENUM_WATCHDOG == 2` arma `AFTER_NORMAL_BOOT` con contatore 0, con un WARN `[TEST] ... (NUT_TEST_ENUM_WATCHDOG=2)`;
+        - normale: se `!_enum_wd.armed() && !_poll_task_handle`, `_enum_wd.arm(millis(), EnumWatchdog::modeFor(_auto_restart_count))`; la riga INFO "Automatic restart #N: waiting for the UPS to enumerate" solo con contatore > 0;
+        - aggiornare il commento (US-121 e US-139).
+      - in `serviceEnumWatchdog()`, caso `CYCLE_PORT`: con `_enum_wd.mode() == AFTER_NORMAL_BOOT` log INFO `[USB] No UPS enumerated %u min after boot: power-cycling the USB port (%u/%u)` (minuti `now / 60000`, `cycles()`, `MAX_PORT_CYCLES`); altrimenti il WARN di oggi invariato. Poi `cycleRootPort()` in entrambi i casi.
+      - il forzato `enumerated = false` della build di prova resta legato a `_auto_restart_count == 0` e vale per entrambi i valori del flag.
+
+      **Passi:** 1) modificare `begin()`; 2) modificare `serviceEnumWatchdog()`; 3) build `esp32-s3-standard` normale e con `-DNUT_TEST_ENUM_WATCHDOG=2`.
+
+      **Verifica:** da PowerShell `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok; con `$env:PLATFORMIO_BUILD_FLAGS='-DNUT_TEST_ENUM_WATCHDOG=2'` ok (poi rimuovere la variabile).
+
+      **Fatto:** nessuna modifica a `requestRestart()`, `isNotEnumeratedRestart()`, `CrashDiag`, `/api/system-status`, web UI; nessun campo nuovo nella diagnostica.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — armo con `modeFor()`, riga INFO per `AFTER_NORMAL_BOOT`, flag di prova `=2`
+
+      ## Criteri di Completamento
+      - [ ] Con contatore 0 il watchdog è armato in `AFTER_NORMAL_BOOT`, con contatore > 0 in `AFTER_AUTO_RESTART` come prima
+      - [ ] Riga INFO "No UPS enumerated N min after boot: power-cycling the USB port (n/2)" a ogni ciclo dopo un avvio normale
+      - [ ] Build normale e build con `NUT_TEST_ENUM_WATCHDOG=2` compilano
+    ref: TASK-03
+  - id: TASK-04
+    title: 'ADR 0008: addendum US-139 e rimando dall''addendum US-121'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione e il comportamento nuovo dove sta quello di US-121.
+
+      **Leggere:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md` (addendum US-121 da riga ~146 e addendum US-122), sezione 3 della soluzione tecnica.
+
+      **Modificare:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md`:
+      - nuovo addendum dopo quello di US-122: "UPS not enumerated after a boot that was not automatic (US-139, issue #78, 2026-11-08)", in inglese come gli altri: prova (v1.14.0, `rst:0x1 (POWERON)`, 2 h 50 min senza UPS, tornato in ~3 s al ricollegamento), `EnumWatchdog::modeFor()` e `AFTER_NORMAL_BOOT`, riga INFO, niente riavvio/banner/diagnostica e perché, distacchi durante il funzionamento invariati, build di prova `NUT_TEST_ENUM_WATCHDOG=2`, rischi aperti (porta vuota provata solo dalla prova sul campo; efficacia sul Smart-UPS da confermare dal reporter);
+      - nell'addendum US-121, la frase "With a count of 0 (a board powered without a UPS) nothing changes." diventa un rimando al nuovo addendum; nella voce "Test build" citare il valore `=1`.
+
+      **Passi:** 1) scrivere l'addendum; 2) aggiornare l'addendum US-121.
+
+      **Verifica:** rilettura; i nomi di classi, costanti e messaggi coincidono con il codice dei TASK-01 e TASK-03.
+
+      **Fatto:** nessun codice US nel testo destinato agli utenti (l'ADR è interno, i codici US vanno bene come negli altri addendum).
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — addendum US-139, rimando nell'addendum US-121
+
+      ## Criteri di Completamento
+      - [ ] Addendum US-139 presente e coerente con il codice
+      - [ ] L'addendum US-121 non dice più che con contatore 0 non cambia niente
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Verifica finale: suite native e tre build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere il criterio 5 della spec.
+
+      **Leggere:** `platformio.ini` (ambienti `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, `native`).
+
+      **Modificare:** niente, salvo correzioni a errori trovati.
+
+      **Passi:**
+      1) `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` (Git Bash);
+      2) da PowerShell `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, `-e esp32-p4-eth`, `-e esp32-p4-eth-v1`;
+      3) controllare che `PLATFORMIO_BUILD_FLAGS` non sia impostata durante le build normali.
+
+      **Verifica:** suite native verde (annotare il numero di test), tre build ok.
+
+      **Fatto:** risultati riportati nel messaggio di consegna.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - nessun file da modificare
+
+      ## Criteri di Completamento
+      - [ ] Suite native completa verde
+      - [ ] Build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1` ok
+    ref: TASK-05
+  - id: TASK-06
+    title: Prova sulla scheda con l'Eaton 3S (solo con un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare sulla scheda la riga "Sulla scheda" della Dimostrazione: cicli su porta reale, nessun riavvio, nessun banner.
+
+      **Leggere:** memoria sulle credenziali OTA (file JSON, mai stamparlo), stato attuale della scheda di test (oggi su enum-delay-v1), sezione Strategia di test del piano.
+
+      **Modificare:** nuovo `docs/test-results/US-139/` con il System Log esportato e un breve esito.
+
+      **Passi:**
+      1) chiedere all'utente un sì esplicito prima di toccare la scheda;
+      2) build `esp32-s3-standard` con `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_ENUM_WATCHDOG=2`, caricarla via OTA (riavvio software, contatore 0);
+      3) dopo ~3 min esportare il System Log: due righe INFO "No UPS enumerated 1/2 min after boot ... (1/2)" e "(2/2)", l'UPS che si stacca e torna ogni volta, nessun riavvio, nessun banner, nessun WARN "power off/on failed";
+      4) caricare la build normale via OTA: con l'UPS collegato nessuna riga dei cicli;
+      5) lasciare sulla scheda la build che l'utente indica.
+
+      **Verifica:** log salvati in `docs/test-results/US-139/`.
+
+      **Fatto:** esito riportato all'utente; se la porta non si comporta come atteso, fermarsi e segnalarlo prima della review.
+
+      **Blocchi:** serve il consenso dell'utente; un blackout lascia Claude senza rete (l'Eaton alimenta scheda e router). Il caso della porta vuota senza cavo USB non si può provare da remoto: resta coperto dalla build `=2` e dal reporter della #78.
+
+      ## File Coinvolti
+      - docs/test-results/US-139/ — log ed esito della prova
+
+      ## Criteri di Completamento
+      - [ ] Sì esplicito dell'utente prima della prova
+      - [ ] Due righe INFO, nessun riavvio e nessun banner con la build `=2`
+      - [ ] Nessuna riga dei cicli con la build normale e l'UPS collegato
+    ref: TASK-06

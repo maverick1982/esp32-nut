@@ -4,8 +4,11 @@
 
 // US-121 (issue #78): after a controlled restart the UPS may never enumerate again, and
 // ESP-IDF does not retry. The watchdog power-cycles the root port, then asks for a restart.
+// US-139 (issue #78): after a boot that was not automatic (power on, OTA, settings saved)
+// the same two cycles, and nothing else.
 
 typedef EnumWatchdog::Action A;
+typedef EnumWatchdog::Mode M;
 typedef RestartPolicy::Decision D;
 
 static const uint32_t FIRST = EnumWatchdog::FIRST_CYCLE_MS;
@@ -14,7 +17,8 @@ static const uint32_t STEP = EnumWatchdog::CYCLE_INTERVAL_MS;
 void setUp(void) {}
 void tearDown(void) {}
 
-// Normal boot (counter 0): the owner never arms it, nothing happens for an hour
+// A watchdog that was never armed does nothing for an hour (since US-139 the owner arms it
+// at every boot, in the mode modeFor() picks)
 void test_not_armed_never_acts(void) {
     EnumWatchdog w;
     for (uint32_t t = 0; t <= 3600000; t += 1000) {
@@ -174,6 +178,109 @@ void test_enumeration_mid_ladder_cancels_restart(void) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// US-139: boot that was not automatic (consecutive restart counter 0)
+// ---------------------------------------------------------------------------
+
+void test_mode_for_counter(void) {
+    TEST_ASSERT_TRUE(M::AFTER_NORMAL_BOOT == EnumWatchdog::modeFor(0));
+    TEST_ASSERT_TRUE(M::AFTER_AUTO_RESTART == EnumWatchdog::modeFor(1));
+    TEST_ASSERT_TRUE(M::AFTER_AUTO_RESTART == EnumWatchdog::modeFor(2));
+    TEST_ASSERT_TRUE(M::AFTER_AUTO_RESTART == EnumWatchdog::modeFor(RestartPolicy::MAX_RESTARTS));
+    TEST_ASSERT_TRUE(M::AFTER_AUTO_RESTART == EnumWatchdog::modeFor(255));
+}
+
+// The Demonstrates line of the spec: two cycles, 1 and 2 min after the USB host start,
+// then nothing else
+void test_normal_boot_two_cycles_then_nothing(void) {
+    EnumWatchdog w;
+    const uint32_t t0 = 3000;
+    w.arm(t0, EnumWatchdog::modeFor(0));
+    TEST_ASSERT_TRUE(M::AFTER_NORMAL_BOOT == w.mode());
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, t0 + FIRST - 1));
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST));
+    TEST_ASSERT_EQUAL_UINT8(1, w.cycles());
+    TEST_ASSERT_TRUE(w.armed());
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, t0 + FIRST + STEP - 1));
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST + STEP));
+    TEST_ASSERT_EQUAL_UINT8(EnumWatchdog::MAX_PORT_CYCLES, w.cycles());
+    TEST_ASSERT_FALSE(w.armed());
+    for (uint32_t t = t0 + FIRST + STEP; t <= t0 + 3600000; t += 1000) {
+        TEST_ASSERT_TRUE(A::NONE == w.tick(false, t));
+    }
+    TEST_ASSERT_FALSE(w.restartRequested());
+    TEST_ASSERT_EQUAL_UINT8(EnumWatchdog::MAX_PORT_CYCLES, w.cycles());
+}
+
+void test_normal_boot_enumeration_cancels_before_cycles(void) {
+    EnumWatchdog w;
+    w.arm(3000, M::AFTER_NORMAL_BOOT);
+    TEST_ASSERT_TRUE(A::NONE == w.tick(true, 5000));
+    expectDisarmedForGood(w, 5000);
+    TEST_ASSERT_EQUAL_UINT8(0, w.cycles());
+}
+
+void test_normal_boot_enumeration_cancels_between_cycles(void) {
+    EnumWatchdog w;
+    w.arm(0, M::AFTER_NORMAL_BOOT);
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, FIRST));
+    TEST_ASSERT_TRUE(A::NONE == w.tick(true, FIRST + 2000)); // the cycle worked
+    expectDisarmedForGood(w, FIRST + 2000);
+    TEST_ASSERT_EQUAL_UINT8(1, w.cycles());
+    TEST_ASSERT_FALSE(w.restartRequested());
+}
+
+void test_normal_boot_late_tick(void) {
+    EnumWatchdog w;
+    w.arm(0, M::AFTER_NORMAL_BOOT);
+    const uint32_t late = FIRST + 10 * STEP;
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, late));
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, late));
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, late));
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, late + 3600000));
+}
+
+void test_normal_boot_millis_wrap(void) {
+    EnumWatchdog w;
+    const uint32_t t0 = 0xFFFFFFFFu - 30000u;
+    w.arm(t0, M::AFTER_NORMAL_BOOT);
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, t0 + 40000)); // wrapped, 40 s elapsed
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST));
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST + STEP));
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, t0 + FIRST + 2 * STEP));
+}
+
+// No restart request reaches RestartPolicy: no restart, no degraded mode, no banner
+void test_normal_boot_never_reaches_restart_policy(void) {
+    EnumWatchdog w;
+    RestartPolicy p(0);
+    const uint32_t t0 = 3000;
+    w.arm(t0, EnumWatchdog::modeFor(0));
+    bool requested = false;
+    uint8_t cycles = 0;
+    for (uint32_t now = t0; now <= t0 + 3600000; now += 1000) {
+        A a = w.tick(false, now);
+        if (a == A::CYCLE_PORT) cycles++;
+        if (a == A::REQUEST_RESTART) requested = true;
+        TEST_ASSERT_TRUE(D::NONE == p.update(requested, false, now));
+    }
+    TEST_ASSERT_FALSE(requested);
+    TEST_ASSERT_EQUAL_UINT8(EnumWatchdog::MAX_PORT_CYCLES, cycles);
+}
+
+// After an automatic restart US-121 is unchanged
+void test_auto_restart_mode_explicit(void) {
+    EnumWatchdog w;
+    const uint32_t t0 = 3000;
+    w.arm(t0, EnumWatchdog::modeFor(1));
+    TEST_ASSERT_TRUE(M::AFTER_AUTO_RESTART == w.mode());
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST));
+    TEST_ASSERT_TRUE(A::CYCLE_PORT == w.tick(false, t0 + FIRST + STEP));
+    TEST_ASSERT_TRUE(w.armed());
+    TEST_ASSERT_TRUE(A::NONE == w.tick(false, t0 + FIRST + 2 * STEP - 1));
+    TEST_ASSERT_TRUE(A::REQUEST_RESTART == w.tick(false, t0 + FIRST + 2 * STEP));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_not_armed_never_acts);
@@ -185,5 +292,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_millis_wrap);
     RUN_TEST(test_ladder_to_degraded);
     RUN_TEST(test_enumeration_mid_ladder_cancels_restart);
+    RUN_TEST(test_mode_for_counter);
+    RUN_TEST(test_normal_boot_two_cycles_then_nothing);
+    RUN_TEST(test_normal_boot_enumeration_cancels_before_cycles);
+    RUN_TEST(test_normal_boot_enumeration_cancels_between_cycles);
+    RUN_TEST(test_normal_boot_late_tick);
+    RUN_TEST(test_normal_boot_millis_wrap);
+    RUN_TEST(test_normal_boot_never_reaches_restart_policy);
+    RUN_TEST(test_auto_restart_mode_explicit);
     return UNITY_END();
 }
