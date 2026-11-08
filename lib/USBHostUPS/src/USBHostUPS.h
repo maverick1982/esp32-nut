@@ -271,6 +271,9 @@ private:
     friend class QxRequestPort;
     static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
+    // Pause after each pass of the USB Host library events (issue #36, esp-idf#17918): the
+    // device gets ~15 ms between two enumeration requests (20 minus the transfer itself)
+    static const uint32_t ENUM_STAGE_GAP_MS = 20;
     // Longest wait for the first full poll after a claim: past it the data is served
     // anyway, and LinkMonitor judges the link (a UPS without status usages never ends it)
     static const uint32_t FIRST_DATA_MAX_MS = 30000;

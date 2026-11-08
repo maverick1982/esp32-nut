@@ -2214,6 +2214,14 @@ void USBHostUPS::usb_host_lib_task(void *arg) {
         uint32_t event_flags;
         esp_err_t err = usb_host_lib_handle_events(pdMS_TO_TICKS(100), &event_flags);
         if (err == ESP_OK) {
+            // Issue #36: the Powercom SPD-750U answers the full configuration descriptor with
+            // no data when it comes right after the short one, and fails the enumeration again
+            // and again, for minutes. Same symptom as espressif/esp-idf#17918, fixed there by
+            // 10-15 ms between the enumeration stages. usb_host_lib_handle_events() returns
+            // while the control transfer of the next stage is in flight, so this pause gives
+            // the device that time before the request after it. Only after a pass that handled
+            // events: an idle wait returns ESP_ERR_TIMEOUT. An enumeration takes ~0.5 s more.
+            vTaskDelay(pdMS_TO_TICKS(ENUM_STAGE_GAP_MS));
             if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
                 // If there are no clients, we can do usb_host_uninstall() or just delay.
                 // But hid_host is a client, so it's fine.
