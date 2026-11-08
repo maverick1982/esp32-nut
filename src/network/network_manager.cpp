@@ -26,6 +26,16 @@ String AppNetworkManager::ethHostnameSeed(bool has_wifi) const {
     return NetHostname::effective(m_savedHostname, mac);
 }
 
+EthLink* AppNetworkManager::newEthLink(const EthConfig& cfg, bool has_wifi) const {
+    EthLink* eth = new EthLink(cfg, ethHostnameSeed(has_wifi));
+    // Issue #64: on a board with Wi-Fi the W5500 takes the station MAC, so the router sees
+    // one device on both links and gives it the same address (a DHCP reservation works).
+    // Safe only because the two never hold an address together (setDhcp, switchLink)
+    uint8_t mac[6];
+    if (has_wifi && esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) eth->setMac(mac);
+    return eth;
+}
+
 void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan, const String& ssid,
                               const String& password, const String& saved_hostname) {
     m_savedHostname = saved_hostname;
@@ -48,7 +58,7 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         // the link is already active and activate() leaves it as it is
         const EthConfig& cfg = m_hasEthCfg ? m_ethCfg : board.eth;
         if (cfg.type != EthType::NONE) {
-            if (!m_eth) m_eth = new EthLink(cfg, ethHostnameSeed(board.has_wifi));
+            if (!m_eth) m_eth = newEthLink(cfg, board.has_wifi);
             m_selector.activate(m_eth);
             break;
         }
@@ -63,8 +73,9 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
     m_autoSwitch = m_autoSwitch && m_eth && m_eth->started() &&
                    (plan.link == BootLink::ETHERNET || plan.link == BootLink::WIFI_STATION);
     if (m_autoSwitch) {
+        // A cable that gave no address at startup is not tried again until it is replugged
         m_autoSwitcher.begin(millis(), plan.link == BootLink::ETHERNET ? AutoLink::ETHERNET : AutoLink::WIFI,
-                             m_ssid.length() > 0);
+                             m_ssid.length() > 0, m_ethProbe == EthProbeOutcome::NO_IP);
     }
 }
 
@@ -76,7 +87,7 @@ void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
 EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now)) {
     m_savedHostname = saved_hostname;
     m_hasWifi = board().has_wifi;
-    if (!m_eth) m_eth = new EthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), ethHostnameSeed(m_hasWifi));
+    if (!m_eth) m_eth = newEthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), m_hasWifi);
     m_selector.activate(m_eth);
     EthBootProbe probe;
     probe.begin(millis(), m_eth->started());
@@ -99,6 +110,8 @@ EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, v
 
 void AppNetworkManager::leaveEthernet(bool standby) {
     if (standby && m_eth && m_eth->started() && m_selector.active() == m_eth) {
+        // Issue #64: no address on the standby W5500 while the station runs (same MAC)
+        m_eth->setDhcp(false);
         m_selector.activate(nullptr, true);
         m_ethStandby = true;
         AppLogger::log("INFO", "[NETWORK] W5500 kept on standby: back to Ethernet when the cable is connected");
@@ -108,19 +121,28 @@ void AppNetworkManager::leaveEthernet(bool standby) {
 }
 
 // Carries out an action of NetAutoSwitch: one link in the selector at a time, the W5500
-// stays started (standby) while the board is on Wi-Fi
+// stays started (standby) while the board is on Wi-Fi. Issue #64: the W5500 has the
+// station MAC, so the old link lets go of its address before the new one asks for it
 void AppNetworkManager::switchLink(AutoAction action) {
     const uint32_t now = millis();
     if (action == AutoAction::TO_WIFI) {
         AppLogger::log("WARN", "[NETWORK] Ethernet lost: switching to Wi-Fi");
+        m_eth->setDhcp(false);
         if (!m_sta) m_sta = new WifiStaLink(m_ssid, m_password, m_savedHostname);
         m_selector.activate(m_sta, true);
         m_ethStandby = true;
         m_autoSwitcher.switched(now, AutoLink::WIFI);
+        if (m_autoSwitcher.waitingForReplug()) {
+            AppLogger::log("WARN", "[NETWORK] No DHCP address on the cable: Ethernet tried again once the cable is "
+                                   "replugged, or in %u min",
+                           (unsigned)(NetAutoSwitch::RETRY_MS / 60000));
+        }
     } else if (action == AutoAction::TO_ETHERNET) {
         AppLogger::log("INFO", "[NETWORK] Ethernet back: switching from Wi-Fi to Ethernet");
-        // Stops the station; the W5500 is already running, its begin() does nothing
+        // Stops the station (radio off) first; the W5500 is already running, its begin()
+        // does nothing. Only then its DHCP asks for the address
         m_selector.activate(m_eth);
+        m_eth->setDhcp(true);
         m_ethStandby = false;
         m_autoSwitcher.switched(now, AutoLink::ETHERNET);
     } else {
@@ -132,7 +154,7 @@ void AppNetworkManager::switchLink(AutoAction action) {
 void AppNetworkManager::loop() {
     m_selector.loop(millis());
     if (m_autoSwitch && m_eth && m_eth->started()) {
-        switchLink(m_autoSwitcher.step(millis(), m_eth->linkUp() && m_eth->hasIP()));
+        switchLink(m_autoSwitcher.step(millis(), m_eth->linkUp(), m_eth->hasIP()));
     }
 }
 

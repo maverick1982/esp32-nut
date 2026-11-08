@@ -74,6 +74,8 @@ private:
     // Name given to the Ethernet link: on a board with Wi-Fi, without a saved name, the
     // default of the station MAC, so the board has the same name on both links (US-127)
     String ethHostnameSeed(bool has_wifi) const;
+    // The Ethernet link, with the station MAC on a W5500 of a board with Wi-Fi (issue #64)
+    EthLink* newEthLink(const EthConfig& cfg, bool has_wifi) const;
     void switchLink(AutoAction action);
 
     NetLinkSelector m_selector;
