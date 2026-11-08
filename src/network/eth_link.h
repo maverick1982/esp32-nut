@@ -31,11 +31,21 @@ public:
     bool started() const { return m_started; }
     // Link up, with or without an address (startup probe, US-126)
     bool linkUp() const;
+    // A real IPv4 address: ETH.hasIP() alone stays true after setDhcp(false), which posts
+    // no IP-lost event
     bool hasIP() const;
+    // Issue #64: the MAC the W5500 uses instead of the one derived from ESP_MAC_ETH. Set
+    // before begin(); only for an SPI module, which has no MAC of its own
+    void setMac(const uint8_t mac[6]);
+    // Issue #64: DHCP client of the running link. Off on a W5500 kept on standby, so it
+    // never holds an address (with the station MAC) while the station is on; on again
+    // when the board comes back to Ethernet. Off clears the address at once
+    void setDhcp(bool on);
 
 private:
     void beginW5500(const char* hostname);
     void releaseW5500();
+    void applyMac();
 
     EthConfig m_cfg;
     String m_savedHostname;
@@ -45,6 +55,8 @@ private:
     bool m_lastLinkUp;
     // "No Ethernet link" repeated while the cable is missing (issue #136)
     LinkWaitReminder m_linkWait;
+    bool m_hasMac;
+    uint8_t m_mac[6];
 };
 
 #endif // ETH_LINK_H
