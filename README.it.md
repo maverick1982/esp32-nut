@@ -188,7 +188,9 @@ Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun p
 
 L'installer ha un pulsante per le schede ESP32-S3 e due per le schede ESP32-P4, uno per revisione del chip (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
-Se l'installer trova la scheda ma si ferma con "Failed to initialize", la scheda non è entrata da sola in modalità download: tieni premuto il pulsante **BOOT** mentre clicchi **Install** (o mentre colleghi il cavo USB) e rilascialo quando l'installer si collega. Se non basta, scrivi il pacchetto della release con esptool (vedi **Pacchetti delle release** qui sotto). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+Se l'installer trova la scheda ma si ferma con "Failed to initialize":
+- **ESP32-P4 v3.1 o successive**: per ora l'installer non riesce a scrivere su questi chip. La libreria che usa per il flash (esptool-js 0.6, dentro ESP Web Tools 10.4.0) non accende la loro memoria flash in modalità download. Scrivi il pacchetto della release con esptool (vedi **Pacchetti delle release** qui sotto). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+- **Altre schede**: la scheda non è entrata da sola in modalità download. Tieni premuto il pulsante **BOOT** mentre clicchi **Install** (o mentre colleghi il cavo USB) e rilascialo quando l'installer si collega. Se non basta, usa esptool.
 
 **Opzione B: Compilazione Manuale tramite PlatformIO**
 1. Clona questo repository.

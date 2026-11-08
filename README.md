@@ -188,7 +188,9 @@ You can install the firmware directly from your browser without downloading any 
 
 The installer has one button for ESP32-S3 boards and two for ESP32-P4 boards, one per chip revision (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 
-If the installer finds the board but stops with "Failed to initialize", the board did not enter download mode by itself: hold the **BOOT** button while you click **Install** (or while you plug in the USB cable) and release it once the installer connects. If it still fails, write the release package with esptool (see **Release packages** below). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+If the installer finds the board but stops with "Failed to initialize":
+- **ESP32-P4 v3.1 or later**: the installer cannot flash these chips yet. Its flashing library (esptool-js 0.6, inside ESP Web Tools 10.4.0) does not power on their flash memory in download mode. Write the release package with esptool instead (see **Release packages** below). ([#136](https://github.com/maverick1982/esp32-nut/issues/136))
+- **Other boards**: the board did not enter download mode by itself. Hold the **BOOT** button while you click **Install** (or while you plug in the USB cable) and release it once the installer connects. If it still fails, use esptool.
 
 **Option B: Manual Build via PlatformIO**
 1. Clone this repository.
