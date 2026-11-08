@@ -17,6 +17,7 @@
 #include "LinkMonitor.h"
 #include "InputReassembler.h"
 #include "DescriptorRetry.h"
+#include "InputErrorBackoff.h"
 #include "OnlineDischargeLog.h"
 #include "DriverVarStore.h"
 #include "DiagSweep.h"
@@ -262,7 +263,6 @@ private:
         USBHostUPS& _h;
     };
     friend class QxRequestPort;
-    static const uint8_t MAX_IN_RECOVERIES = 3;
     static const uint8_t MAX_IN_START_ATTEMPTS = 40;
     // Pause after each pass of the USB Host library events (issue #36, esp-idf#17918): the
     // device gets ~15 ms between two enumeration requests (20 minus the transfer itself)
@@ -434,7 +434,8 @@ private:
     bool _in_restart_pending;
     uint8_t _in_start_attempts;
     uint32_t _in_restart_at;
-    uint8_t _in_recoveries;
+    // Restarts of the interface after IN pipe errors, spaced out (issue #36)
+    InputErrorBackoff _in_errors;
     bool _restart_requested;
     const char* _restart_reason;
 
