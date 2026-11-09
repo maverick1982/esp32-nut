@@ -34,11 +34,12 @@
  *   firmwares, here only requestLength() of the BX).
  */
 
-APCDriver::APCDriver() : _back_ups_bx(false) {}
+APCDriver::APCDriver() : _back_ups_bx(false), _bx_frozen_inputs(false) {}
 
 void APCDriver::setup() {
     GenericDriver::setup();
     _back_ups_bx = false;
+    _bx_frozen_inputs = false;
 }
 
 bool APCDriver::splitProduct(const String& product, String& model, String& firmware, String& aux) {
@@ -71,7 +72,9 @@ void APCDriver::formatDeviceStrings(UPSData& data) {
 
 void APCDriver::onLoop(IHidTransport* host, UPSData& data) {
     // ups.model comes from the product string, read at claim time
-    _back_ups_bx = isBackUpsBX(data.get("ups.model"));
+    const String model = data.get("ups.model");
+    _back_ups_bx = isBackUpsBX(model);
+    _bx_frozen_inputs = _back_ups_bx && !isBackUpsBXR(model);
 }
 
 // The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from apcHid2Nut(),

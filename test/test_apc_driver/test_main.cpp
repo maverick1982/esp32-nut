@@ -501,6 +501,33 @@ void test_apc_battery_dates(void) {
     TEST_ASSERT_EQUAL_STRING("not set", ups_data.get("battery.date").c_str());
 }
 
+// Issue #138: only a Back-UPS BX (not the BXR series) treats a silent interrupt pipe as
+// frozen values; the model is read on the poll loop and forgotten by setup()
+static uint32_t silenceFaultFor(const char* model) {
+    driver.setup();
+    ups_data = UPSData();
+    ups_data.set("ups.model", model);
+    driver.loop(&mockHost, ups_data, 1000);
+    return driver.inputSilenceFaultMs();
+}
+
+void test_apc_bx_input_silence_fault(void) {
+    TEST_ASSERT_EQUAL_UINT32(0, driver.inputSilenceFaultMs()); // model not read yet
+    TEST_ASSERT_EQUAL_UINT32(APCDriver::BX_INPUT_SILENCE_MS, silenceFaultFor("Back-UPS BX750MI"));
+    TEST_ASSERT_EQUAL_UINT32(APCDriver::BX_INPUT_SILENCE_MS, silenceFaultFor("Back-UPS BX1200MI"));
+    TEST_ASSERT_EQUAL_UINT32(0, silenceFaultFor("Back-UPS BXR1200MI"));
+    TEST_ASSERT_EQUAL_UINT32(0, silenceFaultFor("Back-UPS ES 700G"));
+    TEST_ASSERT_EQUAL_UINT32(0, silenceFaultFor("Smart-UPS 750"));
+    // The BXR still gets the rest of the BX handling
+    TEST_ASSERT_TRUE(APCDriver::isBackUpsBX("Back-UPS BXR1200MI"));
+    TEST_ASSERT_TRUE(APCDriver::isBackUpsBXR("Back-UPS BXR1200MI"));
+    TEST_ASSERT_FALSE(APCDriver::isBackUpsBXR("Back-UPS BX750MI"));
+
+    silenceFaultFor("Back-UPS BX750MI");
+    driver.setup();
+    TEST_ASSERT_EQUAL_UINT32(0, driver.inputSilenceFaultMs());
+}
+
 // Standard NUT names apc-hid does not read stay as extensions (ADR 0011 rule 2), the
 // non-standard battery.capacity.full goes
 void test_apc_extensions_kept(void) {
@@ -544,6 +571,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_line_fail_cause_reason);
     RUN_TEST(test_apc_general_collection_timers);
     RUN_TEST(test_apc_battery_dates);
+    RUN_TEST(test_apc_bx_input_silence_fault);
     RUN_TEST(test_apc_extensions_kept);
     RUN_TEST(test_apc_superseded_status_paths);
     return UNITY_END();
@@ -568,6 +596,7 @@ void setup() {
     RUN_TEST(test_apc_line_fail_cause_reason);
     RUN_TEST(test_apc_general_collection_timers);
     RUN_TEST(test_apc_battery_dates);
+    RUN_TEST(test_apc_bx_input_silence_fault);
     RUN_TEST(test_apc_extensions_kept);
     RUN_TEST(test_apc_superseded_status_paths);
     UNITY_END();
