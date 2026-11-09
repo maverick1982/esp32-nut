@@ -1,5 +1,6 @@
 #include "core/eth_spi_store.h"
 #include <Preferences.h>
+#include "core/nvs_namespace.h"
 #include "core/app_logger.h"
 
 static const char* kNamespace = "eth";
@@ -16,7 +17,7 @@ EthSpiSettings EthSpiStore::load(const BoardConfig& board) {
     EthSpiSettings s = ethSpiDefaults();
     Preferences prefs;
     // Read-only: begin() fails while the namespace does not exist, i.e. nothing saved yet
-    if (!prefs.begin(kNamespace, true)) return s;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return s;
     s.enabled = prefs.getBool(kKeyOn, s.enabled);
     s.sck = prefs.getChar(kKeySck, s.sck);
     s.mosi = prefs.getChar(kKeyMosi, s.mosi);
@@ -51,7 +52,7 @@ bool EthSpiStore::save(const EthSpiSettings& settings) {
 NetworkMode EthSpiStore::loadMode() {
     NetworkMode mode = NetworkMode::AUTO;
     Preferences prefs;
-    if (!prefs.begin(kNamespace, true)) return mode;
+    if (!NvsNamespace::beginRead(prefs, kNamespace)) return mode;
     // isKey() first: getString() of a missing key logs an NVS error
     if (prefs.isKey(kKeyMode)) {
         const String text = prefs.getString(kKeyMode, "");

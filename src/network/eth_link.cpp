@@ -18,7 +18,7 @@
 
 EthLink::EthLink(const EthConfig& cfg, const String& saved_hostname)
     : m_cfg(cfg), m_savedHostname(saved_hostname), m_started(false), m_lastConnected(false), m_lastLinkUp(false),
-      m_hasMac(false), m_mac{0, 0, 0, 0, 0, 0} {}
+      m_linkReminder(true), m_hasMac(false), m_mac{0, 0, 0, 0, 0, 0} {}
 
 void EthLink::setMac(const uint8_t mac[6]) {
     if (m_cfg.type != EthType::SPI) return;
@@ -179,7 +179,8 @@ void EthLink::loop(uint32_t now) {
     bool link_up = ETH.linkUp();
     bool connected = isConnected();
     // Link down from the start never changes state: without this the log stays silent
-    if (uint32_t waited_s = m_linkWait.update(link_up, now)) {
+    uint32_t waited_s = m_linkWait.update(link_up, now);
+    if (waited_s && m_linkReminder) {
         AppLogger::log("WARN", "[NETWORK] No Ethernet link for %lu s: check the cable and the switch port",
                        (unsigned long)waited_s);
     }

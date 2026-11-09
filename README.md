@@ -13,7 +13,7 @@
 >
 > After this one-time install, later updates can be installed via OTA again.
 
-An open-source firmware for ESP32-S3 (Wi-Fi) and ESP32-P4 (Ethernet) boards that acts as a standalone **Network UPS Tools (NUT) Server bridge**. It connects to a USB UPS (Eaton, APC, CyberPower, Powercom and more) via USB Host and exposes its data to your local network using the standard NUT protocol (port 3493) and a built-in Web Interface.
+An open-source firmware for ESP32-S3 (Wi-Fi, or Ethernet with a W5500 module) and ESP32-P4 (Ethernet) boards that acts as a standalone **Network UPS Tools (NUT) Server bridge**. It connects to a USB UPS (Eaton, APC, CyberPower, Powercom and more) via USB Host and exposes its data to your local network using the standard NUT protocol (port 3493) and a built-in Web Interface.
 
 This allows you to easily integrate your USB-only UPS into Home Assistant, TrueNAS, Synology, or any other NUT-compatible client without needing a dedicated Raspberry Pi or PC running 24/7.
 
@@ -32,6 +32,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 - **Over-The-Air (OTA) Updates**: Flash new firmware versions directly from the web browser without touching the board.
 - **Status LED (ESP32-S3)**: Visual feedback for the network and UPS connection, with adjustable brightness.
 - **ESP32-P4 with Ethernet**: A wired network, and PoE on the boards that have it, with ESP32-P4 boards such as the Waveshare ESP32-P4-ETH (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
+- **W5500 Ethernet on the ESP32-S3**: A wired network, and PoE on the boards that have it, with a W5500 SPI module or a board with one built in. In Automatic mode the board switches between cable and Wi-Fi by itself (see [Ethernet with a W5500 module](#ethernet-with-a-w5500-module-esp32-s3)).
 
 ## 🔌 Supported UPS Devices
 
@@ -139,6 +140,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 ## 🛠 Hardware Requirements & Wiring
 
 - **ESP32-S3 or ESP32-P4 Board**: An ESP32-S3 development board, or a supported ESP32-P4 board with Ethernet (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), is **required** because these chips have native USB OTG Host capabilities. Standard ESP32 or ESP32-C3 will not work.
+- **W5500 Ethernet module (optional, ESP32-S3)**: for a wired network instead of Wi-Fi, an external W5500 module or a board with one built in (see [Ethernet with a W5500 module](#ethernet-with-a-w5500-module-esp32-s3)).
 - **USB OTG Cable**: An adapter to plug the UPS USB cable into the ESP32.
 - **USB hubs and active extension cables**: a long USB cable with a built-in booster contains a USB hub. On the ESP32-P4 High-Speed port, a high-speed hub hides the UPS (a full-speed device): the ESP-IDF USB host stack cannot reach a full-speed device behind a high-speed hub. Use a passive cable, or put a full-speed-only USB isolator (ADuM3160-based) between the board and the cable. On the ESP32-S3, whose USB port is full-speed only, such a cable should work without the isolator (not tested). ([#113](https://github.com/maverick1982/esp32-nut/issues/113))
 
@@ -187,8 +189,8 @@ An ESP32-S3 can use wired Ethernet through a W5500 SPI module: an external modul
 
 | Board | SCK | MOSI | MISO | CS | INT | RST | UPS USB port | Source |
 | :--- | :-: | :-: | :-: | :-: | :-: | :-: | :--- | :--- |
-| External module on an ESP32-S3 DevKit (Mickel4711) | 12 | 11 | 13 | 10 | 9 | 3 | `USB` port of the DevKit | [#94](https://github.com/maverick1982/esp32-nut/issues/94) |
-| Waveshare ESP32-S3-ETH / ESP32-S3-POE-ETH | 13 | 11 | 12 | 14 | 10 | 9 | USB-C, not documented as a host port: an OTG adapter may be needed | [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-ETH) |
+| External module on an ESP32-S3 DevKit (Mickel4711) | 12 | 11 | 13 | 10 | 9 | 3 | `USB` port of the DevKit | [#94](https://github.com/maverick1982/esp32-nut/issues/94), tested ([#64](https://github.com/maverick1982/esp32-nut/issues/64)) |
+| Waveshare ESP32-S3-ETH / ESP32-S3-POE-ETH | 13 | 11 | 12 | 14 | 10 | 9 | USB-C, not documented as a host port: an OTG adapter may be needed | [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-ETH), tested with the PoE module ([#64](https://github.com/maverick1982/esp32-nut/issues/64)) |
 | LilyGO T-ETH-Lite S3 | 10 | 12 | 11 | 9 | 13 | 14 | Not known | [`utilities.h`](https://github.com/Xinyuan-LilyGO/LilyGO-T-ETH-Series) (the wiki gives different values) |
 
 ### 3D Printed Case (Optional)
