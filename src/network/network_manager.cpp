@@ -77,6 +77,9 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
         m_autoSwitcher.begin(millis(), plan.link == BootLink::ETHERNET ? AutoLink::ETHERNET : AutoLink::WIFI,
                              m_ssid.length() > 0, m_ethProbe == EthProbeOutcome::NO_IP);
     }
+    // A missing cable leads to Wi-Fi after 10 s: no "No Ethernet link" reminder before it.
+    // Without a Wi-Fi network, or in Ethernet mode, the reminder is all the log says
+    if (m_eth) m_eth->setLinkReminder(!(m_autoSwitch && m_ssid.length() > 0));
 }
 
 void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {

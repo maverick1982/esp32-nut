@@ -41,6 +41,10 @@ public:
     // never holds an address (with the station MAC) while the station is on; on again
     // when the board comes back to Ethernet. Off clears the address at once
     void setDhcp(bool on);
+    // "No Ethernet link for N s" while the cable is missing (issue #136), on by default.
+    // Off when the automatic switch falls back to Wi-Fi (US-127): the switch comes after
+    // the same 10 s and says why, the reminder before it would only read as a fault
+    void setLinkReminder(bool on) { m_linkReminder = on; }
 
 private:
     void beginW5500(const char* hostname);
@@ -55,6 +59,7 @@ private:
     bool m_lastLinkUp;
     // "No Ethernet link" repeated while the cable is missing (issue #136)
     LinkWaitReminder m_linkWait;
+    bool m_linkReminder;
     bool m_hasMac;
     uint8_t m_mac[6];
 };
