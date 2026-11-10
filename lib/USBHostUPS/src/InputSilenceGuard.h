@@ -6,16 +6,21 @@
 /**
  * A silent interrupt pipe on a UPS whose silence means frozen values (issue #138).
  *
- * The Back-UPS BX750MI sends about 18 INPUT reports per second. After tens of minutes or
- * hours it can stop sending them while it keeps answering GET_REPORT with the values of
- * that moment, until the cable is unplugged. Its continuous stream is never "periodic" for
- * the InputWatchdog (one endless burst), and the poll covers its INPUT values (US-123), so
- * nothing noticed: before v1.14.0 the restarts of issue #60 cleared the state.
+ * The Back-UPS BX750MI sends about 18 INPUT reports per second. It can come back from a
+ * USB port power cycle (US-122) without sending any, while it answers GET_REPORT with
+ * the values of that moment, until the cable is unplugged. Its continuous stream is never
+ * "periodic" for the InputWatchdog (one endless burst), and the poll covers its INPUT
+ * values (US-123), so nothing noticed: before v1.14.0 the restarts of issue #60 cleared
+ * the state.
  *
- * Here a silence of silenceMs after at least one INPUT report since the claim makes the
- * data stale and asks for an interface restart; if the reports are still missing retryMs
- * later, for a system restart (RestartPolicy still limits those). silenceMs 0 (every
- * other UPS) turns the guard off. Pure logic: the owner passes the time and acts.
+ * reset() at the claim counts as the last report. With silenceMs set:
+ * - the data is stale until the first INPUT report after the claim, and again after a
+ *   silence of silenceMs, so a UPS that never sends one is never "healthy" for the
+ *   RestartPolicy, which then walks its ladder up to degraded mode instead of looping;
+ * - after silenceMs the owner restarts the interface, and if the reports are still
+ *   missing RETRY_MS later, asks for a system restart.
+ * silenceMs 0 (every other UPS) turns the guard off. Pure logic: the owner passes the
+ * time and acts.
  */
 class InputSilenceGuard {
 public:
@@ -25,9 +30,9 @@ public:
 
     InputSilenceGuard() { reset(0); }
 
-    // New device, or a claim: unarmed until its first INPUT report
+    // Claim of a device: the silence is counted from now
     void reset(uint32_t now) {
-        _armed = false;
+        _seenInput = false;
         _lastInputMs = now;
         _recovered = false;
         _recoverAt = 0;
@@ -36,7 +41,7 @@ public:
 
     // ts: when the HID task received the report
     void onInput(uint32_t ts) {
-        _armed = true;
+        _seenInput = true;
         _lastInputMs = ts;
         _recovered = false;
         _restartAsked = false;
@@ -45,12 +50,19 @@ public:
     // Set by the owner from the driver before each tick(); 0 = off
     void setSilenceMs(uint32_t ms) { _silenceMs = ms; }
     uint32_t silenceMs() const { return _silenceMs; }
+    bool seenInput() const { return _seenInput; }
 
+    // No report for silenceMs since the last one, or since the claim
     bool isSilent(uint32_t now) const {
-        if (_silenceMs == 0 || !_armed) return false;
+        if (_silenceMs == 0) return false;
         // Signed: a report stamped by the HID task after the owner read the time
         int32_t quiet = (int32_t)(now - _lastInputMs);
         return quiet >= 0 && (uint32_t)quiet >= _silenceMs;
+    }
+
+    // The values cannot be trusted: no report yet since the claim, or a silence
+    bool isStale(uint32_t now) const {
+        return _silenceMs != 0 && (!_seenInput || isSilent(now));
     }
 
     uint32_t silentForMs(uint32_t now) const {
@@ -71,7 +83,7 @@ public:
 
 private:
     uint32_t _silenceMs = 0;
-    bool _armed;
+    bool _seenInput;
     uint32_t _lastInputMs;
     bool _recovered;
     uint32_t _recoverAt;

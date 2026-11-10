@@ -419,12 +419,14 @@ void USBHostUPS::service() {
     }
 
     // Issue #138: on a Back-UPS BX a silent interrupt pipe means frozen values, even if the
-    // poll reads them (they come back the same until the UPS is unplugged)
+    // poll reads them (they come back the same until the UPS is unplugged). It happens
+    // right after a USB port power cycle too: the claim counts as the last report.
     _in_silence.setSilenceMs(DriverDispatch::inputSilenceFaultMs(_driver));
     switch (_in_silence.tick(now)) {
     case InputSilenceGuard::Action::RECOVER:
-        log("WARN", "[USB] No INPUT report for %u s: UPS values likely frozen",
-            (unsigned)(_in_silence.silentForMs(now) / 1000));
+        log("WARN", "[USB] No INPUT report for %u s%s: UPS values likely frozen",
+            (unsigned)(_in_silence.silentForMs(now) / 1000),
+            _in_silence.seenInput() ? "" : " since the UPS connected");
         recoverInterface("INPUT reports stopped, values frozen", now, true);
         return;
     case InputSilenceGuard::Action::RESTART:
@@ -1216,7 +1218,7 @@ bool USBHostUPS::isDataStale() const {
     if (!_first_data_ready) return true;
     // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
     if (_restart_requested) return true;
-    if (_link.isStale(now) || _in_wd.isStale(now) || _in_silence.isSilent(now)) return true;
+    if (_link.isStale(now) || _in_wd.isStale(now) || _in_silence.isStale(now)) return true;
     // The driver's own judgement: the Q* driver after the failed polls of
     // upsdrv_updateinfo() (US-136). _driver is deleted under _mutex
     std::lock_guard<std::recursive_mutex> lock(_mutex);
