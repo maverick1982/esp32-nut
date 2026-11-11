@@ -77,8 +77,58 @@ void test_empty_and_null() {
     TEST_ASSERT_EQUAL_STRING("", buf);
 }
 
+// Issue #91: nut_usb_get_string() of usb-common.c, used when the enumeration read no string
+
+void test_nut_langid_from_table() {
+    const uint8_t table[] = {4, 0x03, 0x09, 0x04};
+    TEST_ASSERT_EQUAL_HEX16(0x0409, DeviceStrings::nutLangId(table, 4));
+    const uint8_t other[] = {4, 0x03, 0x10, 0x04}; // a LANGID that ESP-IDF rejects
+    TEST_ASSERT_EQUAL_HEX16(0x0410, DeviceStrings::nutLangId(other, 4));
+    const uint8_t zero[] = {4, 0x03, 0x00, 0x00}; // taken as it is, as upstream
+    TEST_ASSERT_EQUAL_HEX16(0x0000, DeviceStrings::nutLangId(zero, 4));
+}
+
+void test_nut_langid_broken_is_en_us() {
+    const uint8_t short_answer[] = {4, 0x03};
+    TEST_ASSERT_EQUAL_HEX16(0x0409, DeviceStrings::nutLangId(short_answer, 2));
+    const uint8_t wrong_type[] = {4, 0x02, 0x10, 0x04};
+    TEST_ASSERT_EQUAL_HEX16(0x0409, DeviceStrings::nutLangId(wrong_type, 4));
+    const uint8_t tiny_length[] = {2, 0x03, 0x10, 0x04};
+    TEST_ASSERT_EQUAL_HEX16(0x0409, DeviceStrings::nutLangId(tiny_length, 4));
+    TEST_ASSERT_EQUAL_HEX16(0x0409, DeviceStrings::nutLangId(nullptr, 4));
+}
+
+void test_nut_usb_string_mec0003() {
+    const uint8_t desc[] = {16, 0x03, 'M', 0, 'E', 0, 'C', 0, '0', 0, '0', 0, '0', 0, '3', 0};
+    char buf[64];
+    TEST_ASSERT_EQUAL(7, DeviceStrings::nutUsbString(desc, sizeof(desc), buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("MEC0003", buf);
+}
+
+void test_nut_usb_string_as_upstream() {
+    // A high byte gives '?'; spaces are kept (no trimming upstream)
+    const uint8_t desc[] = {10, 0x03, 'A', 0, 0xE9, 0x00, 0x00, 0x20, ' ', 0};
+    char buf[64];
+    TEST_ASSERT_EQUAL(4, DeviceStrings::nutUsbString(desc, sizeof(desc), buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("A\xE9? ", buf);
+    // Truncated to the buffer, always terminated
+    char small[3];
+    TEST_ASSERT_EQUAL(2, DeviceStrings::nutUsbString(desc, sizeof(desc), small, sizeof(small)));
+    TEST_ASSERT_EQUAL_STRING("A\xE9", small);
+    // Nothing usable
+    buf[0] = 'X';
+    TEST_ASSERT_EQUAL(0, DeviceStrings::nutUsbString(desc, 1, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("", buf);
+    TEST_ASSERT_EQUAL(0, DeviceStrings::nutUsbString(desc, 2, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("", buf);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_nut_langid_from_table);
+    RUN_TEST(test_nut_langid_broken_is_en_us);
+    RUN_TEST(test_nut_usb_string_mec0003);
+    RUN_TEST(test_nut_usb_string_as_upstream);
     RUN_TEST(test_plain_string);
     RUN_TEST(test_trailing_spaces_trimmed);
     RUN_TEST(test_inverted_string_autodetected);
