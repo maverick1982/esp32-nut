@@ -47,6 +47,46 @@ public:
         dst[out] = '\0';
         return out;
     }
+
+    // --- nut_usb_get_string() (nut_repo/drivers/usb-common.c:463-524), issue #91 ---
+    // Used when the enumeration of ESP-IDF read no string: it reads them only with LANGID
+    // 0x0409 and skips them all when the device's LANGID table lacks it (enum.c,
+    // parse_langid_table()), as on the VIDA Armour 1200VA that needs langid_fix with NUT.
+
+    static const uint16_t NUT_DEFAULT_LANGID = 0x0409;
+
+    /**
+     * @brief LANGID of the first entry of string descriptor 0, read with length 4.
+     * @param buf answer, len its length
+     * @return the LANGID, or 0x0409 when the descriptor is broken ("Broken language
+     *         identifier, assuming en_US")
+     */
+    static uint16_t nutLangId(const uint8_t* buf, size_t len) {
+        if (buf && len == 4 && buf[0] >= 4 && buf[1] == 0x03) {
+            return (uint16_t)(buf[2] | (buf[3] << 8));
+        }
+        return NUT_DEFAULT_LANGID;
+    }
+
+    /**
+     * @brief "Simple UTF-16LE to 8-bit" of nut_usb_get_string(): one byte per unit, '?' for
+     * a unit with a high byte, truncated to dst_size - 1. No trimming, as upstream.
+     * @param buf whole string descriptor (header included), len bytes received
+     * @return length written to dst (always NUL-terminated when dst_size > 0)
+     */
+    static size_t nutUsbString(const uint8_t* buf, size_t len, char* dst, size_t dst_size) {
+        if (!dst || dst_size == 0) return 0;
+        dst[0] = '\0';
+        if (!buf || len < 2) return 0;
+        size_t n = len / 2 - 1; // 16-bit characters, without header
+        if (n > dst_size - 1) n = dst_size - 1;
+        size_t i = 0;
+        for (; i < n; i++) {
+            dst[i] = buf[2 + i * 2 + 1] == 0 ? (char)buf[2 + i * 2] : '?';
+        }
+        dst[i] = '\0';
+        return i;
+    }
 };
 
 #endif // DEVICE_STRINGS_H

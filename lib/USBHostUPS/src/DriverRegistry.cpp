@@ -142,6 +142,15 @@ DriverRegistry::Match DriverRegistry::match(uint16_t vid, uint16_t pid, const ch
     return { Family::HID, false, nullptr };
 }
 
+bool DriverRegistry::qxNeedsStrings(uint16_t vid, uint16_t pid) {
+    const DriverEntry* entry;
+    if (findExplicitHid(vid, pid, &entry)) return false; // match() never reaches the Q* rows
+    for (const auto& q : QX_USB_ID) {
+        if (q.vid == vid && q.pid == pid && (q.vendor || q.product)) return true;
+    }
+    return false;
+}
+
 bool DriverRegistry::hasUpsPages(const std::vector<HIDUsageDef>& usages) {
     for (const auto& u : usages) {
         if ((u.usage & 0xFFFF0000) == HID_PAGE_UPS || (u.usage & 0xFFFF0000) == HID_PAGE_BATTERY) {

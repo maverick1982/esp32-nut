@@ -35,6 +35,11 @@ namespace DriverRegistry {
     // none), in the order above. Pure: no allocation, no I/O.
     Match match(uint16_t vid, uint16_t pid, const char* mfr = "", const char* product = "");
 
+    // True when a Q* row of this VID/PID tests a string, so match() needs the device strings
+    // to pick the transport (0001:0000, 06da:0002). The caller reads them itself, as NUT
+    // does, when the enumeration left them empty (issue #91). Pure.
+    bool qxNeedsStrings(uint16_t vid, uint16_t pid);
+
     // True when the interface has a usage on the UPS (0x84) or Battery (0x85) page: the
     // condition of the generic HID fallback.
     bool hasUpsPages(const std::vector<HIDUsageDef>& usages);

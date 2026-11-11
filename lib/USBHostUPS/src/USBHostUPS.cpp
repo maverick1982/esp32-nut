@@ -553,6 +553,20 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         DeviceStrings::toAscii(dev_info.iManufacturer, HID_STR_DESC_MAX_LENGTH, invert, mfr, sizeof(mfr));
         DeviceStrings::toAscii(dev_info.iProduct, HID_STR_DESC_MAX_LENGTH, invert, product, sizeof(product));
 
+        // Issue #91: ESP-IDF reads the strings only with LANGID 0x0409 and skips them all when
+        // the device does not list it. NUT reads them with the device's own LANGID, so the
+        // VIDA Armour 1200VA ("MEC0003") gets the hunnox transport there and krauler here.
+        // Only for a VID/PID whose Q* rows need the strings: no transfer for anything else.
+        if ((!mfr[0] || !product[0]) && DriverRegistry::qxNeedsStrings(dev_info.VID, dev_info.PID)) {
+            uint8_t i_mfr = 0, i_product = 0, i_serial = 0;
+            if (hid_host_device_get_string_indices(handle, &i_mfr, &i_product, &i_serial) == ESP_OK) {
+                if (!mfr[0] && i_mfr) readNutString(handle, i_mfr, mfr, sizeof(mfr));
+                if (!product[0] && i_product) readNutString(handle, i_product, product, sizeof(product));
+                log("INFO", "[USB] Device strings not read at enumeration, read as NUT does: "
+                            "manufacturer \"%s\", product \"%s\"", mfr, product);
+            }
+        }
+
         DriverRegistry::Match match = DriverRegistry::match(dev_info.VID, dev_info.PID, mfr, product);
         if (match.family == DriverRegistry::Family::QX) {
             claimQxInterface(handle, match, dev_info.VID, dev_info.PID, quirks, product);
@@ -761,6 +775,40 @@ void USBHostUPS::releaseBoundState() {
     _unsupported_device = "";
     // A Q* request waiting for the driver just deleted (US-136)
     answerQxRequest(CommandResult::NOT_CONNECTED, NutTable::SetStatus::NOT_CONNECTED);
+}
+
+// nut_usb_get_string() and nut_usb_get_string_descriptor() (usb-common.c:437-524):
+// MAX_STRING_DESC_TRIES 3, 50 ms between tries
+bool USBHostUPS::readNutString(hid_host_device_handle_t handle, uint8_t index, char* out, size_t outlen) {
+    if (out && outlen) out[0] = '\0';
+    if (!out || outlen == 0 || index == 0) return false;
+    auto get = [&](uint8_t idx, uint16_t langid, size_t max, size_t& got) {
+        esp_err_t err = ESP_FAIL;
+        for (int tries = 3; tries--;) {
+            got = 0;
+            // Blocking control transfer: no application lock held (ADR 0008)
+            err = hid_host_device_get_string_descriptor(handle, idx, langid, _request_buffer, max, &got);
+            if (err == ESP_OK) break;
+            if (tries) vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        return err;
+    };
+    size_t got = 0;
+    // Request the LANGID descriptor, 4 bytes as upstream
+    esp_err_t err = get(0, 0, 4, got);
+    if (err != ESP_OK) {
+        log("WARN", "[USB] String descriptor 0 (LANGID) not available: %s", esp_err_to_name(err));
+        return false;
+    }
+    uint16_t langid = DeviceStrings::nutLangId(_request_buffer, got);
+    err = get(index, langid, 255, got);
+    if (err != ESP_OK) {
+        log("WARN", "[USB] String descriptor %u (LANGID 0x%04x) not available: %s", (unsigned)index,
+            (unsigned)langid, esp_err_to_name(err));
+        return false;
+    }
+    DeviceStrings::nutUsbString(_request_buffer, got, out, outlen);
+    return out[0] != '\0';
 }
 
 void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,

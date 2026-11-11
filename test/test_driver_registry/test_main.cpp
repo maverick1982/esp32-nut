@@ -95,6 +95,22 @@ void test_0001_without_strings_is_krauler(void) {
     assertQx("krauler", 0x0001, 0x0000, "Other", "Thing");
 }
 
+// Issue #91 (qx-hunnox-v1 log of 2026-11-11): ESP-IDF read no string from the VIDA, the
+// claim took krauler. The host reads the strings itself only where they decide the row.
+void test_qx_needs_strings_only_for_shared_ids(void) {
+    TEST_ASSERT_TRUE(DriverRegistry::qxNeedsStrings(0x0001, 0x0000));  // fabula/hunnox/fuji/krauler/snr
+    TEST_ASSERT_TRUE(DriverRegistry::qxNeedsStrings(0x06DA, 0x0002));  // phoenixtec / cypress
+    TEST_ASSERT_FALSE(DriverRegistry::qxNeedsStrings(0x0665, 0x5161)); // cypress, no strings
+    TEST_ASSERT_FALSE(DriverRegistry::qxNeedsStrings(0x1CB0, 0x0035)); // krauler, no strings
+    TEST_ASSERT_FALSE(DriverRegistry::qxNeedsStrings(0x051D, 0x0002)); // APC: HID, no Q* row
+    TEST_ASSERT_FALSE(DriverRegistry::qxNeedsStrings(0x0463, 0xFFFF)); // Eaton: HID
+}
+
+void test_issue91_product_read_by_host_is_hunnox(void) {
+    assertQx("krauler", 0x0001, 0x0000, "", "");       // strings left empty by the enumeration
+    assertQx("hunnox", 0x0001, 0x0000, "", "MEC0003"); // product read as NUT does
+}
+
 // --- Explicit HID rows against the Q* rows of the same vendors ------------------------
 
 void test_legrand_keor_stays_hid_and_daker_is_qx(void) {
@@ -202,6 +218,8 @@ static void runAll() {
     RUN_TEST(test_strings_compare_without_case);
     RUN_TEST(test_atcl_strings_are_fuji);
     RUN_TEST(test_0001_without_strings_is_krauler);
+    RUN_TEST(test_qx_needs_strings_only_for_shared_ids);
+    RUN_TEST(test_issue91_product_read_by_host_is_hunnox);
     RUN_TEST(test_legrand_keor_stays_hid_and_daker_is_qx);
     RUN_TEST(test_qinheng_ch340_is_not_qx);
     RUN_TEST(test_every_qx_row_gives_its_transport);
