@@ -420,20 +420,15 @@ void USBHostUPS::service() {
 
     // Issue #138: on a Back-UPS BX a silent interrupt pipe means frozen values, even if the
     // poll reads them (they come back the same until the UPS is unplugged). It happens
-    // right after a USB port power cycle too: the claim counts as the last report.
+    // right after a USB port power cycle too: the claim counts as the last report. Straight
+    // to a system restart: an interface restart never freed the UPS, a system restart did.
     _in_silence.setSilenceMs(DriverDispatch::inputSilenceFaultMs(_driver));
-    switch (_in_silence.tick(now)) {
-    case InputSilenceGuard::Action::RECOVER:
+    if (_in_silence.tick(now) == InputSilenceGuard::Action::RESTART) {
         log("WARN", "[USB] No INPUT report for %u s%s: UPS values likely frozen",
             (unsigned)(_in_silence.silentForMs(now) / 1000),
             _in_silence.seenInput() ? "" : " since the UPS connected");
-        recoverInterface("INPUT reports stopped, values frozen", now, true);
-        return;
-    case InputSilenceGuard::Action::RESTART:
         requestRestart("INPUT reports stopped, values frozen");
         return;
-    default:
-        break;
     }
 
     logStats(now);

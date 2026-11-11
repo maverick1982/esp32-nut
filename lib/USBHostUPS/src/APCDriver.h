@@ -24,9 +24,10 @@ public:
     // The newer BXR series (issue #123) also matches isBackUpsBX(), but keeps sending INPUT
     // reports: it is left out of the frozen-values check below
     static bool isBackUpsBXR(const String& model) { return model.startsWith("Back-UPS BXR"); }
-    // Back-UPS BX (not BXR): about 18 INPUT reports per second; a silence of a minute means
-    // the UPS answers GET_REPORT with frozen values until it is unplugged (issue #138)
-    static const uint32_t BX_INPUT_SILENCE_MS = 60000;
+    // Back-UPS BX (not BXR): about 18 INPUT reports per second, never under ~1040 a minute
+    // and back right after a port cycle; a silence of 15 s means the UPS answers GET_REPORT
+    // with frozen values until it is unplugged or the board restarts (issue #138)
+    static const uint32_t BX_INPUT_SILENCE_MS = 15000;
     uint32_t inputSilenceFaultMs() const override { return _bx_frozen_inputs ? BX_INPUT_SILENCE_MS : 0; }
     // Public: the host asks the same length for the SET VAR read-modify-write and read back
     uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {

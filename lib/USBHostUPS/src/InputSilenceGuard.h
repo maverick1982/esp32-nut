@@ -17,16 +17,15 @@
  * - the data is stale until the first INPUT report after the claim, and again after a
  *   silence of silenceMs, so a UPS that never sends one is never "healthy" for the
  *   RestartPolicy, which then walks its ladder up to degraded mode instead of looping;
- * - after silenceMs the owner restarts the interface, and if the reports are still
- *   missing RETRY_MS later, asks for a system restart.
+ * - after silenceMs the owner asks for a system restart, once. No interface restart
+ *   first: on the BX750MI it never brought the reports back (bx-frozen-v2 log of
+ *   2026-11-11, 0 of 2), while the system restart did both times.
  * silenceMs 0 (every other UPS) turns the guard off. Pure logic: the owner passes the
  * time and acts.
  */
 class InputSilenceGuard {
 public:
-    enum class Action : uint8_t { NONE, RECOVER, RESTART };
-
-    static const uint32_t RETRY_MS = 60000;
+    enum class Action : uint8_t { NONE, RESTART };
 
     InputSilenceGuard() { reset(0); }
 
@@ -34,8 +33,6 @@ public:
     void reset(uint32_t now) {
         _seenInput = false;
         _lastInputMs = now;
-        _recovered = false;
-        _recoverAt = 0;
         _restartAsked = false;
     }
 
@@ -43,7 +40,6 @@ public:
     void onInput(uint32_t ts) {
         _seenInput = true;
         _lastInputMs = ts;
-        _recovered = false;
         _restartAsked = false;
     }
 
@@ -70,13 +66,7 @@ public:
     }
 
     Action tick(uint32_t now) {
-        if (!isSilent(now)) return Action::NONE;
-        if (!_recovered) {
-            _recovered = true;
-            _recoverAt = now;
-            return Action::RECOVER;
-        }
-        if (_restartAsked || (now - _recoverAt) < RETRY_MS) return Action::NONE;
+        if (_restartAsked || !isSilent(now)) return Action::NONE;
         _restartAsked = true;
         return Action::RESTART;
     }
@@ -85,8 +75,6 @@ private:
     uint32_t _silenceMs = 0;
     bool _seenInput;
     uint32_t _lastInputMs;
-    bool _recovered;
-    uint32_t _recoverAt;
     bool _restartAsked;
 };
 
