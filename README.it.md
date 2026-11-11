@@ -141,7 +141,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 
 - **Scheda ESP32-S3 o ESP32-P4**: È **obbligatorio** utilizzare una scheda di sviluppo ESP32-S3, oppure una scheda ESP32-P4 con Ethernet tra quelle supportate (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), perché questi chip supportano l'USB OTG Host in modo nativo. I normali ESP32 o ESP32-C3 non funzioneranno.
 - **Modulo Ethernet W5500 (facoltativo, ESP32-S3)**: per la rete via cavo al posto del Wi-Fi, un modulo W5500 esterno o una scheda che lo integra (vedi [Ethernet con un modulo W5500](#ethernet-con-un-modulo-w5500-esp32-s3)).
-- **Cavo USB OTG**: Un adattatore per collegare il cavo USB dell'UPS all'ESP32.
+- **Cavo USB OTG**: Un adattatore per collegare il cavo USB dell'UPS all'ESP32-S3. La Waveshare ESP32-P4-ETH richiede un cavo diverso (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 - **Hub USB e prolunghe attive**: un cavo USB lungo con amplificatore integrato contiene un hub USB. Sulla porta High-Speed dell'ESP32-P4 un hub High-Speed nasconde l'UPS (un dispositivo Full-Speed): lo stack USB host di ESP-IDF non raggiunge un dispositivo Full-Speed dietro un hub High-Speed. Usa un cavo passivo, oppure metti un isolatore USB solo Full-Speed (basato su ADuM3160) tra la scheda e il cavo. Sull'ESP32-S3, la cui porta USB è solo Full-Speed, un cavo del genere dovrebbe funzionare senza isolatore (non provato). ([#113](https://github.com/maverick1982/esp32-nut/issues/113))
 
 ### Configurazione su Board generiche con doppia USB-C (es. Generic ESP32-S3 DevKit)
@@ -155,7 +155,7 @@ Molte schede generiche ESP32-S3 con due porte USB-C nascondono delle piazzole (s
 
 Al posto dell'ESP32-S3 si può usare una scheda ESP32-P4 con porta Ethernet:
 - **Schede supportate**: Waveshare ESP32-P4-ETH (anche la versione PoE), Waveshare ESP32-P4-WIFI6-POE-ETH (provata, [#108](https://github.com/maverick1982/esp32-nut/issues/108); il chip Wi-Fi ESP32-C6 non viene usato, la scheda funziona via Ethernet) e le schede che seguono il design di riferimento Espressif (PHY IP101). Una scheda cablata in modo diverso richiede un suo profilo: apri una issue.
-- **UPS**: sulla porta USB 2.0 High-Speed (l'header a 4 pin J3 sulla Waveshare ESP32-P4-ETH).
+- **UPS**: sulla porta USB 2.0 High-Speed (l'header a 4 pin J3 sulla Waveshare ESP32-P4-ETH). Su questa scheda la porta USB-C non è una porta host: un adattatore OTG collegato lì non vede mai l'UPS. Usa sul J3 un cavo da JST 1,25 mm a 4 pin a presa USB-A, con tutti e quattro i fili: l'UPS ha bisogno della linea a 5V per rilevare l'host, e con solo GND, D- e D+ collegati non compare. ([#140](https://github.com/maverick1982/esp32-nut/discussions/140))
 - **Rete**: solo via cavo. L'indirizzo arriva via DHCP e il nome host è `esp32-nut-xxxxxx` (ultimi 3 byte del MAC). Non ci sono Wi-Fi né access point.
 - **Due immagini, una per revisione del chip**:
 

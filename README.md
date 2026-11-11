@@ -141,7 +141,7 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 
 - **ESP32-S3 or ESP32-P4 Board**: An ESP32-S3 development board, or a supported ESP32-P4 board with Ethernet (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)), is **required** because these chips have native USB OTG Host capabilities. Standard ESP32 or ESP32-C3 will not work.
 - **W5500 Ethernet module (optional, ESP32-S3)**: for a wired network instead of Wi-Fi, an external W5500 module or a board with one built in (see [Ethernet with a W5500 module](#ethernet-with-a-w5500-module-esp32-s3)).
-- **USB OTG Cable**: An adapter to plug the UPS USB cable into the ESP32.
+- **USB OTG Cable**: An adapter to plug the UPS USB cable into the ESP32-S3. The Waveshare ESP32-P4-ETH needs a different cable (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
 - **USB hubs and active extension cables**: a long USB cable with a built-in booster contains a USB hub. On the ESP32-P4 High-Speed port, a high-speed hub hides the UPS (a full-speed device): the ESP-IDF USB host stack cannot reach a full-speed device behind a high-speed hub. Use a passive cable, or put a full-speed-only USB isolator (ADuM3160-based) between the board and the cable. On the ESP32-S3, whose USB port is full-speed only, such a cable should work without the isolator (not tested). ([#113](https://github.com/maverick1982/esp32-nut/issues/113))
 
 ### Typical Dual USB-C Board Setup (e.g., Generic ESP32-S3 DevKit)
@@ -155,7 +155,7 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 
 An ESP32-P4 board with a wired Ethernet port can take the place of the ESP32-S3:
 - **Supported boards**: Waveshare ESP32-P4-ETH (also the PoE version), Waveshare ESP32-P4-WIFI6-POE-ETH (tested, [#108](https://github.com/maverick1982/esp32-nut/issues/108); its ESP32-C6 Wi-Fi chip is not used, the board runs on Ethernet) and boards that follow the Espressif reference design (IP101 PHY). A board wired differently needs its own profile: open an issue.
-- **UPS**: on the USB 2.0 High-Speed port (the 4-pin header J3 on the Waveshare ESP32-P4-ETH).
+- **UPS**: on the USB 2.0 High-Speed port (the 4-pin header J3 on the Waveshare ESP32-P4-ETH). On that board, the USB-C port is not a host port: an OTG adapter on it never sees the UPS. Use a JST 1.25 mm 4-pin to USB-A socket cable on J3, with all four wires: the UPS needs the 5V line to detect the host, and it does not show up with only GND, D- and D+ connected. ([#140](https://github.com/maverick1982/esp32-nut/discussions/140))
 - **Network**: cable only. The address comes from DHCP and the host name is `esp32-nut-xxxxxx` (last 3 bytes of the MAC address). There is no Wi-Fi and no access point.
 - **Two images, one per chip revision**:
 
