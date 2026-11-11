@@ -124,6 +124,9 @@ private:
     QxOptions _options;
     // A poll() ran since setup(): configure() then restarts the detection
     bool _started = false;
+    // The switch of the transport to langid_fix is in the System Log (issue #91): once per
+    // attach, as the switch itself
+    bool _langidFixLogged = false;
 };
 
 #endif // QX_DRIVER_H

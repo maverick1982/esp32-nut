@@ -560,10 +560,13 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         if ((!mfr[0] || !product[0]) && DriverRegistry::qxNeedsStrings(dev_info.VID, dev_info.PID)) {
             uint8_t i_mfr = 0, i_product = 0, i_serial = 0;
             if (hid_host_device_get_string_indices(handle, &i_mfr, &i_product, &i_serial) == ESP_OK) {
-                if (!mfr[0] && i_mfr) readNutString(handle, i_mfr, mfr, sizeof(mfr));
-                if (!product[0] && i_product) readNutString(handle, i_product, product, sizeof(product));
+                char note[64] = ""; // LANGID and string descriptor 0, for the reports (#91)
+                if (!mfr[0] && i_mfr) readNutString(handle, i_mfr, mfr, sizeof(mfr), note, sizeof(note));
+                if (!product[0] && i_product)
+                    readNutString(handle, i_product, product, sizeof(product), note, sizeof(note));
                 log("INFO", "[USB] Device strings not read at enumeration, read as NUT does: "
-                            "manufacturer \"%s\", product \"%s\"", mfr, product);
+                            "manufacturer \"%s\", product \"%s\" (%s)", mfr, product,
+                    note[0] ? note : "string 0 not read");
             }
         }
 
@@ -779,7 +782,8 @@ void USBHostUPS::releaseBoundState() {
 
 // nut_usb_get_string() and nut_usb_get_string_descriptor() (usb-common.c:437-524):
 // MAX_STRING_DESC_TRIES 3, 50 ms between tries
-bool USBHostUPS::readNutString(hid_host_device_handle_t handle, uint8_t index, char* out, size_t outlen) {
+bool USBHostUPS::readNutString(hid_host_device_handle_t handle, uint8_t index, char* out, size_t outlen,
+                               char* note, size_t notelen) {
     if (out && outlen) out[0] = '\0';
     if (!out || outlen == 0 || index == 0) return false;
     auto get = [&](uint8_t idx, uint16_t langid, size_t max, size_t& got) {
@@ -801,6 +805,13 @@ bool USBHostUPS::readNutString(hid_host_device_handle_t handle, uint8_t index, c
         return false;
     }
     uint16_t langid = DeviceStrings::nutLangId(_request_buffer, got);
+    if (note && notelen && !note[0]) {
+        int n = snprintf(note, notelen, "LANGID 0x%04x, string 0:", (unsigned)langid);
+        for (size_t i = 0; i < got && n > 0 && (size_t)n < notelen; i++) {
+            n += snprintf(note + n, notelen - (size_t)n, " %02X", (unsigned)_request_buffer[i]);
+        }
+        if (got == 0 && n > 0 && (size_t)n < notelen) snprintf(note + n, notelen - (size_t)n, " (empty)");
+    }
     err = get(index, langid, 255, got);
     if (err != ESP_OK) {
         log("WARN", "[USB] String descriptor %u (LANGID 0x%04x) not available: %s", (unsigned)index,

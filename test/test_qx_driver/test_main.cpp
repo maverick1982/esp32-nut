@@ -490,6 +490,52 @@ void test_hunnox_without_novendor_is_not_claimed(void) {
     TEST_ASSERT_EQUAL(1, r.host.count("Protocol hunnox did not claim the UPS"));
 }
 
+// #91, qx-hunnox-v2: Q1 failed on the VIDA because usb_get_string_simple() refuses its
+// strings (NUT needs langid_fix = 0x0409). The transport switches to langid_fix by itself,
+// says it once in the System Log and in the export, and the protocol is claimed.
+void test_hunnox_with_a_broken_langid_list_switches_to_langid_fix(void) {
+    Rig r("hunnox");
+    r.usb.device.setTable(HUNNOX_TESTING, QX_HUNNOX.rejected);
+    r.usb.brokenLangidList = true;
+    QxOptions opt;
+    opt.novendor = true;
+    r.driver.configure("hunnox", opt);
+    TEST_ASSERT_TRUE(r.runUntilFirstData(2000));
+    TEST_ASSERT_EQUAL_STRING("Hunnox 0.03", r.get("driver.version.data").c_str());
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage").c_str());
+    r.runFor(60000);
+    TEST_ASSERT_EQUAL(1, r.host.count("[Q*] The UPS answers only with LANGID 0x0409: langid_fix = 0x0409 applied"));
+    UsbDiagQx d;
+    r.host.lock();
+    r.driver.fillDiagnostics(d);
+    r.host.unlock();
+    TEST_ASSERT_EQUAL_STRING("0x0409", d.langid_fix.c_str());
+    TEST_ASSERT_TRUE(d.string_failure);
+    TEST_ASSERT_EQUAL(3, d.sf_index);
+    TEST_ASSERT_EQUAL_INT32(QX_USB_ERR_IO, d.sf_result);
+    TEST_ASSERT_EQUAL_INT32(2, d.sf_langids_length);
+    TEST_ASSERT_EQUAL(2, (int)d.sf_langids.size());
+    TEST_ASSERT_FALSE(d.sf_answer_asked);
+    TEST_ASSERT_EQUAL(0, r.usb.callsUnderLock);
+}
+
+// A device that answers usb_get_string_simple() keeps it: no langid_fix, no failure
+void test_hunnox_with_a_good_langid_list_keeps_the_simple_read(void) {
+    Rig r("hunnox");
+    r.usb.device.setTable(HUNNOX_TESTING, QX_HUNNOX.rejected);
+    QxOptions opt;
+    opt.novendor = true;
+    r.driver.configure("hunnox", opt);
+    TEST_ASSERT_TRUE(r.runUntilFirstData(2000));
+    TEST_ASSERT_EQUAL(0, r.host.count("langid_fix"));
+    UsbDiagQx d;
+    r.host.lock();
+    r.driver.fillDiagnostics(d);
+    r.host.unlock();
+    TEST_ASSERT_EQUAL_STRING("", d.langid_fix.c_str());
+    TEST_ASSERT_FALSE(d.string_failure);
+}
+
 // --- US-137: the krauler family on the driver ---
 
 namespace {
@@ -605,6 +651,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_configure_back_to_automatic);
     RUN_TEST(test_hunnox_with_novendor_reaches_the_first_walk);
     RUN_TEST(test_hunnox_without_novendor_is_not_claimed);
+    RUN_TEST(test_hunnox_with_a_broken_langid_list_switches_to_langid_fix);
+    RUN_TEST(test_hunnox_with_a_good_langid_list_keeps_the_simple_read);
     RUN_TEST(test_krauler_family_reaches_the_protocol_and_first_walk);
     RUN_TEST(test_krauler_exchanges_in_the_export);
     RUN_TEST(test_krauler_family_step_bound_with_a_mute_ups);

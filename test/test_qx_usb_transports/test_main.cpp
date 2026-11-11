@@ -605,6 +605,206 @@ void test_hunnox_mute_ups_stays_within_the_budget(void) {
     TEST_ASSERT_TRUE(r.tookMs <= QxHunnoxTransport::BUDGET_MS + QX_CTRL_TIMEOUT_MS);
 }
 
+// --- langid_fix applied by itself (issue #91) ---
+
+void test_langid_read_asks_buflen_with_the_langid_and_converts(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    // 'A', U+0142 (high byte), 'Z'
+    usb.script(std::vector<uint8_t>{8, 0x03, 'A', 0, 0x42, 0x01, 'Z', 0});
+    char buf[BUF] = {0};
+    bool mismatch = true;
+    TEST_ASSERT_EQUAL(3, qxGetStringLangid(usb, 0x03, 0x0409, buf, 102, mismatch));
+    TEST_ASSERT_FALSE(mismatch);
+    TEST_ASSERT_EQUAL_STRING("A?Z", buf);
+    TEST_ASSERT_EQUAL(1, (int)usb.stringCalls.size());
+    assertCall(usb.stringCalls[0], 0x03, 0x0409, 102);
+}
+
+void test_langid_read_size_mismatch_and_errors(void) {
+    char buf[BUF];
+    bool mismatch = false;
+    {
+        // bLength 10, 4 bytes received: "size mismatch", buf untouched
+        FakeQxUsbPrimitives usb(nullptr);
+        usb.script(std::vector<uint8_t>{10, 0x03, 'A', 0});
+        memset(buf, 'x', sizeof(buf));
+        TEST_ASSERT_EQUAL(0, qxGetStringLangid(usb, 0x03, 0x0409, buf, 102, mismatch));
+        TEST_ASSERT_TRUE(mismatch);
+        TEST_ASSERT_EQUAL('x', buf[0]);
+    }
+    {
+        // The descriptor type is not checked, as upstream
+        FakeQxUsbPrimitives usb(nullptr);
+        usb.script(std::vector<uint8_t>{4, 0x02, 'A', 0});
+        TEST_ASSERT_EQUAL(1, qxGetStringLangid(usb, 0x03, 0x0409, buf, 102, mismatch));
+        TEST_ASSERT_FALSE(mismatch);
+    }
+    {
+        FakeQxUsbPrimitives usb(nullptr);
+        usb.scriptError(QX_USB_ERR_PIPE);
+        TEST_ASSERT_EQUAL(QX_USB_ERR_PIPE, qxGetStringLangid(usb, 0x03, 0x0409, buf, 102, mismatch));
+        TEST_ASSERT_FALSE(mismatch);
+    }
+    {
+        // Only buflen bytes are asked, as upstream: a longer string is a size mismatch
+        FakeQxUsbPrimitives usb(nullptr);
+        usb.script(FakeQxUsbPrimitives::stringDescriptor("ABCDEF"));
+        TEST_ASSERT_EQUAL(0, qxGetStringLangid(usb, 0x03, 0x0409, buf, 4, mismatch));
+        TEST_ASSERT_TRUE(mismatch);
+        assertCall(usb.stringCalls[0], 0x03, 0x0409, 4);
+    }
+    {
+        // Odd bLength: the last byte is read as a unit with a zero high byte, as upstream (no
+        // read past the local buffer)
+        FakeQxUsbPrimitives usb(nullptr);
+        usb.script(std::vector<uint8_t>{5, 0x03, 'A', 0, 'B'});
+        memset(buf, 'x', sizeof(buf));
+        TEST_ASSERT_EQUAL(2, qxGetStringLangid(usb, 0x03, 0x0409, buf, 102, mismatch));
+        TEST_ASSERT_FALSE(mismatch);
+        TEST_ASSERT_EQUAL_STRING("AB", buf);
+    }
+}
+
+// The VIDA Armour 1200VA case: usb_get_string_simple() refuses the answer (a langid list
+// shorter than 4 bytes here), the langid_fix read answers. From then on only that read.
+void test_hunnox_switches_to_langid_fix_when_the_simple_read_fails(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxHunnoxTransport t(usb);
+    for (int i = 0; i < 3; i++) usb.script(FakeQxUsbPrimitives::langidDescriptor(0x0409)); // preamble
+    usb.script(std::vector<uint8_t>{2, 0x03});                         // string 0 for the simple read
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("(246.0 246.0 247.0 007 50.1 27.3 29.0 00001001\r"));
+    TEST_ASSERT_EQUAL(0, t.langidFix());
+    Run r = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL_STRING("(246.0 246.0 247.0 007 50.1 27.3 29.0 00001001\r", r.text.c_str());
+    TEST_ASSERT_EQUAL((int)r.text.size(), r.ret);
+    TEST_ASSERT_EQUAL(5, (int)usb.stringCalls.size());
+    assertCall(usb.stringCalls[3], 0x00, 0x0000, 255);
+    assertCall(usb.stringCalls[4], 0x03, 0x0409, 102); // as NUT with langid_fix: buflen 102
+    TEST_ASSERT_EQUAL_HEX16(0x0409, t.langidFix());
+    // The refused read stays in the diagnostics
+    const QxStringFailure& f = t.stringFailure();
+    TEST_ASSERT_TRUE(f.present);
+    TEST_ASSERT_EQUAL_HEX8(0x03, f.index);
+    TEST_ASSERT_EQUAL(QX_USB_ERR_IO, f.result);
+    TEST_ASSERT_EQUAL(2, f.langidsLength);
+    TEST_ASSERT_EQUAL_HEX8(0x02, f.langids[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x03, f.langids[1]);
+    TEST_ASSERT_FALSE(f.answerAsked);
+
+    // Next command (preamble step 1: 0x0d), then one read with langid_fix only
+    usb.stringCalls.clear();
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("x"));
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("(246.0\r"));
+    r = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL_STRING("(246.0\r", r.text.c_str());
+    TEST_ASSERT_EQUAL(2, (int)usb.stringCalls.size());
+    assertCall(usb.stringCalls[1], 0x03, 0x0409, 102);
+}
+
+void test_hunnox_langid_fix_size_mismatch_returns_zero_once_active(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxHunnoxTransport t(usb);
+    for (int i = 0; i < 3; i++) usb.script(FakeQxUsbPrimitives::langidDescriptor(0x0409));
+    usb.scriptError(QX_USB_ERR_PIPE);
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("(246.0\r"));
+    TEST_ASSERT_EQUAL(7, send(t, usb, "Q1\r").ret);
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("x"));   // preamble step 1
+    usb.script(std::vector<uint8_t>{20, 0x03, '(', 0});       // bLength beyond the bytes
+    TEST_ASSERT_EQUAL(0, send(t, usb, "Q1\r").ret);
+    TEST_ASSERT_EQUAL_HEX16(0x0409, t.langidFix()); // stays: a corrupt answer, as in NUT
+}
+
+void test_hunnox_no_switch_when_the_langid_fix_read_does_not_help(void) {
+    {
+        // The langid_fix read STALLs too: the error of usb_get_string_simple(), no switch
+        FakeQxUsbPrimitives usb(nullptr);
+        QxHunnoxTransport t(usb);
+        for (int i = 0; i < 3; i++) usb.script(FakeQxUsbPrimitives::langidDescriptor(0x0409));
+        usb.script(FakeQxUsbPrimitives::langidDescriptor(0x0407));
+        usb.script(std::vector<uint8_t>{10, 0x03, 'A', 0});  // bLength beyond the bytes
+        usb.scriptError(QX_USB_ERR_PIPE);
+        Run r = send(t, usb, "Q1\r");
+        TEST_ASSERT_EQUAL(QX_USB_ERR_IO, r.ret);
+        TEST_ASSERT_EQUAL_STRING("", r.text.c_str());
+        TEST_ASSERT_EQUAL(0, t.langidFix());
+        const QxStringFailure& f = t.stringFailure();
+        TEST_ASSERT_TRUE(f.present);
+        TEST_ASSERT_EQUAL(4, f.langidsLength);
+        TEST_ASSERT_EQUAL_HEX8(0x07, f.langids[2]);
+        TEST_ASSERT_TRUE(f.answerAsked);
+        TEST_ASSERT_EQUAL(4, f.answerLength);
+        TEST_ASSERT_EQUAL_HEX8(10, f.answer[0]);
+        assertCall(usb.stringCalls[4], 0x03, 0x0407, 255);
+        assertCall(usb.stringCalls[5], 0x03, 0x0409, 102);
+    }
+    {
+        // An empty answer or a size mismatch with langid_fix: no switch either
+        FakeQxUsbPrimitives usb(nullptr);
+        QxHunnoxTransport t(usb);
+        for (int i = 0; i < 3; i++) usb.script(FakeQxUsbPrimitives::langidDescriptor(0x0409));
+        usb.scriptError(QX_USB_ERR_PIPE);
+        usb.script(FakeQxUsbPrimitives::stringDescriptor(""));
+        TEST_ASSERT_EQUAL(QX_USB_ERR_PIPE, send(t, usb, "Q1\r").ret);
+        TEST_ASSERT_EQUAL(0, t.langidFix());
+        usb.script(FakeQxUsbPrimitives::stringDescriptor("x"));
+        usb.scriptError(QX_USB_ERR_PIPE);
+        usb.script(std::vector<uint8_t>{20, 0x03, '(', 0});
+        TEST_ASSERT_EQUAL(QX_USB_ERR_PIPE, send(t, usb, "Q1\r").ret);
+        TEST_ASSERT_EQUAL(0, t.langidFix());
+    }
+}
+
+void test_simple_read_that_works_never_tries_langid_fix(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.stringDevice = true;
+    usb.langidList = 0x0407;
+    QxHunnoxTransport t(usb);
+    for (int i = 0; i < 4; i++) TEST_ASSERT_TRUE(send(t, usb, "Q1\r").ret > 0);
+    for (const Call& c : usb.stringCalls) {
+        // Only the simple reads (255 bytes) and the preamble (1026 / 102 on other indices)
+        if (c.index == 0x03) TEST_ASSERT_EQUAL_UINT32(255, (uint32_t)c.buflen);
+    }
+    TEST_ASSERT_EQUAL(0, t.langidFix());
+    TEST_ASSERT_FALSE(t.stringFailure().present);
+}
+
+void test_no_langid_fix_read_when_the_device_is_gone(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxKraulerTransport t(usb);
+    usb.scriptError(QX_USB_ERR_NO_DEVICE);
+    TEST_ASSERT_EQUAL(QX_USB_ERR_NO_DEVICE, send(t, usb, "Q1\r").ret);
+    TEST_ASSERT_EQUAL(1, (int)usb.stringCalls.size());
+    TEST_ASSERT_EQUAL(0, t.langidFix());
+}
+
+void test_krauler_switches_to_langid_fix_and_retries_a_size_mismatch(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxKraulerTransport t(usb);
+    usb.script(std::vector<uint8_t>{2, 0x03});                    // langid list refused
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("x230.0"));  // langid_fix answers
+    Run r = send(t, usb, "F\r");
+    TEST_ASSERT_EQUAL_STRING("#230.0\r", r.text.c_str()); // prefix and missing CR as before
+    TEST_ASSERT_EQUAL_HEX16(0x0409, t.langidFix());
+    assertCall(usb.stringCalls[1], 0x0d, 0x0409, BUF < 255 ? BUF : 255);
+    // Active: a size mismatch is retried (continue), as krauler_command() with langid_fix
+    usb.stringCalls.clear();
+    usb.script(std::vector<uint8_t>{20, 0x03, 'x', 0});
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("x231.0\r"));
+    r = send(t, usb, "F\r");
+    TEST_ASSERT_EQUAL_STRING("#231.0\r", r.text.c_str());
+    TEST_ASSERT_EQUAL(2, (int)usb.stringCalls.size());
+}
+
+void test_fabula_has_no_langid_fix(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxFabulaTransport t(usb);
+    usb.script(std::vector<uint8_t>{2, 0x03});
+    usb.script(FakeQxUsbPrimitives::stringDescriptor("(230.0\r"));
+    TEST_ASSERT_EQUAL(QX_USB_ERR_IO, send(t, usb, "Q1\r").ret);
+    TEST_ASSERT_EQUAL(1, (int)usb.stringCalls.size());
+    TEST_ASSERT_EQUAL(0, t.langidFix());
+}
+
 void test_budgets_keep_the_poll_step_bound(void) {
     TEST_ASSERT_TRUE(qxStepBoundMs(QxKraulerTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
     TEST_ASSERT_TRUE(qxStepBoundMs(QxFabulaTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
@@ -635,6 +835,15 @@ int main(int, char**) {
     RUN_TEST(test_fabula_answers);
     RUN_TEST(test_fabula_unknown_command_is_echoed_without_transfers);
     RUN_TEST(test_fabula_mute_ups_stays_within_the_budget);
+    RUN_TEST(test_langid_read_asks_buflen_with_the_langid_and_converts);
+    RUN_TEST(test_langid_read_size_mismatch_and_errors);
+    RUN_TEST(test_hunnox_switches_to_langid_fix_when_the_simple_read_fails);
+    RUN_TEST(test_hunnox_langid_fix_size_mismatch_returns_zero_once_active);
+    RUN_TEST(test_hunnox_no_switch_when_the_langid_fix_read_does_not_help);
+    RUN_TEST(test_simple_read_that_works_never_tries_langid_fix);
+    RUN_TEST(test_no_langid_fix_read_when_the_device_is_gone);
+    RUN_TEST(test_krauler_switches_to_langid_fix_and_retries_a_size_mismatch);
+    RUN_TEST(test_fabula_has_no_langid_fix);
     RUN_TEST(test_hunnox_preamble_lock_step_over_five_commands);
     RUN_TEST(test_hunnox_preamble_skips_the_index_being_asked);
     RUN_TEST(test_hunnox_novendor_skips_0x0c_in_the_preamble);

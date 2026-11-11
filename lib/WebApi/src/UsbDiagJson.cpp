@@ -138,6 +138,21 @@ void qxSection(ChunkWriter& w, const UsbDiagQx& q) {
     key(w, 2, "retry_ms", false);        num(w, q.retry_ms);
     key(w, 2, "forced_protocol", false); str(w, q.forced_protocol);
     key(w, 2, "novendor", false);        raw(w, q.novendor ? "true" : "false"); // US-138
+    key(w, 2, "langid_fix", false);      str(w, q.langid_fix);                  // #91
+    if (q.string_failure) {
+        key(w, 2, "string_failure", false);
+        w.write('{');
+        key(w, 3, "index", true);              num(w, q.sf_index);
+        key(w, 3, "result", false);            snum(w, q.sf_result);
+        key(w, 3, "langids_length", false);    snum(w, q.sf_langids_length);
+        key(w, 3, "langids_hex", false);       hexBytes(w, q.sf_langids.data(), q.sf_langids.size());
+        if (q.sf_answer_asked) {
+            key(w, 3, "answer_length", false); snum(w, q.sf_answer_length);
+            key(w, 3, "answer_hex", false);    hexBytes(w, q.sf_answer.data(), q.sf_answer.size());
+        }
+        newline(w, 2);
+        w.write('}');
+    }
     key(w, 2, "exchanges", false);
     if (q.exchanges.empty()) {
         raw(w, "[]");

@@ -22,6 +22,22 @@ static const uint32_t QX_STEP_BOUND_MAX_MS = 12000;
 inline uint32_t qxStepBoundMs(uint32_t budgetMs) { return 2 * budgetMs + QX_CTRL_TIMEOUT_MS; }
 
 /**
+ * @brief The last string read that usb_get_string_simple() refused (issue #91), for the
+ * diagnostics export: its first bytes tell a broken langid list from a malformed answer.
+ */
+struct QxStringFailure {
+    static const size_t BYTES_MAX = 16;
+    bool present = false;
+    uint8_t index = 0;          // string index of the command
+    int result = 0;             // what qxGetStringAscii() returned
+    int langidsLength = 0;      // string descriptor 0: bytes received, or an error < 0
+    uint8_t langids[BYTES_MAX] = {0};
+    bool answerAsked = false;   // false: the read stopped at string descriptor 0
+    int answerLength = 0;       // the string: bytes received, or an error < 0
+    uint8_t answer[BYTES_MAX] = {0};
+};
+
+/**
  * @brief A Q* USB subdriver (ADR 0013, section 3): one class per upstream *_command() of
  * nut_repo/drivers/nutdrv_qx.c, built only on IQxUsbPrimitives.
  *
@@ -57,6 +73,14 @@ public:
     // The ups.conf options the USB subdriver reads with testvar() (US-138): none by default,
     // novendor for hunnox. Called by QxDriver::configure() in the poll task, between commands
     virtual void setOptions(const QxOptions& options) { (void)options; }
+    // The langid_fix in use (issue #91): 0 as NUT without the option, 0x0409 once the
+    // krauler or hunnox transport has switched to it by itself (QxLangidFallback)
+    virtual uint16_t langidFix() const { return 0; }
+    // The last string read refused by usb_get_string_simple() (issue #91); not present by default
+    virtual const QxStringFailure& stringFailure() const {
+        static const QxStringFailure none;
+        return none;
+    }
 
     const char* lastError() const { return _usb.lastError(); }
     uint32_t nowMs() const { return _usb.nowMs(); }

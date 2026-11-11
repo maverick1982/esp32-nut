@@ -113,7 +113,19 @@ int addMissingCr(char* buf, size_t buflen, int ret) {
 
 } // namespace
 
-int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buflen) {
+namespace {
+
+// Copies the first bytes received into a QxStringFailure field
+void keepBytes(uint8_t* dst, const uint8_t* src, int received) {
+    size_t n = received > 0 ? (size_t)received : 0;
+    if (n > QxStringFailure::BYTES_MAX) n = QxStringFailure::BYTES_MAX;
+    memset(dst, 0, QxStringFailure::BYTES_MAX);
+    if (n) memcpy(dst, src, n);
+}
+
+} // namespace
+
+int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buflen, QxStringFailure* failure) {
     // libusb_get_string_descriptor_ascii(), as libusb 1.0.2x: the langid list is read with a
     // 255-byte buffer like the string itself, and again for every command (no cache). The
     // most recent libusb asks only 4 bytes of string 0: switch to that if a tester's bridge
@@ -125,20 +137,37 @@ int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buf
     // There's no point in trying to read descriptor 0 with this function
     if (index == 0 || buflen == 0) return QX_USB_ERR_INVALID_PARAM;
 
+    // Raw bytes of a refused read, for the diagnostics export (issue #91)
+    QxStringFailure seen;
+    seen.index = index;
+    auto fail = [&](int ret) {
+        if (failure) {
+            seen.present = true;
+            seen.result = ret;
+            *failure = seen;
+        }
+        return ret;
+    };
+
     int r = usb.getStringDescriptor(0, 0, tbuf, 255);
-    if (r < 0) return r;
-    if (r < 4) return QX_USB_ERR_IO;
+    seen.langidsLength = r;
+    keepBytes(seen.langids, tbuf, r);
+    if (r < 0) return fail(r);
+    if (r < 4) return fail(QX_USB_ERR_IO);
 
     const uint16_t langid = (uint16_t)(tbuf[2] | (tbuf[3] << 8));
 
     memset(tbuf, 0, sizeof(tbuf));
     r = usb.getStringDescriptor(index, langid, tbuf, 255);
-    if (r < 0) return r;
+    seen.answerAsked = true;
+    seen.answerLength = r;
+    keepBytes(seen.answer, tbuf, r);
+    if (r < 0) return fail(r);
     // Shorter than the descriptor header (as the recent libusb: the old one compared the
     // stale bytes of the langid list, with the same result)
-    if (r < 2) return QX_USB_ERR_IO;
-    if (tbuf[1] != DT_STRING) return QX_USB_ERR_IO;
-    if (tbuf[0] > r) return QX_USB_ERR_IO;
+    if (r < 2) return fail(QX_USB_ERR_IO);
+    if (tbuf[1] != DT_STRING) return fail(QX_USB_ERR_IO);
+    if (tbuf[0] > r) return fail(QX_USB_ERR_IO);
 
     size_t di = 0;
     for (size_t si = 2; si < tbuf[0]; si += 2) {
@@ -150,6 +179,59 @@ int qxGetStringAscii(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buf
     }
     buf[di] = 0;
     return (int)di;
+}
+
+int qxGetStringLangid(IQxUsbPrimitives& usb, uint8_t index, uint16_t langid, char* buf, size_t buflen,
+                      bool& mismatch) {
+    mismatch = false;
+    if (buflen == 0) return QX_USB_ERR_INVALID_PARAM;
+    // NUT reads into buf itself, asking buflen bytes: here a local copy, as the primitive asks
+    // at most 255 (hid_host.c caps wLength). One byte more: an odd bLength 255 makes the loop
+    // read tbuf[255].
+    uint8_t tbuf[256];
+    memset(tbuf, 0, sizeof(tbuf));
+    const size_t want = buflen < 255 ? buflen : 255;
+    int ret = usb.getStringDescriptor(index, langid, tbuf, want);
+    if (ret <= 0) return ret;
+
+    // Invalid receive size - message corrupted
+    if (ret != tbuf[0]) {
+        mismatch = true;
+        return 0;
+    }
+
+    // Simple unicode -> ASCII inplace conversion
+    const unsigned size = tbuf[0];
+    size_t di = 0;
+    for (unsigned si = 2; si < size; si += 2) {
+        if (di >= buflen - 1) break;
+        if (tbuf[si + 1]) // high byte
+            buf[di++] = '?';
+        else
+            buf[di++] = (char)tbuf[si];
+    }
+    buf[di] = 0;
+    return (int)di;
+}
+
+int QxLangidFallback::read(IQxUsbPrimitives& usb, uint8_t index, char* buf, size_t buflen, bool& mismatch) {
+    mismatch = false;
+    if (_active) return qxGetStringLangid(usb, index, LANGID, buf, buflen, mismatch);
+
+    int ret = qxGetStringAscii(usb, index, buf, buflen, &_failure);
+    if (ret >= 0 || ret == QX_USB_ERR_NO_DEVICE || ret == QX_USB_ERR_INVALID_PARAM) return ret;
+
+    // usb_get_string_simple() failed: the same string as NUT with langid_fix = 0x0409. Past
+    // the command budget the primitive refuses it without traffic.
+    bool fixMismatch = false;
+    int fix = qxGetStringLangid(usb, index, LANGID, buf, buflen, fixMismatch);
+    if (fix > 0) {
+        _active = true;
+        return fix;
+    }
+    // No help: the outcome of NUT without langid_fix
+    buf[0] = 0;
+    return ret;
 }
 
 // --- krauler ---
@@ -182,8 +264,13 @@ int QxKraulerTransport::doCommand(const char* cmd, size_t cmdlen, char* buf, siz
 
         for (int retry = 0; retry < 10; retry++) {
             // Upstream: usb_get_string() with langid_fix when set (nutdrv_qx.c:1338-1342) and
-            // the size check plus unicode conversion of 1358-1382; langid_fix is not ported
-            int ret = qxGetStringAscii(_usb, (uint8_t)command[i].index, buf, buflen);
+            // the size check plus unicode conversion of 1358-1382; here langid_fix is applied
+            // by itself (QxLangidFallback, issue #91)
+            bool mismatch = false;
+            int ret = _strings.read(_usb, (uint8_t)command[i].index, buf, buflen, mismatch);
+
+            // langid_fix: "size mismatch", retried
+            if (mismatch) continue;
 
             if (ret <= 0) return ret;
 
@@ -239,7 +326,8 @@ void QxHunnoxTransport::preamble(int askingFor) {
     // (hid_host.c caps wLength there) and never writes more, and a string descriptor is never
     // longer than 255 bytes. With novendor step 3 reads nothing (US-138).
     uint8_t tmp[255];
-    const uint16_t langid = PREAMBLE_LANGID; // langid_fix is not ported
+    // langid_fix_local: 0x0409, the langid_fix QxLangidFallback applies too
+    const uint16_t langid = PREAMBLE_LANGID;
 
     switch (_step) {
     case 0:
@@ -280,9 +368,11 @@ int QxHunnoxTransport::doCommand(const char* cmd, size_t cmdlen, char* buf, size
     if (buflen > 102) buflen = 102;
 
     // Send command/Read reply. Upstream: usb_get_string() with langid_fix when set and the
-    // size check plus unicode conversion of nutdrv_qx.c:1649-1690; langid_fix is not ported.
+    // size check plus unicode conversion of nutdrv_qx.c:1649-1690; here langid_fix is applied
+    // by itself (QxLangidFallback, issue #91), a size mismatch returns 0 as upstream.
     // Unlike fabula, no missing CR is added.
-    int ret = qxGetStringAscii(_usb, (uint8_t)index, buf, buflen);
+    bool mismatch = false;
+    int ret = _strings.read(_usb, (uint8_t)index, buf, buflen, mismatch);
 
     if (ret <= 0) return ret;
 

@@ -40,9 +40,20 @@ int QxDriver::Recorder::command(const char* cmd, size_t cmdlen, char* buf, size_
     int ret = _d._transport->command(cmd, cmdlen, buf, buflen);
     const uint32_t duration = _d._transport->nowMs() - start;
     size_t len = cmdlen > 0 ? cmdlen : (cmd ? strlen(cmd) : 0);
-    HostLock lock(_d._host);
-    _d._exchanges.add(cmd, len, reinterpret_cast<const uint8_t*>(buf), ret, start, duration,
-                      _d._transport->lastError());
+    {
+        HostLock lock(_d._host);
+        _d._exchanges.add(cmd, len, reinterpret_cast<const uint8_t*>(buf), ret, start, duration,
+                          _d._transport->lastError());
+    }
+    // Issue #91: once per attach, when the transport switched to langid_fix by itself
+    if (!_d._langidFixLogged && _d._transport->langidFix()) {
+        _d._langidFixLogged = true;
+        char line[160];
+        snprintf(line, sizeof(line),
+                 "[Q*] The UPS answers only with LANGID 0x%04X: langid_fix = 0x%04X applied, as in NUT's ups.conf",
+                 (unsigned)_d._transport->langidFix(), (unsigned)_d._transport->langidFix());
+        _d._host.log("INFO", line);
+    }
     return ret;
 }
 
@@ -254,6 +265,29 @@ void QxDriver::fillDiagnostics(UsbDiagQx& out) const {
     out.retry_ms = _prober.retryDelayMs();
     out.forced_protocol = _prober.protocol();
     out.novendor = _options.novendor;
+    // Issue #91
+    if (const uint16_t fix = _transport->langidFix()) {
+        char hex[8];
+        snprintf(hex, sizeof(hex), "0x%04X", (unsigned)fix);
+        out.langid_fix = hex;
+    } else {
+        out.langid_fix = "";
+    }
+    const QxStringFailure& sf = _transport->stringFailure();
+    out.string_failure = sf.present;
+    if (sf.present) {
+        out.sf_index = sf.index;
+        out.sf_result = sf.result;
+        out.sf_langids_length = sf.langidsLength;
+        size_t n = sf.langidsLength > 0 ? (size_t)sf.langidsLength : 0;
+        if (n > QxStringFailure::BYTES_MAX) n = QxStringFailure::BYTES_MAX;
+        out.sf_langids.assign(sf.langids, sf.langids + n);
+        out.sf_answer_asked = sf.answerAsked;
+        out.sf_answer_length = sf.answerLength;
+        n = sf.answerLength > 0 ? (size_t)sf.answerLength : 0;
+        if (n > QxStringFailure::BYTES_MAX) n = QxStringFailure::BYTES_MAX;
+        out.sf_answer.assign(sf.answer, sf.answer + n);
+    }
     out.exchanges.clear();
     out.exchanges.reserve(_exchanges.size());
     for (size_t i = 0; i < _exchanges.size(); i++) {
