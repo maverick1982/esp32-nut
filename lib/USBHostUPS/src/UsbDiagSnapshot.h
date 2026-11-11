@@ -47,6 +47,17 @@ struct UsbDiagQx {
     uint32_t retry_ms = 0;  // back-off after the last cycle without a claim
     String forced_protocol; // the protocol setting, empty when automatic
     bool novendor = false;  // the novendor setting (US-138)
+    String langid_fix;      // "0x0409" once the transport applied it by itself, empty otherwise (#91)
+    // The last string read refused by usb_get_string_simple() (#91), written only when present:
+    // first bytes of string descriptor 0 and of the answer, with what each read returned
+    bool string_failure = false;
+    uint8_t sf_index = 0;
+    int32_t sf_result = 0;
+    int32_t sf_langids_length = 0;
+    std::vector<uint8_t> sf_langids;
+    bool sf_answer_asked = false;
+    int32_t sf_answer_length = 0;
+    std::vector<uint8_t> sf_answer;
     std::vector<UsbDiagQxExchange> exchanges; // oldest first
     uint32_t uptime_ms = 0; // uptime of the snapshot, the reference of the exchange times
 };

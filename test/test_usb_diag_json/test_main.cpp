@@ -420,7 +420,8 @@ void test_qx_without_driver(void) {
     TEST_ASSERT_TRUE(got.find("\"failed\": 0\r\n  },\r\n  \"qx\": {\r\n    \"transport\": \"krauler\",\r\n"
                               "    \"protocol\": \"\",\r\n    \"probe\": \"\",\r\n    \"tries\": 0,\r\n"
                               "    \"failed_cycles\": 0,\r\n    \"retry_ms\": 0,\r\n    \"forced_protocol\": \"\",\r\n"
-                              "    \"novendor\": false,\r\n    \"exchanges\": []\r\n  },\r\n  \"scenarios\": [") != std::string::npos);
+                              "    \"novendor\": false,\r\n    \"langid_fix\": \"\",\r\n"
+                              "    \"exchanges\": []\r\n  },\r\n  \"scenarios\": [") != std::string::npos);
     JsonDocument doc;
     TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
     TEST_ASSERT_EQUAL_STRING("krauler", doc["qx"]["transport"]);
@@ -504,6 +505,44 @@ void test_qx_control_bytes_and_truncated(void) {
     TEST_ASSERT_TRUE(doc["qx"]["exchanges"][0]["truncated"].as<bool>());
 }
 
+// Issue #91: langid_fix applied by the transport and the last refused string read, with the
+// first bytes of string descriptor 0 and of the answer; answer_* only when it was asked
+void test_qx_langid_fix_and_string_failure(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.qx.present = true;
+    s.qx.transport = "hunnox";
+    s.qx.langid_fix = "0x0409";
+    s.qx.string_failure = true;
+    s.qx.sf_index = 3;
+    s.qx.sf_result = -1;
+    s.qx.sf_langids_length = 4;
+    const uint8_t langids[] = {0x04, 0x03, 0x00, 0x00};
+    s.qx.sf_langids.assign(langids, langids + 4);
+    s.qx.sf_answer_asked = true;
+    s.qx.sf_answer_length = -9;
+
+    std::string got = writeChunked(s, 7);
+    TEST_ASSERT_TRUE(got.find("    \"novendor\": false,\r\n    \"langid_fix\": \"0x0409\",\r\n"
+                              "    \"string_failure\": {\r\n      \"index\": 3,\r\n      \"result\": -1,\r\n"
+                              "      \"langids_length\": 4,\r\n      \"langids_hex\": \"04 03 00 00\",\r\n"
+                              "      \"answer_length\": -9,\r\n      \"answer_hex\": \"\"\r\n    },\r\n"
+                              "    \"exchanges\": []") != std::string::npos);
+    for (size_t cap : BUFFER_SIZES) TEST_ASSERT_TRUE(writeChunked(s, cap) == got);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+    TEST_ASSERT_EQUAL_STRING("0x0409", doc["qx"]["langid_fix"]);
+    TEST_ASSERT_EQUAL(-1, doc["qx"]["string_failure"]["result"].as<int>());
+
+    // The read stopped at string 0: no answer_* keys
+    s.qx.sf_answer_asked = false;
+    got = writeChunked(s, 64);
+    TEST_ASSERT_TRUE(got.find("\"langids_hex\": \"04 03 00 00\"\r\n    },") != std::string::npos);
+    TEST_ASSERT_TRUE(got.find("answer_length") == std::string::npos);
+    // Without a failure: no string_failure object
+    s.qx.string_failure = false;
+    TEST_ASSERT_TRUE(writeChunked(s, 64).find("string_failure") == std::string::npos);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -526,5 +565,6 @@ int main(int argc, char** argv) {
     RUN_TEST(test_qx_without_driver);
     RUN_TEST(test_qx_two_exchanges);
     RUN_TEST(test_qx_control_bytes_and_truncated);
+    RUN_TEST(test_qx_langid_fix_and_string_failure);
     return UNITY_END();
 }

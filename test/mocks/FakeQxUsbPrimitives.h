@@ -74,7 +74,7 @@ public:
             }
             bytes = r.bytes;
         } else if (index == 0) {
-            bytes = langidDescriptor(langidList);
+            bytes = brokenLangidList ? std::vector<uint8_t>{2, 0x03} : langidDescriptor(langidList);
         } else {
             const char* cmd = kraulerCommandOf(index);
             if (!cmd) {
@@ -152,6 +152,9 @@ public:
     // testing_t table; an index outside the map STALLs. False: every request STALLs.
     bool stringDevice = false;
     uint16_t langidList = 0x0409;
+    // String 0 is a bare header (no langid): usb_get_string_simple() fails on every string,
+    // the langid_fix read answers (the VIDA Armour 1200VA of #91, which needs langid_fix in NUT)
+    bool brokenLangidList = false;
     uint32_t stringTransferMs = 2; // fake time of one answered GET_DESCRIPTOR
     std::vector<uint32_t> sleeps;
 

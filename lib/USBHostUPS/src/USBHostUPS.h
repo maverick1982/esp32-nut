@@ -308,7 +308,10 @@ private:
     // nut_usb_get_string() on a device being claimed (issue #91): LANGID from string
     // descriptor 0 (0x0409 when broken), then the string, 3 tries 50 ms apart each.
     // Blocking control transfers, no application lock held. False with out = "" on failure.
-    bool readNutString(hid_host_device_handle_t handle, uint8_t index, char* out, size_t outlen);
+    // note, when given and still empty, gets the LANGID used and the bytes of string
+    // descriptor 0 ("LANGID 0x0409, string 0: 04 03 09 04") for the System Log (issue #91).
+    bool readNutString(hid_host_device_handle_t handle, uint8_t index, char* out, size_t outlen,
+                       char* note = nullptr, size_t notelen = 0);
     // Q* path of claimInterface() (US-132, ADR 0013 section 2): keeps interface 0, logs
     // that the UPS is recognised but not supported yet. No IN pipe, cache or diagnostics.
     // vid, pid, quirks and product go to the USB diagnostics export, so a report names the
