@@ -1974,14 +1974,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            // UPS recognised but not supported yet (Q*, issues #91 and #28): _unsupported is
-            // "Q* UPS (USB transport: hunnox)", shown as "Q* UPS recognized (USB transport: ...)"
+            // Q* UPS whose USB transport is not ported yet (issues #91 and #28): _unsupported is
+            // "Q* UPS (USB transport: cypress)", shown as "Q* UPS recognized (USB transport: ...)".
+            // krauler, fabula and hunnox are ported: those UPS units never get here.
             const unsupportedBanner = document.getElementById('unsupported-ups-banner');
             if (unsupportedBanner) {
                 if (data._unsupported) {
                     const device = String(data._unsupported).replace(/^(.*?) \(/, '$1 recognized (');
                     document.getElementById('unsupported-ups-text').textContent = device +
-                        ': not supported yet. Support for Q* UPS units is in progress (GitHub issues #91, #28).';
+                        ': not supported yet. So far only the krauler, fabula and hunnox USB transports work. ' +
+                        'Please open an issue on GitHub and attach the USB Diagnostics export (System Logs tab).';
                     unsupportedBanner.style.display = 'block';
                 } else {
                     unsupportedBanner.style.display = 'none';
