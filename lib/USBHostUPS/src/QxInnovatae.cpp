@@ -1,3 +1,14 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/nutdrv_qx_innovatae.c:
+ *   Copyright (C) 2025 Viktor Drobot <linux776@gmail.com>
+ */
+
 #include "QxProtocols.h"
 #include "QxBlazerCommon.h"
 #include "QxEngine.h"

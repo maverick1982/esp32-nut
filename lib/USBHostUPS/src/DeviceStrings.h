@@ -1,3 +1,14 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/usb-common.c (nut_usb_get_string()):
+ *   Copyright (C) 2008 Arnaud Quette <arnaud.quette@gmail.com>
+ */
+
 #ifndef DEVICE_STRINGS_H
 #define DEVICE_STRINGS_H
 
