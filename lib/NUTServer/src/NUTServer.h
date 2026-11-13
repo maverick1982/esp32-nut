@@ -59,7 +59,22 @@ public:
     // Motivo della chiusura di una sessione (US-084): solo il timeout va nel System Log
     // LinkChanged (US-127): the board switched between Ethernet and Wi-Fi, the sockets point
     // to the old address; one summary line for all of them (closeAllSessions)
-    enum class CloseReason { PeerClosed, Logout, Inactivity, LinkChanged };
+    // ConfigChanged (US-124): new UPS name or NUT credentials; applyConfig() logs the summary
+    enum class CloseReason { PeerClosed, Logout, Inactivity, LinkChanged, ConfigChanged };
+
+    // Outcome of applyConfig(): whether a value changed and how many sessions were closed
+    struct ApplyResult {
+        bool changed;
+        unsigned closed;
+    };
+    // New UPS name and NUT credentials, at once and without a restart (US-124). The name is
+    // normalized as in begin(). Same values: nothing changes and the sessions stay. Otherwise
+    // every session is closed, so no client stays authenticated (or logged in) with the old
+    // settings: the clients reconnect and are checked against the new ones. One System Log
+    // line, never with the credentials. Before begin() it only stores the settings
+    ApplyResult applyConfig(const NUTServerConfig& config);
+    // begin() was called: false in access point mode without a valid configuration
+    bool isRunning() const { return _initialized; }
 
     // Occupa il primo slot libero per un client appena accettato e ne azzera lo stato.
     // -1 se gli slot sono esauriti: il rifiuto va nel System Log, al più una riga ogni
@@ -67,8 +82,9 @@ public:
     int openSession(const String& peerIp, uint16_t peerPort);
     void closeSession(int slot, CloseReason reason);
     // Closes every open session, sockets included, so the clients reconnect at once (US-127).
-    // Harmless with no session or before begin(): the slots start free
-    void closeAllSessions(CloseReason reason);
+    // Harmless with no session or before begin(): the slots start free. Returns how many
+    // sessions it closed
+    unsigned closeAllSessions(CloseReason reason);
 
     // Helpers per testing
     // Chiude tutte le sessioni aperte e riparte con il log degli slot da adesso

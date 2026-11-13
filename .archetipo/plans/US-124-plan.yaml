@@ -1,0 +1,295 @@
+schema: archetipo/plan/v2
+spec_code: US-124
+body: |-
+  ## Soluzione Tecnica
+
+  Oggi `handleNutConfig()` salva e imposta `should_restart` perché `NUTServer` legge `NUTServerConfig` solo in `begin()`. La soluzione aggiunge al server un'applicazione a caldo, chiamata dalla Web UI nello stesso task del loop principale (server NUT e web server girano entrambi in `loop()`, quindi niente lock).
+
+  - **`NUTServer::applyConfig(const NUTServerConfig&)`** (`lib/NUTServer`): normalizza il nome UPS con `normalizeUpsName()` come `begin()`, confronta username, password e nome normalizzato con `_config`. Senza differenze non tocca niente e restituisce `changed=false, closed=0`. Con differenze sostituisce `_config` e chiude tutte le sessioni con `closeAllSessions(CloseReason::ConfigChanged)`, così nessun client resta autenticato (o in `LOGIN`) con le credenziali precedenti. Il risultato è una struct `NutApplyResult { bool changed; unsigned closed; }`.
+  - **Log**: una sola riga del server NUT via `_log_cb`: con cambi `INFO [NUT] Settings applied (UPS name "<nome>"): N NUT clients disconnected`, senza cambi `INFO [NUT] Settings unchanged: NUT clients stay connected`. Username e password non compaiono mai. `closeAllSessions()` con `ConfigChanged` non scrive la propria riga (come oggi fa solo `LinkChanged`) e restituisce il numero di sessioni chiuse (`unsigned`); il chiamante US-127 in `main.cpp` ignora il valore.
+  - **Prima di `begin()`** (AP senza configurazione valida, server non avviato): `applyConfig()` aggiorna solo `_config` (nessuna sessione aperta). Il `begin()` successivo rilegge comunque la configurazione salvata.
+  - **Web**: `WebConfigServer::setNutServer(NUTServer*)`, chiamato in `setup()` accanto a `setNutOverrides()`. `handleNutConfig()` mantiene identiche validazione e 400 (US-082, `checkNutConfigBody`). Salva, e solo se `config_mgr.save()` riesce chiama `applyConfig()` e risponde 200 con `WebApiJson::nutConfigAppliedJson(result)` = `{"success":true,"applied":true,"restart":false,"changed":bool,"sessions_closed":N}`. Niente più `should_restart`/`restart_request_time` per questa rotta. Su errore di salvataggio resta il 500 e non si applica niente. Con `nut_server` nullo (non dovrebbe capitare) si risponde comunque `applied:false, restart:false` e vale la config salvata al prossimo avvio. La riga `[WEB] NUT configuration updated` diventa `[WEB] NUT configuration saved`.
+  - **Pagina NUT Server** (`data/www`): dopo `Saved!` un paragrafo di stato `#nut-status` (aria-live) dice `Applied now, no restart. N NUT clients disconnected: they reconnect with the new settings.` oppure, con `changed:false`, `No changes: NUT clients stay connected.`. Sotto il form una nota fissa nello stile di `#hostname-help` spiega che le modifiche valgono subito senza riavvio. Solo testo, nessun nuovo layout: niente mockup. Asset rigenerati con `python scripts/embed_web.py`.
+  - **Documentazione**: README EN/IT (riga "saving restarts the board" / "il salvataggio riavvia la scheda") e una frase in `docs/concepts/architecture.md`. Il manuale utente non si modifica (decisione dell'utente, 2026-11-13). Le note di rilascio non fanno parte del piano: si scrivono prima della release.
+
+  **Fuori ambito:** Wi-Fi (riavvio necessario), hostname (DHCP), campi facoltativi e password conservata (US-125).
+
+  ---
+
+  ## Strategia di Test
+
+  Il comportamento sta quasi tutto in `NUTServer`, che è già testabile in nativo con `processCommand()` e `openSession()`. La rotta web non gira in nativo: si testa l'helper della risposta in `test_web_api` e il comportamento della pagina con Playwright. Chiude una prova sull'Eaton 3S.
+
+  - **Nativi `test_nut_server`**: stessi valori → `changed=false`, sessioni intatte, riga "unchanged". Password cambiata → tutte le sessioni chiuse, slot liberi, riga con il conteggio. Un client autenticato col vecchio login, dopo la riconnessione, riceve `ERR ACCESS-DENIED` alla vecchia password e `OK` alla nuova, poi `INSTCMD` passa solo con la nuova. Nome UPS cambiato → `LIST UPS` e `GET VAR` col nuovo nome, il vecchio dà `ERR UNKNOWN-UPS`. Nome vuoto → normalizzato a `ups` e uguale a `ups` salvato (nessun cambio). Nessuna riga di log contiene la password. `applyConfig()` prima di `begin()`. `LinkChanged` continua a loggare come prima.
+  - **Nativi `test_web_api`**: `nutConfigAppliedJson()` per `changed` vero/falso e conteggi 0/N. `test_nut_config_body_check` resta verde (400 invariati).
+  - **Build** dei due env firmware (S3 e P4) e suite nativa completa.
+  - **Prova sul campo** sull'Eaton 3S, solo dopo un sì esplicito dell'utente: la dimostrazione della spec.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`, API simulate con `page.route`)
+  **Video demo:** in parte filmabile (la pagina che resta collegata e il messaggio "applied, no restart"); la parte `upsc`/`upscmd` è da terminale. Decide `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Cambio password applicato | L'utente apre NUT Server, cambia la password, preme Save Credentials. L'API risponde `changed:true, sessions_closed:2`: vede `Saved!` e il messaggio "Applied now, no restart. 2 NUT clients disconnected...". Nessun "Restarting", nessun alert di riavvio. |
+  | Salvataggio senza cambi | Stessi valori, risposta `changed:false, sessions_closed:0`: vede "No changes: NUT clients stay connected." |
+  | Nome UPS non valido | Un 400 `Invalid UPS name` dell'API (validazione invariata) mostra l'errore e nessun messaggio di applicazione. |
+  | Nota della pagina | La nota sotto il form dice che le modifiche valgono subito senza riavvio e non contiene "restart" come azione futura. |
+
+  _Piano generato con ARchetipo Planning — 2026-11-13_
+tasks:
+  - id: TASK-01
+    title: NUTServer::applyConfig() con chiusura delle sessioni
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** applicare a caldo nome UPS e credenziali NUT, chiudendo tutte le sessioni solo se qualcosa cambia.
+
+      **Leggere:** `lib/NUTServer/src/NUTServer.h` (begin, CloseReason, closeAllSessions, setLogCallback), `lib/NUTServer/src/NUTServer.cpp` righe ~265-390 (begin, openSession, closeSession, closeAllSessions) e il comando PASSWORD (~560).
+
+      **Modifiche:**
+      1. In `NUTServer.h` aggiungere `struct NutApplyResult { bool changed; unsigned closed; };` e il metodo pubblico `NutApplyResult applyConfig(const NUTServerConfig& config);` con un commento (US-124).
+      2. Aggiungere `ConfigChanged` a `enum class CloseReason` con il commento: una riga di riepilogo la scrive `applyConfig()`.
+      3. Cambiare `void closeAllSessions(CloseReason)` in `unsigned closeAllSessions(CloseReason)` che restituisce le sessioni chiuse. Il log resta solo per `LinkChanged`.
+      4. In `NUTServer.cpp` implementare `applyConfig()`: `String name = normalizeUpsName(config.ups_name)`. Se `config.username == _config.username && config.password == _config.password && name == _config.ups_name`, scrivere `log("INFO", "[NUT] Settings unchanged: NUT clients stay connected")` e restituire `{false, 0}`. Altrimenti assegnare `_config = config; _config.ups_name = name;`, `unsigned closed = closeAllSessions(CloseReason::ConfigChanged);`, `log("INFO", "[NUT] Settings applied (UPS name \"%s\"): %u NUT clients disconnected", name.c_str(), closed)` e restituire `{true, closed}`.
+      5. Non loggare mai username o password. Non toccare la tabella TRACKING (è condivisa, come in upsd).
+
+      **Verifica:** `pio test -e native -f test_nut_server` compila (i test nuovi arrivano in TASK-02).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — NutApplyResult, applyConfig(), CloseReason::ConfigChanged, closeAllSessions() unsigned
+      - lib/NUTServer/src/NUTServer.cpp — implementazione di applyConfig() e del valore di ritorno di closeAllSessions()
+
+      ## Criteri di Completamento
+      - [ ] applyConfig() normalizza il nome UPS come begin()
+      - [ ] Con gli stessi valori non chiude sessioni e restituisce changed=false
+      - [ ] Con un valore diverso sostituisce la config e chiude tutte le sessioni, una sola riga di log col conteggio
+      - [ ] Nessuna riga di log contiene username o password
+      - [ ] closeAllSessions() restituisce il numero di sessioni chiuse e logga ancora solo per LinkChanged
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi dell'applicazione a caldo nel server NUT
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire in nativo tutti i casi di `applyConfig()`.
+
+      **Leggere:** `test/test_nut_server/test_main.cpp`: setUp (~135), test_auth_flow (~196), openClients/request/logLines e i test US-127 `test_link_change_*` (~2056).
+
+      **Test da aggiungere (con RUN_TEST in main):**
+      1. `test_apply_same_config_keeps_sessions`: 2 client aperti e autenticati, applyConfig con gli stessi valori → changed=false, closed=0, gli slot restano attivi (un comando su ciascuno risponde), log `INFO [NUT] Settings unchanged: NUT clients stay connected`.
+      2. `test_apply_new_password_closes_all_sessions`: 3 client → changed=true, closed=3, tutti gli slot liberi (openSession restituisce 0..7), log `INFO [NUT] Settings applied (UPS name "testups"): 3 NUT clients disconnected`.
+      3. `test_old_password_denied_after_apply`: client autenticato con `admin/secret`, apply con password `newpass`, riapertura della sessione: `USERNAME admin` + `PASSWORD secret` → `ERR ACCESS-DENIED`; `PASSWORD newpass` → `OK`; un `INSTCMD` passa solo dopo la nuova password.
+      4. `test_apply_new_ups_name`: apply con nome `newups` → `LIST UPS` mostra `UPS newups`, `GET VAR newups battery.charge` risponde, `GET VAR testups ...` → `ERR UNKNOWN-UPS`.
+      5. `test_apply_normalizes_ups_name`: con il nome salvato `ups`, apply con nome vuoto → changed=false (normalizzato a `ups`).
+      6. `test_apply_log_never_contains_password`: nessuna riga di logLines contiene la vecchia o la nuova password.
+      7. `test_apply_before_begin`: su un NUTServer non avviato applyConfig non va in crash e restituisce closed=0.
+      8. Verificare che `test_link_change_*` restino invariati (closeAllSessions ora restituisce il conteggio: aggiungere un assert sul valore).
+
+      **Verifica:** `pio test -e native -f test_nut_server`, tutti verdi. Mutazione rapida: togliere la chiusura delle sessioni in applyConfig deve far fallire i test 2-3.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — nuovi test di applyConfig() e assert sul ritorno di closeAllSessions()
+
+      ## Criteri di Completamento
+      - [ ] I 7 test nuovi passano e sono registrati con RUN_TEST
+      - [ ] Il caso vecchia password dopo l'applicazione restituisce ERR ACCESS-DENIED
+      - [ ] Il cambio nome dà ERR UNKNOWN-UPS sul nome vecchio
+      - [ ] I test US-127 sul cambio di link passano ancora
+    ref: TASK-02
+  - id: TASK-03
+    title: Risposta dell'API in WebApiJson e relativo test nativo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** costruire la risposta 200 di `POST /api/nut/config` in un helper testabile.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h` (~100-110, checkNutConfigBody, upsNameFromConfig), `lib/WebApi/src/WebApiJson.cpp` (~375), `test/test_web_api/test_main.cpp` (~926-950).
+
+      **Modifiche:**
+      1. In `WebApiJson.h` dichiarare `static String nutConfigAppliedJson(bool applied, bool changed, unsigned sessions_closed);` con il commento (US-124): `{"success":true,"applied":bool,"restart":false,"changed":bool,"sessions_closed":N}`.
+      2. Implementarlo in `WebApiJson.cpp` con ArduinoJson, nell'ordine indicato.
+      3. In `test/test_web_api/test_main.cpp` aggiungere `test_nut_config_applied_json`: (true,true,2) e (true,false,0) confrontati con le stringhe esatte, e (false,false,0) per il caso senza server. Registrarlo con RUN_TEST.
+
+      **Verifica:** `pio test -e native -f test_web_api` verde; `test_nut_config_body_check` invariato.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — dichiarazione di nutConfigAppliedJson()
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+      - test/test_web_api/test_main.cpp — test_nut_config_applied_json
+
+      ## Criteri di Completamento
+      - [ ] L'helper produce il JSON esatto con restart:false
+      - [ ] Il test nativo nuovo passa e test_nut_config_body_check resta verde
+    ref: TASK-03
+  - id: TASK-04
+    title: handleNutConfig applica la configurazione senza riavvio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la rotta salva e applica subito, senza `should_restart`.
+
+      **Leggere:** `src/network/web_config_server.cpp` handleNutConfig (~661-702) e setNutOverrides; `include/network/web_config_server.h` (setter e membri ~50-100); `src/core/main.cpp` (~242 setNutOverrides, ~318-331 begin del server NUT).
+
+      **Modifiche:**
+      1. `web_config_server.h`: includere `NUTServer.h`, aggiungere `void setNutServer(NUTServer* server);` con il commento (US-124: stesso task del loop, nessun lock) e il membro `NUTServer* nut_server = nullptr;`.
+      2. `web_config_server.cpp`: implementare il setter. In handleNutConfig lasciare identici il controllo JSON, `checkNutConfigBody` e l'aggiornamento di `nc`. Se `config_mgr.save()` riesce: se `nut_server` è valido, `NutApplyResult r = nut_server->applyConfig({nc.username, nc.password, nc.ups_name});` e rispondere 200 con `WebApiJson::nutConfigAppliedJson(true, r.changed, r.closed)`; altrimenti `nutConfigAppliedJson(false, false, 0)`. Log `AppLogger::log("INFO", "[WEB] NUT configuration saved")` prima della chiamata ad applyConfig, così il riepilogo [NUT] lo segue. Togliere `should_restart = true` e `restart_request_time = millis()` da questa rotta (le altre rotte non cambiano). Se il salvataggio fallisce resta il 500 e non si applica niente.
+      3. `main.cpp`: `web_server.setNutServer(&nut_server);` accanto a `setNutOverrides()`.
+
+      **Verifica:** `pio run -e esp32-s3-devkitc-1` (oppure l'env S3 di platformio.ini) e l'env P4 compilano; `grep should_restart` mostra che handleNutConfig non lo usa più.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/network/web_config_server.h — setNutServer() e membro nut_server
+      - src/network/web_config_server.cpp — handleNutConfig senza riavvio, applicazione e nuova risposta
+      - src/core/main.cpp — collegamento web_server.setNutServer(&nut_server)
+
+      ## Criteri di Completamento
+      - [ ] POST /api/nut/config non imposta più should_restart
+      - [ ] La risposta 200 è quella di nutConfigAppliedJson()
+      - [ ] Validazione e 400 invariati; con salvataggio fallito 500 e nessuna applicazione
+      - [ ] Build S3 e P4 ok
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Pagina NUT Server: messaggio di applicazione senza riavvio'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la pagina dice che le impostazioni sono applicate subito, senza riavvio.
+
+      **Leggere:** `data/www/index.html` (~507-545, form `#nut-form` e la nota `#hostname-help` come stile), `data/www/bundle.js` (~324-375, submit del form NUT).
+
+      **Modifiche:**
+      1. `index.html`: sotto `#nut-form` aggiungere `<p class="auth-fineprint" id="nut-status" aria-live="polite" hidden></p>` e una nota fissa `<p class="auth-fineprint" id="nut-help">Changes apply at once, with no restart. Connected NUT clients are disconnected and reconnect with the new settings.</p>`.
+      2. `bundle.js`: alla risposta ok leggere il JSON. Con `changed` vero mostrare in `#nut-status` `Applied now, no restart. N NUT clients disconnected: they reconnect with the new settings.` (singolare per 1, frase senza conteggio per 0). Con `changed` falso: `No changes: NUT clients stay connected.`. Con `applied` falso: `Saved. The NUT server uses these settings at the next start.`. Nascondere `#nut-status` a ogni nuovo invio e in caso di errore. Il comportamento di `Saved!` sul pulsante resta.
+      3. Rigenerare gli asset: `python scripts/embed_web.py` (index_inlined.html e gli header embedded).
+
+      **Verifica:** gli e2e esistenti di `e2e/nut_config.spec.ts` passano ancora; controllo visivo con serveIndex.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — #nut-status e nota #nut-help
+      - data/www/bundle.js — gestione della risposta applied/changed/sessions_closed
+      - data/www/index_inlined.html e asset embedded — rigenerati con scripts/embed_web.py
+
+      ## Criteri di Completamento
+      - [ ] Dopo il salvataggio la pagina mostra il messaggio di applicazione senza riavvio
+      - [ ] Con changed:false mostra che i client restano collegati
+      - [ ] Nessun testo della pagina NUT annuncia un riavvio
+      - [ ] Asset rigenerati
+    ref: TASK-05
+  - id: TASK-06
+    title: E2E Playwright della pagina NUT Server
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente della pagina con le risposte nuove dell'API.
+
+      **Leggere:** `e2e/nut_config.spec.ts`, `e2e/support/webui.ts`.
+
+      **Test (in `e2e/nut_config.spec.ts`):**
+      1. Aggiornare `submits NUT credentials successfully` perché la route risponda `{success:true,applied:true,restart:false,changed:true,sessions_closed:2}` e verificare `#nut-status` con `Applied now, no restart. 2 NUT clients disconnected`.
+      2. `saving the same values keeps the NUT clients`: risposta `changed:false, sessions_closed:0` → `No changes: NUT clients stay connected.`.
+      3. `one client disconnected uses the singular`: sessions_closed 1.
+      4. `no restart is announced`: dopo il salvataggio nessun dialog (`page.on('dialog')` non scatta), nessun testo `Restarting` nella barra di stato, la nota `#nut-help` dice `no restart`.
+      5. `API 400 shows the error and no applied message`: route 400 `{"error":"Invalid UPS name"}` → `#nut-status` nascosto.
+      6. Gli altri test del file restano invariati.
+
+      **Verifica:** `npx playwright test e2e/nut_config.spec.ts` e la suite e2e completa verdi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/nut_config.spec.ts — scenari applied, unchanged, singolare, nessun riavvio, errore 400
+
+      ## Criteri di Completamento
+      - [ ] I 5 scenari passano
+      - [ ] Suite e2e completa verde
+    ref: TASK-06
+  - id: TASK-07
+    title: README e architettura senza il riavvio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** README e architettura non dicono più che il salvataggio NUT riavvia la scheda. Il manuale utente non si modifica (decisione dell'utente, 2026-11-13).
+
+      **Modifiche:**
+      1. `README.md` riga ~287: sostituire `(saving restarts the board)` con una frase come `(applied at once, with no restart: connected NUT clients are disconnected and reconnect with the new settings)`.
+      2. `README.it.md` riga ~287: stessa modifica in italiano (`si applicano subito, senza riavvio: i client NUT collegati vengono scollegati e si ricollegano con le impostazioni nuove`).
+      3. `docs/concepts/architecture.md`: una frase nella parte del server NUT su `applyConfig()` (stesso task della Web UI, chiusura delle sessioni solo con un cambio).
+      4. Non toccare il manuale utente (branch `feature/user-manual`).
+      5. Le note di rilascio NON si scrivono qui: si fanno prima della release, e nel testo vanno solo i numeri #N.
+
+      **Verifica:** `grep -n -i "restart" README.md README.it.md` non trova più frasi sul salvataggio NUT.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - README.md — riga delle credenziali NUT
+      - README.it.md — riga delle credenziali NUT
+      - docs/concepts/architecture.md — applicazione a caldo della config NUT
+
+      ## Criteri di Completamento
+      - [ ] README EN/IT senza riavvio per il salvataggio NUT
+      - [ ] Nota in architecture.md
+      - [ ] Manuale utente non modificato
+    ref: TASK-07
+  - id: TASK-08
+    title: Suite completa e prova sull'Eaton 3S (con consenso)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** regressione completa e dimostrazione della spec sull'hardware.
+
+      **Passi:**
+      1. `pio test -e native` completo (su Windows rilanciare da sole le suite ERRORED transitorie), build degli env S3 e P4, suite e2e completa. Salvare gli esiti in `docs/test-results/US-124/`.
+      2. **Prova sul campo, solo dopo un sì esplicito dell'utente** (le prove sull'UPS reale le fa Claude): OTA della build sulla scheda di test (credenziali dal file JSON della scheda, mai stampato). Annotare l'uptime (`/api/system-status`). Avviare un `upsc` in loop o un client connesso. Cambiare la password NUT dalla pagina e premere Save Credentials. Verificare che la pagina resti collegata e l'uptime non si azzeri; il client viene scollegato e si ricollega; `upscmd` con la vecchia password → `ERR ACCESS-DENIED`, con la nuova esegue (per esempio `beeper.disable`/`beeper.enable`). Cambiare il nome UPS e verificare `upsc <nuovo>@host` e l'errore sul vecchio. Un secondo salvataggio con gli stessi valori non scollega il client. Controllare nel System Log la riga `[NUT] Settings applied ...` col conteggio e l'assenza della password. Riavviare la scheda e verificare che resti la configurazione salvata. Rimettere la password originale alla fine.
+      3. Riportare l'esito in `docs/test-results/US-124/field.md`.
+
+      **Blocchi:** senza il consenso alla prova sul campo il punto 2 resta da fare e va segnalato in review.
+
+      ## File Coinvolti
+      - docs/test-results/US-124/ — esiti di nativi, build, e2e e prova sul campo
+
+      ## Criteri di Completamento
+      - [ ] Nativi, build S3/P4 ed e2e verdi
+      - [ ] Prova sull'Eaton 3S fatta dopo il consenso, oppure segnalata come mancante
+      - [ ] Uptime invariato dopo il salvataggio, vecchia password rifiutata, nuova accettata
+    ref: TASK-08

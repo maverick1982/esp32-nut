@@ -340,12 +340,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // US-124: the reply says whether the NUT server took the settings and how many NUT
+    // clients it disconnected; the board never restarts for this page
+    const nutStatus = document.getElementById('nut-status');
+    function nutStatusText(data) {
+        if (data.applied === false) return 'Saved. The NUT server uses these settings at the next start.';
+        if (!data.changed) return 'No changes: NUT clients stay connected.';
+        const n = Number(data.sessions_closed) || 0;
+        if (n === 0) return 'Applied now, no restart.';
+        return `Applied now, no restart. ${n} NUT ${n === 1 ? 'client' : 'clients'} disconnected: ` +
+            `${n === 1 ? 'it reconnects' : 'they reconnect'} with the new settings.`;
+    }
+    function showNutStatus(data) {
+        if (!nutStatus || typeof data.applied !== 'boolean') return;
+        nutStatus.classList.toggle('success', data.applied !== false);
+        nutStatus.classList.toggle('info', data.applied === false);
+        document.getElementById('nut-status-text').textContent = nutStatusText(data);
+        nutStatus.hidden = false;
+    }
+
     if(document.getElementById('nut-form')) {
         document.getElementById('nut-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (nutStatus) nutStatus.hidden = true;
             btnSaveNut.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...`;
             btnSaveNut.disabled = true;
-            
+
             try {
                 const response = await apiFetch('/api/nut/config', {
                     method: 'POST',
@@ -358,7 +378,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 
                 if (!response.ok) throw new Error('Save failed');
-                
+                let data = {};
+                try { data = await response.json(); } catch (_) { /* older reply without a body */ }
+                showNutStatus(data);
+
                 btnSaveNut.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved!`;
                 btnSaveNut.style.background = 'var(--success)';
                 btnSaveNut.style.borderColor = 'var(--success)';

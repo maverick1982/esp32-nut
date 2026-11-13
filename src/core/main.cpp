@@ -240,6 +240,8 @@ void setup() {
         AppLogger::log("INFO", "[NUT] %u custom variables loaded", (unsigned)nut_overrides.size());
     }
     web_server.setNutOverrides(&nut_override_store, &nut_overrides);
+    // US-124: the NUT Server page applies UPS name and credentials at once
+    web_server.setNutServer(&nut_server);
 
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;

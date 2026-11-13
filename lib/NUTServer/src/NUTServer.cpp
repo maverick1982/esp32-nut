@@ -376,7 +376,7 @@ void NUTServer::closeSession(int slot, CloseReason reason) {
     }
 }
 
-void NUTServer::closeAllSessions(CloseReason reason) {
+unsigned NUTServer::closeAllSessions(CloseReason reason) {
     unsigned closed = 0;
     for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
         if (!_clientActive[i]) continue;
@@ -386,6 +386,21 @@ void NUTServer::closeAllSessions(CloseReason reason) {
     if (closed > 0 && reason == CloseReason::LinkChanged) {
         log("INFO", "[NUT] Network link changed: %u NUT clients disconnected", closed);
     }
+    return closed;
+}
+
+NUTServer::ApplyResult NUTServer::applyConfig(const NUTServerConfig& config) {
+    String name = normalizeUpsName(config.ups_name);
+    if (config.username == _config.username && config.password == _config.password &&
+        name == _config.ups_name) {
+        log("INFO", "[NUT] Settings unchanged: NUT clients stay connected");
+        return {false, 0};
+    }
+    _config = config;
+    _config.ups_name = name;
+    unsigned closed = closeAllSessions(CloseReason::ConfigChanged);
+    log("INFO", "[NUT] Settings applied (UPS name \"%s\"): %u NUT clients disconnected", name.c_str(), closed);
+    return {true, closed};
 }
 
 // Value as upsd sends it in VAR, RW and ENUM replies: common/state.c val_escape() keeps

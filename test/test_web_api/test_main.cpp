@@ -950,6 +950,20 @@ void test_nut_config_body_check() {
     }
 }
 
+// US-124: the NUT settings apply at once, the reply never asks for a restart
+void test_nut_config_applied_json() {
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":true,\"restart\":false,\"changed\":true,\"sessions_closed\":2}",
+        WebApiJson::nutConfigAppliedJson(true, true, 2).c_str());
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":true,\"restart\":false,\"changed\":false,\"sessions_closed\":0}",
+        WebApiJson::nutConfigAppliedJson(true, false, 0).c_str());
+    // No NUT server to take them: saved, used at the next start
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"success\":true,\"applied\":false,\"restart\":false,\"changed\":false,\"sessions_closed\":0}",
+        WebApiJson::nutConfigAppliedJson(false, false, 0).c_str());
+}
+
 void test_needs_confirmation_spec_names() {
     const char* names[] = {
         "ups.shutdown",
@@ -2267,6 +2281,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_set_and_reset_variable_ok_then_disconnected);
     RUN_TEST(test_ups_name_from_config);
     RUN_TEST(test_nut_config_body_check);
+    RUN_TEST(test_nut_config_applied_json);
     RUN_TEST(test_needs_confirmation_spec_names);
     RUN_TEST(test_needs_confirmation_other_names);
     RUN_TEST(test_board_json_s3);

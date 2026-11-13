@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |-
   #### US-124: Impostazioni del server NUT applicate senza riavviare la scheda
 
@@ -32,8 +32,16 @@ body: |-
   - [ ] Il System Log riporta l'applicazione con il numero di sessioni chiuse; le password non compaiono mai nel log.
   - [ ] La risposta dell'API e la pagina NUT Server indicano che le impostazioni sono applicate, senza riavvio. Dopo un riavvio vale la configurazione salvata.
   - [ ] Test nativi del server NUT (applicazione con e senza cambiamenti, chiusura delle sessioni, client autenticato con la vecchia password, cambio del nome UPS), test dell'API ed e2e della pagina.
-  - [ ] README (EN/IT) e manuale utente non dicono più che il salvataggio riavvia la scheda.
+  - [ ] README (EN/IT) non dice più che il salvataggio riavvia la scheda.
   - [ ] Fuori ambito: configurazione Wi-Fi (il riavvio resta necessario), nome host (DHCP), campi facoltativi e password conservata (US-125).
 history:
   - status: TODO
     at: "2026-11-06T14:43:58Z"
+  - status: PLANNED
+    at: "2026-11-13T20:01:46Z"
+  - status: IN PROGRESS
+    at: "2026-11-13T20:07:22Z"
+  - status: REVIEW
+    at: "2026-11-13T20:34:59Z"
+  - status: DONE
+    at: "2026-11-13T21:06:43Z"

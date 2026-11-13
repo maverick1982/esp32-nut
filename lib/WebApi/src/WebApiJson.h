@@ -103,6 +103,10 @@ public:
     // il valore attuale; non stringa o non valido per NUTServer::isValidUpsName() → 400
     // {"error":"Invalid UPS name"}. Restituisce 0 se il body va bene
     static int checkNutConfigBody(JsonVariantConst body, String& response);
+    // 200 reply of POST /api/nut/config (US-124): the settings apply at once, never with a
+    // restart. {"success":true,"applied":bool,"restart":false,"changed":bool,
+    // "sessions_closed":n}; applied false when no NUT server was there to take them
+    static String nutConfigAppliedJson(bool applied, bool changed, unsigned sessions_closed);
 
     // GET /api/board (US-094): {"id","label","led":{present,on,level,levels},
     // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"

@@ -284,7 +284,7 @@ The Web UI is protected by a username and password.
 - Once connected to your home network, the board gets an IP address from your DHCP server. The **Network** tab shows it; to always find the board at the same address, reserve one for its MAC address in the router.
 - **Web Dashboard**: Navigate to the board's IP address in your browser to see real-time UPS stats (Battery level, Voltage, Load, etc.).
 - **NUT Client**: Configure your Home Assistant or NAS to connect to the board's IP on port `3493`.
-- **NUT credentials**: set them in the **NUT Server** tab (saving restarts the board). NUT clients need them to run commands and change settings; reading the data works without them, as with NUT. With no NUT credentials set, every client is allowed.
+- **NUT credentials**: set them in the **NUT Server** tab, together with the UPS name. They apply at once, with no restart: connected NUT clients are disconnected and reconnect with the new settings. NUT clients need them to run commands and change settings; reading the data works without them, as with NUT. With no NUT credentials set, every client is allowed.
 - **UPS name**: NUT clients address the UPS by the **UPS Name** of the NUT tab (default `ups`), not by its model, e.g. `upsc ups@192.168.1.50`.
 - **Up to 8 NUT clients** can be connected at the same time. Beyond that a new connection is rejected, and the System Log shows which addresses hold the connections. A client that disappears without closing its connection frees its slot after about 90 seconds.
 - **No fresh data**: when the UPS is not answering (disconnected, USB link being recovered), NUT clients get `ERR DATA-STALE`, as with NUT.

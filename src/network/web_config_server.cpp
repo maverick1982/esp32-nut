@@ -351,6 +351,10 @@ void WebConfigServer::setNutOverrides(NvsNutOverrideStore* store, std::vector<Nu
     nut_overrides = list;
 }
 
+void WebConfigServer::setNutServer(NUTServer* server) {
+    nut_server = server;
+}
+
 // Custom variables of the NUT Server page (US-115)
 void WebConfigServer::handleGetNutOverrides() {
     static const std::vector<NutOverride> none;
@@ -693,10 +697,18 @@ void WebConfigServer::handleNutConfig() {
 
     config_mgr.setNutConfig(nc);
     if (config_mgr.save()) {
-        server.send(200, "application/json", "{\"success\": true}");
-        AppLogger::log("INFO", "[WEB] NUT configuration updated");
-        should_restart = true;
-        restart_request_time = millis();
+        // US-124: applied at once, no restart. Only what was saved is applied, so a restart
+        // keeps the same settings. With no NUT server running (access point without a valid
+        // configuration) begin() reads them at the next start
+        AppLogger::log("INFO", "[WEB] NUT configuration saved");
+        String reply;
+        if (nut_server && nut_server->isRunning()) {
+            NUTServer::ApplyResult r = nut_server->applyConfig({nc.username, nc.password, nc.ups_name});
+            reply = WebApiJson::nutConfigAppliedJson(true, r.changed, r.closed);
+        } else {
+            reply = WebApiJson::nutConfigAppliedJson(false, false, 0);
+        }
+        server.send(200, "application/json", reply);
     } else {
         server.send(500, "application/json", "{\"error\": \"Failed to save config\"}");
     }

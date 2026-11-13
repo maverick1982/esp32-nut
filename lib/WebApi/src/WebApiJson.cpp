@@ -381,6 +381,18 @@ int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
     return 0;
 }
 
+String WebApiJson::nutConfigAppliedJson(bool applied, bool changed, unsigned sessions_closed) {
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["applied"] = applied;
+    doc["restart"] = false;
+    doc["changed"] = changed;
+    doc["sessions_closed"] = sessions_closed;
+    std::string out_std;
+    serializeJson(doc, out_std);
+    return String(out_std.c_str());
+}
+
 String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
                                      AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx) {
     JsonDocument doc;

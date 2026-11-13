@@ -531,12 +531,21 @@
                                 </button>
                             </div>
                         </div>
+                        <!-- US-124: outcome of the save, applied at once without a restart -->
+                        <div class="auth-alert success" id="nut-status" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                            <span id="nut-status-text"></span>
+                        </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" id="btn-save-nut">
                                 <span class="glow"></span>
                                 Save Credentials
                             </button>
                         </div>
+                        <p class="auth-fineprint" id="nut-help">Changes apply at once, with no restart. Connected NUT
+                            clients are disconnected and reconnect with the new settings.</p>
                     </form>
                 </div>
 

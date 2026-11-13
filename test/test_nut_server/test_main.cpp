@@ -2055,7 +2055,7 @@ void test_inactivity_close_is_logged(void) {
 // US-127: a switch between Ethernet and Wi-Fi closes every session with one log line
 void test_link_change_closes_all_sessions(void) {
     openClients(2);
-    server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
+    TEST_ASSERT_EQUAL(2, (int)server.closeAllSessions(NUTServer::CloseReason::LinkChanged));
     TEST_ASSERT_EQUAL(1, (int)logLines.size());
     TEST_ASSERT_EQUAL_STRING("INFO [NUT] Network link changed: 2 NUT clients disconnected", logLines[0].c_str());
     // Every slot is free again
@@ -2066,8 +2066,143 @@ void test_link_change_closes_all_sessions(void) {
 }
 
 void test_link_change_without_sessions_logs_nothing(void) {
-    server.closeAllSessions(NUTServer::CloseReason::LinkChanged);
+    TEST_ASSERT_EQUAL(0, (int)server.closeAllSessions(NUTServer::CloseReason::LinkChanged));
     TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// --- Settings of the NUT Server page applied without a restart (US-124) ---
+
+static NUTServerConfig nutConfig(const char* user, const char* password, const char* name) {
+    NUTServerConfig c;
+    c.username = user;
+    c.password = password;
+    c.ups_name = name;
+    return c;
+}
+
+// USERNAME + PASSWORD on a slot, the reply to PASSWORD
+static std::string authenticate(int slot, const char* user, const char* password) {
+    request(slot, (std::string("USERNAME ") + user).c_str());
+    return request(slot, (std::string("PASSWORD ") + password).c_str());
+}
+
+void test_apply_same_config_keeps_sessions(void) {
+    openClients(2);
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "testups"));
+    TEST_ASSERT_FALSE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings unchanged: NUT clients stay connected", logLines[0].c_str());
+    // Both sessions are still open: the next client gets slot 2, and slot 0 is still
+    // authenticated
+    TEST_ASSERT_EQUAL(2, server.openSession("10.0.0.3", 50002));
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+}
+
+void test_apply_new_password_closes_all_sessions(void) {
+    openClients(3);
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "newpass", "testups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(3, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"testups\"): 3 NUT clients disconnected",
+                             logLines[0].c_str());
+    // Every slot is free again
+    for (int i = 0; i < NUT_MAX_CLIENTS; i++) {
+        String ip = String("10.0.2.") + String(i + 1);
+        TEST_ASSERT_EQUAL(i, server.openSession(ip, (uint16_t)(52000 + i)));
+    }
+}
+
+void test_apply_without_sessions_still_logs(void) {
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("newuser", "secret", "testups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    TEST_ASSERT_EQUAL(1, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"testups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+}
+
+void test_old_password_denied_after_apply(void) {
+    openClients(1);
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+    server.applyConfig(nutConfig("admin", "newpass", "testups"));
+
+    // The client reconnects and tries the old password: denied, and so is the command
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL(0, server.openSession("10.0.0.1", 50100));
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+
+    // With the new one the command runs
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "PASSWORD newpass").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+}
+
+void test_apply_new_username(void) {
+    server.applyConfig(nutConfig("operator", "secret", "testups"));
+    TEST_ASSERT_EQUAL(0, server.openSession("10.0.0.1", 50100));
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "operator", "secret").c_str());
+}
+
+void test_apply_new_ups_name(void) {
+    mockHost.data.set("battery.charge", "100");
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "newups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"newups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+
+    std::string list = request(0, "LIST UPS");
+    TEST_ASSERT_TRUE(list.find("UPS newups \"") != std::string::npos);
+    TEST_ASSERT_TRUE(list.find("testups") == std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR newups battery.charge \"100\"\n", request(0, "GET VAR newups battery.charge").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(0, "GET VAR testups battery.charge").c_str());
+}
+
+// The empty name is normalized to "ups" as at boot: the same as a saved "ups"
+void test_apply_normalizes_ups_name(void) {
+    server.applyConfig(nutConfig("admin", "secret", ""));
+    TEST_ASSERT_EQUAL_STRING("INFO [NUT] Settings applied (UPS name \"ups\"): 0 NUT clients disconnected",
+                             logLines[0].c_str());
+    TEST_ASSERT_TRUE(request(0, "LIST UPS").find("UPS ups \"") != std::string::npos);
+
+    openClients(1);
+    NUTServer::ApplyResult r = server.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_FALSE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    r = server.applyConfig(nutConfig("admin", "secret", ""));
+    TEST_ASSERT_FALSE(r.changed);
+}
+
+void test_apply_log_never_contains_credentials(void) {
+    openClients(2);
+    server.applyConfig(nutConfig("operator", "S3cr3t-New", "testups"));
+    server.applyConfig(nutConfig("operator", "S3cr3t-New", "testups"));
+    TEST_ASSERT_EQUAL(2, (int)logLines.size());
+    for (const auto& l : logLines) {
+        TEST_ASSERT_TRUE_MESSAGE(l.find("secret") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("S3cr3t-New") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("operator") == std::string::npos, l.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(l.find("admin") == std::string::npos, l.c_str());
+    }
+}
+
+// Before begin() (access point without a valid configuration) it only stores the settings
+void test_apply_before_begin(void) {
+    NUTServer fresh;
+    TEST_ASSERT_FALSE(fresh.isRunning());
+    TEST_ASSERT_TRUE(server.isRunning());
+    NUTServer::ApplyResult r = fresh.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_TRUE(r.changed);
+    TEST_ASSERT_EQUAL(0, (int)r.closed);
+    r = fresh.applyConfig(nutConfig("admin", "secret", "ups"));
+    TEST_ASSERT_FALSE(r.changed);
 }
 
 // --- Custom variables of the NUT Server page (US-115): override.<var> of ups.conf,
@@ -2364,6 +2499,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_inactivity_close_is_logged);
     RUN_TEST(test_link_change_closes_all_sessions);
     RUN_TEST(test_link_change_without_sessions_logs_nothing);
+    RUN_TEST(test_apply_same_config_keeps_sessions);
+    RUN_TEST(test_apply_new_password_closes_all_sessions);
+    RUN_TEST(test_apply_without_sessions_still_logs);
+    RUN_TEST(test_old_password_denied_after_apply);
+    RUN_TEST(test_apply_new_username);
+    RUN_TEST(test_apply_new_ups_name);
+    RUN_TEST(test_apply_normalizes_ups_name);
+    RUN_TEST(test_apply_log_never_contains_credentials);
+    RUN_TEST(test_apply_before_begin);
     return UNITY_END();
 }
 #else
