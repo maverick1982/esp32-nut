@@ -1,3 +1,33 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code and data derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/nutdrv_qx.c:
+ *   Copyright (C) 2013 Daniele Pezzini <hyouko@gmail.com>
+ *                 2016 Eaton
+ *   Based on:
+ *    usbhid-ups.c - Copyright (C)
+ *      2003-2012 Arnaud Quette <arnaud.quette@gmail.com>
+ *      2005      John Stamp <kinsayder@hotmail.com>
+ *      2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *      2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *    blazer.c - Copyright (C)
+ *      2008-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *      2012      Arnaud Quette <ArnaudQuette@Eaton.com>
+ *    blazer_ser.c - Copyright (C)
+ *      2008      Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *    blazer_usb.c - Copyright (C)
+ *      2003-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ *      2011-2012 Arnaud Quette <arnaud.quette@free.fr>
+ *    Masterguard additions
+ *      2020-2021 Edgar Fuß, Mathematisches Institut der Universität Bonn <ef@math.uni-bonn.de>
+ *    Armac (Richcomm-variant) additions
+ *      2021      Tomasz Fortuna <bla@thera.be>
+ */
+
 #include "DriverRegistry.h"
 #include "GenericDriver.h"
 #include "APCDriver.h"

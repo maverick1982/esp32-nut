@@ -1,3 +1,18 @@
+/*
+ * esp32-nut
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Contains code derived from Network UPS Tools (https://networkupstools.org/),
+ * GPL-2.0-or-later, modified for esp32-nut in 2026.
+ *
+ * drivers/nutdrv_qx.h:
+ *   Copyright (C) 2013 Daniele Pezzini <hyouko@gmail.com>
+ *   Based on usbhid-ups.h - Copyright (C)
+ *     2003-2009 Arnaud Quette <http://arnaud.quette.free.fr/contact.html>
+ *     2005-2006 Peter Selinger <selinger@users.sourceforge.net>
+ *     2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
+ */
+
 #ifndef QX_TYPES_H
 #define QX_TYPES_H
 
