@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { serveIndex } from './support/webui';
 
-// US-132: a Q* UPS (issues #91, #28) is recognised but not supported yet. /api/ups-vars
+// US-132: a Q* UPS (issues #91, #28) whose USB transport is not ported yet (cypress here;
+// krauler, fabula and hunnox are ported) is recognised but not supported. /api/ups-vars
 // answers as for a missing UPS plus "_unsupported" (WebApiJson::generateUpsVars), and the
 // UPS page shows #unsupported-ups-banner instead of leaving the user with "Disconnected".
 
-const QX_TEXT = 'Q* UPS (USB transport: hunnox)';
+const QX_TEXT = 'Q* UPS (USB transport: cypress)';
 const QX_VARS = { _disconnected: true, 'ups.status': 'Disconnected', _unsupported: QX_TEXT };
 const NO_UPS_VARS = { _disconnected: true, 'ups.status': 'Disconnected' };
 
@@ -25,8 +26,10 @@ test.describe('Q* UPS not supported yet', () => {
 
     const banner = page.locator('#unsupported-ups-banner');
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText('Q* UPS recognized (USB transport: hunnox)');
+    await expect(banner).toContainText('Q* UPS recognized (USB transport: cypress)');
     await expect(banner).toContainText('not supported yet');
+    await expect(banner).toContainText('only the krauler, fabula and hunnox USB transports work');
+    await expect(banner).toContainText('USB Diagnostics export');
     await expect(page.locator('#generic-ups-banner')).toBeHidden();
     await expect(page.locator('#lbl-ups')).toHaveText('UPS: Not supported yet');
     await expect(page.locator('#ind-ups')).toHaveClass('status-indicator warning');

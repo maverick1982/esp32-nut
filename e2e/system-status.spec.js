@@ -28,7 +28,7 @@ const CASES = [
   {
     // US-132: Q* UPS recognised but not supported yet
     name: 'recognised Q* UPS not supported yet is a warning',
-    status: { wifi: { status: 'HomeNetwork' }, ups: { status: 'Not supported yet', unsupported: 'Q* UPS (USB transport: hunnox)' } },
+    status: { wifi: { status: 'HomeNetwork' }, ups: { status: 'Not supported yet', unsupported: 'Q* UPS (USB transport: cypress)' } },
     wifi: { label: 'Wi-Fi: HomeNetwork', level: 'success' },
     ups: { label: 'UPS: Not supported yet', level: 'warning' },
   },
