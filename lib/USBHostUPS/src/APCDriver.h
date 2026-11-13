@@ -21,6 +21,14 @@ public:
     // 64 bit) instead of the declared length. Here at least 8, never less than declared.
     static const uint16_t BX_MIN_REQUEST_LENGTH = 8;
     static bool isBackUpsBX(const String& model) { return model.startsWith("Back-UPS BX"); }
+    // The newer BXR series (issue #123) also matches isBackUpsBX(), but keeps sending INPUT
+    // reports: it is left out of the frozen-values check below
+    static bool isBackUpsBXR(const String& model) { return model.startsWith("Back-UPS BXR"); }
+    // Back-UPS BX (not BXR): about 18 INPUT reports per second, never under ~1040 a minute
+    // and back right after a port cycle; a silence of 15 s means the UPS answers GET_REPORT
+    // with frozen values until it is unplugged or the board restarts (issue #138)
+    static const uint32_t BX_INPUT_SILENCE_MS = 15000;
+    uint32_t inputSilenceFaultMs() const override { return _bx_frozen_inputs ? BX_INPUT_SILENCE_MS : 0; }
     // Public: the host asks the same length for the SET VAR read-modify-write and read back
     uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
         return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
@@ -49,6 +57,7 @@ protected:
 
 private:
     bool _back_ups_bx;
+    bool _bx_frozen_inputs; // Back-UPS BX but not BXR (issue #138)
 };
 
 #endif // APC_DRIVER_H

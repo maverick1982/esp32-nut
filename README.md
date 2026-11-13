@@ -55,11 +55,12 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 - APC BackUPS Pro 900
 - APC Back-UPS Pro BN1050M, BGM2200
 - APC Back-UPS XS 700U, XS 1500M
-- APC Back-UPS BX750MI, BX1200MI, BXR1200MI
+- APC Back-UPS BX750MI, BX1200MI
+- APC Back-UPS BXR1200MI
 - APC Back-UPS ES 600M1, ES 700G
 - APC Smart-UPS 750, 750L, 1000L
 
-**Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). The board recovers on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+**Back-UPS BX series:** the APC firmware of these models stops answering USB requests at irregular intervals, often several times an hour (NUT on Linux is affected too). The board recovers on its own a few seconds after each lockup, and the UPS status keeps updating until then. NUT clients may still see the data as stale for a few seconds. Sometimes the UPS also stops sending its status and keeps answering with frozen values until it is unplugged: after 15 seconds the board marks the data as stale and restarts, which frees the UPS. The newer BXR series is not affected. ([#60](https://github.com/maverick1982/esp32-nut/issues/60), [#138](https://github.com/maverick1982/esp32-nut/issues/138))
 
 **Smart-UPS:** a USB request sometimes stays stuck. Since v1.14.0 the board switches its USB port off and on instead of restarting: the UPS comes back in a few seconds while the network, the web UI and the NUT server stay up. ([#78](https://github.com/maverick1982/esp32-nut/issues/78), [#120](https://github.com/maverick1982/esp32-nut/issues/120))
 </details>

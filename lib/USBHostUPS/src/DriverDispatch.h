@@ -49,6 +49,12 @@ inline bool inputValuesPolled(const IUPSDriver* d) {
     return h ? h->inputValuesPolled() : true;
 }
 
+// For InputSilenceGuard::setSilenceMs() (issue #138): 0 without HID, a silence is no fault
+inline uint32_t inputSilenceFaultMs(const IUPSDriver* d) {
+    const IHidDriver* h = hidOf(d);
+    return h ? h->inputSilenceFaultMs() : 0;
+}
+
 // The INPUT watchdog guards the values, for the diagnostics export
 inline bool inputWatchdogActive(const IUPSDriver* d, bool no_interrupt_pipe) {
     const IHidDriver* h = hidOf(d);

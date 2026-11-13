@@ -28,6 +28,7 @@
 #include "EventBacklog.h"
 #include "QxRequestBox.h"
 #include "QxProtocols.h"
+#include "InputSilenceGuard.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -409,6 +410,7 @@ private:
 
     LinkMonitor _link;
     InputWatchdog _in_wd;
+    InputSilenceGuard _in_silence; // frozen values of a Back-UPS BX (issue #138)
     InputReassembler _in_reasm;
     uint16_t _ep_in_mps;
     bool _uses_report_ids;

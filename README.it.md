@@ -55,11 +55,12 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - APC BackUPS Pro 900
 - APC Back-UPS Pro BN1050M, BGM2200
 - APC Back-UPS XS 700U, XS 1500M
-- APC Back-UPS BX750MI, BX1200MI, BXR1200MI
+- APC Back-UPS BX750MI, BX1200MI
+- APC Back-UPS BXR1200MI
 - APC Back-UPS ES 600M1, ES 700G
 - APC Smart-UPS 750, 750L, 1000L
 
-**Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). La scheda si riprende da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. ([#60](https://github.com/maverick1982/esp32-nut/issues/60))
+**Serie Back-UPS BX:** il firmware APC di questi modelli smette di rispondere alle richieste USB a intervalli irregolari, spesso più volte all'ora (succede anche con NUT su Linux). La scheda si riprende da sola pochi secondi dopo ogni blocco, e lo stato dell'UPS continua ad aggiornarsi fino a quel momento. I client NUT possono comunque vedere i dati non aggiornati per qualche secondo. A volte l'UPS smette anche di inviare il suo stato e continua a rispondere con valori congelati finché non viene scollegato: dopo 15 secondi la scheda segna i dati come non aggiornati e si riavvia, e questo sblocca l'UPS. La serie BXR più recente non ne soffre. ([#60](https://github.com/maverick1982/esp32-nut/issues/60), [#138](https://github.com/maverick1982/esp32-nut/issues/138))
 
 **Smart-UPS:** a volte una richiesta USB resta bloccata. Dalla v1.14.0 la scheda spegne e riaccende la sua porta USB invece di riavviarsi: l'UPS torna in pochi secondi mentre rete, Web UI e server NUT restano attivi. ([#78](https://github.com/maverick1982/esp32-nut/issues/78), [#120](https://github.com/maverick1982/esp32-nut/issues/120))
 </details>

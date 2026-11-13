@@ -418,6 +418,19 @@ void USBHostUPS::service() {
             (unsigned)(_in_wd.silenceThresholdMs() / 1000), (unsigned)_in_wd.periodMs());
     }
 
+    // Issue #138: on a Back-UPS BX a silent interrupt pipe means frozen values, even if the
+    // poll reads them (they come back the same until the UPS is unplugged). It happens
+    // right after a USB port power cycle too: the claim counts as the last report. Straight
+    // to a system restart: an interface restart never freed the UPS, a system restart did.
+    _in_silence.setSilenceMs(DriverDispatch::inputSilenceFaultMs(_driver));
+    if (_in_silence.tick(now) == InputSilenceGuard::Action::RESTART) {
+        log("WARN", "[USB] No INPUT report for %u s%s: UPS values likely frozen",
+            (unsigned)(_in_silence.silentForMs(now) / 1000),
+            _in_silence.seenInput() ? "" : " since the UPS connected");
+        requestRestart("INPUT reports stopped, values frozen");
+        return;
+    }
+
     logStats(now);
 
     // Drivers skip their poll steps while isPollingPaused() reports a backoff. Right after a
@@ -652,6 +665,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
         log("INFO", "[USB] Interrupt pipe disabled: values read with GET_REPORT (APC 5G, apc-hid)");
     }
     _in_wd.reset(millis());
+    _in_silence.reset(millis());
     _in_reasm.reset();
     _ep_in_mps = hid_host_device_get_ep_in_mps(handle);
     _uses_report_ids = _hid_parser.usesReportIds();
@@ -718,6 +732,7 @@ void USBHostUPS::processInputReport(const HidEvent& ev) {
     _in_recoveries = 0;
     _stat_in_packets++;
     _in_wd.onInput(ev.ts);
+    _in_silence.onInput(ev.ts);
 
     // Reports longer than one packet arrive in several events (review A4)
     size_t expected = 0;
@@ -1198,7 +1213,7 @@ bool USBHostUPS::isDataStale() const {
     if (!_first_data_ready) return true;
     // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
     if (_restart_requested) return true;
-    if (_link.isStale(now) || _in_wd.isStale(now)) return true;
+    if (_link.isStale(now) || _in_wd.isStale(now) || _in_silence.isStale(now)) return true;
     // The driver's own judgement: the Q* driver after the failed polls of
     // upsdrv_updateinfo() (US-136). _driver is deleted under _mutex
     std::lock_guard<std::recursive_mutex> lock(_mutex);

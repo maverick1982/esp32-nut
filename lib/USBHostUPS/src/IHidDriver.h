@@ -106,6 +106,13 @@ public:
     virtual bool inputValuesPolled() const { return false; }
 
     /**
+     * @brief How long a silence of the interrupt pipe may last before the values count as
+     * frozen (issue #138, InputSilenceGuard): stale data and a system restart. 0 (default)
+     * = a silence is not a fault, whatever inputValuesPolled() says.
+     */
+    virtual uint32_t inputSilenceFaultMs() const { return 0; }
+
+    /**
      * @brief Parses a received String Descriptor
      *
      * @param index The string index
