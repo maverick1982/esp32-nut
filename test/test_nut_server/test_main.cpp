@@ -1210,6 +1210,9 @@ void test_set_var_driver_not_connected(void) {
     NUTServerConfig config;
     config.ups_name = "testups";
     bare.begin(config, nullptr, 3493);
+    // USERNAME and PASSWORD first, also without NUT credentials (check_command(), US-125)
+    bare.processCommand(printer, 0, "USERNAME admin");
+    bare.processCommand(printer, 0, "PASSWORD secret");
     printer.clear();
     bare.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
     TEST_ASSERT_EQUAL_STRING("ERR DRIVER-NOT-CONNECTED\n", printer.getOutput().c_str());
@@ -1240,15 +1243,20 @@ void test_set_var_access_denied(void) {
     TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
     mockHost.sets.clear();
 
-    // Without NUT credentials SET is allowed, as INSTCMD
+    // US-125: without NUT credentials SET is refused, as upsd with no users
     NUTServer open;
     NUTServerConfig config;
     config.ups_name = "testups";
     open.begin(config, &mockHost, 3493);
     printer.clear();
     open.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
-    TEST_ASSERT_EQUAL_STRING("OK\n", printer.getOutput().c_str());
-    TEST_ASSERT_EQUAL(1, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", printer.getOutput().c_str());
+    open.processCommand(printer, 0, "USERNAME admin");
+    open.processCommand(printer, 0, "PASSWORD secret");
+    printer.clear();
+    open.processCommand(printer, 0, "SET VAR testups battery.charge.low 30");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", printer.getOutput().c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
 }
 
 void test_set_var_not_supported_and_readonly(void) {
@@ -2205,6 +2213,121 @@ void test_apply_before_begin(void) {
     TEST_ASSERT_FALSE(r.changed);
 }
 
+// --- Optional NUT credentials as in NUT (US-125): with no users in upsd.users reading
+// is free and nobody may run commands or change variables ---
+
+// No NUT credentials, then client 10.0.0.1 on slot 0 with an empty log
+static void noCredentials() {
+    server.applyConfig(nutConfig("", "", "testups"));
+    openClients(1);
+    logLines.clear();
+}
+
+static const char* NO_CRED_LOG = "WARN [NUT] INSTCMD beeper.disable from 10.0.0.1: ERR %s (no NUT credentials set)";
+
+static std::string noCredLog(const char* err) {
+    char buf[160];
+    snprintf(buf, sizeof(buf), NO_CRED_LOG, err);
+    return buf;
+}
+
+void test_no_credentials_reads_are_free(void) {
+    noCredentials();
+    TEST_ASSERT_FALSE(server.hasCredentials());
+    mockHost.data.set("battery.charge", "100");
+    TEST_ASSERT_TRUE(request(0, "LIST UPS").find("UPS testups \"") != std::string::npos);
+    TEST_ASSERT_EQUAL_STRING("VAR testups battery.charge \"100\"\n", request(0, "GET VAR testups battery.charge").c_str());
+    TEST_ASSERT_EQUAL_INT(0, (int)request(0, "VER").find("Network UPS Tools esp32-nut"));
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+void test_no_credentials_instcmd_refused_as_upsd(void) {
+    noCredentials();
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "USERNAME x").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "PASSWORD y").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.writes.size());
+    TEST_ASSERT_EQUAL(3, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("USERNAME-REQUIRED").c_str(), logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("PASSWORD-REQUIRED").c_str(), logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING(noCredLog("ACCESS-DENIED").c_str(), logLines[2].c_str());
+}
+
+void test_no_credentials_set_var_refused_as_upsd(void) {
+    setupSettable();
+    noCredentials();
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    request(0, "USERNAME x");
+    TEST_ASSERT_EQUAL_STRING("ERR PASSWORD-REQUIRED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    request(0, "PASSWORD y");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+    TEST_ASSERT_EQUAL(3, (int)logLines.size());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from -: ERR USERNAME-REQUIRED", logLines[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from x: ERR PASSWORD-REQUIRED", logLines[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("WARN SET battery.charge.low \"30\" from x: ERR ACCESS-DENIED", logLines[2].c_str());
+}
+
+// The one deviation from upsd: LOGIN stays allowed, so upsmon keeps connecting
+void test_no_credentials_login_allowed(void) {
+    noCredentials();
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL(1, server.openSession("10.0.0.2", 50001));
+    request(1, "USERNAME monuser");
+    request(1, "PASSWORD whatever");
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(1, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR UNKNOWN-UPS\n", request(1, "LOGIN other").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK Goodbye\n", request(0, "LOGOUT").c_str());
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
+// USERNAME "" and PASSWORD "" match the empty configured credentials: they must not
+// open the commands
+void test_empty_quoted_credentials_never_authorize(void) {
+    noCredentials();
+    setupSettable();
+    server.setAuthenticated(0, false);
+    server.setClientUsername(0, "");
+    mockHost.data.set("ups.beeper.status", "enabled");
+    request(0, "USERNAME \"\"");
+    request(0, "PASSWORD \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "SET VAR testups battery.charge.low 30").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)mockHost.sets.size());
+}
+
+// A username without a password (an old configuration) counts as no credentials
+void test_username_without_password_is_no_credentials(void) {
+    server.applyConfig(nutConfig("admin", "", "testups"));
+    TEST_ASSERT_FALSE(server.hasCredentials());
+    openClients(1);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    // The saved username with an empty password matches the configuration
+    request(0, "USERNAME admin");
+    request(0, "PASSWORD \"\"");
+    TEST_ASSERT_EQUAL_STRING("ERR ACCESS-DENIED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_TRUE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "LOGIN testups").c_str());
+}
+
+// With credentials nothing changes, and nothing new goes to the System Log
+void test_credentials_still_required_and_accepted(void) {
+    TEST_ASSERT_TRUE(server.hasCredentials());
+    openClients(1);
+    mockHost.data.set("ups.beeper.status", "enabled");
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_EQUAL_STRING("ERR USERNAME-REQUIRED\n", request(0, "LOGIN testups").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", authenticate(0, "admin", "secret").c_str());
+    TEST_ASSERT_EQUAL_STRING("OK\n", request(0, "INSTCMD testups beeper.disable").c_str());
+    TEST_ASSERT_FALSE(mockHost.beeperState);
+    TEST_ASSERT_EQUAL(0, (int)logLines.size());
+}
+
 // --- Custom variables of the NUT Server page (US-115): override.<var> of ups.conf,
 // drivers/main.c storeval (dstate_setinfo + ST_FLAG_IMMUTABLE + dparam_setinfo) ---
 
@@ -2508,6 +2631,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apply_normalizes_ups_name);
     RUN_TEST(test_apply_log_never_contains_credentials);
     RUN_TEST(test_apply_before_begin);
+    RUN_TEST(test_no_credentials_reads_are_free);
+    RUN_TEST(test_no_credentials_instcmd_refused_as_upsd);
+    RUN_TEST(test_no_credentials_set_var_refused_as_upsd);
+    RUN_TEST(test_no_credentials_login_allowed);
+    RUN_TEST(test_empty_quoted_credentials_never_authorize);
+    RUN_TEST(test_username_without_password_is_no_credentials);
+    RUN_TEST(test_credentials_still_required_and_accepted);
     return UNITY_END();
 }
 #else

@@ -6,7 +6,7 @@ epic:
   title: Server NUT
 priority: MEDIUM
 points: 2
-status: TODO
+status: DONE
 body: |-
   #### US-125: Credenziali NUT facoltative come in NUT: senza credenziali niente comandi, password vuota conservata
 
@@ -26,15 +26,23 @@ body: |-
 
   **Criteri di Accettazione**
   - [ ] La lettura dei dati (`LIST`, `GET`, `VER`) resta libera per ogni client, con o senza credenziali.
-  - [ ] Senza credenziali NUT configurate, `INSTCMD` e `SET VAR` rispondono `ERR ACCESS-DENIED` come in NUT, e il rifiuto va nel System Log. `LOGIN` e `LOGOUT` restano ammessi, così `upsmon` continua a collegarsi. I comandi dalla web UI e lo spegnimento automatico della scheda non passano dal server NUT e non cambiano.
+  - [ ] Senza credenziali NUT configurate, `INSTCMD` e `SET VAR` vengono rifiutati come in upsd senza utenti: `ERR USERNAME-REQUIRED` / `ERR PASSWORD-REQUIRED` se il client non li ha inviati, altrimenti `ERR ACCESS-DENIED`; il rifiuto va nel System Log. `LOGIN` e `LOGOUT` restano ammessi, così `upsmon` continua a collegarsi. I comandi dalla web UI e lo spegnimento automatico della scheda non passano dal server NUT e non cambiano.
   - [ ] Con credenziali configurate il comportamento resta quello di oggi.
   - [ ] Nella pagina NUT Server Username e Password non sono più obbligatori. La pagina indica se una password è già impostata; una password lasciata vuota conserva quella attuale.
   - [ ] Un username senza password, quando nessuna password è salvata, viene rifiutato con un messaggio chiaro: le credenziali sono entrambe presenti o entrambe assenti.
   - [ ] Un'azione esplicita **Remove NUT credentials**, con conferma, cancella username e password; si applica al volo e chiude le sessioni NUT aperte come in US-124.
   - [ ] La pagina avvisa che senza credenziali i client NUT possono solo leggere i dati.
   - [ ] Test nativi del server NUT (comandi e `SET VAR` con e senza credenziali, `LOGIN` senza credenziali), test dell'API (password vuota conservata, username senza password, rimozione) ed e2e della pagina.
-  - [ ] README (EN/IT) e manuale utente descrivono le nuove regole. Le note di rilascio avvisano chi oggi invia comandi senza credenziali NUT (per esempio da Home Assistant su una ESP32-P4 con le impostazioni predefinite) che dovrà impostarle.
+  - [ ] README (EN/IT) descrive le nuove regole (il manuale utente non si modifica, decisione dell'utente 2026-11-13). Le note di rilascio avvisano chi oggi invia comandi senza credenziali NUT (per esempio da Home Assistant su una ESP32-P4 con le impostazioni predefinite) che dovrà impostarle.
   - [ ] Fuori ambito: più utenti NUT con permessi diversi (`upsd.users`), credenziali della web UI.
 history:
   - status: TODO
     at: "2026-11-06T14:43:58Z"
+  - status: PLANNED
+    at: "2026-11-13T21:17:12Z"
+  - status: IN PROGRESS
+    at: "2026-11-13T21:27:29Z"
+  - status: REVIEW
+    at: "2026-11-13T22:00:39Z"
+  - status: DONE
+    at: "2026-11-13T22:05:11Z"

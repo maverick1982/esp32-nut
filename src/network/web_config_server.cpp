@@ -677,30 +677,27 @@ void WebConfigServer::handleNutConfig() {
         return;
     }
 
-    // ups_name not a string or not valid → 400, nothing saved and no restart (US-082)
+    // Merged into the saved settings: an empty password keeps the saved one, credentials
+    // both set or both empty, explicit removal (US-125); an invalid ups_name stays a 400
+    // (US-082). On a 400 nothing is saved or applied
+    NutConfig nc = config_mgr.getNutConfig();
+    NUTServerConfig next;
     String rejected;
-    if (int status = WebApiJson::checkNutConfigBody(doc, rejected)) {
+    if (int status = WebApiJson::nutConfigFromBody(doc, {nc.username, nc.password, nc.ups_name}, next, rejected)) {
         server.send(status, "application/json", rejected);
         return;
     }
-
-    NutConfig nc = config_mgr.getNutConfig();
-    if (doc["username"].is<String>()) {
-        nc.username = doc["username"].as<String>();
-    }
-    if (doc["password"].is<String>()) {
-        nc.password = doc["password"].as<String>();
-    }
-    if (doc["ups_name"].is<String>()) {
-        nc.ups_name = doc["ups_name"].as<String>();
-    }
+    nc.username = next.username;
+    nc.password = next.password;
+    nc.ups_name = next.ups_name;
+    bool removed = doc["remove_credentials"].is<bool>() && doc["remove_credentials"].as<bool>();
 
     config_mgr.setNutConfig(nc);
     if (config_mgr.save()) {
         // US-124: applied at once, no restart. Only what was saved is applied, so a restart
         // keeps the same settings. With no NUT server running (access point without a valid
         // configuration) begin() reads them at the next start
-        AppLogger::log("INFO", "[WEB] NUT configuration saved");
+        AppLogger::log("INFO", removed ? "[WEB] NUT credentials removed" : "[WEB] NUT configuration saved");
         String reply;
         if (nut_server && nut_server->isRunning()) {
             NUTServer::ApplyResult r = nut_server->applyConfig({nc.username, nc.password, nc.ups_name});
@@ -733,6 +730,8 @@ void WebConfigServer::handleGetConfig() {
     JsonObject nutObj = doc["nut"].to<JsonObject>();
     nutObj["username"] = config_mgr.getNutConfig().username;
     nutObj["ups_name"] = config_mgr.getNutConfig().ups_name;
+    // US-125: whether a password is saved, never the password itself
+    nutObj["has_password"] = config_mgr.getNutConfig().password.length() > 0;
     
     String response;
     serializeJson(doc, response);

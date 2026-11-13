@@ -359,27 +359,112 @@ document.addEventListener('DOMContentLoaded', () => {
         nutStatus.hidden = false;
     }
 
+    // US-125: NUT credentials are optional, both set or both empty. The saved password is
+    // never sent to the page: has_password says whether there is one, and an empty field
+    // keeps it. The API is the authority; the page runs the same check first
+    const NUT_BOTH_OR_NEITHER = 'Set both the NUT username and password, or remove the NUT credentials';
+    const nutState = { username: '', hasPassword: false };
+    const nutError = document.getElementById('nut-error');
+    const btnRemoveNut = document.getElementById('btn-remove-nut-creds');
+
+    function renderNutCredentials() {
+        const hasCredentials = nutState.username !== '' && nutState.hasPassword;
+        const state = document.getElementById('nut-password-state');
+        if (state) {
+            state.textContent = nutState.hasPassword
+                ? 'A password is set: leave the field empty to keep it.'
+                : 'No password set.';
+        }
+        if (nutPwdInput) {
+            nutPwdInput.placeholder = nutState.hasPassword ? 'Leave empty to keep the current password' : 'Password';
+        }
+        const warning = document.getElementById('nut-no-credentials');
+        if (warning) warning.hidden = hasCredentials;
+        if (btnRemoveNut) btnRemoveNut.hidden = !hasCredentials;
+    }
+    function showNutError(message) {
+        if (!nutError) return;
+        document.getElementById('nut-error-text').textContent = message;
+        nutError.hidden = false;
+    }
+    function hideNutMessages() {
+        if (nutStatus) nutStatus.hidden = true;
+        if (nutError) nutError.hidden = true;
+    }
+    // The message of a refused request: {"error"} of the API, or a generic one
+    async function nutErrorOf(response) {
+        try {
+            const body = await response.json();
+            if (body && body.error) return body.error;
+        } catch (_) { /* no JSON body */ }
+        return 'Failed to save NUT configuration.';
+    }
+    // POST /api/nut/config; resolves to the reply, or null after showing the error
+    async function postNutConfig(body) {
+        try {
+            const response = await apiFetch('/api/nut/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                showNutError(await nutErrorOf(response));
+                return null;
+            }
+            let data = {};
+            try { data = await response.json(); } catch (_) { /* older reply without a body */ }
+            return data;
+        } catch (_) {
+            showNutError('Failed to save NUT configuration.');
+            return null;
+        }
+    }
+
+    if (btnRemoveNut) {
+        btnRemoveNut.addEventListener('click', async () => {
+            hideNutMessages();
+            if (!window.confirm('Remove the NUT credentials?\n\nNUT clients will only be able to read the data, ' +
+                'and the connected NUT clients are disconnected.')) return;
+            btnRemoveNut.disabled = true;
+            const data = await postNutConfig({ remove_credentials: true });
+            btnRemoveNut.disabled = false;
+            if (!data) return;
+            nutState.username = '';
+            nutState.hasPassword = false;
+            nutUsernameInput.value = '';
+            nutPwdInput.value = '';
+            renderNutCredentials();
+            showNutStatus(data);
+        });
+    }
+
     if(document.getElementById('nut-form')) {
+        renderNutCredentials();
         document.getElementById('nut-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (nutStatus) nutStatus.hidden = true;
+            hideNutMessages();
+            const username = nutUsernameInput.value;
+            const password = nutPwdInput.value;
+            // As the API: an empty field keeps the saved password
+            const passwordAfter = password !== '' || nutState.hasPassword;
+            if ((username !== '') !== passwordAfter) {
+                showNutError(NUT_BOTH_OR_NEITHER);
+                return;
+            }
             btnSaveNut.innerHTML = `<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...`;
             btnSaveNut.disabled = true;
 
             try {
-                const response = await apiFetch('/api/nut/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ups_name: nutUpsNameInput.value,
-                        username: nutUsernameInput.value,
-                        password: nutPwdInput.value
-                    })
+                const data = await postNutConfig({
+                    ups_name: nutUpsNameInput.value,
+                    username: username,
+                    password: password
                 });
-                
-                if (!response.ok) throw new Error('Save failed');
-                let data = {};
-                try { data = await response.json(); } catch (_) { /* older reply without a body */ }
+                if (!data) throw new Error('Save failed');
+                nutState.username = username;
+                nutState.hasPassword = passwordAfter;
+                nutPwdInput.value = '';
+                renderNutCredentials();
                 showNutStatus(data);
 
                 btnSaveNut.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved!`;
@@ -394,9 +479,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     btnSaveNut.disabled = false;
                 }, 2000);
             } catch (error) {
-                btnSaveNut.innerHTML = `<span>Error</span>`;
+                // The message is already in #nut-error
+                btnSaveNut.innerHTML = `<span class="glow"></span> Save Credentials`;
                 btnSaveNut.disabled = false;
-                alert('Failed to save NUT configuration.');
             }
         });
     }
@@ -1886,6 +1971,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.nut.ups_name && nutUpsNameInput && !nutUpsNameInput.value) {
                     nutUpsNameInput.value = data.nut.ups_name;
                 }
+                // US-125: saved credentials, never the password
+                nutState.username = data.nut.username || '';
+                nutState.hasPassword = data.nut.has_password === true;
+                renderNutCredentials();
             }
         })
         .catch(err => {

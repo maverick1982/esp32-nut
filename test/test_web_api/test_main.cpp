@@ -964,6 +964,112 @@ void test_nut_config_applied_json() {
         WebApiJson::nutConfigAppliedJson(false, false, 0).c_str());
 }
 
+// US-125: body of POST /api/nut/config merged into the saved settings
+static const char* BOTH_OR_NEITHER =
+    "{\"error\":\"Set both the NUT username and password, or remove the NUT credentials\"}";
+
+static int nutFromBody(const char* json, const NUTServerConfig& current, NUTServerConfig& next, String& out) {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, json));
+    out = "";
+    return WebApiJson::nutConfigFromBody(doc, current, next, out);
+}
+
+static NUTServerConfig nutCfg(const char* user, const char* pass, const char* name) {
+    NUTServerConfig c;
+    c.username = user;
+    c.password = pass;
+    c.ups_name = name;
+    return c;
+}
+
+static void assertNut(const NUTServerConfig& c, const char* user, const char* pass, const char* name) {
+    TEST_ASSERT_EQUAL_STRING(user, c.username.c_str());
+    TEST_ASSERT_EQUAL_STRING(pass, c.password.c_str());
+    TEST_ASSERT_EQUAL_STRING(name, c.ups_name.c_str());
+}
+
+void test_nut_config_keeps_the_saved_password() {
+    const NUTServerConfig saved = nutCfg("admin", "secret", "ups");
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"ups_name\":\"eaton\",\"username\":\"admin\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "admin", "secret", "eaton");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"ups_name\":\"eaton\"}", saved, next, out));
+    assertNut(next, "admin", "secret", "eaton");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"operator\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "operator", "secret", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"admin\",\"password\":\"new\"}", saved, next, out));
+    assertNut(next, "admin", "new", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{}", saved, next, out));
+    assertNut(next, "admin", "secret", "ups");
+    TEST_ASSERT_EQUAL_STRING("", out.c_str());
+}
+
+void test_nut_config_both_or_neither() {
+    NUTServerConfig next;
+    String out;
+    // An empty username with a saved password
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"\"}", nutCfg("admin", "secret", "ups"), next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+
+    const NUTServerConfig none = nutCfg("", "", "ups");
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"admin\",\"password\":\"\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"admin\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"username\":\"\",\"password\":\"x\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"password\":\"x\"}", none, next, out));
+    TEST_ASSERT_EQUAL_STRING(BOTH_OR_NEITHER, out.c_str());
+    // Both empty: no credentials, as the default settings
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"\",\"password\":\"\"}", none, next, out));
+    assertNut(next, "", "", "ups");
+    // Both new
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"username\":\"admin\",\"password\":\"x\"}", none, next, out));
+    assertNut(next, "admin", "x", "ups");
+}
+
+void test_nut_config_remove_credentials() {
+    const NUTServerConfig saved = nutCfg("admin", "secret", "ups");
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true}", saved, next, out));
+    assertNut(next, "", "", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true,\"ups_name\":\"eaton\"}", saved, next, out));
+    assertNut(next, "", "", "eaton");
+    // Empty fields of the form may come along
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":true,\"username\":\"\",\"password\":\"\"}", saved, next, out));
+    assertNut(next, "", "", "ups");
+
+    const char* invalid[] = {
+        "{\"remove_credentials\":true,\"password\":\"x\"}",
+        "{\"remove_credentials\":true,\"username\":\"admin\"}",
+        "{\"remove_credentials\":\"yes\"}",
+        "{\"remove_credentials\":1}",
+    };
+    for (const char* json : invalid) {
+        TEST_ASSERT_EQUAL_MESSAGE(400, nutFromBody(json, saved, next, out), json);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("{\"error\":\"Invalid request\"}", out.c_str(), json);
+    }
+    // false or null: an ordinary save
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":false,\"username\":\"admin\",\"password\":\"x\"}", saved, next, out));
+    assertNut(next, "admin", "x", "ups");
+    TEST_ASSERT_EQUAL(0, nutFromBody("{\"remove_credentials\":null}", saved, next, out));
+    assertNut(next, "admin", "secret", "ups");
+}
+
+// The UPS name rules of US-082 are unchanged
+void test_nut_config_from_body_checks_the_ups_name() {
+    NUTServerConfig next;
+    String out;
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"ups_name\":\"my ups\"}", nutCfg("admin", "secret", "ups"), next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid UPS name\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, nutFromBody("{\"ups_name\":123,\"remove_credentials\":true}", nutCfg("admin", "secret", "ups"),
+                                       next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid UPS name\"}", out.c_str());
+}
+
 void test_needs_confirmation_spec_names() {
     const char* names[] = {
         "ups.shutdown",
@@ -2282,6 +2388,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ups_name_from_config);
     RUN_TEST(test_nut_config_body_check);
     RUN_TEST(test_nut_config_applied_json);
+    RUN_TEST(test_nut_config_keeps_the_saved_password);
+    RUN_TEST(test_nut_config_both_or_neither);
+    RUN_TEST(test_nut_config_remove_credentials);
+    RUN_TEST(test_nut_config_from_body_checks_the_ups_name);
     RUN_TEST(test_needs_confirmation_spec_names);
     RUN_TEST(test_needs_confirmation_other_names);
     RUN_TEST(test_board_json_s3);

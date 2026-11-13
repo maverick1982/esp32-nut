@@ -75,6 +75,9 @@ public:
     ApplyResult applyConfig(const NUTServerConfig& config);
     // begin() was called: false in access point mode without a valid configuration
     bool isRunning() const { return _initialized; }
+    // NUT username and password both set (US-125). Without them NUT clients can only read
+    // the data, as upsd with no users in upsd.users: INSTCMD and SET VAR are refused
+    bool hasCredentials() const { return _config.username.length() > 0 && _config.password.length() > 0; }
 
     // Occupa il primo slot libero per un client appena accettato e ne azzera lo stato.
     // -1 se gli slot sono esauriti: il rifiuto va nel System Log, al più una riga ogni
@@ -140,6 +143,7 @@ private:
     // Esito di SET VAR o INSTCMD con TRACKING ON: voce nella tabella condivisa e OK TRACKING <id>
     void replyTracking(Print& client, NutTable::SetStatus st);
     const char* missingCredentials(int slot) const;
+    void logInstcmdWithoutCredentials(const std::vector<String>& tokens, int slot, const char* err) const;
     // Value GET VAR answers for a variable, overrides included (US-115); false when the
     // variable does not exist. The one place that decides value and presence
     bool resolveVar(const UPSData& data, const String& varNameLower, String& out) const;

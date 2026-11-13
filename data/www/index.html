@@ -517,12 +517,12 @@
                         </div>
                         <div class="form-group">
                             <label for="nut-username">Username</label>
-                            <input type="text" id="nut-username" placeholder="admin" required>
+                            <input type="text" id="nut-username" placeholder="admin" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label for="nut-password">Password</label>
                             <div class="input-wrapper">
-                                <input type="password" id="nut-password" placeholder="••••••••••••" required>
+                                <input type="password" id="nut-password" placeholder="Password" autocomplete="new-password">
                                 <button type="button" class="btn-icon" id="toggle-nut-pwd">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
@@ -530,6 +530,24 @@
                                     </svg>
                                 </button>
                             </div>
+                            <!-- US-125: whether a password is saved; an empty field keeps it -->
+                            <p class="nut-hint" id="nut-password-state">No password set.</p>
+                        </div>
+                        <!-- US-125: with no NUT credentials NUT clients can only read the data -->
+                        <div class="auth-alert info" id="nut-no-credentials" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                            </svg>
+                            <span>Without NUT credentials, NUT clients can only read the data: commands and setting
+                                changes are refused.</span>
+                        </div>
+                        <div class="auth-alert" id="nut-error" role="alert" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 8v4M12 16h.01" />
+                            </svg>
+                            <span id="nut-error-text"></span>
                         </div>
                         <!-- US-124: outcome of the save, applied at once without a restart -->
                         <div class="auth-alert success" id="nut-status" role="status" hidden>
@@ -543,9 +561,14 @@
                                 <span class="glow"></span>
                                 Save Credentials
                             </button>
+                            <button type="button" class="btn btn-outline" id="btn-remove-nut-creds" hidden>
+                                Remove NUT credentials
+                            </button>
                         </div>
                         <p class="auth-fineprint" id="nut-help">Changes apply at once, with no restart. Connected NUT
-                            clients are disconnected and reconnect with the new settings.</p>
+                            clients are disconnected and reconnect with the new settings. Leave Password empty to keep
+                            the current one. NUT credentials are optional: without them NUT clients can read the data
+                            but cannot run commands or change settings.</p>
                     </form>
                 </div>
 

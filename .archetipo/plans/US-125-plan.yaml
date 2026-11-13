@@ -1,0 +1,335 @@
+schema: archetipo/plan/v2
+spec_code: US-125
+body: |-
+  ## Soluzione Tecnica
+
+  Tre livelli: il server NUT rifiuta i comandi quando non ci sono credenziali, l'API unisce il body alla configurazione salvata (password conservata, rimozione esplicita, entrambe o nessuna) e la pagina NUT Server rende facoltativi i campi e mostra lo stato. L'applicazione al volo e la chiusura delle sessioni restano quelle di US-124 (`NUTServer::applyConfig()`).
+
+  - **Server NUT** (`lib/NUTServer`): nuovo `bool hasCredentials() const` = username e password configurati e non vuoti (la condizione `authRequired` di oggi, in un solo punto). `INSTCMD` e `SET VAR` seguono `check_command()` e `user_checkinstcmd()`/`user_checkaction()` di upsd anche senza credenziali: prima la presenza di USERNAME e PASSWORD (`ERR USERNAME-REQUIRED` / `ERR PASSWORD-REQUIRED`, controllo `FLAG_USER` che in upsd vale sempre), poi passano solo con `hasCredentials() && _clientAuthenticated[slot]`, altrimenti `ERR ACCESS-DENIED`. Per questo `missingCredentials()` non dipende più da `hasCredentials()` per `INSTCMD` e `SET`; per `LOGIN` resta condizionato a `hasCredentials()`. Senza credenziali ogni rifiuto di `INSTCMD` scrive `WARN [NUT] INSTCMD <cmd> from <ip>: ERR <errore> (no NUT credentials set)`; `SET VAR` usa la riga di `rejectSet()` che esiste già. Il caso `PASSWORD ""` con credenziali vuote non può più autenticare. `LOGIN` e `LOGOUT` senza credenziali restano ammessi anche senza USERNAME (unico scostamento da upsd, dove `LOGIN` senza utenti dà `ACCESS-DENIED`: deciso dall'utente il 2026-11-13 perché `upsmon` continui a collegarsi senza errori). `LIST`, `GET`, `VER` e `NETVER` restano liberi. Con credenziali configurate nulla cambia.
+  - **API** (`lib/WebApi`): `static int WebApiJson::nutConfigFromBody(JsonVariantConst body, const NUTServerConfig& current, NUTServerConfig& next, String& response)`, funzione pura che usa `NUTServerConfig` (disponibile in nativo; `NutConfig` sta in `config_manager.h`, che il nativo non compila). Regole: `ups_name` come oggi con `checkNutConfigBody()` (assente o null = invariato). `remove_credentials` presente e non booleano → 400 `Invalid request`; `true` → username e password vuoti, e con username o password non vuoti nello stesso body → 400 `Invalid request`. `username` stringa → sostituito (anche vuoto). `password` stringa non vuota → sostituita; vuota o assente → resta quella salvata. Alla fine username e password o entrambi vuoti o entrambi pieni, altrimenti 400 `{"error":"Set both the NUT username and password, or remove the NUT credentials"}`. Restituisce 0 se va bene.
+  - **Rotte** (`src/network/web_config_server.cpp`): `handleNutConfig()` usa `nutConfigFromBody()` partendo dalla config salvata, poi salva e applica come in US-124. Log `[WEB] NUT credentials removed` per la rimozione, `[WEB] NUT configuration saved` per il resto, mai le password. `handleGetConfig()` aggiunge `nut.has_password` (bool), senza la password.
+  - **Pagina NUT Server** (`data/www`): Username e Password senza `required`. Sotto la password una riga di stato `#nut-password-state` ("A password is set: leave the field empty to keep it." / "No password set.") e un placeholder coerente. Un avviso `#nut-no-credentials` (`auth-alert info`) visibile senza credenziali: "Without NUT credentials, NUT clients can only read the data: commands and setting changes are refused.". Pulsante secondario **Remove NUT credentials** (`#btn-remove-nut-creds`), visibile solo con credenziali, con `window.confirm()` come le altre azioni distruttive; invia `{"remove_credentials":true}` e mostra l'esito di US-124. Prima dell'invio la pagina fa lo stesso controllo dell'API (stesso messaggio). Gli errori dell'API vanno in un riquadro `#nut-error` (`auth-alert`) al posto dell'alert. Dopo ogni salvataggio il campo password si svuota e lo stato si aggiorna. Nessun nuovo layout: niente mockup. Asset con `python scripts/embed_web.py`.
+  - **Documentazione**: README EN/IT (riga delle credenziali NUT: facoltative, senza credenziali solo lettura, password vuota conservata, pulsante di rimozione; nota ESP32-P4 sulle impostazioni predefinite) e un paragrafo in `docs/concepts/architecture.md`. Il manuale utente non si modifica (decisione dell'utente). Le note di rilascio non sono nel piano: si scrivono prima della release, con l'avviso per chi oggi invia comandi senza credenziali (per esempio Home Assistant su una ESP32-P4 con le impostazioni predefinite).
+
+  **Fuori ambito:** più utenti NUT con permessi diversi (`upsd.users`), credenziali della web UI, comandi dalla web UI e spegnimento automatico (non passano dal server NUT).
+
+  ---
+
+  ## Strategia di Test
+
+  La logica sta in due funzioni testabili in nativo (`NUTServer::processCommand()` e `WebApiJson::nutConfigFromBody()`); la pagina si prova con Playwright e il tutto sull'Eaton 3S.
+
+  - **Nativi `test_nut_server`** (con un helper che applica credenziali vuote via `applyConfig()`): senza credenziali `LIST UPS`, `GET VAR`, `VER` ok; `INSTCMD` → `ERR USERNAME-REQUIRED` senza USERNAME, `ERR PASSWORD-REQUIRED` con il solo USERNAME, `ERR ACCESS-DENIED` con USERNAME e PASSWORD qualsiasi, ogni volta con la riga WARN e nessuna scrittura sull'host; `SET VAR` con gli stessi tre esiti e la riga di rifiuto, nessun `setVariable`; `LOGIN <ups>` → `OK` con e senza USERNAME; `LOGOUT` ok; `PASSWORD ""` non autentica; username senza password conta come nessuna credenziale. Con credenziali i test di oggi restano verdi.
+  - **Nativi `test_web_api`**: password vuota o assente conservata; password nuova sostituita; username cambiato con password conservata; username da solo senza password salvata → 400 col messaggio; password da sola senza username → 400; username vuoto con password salvata → 400; rimozione → entrambi vuoti; rimozione con campi pieni → 400; `remove_credentials` non booleano → 400; nome UPS non valido → 400 come oggi; body vuoto → tutto invariato.
+  - **Build** S3 e P4, suite nativa completa ed e2e completi.
+  - **Prova sul campo** sull'Eaton 3S, solo dopo il sì esplicito dell'utente.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`, API simulate con `page.route`)
+  **Video demo:** in parte filmabile (pagina NUT Server: cambio nome con password vuota, rimozione con conferma, avviso di sola lettura); `upscmd`/`upsrw` sono da terminale. Decide `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Cambio nome con password conservata | `/api/config` con `has_password:true`: la pagina mostra "A password is set...", l'utente cambia UPS Name, lascia vuota la password e salva; il body non contiene una password non vuota e compare l'esito "Applied now". |
+  | Username senza password | Senza password salvata l'utente scrive solo lo username: la pagina mostra l'errore e non invia la richiesta. |
+  | Rimozione delle credenziali | Con credenziali, l'utente preme Remove NUT credentials, accetta la conferma: body `{remove_credentials:true}`, username svuotato, avviso di sola lettura visibile, pulsante nascosto. Annullando la conferma non parte nessuna richiesta. |
+  | Senza credenziali | `/api/config` senza username e `has_password:false`: avviso visibile, pulsante di rimozione nascosto, campi non obbligatori (il form si invia vuoto). |
+  | Errore dell'API | Un 400 dell'API mostra il messaggio in `#nut-error`, nessun dialog, nessun esito di applicazione. |
+
+  _Piano generato con ARchetipo Planning — 2026-11-13_
+tasks:
+  - id: TASK-01
+    title: 'Server NUT: comandi e SET VAR rifiutati senza credenziali come in upsd'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** senza credenziali NUT configurate, `INSTCMD` e `SET VAR` vengono rifiutati come in upsd senza utenti (`USERNAME-REQUIRED` / `PASSWORD-REQUIRED` se mancano, altrimenti `ACCESS-DENIED`) e finiscono nel System Log; lettura, `LOGIN` e `LOGOUT` restano liberi.
+
+      **Leggere:** `lib/NUTServer/src/NUTServer.h` (sezione pubblica vicino ad `applyConfig()`/`isRunning()`, dichiarazione di `missingCredentials`), `lib/NUTServer/src/NUTServer.cpp`: `processCommand()` (~530-560, `authRequired` e il blocco `missingCredentials` per LOGIN/SET/INSTCMD), blocco `LOGIN` (~592-612), blocco `INSTCMD` (~818-825), `missingCredentials()` (~1052-1062), `setVar()` (~1100-1108), `rejectSet()`. Riferimento upstream: `nut_repo/server/upsd.c` `check_command()` (~784-830) e `nut_repo/server/netuser.c` `net_login()`.
+
+      **Modifiche:**
+      1. `NUTServer.h`: `bool hasCredentials() const { return _config.username.length() > 0 && _config.password.length() > 0; }` con il commento (US-125: senza credenziali i client possono solo leggere, come upsd senza utenti in upsd.users).
+      2. `missingCredentials()`: togliere la condizione su `authRequired`, così restituisce `USERNAME-REQUIRED` / `PASSWORD-REQUIRED` in base a ciò che il client ha inviato, sempre (il `FLAG_USER` di `check_command()` non dipende dagli utenti). Aggiornare il commento.
+      3. `processCommand()`, blocco `if (cmd == "LOGIN" || cmd == "SET" || cmd == "INSTCMD")`: per `LOGIN` chiamare `missingCredentials()` solo se `hasCredentials()` (senza credenziali `LOGIN` resta ammesso anche senza USERNAME, scostamento da upsd deciso dall'utente il 2026-11-13: commentarlo); per `SET` e `INSTCMD` sempre. Quando `INSTCMD` è rifiutato qui e `!hasCredentials()`, scrivere anche `log("WARN", "[NUT] INSTCMD %s from %s: ERR %s (no NUT credentials set)", <tokens[2] o "-">, _clientPeer[slot].c_str(), missing)`. `SET VAR` continua a passare da `rejectSet()`.
+      4. Sostituire le altre `bool authRequired = (...)` con `hasCredentials()`.
+      5. Blocco `INSTCMD`: `if (!hasCredentials() || !_clientAuthenticated[slot])` → `ERR ACCESS-DENIED`; se `!hasCredentials()` stessa riga WARN con `ACCESS-DENIED`. Con credenziali sbagliate nessun log nuovo (comportamento di oggi).
+      6. `setVar()`: `if (!hasCredentials() || !_clientAuthenticated[slot]) { rejectSet(..., "ACCESS-DENIED"); return; }` nella stessa posizione (dopo UNKNOWN-UPS, DRIVER-NOT-CONNECTED, DATA-STALE).
+      7. `LOGIN`: `if (hasCredentials() && !_clientAuthenticated[slot])` → senza credenziali resta `OK`.
+
+      **Verifica:** `pio test -e native -f test_nut_server` verde (i test di oggi usano credenziali admin/secret, dove nulla cambia).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NUTServer.h — hasCredentials()
+      - lib/NUTServer/src/NUTServer.cpp — missingCredentials sempre per SET/INSTCMD, INSTCMD, setVar, LOGIN con hasCredentials(), righe WARN
+
+      ## Criteri di Completamento
+      - [ ] Senza credenziali INSTCMD e SET VAR danno USERNAME-REQUIRED / PASSWORD-REQUIRED se mancano, altrimenti ACCESS-DENIED, sempre con una riga nel System Log
+      - [ ] LOGIN (anche senza USERNAME), LOGOUT, LIST, GET, VER restano ammessi senza credenziali
+      - [ ] Con credenziali il comportamento è quello di oggi
+      - [ ] Nessun authRequired duplicato rimasto
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi del server NUT senza credenziali
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire i comandi con e senza credenziali.
+
+      **Leggere:** `test/test_nut_server/test_main.cpp`: setUp (credenziali admin/secret), helper `request()`, `authenticate()`, `nutConfig()` di US-124, `test_instcmd_beeper`, i test SET VAR (`setupSettable`, `test_set_var_rejections_are_logged`).
+
+      **Test (registrati con RUN_TEST nel main nativo):**
+      1. Helper `static void noCredentials()` = `server.applyConfig(nutConfig("", "", "testups")); logLines.clear();`.
+      2. `test_no_credentials_reads_are_free`: `LIST UPS`, `GET VAR testups battery.charge`, `VER` rispondono come con credenziali.
+      3. `test_no_credentials_instcmd_refused_as_upsd`: senza USERNAME `INSTCMD testups beeper.disable` → `ERR USERNAME-REQUIRED`; dopo `USERNAME x` → `ERR PASSWORD-REQUIRED`; dopo `PASSWORD y` → `ERR ACCESS-DENIED`. `mockHost.beeperState` invariato e tre righe `WARN [NUT] INSTCMD beeper.disable from <ip>: ERR <errore> (no NUT credentials set)`.
+      4. `test_no_credentials_set_var_refused_as_upsd`: con `mockHost.rw` e la variabile presenti, `SET VAR testups battery.charge.low 30` dà gli stessi tre esiti nelle stesse condizioni, una riga di rifiuto ciascuno, nessun elemento in `mockHost.sets`.
+      5. `test_no_credentials_login_allowed`: `LOGIN testups` → `OK` senza USERNAME e, su un altro slot, dopo USERNAME/PASSWORD qualsiasi; `LOGOUT` → `OK Goodbye`.
+      6. `test_empty_quoted_password_never_authenticates`: senza credenziali `USERNAME x`, `PASSWORD ""` poi `INSTCMD` → `ERR ACCESS-DENIED`.
+      7. `test_username_without_password_is_no_credentials`: `applyConfig(nutConfig("admin", "", "testups"))` → dopo `USERNAME admin` + `PASSWORD x`, `INSTCMD` → `ERR ACCESS-DENIED`.
+      8. `test_credentials_still_required_and_accepted`: con credenziali (setUp) `INSTCMD` senza USERNAME → `ERR USERNAME-REQUIRED`, `LOGIN` senza USERNAME → `ERR USERNAME-REQUIRED`, e con quelle giuste `INSTCMD` → `OK` (comportamento invariato).
+
+      **Verifica:** `pio test -e native -f test_nut_server` verde. Mutazioni: togliere `!hasCredentials() ||` dal blocco INSTCMD deve far fallire il test 3; rimettere la condizione su `hasCredentials()` in `missingCredentials()` deve far fallire i test 3 e 4.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_nut_server/test_main.cpp — test senza credenziali e regressione con credenziali
+
+      ## Criteri di Completamento
+      - [ ] I 7 test nuovi passano
+      - [ ] Le due mutazioni vengono rilevate
+      - [ ] I test esistenti restano verdi
+    ref: TASK-02
+  - id: TASK-03
+    title: 'WebApiJson::nutConfigFromBody(): password conservata, rimozione, entrambe o nessuna'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** unire il body di `POST /api/nut/config` alla configurazione salvata in una funzione pura.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h` (~98-110: `upsNameFromConfig`, `checkNutConfigBody`, `nutConfigAppliedJson`), `lib/WebApi/src/WebApiJson.cpp` (~375-395 e `sendError` ~159), `lib/NUTServer/src/NUTServer.h` (`NUTServerConfig`).
+
+      **Modifiche:**
+      1. `WebApiJson.h`: dichiarare `static int nutConfigFromBody(JsonVariantConst body, const NUTServerConfig& current, NUTServerConfig& next, String& response);` con il commento delle regole (US-125).
+      2. `WebApiJson.cpp`, nell'ordine: `next = current`; `checkNutConfigBody()` (se != 0 restituirlo); `ups_name` stringa → `next.ups_name`. `remove_credentials`: presente e non bool → `sendError(400, "Invalid request")`; `true` → se `username` o `password` sono stringhe non vuote → 400 `Invalid request`, altrimenti `next.username = ""; next.password = "";`. Senza rimozione: `username` stringa → `next.username`; `password` stringa non vuota → `next.password` (vuota o assente: resta). Infine se `next.username.length() > 0` e `next.password.length() > 0` sono diversi → `sendError(response, 400, "Set both the NUT username and password, or remove the NUT credentials")`. Restituire 0.
+      3. Attenzione al gotcha di ArduinoJson 7: `as<String>()` su chiave assente dà "null": controllare sempre `is<const char*>()` prima di leggere.
+
+      **Verifica:** compila con `pio test -e native -f test_web_api` (i test arrivano in TASK-04).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — dichiarazione e regole
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] Password vuota o assente conserva quella salvata
+      - [ ] remove_credentials:true svuota username e password
+      - [ ] Username e password o entrambi presenti o entrambi assenti, altrimenti 400 col messaggio
+      - [ ] Le regole del nome UPS restano quelle di US-082
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi di nutConfigFromBody()
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire tutte le regole dell'unione body/config.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (~926-960: `nutConfigStatus`, `test_nut_config_body_check`, `test_nut_config_applied_json`).
+
+      **Test (`test_nut_config_from_body`, o più funzioni, registrate con RUN_TEST):** partendo da `current = {"admin","secret","ups"}` salvo diversamente indicato:
+      1. `{"ups_name":"eaton","username":"admin","password":""}` → 0, password `secret` conservata, nome `eaton`.
+      2. `{"ups_name":"eaton"}` → 0, credenziali invariate.
+      3. `{"username":"admin","password":"new"}` → password `new`.
+      4. `{"username":"operator","password":""}` → username `operator`, password `secret`.
+      5. `{"username":""}` con password salvata → 400 col messaggio "Set both the NUT username and password, or remove the NUT credentials".
+      6. current senza credenziali: `{"username":"admin","password":""}` → 400 stesso messaggio; `{"username":"","password":"x"}` → 400; `{"username":"","password":""}` → 0, nessuna credenziale.
+      7. `{"remove_credentials":true}` → 0, entrambi vuoti, nome invariato; con `"ups_name":"eaton"` anche il nome cambia.
+      8. `{"remove_credentials":true,"password":"x"}` → 400 `Invalid request`; `{"remove_credentials":"yes"}` → 400 `Invalid request`; `{"remove_credentials":false,"password":"x"}` → 0, password `x`.
+      9. `{"ups_name":"my ups"}` → 400 `Invalid UPS name` (US-082 invariato).
+      10. `{}` → 0, tutto invariato.
+
+      **Verifica:** `pio test -e native -f test_web_api` verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — test di nutConfigFromBody()
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati passano
+      - [ ] test_nut_config_body_check e test_nut_config_applied_json restano verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Rotte: POST /api/nut/config con nutConfigFromBody e has_password in /api/config'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare le nuove regole all'API.
+
+      **Leggere:** `src/network/web_config_server.cpp`: `handleNutConfig()` (~665-715) e `handleGetConfig()` (blocco `nutObj`, ~733).
+
+      **Modifiche:**
+      1. `handleNutConfig()`: dopo il parse JSON, costruire `NUTServerConfig current = {nc.username, nc.password, nc.ups_name}` dalla config salvata, chiamare `WebApiJson::nutConfigFromBody(doc, current, next, rejected)`; se != 0 rispondere con quello status e `rejected` (niente salvato, niente applicato). Altrimenti copiare `next` in `nc`, `setNutConfig`, `save()`, poi come in US-124 (`applyConfig` se `isRunning()`, `nutConfigAppliedJson`). Rimuovere il vecchio blocco `doc["username"]/["password"]/["ups_name"]` e la chiamata diretta a `checkNutConfigBody` (ora dentro la funzione).
+      2. Log: se `doc["remove_credentials"] == true` → `[WEB] NUT credentials removed`, altrimenti `[WEB] NUT configuration saved`. Mai le password.
+      3. `handleGetConfig()`: `nutObj["has_password"] = config_mgr.getNutConfig().password.length() > 0;`. La password non va mai nella risposta.
+
+      **Verifica:** `pio run -e esp32-s3-standard` (da PowerShell) compila; lettura del diff: nessun percorso salva o applica dopo un 400.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — handleNutConfig() e handleGetConfig()
+
+      ## Criteri di Completamento
+      - [ ] POST usa nutConfigFromBody e non salva né applica sui 400
+      - [ ] GET /api/config espone has_password e mai la password
+      - [ ] Log distinto per la rimozione, senza password
+      - [ ] Build S3 ok
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Pagina NUT Server: campi facoltativi, stato della password, rimozione e avviso'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la pagina segue le nuove regole.
+
+      **Leggere:** `data/www/index.html` (form `#nut-form`, ~507-560, `#nut-status` e `#nut-help` di US-124, markup `auth-alert` di `#cv-ok`/`#cv-error`), `data/www/bundle.js` (form NUT ~324-400 con `showNutStatus()`, caricamento `/api/config` ~1880, `window.confirm` ~683), `data/www/bundle.css` (`.auth-alert`, `.btn`).
+
+      **Modifiche:**
+      1. `index.html`: togliere `required` da `#nut-username` e `#nut-password` (resta su UPS Name). Sotto la password `<p class="field-hint" id="nut-password-state"></p>` (riusare la classe di hint già presente nel CSS, o `auth-fineprint` senza bordo se non c'è). Un `<div class="auth-alert info" id="nut-no-credentials" role="status" hidden>` con icona e testo "Without NUT credentials, NUT clients can only read the data: commands and setting changes are refused.". Un `<div class="auth-alert" id="nut-error" role="alert" hidden><span id="nut-error-text"></span></div>`. Nei `form-actions` un secondo pulsante `<button type="button" class="btn btn-secondary" id="btn-remove-nut-creds" hidden>Remove NUT credentials</button>` (classe secondaria già usata nella UI). Aggiornare `#nut-help` con "Leave Password empty to keep the current one.".
+      2. `bundle.js`: stato `nutState = { hasPassword, username }` riempito da `/api/config` (`data.nut.has_password`, `data.nut.username`). Funzione `renderNutCredentials()`: testo di `#nut-password-state` ("A password is set: leave the field empty to keep it." / "No password set."), placeholder della password ("Leave empty to keep the current password" / "Password"), `#nut-no-credentials` visibile quando `!username || !hasPassword`, `#btn-remove-nut-creds` visibile quando ci sono credenziali.
+      3. Submit: prima dell'invio, se `(username !== '') !== (password !== '' || hasPassword)` oppure username vuoto con password scritta → mostrare in `#nut-error` "Set both the NUT username and password, or remove the NUT credentials" e non inviare. Su risposta non ok leggere `error` dal JSON e mostrarlo in `#nut-error` (niente più `alert`). Su ok: `hasPassword = hasPassword || password !== ''`, aggiornare `username`, svuotare il campo password, `renderNutCredentials()`, `showNutStatus(data)`.
+      4. Rimozione: click → `window.confirm('Remove the NUT credentials?\n\nNUT clients will only be able to read the data, and the connected NUT clients are disconnected.')`; se confermato POST `{remove_credentials: true}` (stesso `apiFetch` con Content-Type JSON); su ok svuotare username e password, `hasPassword = false`, `renderNutCredentials()`, `showNutStatus(data)`; su errore `#nut-error`.
+      5. Nascondere `#nut-error` a ogni nuovo invio.
+      6. `python scripts/embed_web.py`.
+
+      **Verifica:** `npx playwright test e2e/nut_config.spec.ts e2e/config_autopopulate.spec.ts e2e/credentials.spec.ts`; il test US-124 che si aspetta il dialog sull'errore va adeguato in TASK-07.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — campi facoltativi, stato password, avviso, errore, pulsante di rimozione
+      - data/www/bundle.js — stato delle credenziali, controllo prima dell'invio, rimozione con conferma, errori in pagina
+      - data/www/bundle.css — solo se serve uno stile per il pulsante o la riga di stato
+      - data/www/index_inlined.html e asset embedded — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Username e Password non obbligatori
+      - [ ] La pagina indica se una password è impostata e la conserva se il campo è vuoto
+      - [ ] Username senza password rifiutato prima dell'invio, con il messaggio dell'API
+      - [ ] Remove NUT credentials con conferma, visibile solo con credenziali
+      - [ ] Avviso di sola lettura senza credenziali
+      - [ ] Asset rigenerati
+    ref: TASK-06
+  - id: TASK-07
+    title: E2E Playwright della pagina NUT Server con credenziali facoltative
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente delle nuove regole.
+
+      **Leggere:** `e2e/nut_config.spec.ts` (helper `APPLIED`, `openNutTab`, `saveNut` di US-124), `e2e/config_autopopulate.spec.ts`, `e2e/support/webui.ts`.
+
+      **Test (in `e2e/nut_config.spec.ts`, con un mock di `/api/config` parametrico):**
+      1. `changing the UPS name keeps the saved password`: `has_password:true`, username `admin`; la pagina mostra "A password is set"; cambio UPS Name, password vuota, salvataggio; il body inviato ha `password` vuota o assente; esito "Applied now".
+      2. `a username without a password is refused before sending`: `has_password:false`, nessun username; scrivo solo lo username → `#nut-error` col messaggio, nessuna POST.
+      3. `remove NUT credentials asks and clears them`: con credenziali, click su Remove, accetto il dialog (verifico il testo) → body `{remove_credentials:true}`, `#nut-username` vuoto, `#nut-no-credentials` visibile, pulsante nascosto, esito mostrato.
+      4. `cancelling the removal sends nothing`: dismiss del dialog → nessuna POST.
+      5. `without credentials the page warns and the form saves empty fields`: username vuoto e `has_password:false` → avviso visibile, pulsante nascosto, salvataggio con campi vuoti consentito dal browser (nessun `required`).
+      6. Adeguare `an API error shows no applied message` (US-124): il 400 mostra il messaggio in `#nut-error` e non apre dialog.
+      7. Gli altri test del file e di `config_autopopulate.spec.ts` restano verdi (aggiungere `has_password` ai mock solo dove serve).
+
+      **Verifica:** `npx playwright test e2e/nut_config.spec.ts e2e/config_autopopulate.spec.ts` e suite completa verdi.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/nut_config.spec.ts — scenari di password conservata, username da solo, rimozione, sola lettura, errore in pagina
+      - e2e/config_autopopulate.spec.ts — solo se il mock va adeguato
+
+      ## Criteri di Completamento
+      - [ ] I 5 scenari nuovi passano
+      - [ ] Il test di errore di US-124 è adeguato al riquadro in pagina
+      - [ ] Suite e2e completa verde
+    ref: TASK-07
+  - id: TASK-08
+    title: README e architettura con le nuove regole delle credenziali NUT
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare le regole nuove. Il manuale utente non si modifica (decisione dell'utente); le note di rilascio si scrivono prima della release.
+
+      **Modifiche:**
+      1. `README.md` riga ~287 (NUT credentials): facoltative; con credenziali i client NUT le usano per comandi e impostazioni, la lettura resta libera; **senza credenziali i client NUT possono solo leggere i dati** (comandi e modifiche rifiutati con `ACCESS-DENIED`, come NUT senza utenti); password lasciata vuota = resta quella attuale; **Remove NUT credentials** per cancellarle. Togliere "With no NUT credentials set, every client is allowed.".
+      2. `README.md` riga ~252 (ESP32-P4): dopo "(no NUT credentials, UPS name `ups`)" aggiungere che senza credenziali i client NUT possono solo leggere e che per i comandi da Home Assistant o `upscmd` vanno impostate nella scheda NUT Server.
+      3. `README.it.md`: stesse modifiche in italiano (righe ~252 e ~287).
+      4. `docs/concepts/architecture.md`: un paragrafo (US-125) su `hasCredentials()`, il rifiuto di INSTCMD/SET VAR come in upsd (USERNAME-REQUIRED, PASSWORD-REQUIRED, ACCESS-DENIED), `LOGIN` ammesso senza credenziali (unico scostamento da upsd) e le regole di `nutConfigFromBody()`.
+
+      **Verifica:** `grep -n "every client is allowed\|ogni client è ammesso" README.md README.it.md` non trova nulla.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - README.md — righe delle credenziali NUT e della ESP32-P4
+      - README.it.md — stesse righe in italiano
+      - docs/concepts/architecture.md — paragrafo US-125
+
+      ## Criteri di Completamento
+      - [ ] README EN/IT descrivono sola lettura senza credenziali, password conservata e rimozione
+      - [ ] Nessuna frase dice più che senza credenziali ogni client è ammesso
+      - [ ] Paragrafo in architecture.md
+    ref: TASK-08
+  - id: TASK-09
+    title: Suite completa e prova sull'Eaton 3S (con consenso)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** regressione completa e dimostrazione della spec sull'hardware.
+
+      **Passi:**
+      1. `pio test -e native` completo (rilanciare da sole le suite ERRORED transitorie su Windows), build `esp32-s3-standard` e `esp32-p4-eth` da PowerShell, `npx playwright test` completo. Esiti in `docs/test-results/US-125/` (`native.log`, `e2e.log`, `summary.md`).
+      2. **Prova sul campo, solo dopo un sì esplicito dell'utente**: OTA sulla scheda di test (credenziali da `C:\Users\pasquale\.esp32-nut-cred.json`, mai stampate; script `ota_upload.py` e un client NUT Python come in US-124). Cambiare il nome UPS con password vuota via API: `INSTCMD` con la password di prima funziona. Rimuovere le credenziali: `GET VAR` funziona, `INSTCMD` e `SET VAR` → `ERR USERNAME-REQUIRED` senza USERNAME e `ERR ACCESS-DENIED` con username e password, con le righe nel System Log, `LOGIN` → `OK`. Username senza password → 400. Ripristinare subito nome e credenziali originali (il client NUT esterno 192.168.1.4 riceve errori nel frattempo, e i comandi del beeper vanno scelti in modo da non cambiare lo stato dell'UPS).
+      3. Esito in `docs/test-results/US-125/field.md`.
+
+      **Blocchi:** senza il consenso alla prova sul campo il punto 2 resta da fare e va segnalato in review.
+
+      ## File Coinvolti
+      - docs/test-results/US-125/ — esiti di nativi, build, e2e e prova sul campo
+
+      ## Criteri di Completamento
+      - [ ] Nativi, build S3/P4 ed e2e verdi
+      - [ ] Prova sull'Eaton 3S fatta dopo il consenso, oppure segnalata come mancante
+      - [ ] Configurazione NUT originale ripristinata sulla scheda
+    ref: TASK-09

@@ -531,11 +531,12 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     String cmd = tokens[0];
     cmd.toUpperCase();
 
-    bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
-
     // upsd check_command(): FLAG_USER commands need USERNAME and PASSWORD before any
-    // other check, arguments included
-    if (cmd == "LOGIN" || cmd == "SET" || cmd == "INSTCMD") {
+    // other check, arguments included, whether or not upsd.users has users (US-125).
+    // One deviation: with no NUT credentials LOGIN is allowed without them, so upsmon
+    // keeps connecting (upsd net_login() refuses it; user decision of 2026-11-13)
+    bool checkSent = (cmd == "SET" || cmd == "INSTCMD") || (cmd == "LOGIN" && hasCredentials());
+    if (checkSent) {
         const char* missing = missingCredentials(slot);
         if (missing) {
             String subcmd = tokens.size() > 1 ? tokens[1] : String("");
@@ -544,6 +545,7 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
                 // A refused SET VAR goes to the System Log like the others
                 rejectSet(client, slot, tokens[3], tokens[4], missing);
             } else {
+                if (cmd == "INSTCMD") logInstcmdWithoutCredentials(tokens, slot, missing);
                 client.printf("ERR %s\n", missing);
             }
             return;
@@ -604,7 +606,8 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
             return;
         }
 
-        if (authRequired && !_clientAuthenticated[slot]) {
+        // With no NUT credentials LOGIN is allowed (see the FLAG_USER check above)
+        if (hasCredentials() && !_clientAuthenticated[slot]) {
             client.print("ERR ACCESS-DENIED\n");
             return;
         }
@@ -816,7 +819,9 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
     }
 
     if (cmd == "INSTCMD") {
-        if (authRequired && !_clientAuthenticated[slot]) {
+        // user_checkinstcmd(): with no NUT credentials no user may run commands (US-125)
+        if (!hasCredentials() || !_clientAuthenticated[slot]) {
+            logInstcmdWithoutCredentials(tokens, slot, "ACCESS-DENIED");
             client.print("ERR ACCESS-DENIED\n");
             return;
         }
@@ -1050,14 +1055,20 @@ void NUTServer::processCommand(Print& client, int slot, const String& cmdLine) {
 }
 
 // upsd check_command(), FLAG_USER: USERNAME-REQUIRED / PASSWORD-REQUIRED when the
-// client has not sent them. Whether they are right is checked by each command
-// (ACCESS-DENIED). With no NUT credentials configured every client is allowed.
+// client has not sent them, with or without NUT credentials configured (US-125).
+// Whether they are right is checked by each command (ACCESS-DENIED)
 const char* NUTServer::missingCredentials(int slot) const {
-    bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
-    if (!authRequired) return nullptr;
     if (!_clientUsernameSet[slot]) return "USERNAME-REQUIRED";
     if (!_clientPasswordSet[slot]) return "PASSWORD-REQUIRED";
     return nullptr;
+}
+
+// INSTCMD refused while no NUT credentials are set (US-125): the System Log says why,
+// since a client that worked before now gets an error. With credentials nothing is logged
+void NUTServer::logInstcmdWithoutCredentials(const std::vector<String>& tokens, int slot, const char* err) const {
+    if (hasCredentials()) return;
+    const char* name = tokens.size() > 2 ? tokens[2].c_str() : "-";
+    log("WARN", "[NUT] INSTCMD %s from %s: ERR %s (no NUT credentials set)", name, _clientPeer[slot].c_str(), err);
 }
 
 // A SET VAR refused by the checks of upsd: the error goes to the client and to the
@@ -1100,9 +1111,9 @@ void NUTServer::setVar(Print& client, int slot, const String& upsName, const Str
     }
 
     // user_checkaction(): the credentials that allow INSTCMD allow SET. USERNAME and
-    // PASSWORD were sent (missingCredentials()), here they are wrong
-    bool authRequired = (_config.username.length() > 0 && _config.password.length() > 0);
-    if (authRequired && !_clientAuthenticated[slot]) {
+    // PASSWORD were sent (missingCredentials()), here they are wrong or there are no NUT
+    // credentials, so no user may change variables (US-125)
+    if (!hasCredentials() || !_clientAuthenticated[slot]) {
         rejectSet(client, slot, varName, value, "ACCESS-DENIED");
         return;
     }

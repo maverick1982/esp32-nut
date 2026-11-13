@@ -2233,6 +2233,15 @@ body.auth-page {
 .auth-alert.success svg { color: var(--success); }
 /* US-124: outcome of a NUT Server save, above the button */
 #nut-form .auth-alert { margin-bottom: 1rem; }
+/* US-125: saved password state, and the remove button next to Save */
+.nut-hint {
+    margin-top: 0.4rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+#nut-form .form-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+#nut-form .btn[hidden] { display: none; }
 
 /* Countdown digits inside the 429 alert */
 .auth-alert .countdown {

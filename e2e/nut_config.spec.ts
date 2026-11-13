@@ -156,12 +156,124 @@ test.describe('NUT Configuration UI', () => {
     await expect(page.locator('#nut-status')).toHaveClass(/info/);
   });
 
+  // US-125: the API message is shown in the page, no dialog
   test('an API error shows no applied message', async ({ page }) => {
     const dialogs: string[] = [];
     page.on('dialog', d => { dialogs.push(d.message()); void d.dismiss(); });
     await saveNut(page, { status: 400, json: { error: 'Invalid UPS name' } });
-    await expect(page.locator('#btn-save-nut')).toHaveText(/Error/);
+    await expect(page.locator('#nut-error')).toBeVisible();
+    await expect(page.locator('#nut-error')).toHaveText('Invalid UPS name');
     await expect(page.locator('#nut-status')).toBeHidden();
-    expect(dialogs).toEqual(['Failed to save NUT configuration.']);
+    await expect(page.locator('#btn-save-nut')).toHaveText(/Save Credentials/);
+    expect(dialogs).toEqual([]);
+  });
+
+  // --- US-125: optional NUT credentials, the saved password is kept ---
+
+  type NutMock = { username: string; has_password: boolean; ups_name?: string };
+
+  /** /api/config with the given NUT settings; every POST body of /api/nut/config is collected. */
+  async function mockNut(page: Page, nut: NutMock, reply: object = APPLIED(true, 0)) {
+    const posts: Record<string, unknown>[] = [];
+    await page.route('**/api/config', route =>
+      route.fulfill({ json: { wifi: { ssid: 'Home', mode: 'STA' }, nut: { ups_name: 'ups', ...nut } } }));
+    await page.route('**/api/nut/config', route => {
+      posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: reply });
+    });
+    await openNutTab(page);
+    return posts;
+  }
+
+  test('changing the UPS name keeps the saved password', async ({ page }) => {
+    const posts = await mockNut(page, { username: 'admin', has_password: true });
+    await expect(page.locator('#nut-password-state')).toHaveText('A password is set: leave the field empty to keep it.');
+    await expect(page.locator('#nut-password')).toHaveAttribute('placeholder', 'Leave empty to keep the current password');
+    await expect(page.locator('#nut-no-credentials')).toBeHidden();
+    await expect(page.locator('#nut-username')).toHaveValue('admin');
+
+    await page.fill('#nut-upsname', 'eaton');
+    await page.click('#btn-save-nut');
+    await expect(page.locator('#nut-status')).toHaveText('Applied now, no restart.');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ ups_name: 'eaton', username: 'admin' });
+    expect(posts[0].password ?? '').toBe('');
+    await expect(page.locator('#nut-password-state')).toHaveText(/A password is set/);
+  });
+
+  test('a username without a password is refused before sending', async ({ page }) => {
+    const posts = await mockNut(page, { username: '', has_password: false });
+    await page.fill('#nut-upsname', 'ups');
+    await page.fill('#nut-username', 'admin');
+    await page.click('#btn-save-nut');
+    await expect(page.locator('#nut-error')).toHaveText(
+      'Set both the NUT username and password, or remove the NUT credentials');
+    await expect(page.locator('#nut-status')).toBeHidden();
+    expect(posts).toHaveLength(0);
+  });
+
+  test('an empty username with a saved password is refused before sending', async ({ page }) => {
+    const posts = await mockNut(page, { username: 'admin', has_password: true });
+    await page.fill('#nut-username', '');
+    await page.click('#btn-save-nut');
+    await expect(page.locator('#nut-error')).toBeVisible();
+    expect(posts).toHaveLength(0);
+  });
+
+  test('remove NUT credentials asks and clears them', async ({ page }) => {
+    const posts = await mockNut(page, { username: 'admin', has_password: true }, APPLIED(true, 2));
+    const dialogs: string[] = [];
+    page.on('dialog', d => { dialogs.push(d.message()); void d.accept(); });
+
+    const remove = page.locator('#btn-remove-nut-creds');
+    await expect(remove).toBeVisible();
+    await remove.click();
+
+    await expect(page.locator('#nut-status')).toHaveText(
+      'Applied now, no restart. 2 NUT clients disconnected: they reconnect with the new settings.');
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0]).toContain('Remove the NUT credentials?');
+    expect(dialogs[0]).toContain('NUT clients will only be able to read the data');
+    expect(posts).toEqual([{ remove_credentials: true }]);
+    await expect(page.locator('#nut-username')).toHaveValue('');
+    await expect(page.locator('#nut-no-credentials')).toBeVisible();
+    await expect(page.locator('#nut-password-state')).toHaveText('No password set.');
+    await expect(remove).toBeHidden();
+  });
+
+  test('cancelling the removal sends nothing', async ({ page }) => {
+    const posts = await mockNut(page, { username: 'admin', has_password: true });
+    page.on('dialog', d => { void d.dismiss(); });
+    await page.click('#btn-remove-nut-creds');
+    await expect(page.locator('#btn-remove-nut-creds')).toBeVisible();
+    await expect(page.locator('#nut-username')).toHaveValue('admin');
+    expect(posts).toHaveLength(0);
+  });
+
+  test('without credentials the page warns and saves empty fields', async ({ page }) => {
+    const posts = await mockNut(page, { username: '', has_password: false });
+    await expect(page.locator('#nut-no-credentials')).toBeVisible();
+    await expect(page.locator('#nut-no-credentials')).toContainText('NUT clients can only read the data');
+    await expect(page.locator('#btn-remove-nut-creds')).toBeHidden();
+    await expect(page.locator('#nut-username')).not.toHaveAttribute('required', /.*/);
+    await expect(page.locator('#nut-password')).not.toHaveAttribute('required', /.*/);
+
+    await page.fill('#nut-upsname', 'ups');
+    await page.click('#btn-save-nut');
+    await expect(page.locator('#nut-status')).toBeVisible();
+    expect(posts).toEqual([{ ups_name: 'ups', username: '', password: '' }]);
+  });
+
+  test('setting new credentials hides the read-only warning', async ({ page }) => {
+    await mockNut(page, { username: '', has_password: false });
+    await page.fill('#nut-upsname', 'ups');
+    await page.fill('#nut-username', 'admin');
+    await page.fill('#nut-password', 'secret');
+    await page.click('#btn-save-nut');
+    await expect(page.locator('#nut-status')).toBeVisible();
+    await expect(page.locator('#nut-no-credentials')).toBeHidden();
+    await expect(page.locator('#btn-remove-nut-creds')).toBeVisible();
+    await expect(page.locator('#nut-password')).toHaveValue('');
+    await expect(page.locator('#nut-password-state')).toHaveText(/A password is set/);
   });
 });

@@ -9,6 +9,7 @@
 #include "core/auto_shutdown.h"
 #include "NetLinkInfo.h"
 #include "NutOverrides.h"
+#include "NUTServer.h"
 #include "SyslogSettings.h"
 #include "SyslogStatus.h"
 #include "TimeSettings.h"
@@ -107,6 +108,15 @@ public:
     // restart. {"success":true,"applied":bool,"restart":false,"changed":bool,
     // "sessions_closed":n}; applied false when no NUT server was there to take them
     static String nutConfigAppliedJson(bool applied, bool changed, unsigned sessions_closed);
+    // Body of POST /api/nut/config merged into the saved settings (US-125). next starts as
+    // current; ups_name as checkNutConfigBody(). "remove_credentials": true empties username
+    // and password (400 "Invalid request" when it is not a bool, or with a non-empty username
+    // or password in the same body). Otherwise a string "username" replaces the saved one,
+    // even empty, and a non-empty "password" replaces the saved one: empty or absent keeps
+    // it. Username and password are both set or both empty, otherwise 400 {"error":"Set both
+    // the NUT username and password, or remove the NUT credentials"}. 0 when next is valid
+    static int nutConfigFromBody(JsonVariantConst body, const NUTServerConfig& current, NUTServerConfig& next,
+                                 String& response);
 
     // GET /api/board (US-094): {"id","label","led":{present,on,level,levels},
     // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"

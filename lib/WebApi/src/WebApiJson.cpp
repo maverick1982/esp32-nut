@@ -381,6 +381,35 @@ int WebApiJson::checkNutConfigBody(JsonVariantConst body, String& response) {
     return 0;
 }
 
+int WebApiJson::nutConfigFromBody(JsonVariantConst body, const NUTServerConfig& current, NUTServerConfig& next,
+                                  String& response) {
+    next = current;
+    if (int status = checkNutConfigBody(body, response)) return status;
+    if (body["ups_name"].is<const char*>()) next.ups_name = body["ups_name"].as<const char*>();
+
+    // is<const char*>() before reading: as<String>() of a missing key is "null"
+    JsonVariantConst user = body["username"];
+    JsonVariantConst pass = body["password"];
+    bool has_user = user.is<const char*>() && strlen(user.as<const char*>()) > 0;
+    bool has_pass = pass.is<const char*>() && strlen(pass.as<const char*>()) > 0;
+
+    JsonVariantConst remove = body["remove_credentials"];
+    if (!remove.isNull() && !remove.is<bool>()) return sendError(response, 400, "Invalid request");
+    if (remove.is<bool>() && remove.as<bool>()) {
+        if (has_user || has_pass) return sendError(response, 400, "Invalid request");
+        next.username = "";
+        next.password = "";
+        return 0;
+    }
+
+    if (user.is<const char*>()) next.username = user.as<const char*>();
+    if (has_pass) next.password = pass.as<const char*>();
+    if ((next.username.length() > 0) != (next.password.length() > 0)) {
+        return sendError(response, 400, "Set both the NUT username and password, or remove the NUT credentials");
+    }
+    return 0;
+}
+
 String WebApiJson::nutConfigAppliedJson(bool applied, bool changed, unsigned sessions_closed) {
     JsonDocument doc;
     doc["success"] = true;
