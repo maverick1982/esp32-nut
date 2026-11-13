@@ -133,6 +133,7 @@ public:
         lastId = id;
     }
     bool inputValuesPolled() const override { hidCalls.push_back("inputValuesPolled"); return false; }
+    uint32_t inputSilenceFaultMs() const override { hidCalls.push_back("inputSilenceFaultMs"); return 15000; }
     uint8_t encodeBeeperValue(bool, uint16_t) const override { hidCalls.push_back("encodeBeeperValue"); return 9; }
     bool beeperControllable() const override { hidCalls.push_back("beeperControllable"); return false; }
     bool beeperMuteSupported() const override { hidCalls.push_back("beeperMuteSupported"); return false; }
@@ -195,6 +196,7 @@ void test_neutral_driver_never_reaches_hid(void) {
     DriverDispatch::decode(d, &t, 1, 1, buf, sizeof(buf), ups);
     DriverDispatch::parseString(d, &t, 3, buf, sizeof(buf), ups);
     TEST_ASSERT_TRUE(DriverDispatch::inputValuesPolled(d));
+    TEST_ASSERT_EQUAL_UINT32(0, DriverDispatch::inputSilenceFaultMs(d)); // issue #138: no silence fault
     TEST_ASSERT_FALSE(DriverDispatch::inputWatchdogActive(d, false));
     TEST_ASSERT_EQUAL_UINT16(8, DriverDispatch::requestLength(d, 3, 12, 8));
     TEST_ASSERT_FALSE(DriverDispatch::acceptDiagReport(d, 3, 12));
@@ -229,6 +231,7 @@ void test_null_driver_neutral_values(void) {
     TEST_ASSERT_TRUE(DriverDispatch::beeperMuteSupported(nullptr));
     TEST_ASSERT_FALSE(DriverDispatch::beeperFieldRead(nullptr, nullptr));
     TEST_ASSERT_FALSE(DriverDispatch::inputWatchdogActive(nullptr, false));
+    TEST_ASSERT_EQUAL_UINT32(0, DriverDispatch::inputSilenceFaultMs(nullptr));
     DriverDispatch::applyDefaultDelays(nullptr, ups, usages, nullptr);
     TEST_ASSERT_FALSE(ups.hasKey("ups.delay.shutdown"));
 }
@@ -351,6 +354,13 @@ void test_hid_driver_forwards_every_call(void) {
     TEST_ASSERT_FALSE(ups.hasKey("ups.delay.shutdown")); // nullptr paths set nothing
 }
 
+// Issue #138: the silence limit of the BX guard comes from the HID extension
+void test_hid_driver_forwards_input_silence_fault(void) {
+    SpyHidDriver drv(false);
+    TEST_ASSERT_EQUAL_UINT32(15000, DriverDispatch::inputSilenceFaultMs(&drv));
+    TEST_ASSERT_EQUAL_STRING("inputSilenceFaultMs", join(drv.hidCalls).c_str());
+}
+
 // The same ups.delay.* as before through the dispatch, on a real driver and usages
 void test_hid_driver_delays_unchanged(void) {
     GenericDriver gen;
@@ -393,6 +403,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_neutral_driver_keeps_input_watchdog_inert);
     RUN_TEST(test_neutral_driver_delays);
     RUN_TEST(test_hid_driver_forwards_every_call);
+    RUN_TEST(test_hid_driver_forwards_input_silence_fault);
     RUN_TEST(test_hid_driver_delays_unchanged);
     RUN_TEST(test_every_hid_driver_returns_its_extension);
     return UNITY_END();
