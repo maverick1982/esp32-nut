@@ -20,6 +20,7 @@ This allows you to easily integrate your USB-only UPS into Home Assistant, TrueN
 ## 🌟 Features
 
 - **Native USB Host Support**: Directly reads HID data from USB-compatible UPS devices (tested with Eaton, APC, CyberPower, Powercom).
+- **Megatec/Q1 UPS units**: Some UPS units that NUT drives with `nutdrv_qx` instead of `usbhid-ups` (Megatec/Q1 protocol family) work too, see [Q\* UPS units](#q-ups-units-megatecq1-nutdrv_qx).
 - **NUT Server Protocol**: Implements the standard NUT protocol, making it instantly compatible with existing NUT clients (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), up to 8 at the same time.
 - **UPS Commands**: Battery and panel tests, beeper, load and shutdown commands, from the Web UI or with `upscmd` and Home Assistant, as with NUT's `usbhid-ups` driver.
 - **UPS Settings**: Change the parameters your UPS allows (low battery thresholds, transfer points, battery date, shutdown delays, …) from the Web UI or with `upsrw`.
@@ -116,8 +117,22 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 > [!TIP]
 > **Is your UPS working but not in the list?** Let us know with the [UPS Compatibility Report](https://github.com/maverick1982/esp32-nut/issues/new?template=ups_report.yml) form: we'll add it to the tested models. Attaching the `usb_diagnostics.json` file helps us check future releases against your model.
 
+### Q\* UPS units (Megatec/Q1, `nutdrv_qx`)
+
+Some UPS units show up on USB as HID devices but send their data with a protocol of the Megatec/Q1 family: NUT drives them with `nutdrv_qx` instead of `usbhid-ups`. The board recognizes them by their USB ID, as NUT does, and uses the same protocols.
+
+<details>
+<summary><b>Q* UPS units</b> (Click to expand tested models)</summary>
+
+- VIDA Armour 1200VA (Protocol `hunnox`, novendor on)
+</details>
+
+- **Supported**: UPS units with USB ID `0001:0000` that NUT handles with the `krauler`, `fabula` or `hunnox` USB subdriver (for example Krauler, Fideltronik/MEC LUPUS, Hunnox and other units whose USB product name is `MEC0003`). Protocols: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` and `q1`.
+- **Settings**: if your UPS needs `protocol` or `novendor` in NUT's `ups.conf`, set them in **Board Settings** > **Q\* UPS driver** (see [More Settings](#5-more-settings)). `langid_fix` is applied by itself when the UPS needs it.
+- **Not supported yet**: Q\* UPS units with other USB adapters (Cypress, Phoenix, Ippon, …, such as the Voltronic Power units with USB ID `0665:5161`). The board recognizes them and the Web UI says they are not supported yet.
+
 > [!NOTE]
-> **USB HID Protocol Requirement:** This firmware currently supports only UPS models using the standard **USB HID Power Device Class** (`usbhid-ups`). UPS units communicating via USB-to-Serial protocols (such as Megatec/Q1, USB CDC/serial bridges, or proprietary serial protocols) are not currently supported.
+> UPS units with a USB-to-serial adapter (USB CDC, CH340, …) or a proprietary protocol are not supported.
 
 ## 📸 Screenshots
 
@@ -279,6 +294,7 @@ The Web UI is protected by a username and password.
 - **Automatic shutdown** (**Board Settings** tab, off by default): when the UPS is on battery and reports low battery (`OB LB`), the board sends `shutdown.default` once, even with no NUT client connected, and not again until the UPS is back on line. The threshold is `battery.charge.low` / `battery.runtime.low` of the UPS (**UPS Settings** tab). Whether the UPS turns back on when power returns depends on the model.
 - **Time** (**Board Settings** tab): NTP on by default (`pool.ntp.org`, UTC), with a time zone list with automatic daylight saving time. The time is only shown in the System Log and written in the syslog lines; without Internet access the board works as before.
 - **Status LED** (**Board Settings** tab, ESP32-S3): turn it off or choose its brightness.
+- **Q\* UPS driver** (**Board Settings** tab, only with a [Q\* UPS](#q-ups-units-megatecq1-nutdrv_qx) connected): the protocol the board detected, and the `protocol` and `novendor` options of NUT's `ups.conf`. Leave Protocol on **Automatic** unless NUT needs a specific one for your model: some protocols answer the same probe (`hunnox` is detected as `megatec`), as in NUT. Applied at once, with no restart.
 - **Custom variables** (**NUT Server** tab): up to 16 values that NUT clients see in place of the UPS ones, or as extra variables. `ups.status`, `ups.status.*`, `device.type` and `driver.parameter.*` cannot be set, and a writable variable with a custom value becomes read-only.
 - **Remote logging** (**System Logs** tab, off by default): send the System Log to a syslog server over UDP, with server, port (default 514), format, facility, minimum level and rate limit. UDP syslog is not encrypted: anyone on the LAN can read the lines.
 - **Automatic recovery**: when the UPS stops answering, the board recovers the USB link by itself: first the USB interface, then a power cycle of the USB port, then a restart (at once, then after 1, 5 and 15 minutes). After 4 restarts in a row without the UPS it stops restarting (degraded mode) and the yellow box at the top of the web UI says what to do.

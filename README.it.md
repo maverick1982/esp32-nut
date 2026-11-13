@@ -20,6 +20,7 @@ Questo progetto permette di integrare facilmente il tuo UPS (che magari dispone 
 ## 🌟 Funzionalità
 
 - **Supporto USB Host Nativo**: Legge direttamente i dati HID dai dispositivi UPS compatibili via USB (testato con Eaton, APC, CyberPower, Powercom).
+- **UPS Megatec/Q1**: Funzionano anche alcuni UPS che NUT gestisce con `nutdrv_qx` invece di `usbhid-ups` (famiglia di protocolli Megatec/Q1), vedi [UPS Q\*](#ups-q-megatecq1-nutdrv_qx).
 - **Protocollo Server NUT**: Implementa il protocollo standard NUT, rendendolo immediatamente compatibile con i client NUT esistenti (`upsc`, `upsmon`, Home Assistant, PeaNUT, …), fino a 8 contemporaneamente.
 - **Comandi UPS**: Test della batteria e del pannello, beeper, comandi di carico e di spegnimento, dalla Web UI oppure con `upscmd` e Home Assistant, come con il driver `usbhid-ups` di NUT.
 - **Parametri UPS**: Modifica dei parametri che l'UPS permette di cambiare (soglie di batteria scarica, punti di intervento, data della batteria, ritardi di spegnimento, …) dalla Web UI oppure con `upsrw`.
@@ -116,8 +117,22 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 > [!TIP]
 > **Il tuo UPS funziona ma non è nell'elenco?** Segnalacelo con il modulo [UPS Compatibility Report](https://github.com/maverick1982/esp32-nut/issues/new?template=ups_report.yml): lo aggiungeremo ai modelli testati. Allegare il file `usb_diagnostics.json` ci aiuta a verificare le release future sul tuo modello.
 
+### UPS Q\* (Megatec/Q1, `nutdrv_qx`)
+
+Alcuni UPS si presentano sulla USB come dispositivi HID ma inviano i dati con un protocollo della famiglia Megatec/Q1: NUT li gestisce con `nutdrv_qx` invece di `usbhid-ups`. La scheda li riconosce dall'ID USB, come NUT, e usa gli stessi protocolli.
+
+<details>
+<summary><b>UPS Q*</b> (Clicca per espandere i modelli testati)</summary>
+
+- VIDA Armour 1200VA (Protocol `hunnox`, novendor attivo)
+</details>
+
+- **Supportati**: gli UPS con ID USB `0001:0000` che NUT gestisce con il sottodriver USB `krauler`, `fabula` o `hunnox` (per esempio Krauler, Fideltronik/MEC LUPUS, Hunnox e altri UPS con nome prodotto USB `MEC0003`). Protocolli: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` e `q1`.
+- **Impostazioni**: se il tuo UPS in NUT richiede `protocol` o `novendor` in `ups.conf`, impostali in **Board Settings** > **Q\* UPS driver** (vedi [Altre Impostazioni](#5-altre-impostazioni)). `langid_fix` viene applicato da solo quando l'UPS ne ha bisogno.
+- **Non ancora supportati**: gli UPS Q\* con altri adattatori USB (Cypress, Phoenix, Ippon, …, come gli UPS Voltronic Power con ID USB `0665:5161`). La scheda li riconosce e la Web UI indica che non sono ancora supportati.
+
 > [!NOTE]
-> **Requisito Protocollo USB HID:** Questo firmware supporta attualmente solo UPS conformi allo standard **USB HID Power Device Class** (`usbhid-ups`). I gruppi di continuità che comunicano tramite convertitori USB-Seriale o protocolli seriali proprietari (es. Megatec/Q1, serial over USB CDC) non sono attualmente supportati.
+> Gli UPS con un convertitore USB-seriale (USB CDC, CH340, …) o un protocollo proprietario non sono supportati.
 
 ## 📸 Screenshot
 
@@ -279,6 +294,7 @@ La Web UI è protetta da nome utente e password.
 - **Automatic shutdown** (scheda **Board Settings**, disattivato di default): quando l'UPS è a batteria e segnala batteria scarica (`OB LB`), la scheda invia una volta `shutdown.default`, anche senza client NUT collegati, e non lo invia di nuovo finché l'UPS non torna in rete. La soglia è `battery.charge.low` / `battery.runtime.low` dell'UPS (scheda **UPS Settings**). Se l'UPS si riaccende al ritorno della corrente dipende dal modello.
 - **Time** (scheda **Board Settings**): NTP attivo di default (`pool.ntp.org`, UTC), con un elenco di fusi orari con ora legale automatica. L'ora serve solo a mostrarla nel System Log e a scriverla nelle righe syslog; senza accesso a Internet la scheda funziona come prima.
 - **Status LED** (scheda **Board Settings**, ESP32-S3): spegnilo o scegline la luminosità.
+- **Q\* UPS driver** (scheda **Board Settings**, solo con un [UPS Q\*](#ups-q-megatecq1-nutdrv_qx) collegato): il protocollo rilevato dalla scheda e le opzioni `protocol` e `novendor` di `ups.conf` di NUT. Lascia Protocol su **Automatic** a meno che NUT non richieda un protocollo preciso per il tuo modello: alcuni protocolli rispondono alla stessa interrogazione (`hunnox` viene rilevato come `megatec`), come in NUT. Si applicano subito, senza riavvio.
 - **Custom variables** (scheda **NUT Server**): fino a 16 valori che i client NUT vedono al posto di quelli dell'UPS, o come variabili in più. `ups.status`, `ups.status.*`, `device.type` e `driver.parameter.*` non si possono impostare, e una variabile scrivibile con un valore personalizzato diventa di sola lettura.
 - **Remote logging** (scheda **System Logs**, disattivato di default): invia il System Log a un server syslog via UDP, con server, porta (predefinita 514), formato, facility, livello minimo e limite di righe al secondo. Il syslog su UDP non è cifrato: chiunque sulla rete locale può leggere le righe.
 - **Recupero automatico**: quando l'UPS smette di rispondere, la scheda recupera da sola il collegamento USB: prima l'interfaccia USB, poi un ciclo di alimentazione della porta USB, poi un riavvio (subito, poi dopo 1, 5 e 15 minuti). Dopo 4 riavvii di fila senza l'UPS smette di riavviarsi (modalità degradata) e il riquadro giallo in cima alla Web UI indica cosa fare.
