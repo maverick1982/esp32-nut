@@ -136,6 +136,7 @@ void UpdateService::run() {
         bool net = networkUp();
         {
             std::lock_guard<std::mutex> lock(_mutex);
+            if (_status.phase == UpdatePhase::Restarting) continue;
             manual = _want_check;
             install_now = _want_install;
             auto_due = _schedule.due(millis(), net);

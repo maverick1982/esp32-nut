@@ -262,24 +262,28 @@
 
         async function ouLoad() {
             let s = null;
-            let answered = false;
+            let httpStatus = 0;
             try {
                 const res = await ouFetch('/api/update');
-                answered = true;
+                httpStatus = res.status;
                 if (res.ok) s = await res.json();
             } catch (err) {
                 s = null;
             }
             if (ouInstalling) {
-                if (!answered) {
+                if (httpStatus === 0) {
                     ouWentDown = true;
-                    ouMessage('Restarting, waiting for the board...', '');
+                    ouMessage('Waiting for the board...', '');
                     ouPoll(3000);
                     return;
                 }
-                const newVersion = s && s.phase === 'idle' && s.current !== ouStartVersion;
-                if (ouWentDown || newVersion) {
+                const restarted = s && s.phase === 'idle' && (ouWentDown || s.current !== ouStartVersion);
+                if (httpStatus === 404 || restarted) {
                     ouFinish();
+                    return;
+                }
+                if (!s) {
+                    ouPoll(3000);
                     return;
                 }
             }

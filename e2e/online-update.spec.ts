@@ -156,8 +156,25 @@ test.describe('Online firmware update', () => {
       return route.fulfill({ status: 404, body: 'Not found' });
     });
     await page.click('#btnInstallUpdate');
-    await expect(page.locator('#ouMsg')).toHaveText('Restarting, waiting for the board...', { timeout: 10000 });
+    await expect(page.locator('#ouMsg')).toHaveText('Waiting for the board...', { timeout: 10000 });
     await page.waitForURL('http://esp32.local/', { timeout: 15000 });
+  });
+
+  test('install: a failed poll during the download does not end the install', async ({ page }) => {
+    await page.goto('http://esp32.local/update');
+    page.once('dialog', d => d.accept());
+    let calls = 0;
+    await page.route('**/api/update', route => {
+      calls++;
+      if (calls === 1) return route.fulfill({ json: status({ phase: 'downloading', progress: 20 }) });
+      if (calls === 2) return route.abort('connectionrefused');
+      if (calls === 3) return route.fulfill({ json: status({ phase: 'downloading', progress: 60 }) });
+      return route.fulfill({ json: status({ phase: 'failed', error: 'Read failed' }) });
+    });
+    await page.click('#btnInstallUpdate');
+    await expect(page.locator('#ouMsg')).toContainText('60%', { timeout: 15000 });
+    await expect(page.locator('#ouMsg')).toHaveText('Update failed: Read failed. The running firmware is unchanged.', { timeout: 15000 });
+    expect(page.url()).toBe('http://esp32.local/update');
   });
 
   test('install cancelled in the confirmation sends nothing', async ({ page }) => {
