@@ -129,7 +129,7 @@ test.describe('Online firmware update', () => {
     await expect(page.locator('#ouMsg')).toHaveText('Check failed: GitHub rate limit reached, try again later');
   });
 
-  test('install: confirm, progress, restart, new version', async ({ page }) => {
+  test('install: confirm, progress, restart, back to the dashboard', async ({ page }) => {
     await page.goto('http://esp32.local/update');
     page.once('dialog', d => d.accept());
     queue = [
@@ -140,9 +140,24 @@ test.describe('Online firmware update', () => {
     await page.click('#btnInstallUpdate');
     await expect(page.locator('#ouMsg')).toContainText('40%');
     await expect(page.locator('#ouProgressContainer')).toBeVisible();
-    await expect(page.locator('#ouMsg')).toHaveText('Update complete: now running v1.17.0.', { timeout: 15000 });
-    await expect(page.locator('#btnInstallUpdate')).toBeHidden();
+    await expect(page.locator('#ouMsg')).toHaveText('Update complete! Returning to the dashboard...', { timeout: 15000 });
+    await page.waitForURL('http://esp32.local/', { timeout: 10000 });
     expect(posts).toEqual([{ url: '/api/update/install', body: {} }]);
+  });
+
+  test('install: board back with a firmware without /api/update still returns to the dashboard', async ({ page }) => {
+    await page.goto('http://esp32.local/update');
+    page.once('dialog', d => d.accept());
+    let calls = 0;
+    await page.route('**/api/update', route => {
+      calls++;
+      if (calls === 1) return route.fulfill({ json: status({ phase: 'restarting', progress: 100 }) });
+      if (calls === 2) return route.abort('connectionrefused');
+      return route.fulfill({ status: 404, body: 'Not found' });
+    });
+    await page.click('#btnInstallUpdate');
+    await expect(page.locator('#ouMsg')).toHaveText('Restarting, waiting for the board...', { timeout: 10000 });
+    await page.waitForURL('http://esp32.local/', { timeout: 15000 });
   });
 
   test('install cancelled in the confirmation sends nothing', async ({ page }) => {

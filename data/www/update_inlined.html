@@ -3681,8 +3681,8 @@ body.auth-page {
         const ou = (id) => document.getElementById(id);
         let ouTimer = null;
         let ouInstalling = false;
-        let ouTargetVersion = '';
-        let ouRebootPolls = 0;
+        let ouStartVersion = '';
+        let ouWentDown = false;
 
         function ouMessage(text, cls) {
             ou('ouMsg').textContent = text;
@@ -3764,29 +3764,39 @@ body.auth-page {
             return busy;
         }
 
+        function ouFinish() {
+            ouInstalling = false;
+            clearTimeout(ouTimer);
+            ouMessage('Update complete! Returning to the dashboard...', 'success');
+            setTimeout(() => { window.location.href = '/'; }, 3000);
+        }
+
         async function ouLoad() {
             let s = null;
+            let answered = false;
             try {
                 const res = await ouFetch('/api/update');
+                answered = true;
                 if (res.ok) s = await res.json();
             } catch (err) {
                 s = null;
             }
-            if (!s) {
-                if (ouInstalling && ouRebootPolls < 40) {
-                    ouRebootPolls++;
+            if (ouInstalling) {
+                if (!answered) {
+                    ouWentDown = true;
                     ouMessage('Restarting, waiting for the board...', '');
                     ouPoll(3000);
-                } else if (!ouInstalling) {
-                    ouMessage('Online update is not available.', 'error');
-                    ou('btnCheckUpdate').disabled = true;
+                    return;
                 }
-                return;
+                const newVersion = s && s.phase === 'idle' && s.current !== ouStartVersion;
+                if (ouWentDown || newVersion) {
+                    ouFinish();
+                    return;
+                }
             }
-            if (ouInstalling && s.phase === 'idle' && s.current === ouTargetVersion) {
-                ouInstalling = false;
-                ouRender(s);
-                ouMessage('Update complete: now running ' + s.current + '.', 'success');
+            if (!s) {
+                ouMessage('Online update is not available.', 'error');
+                ou('btnCheckUpdate').disabled = true;
                 return;
             }
             if (s.phase === 'failed') ouInstalling = false;
@@ -3834,8 +3844,8 @@ body.auth-page {
                     return;
                 }
                 ouInstalling = true;
-                ouTargetVersion = version;
-                ouRebootPolls = 0;
+                ouStartVersion = ou('ouCurrent').textContent;
+                ouWentDown = false;
                 ouPoll(1000);
             } catch (e) {
                 ouMessage('Network error', 'error');
