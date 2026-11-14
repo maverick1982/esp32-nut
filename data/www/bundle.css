@@ -3403,3 +3403,17 @@ body.auth-page {
     .panel-header .w5500-badge { margin-left: 0; }
     .w5500-mode-options { grid-template-columns: 1fr; }
 }
+
+.update-banner {
+    display: block;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--border-radius);
+    background: rgba(0, 240, 255, 0.08);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+.update-banner[hidden] { display: none; }
+.update-banner:hover { box-shadow: 0 0 15px var(--accent-glow); }

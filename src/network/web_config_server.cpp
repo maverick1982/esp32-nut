@@ -119,6 +119,10 @@ void WebConfigServer::begin(bool isAPMode) {
     }
     // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
     // so protected by the login
+    server.on("/api/update", HTTP_GET, guarded([this]() { handleGetUpdate(); }));
+    server.on("/api/update/check", HTTP_POST, guarded([this]() { handleUpdateCheck(); }));
+    server.on("/api/update/install", HTTP_POST, guarded([this]() { handleUpdateInstall(); }));
+    server.on("/api/update/settings", HTTP_POST, guarded([this]() { handleUpdateSettings(); }));
     server.on("/api/logging", HTTP_GET, guarded([this]() { handleGetLogging(); }));
     server.on("/api/logging", HTTP_POST, guarded([this]() { handleSetLogging(); }));
     server.on("/api/time", HTTP_GET, guarded([this]() { handleGetTime(); }));
@@ -495,6 +499,92 @@ void WebConfigServer::handleSetEthSpi() {
 
 // --- Remote logging of the System Logs page (US-116, ADR 0012) ---
 
+void WebConfigServer::setUpdateService(UpdateService* updates) {
+    update_service = updates;
+}
+
+void WebConfigServer::handleGetUpdate() {
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", WebApiJson::updateStatusJson(update_service->status()));
+}
+
+static int updateRequestStatus(UpdateService::Request r, String& response) {
+    switch (r) {
+    case UpdateService::Request::Accepted:
+        response = "{\"success\":true}";
+        return 202;
+    case UpdateService::Request::TooSoon:
+        response = "{\"error\":\"Checked a moment ago, try again in 30 seconds\"}";
+        return 429;
+    case UpdateService::Request::NotInstallable:
+        response = "{\"error\":\"No verified update to install\"}";
+        return 409;
+    default:
+        response = "{\"error\":\"An update check or install is already running\"}";
+        return 409;
+    }
+}
+
+void WebConfigServer::handleUpdateCheck() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    String response;
+    int status = updateRequestStatus(update_service->requestCheck(), response);
+    server.send(status, "application/json", response);
+}
+
+void WebConfigServer::handleUpdateInstall() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    if (ota_upload_started || Update.isRunning()) {
+        server.send(409, "application/json", "{\"error\":\"A firmware upload is in progress\"}");
+        return;
+    }
+    String response;
+    UpdateService::Request r = update_service->requestInstall();
+    int status = updateRequestStatus(r, response);
+    if (r == UpdateService::Request::Accepted) {
+        AppLogger::log("INFO", String("[UPDATE] Online update started from the Web UI by '") + webUiUser() + "'");
+    }
+    server.send(status, "application/json", response);
+}
+
+void WebConfigServer::handleUpdateSettings() {
+    if (!requireJson()) return;
+    if (!update_service) {
+        server.send(503, "application/json", "{\"error\":\"Online update not available\"}");
+        return;
+    }
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    bool auto_check = true;
+    String rejected;
+    if (int status = WebApiJson::checkUpdateSettingsBody(doc, auto_check, rejected)) {
+        server.send(status, "application/json", rejected);
+        return;
+    }
+    if (!update_service->setAutoCheck(auto_check)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+        return;
+    }
+    AppLogger::log("INFO", String("[UPDATE] Daily update check ") + (auto_check ? "enabled" : "disabled") + " by '" +
+                               webUiUser() + "'");
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
 void WebConfigServer::setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog) {
     log_store = store;
     syslog_output = syslog;
@@ -771,6 +861,7 @@ void WebConfigServer::handleSystemStatus() {
     WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), ups_source);
 
     CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
+    if (update_service) WebApiJson::updateSummaryJson(doc["update"].to<JsonObject>(), update_service->status());
 
     String response;
     serializeJson(doc, response);
@@ -895,10 +986,12 @@ void WebConfigServer::handleOTAUpload() {
     if (upload.status == UPLOAD_FILE_START) {
         // uri, metodo e header raccolti sono già disponibili: WebServer analizza gli
         // header prima del body multipart. Senza sessione Update.begin() non parte
-        ota_rejected = !authorizedQuiet();
+        bool online_update = update_service && update_service->busy();
+        ota_rejected = !authorizedQuiet() || online_update;
         ota_upload_started = !ota_rejected;
         if (ota_rejected) {
-            AppLogger::log("WARN", "[OTA] Upload rejected: not authenticated");
+            AppLogger::log("WARN", online_update ? "[OTA] Upload rejected: online update in progress"
+                                                 : "[OTA] Upload rejected: not authenticated");
             return;
         }
         AppLogger::log("INFO", String("[OTA] Upload started: ") + upload.filename);

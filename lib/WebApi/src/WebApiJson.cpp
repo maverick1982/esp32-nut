@@ -974,3 +974,45 @@ int WebApiJson::checkTimeBody(JsonVariantConst body, const TimeSettings& current
     if (next.ntp && next.server.length() == 0) return sendError(response, 400, "Server required to enable NTP");
     return 0;
 }
+
+// --- Online firmware update ---
+
+String WebApiJson::updateStatusJson(const UpdateStatus& s) {
+    JsonDocument doc;
+    doc["current"] = s.current.c_str();
+    doc["latest"] = s.latest.c_str();
+    doc["available"] = updateAvailable(s.current, s.latest);
+    doc["installable"] = updateInstallable(s);
+    doc["release_url"] = s.release_url.c_str();
+    JsonObject asset = doc["asset"].to<JsonObject>();
+    asset["name"] = s.asset_name.c_str();
+    asset["size"] = s.asset_size;
+    asset["verified"] = s.asset_verified;
+    doc["checked"] = s.checked;
+    doc["last_check_ok"] = s.last_check_ok;
+    if (s.checked) {
+        doc["checked_age_s"] = s.checked_age_s;
+    } else {
+        doc["checked_age_s"] = nullptr;
+    }
+    doc["error"] = s.error.c_str();
+    doc["phase"] = updatePhaseName(s.phase);
+    doc["progress"] = s.progress;
+    doc["auto_check"] = s.auto_check;
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+void WebApiJson::updateSummaryJson(JsonObject out, const UpdateStatus& s) {
+    out["available"] = updateAvailable(s.current, s.latest);
+    out["latest"] = s.latest.c_str();
+}
+
+int WebApiJson::checkUpdateSettingsBody(JsonVariantConst body, bool& auto_check, String& response) {
+    if (!body.is<JsonObjectConst>() || !body["auto_check"].is<bool>()) {
+        return sendError(response, 400, "Invalid request");
+    }
+    auto_check = body["auto_check"].as<bool>();
+    return 0;
+}

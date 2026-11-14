@@ -2801,6 +2801,15 @@ document.addEventListener('DOMContentLoaded', () => {
         loadSettings();
     }
 
+    function renderUpdateNotice(data) {
+        const banner = document.getElementById('update-banner');
+        if (!banner) return;
+        const upd = data.update || {};
+        const show = upd.available === true && typeof upd.latest === 'string' && upd.latest !== '';
+        if (show) banner.textContent = 'Firmware ' + upd.latest + ' is available. Open Firmware OTA to install it.';
+        banner.hidden = !show;
+    }
+
     // Issue #47: surface crash diagnostics without a serial console
     function renderDiagnostics(data) {
         const banner = document.getElementById('diag-banner');
@@ -2881,6 +2890,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderDiagnostics(data);
+            renderUpdateNotice(data);
             renderNetworkStatus(data.network);
 
             if (lblUps && data.ups) {
@@ -3940,6 +3950,91 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
         if (activeTab && activeTab.getAttribute('data-target') === 'board') loadBoard();
+    }
+
+    // --- Firmware updates section of Board Settings: GET /api/update when the tab opens,
+    // POST /api/update/settings on each change of the switch ---
+    const fwcheckSwitch = document.getElementById('fwcheck-on');
+    if (fwcheckSwitch) {
+        const F = (id) => document.getElementById(id);
+        let fwcheckOn = null;
+        let fwcheckBusy = false;
+        let fwcheckTimer = null;
+
+        function renderFwcheck() {
+            const known = fwcheckOn !== null;
+            fwcheckSwitch.checked = fwcheckOn === true;
+            fwcheckSwitch.disabled = fwcheckBusy || !known;
+            F('fwcheck-state').textContent = fwcheckOn ? 'On' : 'Off';
+            F('fwcheck-state').classList.toggle('on', fwcheckOn === true);
+            F('row-fwcheck').classList.toggle('is-disabled', !known);
+        }
+
+        function fwcheckError(text) {
+            F('fwcheck-error-text').textContent = text;
+            F('fwcheck-error').hidden = false;
+        }
+
+        async function loadFwcheck() {
+            if (sessionExpired) return;
+            try {
+                const res = await apiFetch('/api/update', { cache: 'no-store' });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                fwcheckOn = data.auto_check === true;
+                F('fwcheck-error').hidden = true;
+            } catch (err) {
+                console.error('Failed to fetch update settings:', err);
+                fwcheckOn = null;
+                fwcheckError('Could not read the update settings. Open the tab again to retry.');
+            }
+            renderFwcheck();
+        }
+
+        fwcheckSwitch.addEventListener('change', async () => {
+            if (fwcheckBusy || fwcheckOn === null) return;
+            const on = fwcheckSwitch.checked;
+            F('fwcheck-error').hidden = true;
+            clearTimeout(fwcheckTimer);
+            F('fwcheck-result').textContent = '';
+            fwcheckBusy = true;
+            renderFwcheck();
+            fwcheckSwitch.checked = on;
+            let message = 'Network error';
+            try {
+                const res = await apiFetch('/api/update/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ auto_check: on })
+                });
+                let json = null;
+                try { json = await res.json(); } catch (err) { json = null; }
+                if (res.ok && json && json.success === true) {
+                    message = null;
+                } else {
+                    message = (json && typeof json.error === 'string' && json.error) || `Failed (HTTP ${res.status})`;
+                }
+            } catch (err) {
+                console.error('Update settings save error:', err);
+            }
+            fwcheckBusy = false;
+            if (message === null) {
+                fwcheckOn = on;
+                F('fwcheck-result').className = 'cmd-result success';
+                F('fwcheck-result').textContent = on ? '✓ Daily update check on · saved' : '✓ Daily update check off · saved';
+                fwcheckTimer = setTimeout(() => { F('fwcheck-result').textContent = ''; }, 4000);
+            } else {
+                fwcheckError(message);
+            }
+            renderFwcheck();
+        });
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                if (tab.getAttribute('data-target') === 'board') loadFwcheck();
+            });
+        });
+        if (activeTab && activeTab.getAttribute('data-target') === 'board') loadFwcheck();
     }
 
     // --- US-117: Time section of Board Settings (ADR 0009). GET /api/time when the tab opens

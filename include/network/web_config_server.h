@@ -23,6 +23,7 @@
 #include "network/auth_platform.h"
 #include "network/network_manager.h"
 #include "network/syslog_output.h"
+#include "core/update_service.h"
 #include "core/log_settings_store.h"
 #include "core/time_settings_store.h"
 #include "network/ntp_clock.h"
@@ -56,6 +57,7 @@ public:
     // Remote logging of the System Logs page (US-116): settings in NVS, applied live to
     // the syslog output
     void setRemoteLog(LogSettingsStore* store, SyslogOutput* syslog);
+    void setUpdateService(UpdateService* updates);
     // Network time of Board Settings (US-117): settings in NVS, applied live to the clock
     void setTime(TimeSettingsStore* store, NtpClock* clock);
 
@@ -92,6 +94,11 @@ private:
     NUTServer* nut_server = nullptr;
     LogSettingsStore* log_store = nullptr;
     SyslogOutput* syslog_output = nullptr;
+    UpdateService* update_service = nullptr;
+    void handleGetUpdate();
+    void handleUpdateCheck();
+    void handleUpdateInstall();
+    void handleUpdateSettings();
     void handleGetLogging();
     void handleSetLogging();
     TimeSettingsStore* time_store = nullptr;
