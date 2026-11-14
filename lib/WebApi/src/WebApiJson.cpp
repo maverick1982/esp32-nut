@@ -983,6 +983,7 @@ String WebApiJson::updateStatusJson(const UpdateStatus& s) {
     doc["latest"] = s.latest.c_str();
     doc["available"] = updateAvailable(s.current, s.latest);
     doc["installable"] = updateInstallable(s);
+    doc["release_build"] = isReleaseBuild(s.current);
     doc["release_url"] = s.release_url.c_str();
     JsonObject asset = doc["asset"].to<JsonObject>();
     asset["name"] = s.asset_name.c_str();

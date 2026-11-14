@@ -2337,6 +2337,7 @@ void test_update_status_json(void) {
     TEST_ASSERT_EQUAL_STRING("v1.17.0", doc["latest"].as<const char*>());
     TEST_ASSERT_TRUE(doc["available"].as<bool>());
     TEST_ASSERT_TRUE(doc["installable"].as<bool>());
+    TEST_ASSERT_TRUE(doc["release_build"].as<bool>());
     TEST_ASSERT_EQUAL_STRING("esp32-nut-v1.17.0-esp32-p4-eth-v1.zip", doc["asset"]["name"].as<const char*>());
     TEST_ASSERT_EQUAL(3247719, doc["asset"]["size"].as<int>());
     TEST_ASSERT_TRUE(doc["asset"]["verified"].as<bool>());
@@ -2358,6 +2359,13 @@ void test_update_status_json_never_checked(void) {
     TEST_ASSERT_FALSE(doc["installable"].as<bool>());
     TEST_ASSERT_TRUE(doc["checked_age_s"].isNull());
     TEST_ASSERT_EQUAL_STRING("idle", doc["phase"].as<const char*>());
+
+    UpdateStatus dev = updateStatus();
+    dev.current = "dev";
+    deserializeJson(doc, WebApiJson::updateStatusJson(dev).c_str());
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+    TEST_ASSERT_FALSE(doc["installable"].as<bool>());
+    TEST_ASSERT_FALSE(doc["release_build"].as<bool>());
 }
 
 void test_update_summary_json(void) {

@@ -10,6 +10,7 @@ function status(over: Status = {}): Status {
   return {
     current: 'v1.16.0', latest: 'v1.17.0', available: true, installable: true,
     release_url: 'https://github.com/maverick1982/esp32-nut/releases/tag/v1.17.0',
+    release_build: true,
     asset: { name: 'esp32-nut-v1.17.0-esp32-p4-eth-v1.zip', size: 3247719, verified: true },
     checked: true, last_check_ok: true, checked_age_s: 7200, error: '',
     phase: 'idle', progress: 0, auto_check: true,
@@ -82,6 +83,23 @@ test.describe('Online firmware update', () => {
     await page.goto('http://esp32.local/update');
     await expect(page.locator('#ouMsg')).toHaveText('The firmware is up to date.');
     await expect(page.locator('#btnInstallUpdate')).toBeHidden();
+  });
+
+  test('build without a release version: no install offered', async ({ page }) => {
+    current = status({ current: 'dev', available: false, installable: false, release_build: false });
+    await page.goto('http://esp32.local/update');
+    await expect(page.locator('#ouMsg')).toContainText('online updates are not offered');
+    await expect(page.locator('#btnInstallUpdate')).toBeHidden();
+    await expect(page.locator('#btnCheckUpdate')).toBeEnabled();
+  });
+
+  test('manual upload during an online install shows the 409 message', async ({ page }) => {
+    await page.route('**/update', route => route.request().method() === 'POST'
+      ? route.fulfill({ status: 409, json: { error: 'An online update is in progress' } })
+      : route.fallback());
+    await page.goto('http://esp32.local/update');
+    await page.setInputFiles('#fileInput', { name: 'firmware.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([0xe9, 1, 2, 3]) });
+    await expect(page.locator('#statusMessage')).toHaveText('An online update is in progress');
   });
 
   test('check button posts and shows the result', async ({ page }) => {

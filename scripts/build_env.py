@@ -5,6 +5,7 @@ import sys
 
 Import("env")  # noqa: F821
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(env["PROJECT_DIR"], "scripts"))  # noqa: F821
 from release_package import BOARDS  # noqa: E402
 

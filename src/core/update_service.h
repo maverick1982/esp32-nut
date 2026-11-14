@@ -25,6 +25,8 @@ public:
     Request requestCheck();
     Request requestInstall();
     bool setAutoCheck(bool enabled);
+    // true once after a successful install
+    bool takeRestartRequest();
 
 private:
     static void taskEntry(void* arg);
@@ -45,6 +47,7 @@ private:
     uint32_t _checked_at = 0;
     bool _want_check = false;
     bool _want_install = false;
+    bool _restart_request = false;
     String _logged_latest;
     bool _check_failing = false;
 };

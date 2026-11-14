@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-// Release version: "v1.16.0", "1.16.0" or "v1.17.0-rc1"
+// Release version: "v1.16.0" or "v1.17.0-rc1"
 struct FirmwareVersion {
     uint32_t major;
     uint32_t minor;
@@ -13,8 +13,8 @@ struct FirmwareVersion {
 };
 
 inline bool parseFirmwareVersion(const char* s, FirmwareVersion& out) {
-    if (!s) return false;
-    if (*s == 'v' || *s == 'V') s++;
+    if (!s || *s != 'v') return false;
+    s++;
     uint32_t parts[3];
     for (int i = 0; i < 3; i++) {
         if (*s < '0' || *s > '9') return false;
@@ -28,11 +28,18 @@ inline bool parseFirmwareVersion(const char* s, FirmwareVersion& out) {
             s++;
         }
     }
-    if (*s != '\0' && *s != '-' && *s != '+') return false;
+    bool rc = false;
+    if (*s != '\0') {
+        if (s[0] != '-' || s[1] != 'r' || s[2] != 'c' || s[3] < '0' || s[3] > '9') return false;
+        for (s += 3; *s; s++) {
+            if (*s < '0' || *s > '9') return false;
+        }
+        rc = true;
+    }
     out.major = parts[0];
     out.minor = parts[1];
     out.patch = parts[2];
-    out.prerelease = (*s == '-');
+    out.prerelease = rc;
     return true;
 }
 

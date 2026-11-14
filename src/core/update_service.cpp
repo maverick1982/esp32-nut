@@ -111,6 +111,13 @@ bool UpdateService::networkUp() const {
     return _network && _network->isConnected() && !_network->isApMode();
 }
 
+bool UpdateService::takeRestartRequest() {
+    std::lock_guard<std::mutex> lock(_mutex);
+    bool wanted = _restart_request;
+    _restart_request = false;
+    return wanted;
+}
+
 void UpdateService::setPhase(UpdatePhase phase, const String& error, uint8_t progress) {
     std::lock_guard<std::mutex> lock(_mutex);
     _status.phase = phase;
@@ -335,8 +342,11 @@ void UpdateService::install() {
         return failInstall(String("Firmware image rejected: ") + Update.errorString());
     }
 
-    setPhase(UpdatePhase::Restarting, String(), 100);
     AppLogger::log("INFO", "[UPDATE] Installed %s (%u bytes), restarting", tag.c_str(), (unsigned)zip.entrySize());
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    ESP.restart();
+    std::lock_guard<std::mutex> lock(_mutex);
+    _status.phase = UpdatePhase::Restarting;
+    _status.error = String();
+    _status.progress = 100;
+    _want_install = false;
+    _restart_request = true;
 }

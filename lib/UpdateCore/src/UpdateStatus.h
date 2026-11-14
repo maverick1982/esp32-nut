@@ -39,11 +39,15 @@ inline bool updateAvailable(const String& current, const String& latest) {
     return compareFirmwareVersions(l, c) > 0;
 }
 
-// The latest release can be installed on this build
-inline bool updateInstallable(const UpdateStatus& s) {
-    if (s.latest.length() == 0 || s.asset_name.length() == 0 || !s.asset_verified) return false;
+// This build has a release version ("vX.Y.Z" or "vX.Y.Z-rcN")
+inline bool isReleaseBuild(const String& current) {
     FirmwareVersion c;
-    if (!parseFirmwareVersion(s.current.c_str(), c)) return true;
+    return parseFirmwareVersion(current.c_str(), c);
+}
+
+// The latest release is newer and its zip and digest are known
+inline bool updateInstallable(const UpdateStatus& s) {
+    if (s.asset_name.length() == 0 || !s.asset_verified) return false;
     return updateAvailable(s.current, s.latest);
 }
 

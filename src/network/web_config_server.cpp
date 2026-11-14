@@ -200,7 +200,11 @@ void WebConfigServer::begin(bool isAPMode) {
             // Nessun file ricevuto (body non multipart): niente "OK" e niente riavvio
             if (!ota_upload_started) {
                 server.sendHeader("Connection", "close");
-                server.send(400, "application/json", "{\"error\":\"multipart upload required\"}");
+                if (update_service && update_service->busy()) {
+                    server.send(409, "application/json", "{\"error\":\"An online update is in progress\"}");
+                } else {
+                    server.send(400, "application/json", "{\"error\":\"multipart upload required\"}");
+                }
                 return;
             }
             ota_upload_started = false;
@@ -242,6 +246,11 @@ void WebConfigServer::loop() {
 
     if (recovery.update(millis()) == RecoveryWindow::Event::EXPIRED) {
         AppLogger::log("INFO", "[AUTH] Recovery window closed: expired, the current credentials stay valid");
+    }
+
+    if (update_service && update_service->takeRestartRequest()) {
+        should_restart = true;
+        restart_request_time = millis();
     }
 
     if (should_restart && (millis() - restart_request_time >= 1000)) {

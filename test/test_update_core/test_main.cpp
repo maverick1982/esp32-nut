@@ -23,8 +23,14 @@ void test_version_parse(void) {
     TEST_ASSERT_EQUAL_UINT32(16, v.minor);
     TEST_ASSERT_EQUAL_UINT32(0, v.patch);
     TEST_ASSERT_FALSE(v.prerelease);
-    TEST_ASSERT_TRUE(parseFirmwareVersion("2.0.1-rc1", v));
+    TEST_ASSERT_TRUE(parseFirmwareVersion("v2.0.1-rc1", v));
     TEST_ASSERT_TRUE(v.prerelease);
+    TEST_ASSERT_FALSE(parseFirmwareVersion("1.16.0", v));
+    TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16.0-beta", v));
+    TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16.0-rc", v));
+    TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16.0-rc1x", v));
+    TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16.0-3-gabc123", v));
+    TEST_ASSERT_FALSE(parseFirmwareVersion("update-test", v));
     TEST_ASSERT_FALSE(parseFirmwareVersion("dev", v));
     TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16", v));
     TEST_ASSERT_FALSE(parseFirmwareVersion("v1.16.0.1", v));
@@ -42,7 +48,7 @@ void test_version_compare(void) {
     TEST_ASSERT_TRUE(compareFirmwareVersions(a, b) < 0);
     parseFirmwareVersion("v1.16.0-rc1", b);
     TEST_ASSERT_TRUE(compareFirmwareVersions(b, a) < 0);
-    parseFirmwareVersion("1.16.0", b);
+    parseFirmwareVersion("v1.16.0", b);
     TEST_ASSERT_EQUAL(0, compareFirmwareVersions(a, b));
 }
 
@@ -67,7 +73,11 @@ void test_update_available_and_installable(void) {
     s.asset_name = "esp32-nut-v1.17.0.zip";
     s.current = "v1.17.0";
     TEST_ASSERT_FALSE(updateInstallable(s));
-    s.current = "dev";  // a development build can install the latest release
+    s.current = "dev";
+    TEST_ASSERT_FALSE(updateInstallable(s));
+    TEST_ASSERT_FALSE(isReleaseBuild("dev"));
+    TEST_ASSERT_TRUE(isReleaseBuild("v1.17.0-rc2"));
+    s.current = "v1.17.0-rc2";
     TEST_ASSERT_TRUE(updateInstallable(s));
 }
 

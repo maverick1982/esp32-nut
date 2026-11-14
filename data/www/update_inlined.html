@@ -3652,6 +3652,11 @@ body.auth-page {
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 5000);
+                } else if (xhr.status === 409) {
+                    let message = 'Upload refused.';
+                    try { message = JSON.parse(xhr.responseText).error || message; } catch (err) { /* keep */ }
+                    showStatus(message, 'error');
+                    progressBar.style.backgroundColor = '#dc3545';
                 } else {
                     showStatus('Error during update.', 'error');
                     progressBar.style.backgroundColor = '#dc3545';
@@ -3749,8 +3754,8 @@ body.auth-page {
                 ouMessage('Firmware ' + s.latest + ' is available, but the release has no file for this board. Install it manually.', 'error');
             } else if (s.available) {
                 ouMessage('Firmware ' + s.latest + ' is available, but the release publishes no checksum. Download it from GitHub and upload it below.', 'error');
-            } else if (s.installable) {
-                ouMessage('This is a development build. The latest release can be installed.', '');
+            } else if (s.checked && s.release_build === false) {
+                ouMessage('This build has no release version, so online updates are not offered. Upload a firmware file below to change version.', '');
             } else if (s.checked) {
                 ouMessage('The firmware is up to date.', 'success');
             } else {
