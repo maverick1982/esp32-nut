@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1]
+        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1]
 
     steps:
       - name: Checkout code

@@ -169,6 +169,14 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 3. **Power**: Connect a USB wall charger to the port labeled `COM` (or `UART`).
 4. **Data**: Connect a USB-C OTG adapter to the port labeled `USB`, and plug the UPS into it.
 
+### Arduino Nano ESP32
+
+The `arduino-nano-esp32` PlatformIO environment targets the Arduino Nano ESP32 (ESP32-S3, 16 MB flash). It is compiled separately because its USB-C connector is the chip's only USB OTG controller. The Arduino board definition enables USB CDC and DFU at application start; this environment disables both so ESP-IDF USB Host can own the controller and enumerate the UPS. The Arduino bootloader's double-reset recovery mode and firmware OTA remain available.
+
+Build it with `pio run -e arduino-nano-esp32`. The USB-C serial port is unavailable while this firmware runs; use the Web UI/System Logs, Wi-Fi OTA, or the hardware UART pins for diagnostics.
+
+The UPS must receive USB VBUS from the host-side cable or hub as well as D+, D- and GND. Plan the power arrangement before connecting it: the Nano's VBUS pin only has 5 V when the Nano itself is USB-powered, and it is disabled when the board is powered through VIN. A powered OTG adapter or hub may be required, depending on the UPS and power source. The project has verified USB-host enumeration and UPS data on one Nano ESP32 setup; the suitability and current capacity of individual adapters, hubs and UPSes have not been verified.
+
 ### ESP32-P4 (Ethernet)
 
 An ESP32-P4 board with a wired Ethernet port can take the place of the ESP32-S3:
