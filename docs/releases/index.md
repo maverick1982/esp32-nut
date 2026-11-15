@@ -13,7 +13,7 @@ Questa directory contiene il [template](template.md) delle release notes e, una 
 
 Il tag e le note sono indipendenti: si può taggare qualunque commit in qualunque momento, e le note si possono scrivere prima, dopo o mai.
 
-1. Il push di un tag `vX.Y.Z` avvia `.github/workflows/release.yml`: build delle tre immagini (ESP32-S3, ESP32-P4 v3.1+, ESP32-P4 pre-v3), uno zip per scheda preparato da `scripts/release_package.py`, release su GitHub e aggiornamento del web installer. Il nome del tag diventa `FIRMWARE_VERSION`. Per provare la pipeline senza pubblicare: *Actions → Release → Run workflow* con `dry_run` (attivo di default) produce solo gli artifact.
+1. Il push di un tag `vX.Y.Z` avvia `.github/workflows/release.yml`: build delle tre immagini (ESP32-S3, ESP32-P4 v3.1+, ESP32-P4 pre-v3), uno zip per scheda preparato da `scripts/release_package.py` più il suo `firmware.bin` da solo come `esp32-nut-vX.Y.Z<suffisso>-ota.bin` (lo scarica l'aggiornamento online dalla web UI, #146), release su GitHub e aggiornamento del web installer. Il nome del tag diventa `FIRMWARE_VERSION`. Per provare la pipeline senza pubblicare: *Actions → Release → Run workflow* con `dry_run` (attivo di default) produce solo gli artifact.
 2. Testo della release:
    - se il commit taggato contiene `docs/releases/vX.Y.Z.md`, il testo della release è quel file;
    - altrimenti GitHub genera le note dalle PR unite dal tag precedente ("What's Changed" + "Full Changelog"), come prima.
