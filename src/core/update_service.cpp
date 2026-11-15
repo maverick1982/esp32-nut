@@ -1,9 +1,7 @@
 #include "core/update_service.h"
 #include "core/app_logger.h"
-#include "core/rom_inflater.h"
 #include "network/https_stream.h"
 #include "network/network_manager.h"
-#include "ZipEntryExtractor.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Update.h>
@@ -16,10 +14,10 @@
 #ifndef NUT_BUILD_ENV
 #define NUT_BUILD_ENV ""
 #endif
-#ifdef NUT_RELEASE_ZIP_SUFFIX
-static const char* kZipSuffix = NUT_RELEASE_ZIP_SUFFIX;
+#ifdef NUT_RELEASE_SUFFIX
+static const char* kReleaseSuffix = NUT_RELEASE_SUFFIX;
 #else
-static const char* kZipSuffix = nullptr;
+static const char* kReleaseSuffix = nullptr;
 #endif
 #ifndef NUT_UPDATE_REPO
 #define NUT_UPDATE_REPO "maverick1982/esp32-nut"
@@ -27,7 +25,7 @@ static const char* kZipSuffix = nullptr;
 
 static const char* kNamespace = "update";
 static const char* kKeyAuto = "auto";
-static const size_t MIN_FREE_HEAP = 110 * 1024;
+static const size_t MIN_FREE_HEAP = 95 * 1024;
 static const size_t MIN_FREE_BLOCK = 36 * 1024;
 
 static String userAgent() {
@@ -169,7 +167,7 @@ void UpdateService::check(bool manual) {
             if (jerr) {
                 error = String("Invalid release data: ") + jerr.c_str();
             } else {
-                ok = parseRelease(doc, kZipSuffix, info, error);
+                ok = parseRelease(doc, kReleaseSuffix, info, error);
             }
         } else if (code == 404) {
             error = "No release found";
@@ -218,30 +216,13 @@ void UpdateService::check(bool manual) {
         AppLogger::log("INFO", "[UPDATE] Update check done: latest release %s", info.tag.c_str());
     }
     if (ok && info.tag.length() > 0 && !info.has_asset && manual) {
-        AppLogger::log("WARN", "[UPDATE] Release %s has no firmware zip for this build (%s)", info.tag.c_str(),
+        AppLogger::log("WARN", "[UPDATE] Release %s has no firmware file for this build (%s)", info.tag.c_str(),
                        NUT_BUILD_ENV);
     }
     if (log_failure) AppLogger::log("WARN", "[UPDATE] Update check failed: %s", error.c_str());
 }
 
 namespace {
-
-class OtaSink : public IByteSink {
-public:
-    bool write(const uint8_t* data, size_t len) override {
-        if (!_started) {
-            if (len == 0 || data[0] != 0xE9) return false;
-            uint32_t space = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-            if (!Update.begin(space, U_FLASH)) return false;
-            _started = true;
-        }
-        return Update.write((uint8_t*)data, len) == len;
-    }
-    bool started() const { return _started; }
-
-private:
-    bool _started = false;
-};
 
 String toHex(const uint8_t* d, size_t n) {
     static const char* hex = "0123456789abcdef";
@@ -295,15 +276,13 @@ void UpdateService::install() {
         return failInstall("Download size does not match the release");
     }
 
-    OtaSink ota;
-    RomInflater inflater;
-    ZipEntryExtractor zip("firmware.bin", &inflater, &ota);
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
     mbedtls_sha256_starts(&sha, 0);
 
     static uint8_t buf[4096];
     uint32_t total = 0;
+    bool started = false;
     uint8_t last_pct = 255;
     String error;
     for (;;) {
@@ -319,8 +298,19 @@ void UpdateService::install() {
             break;
         }
         mbedtls_sha256_update(&sha, buf, (size_t)n);
-        if (!zip.feed(buf, (size_t)n)) {
-            error = zip.error();
+        if (!started) {
+            if (buf[0] != 0xE9) {
+                error = "Not a firmware image";
+                break;
+            }
+            if (!Update.begin(asset.size, U_FLASH)) {
+                error = String("Firmware image rejected: ") + Update.errorString();
+                break;
+            }
+            started = true;
+        }
+        if (Update.write(buf, (size_t)n) != (size_t)n) {
+            error = String("Flash write failed: ") + Update.errorString();
             break;
         }
         uint8_t pct = asset.size ? (uint8_t)((uint64_t)total * 100 / asset.size) : 0;
@@ -338,12 +328,11 @@ void UpdateService::install() {
     if (error.length() > 0) return failInstall(error);
     if (total != asset.size) return failInstall("Download incomplete");
     if (toHex(digest, sizeof(digest)) != asset.sha256) return failInstall("SHA-256 does not match the release");
-    if (!zip.complete()) return failInstall(zip.found() ? "firmware.bin incomplete" : "firmware.bin not in the zip");
-    if (!ota.started() || !Update.end(true)) {
+    if (!started || !Update.end(true)) {
         return failInstall(String("Firmware image rejected: ") + Update.errorString());
     }
 
-    AppLogger::log("INFO", "[UPDATE] Installed %s (%u bytes), restarting", tag.c_str(), (unsigned)zip.entrySize());
+    AppLogger::log("INFO", "[UPDATE] Installed %s (%u bytes), restarting", tag.c_str(), (unsigned)total);
     std::lock_guard<std::mutex> lock(_mutex);
     _status.phase = UpdatePhase::Restarting;
     _status.error = String();

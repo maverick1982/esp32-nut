@@ -2318,7 +2318,7 @@ static UpdateStatus updateStatus() {
     s.current = "v1.16.0";
     s.latest = "v1.17.0";
     s.release_url = "https://github.com/maverick1982/esp32-nut/releases/tag/v1.17.0";
-    s.asset_name = "esp32-nut-v1.17.0-esp32-p4-eth-v1.zip";
+    s.asset_name = "esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin";
     s.asset_size = 3247719;
     s.asset_verified = true;
     s.checked = true;
@@ -2338,7 +2338,7 @@ void test_update_status_json(void) {
     TEST_ASSERT_TRUE(doc["available"].as<bool>());
     TEST_ASSERT_TRUE(doc["installable"].as<bool>());
     TEST_ASSERT_TRUE(doc["release_build"].as<bool>());
-    TEST_ASSERT_EQUAL_STRING("esp32-nut-v1.17.0-esp32-p4-eth-v1.zip", doc["asset"]["name"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin", doc["asset"]["name"].as<const char*>());
     TEST_ASSERT_EQUAL(3247719, doc["asset"]["size"].as<int>());
     TEST_ASSERT_TRUE(doc["asset"]["verified"].as<bool>());
     TEST_ASSERT_EQUAL(120, doc["checked_age_s"].as<int>());

@@ -1,9 +1,9 @@
 #include "ReleaseInfo.h"
 #include <string.h>
 
-String releaseZipName(const String& tag, const char* zip_suffix) {
-    if (!zip_suffix || tag.length() == 0) return String("");
-    return String("esp32-nut-") + tag + zip_suffix + ".zip";
+String releaseAssetName(const String& tag, const char* suffix) {
+    if (!suffix || tag.length() == 0) return String("");
+    return String("esp32-nut-") + tag + suffix + "-ota.bin";
 }
 
 void releaseJsonFilter(JsonDocument& filter) {
@@ -37,7 +37,7 @@ static bool isGithubUrl(const char* url) {
     return url && strncmp(url, "https://github.com/", 19) == 0;
 }
 
-bool parseRelease(JsonVariantConst release, const char* zip_suffix, ReleaseInfo& out, String& error) {
+bool parseRelease(JsonVariantConst release, const char* suffix, ReleaseInfo& out, String& error) {
     out = ReleaseInfo();
     out.has_asset = false;
     const char* tag = release["tag_name"] | (const char*)nullptr;
@@ -52,7 +52,7 @@ bool parseRelease(JsonVariantConst release, const char* zip_suffix, ReleaseInfo&
     out.tag = tag;
     out.page_url = release["html_url"] | "";
 
-    String wanted = releaseZipName(out.tag, zip_suffix);
+    String wanted = releaseAssetName(out.tag, suffix);
     if (wanted.length() == 0) return true;
     for (JsonVariantConst a : release["assets"].as<JsonArrayConst>()) {
         const char* name = a["name"] | "";

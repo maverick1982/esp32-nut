@@ -11,7 +11,7 @@ function status(over: Status = {}): Status {
     current: 'v1.16.0', latest: 'v1.17.0', available: true, installable: true,
     release_url: 'https://github.com/maverick1982/esp32-nut/releases/tag/v1.17.0',
     release_build: true,
-    asset: { name: 'esp32-nut-v1.17.0-esp32-p4-eth-v1.zip', size: 3247719, verified: true },
+    asset: { name: 'esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin', size: 3247719, verified: true },
     checked: true, last_check_ok: true, checked_age_s: 7200, error: '',
     phase: 'idle', progress: 0, auto_check: true,
     ...over,
@@ -194,7 +194,7 @@ test.describe('Online firmware update', () => {
   });
 
   test('release without a checksum or a file for this board cannot be installed', async ({ page }) => {
-    current = status({ installable: false, asset: { name: 'x.zip', size: 1, verified: false } });
+    current = status({ installable: false, asset: { name: 'x-ota.bin', size: 1, verified: false } });
     await page.goto('http://esp32.local/update');
     await expect(page.locator('#ouMsg')).toContainText('publishes no checksum');
     await expect(page.locator('#btnInstallUpdate')).toBeHidden();

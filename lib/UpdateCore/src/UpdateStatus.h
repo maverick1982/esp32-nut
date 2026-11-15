@@ -20,9 +20,9 @@ struct UpdateStatus {
     String current;
     String latest;        // empty until a check succeeds
     String release_url;
-    String asset_name;    // empty when the release has no zip for this build
+    String asset_name;    // empty when the release has no firmware file for this build
     uint32_t asset_size;
-    bool asset_verified;  // the release publishes a SHA-256 digest for the zip
+    bool asset_verified;  // the release publishes a SHA-256 digest for the file
     bool checked;
     bool last_check_ok;
     uint32_t checked_age_s;
@@ -45,7 +45,7 @@ inline bool isReleaseBuild(const String& current) {
     return parseFirmwareVersion(current.c_str(), c);
 }
 
-// The latest release is newer and its zip and digest are known
+// The latest release is newer and its file and digest are known
 inline bool updateInstallable(const UpdateStatus& s) {
     if (s.asset_name.length() == 0 || !s.asset_verified) return false;
     return updateAvailable(s.current, s.latest);

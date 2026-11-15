@@ -12,7 +12,7 @@
 class AppNetworkManager;
 
 // Checks GitHub for a newer release daily or on request, and installs this build's
-// release zip from GitHub. Checks and installs run in its own task.
+// release firmware from GitHub. Checks and installs run in its own task.
 class UpdateService {
 public:
     enum class Request : uint8_t { Accepted, Busy, TooSoon, NotInstallable };
