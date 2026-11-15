@@ -26,7 +26,8 @@ concurrency:
 
 jobs:
   # One image per board (US-102): scripts/release_package.py lists the boards and
-  # writes each package (binaries, full image, manifest, README) and its zip
+  # writes each package (binaries, full image, manifest, README), its zip and the
+  # -ota.bin of the online update (#146)
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -126,12 +127,17 @@ jobs:
             echo "generate=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # The -ota.bin files are firmware.bin alone, one per board: the online update
+      # downloads them and checks them against the digest GitHub publishes (#146)
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: ${{ steps.notes.outputs.generate }}
-          files: dist/*.zip
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.zip
+            dist/*-ota.bin
 
       # Web installer site: the root keeps the ESP32-S3 binaries and manifest.json
       # as before the P4, so existing links and installs do not change; every board

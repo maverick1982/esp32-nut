@@ -5,6 +5,10 @@ environment, whose name is also the board folder on GitHub Pages
 (vX.Y.Z/<env>/) and the suffix of the P4 zips. The ESP32-S3 keeps the zip
 name and the manifest of the releases before the P4 (esp32-nut-vX.Y.Z.zip).
 
+Next to each zip goes esp32-nut-vX.Y.Z<suffix>-ota.bin, a copy of firmware.bin:
+the online update of the Web UI downloads it (#146), since a board without
+PSRAM has no RAM left to inflate the zip while the TLS connection is open.
+
 Usage:
   python scripts/release_package.py package --env esp32-s3-standard --version v1.11.0 \
       --build-dir .pio/build/esp32-s3-standard --out pkg/esp32-s3-standard --zip-dir dist
@@ -62,6 +66,17 @@ BOARDS = {
 BUILD_FILES = ["firmware.bin", "bootloader.bin", "partitions.bin", "firmware.factory.bin"]
 
 
+def zip_name(env, version):
+    return "esp32-nut-%s%s.zip" % (version, BOARDS[env]["zip_suffix"])
+
+
+# Release asset of the online update: firmware.bin, named as the zip with -ota.bin
+# in place of .zip. The firmware looks for this name, built from the board's
+# zip_suffix: keep the two in step
+def ota_name(env, version):
+    return "esp32-nut-%s%s-ota.bin" % (version, BOARDS[env]["zip_suffix"])
+
+
 def manifest(env, version, prefix=""):
     board = BOARDS[env]
     return {
@@ -105,6 +120,8 @@ def readme(env, version):
         "",
         "Update over the air",
         "  Web UI > Firmware OTA: upload this zip or firmware.bin.",
+        "  The release also publishes firmware.bin alone as %s:" % ota_name(env, version),
+        "  it can be uploaded the same way.",
         "  An image for another chip or another chip revision is refused and the",
         "  board keeps the firmware it is running.",
         "",
@@ -146,11 +163,14 @@ def package(args):
         f.write(readme(args.env, args.version))
 
     os.makedirs(args.zip_dir, exist_ok=True)
-    zip_path = os.path.join(args.zip_dir, "esp32-nut-%s%s.zip" % (args.version, BOARDS[args.env]["zip_suffix"]))
+    zip_path = os.path.join(args.zip_dir, zip_name(args.env, args.version))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for name in sorted(os.listdir(args.out)):
             z.write(os.path.join(args.out, name), name)
     print("release_package.py: %s" % zip_path)
+    ota_path = os.path.join(args.zip_dir, ota_name(args.env, args.version))
+    shutil.copyfile(os.path.join(args.out, "firmware.bin"), ota_path)
+    print("release_package.py: %s" % ota_path)
 
 
 def manifests(args):
@@ -170,7 +190,7 @@ def main():
     parser = argparse.ArgumentParser(description="ESP32-NUT release packages and installer manifests")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("package", help="package one board image: files, manifest, README and zip")
+    p = sub.add_parser("package", help="package one board image: files, manifest, README, zip and -ota.bin")
     p.add_argument("--env", required=True, choices=list(BOARDS))
     p.add_argument("--version", required=True)
     p.add_argument("--build-dir", required=True)

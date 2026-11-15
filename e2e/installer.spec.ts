@@ -105,7 +105,7 @@ test.describe('ESP Web Installer', () => {
     });
   }
 
-  test('release packages: zip names per board and the files inside', () => {
+  test('release packages: zip and -ota.bin names per board and the files inside', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'esp32-nut-package-'));
     const script = path.resolve(__dirname, '../scripts/release_package.py');
     try {
@@ -129,8 +129,13 @@ test.describe('ESP Web Installer', () => {
         const names = listing.split(/\r?\n/).slice(1).map(l => l.split(/\s+/)[0]).filter(Boolean).sort();
         expect(names).toEqual(['README.txt', 'boot_app0.bin', 'bootloader.bin', 'firmware.bin',
           'firmware.factory.bin', 'manifest.json', 'partitions.bin']);
+        // #146: firmware.bin alone next to the zip, for the online update
+        const ota = expected[env].replace(/\.zip$/, '-ota.bin');
+        expect(fs.readFileSync(path.join(zips, ota), 'utf8')).toBe('firmware.bin');
+        expect(fs.readFileSync(path.join(tmp, 'pkg', env, 'README.txt'), 'utf8')).toContain(ota);
       }
-      expect(fs.readdirSync(zips).sort()).toEqual(Object.values(expected).sort());
+      const otas = Object.values(expected).map(z => z.replace(/\.zip$/, '-ota.bin'));
+      expect(fs.readdirSync(zips).sort()).toEqual([...Object.values(expected), ...otas].sort());
 
       // A branch name as version (manual run from feature/...) is refused, not half-written
       expect(() => execFileSync('python', [script, 'package', '--env', 'esp32-s3-standard',
