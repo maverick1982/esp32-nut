@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Build and package the three images as artifacts, without release and deploy'
+        description: 'Build and package all board images as artifacts, without release and deploy'
         type: boolean
         default: true
   release:
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        env: [esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1]
+        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1]
 
     steps:
       - name: Checkout code
