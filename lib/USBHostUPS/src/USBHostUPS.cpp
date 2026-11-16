@@ -322,6 +322,29 @@ void USBHostUPS::service() {
     }
 
     serviceEnumWatchdog(now);
+    // Before the early returns: until the claim service() stops at !_is_ready_to_poll
+    serviceReconnectBridge(now);
+
+#if defined(NUT_TEST_RECONNECT_BRIDGE) && NUT_TEST_RECONNECT_BRIDGE
+    // Test build (US-140): after TEST_BRIDGE_EVERY_MS of fresh data the UPS drops off the bus
+    // with its data still fresh, unlike the port cycle of US-122. =1 power-cycles the port
+    // (back in 1-2 s), =2 keeps it off for TEST_PORT_OFF_MS, past the 5 s window.
+    if (_test_port_on_at != 0 && (int32_t)(now - _test_port_on_at) >= 0) {
+        _test_port_on_at = 0;
+        rootPortOn();
+    }
+    if (_test_port_on_at != 0 || !_first_data_ready || _bridge.active() || isDataStale()) {
+        _test_bridge_at = now;
+    } else if (now - _test_bridge_at >= TEST_BRIDGE_EVERY_MS) {
+        _test_bridge_at = now;
+        log("WARN", "[TEST] Simulated UPS drop-off (NUT_TEST_RECONNECT_BRIDGE=%d)", (int)NUT_TEST_RECONNECT_BRIDGE);
+#if NUT_TEST_RECONNECT_BRIDGE == 2
+        if (rootPortOff()) _test_port_on_at = (now + TEST_PORT_OFF_MS) | 1u; // never 0
+#else
+        cycleRootPort();
+#endif
+    }
+#endif
 
     // The export read stops when the recovery takes over the link (US-119, ADR 0008)
     if (_restart_requested || _in_restart_pending || _in_errors.pending()) interruptDiagRead();
@@ -467,6 +490,16 @@ void USBHostUPS::service() {
             _first_data_ready = true;
             log(timed_out ? "WARN" : "INFO", "[USB] First full poll %s after %u ms: data served",
                 timed_out ? "not done" : "done", (unsigned)(now - _claimed_at));
+            // US-140: the values kept across the drop-off are all current again
+            uint32_t bridged_ms = 0;
+            bool bridged;
+            {
+                std::lock_guard<std::recursive_mutex> lock(_mutex);
+                bridged = _bridge.onFirstData(now, bridged_ms);
+            }
+            if (bridged) {
+                log("INFO", "[USB] UPS back: last values served for %u ms, all refreshed now", (unsigned)bridged_ms);
+            }
         }
     }
 }
@@ -524,6 +557,10 @@ void USBHostUPS::handleEvent(const HidEvent& ev) {
     switch (ev.type) {
     case HidEvent::CONNECTED:
         _enum_seen = true;
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _bridge.onEnumerated(millis()); // US-140
+        }
         log("INFO", "HID Device Connected event");
         claimInterface(ev.handle);
         break;
@@ -568,6 +605,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     uint32_t quirks = 0;
     char mfr[HID_STR_DESC_MAX_LENGTH + 1] = {0};
     char product[HID_STR_DESC_MAX_LENGTH + 1] = {0};
+    UpsIdentity id; // not valid without device information
     if (have_info) {
         // Quirks first: the strings the registry looks at need QUIRK_INVERT_STRINGS
         for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
@@ -599,9 +637,14 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
             }
         }
 
+        // Who the UPS is, so the values kept across a drop-off go only to the same one (US-140)
+        char serial[HID_STR_DESC_MAX_LENGTH + 1] = {0};
+        DeviceStrings::toAscii(dev_info.iSerialNumber, HID_STR_DESC_MAX_LENGTH, invert, serial, sizeof(serial));
+        id = UpsIdentity::make(dev_info.VID, dev_info.PID, serial, product);
+
         DriverRegistry::Match match = DriverRegistry::match(dev_info.VID, dev_info.PID, mfr, product);
         if (match.family == DriverRegistry::Family::QX) {
-            claimQxInterface(handle, match, dev_info.VID, dev_info.PID, quirks, product);
+            claimQxInterface(handle, match, dev_info.VID, dev_info.PID, quirks, product, id);
             return;
         }
     }
@@ -643,6 +686,8 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
 
     _hid_dev_handle = handle;
+    // Before the strings and the driver write into _ups_data (US-140)
+    applyBridgeClaim(id);
     _qx_transport = nullptr;
     _unsupported_device = "";
     _in_pipe_wanted = true;
@@ -789,16 +834,37 @@ void USBHostUPS::handleDisconnected(hid_host_device_handle_t handle) {
     if (_hid_dev_handle != handle) return;
 
     log("INFO", "HID Device Disconnected");
-    releaseBoundState();
+    // US-140: with fresh data the values stay while the same UPS comes back, as upsd keeps
+    // its values while usbhid-ups reconnects
+    bool keep;
+    bool again;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        const bool fresh = _first_data_ready && !isDataStale();
+        again = _bridge.active();
+        keep = _bridge.onDisconnected(millis(), fresh, _bound_id);
+    }
+    if (keep && !again) {
+        log("INFO", "[USB] Last values served while the same UPS comes back (up to %u s)",
+            (unsigned)(ReconnectBridge::ENUM_WINDOW_MS / 1000));
+    } else if (keep) {
+        log("INFO", "[USB] UPS gone again: last values still served, within %u s of the first drop-off",
+            (unsigned)(ReconnectBridge::MAX_BRIDGE_MS / 1000));
+    }
+    releaseBoundState(keep);
 }
 
-void USBHostUPS::releaseBoundState() {
+void USBHostUPS::releaseBoundState(bool keep_values) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     _hid_dev_handle = NULL;
     _is_ready_to_poll = false;
     _in_restart_pending = false;
     _in_errors.reset();
-    _ups_data = UPSData();
+    _bound_id = UpsIdentity();
+    if (!keep_values) {
+        _ups_data = UPSData();
+        _bridge.reset();
+    }
     _device_product = "";
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
@@ -855,7 +921,8 @@ bool USBHostUPS::readNutString(hid_host_device_handle_t handle, uint8_t index, c
 }
 
 void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
-                                  uint16_t vid, uint16_t pid, uint32_t quirks, const char* product) {
+                                  uint16_t vid, uint16_t pid, uint32_t quirks, const char* product,
+                                  const UpsIdentity& id) {
     // nutdrv_qx claims usb_subdriver.hid_rep_index, LIBUSB_DEFAULT_INTERFACE = 0 unless the
     // usb_hid_rep_index option is given (nut_repo/drivers/libusb1.c:244-245, nut_libusb.h:41)
     hid_host_dev_params_t params;
@@ -877,7 +944,7 @@ void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverR
     // UPS stays "not supported yet" (US-132)
     std::unique_ptr<QxUsbTransport> transport = QxUsbTransports::create(match.qx_transport, _qx_usb);
     if (transport) {
-        attachQxDriver(handle, match, std::move(transport), vid, pid, quirks, product);
+        attachQxDriver(handle, match, std::move(transport), vid, pid, quirks, product, id);
         return;
     }
 
@@ -898,6 +965,12 @@ void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverR
         _quirks = quirks;
         _device_product = product;
         _cached_report_descriptor_hex = "";
+        // Nothing to serve for this UPS: values kept across a drop-off go (US-140)
+        if (_bridge.active()) {
+            _bridge.reset();
+            _ups_data = UPSData();
+        }
+        _bound_id = UpsIdentity();
     }
     if (_restart_requested) {
         // The UPS enumerated again: whatever needed the restart is gone (review A7)
@@ -911,11 +984,12 @@ void USBHostUPS::claimQxInterface(hid_host_device_handle_t handle, const DriverR
 
 void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
                                 std::unique_ptr<QxUsbTransport> transport, uint16_t vid, uint16_t pid,
-                                uint32_t quirks, const char* product) {
+                                uint32_t quirks, const char* product, const UpsIdentity& id) {
     const bool wants_in = transport->needsInterruptIn();
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         _hid_dev_handle = handle;
+        applyBridgeClaim(id); // US-140, before the driver writes into _ups_data
         _qx_transport = match.qx_transport;
         _unsupported_device = "";
         _vid = vid;
@@ -1124,6 +1198,51 @@ void USBHostUPS::requestRestart(const char* why) {
     log("ERROR", "[USB] Recovery exhausted (%s): system restart requested", why);
     _restart_reason = why;
     _restart_requested = true;
+    // US-140: no values of a bridge survive a requested restart. A UPS not claimed has
+    // nothing else in _ups_data; a claimed one keeps what its driver read.
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (_bridge.active()) {
+        _bridge.reset();
+        if (!_is_ready_to_poll) _ups_data = UPSData();
+    }
+}
+
+void USBHostUPS::applyBridgeClaim(const UpsIdentity& id) {
+    const uint32_t now = millis();
+    const uint32_t since = _bridge.elapsedMs(now);
+    switch (_bridge.onClaim(now, id)) {
+    case ReconnectBridge::Claim::KEEP_VALUES:
+        log("INFO", "[USB] Same UPS back after %u ms: last values served until the first full poll",
+            (unsigned)since);
+        break;
+    case ReconnectBridge::Claim::DROP_VALUES:
+        _ups_data = UPSData();
+        log("INFO", "[USB] UPS back as another device or too late (%u ms): last values dropped",
+            (unsigned)since);
+        break;
+    default:
+        break;
+    }
+    _bound_id = id;
+}
+
+void USBHostUPS::serviceReconnectBridge(uint32_t now) {
+    ReconnectBridge::Expiry e;
+    uint32_t ms;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_bridge.active()) return;
+        ms = _bridge.elapsedMs(now);
+        e = _bridge.tick(now);
+        if (e == ReconnectBridge::Expiry::DROP_VALUES && !_is_ready_to_poll) _ups_data = UPSData();
+    }
+    if (e == ReconnectBridge::Expiry::DROP_VALUES) {
+        log("INFO", "[USB] UPS not back %u ms after the disconnection: last values dropped, data stale",
+            (unsigned)ms);
+    } else if (e == ReconnectBridge::Expiry::STALE_UNTIL_FIRST_DATA) {
+        log("INFO", "[USB] First full poll not done %u ms after the disconnection: data stale until it ends",
+            (unsigned)ms);
+    }
 }
 
 void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
@@ -1164,13 +1283,22 @@ void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
 // With a device attached (US-122) the USBH gives the stuck control URB back before DEV_GONE.
 // Poll task, _op_mutex held: the pause blocks no request of ours.
 void USBHostUPS::cycleRootPort() {
+    if (!rootPortOff()) return;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    rootPortOn();
+}
+
+bool USBHostUPS::rootPortOff() {
     esp_err_t err = usb_host_lib_set_root_port_power(false);
     if (err != ESP_OK) {
         log("WARN", "[USB] USB port power off failed: %s", esp_err_to_name(err));
-        return;
+        return false;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
-    err = usb_host_lib_set_root_port_power(true);
+    return true;
+}
+
+void USBHostUPS::rootPortOn() {
+    esp_err_t err = usb_host_lib_set_root_port_power(true);
     if (err != ESP_OK) {
         log("WARN", "[USB] USB port power on failed: %s", esp_err_to_name(err));
     }
@@ -1222,14 +1350,23 @@ bool USBHostUPS::isPollingPaused() const {
 
 bool USBHostUPS::isDataStale() const {
     uint32_t now = millis();
-    // No device, or not claimed yet after boot (review A1). Like upsd while the driver is
-    // not up: before issue #60 the first 15 s after boot were exempt, and NUT served an
-    // empty status (Home Assistant: "unknown").
-    if (!_is_ready_to_poll) return true;
-    // Partial values until the first full poll (usbhid-ups upsdrv_initinfo())
-    if (!_first_data_ready) return true;
-    // Recovery exhausted: nothing refreshes the values while the restart waits (review A7)
+    // Recovery exhausted: nothing refreshes the values while the restart waits (review A7).
+    // First, so the values kept across a drop-off (US-140) never hide it.
     if (_restart_requested) return true;
+    // No device, or not claimed yet after boot (review A1), like upsd while the driver is
+    // not up: before issue #60 the first 15 s after boot were exempt, and NUT served an
+    // empty status (Home Assistant: "unknown"). Then partial values until the first full
+    // poll (usbhid-ups upsdrv_initinfo()). Except while the same UPS comes back after a
+    // drop-off with fresh data (US-140, ADR 0008): upsd keeps serving its values while
+    // usbhid-ups reconnects and walks the device again.
+    if (!_is_ready_to_poll || !_first_data_ready) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_bridge.serving(now)) return true;
+        if (!_is_ready_to_poll) return false;
+        // Back, but its link already failing
+        return _link.isStale(now) || _in_wd.isStale(now) || _in_silence.isStale(now) ||
+               (_driver && _driver->dataStale());
+    }
     if (_link.isStale(now) || _in_wd.isStale(now) || _in_silence.isStale(now)) return true;
     // The driver's own judgement: the Q* driver after the failed polls of
     // upsdrv_updateinfo() (US-136). _driver is deleted under _mutex
