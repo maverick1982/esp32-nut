@@ -157,6 +157,7 @@
             </header>
 
             <div class="diag-banner" id="diag-banner" hidden></div>
+            <a class="update-banner" id="update-banner" href="/update" hidden></a>
 
             <!-- US-112: one .net-section per link, shown from /api/config network.links (no per-board
                  code). A section that is not about a link (Hostname, US-113) is one more
@@ -926,6 +927,38 @@
                                     <path d="M12 8v4M12 16h.01" />
                                 </svg>
                                 <span id="autosd-error-text"></span>
+                            </div>
+                        </section>
+
+                        <!-- Daily firmware update check (every board) -->
+                        <section class="board-section" id="fwcheck-section">
+                            <div class="cred-section">Firmware updates</div>
+
+                            <div class="board-row" id="row-fwcheck">
+                                <div class="board-label">
+                                    <span class="board-name">Check for updates daily</span>
+                                    <span class="board-hint">Once a day the board asks GitHub for the latest
+                                        release and shows a notice when a newer version exists. Updates are
+                                        installed only from the Firmware OTA page.</span>
+                                </div>
+                                <div class="board-control led-toggle">
+                                    <label class="switch">
+                                        <input type="checkbox" id="fwcheck-on" aria-label="Check for updates daily" disabled>
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span class="led-state" id="fwcheck-state">Off</span>
+                                </div>
+                            </div>
+
+                            <div class="board-outcome">
+                                <span class="cmd-result" id="fwcheck-result" aria-live="polite"></span>
+                            </div>
+                            <div class="auth-alert" id="fwcheck-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="fwcheck-error-text"></span>
                             </div>
                         </section>
 

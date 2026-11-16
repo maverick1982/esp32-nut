@@ -22,3 +22,5 @@ site/
 .Trashes
 ehthumbs.db
 Thumbs.db
+# Python bytecode
+__pycache__/

@@ -17,6 +17,7 @@
 #include "core/auto_shutdown.h"
 #include "NetBootPlan.h"
 #include "core/log_dispatcher.h"
+#include "core/update_service.h"
 #include "core/log_settings_store.h"
 #include "network/syslog_output.h"
 #include "network/ntp_clock.h"
@@ -45,6 +46,7 @@ static std::vector<NutOverride> nut_overrides;
 // Remote logging (US-116, ADR 0012): queue + log task, syslog output, settings in NVS
 // "logout"
 static LogDispatcher log_dispatcher;
+static UpdateService update_service;
 static SyslogOutput syslog_output;
 static LogSettingsStore log_settings_store;
 
@@ -287,6 +289,8 @@ void setup() {
     log_dispatcher.addOutput(&syslog_output);
     log_dispatcher.start();
     web_server.setRemoteLog(&log_settings_store, &syslog_output);
+    update_service.begin(&network_mgr);
+    web_server.setUpdateService(&update_service);
     web_server.setTime(&time_settings_store, &ntp_clock);
 
     // Inizializzazione della libreria USBHostUPS (sempre attiva)

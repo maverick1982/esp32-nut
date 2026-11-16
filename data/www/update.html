@@ -12,6 +12,21 @@
 <body style="background-color: var(--bg-base); color: var(--text-primary); font-family: var(--font-ui);">
     <div class="ota-container">
         <h2>OTA Firmware Update</h2>
+        <div class="online-update" id="onlineUpdate">
+            <dl>
+                <dt>Installed</dt><dd id="ouCurrent">--</dd>
+                <dt>Latest release</dt><dd id="ouLatest">--</dd>
+                <dt>Last check</dt><dd id="ouChecked">--</dd>
+            </dl>
+            <p class="ou-msg" id="ouMsg" aria-live="polite"></p>
+            <div class="ou-actions">
+                <button type="button" class="btn btn-outline" id="btnCheckUpdate">Check for updates</button>
+                <button type="button" class="btn btn-primary" id="btnInstallUpdate" hidden>Download and install</button>
+            </div>
+            <div class="progress-bar-container" id="ouProgressContainer">
+                <div class="progress-bar" id="ouProgressBar"></div>
+            </div>
+        </div>
         <p>Drag and drop the compiled .bin file below or click to select.</p>
         
         <div class="dropzone" id="dropzone">
@@ -126,6 +141,11 @@
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 5000);
+                } else if (xhr.status === 409) {
+                    let message = 'Upload refused.';
+                    try { message = JSON.parse(xhr.responseText).error || message; } catch (err) { /* keep */ }
+                    showStatus(message, 'error');
+                    progressBar.style.backgroundColor = '#dc3545';
                 } else {
                     showStatus('Error during update.', 'error');
                     progressBar.style.backgroundColor = '#dc3545';
@@ -145,6 +165,188 @@
             statusMessage.textContent = message;
             statusMessage.className = 'status ' + className;
         }
+
+        // Online update: status from GET /api/update, polled while a check or install runs
+        const ou = (id) => document.getElementById(id);
+        let ouTimer = null;
+        let ouInstalling = false;
+        let ouStartVersion = '';
+        let ouWentDown = false;
+
+        function ouMessage(text, cls) {
+            ou('ouMsg').textContent = text;
+            ou('ouMsg').className = 'ou-msg' + (cls ? ' ' + cls : '');
+        }
+
+        function ouAge(seconds) {
+            if (seconds < 90) return 'just now';
+            if (seconds < 5400) return Math.round(seconds / 60) + ' minutes ago';
+            if (seconds < 129600) return Math.round(seconds / 3600) + ' hours ago';
+            return Math.round(seconds / 86400) + ' days ago';
+        }
+
+        async function ouFetch(url, options) {
+            const res = await fetch(url, Object.assign({ cache: 'no-store' }, options));
+            if (res.status === 401) {
+                window.location.replace('/login');
+                throw new Error('unauthorized');
+            }
+            return res;
+        }
+
+        function ouPoll(delay) {
+            clearTimeout(ouTimer);
+            ouTimer = setTimeout(ouLoad, delay);
+        }
+
+        function ouRender(s) {
+            ou('ouCurrent').textContent = s.current || '--';
+            const latest = ou('ouLatest');
+            latest.textContent = '';
+            if (s.latest) {
+                if (typeof s.release_url === 'string' && s.release_url.startsWith('https://github.com/')) {
+                    const a = document.createElement('a');
+                    a.href = s.release_url;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    a.textContent = s.latest;
+                    latest.appendChild(a);
+                } else {
+                    latest.textContent = s.latest;
+                }
+            } else {
+                latest.textContent = '--';
+            }
+            ou('ouChecked').textContent = s.checked ? ouAge(s.checked_age_s || 0) : 'never';
+
+            const busy = s.phase === 'checking' || s.phase === 'downloading' || s.phase === 'restarting';
+            ou('btnCheckUpdate').disabled = busy;
+            ou('btnInstallUpdate').hidden = !(s.installable === true);
+            ou('btnInstallUpdate').disabled = busy;
+            ou('btnInstallUpdate').textContent = 'Download and install ' + (s.latest || '');
+            ou('ouProgressContainer').style.display = (s.phase === 'downloading' || s.phase === 'restarting') ? 'block' : 'none';
+            ou('ouProgressBar').style.width = (s.phase === 'restarting' ? 100 : (s.progress || 0)) + '%';
+
+            if (s.phase === 'checking') {
+                ouMessage('Checking GitHub...', '');
+            } else if (s.phase === 'downloading') {
+                ouMessage('Downloading and writing ' + (s.latest || 'the update') + ': ' + (s.progress || 0) + '%. Do not power off the board.', '');
+            } else if (s.phase === 'restarting') {
+                ouMessage('Update installed. Restarting...', 'success');
+            } else if (s.phase === 'failed') {
+                ouMessage('Update failed: ' + (s.error || 'unknown error') + '. The running firmware is unchanged.', 'error');
+            } else if (s.checked && !s.last_check_ok) {
+                ouMessage('Check failed: ' + (s.error || 'unknown error'), 'error');
+            } else if (s.available && s.installable) {
+                ouMessage('Firmware ' + s.latest + ' is available.', 'success');
+            } else if (s.available && !(s.asset && s.asset.name)) {
+                ouMessage('Firmware ' + s.latest + ' is available, but the release has no file for this board. Install it manually.', 'error');
+            } else if (s.available) {
+                ouMessage('Firmware ' + s.latest + ' is available, but the release publishes no checksum. Download it from GitHub and upload it below.', 'error');
+            } else if (s.checked && s.release_build === false) {
+                ouMessage('This build has no release version, so online updates are not offered. Upload a firmware file below to change version.', '');
+            } else if (s.checked) {
+                ouMessage('The firmware is up to date.', 'success');
+            } else {
+                ouMessage('', '');
+            }
+            return busy;
+        }
+
+        function ouFinish() {
+            ouInstalling = false;
+            clearTimeout(ouTimer);
+            ouMessage('Update complete! Returning to the dashboard...', 'success');
+            setTimeout(() => { window.location.href = '/'; }, 3000);
+        }
+
+        async function ouLoad() {
+            let s = null;
+            let httpStatus = 0;
+            try {
+                const res = await ouFetch('/api/update');
+                httpStatus = res.status;
+                if (res.ok) s = await res.json();
+            } catch (err) {
+                s = null;
+            }
+            if (ouInstalling) {
+                if (httpStatus === 0) {
+                    ouWentDown = true;
+                    ouMessage('Waiting for the board...', '');
+                    ouPoll(3000);
+                    return;
+                }
+                const restarted = s && s.phase === 'idle' && (ouWentDown || s.current !== ouStartVersion);
+                if (httpStatus === 404 || restarted) {
+                    ouFinish();
+                    return;
+                }
+                if (!s) {
+                    ouPoll(3000);
+                    return;
+                }
+            }
+            if (!s) {
+                ouMessage('Online update is not available.', 'error');
+                ou('btnCheckUpdate').disabled = true;
+                return;
+            }
+            if (s.phase === 'failed') ouInstalling = false;
+            if (ouRender(s) || ouInstalling) ouPoll(s.phase === 'checking' ? 1000 : 2000);
+        }
+
+        async function ouPost(url, body) {
+            const res = await ouFetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {})
+            });
+            let json = null;
+            try { json = await res.json(); } catch (err) { json = null; }
+            if (res.ok) return null;
+            return (json && typeof json.error === 'string' && json.error) || ('Failed (HTTP ' + res.status + ')');
+        }
+
+        ou('btnCheckUpdate').addEventListener('click', async () => {
+            ou('btnCheckUpdate').disabled = true;
+            try {
+                const err = await ouPost('/api/update/check');
+                if (err) {
+                    ouMessage(err, 'error');
+                    ou('btnCheckUpdate').disabled = false;
+                    return;
+                }
+                ouMessage('Checking GitHub...', '');
+                ouPoll(1000);
+            } catch (e) {
+                ouMessage('Network error', 'error');
+                ou('btnCheckUpdate').disabled = false;
+            }
+        });
+
+        ou('btnInstallUpdate').addEventListener('click', async () => {
+            const version = ou('ouLatest').textContent;
+            if (!window.confirm('Download ' + version + ' from GitHub and install it? The board restarts when it is done.')) return;
+            ou('btnInstallUpdate').disabled = true;
+            try {
+                const err = await ouPost('/api/update/install');
+                if (err) {
+                    ouMessage(err, 'error');
+                    ou('btnInstallUpdate').disabled = false;
+                    return;
+                }
+                ouInstalling = true;
+                ouStartVersion = ou('ouCurrent').textContent;
+                ouWentDown = false;
+                ouPoll(1000);
+            } catch (e) {
+                ouMessage('Network error', 'error');
+                ou('btnInstallUpdate').disabled = false;
+            }
+        });
+
+        ouLoad();
     </script>
 </body>
 </html>

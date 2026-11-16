@@ -2311,6 +2311,88 @@ void test_time_body_server_required_only_with_ntp(void) {
     TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
 }
 
+// --- Online firmware update ---
+
+static UpdateStatus updateStatus() {
+    UpdateStatus s;
+    s.current = "v1.16.0";
+    s.latest = "v1.17.0";
+    s.release_url = "https://github.com/maverick1982/esp32-nut/releases/tag/v1.17.0";
+    s.asset_name = "esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin";
+    s.asset_size = 3247719;
+    s.asset_verified = true;
+    s.checked = true;
+    s.last_check_ok = true;
+    s.checked_age_s = 120;
+    s.phase = UpdatePhase::Downloading;
+    s.progress = 42;
+    s.auto_check = true;
+    return s;
+}
+
+void test_update_status_json(void) {
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::updateStatusJson(updateStatus()).c_str());
+    TEST_ASSERT_EQUAL_STRING("v1.16.0", doc["current"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("v1.17.0", doc["latest"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["available"].as<bool>());
+    TEST_ASSERT_TRUE(doc["installable"].as<bool>());
+    TEST_ASSERT_TRUE(doc["release_build"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("esp32-nut-v1.17.0-esp32-p4-eth-v1-ota.bin", doc["asset"]["name"].as<const char*>());
+    TEST_ASSERT_EQUAL(3247719, doc["asset"]["size"].as<int>());
+    TEST_ASSERT_TRUE(doc["asset"]["verified"].as<bool>());
+    TEST_ASSERT_EQUAL(120, doc["checked_age_s"].as<int>());
+    TEST_ASSERT_EQUAL_STRING("downloading", doc["phase"].as<const char*>());
+    TEST_ASSERT_EQUAL(42, doc["progress"].as<int>());
+    TEST_ASSERT_TRUE(doc["auto_check"].as<bool>());
+}
+
+void test_update_status_json_never_checked(void) {
+    UpdateStatus s = updateStatus();
+    s.latest = "";
+    s.asset_name = "";
+    s.checked = false;
+    s.phase = UpdatePhase::Idle;
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::updateStatusJson(s).c_str());
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+    TEST_ASSERT_FALSE(doc["installable"].as<bool>());
+    TEST_ASSERT_TRUE(doc["checked_age_s"].isNull());
+    TEST_ASSERT_EQUAL_STRING("idle", doc["phase"].as<const char*>());
+
+    UpdateStatus dev = updateStatus();
+    dev.current = "dev";
+    deserializeJson(doc, WebApiJson::updateStatusJson(dev).c_str());
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+    TEST_ASSERT_FALSE(doc["installable"].as<bool>());
+    TEST_ASSERT_FALSE(doc["release_build"].as<bool>());
+}
+
+void test_update_summary_json(void) {
+    JsonDocument doc;
+    WebApiJson::updateSummaryJson(doc.to<JsonObject>(), updateStatus());
+    TEST_ASSERT_TRUE(doc["available"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("v1.17.0", doc["latest"].as<const char*>());
+    UpdateStatus same = updateStatus();
+    same.current = "v1.17.0";
+    WebApiJson::updateSummaryJson(doc.to<JsonObject>(), same);
+    TEST_ASSERT_FALSE(doc["available"].as<bool>());
+}
+
+void test_update_settings_body(void) {
+    JsonDocument doc;
+    bool auto_check = true;
+    String out;
+    deserializeJson(doc, "{\"auto_check\":false}");
+    TEST_ASSERT_EQUAL(0, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    TEST_ASSERT_FALSE(auto_check);
+    deserializeJson(doc, "{\"auto_check\":\"no\"}");
+    TEST_ASSERT_EQUAL(400, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    deserializeJson(doc, "[]");
+    TEST_ASSERT_EQUAL(400, WebApiJson::checkUpdateSettingsBody(doc, auto_check, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_overrides_json_with_ups_values);
@@ -2454,5 +2536,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_time_body_error_messages);
     RUN_TEST(test_time_body_server_required_only_with_ntp);
     RUN_TEST(test_diag_read_json_states);
+    RUN_TEST(test_update_status_json);
+    RUN_TEST(test_update_status_json_never_checked);
+    RUN_TEST(test_update_summary_json);
+    RUN_TEST(test_update_settings_body);
     return UNITY_END();
 }

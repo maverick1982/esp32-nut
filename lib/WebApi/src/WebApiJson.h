@@ -11,6 +11,7 @@
 #include "NutOverrides.h"
 #include "NUTServer.h"
 #include "SyslogSettings.h"
+#include "UpdateStatus.h"
 #include "SyslogStatus.h"
 #include "TimeSettings.h"
 #include "TimeStatus.h"
@@ -198,6 +199,15 @@ public:
     // GET /api/logging (US-116): {"syslog":{enabled,host,port,protocol,facility,
     // min_level,rate},"status":{"syslog":{state,target,error,sent,failed,rate_limited,
     // not_ready}},"options":{protocols,facilities,levels,rate_min,rate_max}}
+    // GET /api/update: {"current","latest","available","installable","release_build","release_url",
+    // "asset":{"name","size","verified"},"checked","last_check_ok","checked_age_s",
+    // "error","phase","progress","auto_check"}
+    static String updateStatusJson(const UpdateStatus& s);
+    // Dashboard part of /api/system-status: {"available","latest"}
+    static void updateSummaryJson(JsonObject out, const UpdateStatus& s);
+    // POST /api/update/settings {"auto_check":bool}: 0, or 400 with {"error"}
+    static int checkUpdateSettingsBody(JsonVariantConst body, bool& auto_check, String& response);
+
     static String remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status);
     // POST /api/logging: {"syslog":{...}} with any of the fields above; the others keep
     // their value. 0 with next filled, otherwise 400 {"error"}: "Invalid request",

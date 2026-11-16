@@ -1,0 +1,7 @@
+{
+  "name": "UpdateCore",
+  "version": "1.0.0",
+  "description": "Firmware update check and install logic of esp32-nut: versions, GitHub release parsing, check schedule. Pure logic, no platform calls.",
+  "platforms": ["espressif32", "native"],
+  "dependencies": [{ "name": "ArduinoJson" }]
+}
