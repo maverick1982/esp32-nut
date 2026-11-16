@@ -1,0 +1,49 @@
+schema: archetipo/spec/v2
+code: US-140
+title: Ultimi valori serviti durante un distacco breve dello stesso UPS, come usbhid-ups (#36)
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: MEDIUM
+points: 3
+status: REVIEW
+body: |-
+  #### US-140: Ultimi valori serviti durante un distacco breve dello stesso UPS, come usbhid-ups (#36)
+
+  **Epic:** EP-001 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS che ogni tanto si stacca da solo dal bus USB e si ricollega dopo circa un secondo (per esempio il Powercom SPD-750U di fox1047 nella #36),
+  voglio che il server NUT continui a servire gli ultimi valori mentre lo stesso UPS si ricollega,
+  in modo che Home Assistant non mostri l'UPS "unavailable" a ogni distacco, come succede con NUT su Linux.
+
+  **Dimostrazione**
+  - **Test nativo:** distacco con dati freschi e ricollegamento dello stesso UPS entro 5 s: i dati non diventano mai stale, e i valori nuovi sostituiscono i vecchi man mano che arrivano. Senza ricollegamento entro 5 s, con un UPS diverso, o con il primo poll completo non finito entro 30 s: dati stale come oggi, valori vecchi scartati.
+  - **Sulla scheda:** con un client NUT che legge ogni secondo, staccando e riattaccando subito il cavo USB il client non riceve mai `ERR DATA-STALE`. Staccandolo per più di 5 s riceve `ERR DATA-STALE` come oggi. Il System Log mostra l'inizio e la fine dell'attesa.
+
+  **Criteri di Accettazione**
+  - [ ] Se l'UPS si stacca mentre i dati non sono stale e lo stesso UPS si enumera di nuovo entro 5 s, `isDataStale()` resta falso dal distacco alla fine del primo poll completo, e il server NUT continua a servire `LIST VAR`, `GET VAR` e `ups.status` senza `ERR DATA-STALE`.
+  - [ ] "Lo stesso UPS" vuol dire stesso VID/PID e stesso numero di serie. Senza numero di serie: stesso VID/PID e stessa stringa del prodotto. Con un UPS diverso i valori vecchi si scartano e i dati sono stale fino al primo poll completo, come oggi.
+  - [ ] Dopo il ricollegamento ogni valore letto dall'UPS (report INPUT o poll) sostituisce subito quello vecchio, stato compreso. Le variabili non ancora rilette restano quelle di prima. Alla fine del primo poll completo il comportamento torna quello di oggi.
+  - [ ] Se l'UPS non si enumera entro 5 s dal distacco, i valori vecchi si scartano e i dati sono stale come oggi. Se il primo poll completo non finisce entro 30 s dal distacco, i dati tornano stale fino al primo poll completo, come oggi; i valori non ancora riletti restano in memoria e il poll li sostituisce (come i valori che upsd conserva durante il ricollegamento).
+  - [ ] Nessun cambiamento per: avvio della scheda e riavvii controllati, primo collegamento, distacco con dati già stale (per esempio con un riavvio già richiesto), web UI (durante il distacco mostra "Disconnected"), spegnimento automatico, comandi e SET VAR (rispondono come oggi con l'UPS scollegato o in attesa del primo poll).
+  - [ ] Nel System Log una riga INFO quando inizia l'attesa e una quando finisce, con l'esito (UPS tornato e dati aggiornati, oppure UPS non tornato e dati stale).
+  - [ ] Un addendum all'ADR 0008 restringe la regola di #60 (dati stale fino al primo poll completo dopo un claim) ai casi senza i dati recenti dello stesso UPS.
+  - [ ] Test nativi per la nuova logica pura (la classe la decide il piano). Suite nativa verde e tre build ok.
+
+  **Assunzioni**
+  - **Prova dalla #36** (2026-11-15): con enum-delay-v2 Home Assistant mostra l'UPS "unavailable" per brevi periodi. `dmesg -w` su Linux con lo stesso UPS mostra 5 distacchi spontanei in circa 21 h, ognuno ricollegato in circa 0,3 s. Sul Powercom il primo poll completo dura circa 18 s (800 ms tra le richieste, `PowercomDriver.h`), e oggi per tutto quel tempo i dati sono stale.
+  - **Comportamento di NUT** (`usbhid-ups.c:1392-1424`): alla caduta del collegamento non dichiara i dati stale. Al tentativo successivo (circa 2 s) chiama `dstate_datastale()` solo se l'UPS non c'è. Se si ricollega rilegge tutto (`HU_WALKMODE_INIT`) mentre upsd serve i valori vecchi, e si ricollega solo allo stesso dispositivo.
+  - **5 s** sono l'equivalente del primo tentativo di NUT, con l'enumerazione della scheda che richiede 1-1,5 s. **30 s** sono `FIRST_DATA_MAX_MS`.
+  - **Fuori scope:** `driver.state` (`reconnect.trying`), che oggi non pubblichiamo; `LIST CMD`/`LIST RW` durante l'attesa (upsd li conserva, noi senza driver li diamo vuoti come oggi); accorciare il primo poll del Powercom.
+  - Issue aperte fino alla release ("Refs #36").
+history:
+  - status: TODO
+    at: "2026-11-16T15:06:57Z"
+  - status: PLANNED
+    at: "2026-11-16T15:53:33Z"
+  - status: IN PROGRESS
+    at: "2026-11-16T15:56:58Z"
+  - status: REVIEW
+    at: "2026-11-16T16:48:28Z"

@@ -32,6 +32,7 @@
 #include "QxRequestBox.h"
 #include "QxProtocols.h"
 #include "InputSilenceGuard.h"
+#include "ReconnectBridge.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -328,13 +329,19 @@ private:
     // vid, pid, quirks and product go to the USB diagnostics export, so a report names the
     // device that is bound instead of the previous one
     void claimQxInterface(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
-                          uint16_t vid, uint16_t pid, uint32_t quirks, const char* product);
+                          uint16_t vid, uint16_t pid, uint32_t quirks, const char* product,
+                          const UpsIdentity& id);
     // claimQxInterface() with a ported transport (US-136): the Q* driver on interface 0
     void attachQxDriver(hid_host_device_handle_t handle, const DriverRegistry::Match& match,
                         std::unique_ptr<QxUsbTransport> transport, uint16_t vid, uint16_t pid,
-                        uint32_t quirks, const char* product);
-    // Drops the state of the bound device, HID or Q* (body of handleDisconnected())
-    void releaseBoundState();
+                        uint32_t quirks, const char* product, const UpsIdentity& id);
+    // Drops the state of the bound device, HID or Q* (body of handleDisconnected()). With
+    // keep_values the UPS data stays, served while the same UPS comes back (US-140).
+    void releaseBoundState(bool keep_values = false);
+    // The outcome of a claim for the values kept across a drop-off (US-140). _mutex held.
+    void applyBridgeClaim(const UpsIdentity& id);
+    // End of a bridge that ran out (US-140), once per service() pass
+    void serviceReconnectBridge(uint32_t now);
     bool deferClaim(hid_host_device_handle_t handle, uint32_t now);
     void clearDeferredClaim(hid_host_device_handle_t handle);
     void processInputReport(const HidEvent& ev);
@@ -358,6 +365,9 @@ private:
     // a device from its connection on and keeps a cancelled enumeration until a detach
     int configuredDeviceCount() const;
     void cycleRootPort();
+    // The two halves of cycleRootPort(), apart for the US-140 test build
+    bool rootPortOff();
+    void rootPortOn();
     // One power on attempt of the root port cycle; then the slow retries of the poll loop
     void tryRootPortPowerOn(uint32_t now);
     void servicePortPowerOn(uint32_t now);
@@ -407,6 +417,11 @@ private:
     uint32_t _power_nominals_gen = 0;
     uint32_t _power_nominals_applied = 0;
     void applyPowerNominals();
+    // Empty _ups_data that keeps the custom nominal powers (US-146), under _mutex
+    void clearUpsData() {
+        _ups_data = UPSData();
+        _ups_data.setCustomPowerNominals(_custom_real_w, _custom_apparent_va);
+    }
     // Interface being closed by the loopTask: its synchronous DISCONNECTED is not queued
     volatile hid_host_device_handle_t _self_close_handle;
     volatile uint32_t _dropped_events;
@@ -481,6 +496,17 @@ private:
     static const uint32_t TEST_STUCK_EVERY_MS = 90000;
     uint32_t _test_stuck_at = 0;    // last time the pipe was not proven, or a cycle waited
     bool _test_stuck_active = false; // simulated stuck transfer, until the cycle starts
+#endif
+
+    // Last values served while the same UPS drops off the bus and comes back (US-140, issue
+    // #36). Written in the poll task under _mutex; isDataStale() reads them under _mutex.
+    ReconnectBridge _bridge;
+    UpsIdentity _bound_id; // the UPS served, from the descriptors read at enumeration
+#if defined(NUT_TEST_RECONNECT_BRIDGE) && NUT_TEST_RECONNECT_BRIDGE
+    static const uint32_t TEST_BRIDGE_EVERY_MS = 120000;
+    static const uint32_t TEST_PORT_OFF_MS = 7000; // NUT_TEST_RECONNECT_BRIDGE=2
+    uint32_t _test_bridge_at = 0;   // last time the data was not fresh, or a drop-off ran
+    uint32_t _test_port_on_at = 0;  // =2: when the port goes on again, 0 = not off
 #endif
 
     UPSData _ups_data;

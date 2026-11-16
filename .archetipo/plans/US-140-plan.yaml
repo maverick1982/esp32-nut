@@ -1,0 +1,439 @@
+schema: archetipo/plan/v2
+spec_code: US-140
+body: |-
+  ---
+  type: plan
+  title: 'US-140: Ultimi valori serviti durante un distacco breve dello stesso UPS, come usbhid-ups (#36) — Piano di implementazione'
+  description: 'Piano di implementazione per US-140'
+  tags: [plan, implementation, US-140]
+  ---
+  # US-140: Ultimi valori serviti durante un distacco breve dello stesso UPS, come usbhid-ups (#36) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-16
+  **Branch:** da creare all'implementazione da `fix/issue-36-enum-delay` (e3604e7, già ribasato su main 7225d4c), per esempio `feature/us-140-reconnect-bridge`. Il Powercom della #36 va provato con entrambe le modifiche; la PR va dopo quella della #36 (rebase su main a quel punto). Spec e backlog di US-140 sono ancora da committare.
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** MEDIUM | **Punti:** 3 | **Bloccato da:** -
+
+  Quando lo stesso UPS si stacca con dati freschi e si enumera di nuovo entro 5 s, il server NUT continua a servire gli ultimi valori fino alla fine del primo poll completo. I valori nuovi sostituiscono i vecchi man mano che arrivano. Senza enumerazione entro 5 s, o con un UPS diverso, i valori vecchi si scartano come oggi. Con il primo poll non finito entro 30 s dal distacco, i dati tornano stale fino alla sua fine.
+
+  **Nota sul criterio 4 (rivisto durante la pianificazione):** dopo il claim lo stesso `UPSData` riceve i valori nuovi. Scartare solo i valori "vecchi" a 30 s richiederebbe di sapere quali chiavi sono state riscritte, ma i driver saltano `set()` quando il valore non cambia (`valueEquals`, `statusKeys`). Un report statico letto una sola volta (`pollStaticReportsOnce`) con un valore identico andrebbe perso per sempre. Il criterio ora dice: a 30 s dati stale fino al primo poll completo, valori non ancora riletti in memoria e sostituiti dal poll, come fa upsd con il dstate conservato. Dopo un poll completo ogni chiave è stata letta di nuovo: un valore rimasto uguale è quello corrente.
+
+  ## Contesto verificato nel codice
+
+  - `USBHostUPS::releaseBoundState()` (`lib/USBHostUPS/src/USBHostUPS.cpp`, ~riga 795) azzera `_ups_data` a ogni distacco. È chiamata da `handleDisconnected()` e da `claimQxInterface()` quando sostituisce un'interfaccia.
+  - `isDataStale()` (~riga 1223) è vero con `!_is_ready_to_poll` e con `!_first_data_ready`. È la regola di #60 (ADR 0008, addendum #60, terzo giro). `_first_data_ready` torna vero in `service()` (~riga 456) con `initialPollDone()` e stato noto, al massimo `FIRST_DATA_MAX_MS` (30 s) dopo il claim sul percorso HID. Il percorso Q* aspetta senza limite.
+  - Sul Powercom il primo poll completo dura circa 18 s (`PowercomDriver::stepSpacingMs()` = 800 ms).
+  - `claimInterface()` (~riga 562) ha `dev_info` (VID, PID, stringhe `iManufacturer`/`iProduct`/`iSerialNumber` lette all'enumerazione) per entrambe le famiglie, prima di scegliere HID o Q*. `populateStringsFromDeviceInfo()` tratta "Blank" come seriale assente. Il percorso HID riempie `_ups_data` dentro il lock (`populateStringsFromDeviceInfo`, `formatDeviceStrings`, `applyDefaultDelays`). `attachQxDriver()` (~riga 912) e il ramo "not supported yet" di `claimQxInterface()` non scrivono valori.
+  - `handleEvent()` (~riga 523) chiama `claimInterface()` sull'evento `CONNECTED` nel poll task: claim ≈ enumerazione, salvo il descrittore rimandato (`deferClaim`).
+  - `recoverStuckTransfer()` (US-122) mette `_is_ready_to_poll = false` prima del ciclo della porta ("Stale at once"): al distacco i dati sono già stale e la finestra di attesa non parte. Resta così: rientra in "distacco con dati già stale".
+  - Consumatori di `isDataStale()`: `NUTServer` (`ERR DATA-STALE`), `WebApiJson` (`_stale`, banner con `isWaitingFirstData()`), `main.cpp` (`AutoShutdown::update`, `RestartPolicy` con `ups_healthy`). Nessuno va modificato.
+  - I driver usano `hasKey()` solo per le stringhe (`GenericDriver::appendNewStrings` non richiede `ups.mfr/model/serial` già presenti; `PowercomDriver` mette `ups.mfr` di default se manca) e per il prodotto Eaton. Con lo stesso UPS i valori conservati sono quelli giusti.
+  - `USBHostUPS` non ha test nativi (`test_usb_host` è in `test_ignore`): la logica nuova va in una classe pura, come `PortCyclePolicy`, `EnumWatchdog` e `InputErrorBackoff`.
+
+  ## Soluzione tecnica
+
+  Una classe pura `ReconnectBridge` decide se e per quanto servire i valori. `USBHostUPS` non azzera più `_ups_data` quando la finestra parte, la interroga in `isDataStale()` e le notifica gli eventi (distacco, enumerazione, claim, primo poll, scadenze). I valori restano nello stesso `UPSData`, dove il driver nuovo scrive sopra: è il comportamento del dstate di upsd durante `HU_WALKMODE_INIT`.
+
+  ### 1. `ReconnectBridge` e `UpsIdentity` (`lib/USBHostUPS/src/ReconnectBridge.h`, solo header, `<stdint.h>` e `<string.h>`)
+
+  - `struct UpsIdentity { bool valid; uint16_t vid, pid; char serial[65]; char product[65]; }` con `static UpsIdentity make(uint16_t vid, uint16_t pid, const char* serial, const char* product)`: copia troncata e terminata. Seriale `nullptr`, vuoto o "Blank" diventa vuoto (come `populateStringsFromDeviceInfo`). `valid = true`.
+  - `static bool sameUps(const UpsIdentity& a, const UpsIdentity& b)`: entrambi validi e stesso VID/PID. Con due seriali non vuoti contano i seriali. Con un seriale presente e l'altro assente sono diversi (per prudenza). Senza seriali conta il prodotto (`strcmp`).
+  - Costanti: `ENUM_WINDOW_MS = 5000`, `MAX_BRIDGE_MS = 30000`.
+  - `enum class State : uint8_t { IDLE, WAITING_ENUM, WAITING_CLAIM, WAITING_DATA }`.
+  - `bool onDisconnected(uint32_t now, bool dataFresh, const UpsIdentity& bound)`:
+    - se già attiva, torna a `WAITING_ENUM` senza spostare l'inizio (il tetto di 30 s non si allunga) con scadenza `min(now + ENUM_WINDOW_MS, inizio + MAX_BRIDGE_MS)`, e risponde true;
+    - altrimenti parte solo con `dataFresh && bound.valid` (inizio = now, identità salvata);
+    - risponde se i valori vanno conservati.
+  - `void onEnumerated(uint32_t now)`: `WAITING_ENUM` → `WAITING_CLAIM`, solo entro la scadenza; negli altri stati niente.
+  - `enum class Claim : uint8_t { NOT_BRIDGING, KEEP_VALUES, DROP_VALUES }` e `Claim onClaim(uint32_t now, const UpsIdentity& id)`:
+    - `IDLE` → `NOT_BRIDGING`;
+    - attiva ma non più `serving(now)` → reset e `DROP_VALUES`;
+    - `sameUps` → `WAITING_DATA` e `KEEP_VALUES`, accettato anche da `WAITING_ENUM` se l'evento `CONNECTED` è sfuggito;
+    - altrimenti reset e `DROP_VALUES`.
+  - `bool onFirstData(uint32_t now, uint32_t& bridgedMs)`: in `WAITING_DATA` mette il tempo dal distacco in `bridgedMs`, fa reset e risponde true; altrimenti false.
+  - `enum class Expiry : uint8_t { NONE, DROP_VALUES, STALE_UNTIL_FIRST_DATA }` e `Expiry tick(uint32_t now)`:
+    - `WAITING_ENUM` oltre la sua scadenza, o `WAITING_CLAIM` oltre `inizio + MAX_BRIDGE_MS` → reset e `DROP_VALUES`;
+    - `WAITING_DATA` oltre `inizio + MAX_BRIDGE_MS` → reset e `STALE_UNTIL_FIRST_DATA`.
+  - `bool serving(uint32_t now) const`: in `WAITING_ENUM` `now` prima della scadenza; in `WAITING_CLAIM`/`WAITING_DATA` `now - inizio < MAX_BRIDGE_MS`; `IDLE` false. Tutte le differenze sono senza segno (sicure al giro di `millis()`). Basta questo perché i dati diventino stale alla scadenza, anche prima del `tick()`.
+  - `bool active() const`, `State state() const`, `uint32_t elapsedMs(uint32_t now) const`, `void reset()`.
+  - Commento di classe in inglese: issue #36 (Powercom che si stacca da solo ogni 1-3 h, Home Assistant "unavailable" per circa 18 s), riferimento a `usbhid-ups.c:1392-1424` (niente `dstate_datastale()` se il ricollegamento riesce al primo tentativo, dstate conservato durante `HU_WALKMODE_INIT`, solo lo stesso dispositivo), perché 5 s (primo tentativo di NUT dopo circa 2 s, enumerazione della scheda 1-1,5 s) e 30 s (`FIRST_DATA_MAX_MS`).
+
+  ### 2. `USBHostUPS`: identità, distacco, claim
+
+  - Membri nuovi in `USBHostUPS.h`: `ReconnectBridge _bridge;` e `UpsIdentity _bound_id;` (identità dell'UPS servito). Si scrivono solo nel poll task, sotto `_mutex`; `isDataStale()` li legge sotto `_mutex`.
+  - Helper statico in `USBHostUPS.cpp`: `identityOf(const hid_host_dev_info_t&, uint32_t quirks, const char* product)`. Seriale con `DeviceStrings::toAscii(dev_info.iSerialNumber, HID_STR_DESC_MAX_LENGTH, invert, ...)` come in `populateStringsFromDeviceInfo`, poi `UpsIdentity::make()`.
+  - `claimInterface()`: con `have_info` calcola `id` dopo `product`, lo passa a `claimQxInterface()` e ad `attachQxDriver()` (parametro in più) e lo usa nel percorso HID. Senza `have_info` l'identità è `UpsIdentity()` (non valida).
+  - Percorso HID, dentro il lock subito dopo `_hid_dev_handle = handle;` e prima di `populateStringsFromDeviceInfo`:
+    - `KEEP_VALUES` → INFO `[USB] Same UPS back after %u ms: last values served until the first full poll`;
+    - `DROP_VALUES` → `_ups_data = UPSData();` e INFO `[USB] UPS back as another device or too late: last values dropped`;
+    - `NOT_BRIDGING` → niente (oggi `_ups_data` è già vuoto);
+    - poi `_bound_id = id`.
+  - `attachQxDriver()`: stessa gestione di `onClaim()` dentro il suo lock, poi `_bound_id = id`.
+  - Ramo "not supported yet" di `claimQxInterface()`: se la finestra è attiva, reset e `_ups_data = UPSData()`. `_bound_id = UpsIdentity()`. Lì `_ups_data` resta vuoto come oggi.
+  - `handleEvent()`, caso `CONNECTED`: `_bridge.onEnumerated(millis())` sotto `_mutex`, prima di `claimInterface()`.
+  - `handleDisconnected()`: dopo il controllo sull'handle, sotto `_mutex`, `fresh = _first_data_ready && !isDataStale()` e `keep = _bridge.onDisconnected(millis(), fresh, _bound_id)`. Poi la riga "HID Device Disconnected" di oggi e, con `keep`, INFO `[USB] Last values served while the same UPS comes back (up to 5 s)`. Infine `releaseBoundState(keep)`.
+  - `releaseBoundState(bool keep_values = false)`: senza `keep_values` azzera `_ups_data` e fa `_bridge.reset()` come oggi; con `keep_values` conserva `_ups_data`. `_bound_id` torna non valido in entrambi i casi: la finestra ha la sua copia. La chiamata di `claimQxInterface()` resta senza argomento.
+
+  ### 3. `USBHostUPS`: stale, scadenze, primo poll, riavvio
+
+  - `isDataStale()`, primo controllo `_restart_requested` (oggi è il terzo: tutti danno true, quindi il risultato non cambia). Poi, con `!_is_ready_to_poll || !_first_data_ready`, sotto `_mutex`:
+    - `!_bridge.serving(now)` → true come oggi;
+    - durante la finestra con l'UPS già agganciato, stale solo se `_link.isStale(now) || _in_wd.isStale(now) || _in_silence.isStale(now) || (_driver && _driver->dataStale())`;
+    - prima del claim false.
+    - Il resto della funzione non cambia.
+  - `service()`: `serviceReconnectBridge(now)` subito dopo `serviceEnumWatchdog(now)`, prima dei ritorni anticipati (prima del claim `service()` esce a `!_is_ready_to_poll`). Sotto `_mutex`: `ms = _bridge.elapsedMs(now)`, `e = _bridge.tick(now)`; con `DROP_VALUES` e `!_is_ready_to_poll`, `_ups_data = UPSData()`. Log fuori dal lock:
+    - `DROP_VALUES` → INFO `[USB] UPS not back %u ms after the disconnection: last values dropped, data stale`;
+    - `STALE_UNTIL_FIRST_DATA` → INFO `[USB] First full poll not done %u ms after the disconnection: data stale until it ends`.
+  - Blocco `_first_data_ready = true` in `service()`: dopo la riga "First full poll ..." di oggi, `_bridge.onFirstData(now, ms)` sotto `_mutex`; se true, INFO `[USB] UPS back: last values served for %u ms, all refreshed now`.
+  - `requestRestart()`: sotto `_mutex`, con la finestra attiva, `_bridge.reset()` e, se `!_is_ready_to_poll`, `_ups_data = UPSData()`. Un riavvio richiesto non viene mai nascosto, e dopo un claim che annulla il riavvio non restano valori di un'altra fase.
+  - Invariati: web UI (`isConnected()` falso fino al claim, quindi "Disconnected"; dopo il claim valori senza `_stale`), `NUTServer`, `AutoShutdown`, `RestartPolicy`, comandi, SET VAR e `getWritableVariables()` (senza driver vuoti come oggi), ciclo della porta di US-122, avvio e riavvii (RAM azzerata).
+  - Effetto collaterale accettato: dopo il claim `ups_healthy` di `RestartPolicy` diventa vero circa 18 s prima. `PROVEN_RESET_MS` richiede comunque `_first_data_ready`.
+
+  ### 4. Build di prova `NUT_TEST_RECONNECT_BRIDGE`
+
+  Sul modello di `NUT_TEST_STUCK_CYCLE`/`NUT_TEST_ENUM_WATCHDOG`: serve a provarlo sull'Eaton senza staccare il cavo.
+
+  - `=1`: ogni `TEST_BRIDGE_EVERY_MS` (120 s) con `_first_data_ready`, dati non stale e finestra inattiva, WARN `[TEST] Simulated UPS drop-off (NUT_TEST_RECONNECT_BRIDGE=1)` e `cycleRootPort()` (500 ms), senza toccare `_is_ready_to_poll`. L'UPS si stacca con dati freschi e torna in circa 1-2 s.
+  - `=2`: stesso innesco, ma la porta resta spenta 7 s senza bloccare il poll task (accensione in `service()` quando scade `_test_port_on_at`). La finestra scade a 5 s (`DROP_VALUES`, dati stale), poi l'UPS torna e i dati sono stale fino al primo poll come oggi.
+  - `cycleRootPort()` si divide in `rootPortOff()`/`rootPortOn()` (stessi log di errore) senza cambiare il comportamento di oggi.
+
+  ### 5. Documentazione
+
+  - ADR 0008: nuovo addendum `Last values across a short drop-off of the same UPS (US-140, issue #36, 2026-11-16)`, prima di `### Positive`:
+    - prova (dmesg, Home Assistant, 18 s del Powercom);
+    - comportamento di `usbhid-ups`;
+    - regole (5 s, 30 s, identità, valori sovrascritti, distacco durante la finestra);
+    - la regola di #60 vale ora solo senza i dati recenti dello stesso UPS;
+    - cosa non cambia (ciclo della porta US-122, riavvii, web UI);
+    - build di prova `=1`/`=2`.
+    - Nell'addendum #60 (terzo giro), la frase su `isDataStale()` fino al primo poll completo rimanda al nuovo addendum.
+  - Note di rilascio: non in questo piano, si scrivono prima della release (solo `#36`, nessun codice US nel testo). Manuale utente fuori dal piano.
+  - PR con "Refs #36", mai "Closes".
+
+  ---
+
+  ## Strategia di test
+
+  La logica sta tutta in `ReconnectBridge`, coperta dai test nativi. Il collegamento in `USBHostUPS` (che non ha test nativi) si verifica con le tre build, le due build di prova e una prova sull'Eaton 3S.
+
+  - **Native `test_reconnect_bridge`:** identità (stesso seriale, seriale diverso, seriale presente da una parte sola, senza seriale con prodotto uguale o diverso, PID diverso, identità non valida, "Blank"). Macchina a stati con tempi espliciti:
+    - percorso felice (distacco, enumerazione, claim dello stesso UPS, primo poll a 19 s, `bridgedMs`);
+    - nessuna enumerazione (servita a 4999 ms, non a 5000, `tick` → `DROP_VALUES` una volta sola);
+    - enumerazione senza claim (`DROP_VALUES` a 30 s);
+    - claim di un UPS diverso;
+    - claim senza finestra;
+    - claim dopo la scadenza ma prima del `tick`;
+    - primo poll non finito a 30 s (`STALE_UNTIL_FIRST_DATA`, poi `onFirstData` false);
+    - secondo distacco durante la finestra (riparte anche con `dataFresh` falso, il tetto di 30 s non si allunga);
+    - distacco con dati stale o identità non valida (non parte);
+    - giro di `millis()`, `reset()`, `onEnumerated()` in `IDLE`.
+  - **Regressione:** suite nativa completa verde senza modifiche ai test esistenti. Build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`, più S3 con `-DNUT_TEST_RECONNECT_BRIDGE=1` e `=2`.
+  - **Sulla scheda** (Eaton 3S, solo dopo un sì esplicito dell'utente). Build `=1` per circa 10 min (almeno 4 distacchi) con un client NUT che legge `ups.status` e `battery.charge` ogni secondo: zero `ERR DATA-STALE`, righe INFO di inizio e fine finestra, nessun riavvio. Build `=2`: `ERR DATA-STALE` da circa 5 s dopo il distacco fino al primo poll completo dopo il ritorno, riga `UPS not back`. Poi la build normale. Risultati in `docs/test-results/US-140/field/`.
+  - **E2E web:** non servono, la web UI non cambia. Nessun mockup. Nessuna demo video: la Dimostrazione è un test nativo e una prova sulla scheda.
+
+  _Piano generato con ARchetipo Planning — 2026-11-16_
+tasks:
+  - id: TASK-01
+    title: 'ReconnectBridge e UpsIdentity: logica pura della finestra di attesa'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** creare la classe pura che decide se servire gli ultimi valori durante un distacco breve dello stesso UPS, e il confronto delle identità.
+
+      **Leggere:** sezione 1 della soluzione tecnica; `lib/USBHostUPS/src/PortCyclePolicy.h` e `lib/USBHostUPS/src/InputErrorBackoff.h` come modello di stile (solo header, commento di classe in inglese, differenze senza segno).
+
+      **Modificare:** nuovo `lib/USBHostUPS/src/ReconnectBridge.h`:
+      - `struct UpsIdentity` con `valid`, `vid`, `pid`, `serial[65]`, `product[65]` e `static UpsIdentity make(vid, pid, serial, product)` ("Blank", vuoto o `nullptr` → seriale vuoto; copie troncate e terminate);
+      - `ReconnectBridge::sameUps()`;
+      - `ENUM_WINDOW_MS = 5000`, `MAX_BRIDGE_MS = 30000`;
+      - `State`, `Claim`, `Expiry` e i metodi `onDisconnected`, `onEnumerated`, `onClaim`, `onFirstData`, `tick`, `serving`, `active`, `state`, `elapsedMs`, `reset`, esattamente come nella sezione 1.
+
+      **Passi:** 1) identità e `sameUps`; 2) stati, scadenze e transizioni; 3) commento di classe (#36, `usbhid-ups.c:1392-1424`, perché 5 s e 30 s).
+
+      **Verifica:** compila nel test di TASK-02.
+
+      **Fatto:** nessuna dipendenza da Arduino o ESP-IDF; solo `<stdint.h>` e `<string.h>`.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/ReconnectBridge.h — nuova classe pura e `UpsIdentity`
+
+      ## Criteri di Completamento
+      - [ ] Un secondo distacco durante la finestra non sposta l'inizio: la scadenza dell'enumerazione è `min(now + 5 s, inizio + 30 s)`
+      - [ ] `serving()` dipende solo dal tempo e dallo stato, quindi la scadenza vale anche prima di `tick()`
+      - [ ] Tutti i confronti di tempo sono sicuri al giro di `millis()`
+    ref: TASK-01
+  - id: TASK-02
+    title: Test native di ReconnectBridge
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire identità e macchina a stati, e dimostrare la riga "Test nativo" della Dimostrazione.
+
+      **Leggere:** `test/test_input_error_backoff/test_main.cpp` (struttura Unity e `main` del progetto), sezione "Strategia di test" del piano.
+
+      **Modificare:** nuovo `test/test_reconnect_bridge/test_main.cpp` con almeno questi casi:
+      - identità: stesso seriale; seriale diverso; seriale da una parte sola; senza seriale con prodotto uguale e diverso; PID diverso; identità non valida; "Blank";
+      - percorso felice: distacco a 0, enumerazione a 1000, claim dello stesso UPS → `KEEP_VALUES`, `serving(20000)` vero, `onFirstData(19000)` vero con `bridgedMs = 19000`, poi `IDLE`;
+      - nessuna enumerazione: `serving(4999)` vero, `serving(5000)` falso, `tick(5000)` → `DROP_VALUES`, poi `NONE`;
+      - enumerazione senza claim: `DROP_VALUES` a 30000;
+      - claim di un UPS diverso → `DROP_VALUES` e `IDLE`; claim in `IDLE` → `NOT_BRIDGING`; claim a 6000 senza enumerazione e senza `tick` → `DROP_VALUES`;
+      - `WAITING_DATA` fino a 30000 → `STALE_UNTIL_FIRST_DATA`, `onFirstData` dopo → false;
+      - secondo distacco a 20000 con `dataFresh` falso → true, scadenza 25000; terzo a 28000 → scadenza 30000;
+      - distacco con `dataFresh` falso o identità non valida in `IDLE` → false;
+      - giro di `millis()` (inizio a `0xFFFFF000`), `reset()`, `onEnumerated()` in `IDLE`.
+
+      **Passi:** 1) scrivere i test; 2) eseguirli; 3) correggere TASK-01 se serve, mai i test per farli passare.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native -f test_reconnect_bridge` verde.
+
+      **Fatto:** ogni criterio della spec che riguarda tempi e identità ha almeno un test.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - test/test_reconnect_bridge/test_main.cpp — nuovi test native
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati presenti e verdi
+      - [ ] Nessun test esistente modificato
+    ref: TASK-02
+  - id: TASK-03
+    title: 'USBHostUPS: identità al claim, valori conservati al distacco, esito del claim'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** collegare la finestra al ciclo di vita dell'interfaccia: identità dell'UPS, distacco senza azzerare i valori, claim che li tiene o li scarta.
+
+      **Leggere:** sezione 2 della soluzione tecnica; in `lib/USBHostUPS/src/USBHostUPS.cpp` `handleEvent()`, `claimInterface()`, `handleDisconnected()`, `releaseBoundState()`, `claimQxInterface()`, `attachQxDriver()`, `populateStringsFromDeviceInfo()`; `lib/USBHostUPS/src/USBHostUPS.h` (membri e dichiarazioni).
+
+      **Modificare:**
+      - `USBHostUPS.h`: `#include "ReconnectBridge.h"`, membri `_bridge` e `_bound_id` con commento (US-140, sotto `_mutex`), firma `releaseBoundState(bool keep_values = false)`, parametro `const UpsIdentity& id` per `claimQxInterface()` e `attachQxDriver()`.
+      - `USBHostUPS.cpp`:
+        - helper statico `identityOf()`;
+        - `claimInterface()` calcola `id` con `have_info`;
+        - percorso HID: `onClaim()` dentro il lock prima di `populateStringsFromDeviceInfo`, con `_ups_data = UPSData()` su `DROP_VALUES` e le due righe INFO del piano, poi `_bound_id = id`;
+        - stessa gestione in `attachQxDriver()`;
+        - reset e svuotamento nel ramo "not supported yet";
+        - `onEnumerated()` sul `CONNECTED`;
+        - `handleDisconnected()` con `fresh = _first_data_ready && !isDataStale()`, `onDisconnected()` e la riga INFO;
+        - `releaseBoundState(keep)`.
+
+      **Passi:** 1) header; 2) identità e claim; 3) distacco e release; 4) build S3.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok.
+
+      **Fatto:** senza finestra attiva (avvio, primo collegamento, distacco con dati stale) il percorso di codice dà gli stessi risultati di oggi.
+
+      **Blocchi:** se `isDataStale()` chiamata in `handleDisconnected()` sotto `_mutex` crea problemi di lock (è ricorsivo, non dovrebbe), calcolare `fresh` prima di prendere il lock.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — include, membri, firme
+      - lib/USBHostUPS/src/USBHostUPS.cpp — identità, claim HID e Q*, `CONNECTED`, distacco, release
+
+      ## Criteri di Completamento
+      - [ ] Con lo stesso UPS di ritorno `_ups_data` non viene azzerato e il driver nuovo ci scrive sopra
+      - [ ] Con un UPS diverso, senza `dev_info` o a finestra scaduta `_ups_data` viene azzerato prima delle stringhe
+      - [ ] Il ramo Q* "not supported yet" lascia `_ups_data` vuoto come oggi
+      - [ ] Build S3 ok
+    ref: TASK-03
+  - id: TASK-04
+    title: 'USBHostUPS: isDataStale con la finestra, scadenze, fine al primo poll e riavvio'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fare servire i valori conservati ai consumatori e chiudere la finestra nei tempi giusti.
+
+      **Leggere:** sezione 3 della soluzione tecnica; in `USBHostUPS.cpp` `isDataStale()`, `service()` (fino al blocco `_first_data_ready`), `requestRestart()`.
+
+      **Modificare:** `lib/USBHostUPS/src/USBHostUPS.cpp` (e la dichiarazione in `USBHostUPS.h`):
+      - `isDataStale()`: `_restart_requested` per primo; con `!_is_ready_to_poll || !_first_data_ready`, sotto `_mutex`:
+        - `!_bridge.serving(now)` → true;
+        - con l'UPS agganciato, stale solo con link, INPUT, silenzio o `dataStale()` del driver;
+        - prima del claim false;
+        - commento che rimanda all'addendum US-140 dell'ADR 0008;
+      - nuovo `serviceReconnectBridge(uint32_t now)` chiamato dopo `serviceEnumWatchdog(now)`: `tick()` sotto `_mutex`, svuotamento di `_ups_data` su `DROP_VALUES` senza claim, le due righe INFO fuori dal lock;
+      - nel blocco `_first_data_ready = true`: `onFirstData()` e la riga INFO `UPS back: last values served for %u ms, all refreshed now`;
+      - `requestRestart()`: reset della finestra e svuotamento di `_ups_data` se non agganciato.
+
+      **Passi:** 1) `isDataStale()`; 2) `serviceReconnectBridge()`; 3) primo poll; 4) riavvio; 5) build S3.
+
+      **Verifica:** `~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` ok; rilettura dei consumatori (`NUTServer`, `WebApiJson`, `main.cpp`) senza modifiche necessarie.
+
+      **Fatto:** senza finestra attiva `isDataStale()` dà gli stessi risultati di oggi in ogni ramo.
+
+      **Blocchi:** nessuno previsto.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `isDataStale()`, `serviceReconnectBridge()`, primo poll, `requestRestart()`
+      - lib/USBHostUPS/src/USBHostUPS.h — dichiarazione di `serviceReconnectBridge()`
+
+      ## Criteri di Completamento
+      - [ ] Durante la finestra `isDataStale()` è falso prima del claim e dopo il claim, salvo link, INPUT o driver già stale
+      - [ ] Alla scadenza i dati sono stale subito (da `serving()`), e il `tick()` svuota i valori se l'UPS non è tornato
+      - [ ] Un riavvio richiesto rende sempre i dati stale e chiude la finestra
+      - [ ] Righe INFO di fine finestra presenti per i tre esiti
+    ref: TASK-04
+  - id: TASK-05
+    title: Build di prova NUT_TEST_RECONNECT_BRIDGE (=1 distacco breve, =2 porta spenta 7 s)
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** poter provare la finestra sull'Eaton senza staccare il cavo.
+
+      **Leggere:** sezione 4 della soluzione tecnica; in `USBHostUPS.cpp` il blocco `NUT_TEST_STUCK_CYCLE` di `service()` e `cycleRootPort()`; in `USBHostUPS.h` `TEST_STUCK_EVERY_MS` e i membri di prova.
+
+      **Modificare:**
+      - `cycleRootPort()` diviso in `rootPortOff()`/`rootPortOn()` con gli stessi log; `cycleRootPort()` = off, 500 ms, on (invariato);
+      - sotto `#if defined(NUT_TEST_RECONNECT_BRIDGE) && NUT_TEST_RECONNECT_BRIDGE`:
+        - `TEST_BRIDGE_EVERY_MS = 120000`, `_test_bridge_at`, `_test_port_on_at`;
+        - in `service()`, dopo `serviceReconnectBridge(now)`: se `_test_port_on_at` è scaduto → `rootPortOn()`;
+        - con `_first_data_ready`, `!isDataStale()` e `!_bridge.active()` da almeno 120 s → WARN `[TEST] Simulated UPS drop-off (NUT_TEST_RECONNECT_BRIDGE=N)`; `=1` chiama `cycleRootPort()`, `=2` chiama `rootPortOff()` e fissa `_test_port_on_at = now + 7000`;
+        - mai toccare `_is_ready_to_poll`.
+
+      **Passi:** 1) divisione di `cycleRootPort()`; 2) blocco di prova; 3) build con i due valori.
+
+      **Verifica:** `PLATFORMIO_BUILD_FLAGS=-DNUT_TEST_RECONNECT_BRIDGE=1 ~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard` e lo stesso con `=2`, entrambi ok; build normale invariata.
+
+      **Fatto:** senza la macro il binario non contiene codice di prova.
+
+      **Blocchi:** dopo una build con `PLATFORMIO_BUILD_FLAGS` i test native ricompilano tutto (gotcha noto): impacchettare eventuali zip prima dei test.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.cpp — `rootPortOff()`/`rootPortOn()`, blocco di prova
+      - lib/USBHostUPS/src/USBHostUPS.h — dichiarazioni e membri di prova
+
+      ## Criteri di Completamento
+      - [ ] `=1` stacca l'UPS con dati freschi ogni 120 s senza marcarli stale
+      - [ ] `=2` tiene la porta spenta 7 s senza bloccare il poll task
+      - [ ] Le due build di prova e la build normale compilano
+    ref: TASK-05
+  - id: TASK-06
+    title: 'ADR 0008: addendum US-140 e rimando dalla regola di #60'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** documentare la decisione e restringere la regola di #60.
+
+      **Leggere:** `docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md` (addendum #60 terzo giro, addendum US-122, addendum #138 e la struttura degli altri addendum); sezione 5 della soluzione tecnica.
+
+      **Modificare:** lo stesso ADR, in inglese come il resto:
+      - nuovo `### Addendum: last values across a short drop-off of the same UPS (US-140, issue #36, 2026-11-16)` prima di `### Positive`:
+        - prova della #36 (dmesg con 5 distacchi in circa 21 h ricollegati in 0,3 s, Home Assistant "unavailable", primo poll del Powercom circa 18 s);
+        - `usbhid-ups.c:1392-1424`;
+        - regole: 5 s, 30 s, identità VID/PID+seriale o prodotto, valori sovrascritti nello stesso `UPSData`, secondo distacco senza allungare il tetto;
+        - perché a 30 s non si scartano i valori non riletti (i driver saltano `set()` sui valori uguali);
+        - cosa non cambia (ciclo della porta US-122 già stale, riavvii, web UI, comandi);
+        - build di prova `=1`/`=2`;
+      - nell'addendum #60, alla riga su `isDataStale()` fino al primo poll completo, un rimando: "except across a short drop-off of the same UPS, see the US-140 addendum".
+
+      **Passi:** 1) addendum; 2) rimando; 3) rilettura.
+
+      **Verifica:** solo documentazione.
+
+      **Fatto:** niente codici US nel testo destinato alle note di rilascio; nell'ADR i codici sono ammessi come negli altri addendum.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - docs/adr/0008-non-blocking-hid-callbacks-and-control-pipe-recovery.md — addendum US-140 e rimando nell'addendum #60
+
+      ## Criteri di Completamento
+      - [ ] Addendum con prova, regole, eccezioni e build di prova
+      - [ ] Rimando dalla regola di #60 presente
+    ref: TASK-06
+  - id: TASK-07
+    title: 'Regressione: suite nativa completa, tre build e due build di prova'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare che il resto del firmware non cambia e che tutto compila.
+
+      **Leggere:** nessun file nuovo; comandi del progetto in memoria (`pio.exe`, toolchain mingw per native).
+
+      **Modificare:** niente, salvo correzioni dei task precedenti se qualcosa fallisce.
+
+      **Passi:**
+      1) build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`;
+      2) build S3 con `-DNUT_TEST_RECONNECT_BRIDGE=1` e `=2` (prima di eseguire i native, che ricompilano);
+      3) `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" ~/.platformio/penv/Scripts/pio.exe test -e native` completa.
+
+      **Verifica:** tutte le build ok; suite nativa verde con il conteggio dei test (oggi 1608 più i nuovi).
+
+      **Fatto:** output delle build e del riepilogo dei test riportato nella revisione.
+
+      **Blocchi:** un fallimento in un test esistente si corregge nel codice, mai nel test.
+
+      ## File Coinvolti
+      - Nessun file nuovo: verifica di TASK-01…TASK-06
+
+      ## Criteri di Completamento
+      - [ ] Tre build ok
+      - [ ] Due build di prova ok
+      - [ ] Suite nativa completa verde, test esistenti invariati
+    ref: TASK-07
+  - id: TASK-08
+    title: Prova sull'Eaton 3S con le build di prova (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare la riga "Sulla scheda" della Dimostrazione.
+
+      **Leggere:** memoria del progetto (credenziali OTA nel file JSON indicato, mai stampate; procedura OTA delle prove precedenti); `docs/test-results/US-139/` come modello di cartella dei risultati, se presente.
+
+      **Modificare:** nuova cartella `docs/test-results/US-140/field/` con log e riepilogo.
+
+      **Passi:**
+      1) chiedere all'utente il permesso per la prova sull'UPS reale e aspettare un sì esplicito;
+      2) OTA della build `=1`; script nello scratchpad che ogni secondo fa `GET VAR <ups> ups.status` e `GET VAR <ups> battery.charge` sulla porta 3493 e registra ogni risposta con l'ora; System Log scaricato da `/api/logs`; almeno 10 min (4 distacchi);
+      3) OTA della build `=2` per circa 5 min (2 distacchi);
+      4) OTA della build normale di questo branch.
+
+      **Verifica:**
+      - `=1`: zero `ERR DATA-STALE`; per ogni distacco le righe `Last values served while the same UPS comes back`, `Same UPS back after` e `UPS back: last values served for`; nessun riavvio;
+      - `=2`: `ERR DATA-STALE` da circa 5 s dopo il distacco fino al primo poll completo dopo il ritorno, riga `UPS not back`.
+
+      **Fatto:** riepilogo con numeri (distacchi, durata delle finestre, risposte stale) in `docs/test-results/US-140/field/`.
+
+      **Blocchi:** senza il sì dell'utente il task resta aperto e la revisione lo segnala. L'Eaton alimenta la scheda dalla USB-A: il ciclo della porta non spegne VBUS sulle schede supportate, quindi la scheda resta accesa.
+
+      ## File Coinvolti
+      - docs/test-results/US-140/field/ — log del client NUT, System Log, riepilogo
+
+      ## Criteri di Completamento
+      - [ ] Sì esplicito dell'utente prima della prima OTA
+      - [ ] `=1`: zero `ERR DATA-STALE` su almeno 4 distacchi
+      - [ ] `=2`: dati stale dopo 5 s e righe di scadenza nel System Log
+      - [ ] Scheda lasciata sulla build normale del branch
+    ref: TASK-08
