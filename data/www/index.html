@@ -110,6 +110,11 @@
                     <div class="status-indicator warning" id="ind-ups"></div>
                     <span id="lbl-ups">UPS: --</span>
                 </div>
+                <!-- US-142: time since boot; the title carries the last reset and restart -->
+                <div class="status-item" id="status-uptime">
+                    <div class="status-indicator off"></div>
+                    <span id="lbl-uptime">Uptime: --</span>
+                </div>
             </div>
 
             <!-- US-061: session row, shown by bundle.js only with a valid session (never in AP mode) -->
@@ -1030,6 +1035,37 @@
                                     <span class="cmd-result" id="time-result" aria-live="polite"></span>
                                 </div>
                             </form>
+                        </section>
+
+                        <!-- US-142: restart on request (every board, does not need GET /api/board) -->
+                        <section class="board-section" id="restart-section" aria-labelledby="restart-title">
+                            <div class="cred-section" id="restart-title">Restart board</div>
+
+                            <p class="board-hint">Restarts the board now. The Web UI and NUT clients disconnect
+                                for about 15 seconds; the UPS keeps running and its settings are not changed.</p>
+
+                            <div class="auth-alert" id="restart-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="restart-error-text"></span>
+                            </div>
+
+                            <div class="auth-alert success" id="restart-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>The board is restarting, this page reloads in
+                                    <span class="countdown" id="restart-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-outline" id="btn-restart-board">
+                                    <span class="btn-label">Restart</span>
+                                </button>
+                            </div>
                         </section>
 
                     </div>

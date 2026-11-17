@@ -334,4 +334,123 @@ test.describe('Board page (US-094)', () => {
       await expect(page.locator('#led-error')).toBeHidden();
     });
   });
+
+  // US-142 (#133): restart the board from the last section, after a confirmation
+  test.describe('Restart board (US-142)', () => {
+    let restarts: { contentType: string | undefined; body: string | null }[];
+    let restartStatus: number;
+    let restartError: string;
+
+    test.beforeEach(async ({ page }) => {
+      restarts = [];
+      restartStatus = 200;
+      restartError = '';
+      await page.route('**/api/system/restart', route => {
+        const req = route.request();
+        restarts.push({ contentType: req.headers()['content-type'], body: req.postData() });
+        if (restartStatus !== 200) {
+          return route.fulfill({ status: restartStatus, json: { error: restartError } });
+        }
+        return route.fulfill({ json: { success: true, restart: true } });
+      });
+    });
+
+    test('confirmed: one JSON POST, countdown and UPS restarting in the sidebar', async ({ page }) => {
+      // The clock never advances: no status poll overwrites the sidebar and the page
+      // does not reload at the end of the countdown
+      await page.clock.install();
+      await openBoardTab(page);
+      const section = page.locator('#restart-section');
+      await expect(section).toBeVisible();
+      await expect(section).toContainText('Restart board');
+      await expect(section).toContainText('the UPS keeps running');
+
+      let dialogText = '';
+      page.once('dialog', d => { dialogText = d.message(); d.accept(); });
+      await page.locator('#btn-restart-board').click();
+
+      await expect(page.locator('#restart-success')).toBeVisible();
+      await expect(page.locator('#restart-success')).toContainText('The board is restarting');
+      await expect(page.locator('#restart-countdown')).toHaveText('15');
+      expect(dialogText).toContain('Restart the board now?');
+      expect(restarts).toHaveLength(1);
+      expect(restarts[0].contentType).toContain('application/json');
+      await expect(page.locator('#btn-restart-board')).toBeDisabled();
+      await expect(page.locator('#btn-restart-board')).toContainText('Restarting');
+      await expect(page.locator('#lbl-ups')).toHaveText('Restarting...');
+      await expect(page.locator('#restart-error')).toBeHidden();
+
+      // A second click does nothing while the board restarts
+      await page.locator('#btn-restart-board').click({ force: true });
+      expect(restarts).toHaveLength(1);
+    });
+
+    test('cancelled: no request, button still enabled', async ({ page }) => {
+      await openBoardTab(page);
+      page.once('dialog', d => d.dismiss());
+      await page.locator('#btn-restart-board').click();
+
+      await expect(page.locator('#btn-restart-board')).toBeEnabled();
+      await expect(page.locator('#btn-restart-board')).toHaveText('Restart');
+      await expect(page.locator('#restart-success')).toBeHidden();
+      expect(restarts).toHaveLength(0);
+    });
+
+    test('409 during a firmware update: message shown, button enabled again', async ({ page }) => {
+      restartStatus = 409;
+      restartError = 'A firmware update is in progress';
+      await openBoardTab(page);
+      page.once('dialog', d => d.accept());
+      await page.locator('#btn-restart-board').click();
+
+      await expect(page.locator('#restart-error')).toBeVisible();
+      await expect(page.locator('#restart-error')).toContainText('A firmware update is in progress');
+      await expect(page.locator('#btn-restart-board')).toBeEnabled();
+      await expect(page.locator('#btn-restart-board')).toHaveText('Restart');
+      await expect(page.locator('#restart-success')).toBeHidden();
+      expect(restarts).toHaveLength(1);
+    });
+
+    test('board settings not readable: the section still works', async ({ page }) => {
+      await page.route('**/api/board', route => route.fulfill({ status: 500, json: { error: 'x' } }));
+      await page.goto('http://esp32.local/');
+      await page.locator('button.tab[data-target="board"]').click();
+      await expect(page.locator('#board-error')).toBeVisible();
+
+      await expect(page.locator('#restart-section')).toBeVisible();
+      await expect(page.locator('#btn-restart-board')).toBeEnabled();
+      page.once('dialog', d => d.accept());
+      await page.locator('#btn-restart-board').click();
+      await expect(page.locator('#restart-success')).toBeVisible();
+      expect(restarts).toHaveLength(1);
+    });
+
+    test('375 px: no horizontal scroll with the restart section and three sidebar items', async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.route('**/api/system-status', route => route.fulfill({
+        json: { wifi: { status: 'HomeNetwork' }, ups: { status: 'Eaton 3S' }, uptime_s: 442800 },
+      }));
+      mock.board = dualBoard(true);
+      await openBoardTab(page);
+      await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: 5d 3h');
+      await page.locator('#restart-section').scrollIntoViewIfNeeded();
+
+      const overflow = await page.evaluate(() => {
+        const doc = document.documentElement;
+        const area = document.querySelector('.content-area')!;
+        const status = document.querySelector('.system-status')!;
+        return {
+          page: doc.scrollWidth - doc.clientWidth,
+          area: area.scrollWidth - area.clientWidth,
+          status: status.scrollWidth - status.clientWidth,
+        };
+      });
+      expect(overflow.page, 'page horizontal overflow').toBeLessThanOrEqual(0);
+      expect(overflow.area, '.content-area horizontal overflow').toBeLessThanOrEqual(0);
+      expect(overflow.status, 'sidebar status horizontal overflow').toBeLessThanOrEqual(0);
+
+      const box = (await page.locator('#btn-restart-board').boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(375);
+    });
+  });
 });

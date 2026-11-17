@@ -1017,3 +1017,10 @@ int WebApiJson::checkUpdateSettingsBody(JsonVariantConst body, bool& auto_check,
     auto_check = body["auto_check"].as<bool>();
     return 0;
 }
+
+const char* WebApiJson::restartBlockedReason(bool upload_running, UpdatePhase phase) {
+    if (upload_running || phase == UpdatePhase::Downloading || phase == UpdatePhase::Restarting) {
+        return "A firmware update is in progress";
+    }
+    return nullptr;
+}

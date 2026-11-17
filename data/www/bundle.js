@@ -2836,7 +2836,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (diag.degraded) {
             addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable or reboot the board.');
         }
-        if (diag.last_restart_cause) {
+        // US-142: a restart asked from the Web UI is not automatic; it is shown in the
+        // title of the Uptime row
+        if (diag.last_restart_cause && diag.last_restart_manual !== true) {
             addLine('Last automatic restart: ' + diag.last_restart_cause +
                 (diag.consecutive_restarts > 1 ? ' (' + diag.consecutive_restarts + ' in a row)' : ''));
         }
@@ -2854,6 +2856,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         banner.replaceChildren(...lines);
         banner.hidden = lines.length === 0;
+    }
+
+    // US-142: seconds since boot as 45s, 12m, 3h 12m or 5d 3h
+    function formatUptime(s) {
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60) % 60;
+        if (s < 3600) return m + 'm';
+        const h = Math.floor(s / 3600) % 24;
+        if (s < 86400) return h + 'h ' + m + 'm';
+        return Math.floor(s / 86400) + 'd ' + h + 'h';
+    }
+
+    // US-142: Uptime row of the sidebar; null data (board not answering) shows "--"
+    function renderUptime(data) {
+        const lbl = document.getElementById('lbl-uptime');
+        const item = document.getElementById('status-uptime');
+        if (!lbl || !item) return;
+        const s = data ? data.uptime_s : undefined;
+        const ok = typeof s === 'number' && Number.isFinite(s) && s >= 0;
+        lbl.textContent = 'Uptime: ' + (ok ? formatUptime(Math.floor(s)) : '--');
+        const diag = (data && data.diagnostics) || {};
+        const details = [];
+        if (ok && diag.reset_reason) details.push('Last reset: ' + diag.reset_reason);
+        if (ok && diag.last_restart_cause) details.push('Last restart: ' + diag.last_restart_cause);
+        if (details.length > 0) {
+            item.title = details.join('\n');
+        } else {
+            item.removeAttribute('title');
+        }
     }
 
     let statusInFlight = false;
@@ -2890,6 +2921,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderDiagnostics(data);
+            renderUptime(data);
             renderUpdateNotice(data);
             renderNetworkStatus(data.network);
 
@@ -2931,6 +2963,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (lblUps) lblUps.textContent = 'UPS: Offline';
             if (indUps) indUps.className = 'status-indicator danger';
+            renderUptime(null);
             renderNetworkOffline();
         } finally {
             statusInFlight = false;
@@ -3839,27 +3872,79 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshUsbButton();
         });
 
-        function startBoardRestart() {
+        // Board restarting: UPS shown as restarting in the sidebar, countdown in the element
+        // countdownId, then the page reloads (USB port change and Restart board, US-142)
+        function runRestartCountdown(countdownId) {
             boardRestarting = true;
-            usbRadios().forEach(r => { r.disabled = true; });
-            btnSaveUsb.disabled = true;
-            setUsbButton('Restarting…', true);
-            B('board-success').hidden = false;
             const indUps = B('ind-ups');
             const lblUps = B('lbl-ups');
             if (indUps) indUps.className = 'status-indicator warning';
             if (lblUps) lblUps.textContent = 'Restarting...';
             let left = BOARD_RESTART_S;
-            B('usb-countdown').textContent = left;
+            B(countdownId).textContent = left;
             const timer = setInterval(() => {
                 left -= 1;
-                B('usb-countdown').textContent = Math.max(0, left);
+                B(countdownId).textContent = Math.max(0, left);
                 if (left <= 0) {
                     clearInterval(timer);
                     window.location.reload();
                 }
             }, 1000);
         }
+
+        function startBoardRestart() {
+            usbRadios().forEach(r => { r.disabled = true; });
+            btnSaveUsb.disabled = true;
+            setUsbButton('Restarting…', true);
+            B('board-success').hidden = false;
+            runRestartCountdown('usb-countdown');
+        }
+
+        // ---------- US-142: Restart board ----------
+        const btnRestart = B('btn-restart-board');
+
+        function setRestartButton(label, spinner) {
+            btnRestart.innerHTML = spinner ? BOARD_SPINNER : '';
+            const span = document.createElement('span');
+            span.className = 'btn-label';
+            span.textContent = label;
+            btnRestart.appendChild(span);
+        }
+
+        btnRestart.addEventListener('click', async () => {
+            if (boardRestarting || btnRestart.disabled) return;
+            if (!window.confirm('Restart the board now?\n\nThe Web UI and NUT clients disconnect for about ' +
+                '15 seconds. The UPS keeps running.')) return;
+            B('restart-error').hidden = true;
+            btnRestart.disabled = true;
+            setRestartButton('Restarting…', true);
+            let message = null;
+            try {
+                const res = await apiFetch('/api/system/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                let json = null;
+                try { json = await res.json(); } catch (e) { json = null; }
+                if (res.status !== 200) {
+                    message = json && typeof json.error === 'string' && json.error !== ''
+                        ? json.error : `Failed (HTTP ${res.status})`;
+                }
+            } catch (err) {
+                console.error('Restart error:', err);
+                message = 'Network error';
+            }
+            if (message) {
+                B('restart-error-text').textContent = message;
+                B('restart-error').hidden = false;
+                btnRestart.disabled = false;
+                setRestartButton('Restart');
+                return;
+            }
+            B('restart-success').hidden = false;
+            runRestartCountdown('restart-countdown');
+        });
 
         B('usb-form').addEventListener('submit', async (e) => {
             e.preventDefault();

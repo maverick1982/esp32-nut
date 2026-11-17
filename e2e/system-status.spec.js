@@ -109,3 +109,91 @@ test.describe('Status indicators', () => {
     await expect.poll(() => requests).toBe(2);
   });
 });
+
+// US-142 (#129): time since boot in the sidebar, from uptime_s of /api/system-status,
+// with the last reset and restart in the title of the row
+test.describe('Uptime (US-142)', () => {
+  const FORMATS = [
+    { uptime_s: 45, label: 'Uptime: 45s' },
+    { uptime_s: 720, label: 'Uptime: 12m' },
+    { uptime_s: 11520, label: 'Uptime: 3h 12m' },
+    { uptime_s: 442800, label: 'Uptime: 5d 3h' },
+  ];
+
+  for (const f of FORMATS) {
+    test(`${f.uptime_s} s is shown as "${f.label}"`, async ({ page }) => {
+      await serveIndex(page);
+      await page.route('**/api/system-status', route =>
+        route.fulfill({ json: { ...CASES[0].status, uptime_s: f.uptime_s } }));
+      await page.goto('http://esp32.local/');
+
+      await expect(page.locator('#lbl-uptime')).toHaveText(f.label);
+    });
+  }
+
+  test('answer without uptime_s shows "--"', async ({ page }) => {
+    await serveIndex(page);
+    await page.route('**/api/system-status', route => route.fulfill({ json: CASES[0].status }));
+    await page.goto('http://esp32.local/');
+
+    await expect(page.locator('#lbl-wifi')).toHaveText('Wi-Fi: HomeNetwork');
+    await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: --');
+    await expect(page.locator('#status-uptime')).not.toHaveAttribute('title');
+  });
+
+  test('board not answering shows "--"', async ({ page }) => {
+    await serveIndex(page);
+    await page.route('**/api/system-status', route => route.abort('connectionrefused'));
+    await page.goto('http://esp32.local/');
+
+    await expect(page.locator('#lbl-ups')).toHaveText('UPS: Offline');
+    await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: --');
+  });
+
+  test('the row stays in the sidebar on every page', async ({ page }) => {
+    await serveIndex(page);
+    await page.route('**/api/system-status', route =>
+      route.fulfill({ json: { ...CASES[0].status, uptime_s: 720 } }));
+    await page.goto('http://esp32.local/');
+    await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: 12m');
+
+    for (const target of ['board', 'nut', 'logs']) {
+      await page.locator(`button.tab[data-target="${target}"]`).click();
+      await expect(page.locator('#lbl-uptime')).toBeVisible();
+      await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: 12m');
+    }
+  });
+
+  test('the title carries the last reset and the last restart', async ({ page }) => {
+    await serveIndex(page);
+    await page.route('**/api/system-status', route => route.fulfill({
+      json: {
+        ...CASES[0].status,
+        uptime_s: 12,
+        diagnostics: {
+          reset_reason: 'SOFTWARE',
+          coredump_partition: true,
+          last_restart_cause: 'Manual restart from the Web UI',
+          last_restart_manual: true,
+          consecutive_restarts: 0,
+        },
+      },
+    }));
+    await page.goto('http://esp32.local/');
+
+    await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: 12s');
+    await expect(page.locator('#status-uptime')).toHaveAttribute('title',
+      'Last reset: SOFTWARE\nLast restart: Manual restart from the Web UI');
+  });
+
+  test('power-on reset: the title has only the reset', async ({ page }) => {
+    await serveIndex(page);
+    await page.route('**/api/system-status', route => route.fulfill({
+      json: { ...CASES[0].status, uptime_s: 90, diagnostics: { reset_reason: 'POWERON', coredump_partition: true } },
+    }));
+    await page.goto('http://esp32.local/');
+
+    await expect(page.locator('#lbl-uptime')).toHaveText('Uptime: 1m');
+    await expect(page.locator('#status-uptime')).toHaveAttribute('title', 'Last reset: POWERON');
+  });
+});

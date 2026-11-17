@@ -2393,6 +2393,27 @@ void test_update_settings_body(void) {
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
 }
 
+// US-142: POST /api/system/restart is refused only while a firmware update writes the flash
+void test_restart_allowed_when_idle(void) {
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Idle));
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Checking));
+    TEST_ASSERT_NULL(WebApiJson::restartBlockedReason(false, UpdatePhase::Failed));
+}
+
+void test_restart_blocked_while_downloading(void) {
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(false, UpdatePhase::Downloading));
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(false, UpdatePhase::Restarting));
+}
+
+void test_restart_blocked_during_upload(void) {
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(true, UpdatePhase::Idle));
+    TEST_ASSERT_EQUAL_STRING("A firmware update is in progress",
+                             WebApiJson::restartBlockedReason(true, UpdatePhase::Failed));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_overrides_json_with_ups_values);
@@ -2540,5 +2561,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_update_status_json_never_checked);
     RUN_TEST(test_update_summary_json);
     RUN_TEST(test_update_settings_body);
+    RUN_TEST(test_restart_allowed_when_idle);
+    RUN_TEST(test_restart_blocked_while_downloading);
+    RUN_TEST(test_restart_blocked_during_upload);
     return UNITY_END();
 }

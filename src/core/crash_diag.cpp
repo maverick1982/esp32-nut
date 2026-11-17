@@ -144,10 +144,17 @@ void begin() {
     readCoreDumpSummary();
 }
 
+// The last controlled restart was asked from the Web UI (US-142)
+static bool isManualRestart() {
+    return s_last_restart_cause == MANUAL_RESTART_CAUSE;
+}
+
 void logBootInfo() {
     AppLogger::log("INFO", "[DIAG] Reset reason: %s", resetReasonName(s_reset_reason));
     if (s_last_restart_cause.length() > 0) {
-        if (s_restart_count > 0) {
+        // A manual restart is not counted (US-142): the counter left by earlier USB
+        // recovery restarts would read as "N in a row" of this one
+        if (s_restart_count > 0 && !isManualRestart()) {
             AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
                            s_last_restart_cause.c_str(), (unsigned)s_restart_count);
         } else {
@@ -179,6 +186,10 @@ void recordControlledRestart(const char* reason) {
     if (s_restart_count < 255) s_restart_count++;
 }
 
+void recordManualRestart() {
+    recordRestartReason(MANUAL_RESTART_CAUSE);
+}
+
 uint8_t consecutiveRestarts() {
     return s_restart_count;
 }
@@ -201,6 +212,7 @@ void fillJson(JsonObject obj) {
     obj["coredump_partition"] = (bool)s_coredump_partition;
     if (s_last_restart_cause.length() > 0) {
         obj["last_restart_cause"] = s_last_restart_cause;
+        if (isManualRestart()) obj["last_restart_manual"] = true;
     }
     obj["consecutive_restarts"] = s_restart_count;
     // Fragmentation shows up in multi-day soak tests (review S6)
