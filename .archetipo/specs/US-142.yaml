@@ -1,0 +1,52 @@
+schema: archetipo/spec/v2
+code: US-142
+title: Uptime nella barra laterale e riavvio della scheda da Board Settings
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-142: Uptime nella barra laterale e riavvio della scheda da Board Settings
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che controlla la scheda da remoto,
+  voglio vedere da quanto tempo è accesa e poterla riavviare dalla web UI,
+  in modo da accorgermi subito di un riavvio inatteso (#129) e rimetterla in funzione senza andare a staccare l'alimentazione (#133).
+
+  **Dimostrazione**
+  Nella barra laterale, sotto Wi-Fi e UPS, compare `Uptime: 2d 3h` su qualunque scheda. Il dettaglio mostra il motivo dell'ultimo avvio. In Board Settings, nella sezione **Restart board**, l'utente preme **Restart** e conferma. La pagina avvisa del riavvio e si ricollega da sola. A quel punto l'uptime riparte da pochi secondi e il dettaglio indica il riavvio manuale dalla web UI. Se l'utente annulla la conferma, non succede nulla.
+
+  **Contesto**
+  `GET /api/system-status` riporta già `diagnostics` (`reset_reason`, `last_restart_cause`, `consecutive_restarts`), ma la UI non mostra né l'uptime né questi dati. Oggi la scheda si riavvia dal web solo dopo un salvataggio (`should_restart`, `ups_source->end()` in `WebConfigServer::loop`). `CrashDiag::recordRestartReason()` registra solo la causa. `recordControlledRestart()` invece incrementa anche il contatore dei riavvii di recupero, quello che porta allo stato degradato.
+
+  **Criteri di Accettazione**
+  - [ ] `GET /api/system-status` riporta l'uptime in secondi, letto da un contatore a 64 bit (`esp_timer_get_time()`) e quindi corretto oltre i 49,7 giorni di `millis()`. I campi esistenti restano invariati.
+  - [ ] La barra laterale mostra l'uptime come terza riga del riquadro di stato, sotto Wi-Fi e UPS, su ogni scheda. Il formato è leggibile (`45s`, `12m`, `3h 12m`, `5d 3h`) e si aggiorna a ogni lettura di `/api/system-status`. Se lo stato non arriva, la riga mostra `Uptime: --`.
+  - [ ] Accanto all'uptime (in un tooltip o in una riga piccola) compaiono il motivo dell'ultimo reset e, se presente, la causa dell'ultimo riavvio controllato.
+  - [ ] In fondo a Board Settings, su tutte le schede, c'è una sezione **Restart board** con un pulsante che chiede conferma. Se l'utente annulla, nessuna richiesta parte.
+  - [ ] Una nuova route `POST`, protetta come le altre API della web UI, risponde e poi riavvia la scheda con lo stesso percorso dei riavvii dopo un salvataggio: prima chiude la sorgente UPS, poi riavvia dopo circa 1 s.
+  - [ ] Il riavvio manuale registra la causa `manual restart from web UI`, visibile nel System Log all'avvio e in `last_restart_cause`. Non incrementa `consecutive_restarts`, quindi più riavvii manuali di seguito non portano la scheda allo stato degradato.
+  - [ ] Mentre è in corso il download di un aggiornamento firmware, la richiesta viene rifiutata con un errore e la pagina lo mostra.
+  - [ ] Dopo la conferma la pagina avvisa del riavvio e si ricollega, come per gli altri salvataggi che riavviano la scheda.
+  - [ ] Test dell'API (uptime, route di riavvio, rifiuto durante l'aggiornamento) ed e2e per: formati dell'uptime e `--`; dettaglio con motivo e causa; riavvio con conferma e con annullamento; errore durante l'aggiornamento. `system-status.spec.js`, `sidebar-layout.spec.ts` e `board-settings.spec.ts` restano verdi.
+  - [ ] Fuori ambito: riavvio programmato, riavvio dell'UPS (resta nei comandi UPS), ripristino delle impostazioni di fabbrica, storico dei riavvii.
+
+  **Assunzioni**
+  - I testi della UI restano in inglese come il resto (`Uptime`, `Restart board`).
+  - In modalità AP il pulsante c'è, con la stessa protezione delle altre impostazioni.
+history:
+  - status: TODO
+    at: "2026-11-17T17:44:52Z"
+  - status: PLANNED
+    at: "2026-11-17T17:50:17Z"
+  - status: IN PROGRESS
+    at: "2026-11-17T17:53:47Z"
+  - status: REVIEW
+    at: "2026-11-17T18:19:57Z"
+  - status: DONE
+    at: "2026-11-17T19:42:47Z"

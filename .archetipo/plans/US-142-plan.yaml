@@ -1,0 +1,352 @@
+schema: archetipo/plan/v2
+spec_code: US-142
+body: |
+  ## Soluzione Tecnica
+
+  Quasi tutto c'è già. `GET /api/system-status` riporta `diagnostics` (`reset_reason`, `last_restart_cause`, `consecutive_restarts`). `WebConfigServer::loop()` sa già riavviare in modo pulito (`should_restart`, `ups_source->end()`, `ESP.restart()` dopo 1 s). `CrashDiag::recordRestartReason()` registra una causa senza contarla come riavvio di recupero. Il lavoro è aggiungere l'uptime, una route di riavvio, un modo per riconoscere il riavvio manuale e i due punti della UI.
+
+  - **Uptime**: `handleSystemStatus()` aggiunge `uptime_s` = `esp_timer_get_time() / 1000000` come `uint64_t`. È un contatore a 64 bit, quindi non torna a zero dopo 49,7 giorni come `millis()`. I campi esistenti non cambiano.
+  - **Riavvio manuale riconoscibile** (`CrashDiag`): la costante `MANUAL_RESTART_CAUSE = "Manual restart from the Web UI"` e `recordManualRestart()`, che chiama `recordRestartReason(MANUAL_RESTART_CAUSE)` e non incrementa `s_restart_count`. Al boot, se la causa letta è quella, `fillJson()` aggiunge `last_restart_manual: true` e `logBootInfo()` scrive `INFO [DIAG] Last controlled restart: Manual restart from the Web UI` senza "(N in a row)". Il contatore resta quello di prima, anche dopo un riavvio software (oggi lo azzerano solo POWERON e BROWNOUT). Un riavvio manuale quindi non lo incrementa e non lo azzera: se la scheda era degradata e l'UPS non torna, resta degradata.
+  - **Testo della causa**: la spec scrive `manual restart from web UI`. Si usa `Manual restart from the Web UI`, nello stile delle altre cause (`Manual AP timeout: ...`).
+  - **Route `POST /api/system/restart`**, registrata con `guarded()` come le altre: in STA serve la sessione, in AP è aperta come tutta la UI (ADR 0009). Il body non conta, ma la richiesta deve avere `Content-Type: application/json` (`requireJson()`, protezione CSRF già usata dalle altre POST). Il rifiuto si decide nell'helper testabile `WebApiJson::restartBlockedReason(bool upload_running, UpdatePhase phase)`: con un upload OTA in corso (`ota_upload_started` o `Update.isRunning()`) oppure con la fase `Downloading` o `Restarting` dell'aggiornamento online restituisce il messaggio, altrimenti `nullptr`. In quei casi la risposta è 409 `{"error":"A firmware update is in progress"}`. Se il riavvio è ammesso: `CrashDiag::recordManualRestart()`, log `INFO [WEB] Restart requested from the Web UI by '<utente>'` con `webUiUser()`, `should_restart = true`, `restart_request_time = millis()`, e risposta 200 `{"success":true,"restart":true}`. Il riavvio parte da `loop()` dopo circa 1 s, chiudendo prima la sorgente UPS, come per i salvataggi.
+  - **Barra laterale** (`data/www/index.html`, `bundle.js`, `bundle.css`): un terzo `.status-item` con `id="status-uptime"`, punto neutro `status-indicator off` e `<span id="lbl-uptime">Uptime: --</span>`. `formatUptime(s)` produce `45s` (sotto 1 min), `12m` (sotto 1 h), `3h 12m` (sotto 1 g) e `5d 3h`. `fetchSystemStatus()` aggiorna la riga a ogni lettura (ogni 3 s). Se `uptime_s` manca o non è un numero, e nel `catch` (scheda irraggiungibile), la riga mostra `Uptime: --`. Il dettaglio è nell'attributo `title` di `#status-uptime`: `Last reset: <reset_reason>`, più `\nLast restart: <last_restart_cause>` se presente. Sotto 600 px `.system-status.dual` diventa una riga con `flex-wrap: wrap`, così le tre voci non causano scroll orizzontale a 375 px.
+  - **Banner diagnostico**: `renderDiagnostics()` non scrive "Last automatic restart: ..." quando `diagnostics.last_restart_manual` è vero. Il riavvio manuale non è automatico e ha già il suo posto nel dettaglio dell'uptime. Le altre righe non cambiano.
+  - **Board Settings**: un'ultima sezione `#restart-section`, sotto Time, visibile su tutte le schede e indipendente da `GET /api/board`. Contiene il titolo `Restart board`, un testo ("Restarts the board now. The Web UI and NUT clients disconnect for about 15 seconds; the UPS keeps running and its settings are not changed."), il pulsante `#btn-restart-board` (`Restart`), un `#restart-error` (role alert) e un `#restart-success` con un countdown di 15 s, uguale a `#board-success`. Il clic chiede `window.confirm('Restart the board now?\n\n...')`. Se l'utente annulla non parte nulla. Se conferma parte `POST /api/system/restart` con `{}` e `Content-Type: application/json`. Con 200 si attivano `boardRestarting = true`, il pulsante disabilitato su `Restarting…`, il messaggio di successo, UPS nella barra laterale su `Restarting...` (come `startBoardRestart()`) e il reload al termine di `BOARD_RESTART_S`. Con un errore si mostra `json.error`, oppure `Failed (HTTP n)` o `Network error`, e il pulsante torna attivo. Si usano gli stili esistenti (`board-section`, `auth-alert`, `btn`). Il pulsante è `btn btn-outline`, non primario, perché è un'azione distruttiva.
+  - **Mockup**: nessuno. La sezione e la riga riprendono componenti e schemi già presenti (sezione Firmware updates, `#board-success`, voci di stato della barra laterale).
+  - **Asset web**: dopo le modifiche a `data/www` si rigenerano gli asset con `python scripts/embed_web.py`.
+  - **Documentazione**: il manuale utente resta fuori (decisione dell'utente). Le note di rilascio si scrivono prima della release e citano #129 e #133.
+
+  **Fuori ambito:** riavvio programmato, riavvio dell'UPS, ripristino di fabbrica, storico dei riavvii, azzeramento del contatore dei riavvii di recupero.
+
+  ---
+
+  ## Strategia di Test
+
+  La decisione sul rifiuto del riavvio è logica pura e si testa in nativo. Route e `CrashDiag` dipendono da ESP-IDF e si verificano con le build e sulla scheda. La UI si copre con Playwright, simulando le API con `page.route` come negli altri test.
+
+  - **Nativi `test_web_api`**: `restartBlockedReason()` restituisce `nullptr` con fase `Idle`, `Checking` o `Failed` senza upload. Restituisce il messaggio con upload in corso (qualunque fase) e con fase `Downloading` o `Restarting`.
+  - **Build** degli env `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1`, suite nativa completa (`pio test -e native`), suite e2e completa.
+  - **Prova sull'Eaton 3S**, solo dopo un sì esplicito dell'utente: uptime che cresce nella barra laterale, Restart con conferma, uptime che riparte e dettaglio con `SOFTWARE` e la causa manuale. Poi `curl` alla route senza sessione (401), con `text/plain` (415) e un riavvio ripetuto tre volte, verificando che `consecutive_restarts` non cambi e che il banner non dica "Last automatic restart".
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`, API simulate con `page.route`)
+  **Video demo:** sì, l'incremento è visibile (uptime nella barra laterale e riavvio da Board Settings). Lo registra `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Uptime nei quattro formati | L'utente apre la UI con `uptime_s` 45, 720, 11520 e 442800: la barra laterale mostra `Uptime: 45s`, `12m`, `3h 12m` e `5d 3h`. La riga c'è anche cambiando scheda. |
+  | Uptime assente o scheda irraggiungibile | Una risposta senza `uptime_s` e una richiesta rifiutata mostrano `Uptime: --`. |
+  | Dettaglio dell'ultimo avvio | Con `reset_reason: SOFTWARE`, `last_restart_cause` manuale e `last_restart_manual: true`, il `title` di `#status-uptime` contiene `Last reset: SOFTWARE` e `Last restart: Manual restart from the Web UI`, e il banner non contiene "Last automatic restart". Con una causa di recupero USB (senza `last_restart_manual`) il banner la mostra come oggi. |
+  | Riavvio confermato | L'utente apre Board Settings, scorre fino a Restart board, preme Restart e accetta la conferma. Parte una sola `POST /api/system/restart` con content-type JSON. Compare "The board is restarting" con il countdown, il pulsante è disabilitato su Restarting e la barra laterale mostra `UPS: Restarting...`. |
+  | Riavvio annullato | L'utente preme Restart e annulla la conferma: nessuna POST, il pulsante resta attivo. |
+  | Aggiornamento in corso | La POST risponde 409 `A firmware update is in progress`: l'errore compare nella sezione e il pulsante torna attivo. |
+  | Sezione senza /api/board | Con `GET /api/board` in errore la sezione Restart board resta visibile e funzionante. |
+  | 375 px | Barra laterale con tre voci e Board Settings con la nuova sezione, senza scroll orizzontale. |
+
+  _Piano generato con ARchetipo Planning — 2026-11-17_
+tasks:
+  - id: TASK-01
+    title: 'CrashDiag: riavvio manuale registrato senza contarlo'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** registrare il riavvio manuale con una causa riconoscibile, senza incrementare `consecutive_restarts`, ed esporlo alla UI.
+
+      **Leggere:** `include/core/crash_diag.h`, `src/core/crash_diag.cpp` (begin ~125, logBootInfo ~147, recordRestartReason ~171, fillJson ~199).
+
+      **Modifiche:**
+      1. In `crash_diag.h`, dentro `namespace CrashDiag`: `constexpr const char* MANUAL_RESTART_CAUSE = "Manual restart from the Web UI";` e `void recordManualRestart();`, con un commento che rimanda a US-142 e spiega che il contatore non cambia.
+      2. In `crash_diag.cpp`, `recordManualRestart()` chiama `recordRestartReason(MANUAL_RESTART_CAUSE)` e basta: non tocca `s_restart_count`.
+      3. Una funzione statica `isManualRestart()` restituisce `s_last_restart_cause == MANUAL_RESTART_CAUSE`.
+      4. In `logBootInfo()`, se `isManualRestart()`, scrivere sempre `INFO [DIAG] Last controlled restart: <causa>` senza "(N in a row)", anche con `s_restart_count > 0`. Gli altri casi restano invariati.
+      5. In `fillJson()`, subito dopo `last_restart_cause`, scrivere `obj["last_restart_manual"] = true` solo se `isManualRestart()`.
+
+      **Verifica:** `pio run -e esp32-s3-standard` compila.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - include/core/crash_diag.h — costante MANUAL_RESTART_CAUSE e recordManualRestart()
+      - src/core/crash_diag.cpp — recordManualRestart(), isManualRestart(), log al boot e campo last_restart_manual
+
+      ## Criteri di Completamento
+      - [ ] recordManualRestart() scrive la causa nella memoria RTC senza incrementare s_restart_count
+      - [ ] Dopo un riavvio manuale fillJson() contiene last_restart_manual: true; dopo gli altri riavvii il campo manca
+      - [ ] Il log al boot del riavvio manuale è INFO e senza "in a row"
+      - [ ] Il build S3 compila
+    ref: TASK-01
+  - id: TASK-02
+    title: Helper restartBlockedReason() in WebApiJson
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** decidere in una funzione pura, testabile in nativo, quando il riavvio manuale va rifiutato.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h` (~200-210, helper dell'aggiornamento), `lib/UpdateCore/src/UpdateStatus.h` (UpdatePhase).
+
+      **Modifiche:**
+      1. In `WebApiJson.h`: `static const char* restartBlockedReason(bool upload_running, UpdatePhase phase);`, con il commento: US-142, `nullptr` se il riavvio è ammesso.
+      2. In `WebApiJson.cpp` restituire `"A firmware update is in progress"` se `upload_running` oppure se `phase` è `UpdatePhase::Downloading` o `UpdatePhase::Restarting`, altrimenti `nullptr`.
+
+      **Verifica:** `pio test -e native -f test_web_api` compila.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — dichiarazione di restartBlockedReason()
+      - lib/WebApi/src/WebApiJson.cpp — implementazione
+
+      ## Criteri di Completamento
+      - [ ] La funzione non dipende da ESP-IDF ed è usabile in nativo
+      - [ ] Rifiuta con upload in corso e con le fasi Downloading e Restarting, ammette Idle, Checking e Failed
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di restartBlockedReason()
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire tutte le combinazioni dell'helper.
+
+      **Leggere:** `test/test_web_api/test_main.cpp`, test dell'aggiornamento (~2371) e blocco `RUN_TEST` (~2539).
+
+      **Test da aggiungere (registrati con RUN_TEST):**
+      1. `test_restart_allowed_when_idle`: `(false, Idle)`, `(false, Checking)` e `(false, Failed)` restituiscono `nullptr`.
+      2. `test_restart_blocked_while_downloading`: `(false, Downloading)` e `(false, Restarting)` restituiscono `"A firmware update is in progress"`.
+      3. `test_restart_blocked_during_upload`: `(true, Idle)` restituisce lo stesso messaggio.
+
+      **Verifica:** `pio test -e native -f test_web_api` verde. Una mutazione (togliere il controllo su Downloading) deve far fallire il test 2.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — tre test nuovi e relativi RUN_TEST
+
+      ## Criteri di Completamento
+      - [ ] I tre test passano e sono registrati
+      - [ ] Gli altri test di test_web_api restano verdi
+    ref: TASK-03
+  - id: TASK-04
+    title: Uptime in /api/system-status e route POST /api/system/restart
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre l'uptime e riavviare la scheda su richiesta della web UI.
+
+      **Leggere:** `src/network/web_config_server.cpp`: registrazione delle route (~100-140), `loop()` (~245-262), `handleUpdateInstall()` (~552, controllo `ota_upload_started` / `Update.isRunning()` e `webUiUser()`), `handleSystemStatus()` (~849), `requireJson()` (~1087). Poi `include/network/web_config_server.h` (~95-160).
+
+      **Modifiche:**
+      1. In `handleSystemStatus()`, prima di `CrashDiag::fillJson`, aggiungere `doc["uptime_s"] = (uint64_t)(esp_timer_get_time() / 1000000LL);` (con `#include <esp_timer.h>` se manca) e un commento US-142 (64 bit, niente wrap di millis()).
+      2. Dichiarare `void handleSystemRestart();` nel header e registrare `server.on("/api/system/restart", HTTP_POST, guarded([this]() { handleSystemRestart(); }));` accanto a `/api/system-status`. Non aggiungerla alle rotte pubbliche di AuthPolicy.
+      3. In `handleSystemRestart()`:
+         - se `!requireJson()`, return;
+         - calcolare `reason = WebApiJson::restartBlockedReason(ota_upload_started || Update.isRunning(), update_service ? update_service->status().phase : UpdatePhase::Idle)`;
+         - se `reason` non è null: 409 con `{"error":reason}`, serializzato con ArduinoJson, e log `WARN [WEB] Restart refused: <reason>`;
+         - altrimenti: `CrashDiag::recordManualRestart()`, log `INFO [WEB] Restart requested from the Web UI by '<webUiUser()>'`, `should_restart = true`, `restart_request_time = millis()`, risposta 200 `{"success":true,"restart":true}`.
+      4. Non cambiare `loop()`: il percorso esistente chiude la sorgente UPS e riavvia dopo circa 1 s.
+
+      **Verifica:** `pio run -e esp32-s3-standard`, `pio run -e esp32-p4-eth` e `pio run -e esp32-p4-eth-v1` compilano.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - src/network/web_config_server.cpp — uptime_s, route e handleSystemRestart()
+      - include/network/web_config_server.h — dichiarazione di handleSystemRestart()
+
+      ## Criteri di Completamento
+      - [ ] /api/system-status contiene uptime_s in secondi da esp_timer_get_time(); gli altri campi sono invariati
+      - [ ] POST /api/system/restart risponde 200 e la scheda si riavvia dopo circa 1 s con la sorgente UPS chiusa
+      - [ ] Senza application/json risponde 415; in STA senza sessione risponde come le altre route protette
+      - [ ] Con un aggiornamento in corso risponde 409 e non riavvia
+      - [ ] I tre env firmware compilano
+    ref: TASK-04
+  - id: TASK-05
+    title: Uptime nella barra laterale e banner senza il riavvio manuale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** mostrare l'uptime su ogni scheda, con il dettaglio dell'ultimo avvio, senza far passare il riavvio manuale per automatico.
+
+      **Leggere:** `data/www/index.html` (~121-130, `.system-status dual`), `data/www/bundle.js`: `renderDiagnostics()` (~2814) e `fetchSystemStatus()` con il suo `catch` (~2863-2940). Poi `data/www/bundle.css` (~210-280 e la media query ~1337).
+
+      **Modifiche:**
+      1. In `index.html`, dopo la voce UPS: `<div class="status-item" id="status-uptime"><div class="status-indicator off"></div><span id="lbl-uptime">Uptime: --</span></div>`.
+      2. In `bundle.js` aggiungere `formatUptime(s)`: s intero ≥ 0, `<60` → `${s}s`, `<3600` → `${m}m`, `<86400` → `${h}h ${m}m`, altrimenti `${d}d ${h}h`.
+      3. In `fetchSystemStatus()`, dopo `renderDiagnostics(data)`: se `Number.isFinite(data.uptime_s)`, `lbl-uptime` diventa `'Uptime: ' + formatUptime(Math.floor(data.uptime_s))`, altrimenti `'Uptime: --'`. Il `title` di `#status-uptime` è composto da `'Last reset: ' + diag.reset_reason` (se presente) e, se c'è `diag.last_restart_cause`, da una seconda riga `'Last restart: ' + diag.last_restart_cause`. Senza dati il `title` viene tolto.
+      4. Nel `catch`: `lbl-uptime` diventa `Uptime: --` e il `title` viene tolto.
+      5. In `renderDiagnostics()`, la riga `Last automatic restart:` si salta quando `diag.last_restart_manual === true`.
+      6. In `bundle.css`, nella media query mobile di `.system-status.dual`, aggiungere `flex-wrap: wrap;` e un `gap` per le tre voci.
+      7. Lanciare `python scripts/embed_web.py`.
+
+      **Verifica:** `npx playwright test e2e/system-status.spec.js e2e/diag-banner.spec.ts e2e/sidebar-layout.spec.ts` resta verde (i test nuovi arrivano in TASK-07).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — voce Uptime nella barra laterale
+      - data/www/bundle.js — formatUptime(), aggiornamento in fetchSystemStatus(), banner senza il riavvio manuale
+      - data/www/bundle.css — a capo delle voci di stato su mobile
+      - asset rigenerati da scripts/embed_web.py
+
+      ## Criteri di Completamento
+      - [ ] La riga Uptime c'è su tutte le schede e si aggiorna a ogni lettura dello stato
+      - [ ] I quattro formati sono corretti; senza dato o senza risposta compare Uptime: --
+      - [ ] Il title riporta Last reset e, se presente, Last restart
+      - [ ] Il banner non mostra "Last automatic restart" per il riavvio manuale e lo mostra come prima per gli altri
+      - [ ] Asset rigenerati
+    ref: TASK-05
+  - id: TASK-06
+    title: Sezione Restart board in Board Settings
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** riavviare la scheda da Board Settings con una conferma.
+
+      **Leggere:** in `data/www/index.html`, la sezione `#usb-section` con `#board-success` (~778-822) e la fine di `.board-body` dopo `#time-section` (~1034). In `data/www/bundle.js`, il blocco Board (~3365): `BOARD_RESTART_S`, `boardRestarting`, `startBoardRestart()` (~3842), `apiFetch` e gestione degli errori in `postBoard()`.
+
+      **Modifiche:**
+      1. In `index.html`, ultima sezione di `.board-body`: `<section class="board-section" id="restart-section" aria-labelledby="restart-title">`. Dentro: `<div class="cred-section" id="restart-title">Restart board</div>`; un `board-hint` con "Restarts the board now. The Web UI and NUT clients disconnect for about 15 seconds; the UPS keeps running and its settings are not changed."; un `auth-alert` `#restart-error` (role alert, hidden) con `#restart-error-text`; un `auth-alert success` `#restart-success` (role status, hidden) con "The board is restarting, this page reloads in <span class=\"countdown\" id=\"restart-countdown\">15</span> s."; e `form-actions` con `<button type="button" class="btn btn-outline" id="btn-restart-board"><span class="btn-label">Restart</span></button>`. La sezione non ha `hidden` e non dipende da GET /api/board.
+      2. In `bundle.js`, dentro il blocco Board, il click su `#btn-restart-board`:
+         - se `boardRestarting`, return;
+         - `if (!window.confirm('Restart the board now?\n\nThe Web UI and NUT clients disconnect for about 15 seconds. The UPS keeps running.')) return;`;
+         - nascondere `#restart-error`, disabilitare il pulsante con etichetta `Restarting…` e lo spinner `BOARD_SPINNER`;
+         - `apiFetch('/api/system/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })`;
+         - con 200: `boardRestarting = true`, `#restart-success` visibile, `ind-ups` warning e `lbl-ups` `Restarting...`, countdown di `BOARD_RESTART_S` su `#restart-countdown`, poi `window.location.reload()`. Estrarre da `startBoardRestart()` un helper comune per countdown e barra laterale, senza cambiare il comportamento della porta USB;
+         - con un errore: mostrare `json.error`, oppure `Failed (HTTP n)`, oppure `Network error` in `#restart-error-text`, e riattivare il pulsante con etichetta `Restart`.
+      3. Se serve, solo spaziature in `bundle.css` con le classi esistenti.
+      4. Lanciare `python scripts/embed_web.py`.
+
+      **Verifica:** `npx playwright test e2e/board-settings.spec.ts` resta verde (i test nuovi arrivano in TASK-08).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — sezione #restart-section
+      - data/www/bundle.js — conferma, POST, countdown, errori; helper comune con startBoardRestart()
+      - data/www/bundle.css — solo se servono spaziature
+      - asset rigenerati da scripts/embed_web.py
+
+      ## Criteri di Completamento
+      - [ ] La sezione è in fondo a Board Settings su tutte le schede, anche con GET /api/board in errore
+      - [ ] Se si annulla la conferma non parte nessuna richiesta
+      - [ ] Dopo la conferma parte una sola POST JSON; con 200 compaiono countdown e reload, e la barra laterale indica Restarting
+      - [ ] Con 409 o un altro errore il messaggio compare e il pulsante torna attivo
+      - [ ] Il riavvio dopo il cambio della porta USB funziona come prima
+    ref: TASK-06
+  - id: TASK-07
+    title: E2E dell'uptime nella barra laterale e del banner
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright la riga Uptime, il dettaglio e il banner.
+
+      **Leggere:** `e2e/system-status.spec.js` (CASES, expectIndicator), `e2e/diag-banner.spec.ts`, `e2e/support/webui.ts`.
+
+      **Test da aggiungere:**
+      1. In `system-status.spec.js`, un `describe('Uptime (US-142)')`:
+         - `uptime_s` 45, 720, 11520 e 442800 mostrano `Uptime: 45s`, `12m`, `3h 12m` e `5d 3h`;
+         - risposta senza `uptime_s` → `Uptime: --`;
+         - richiesta rifiutata → `Uptime: --`;
+         - la riga c'è anche dopo il click su un'altra scheda (per esempio Board Settings);
+         - `title` di `#status-uptime` con `reset_reason: 'SOFTWARE'` e `last_restart_cause: 'Manual restart from the Web UI'` contiene entrambe le righe.
+      2. In `diag-banner.spec.ts`:
+         - con `last_restart_cause` manuale e `last_restart_manual: true`, il banner non contiene `Last automatic restart`;
+         - con una causa USB senza il flag, il banner la mostra come oggi.
+
+      **Verifica:** `npx playwright test e2e/system-status.spec.js e2e/diag-banner.spec.ts` verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/system-status.spec.js — test dell'uptime
+      - e2e/diag-banner.spec.ts — test del banner con riavvio manuale e automatico
+
+      ## Criteri di Completamento
+      - [ ] Formati, --, persistenza tra le schede e title coperti
+      - [ ] Il banner salta solo il riavvio manuale
+      - [ ] I test esistenti dei due file restano verdi
+    ref: TASK-07
+  - id: TASK-08
+    title: E2E del riavvio da Board Settings e layout a 375 px
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright il flusso di riavvio e controllare il layout su mobile.
+
+      **Leggere:** `e2e/board-settings.spec.ts` (beforeEach con i mock ~60-100, test USB ~157, test 375 px ~218) ed `e2e/sidebar-layout.spec.ts` (~162-200, ~285).
+
+      **Test da aggiungere in `board-settings.spec.ts`, `describe('Restart board (US-142)')`:**
+      1. Conferma accettata (`page.once('dialog', d => d.accept())`): una sola POST a `/api/system/restart` con `content-type` application/json. `#restart-success` contiene "The board is restarting", il pulsante è disabilitato e contiene `Restarting`, `#lbl-ups` è `Restarting...`. Installare `page.clock` per non lasciar partire il reload.
+      2. Conferma annullata (`d.dismiss()`): nessuna POST, pulsante attivo.
+      3. 409 `{error:'A firmware update is in progress'}`: il messaggio compare in `#restart-error` e il pulsante torna attivo con `Restart`.
+      4. Con GET `/api/board` a 500, `#restart-section` resta visibile e il pulsante è attivo.
+      5. A 375 px, Board Settings con la sezione nuova e la barra laterale con tre voci (`uptime_s` 442800) senza scroll orizzontale (`scrollWidth <= clientWidth`, come nel test 375 px esistente).
+
+      **Verifica:** `npx playwright test e2e/board-settings.spec.ts e2e/sidebar-layout.spec.ts e2e/responsive.spec.ts` verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/board-settings.spec.ts — test del riavvio e del layout a 375 px
+
+      ## Criteri di Completamento
+      - [ ] Conferma, annullamento, 409 e GET /api/board in errore coperti
+      - [ ] Niente scroll orizzontale a 375 px
+      - [ ] board-settings, sidebar-layout e responsive restano verdi
+    ref: TASK-08
+  - id: TASK-09
+    title: Verifica completa e prova sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la spec con tutte le suite e, con il consenso dell'utente, la dimostrazione sulla scheda.
+
+      **Passi:**
+      1. `pio test -e native` completo. Su Windows, rilanciare da sole le suite ERRORED transitorie.
+      2. Build di `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1`.
+      3. `npx playwright test`, suite e2e completa.
+      4. Salvare gli esiti in `docs/test-results/US-142/`.
+      5. **Solo dopo un sì esplicito dell'utente**, sulla scheda di test con l'Eaton 3S:
+         - flash della build S3 via OTA;
+         - l'uptime cresce nella barra laterale;
+         - Board Settings, Restart con conferma: la pagina si ricarica, l'uptime riparte da pochi secondi, il title dice `SOFTWARE` e la causa manuale, il banner non dice "Last automatic restart" e il System Log ha la riga `[WEB] Restart requested ...` prima del riavvio e `[DIAG] Last controlled restart: Manual restart from the Web UI` dopo;
+         - `curl` senza sessione (401), con `Content-Type: text/plain` (415) e tre riavvii di seguito, verificando che `consecutive_restarts` non cambi;
+         - l'UPS torna connesso dopo ogni riavvio.
+
+      **Blocchi:** la prova sul campo richiede il consenso esplicito dell'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-142/ — esiti di suite native, build, e2e e prova sul campo
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa, build dei tre env e suite e2e verdi
+      - [ ] Esiti salvati in docs/test-results/US-142/
+      - [ ] Prova sul campo fatta con il consenso dell'utente, oppure segnata come in attesa del consenso
+    ref: TASK-09

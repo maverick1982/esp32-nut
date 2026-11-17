@@ -12,6 +12,7 @@
 #include "network/web_assets.h"
 #include <Update.h>
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -131,6 +132,7 @@ void WebConfigServer::begin(bool isAPMode) {
     server.on("/api/config", HTTP_GET, guarded([this]() { handleGetConfig(); }));
     server.on("/api/ups-vars", HTTP_GET, guarded([this]() { handleUpsVars(); }));
     server.on("/api/system-status", HTTP_GET, guarded([this]() { handleSystemStatus(); }));
+    server.on("/api/system/restart", HTTP_POST, guarded([this]() { handleSystemRestart(); }));
     server.on("/api/ups/commands", HTTP_GET, guarded([this]() { handleUpsCommands(); }));
     server.on("/api/ups/command", HTTP_POST, guarded([this]() { handleUpsCommand(); }));
     server.on("/api/ups/variables", HTTP_GET, guarded([this]() { handleUpsVariables(); }));
@@ -869,12 +871,39 @@ void WebConfigServer::handleSystemStatus() {
     // UPS status: model, "Disconnected" or "Not supported yet" (US-132)
     WebApiJson::upsStatusJson(doc["ups"].to<JsonObject>(), ups_source);
 
+    // US-142: seconds since boot from the 64-bit esp_timer, which does not wrap after
+    // 49.7 days like millis()
+    doc["uptime_s"] = (uint64_t)(esp_timer_get_time() / 1000000LL);
+
     CrashDiag::fillJson(doc["diagnostics"].to<JsonObject>());
     if (update_service) WebApiJson::updateSummaryJson(doc["update"].to<JsonObject>(), update_service->status());
 
     String response;
     serializeJson(doc, response);
     server.send(200, "application/json", response);
+}
+
+// US-142: restart asked from Board Settings. Same path as the restart after a save
+// (loop() closes the UPS source and restarts after 1 s); the cause is recorded without
+// counting it as a USB recovery restart
+void WebConfigServer::handleSystemRestart() {
+    if (!requireJson()) return;
+    UpdatePhase phase = update_service ? update_service->status().phase : UpdatePhase::Idle;
+    const char* blocked = WebApiJson::restartBlockedReason(ota_upload_started || Update.isRunning(), phase);
+    if (blocked) {
+        AppLogger::log("WARN", "[WEB] Restart refused: %s", blocked);
+        JsonDocument err;
+        err["error"] = blocked;
+        String response;
+        serializeJson(err, response);
+        server.send(409, "application/json", response);
+        return;
+    }
+    CrashDiag::recordManualRestart();
+    AppLogger::log("INFO", String("[WEB] Restart requested from the Web UI by '") + webUiUser() + "'");
+    should_restart = true;
+    restart_request_time = millis();
+    server.send(200, "application/json", "{\"success\":true,\"restart\":true}");
 }
 
 // Catalogo dei comandi supportati dall'UPS (US-059), uguale in STA e in AP (US-068)

@@ -27,6 +27,12 @@ namespace CrashDiag {
     // Stores only the reason, shown after the boot as the last controlled restart, without
     // counting it as a USB recovery restart (manual AP timeout, US-064)
     void recordRestartReason(const char* reason);
+    // Cause of a restart asked from the Web UI (US-142)
+    constexpr const char* MANUAL_RESTART_CAUSE = "Manual restart from the Web UI";
+    // Stores MANUAL_RESTART_CAUSE like recordRestartReason(): the counter of USB recovery
+    // restarts is neither incremented nor cleared. After the boot the web UI gets
+    // "last_restart_manual", so it is not shown as an automatic restart
+    void recordManualRestart();
     // Controlled restarts in a row since the data was last healthy (review A7)
     uint8_t consecutiveRestarts();
     void clearConsecutiveRestarts();

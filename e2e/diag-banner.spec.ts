@@ -69,3 +69,32 @@ test.describe('Degraded mode banner', () => {
     await expect(banner).not.toContainText(GENERIC);
   });
 });
+
+// US-142: a restart asked from Board Settings is not an automatic restart. The board sends
+// diagnostics.last_restart_manual with it, and the cause goes only in the Uptime title.
+test.describe('Manual restart in the banner (US-142)', () => {
+  test('manual restart: no "Last automatic restart" line, banner hidden', async ({ page }) => {
+    await openWithDiagnostics(page, {
+      reset_reason: 'SOFTWARE',
+      consecutive_restarts: 2,
+      last_restart_cause: 'Manual restart from the Web UI',
+      last_restart_manual: true,
+    });
+
+    await expect(page.locator('#lbl-wifi')).toHaveText('Wi-Fi: HomeNetwork');
+    const banner = page.locator('#diag-banner');
+    await expect(banner).toBeHidden();
+    await expect(banner).not.toContainText('Last automatic restart');
+  });
+
+  test('USB recovery restart without the flag: still shown as before', async ({ page }) => {
+    await openWithDiagnostics(page, {
+      consecutive_restarts: 1,
+      last_restart_cause: 'control transfer stuck in the USB stack',
+    });
+
+    const banner = page.locator('#diag-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Last automatic restart: control transfer stuck in the USB stack');
+  });
+});

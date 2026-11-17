@@ -207,6 +207,10 @@ public:
     static void updateSummaryJson(JsonObject out, const UpdateStatus& s);
     // POST /api/update/settings {"auto_check":bool}: 0, or 400 with {"error"}
     static int checkUpdateSettingsBody(JsonVariantConst body, bool& auto_check, String& response);
+    // POST /api/system/restart (US-142): nullptr when the board can restart now, otherwise
+    // the message of the 409. A firmware upload in progress, or an online update that is
+    // writing the flash or already restarting, blocks it
+    static const char* restartBlockedReason(bool upload_running, UpdatePhase phase);
 
     static String remoteLogJson(const SyslogSettings& syslog, const SyslogStatus& status);
     // POST /api/logging: {"syslog":{...}} with any of the fields above; the others keep

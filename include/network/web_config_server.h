@@ -119,6 +119,7 @@ private:
     void handleGetConfig();
     void handleUpsVars();
     void handleSystemStatus();
+    void handleSystemRestart();
     void handleUpsCommands();
     void handleUpsCommand();
     void handleUpsVariables();
