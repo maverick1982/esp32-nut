@@ -15,6 +15,8 @@
 #define CMD_PANEL_TEST "test.panel.start test.panel.stop "
 #define CMD_LOAD_FULL "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop"
 #define CMD_LOAD_OFF "load.off load.off.delay shutdown.stop"
+// apc-hid.c:466 (NUT #2683): shutdown.return row on UPS.APCGeneralCollection.APCDelayBeforeReboot
+#define CMD_LOAD_OFF_RETURN "load.off load.off.delay shutdown.return shutdown.stop"
 // shutdown.default (US-058): listed with any of shutdown.return/reboot, load.off.delay, shutdown.stayoff
 #define CMD_DEFAULT " shutdown.default"
 
@@ -79,7 +81,7 @@ void tearDown(void) {}
 // DelayBeforeShutdown/Startup (load.off.delay, load.on.delay, shutdown.stop, 2329-2331).
 //
 // Differences US-074 (3S fixture): outlet.1.switch and outlet.2.switch become outlet.1.status
-// "on" (mge-hid.c:2264, ADR 0011 rule 2); input.voltage.nominal and input.frequency.nominal are
+// "on" (mge-hid.c:2278, ADR 0011 rule 2); input.voltage.nominal and input.frequency.nominal are
 // gone (upstream reads them from Flow.[1]; the 3S has Flow.[4] only, the output: rule 2);
 // ups.realpower 21 -> 28 (eaton_compute_realpower_info, powerfactor 0.80 instead of the 0.60
 // estimate); added outlet.id "0", outlet.switchable "yes", outlet.1.id "1", outlet.1.switchable
@@ -89,7 +91,7 @@ void tearDown(void) {}
 // output.frequency.nominal, ups.power.nominal, ups.beeper.status, LIST CMD and LIST RW.
 //
 // US-107 rows bound by the 3S: the vendor ups.alarm row of Output.PresentStatus.ShortCircuit
-// (mge-hid.c:2160, 0xFFFF004A, FEATURE 0x03). Differences US-107 (every fixture, see
+// (mge-hid.c:2174, 0xFFFF004A, FEATURE 0x03). Differences US-107 (every fixture, see
 // test_status_baseline_all_fixtures): none. No fixture has a key of US-107 set (trim, boost,
 // bypass*, off, cal, vrange, frange, the ups_alarm_set() bits, a vendor ups.alarm row) nor
 // LB+CHRG or RB+OVER together: ups.status, ups.alarm (absent) and input.transfer.reason
@@ -138,7 +140,7 @@ void test_replay_eaton_3s(void) {
 // DelayBeforeShutdown/Startup. Descriptor only: no value to compare.
 //
 // US-107 rows bound by the 5P: the vendor ups.alarm rows of PresentStatus.EmergencyStop and
-// ConfigurationFailure (mge-hid.c:2155, 2157: 0xFFFF0068, 0xFFFF002D, FEATURE 0x03).
+// ConfigurationFailure (mge-hid.c:2169, 2171: 0xFFFF0068, 0xFFFF002D, FEATURE 0x03).
 #define NUT_ROWS_EATON_5P "BOOL battery.capacity battery.charge battery.charge.low battery.charge.restart " \
     "battery.charger.abm.status battery.charger.mode.status battery.charger.status battery.charger.type " \
     "battery.charger.type.status battery.protection battery.runtime battery.type battery.voltage " \
@@ -207,7 +209,7 @@ void test_replay_eaton_ellipse_pro_650_issue110(void) {
     "ups.beeper.status ups.load ups.power.nominal ups.realpower ups.timer.shutdown ups.timer.start"
 
 // Live dump of v1.11.0 attached to issue #111. Differences from the dump: ups.beeper.status
-// "disabled": mge-hid.c:2075 UPS.BatterySystem.Battery.AudibleAlarmControl (FEATURE 0x20 [32, 1])
+// "disabled": mge-hid.c:2089 UPS.BatterySystem.Battery.AudibleAlarmControl (FEATURE 0x20 [32, 1])
 // comes before 2076 PowerSummary.AudibleAlarmControl (FEATURE 0x1F [31, 2], "enabled", what
 // v1.11.0 served) and the first row wins (usbhid-ups.c:2327-2334), as on the 3S, whose reports are
 // the same; ups.status.charging 0 (eaton_abm_check_chrg_fun at 100 %); input.*.nominal gone.
@@ -261,64 +263,64 @@ void test_replay_eaton_ellipse_eco_650_issue112(void) {
 #define RW_CPS_5 "battery.charge.low:10 battery.runtime.low:10 input.sensitivity:0 input.transfer.high:10 input.transfer.low:10"
 
 // apcHid2Nut() rows bound by each APC descriptor (US-076), derived from the parsed usages of the
-// descriptor and the paths of apc_hid2nut (apc-hid.c:334-467, vendor names as hex), not from the
+// descriptor and the paths of apc_hid2nut (apc-hid.c:334-474, vendor names as hex), not from the
 // firmware. The ups.delay.* rows are excluded (applyDefaultDelays). The BGM2200 dumps of #98
 // (on mains, on battery) share the descriptor of the first one.
 // apc-hid.c rows bound by the descriptor: 334 335 337 338 339 340 341 343 346 347 353 358 371 372
 // 373 374 376 384 385 386 387 389 390 391 392 396 397 403 404 407 408 412 413 414 435 437 439 446
-// 448 459 463 464 465 466 467
+// 448 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_BGM2200_PID0002_ISSUE98 \
     "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low " \
     "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute " \
     "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage " \
-    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep " \
+    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep " \
     "test.battery.start.quick test.battery.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 337 338 339 340 341 343 346 347 353 358 371 372
 // 373 374 376 384 385 386 387 389 390 391 392 396 397 403 404 407 408 412 413 414 435 437 439 446
-// 448 459 463 464 465 466 467
+// 448 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_BGM2200_PID0002_ISSUE98_ONBATTERY \
     "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low " \
     "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute " \
     "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage " \
-    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep " \
+    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep " \
     "test.battery.start.quick test.battery.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 337 338 339 340 341 343 346 347 353 358 371 372
 // 373 374 376 384 385 386 387 389 390 391 392 396 397 403 404 407 408 412 413 414 435 437 439 446
-// 448 459 463 464 465 466 467
+// 448 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_BGM2200_PID0002_ISSUE98_ONLINE \
     "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low " \
     "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute " \
     "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage " \
-    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep " \
+    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep " \
     "test.battery.start.quick test.battery.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
 // 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
-// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
+// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_BX1500G_PID0002_ISSUE55 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
     "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
-    "shutdown.reboot shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep test.battery.start.quick " \
     "test.battery.stop test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 337 338 339 340 341 343 346 347 353 358 371 372
 // 373 374 376 384 385 386 387 389 390 391 392 396 397 403 404 407 408 412 413 414 435 437 439 446
-// 448 459 463 464 465 466 467
+// 448 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_BX750MI_PID0002_ISSUE60 \
     "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low " \
     "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute " \
     "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage " \
-    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep " \
+    "input.voltage.nominal load.off.delay shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep " \
     "test.battery.start.quick test.battery.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 345 346 347
 // 349 352 358 359 363 364 365 372 373 374 375 377 384 385 386 387 388 389 390 391 392 403 404 407
-// 408 409 410 414 417 418 420 435 437 439 440 441 446 448 449 451 452 453 454 461 463 464 465 466
-// 467
+// 408 409 410 414 417 418 420 435 437 439 440 441 446 448 449 451 452 453 454 468 470 471 472 473
+// 474
 #define NUT_ROWS_APC_BACKUPS_CS500_PID0002_ISSUE18 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.temperature battery.type battery.voltage " \
@@ -330,50 +332,50 @@ void test_replay_eaton_ellipse_eco_650_issue112(void) {
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown ups.timer.start"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
 // 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
-// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
+// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_CS750RS_PID0002_ISSUE48 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
     "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
-    "shutdown.reboot shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep test.battery.start.quick " \
     "test.battery.stop test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
 // 353 370 371 373 374 375 384 385 386 387 388 389 390 391 392 399 403 404 407 408 412 413 414 440
-// 441 456 458 459 463 464 465 466 467
+// 441 456 458 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_ES700G_PID0002_ISSUE71 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
     "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
-    "shutdown.reboot shutdown.stop test.panel.start test.panel.stop ups.beeper.status ups.load " \
+    "shutdown.reboot shutdown.return shutdown.stop test.panel.start test.panel.stop ups.beeper.status ups.load " \
     "ups.mfr.date ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
 // 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
-// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
+// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_RS900MI_PID0002_ISSUE18 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
     "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
-    "shutdown.reboot shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep test.battery.start.quick " \
     "test.battery.stop test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 346 347 349
 // 353 358 370 371 372 373 374 375 376 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399
-// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 463 464 465 466 467
+// 403 404 407 408 412 413 414 435 437 439 440 441 446 448 456 458 459 466 470 471 472 473 474
 #define NUT_ROWS_APC_BACKUPS_XS1500M_PID0002_ISSUE94 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
     "beeper.disable beeper.enable beeper.mute beeper.off beeper.on input.sensitivity " \
     "input.transfer.high input.transfer.low input.voltage input.voltage.nominal load.off.delay " \
-    "shutdown.reboot shutdown.stop test.battery.start.deep test.battery.start.quick " \
+    "shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep test.battery.start.quick " \
     "test.battery.stop test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date " \
     "ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 338 340 342 344 346 347 349 358 372 373 375
-// 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399 435 437 439 446 448 463 464 465 466
-// 467
+// 384 385 386 387 388 389 390 391 392 394 395 396 397 398 399 435 437 439 446 448 470 471 472 473
+// 474
 #define NUT_ROWS_APC_BACKUPS_XS700U_PID0002_ISSUE20 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.date battery.mfr.date " \
     "battery.runtime battery.runtime.low battery.type battery.voltage battery.voltage.nominal " \
@@ -381,7 +383,7 @@ void test_replay_eaton_ellipse_eco_650_issue112(void) {
     "test.battery.start.deep test.battery.start.quick test.battery.stop ups.beeper.status " \
     "ups.mfr.date ups.test.result ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 338 339 340 342 344 346 347 358 359 372 373
-// 375 384 385 386 387 388 389 390 391 392 435 437 439 446 448 449 463 464 465 466 467
+// 375 384 385 386 387 388 389 390 391 392 435 437 439 446 448 449 470 471 472 473 474
 #define NUT_ROWS_APC_SMARTUPS_750_PID0002_ISSUE13 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.mfr.date battery.runtime " \
     "battery.runtime.low battery.type battery.voltage battery.voltage.nominal beeper.disable " \
@@ -390,7 +392,7 @@ void test_replay_eaton_ellipse_eco_650_issue112(void) {
     "ups.mfr.date ups.test.result ups.timer.reboot ups.timer.shutdown"
 // apc-hid.c rows bound by the descriptor: 334 335 336 337 338 339 340 341 342 343 344 345 346 347
 // 352 358 359 363 364 365 372 373 374 375 384 385 386 387 388 389 390 391 392 403 404 407 409 410
-// 414 417 418 419 420 435 437 439 440 441 446 448 449 451 452 453 454 463 464 465 466 467
+// 414 417 418 419 420 435 437 439 440 441 446 448 449 451 452 453 454 470 471 472 473 474
 #define NUT_ROWS_APC_SMARTUPS_750_PID0002_ISSUE78 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.mfr.date battery.runtime " \
     "battery.runtime.low battery.temperature battery.type battery.voltage battery.voltage.nominal " \
@@ -401,14 +403,14 @@ void test_replay_eaton_ellipse_eco_650_issue112(void) {
     "test.panel.start test.panel.stop ups.beeper.status ups.load ups.mfr.date ups.test.result " \
     "ups.timer.reboot ups.timer.shutdown ups.timer.start"
 // apc-hid.c rows bound by the descriptor: 334 335 336 338 340 342 344 346 358 359 373 375 384 385
-// 386 387 388 389 390 391 392 446 448 449 463 464 465 466 467
+// 386 387 388 389 390 391 392 446 448 449 470 471 472 473 474
 #define NUT_ROWS_APC_SMARTUPS_750_PID0003_ISSUE22 \
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.runtime " \
     "battery.runtime.low battery.type battery.voltage battery.voltage.nominal beeper.disable " \
     "beeper.enable beeper.mute beeper.off beeper.on load.off.delay shutdown.reboot shutdown.stop " \
     "ups.beeper.status ups.mfr.date ups.timer.reboot ups.timer.shutdown"
 
-// The CS500 declares the APC Back-UPS CS field UPS.Output.0xFF86007C: apc-hid.c:461 writes
+// The CS500 declares the APC Back-UPS CS field UPS.Output.0xFF86007C: apc-hid.c:468 writes
 // 1 there for shutdown.return only. shutdown.reboot comes from the standard
 // DelayBeforeReboot and must never resolve to that field (US-058). Same with the rows of
 // apcHid2Nut() and of genericHid2Nut(), which copies the apc-hid.c command rows (US-079).
@@ -443,7 +445,7 @@ void test_replay_apc_cs500(void) {
 
 void test_replay_apc_rs900mi(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_rs900mi_vid051d_pid0002_issue18.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_RS900MI_PID0002_ISSUE18,
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_RS900MI_PID0002_ISSUE18,
         /* descriptor only, no DelayBeforeStartup path */ {}, RW_DELAY_OFF, RW_DELAY_OFF);
 }
 
@@ -574,7 +576,7 @@ void test_spd750u_beeper_disabled_offers_toggle(void) {
 
 void test_replay_apc_bx1500g_issue55(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx1500g_vid051d_pid0002_issue55.json",
-        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BX1500G_PID0002_ISSUE55,
+        /* no beeper report replayed */ CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BX1500G_PID0002_ISSUE55,
         /* descriptor only, no DelayBeforeStartup path */ {}, RW_DELAY_OFF, RW_DELAY_OFF);
 }
 
@@ -586,7 +588,7 @@ void test_replay_apc_smartups750_issue13(void) {
 
 void test_replay_apc_cs750rs_issue48(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_cs750rs_vid051d_pid0002_issue48.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_CS750RS_PID0002_ISSUE48,
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_CS750RS_PID0002_ISSUE48,
         /* replayed FEATURE 0x35, APCSensitivity = 2 -> apc_sensitivity_info */ { { "input.sensitivity", "high" } },
         // apc-hid.c rows, aux 10: RemainingCapacityLimit FEATURE 0x11 [17, 10]; ManufacturerDate
         // FEATURE 0x20 [32, 104, 87] = 2023/11/08; Battery.RemainingTimeLimit FEATURE 0x24
@@ -597,7 +599,7 @@ void test_replay_apc_cs750rs_issue48(void) {
 
 void test_replay_apc_bx750mi_issue60(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bx750mi_vid051d_pid0002_issue60.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BX750MI_PID0002_ISSUE60,
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BX750MI_PID0002_ISSUE60,
         /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } },
         // apc-hid.c rows, aux 10: FEATURE 0x11 [17, 10]; 0x20 [32, 33, 42] = 2001/01/01; 0x24
         // [36, 120, 0]; 0x35 [53, 1]; 0x33 [51, 39, 1] = 295; 0x32 [50, 145, 0] = 145
@@ -608,7 +610,7 @@ void test_replay_apc_bx750mi_issue60(void) {
 // (battery.type) is the same on main
 void test_replay_apc_xs1500m_issue94(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_xs1500m_vid051d_pid0002_issue94.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_XS1500M_PID0002_ISSUE94,
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_XS1500M_PID0002_ISSUE94,
         /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" },
           // apc-hid.c:337 UPS.Battery.RunTimeToEmpty, FEATURE 0x23 [35, 162, 6], before the
           // PowerSummary one (338, INPUT/FEATURE 0x0C); ups.realpower estimated, 24 % of 900 W
@@ -623,11 +625,11 @@ void test_replay_apc_xs1500m_issue94(void) {
 // data for it and the full poll no longer asks for it (golden [requests])
 void test_replay_apc_bxr1200mi_issue123(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bxr1200mi_vid051d_pid0002_issue123.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076): the BX750MI ones and test.panel.* */
+        CMD_BEEPER CMD_BATTERY_TEST CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076): the BX750MI ones and test.panel.* */
         "BOOL battery.charge battery.charge.low battery.mfr.date battery.runtime battery.runtime.low "
         "battery.type battery.voltage battery.voltage.nominal beeper.disable beeper.enable beeper.mute "
         "beeper.off beeper.on input.sensitivity input.transfer.high input.transfer.low input.voltage "
-        "input.voltage.nominal load.off.delay shutdown.reboot shutdown.stop test.battery.start.deep "
+        "input.voltage.nominal load.off.delay shutdown.reboot shutdown.return shutdown.stop test.battery.start.deep "
         "test.battery.start.quick test.battery.stop test.panel.start test.panel.stop ups.beeper.status "
         "ups.load ups.mfr.date ups.realpower.nominal ups.test.result ups.timer.reboot ups.timer.shutdown",
         /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } },
@@ -638,7 +640,7 @@ void test_replay_apc_bxr1200mi_issue123(void) {
 
 void test_replay_apc_es700g_issue71(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_es700g_vid051d_pid0002_issue71.json",
-        CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_ES700G_PID0002_ISSUE71,
+        CMD_BEEPER CMD_PANEL_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_ES700G_PID0002_ISSUE71,
         /* replayed FEATURE 0x35, APCSensitivity = 1 -> apc_sensitivity_info */ { { "input.sensitivity", "medium" } },
         // apc-hid.c rows, aux 10: FEATURE 0x11 [17, 10]; 0x20 [32, 143, 76] = 2018/04/15; 0x24
         // [36, 120, 0]; 0x35 [53, 1]; 0x33 [51, 10, 1] = 266; 0x32 [50, 180, 0] = 180
@@ -647,7 +649,7 @@ void test_replay_apc_es700g_issue71(void) {
 
 void test_replay_apc_bgm2200_issue98(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/apc/apc_backups_bgm2200_vid051d_pid0002_issue98.json",
-        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BGM2200_PID0002_ISSUE98,
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_OFF_RETURN " shutdown.reboot" CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-076) */ NUT_ROWS_APC_BACKUPS_BGM2200_PID0002_ISSUE98,
         // US-098: fields of reports 0x20..0x52 declared with Report Count 23, read from the
         // first one as NUT: FEATURE 0x50 [80, 28] PercentLoad, 0x25 [37, 96, 9] ConfigVoltage
         // = 24.0 V, 0x30 [48, 230], 0x52 [82, 40, 5] ConfigActivePower = 1320, 0x23 [35, 42, 3]
@@ -680,22 +682,23 @@ void test_replay_apc_smartups750_issue78(void) {
 }
 
 // legrandHid2Nut() rows bound by the Keor PDU 800 descriptor (US-106), derived from its usages and
-// legrand-hid.c:129-184: the UPS.Input, UPS.Output and PowerSummary rows (battery.runtime through
+// legrand-hid.c:129-186: the UPS.Input, UPS.Output and PowerSummary rows (battery.runtime through
 // RuntimeToEmpty, names ignore case), the commands on UPS.Output.Test / DelayBefore* and the
 // beeper. "BOOL" stands for rows 158-162.
 static const char* const NUT_ROWS_LEGRAND_KEOR =
     "BOOL battery.charge battery.charge.low battery.charge.warning battery.runtime battery.voltage "
-    "battery.voltage.nominal beeper.disable beeper.enable input.transfer.high input.transfer.low input.voltage "
-    "input.voltage.nominal load.off.delay load.on.delay output.frequency output.voltage test.battery.start.deep "
-    "test.battery.start.quick test.battery.stop ups.load ups.realpower.nominal";
+    "battery.voltage.nominal beeper.disable beeper.enable beeper.mute input.transfer.high input.transfer.low "
+    "input.voltage input.voltage.nominal load.off.delay load.on.delay output.frequency output.voltage "
+    "test.battery.start.deep test.battery.start.quick test.battery.stop ups.beeper.status ups.load "
+    "ups.realpower.nominal";
 
-// US-087: Legrand Keor PDU 800 from the #90 dump. legrand-hid.c: beeper.enable 2 /
-// beeper.disable 3 (no beeper.mute), test.battery.* on UPS.Output.Test, load.* and
+// US-087: Legrand Keor PDU 800 from the #90 dump. legrand-hid.c (US-143): beeper.disable 1 /
+// enable 2 / mute 3 and ups.beeper.status with beeper_info, test.battery.* on UPS.Output.Test, load.* and
 // shutdown.* on UPS.Output.DelayBefore*, no RW rows besides ups.delay.*
 void test_replay_legrand_keor_pdu800_issue90(void) {
     FixtureReplayRunner::runFixtureTest("test/fixtures/legrand/legrand_keor_pdu800_vid1cb0_pid0038_issue90.json",
         // US-106: commands from legrandHid2Nut(); no shutdown.stop, which legrand-hid has no row for
-        "beeper.enable beeper.disable beeper.toggle test.battery.start.quick test.battery.start.deep test.battery.stop "
+        CMD_BEEPER "test.battery.start.quick test.battery.start.deep test.battery.stop "
         "load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.default", nullptr, NUT_ROWS_LEGRAND_KEOR,
         { { "ups.mfr", "Legrand" }, { "ups.beeper.status", "enabled" }, { "battery.voltage", "13.7" },
           { "battery.voltage.nominal", "12.0" }, { "ups.delay.shutdown", "20" }, { "ups.delay.start", "30" },
@@ -736,9 +739,9 @@ void test_replay_powercom_spd750u(void) {
         // report (US-109: no quirk hides them any more, see test_spd750u_beeper_*), no load or
         // shutdown command (shutdownCommandsSupported() false, US-058) although 662-664 bind
         "test.battery.start.quick", nullptr, NUT_ROWS_POWERCOM_SPD750U,
-        /* powercom-hid.c:620-637: ups.delay.start "60", ups.delay.shutdown DEFAULT_OFFDELAY */
+        /* powercom-hid.c:610-627: ups.delay.start "60", ups.delay.shutdown DEFAULT_OFFDELAY */
         { { "ups.delay.start", "60" }, { "ups.delay.shutdown", "20" } },
-        /* no RW row; powercom-hid.c:620-639 delays with aux 8 */ "ups.delay.shutdown:8 ups.delay.start:8", "ups.delay.shutdown:8 ups.delay.start:8");
+        /* no RW row; powercom-hid.c:610-629 delays with aux 8 */ "ups.delay.shutdown:8 ups.delay.start:8", "ups.delay.shutdown:8 ups.delay.start:8");
 }
 
 // cpsHid2Nut() rows bound by the CyberPower descriptors (US-075), derived from their usages and
@@ -818,7 +821,7 @@ void test_replay_cyberpower_cp1500epfclcd(void) {
           { "ups.timer.shutdown", "-1" }, { "ups.timer.start", "-1" } },
         // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; FEATURE 0x08 bytes 4-5 [.., 44, 1] = 300;
         // FEATURE 0x10 [16, 180, 0, 4, 1] = 180 / 260 (Input.*VoltageTransfer); FEATURE 0x1A
-        // [26, 2]. input.sensitivity has info_len 0 upstream (cps-hid.c:416)
+        // [26, 2]. input.sensitivity has info_len 0 upstream (cps-hid.c:432)
         RW_CPS_5 " " RW_DELAYS, RW_CPS_5 " " RW_DELAYS);
 }
 
@@ -851,7 +854,7 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
 
 // Live dump of v1.11.0 attached to issue #108 (ESP32-P4): every value of the dump is the same on
 // main but the strings (battery.type, ups.firmware: no string descriptors in the dump) and the
-// serial (anonymized). battery.mfr.date (cps-hid.c:368, PowerSummary.iOEMInformation, FEATURE
+// serial (anonymized). battery.mfr.date (cps-hid.c:384, PowerSummary.iOEMInformation, FEATURE
 // 0x04) is bound, and report 4 is read since US-111 (layout without vendor reports), but the dump
 // of v1.11.0 has neither report 4 nor the string descriptors: the date is checked by the dump of the
 // test build below
@@ -872,7 +875,7 @@ void test_replay_cyberpower_cp2000eipfcrm2u_issue108(void) {
 
 // Live dump of the test build cps-report4-v1 on the same CP2000EIPFCRM2U (issue #108): the v1.11.0
 // dump plus FEATURE 0x04 [4, 3], read since US-111. iOEMInformation points at string 3, the
-// manufacturer "CPS": battery.mfr.date is "CPS" as in NUT (cps-hid.c:368), also on the reporter's
+// manufacturer "CPS": battery.mfr.date is "CPS" as in NUT (cps-hid.c:384), also on the reporter's
 // Home Assistant NUT add-on. The strings come from what the build served; the runner hands them to
 // the driver again after the reports, when the StringId rows know their index
 void test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4(void) {
@@ -929,7 +932,7 @@ void test_replay_openups_wallecube_w150(void) {
 // bytes from the field of the descriptor (report ID, offset, size, exponent) and the last
 // replayed FEATURE report with that ID, the field rewritten.
 
-// mge-hid.c:2013 UPS.PowerSummary.RemainingCapacityLimitSetting (0xFFFF004D): FEATURE 0x22,
+// mge-hid.c:2027 UPS.PowerSummary.RemainingCapacityLimitSetting (0xFFFF004D): FEATURE 0x22,
 // bits 0-7, logical 0..255, no unit. Last report [34, 20]
 void test_set_cycle_eaton_3s_charge_low(void) {
     FixtureReplayRunner::runSetCycle("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
@@ -950,7 +953,7 @@ void test_set_cycle_apc_cs750rs_mfr_date(void) {
         "battery.mfr.date", "2024/03/15", 22639, { 32, 0x6F, 0x58 }, "2024/03/15");
 }
 
-// cps-hid.c:414 UPS.Output.LowVoltageTransfer (the descriptor has no Input.LowVoltageTransfer):
+// cps-hid.c:430 UPS.Output.LowVoltageTransfer (the descriptor has no Input.LowVoltageTransfer):
 // FEATURE 0x10, bits 0-15, logical 189..207, volt with exponent 7 (net 0). Last report
 // [16, 195, 0, 1, 1]: input.transfer.high (bits 16-31) stays 257
 void test_set_cycle_cp1600_transfer_low(void) {
@@ -966,9 +969,9 @@ void test_set_cycle_apc_bx750mi_sensitivity(void) {
         "input.sensitivity", "high", 2, { 53, 2 }, "high");
 }
 
-// Demonstration of US-107 on the Eaton 3S descriptor: NeedReplacement (mge-hid.c:2126, FEATURE
+// Demonstration of US-107 on the Eaton 3S descriptor: NeedReplacement (mge-hid.c:2140, FEATURE
 // 0x01) gives ups.alarm "Replace battery!" and ALARM OL RB; the vendor row of
-// Output.ShortCircuit (mge-hid.c:2160, FEATURE 0x03) gives its text first. The 3S descriptor
+// Output.ShortCircuit (mge-hid.c:2174, FEATURE 0x03) gives its text first. The 3S descriptor
 // has no Input.[1] Buck/VoltageOutOfRange: those are in test_eaton_driver.
 void test_eaton_3s_need_replacement_alarm(void) {
     FixtureReplayRunner::runFieldScenario("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
@@ -982,7 +985,7 @@ void test_eaton_3s_vendor_and_bit_alarms(void) {
         "ALARM OL RB", "Output short circuit! Replace battery!", "OL");
 }
 
-// PresentStatus.Good 0 (off_info, mge-hid.c:2133) gives OFF, with no alarm
+// PresentStatus.Good 0 (off_info, mge-hid.c:2147) gives OFF, with no alarm
 void test_eaton_3s_good_zero_is_off(void) {
     FixtureReplayRunner::runFieldScenario("test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
         { { "UPS.PowerSummary.PresentStatus.Good", 0 } }, "OL OFF", nullptr, "OL");
@@ -2079,7 +2082,7 @@ static const char* const kLiebertSnapshotVi2200Before =
 // - battery.voltage 13.70 -> 13.7, battery.voltage.nominal 12 -> 12.0: rows 141 and 139 without
 //   divide_by_10_conversion, with its "%0.1f" (US-087, user decision of 2026-10-30).
 // Unchanged: ups.status OL, input.frequency (generic UPS.Input.Frequency, ADR 0011 rule 2), the
-// FullyCharged / RemainingTimeLimitExpired flags, ups.beeper.status (Legrand hook).
+// FullyCharged / RemainingTimeLimitExpired flags, ups.beeper.status (legrand-hid.c:183 since US-143).
 static const char* const kLegrandSnapshotKeorAfter =
     "battery.charge.low=10\n"
     "battery.charge.warning=20\n"

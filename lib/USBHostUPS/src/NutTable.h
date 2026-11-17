@@ -530,7 +530,7 @@ inline const char* statusToken(const HidInfo& info, double v, const Context& ctx
     case Conv::EatonConverterOnline: // eaton_converter_online_fun: only when not OFF
         if (ctx.status.set & statusBit(ST_OFF)) return nullptr;
         return (v == 0) ? "!online" : "online";
-    // powercom-hid.c:308-423, the status bytes of the PowercomUPS page. upsfail is "fanfail"
+    // powercom-hid.c:298-413, the status bytes of the PowercomUPS page. upsfail is "fanfail"
     // upstream although bit 0 is the UPS fault
     case Conv::PowercomUpsfail:
         return ((long)v & 0x0001) ? "fanfail" : "!fanfail";
@@ -622,6 +622,14 @@ inline int mgeModelType(const char* iProduct, const char* iModel) {
         { "Eaton 5P", "850", EATON_5P },
         { "Eaton 5P", "1150", EATON_5P },
         { "Eaton 5P", "1550", EATON_5P },
+        { "Eaton 5P", "650iR G2", EATON_5P },  // 5P Gen2 (mge-hid.c:1834-1846, NUT #2380)
+        { "Eaton 5P", "850iR G2", EATON_5P },
+        { "Eaton 5P", "1150iR G2", EATON_5P },
+        { "Eaton 5P", "1550iR G2", EATON_5P },
+        { "Eaton 5P", "650i G2", EATON_5P },
+        { "Eaton 5P", "850i G2", EATON_5P },
+        { "Eaton 5P", "1150i G2", EATON_5P },
+        { "Eaton 5P", "1550i G2", EATON_5P },
         { "Eaton 5PX", "1500", EATON_5P },
         { "Eaton 5PX", "2200", EATON_5P },
         { "Eaton 5PX", "3000", EATON_5P },
@@ -752,7 +760,7 @@ inline bool nominalVoltageValid(long value, Context& ctx) {
 constexpr double kCpsBatteryVoltageSanityCheck = 1.4;
 
 /**
- * cps_adjust_frequency_scale() (cps-hid.c:104-209): the factor (1 or 0.1) that brings the
+ * cps_adjust_frequency_scale() (cps-hid.c:120-225): the factor (1 or 0.1) that brings the
  * reported frequency inside low..high; nominal, low and high are 0 when unknown. False when
  * neither fits: the value is published as it is and checked again on the next one.
  */
@@ -1579,7 +1587,7 @@ inline bool hasAnyPath(const std::vector<HIDUsageDef>& usages, const char* const
     return false;
 }
 
-// mge-hid.c:2066-2067
+// mge-hid.c:2080-2081
 inline const DelayPaths* mgeDelayPaths() {
     static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown" };
     static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
@@ -1598,7 +1606,7 @@ inline const DelayPaths* apcDelayPaths() {
     return &p;
 }
 
-// cps-hid.c:386-387
+// cps-hid.c:402-403
 inline const DelayPaths* cpsDelayPaths() {
     static const char* const sd[] = { "UPS.Output.DelayBeforeShutdown" };
     static const char* const st[] = { "UPS.Output.DelayBeforeStartup" };
@@ -1606,7 +1614,7 @@ inline const DelayPaths* cpsDelayPaths() {
     return &p;
 }
 
-// powercom-hid.c:620-639: PCMDelayBeforeShutdown is 0x00ff0057 in powercom_usage_lkp
+// powercom-hid.c:610-629: PCMDelayBeforeShutdown is 0x00ff0057 in powercom_usage_lkp
 inline const DelayPaths* powercomDelayPaths() {
     static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown", "UPS.PowerSummary.0x00FF0057" };
     static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
@@ -1709,544 +1717,544 @@ inline void applyDelayValues(UPSData& data, int32_t off_delay, int32_t on_delay,
 inline const HidInfo* mgeHid2Nut(size_t& n) {
     static const HidInfo t[] = {
         // --- Device collection
-        // mge-hid.c:2006 UPS.PowerSummary.Country
+        // mge-hid.c:2020 UPS.PowerSummary.Country
         { "device.country", ST_FLAG_STRING, 20, "UPS.PowerSummary.0xFFFF0095", "Europe", HU_FLAG_STATIC, Conv::MgeCountry, nullptr, 0 },
-        // mge-hid.c:2007 UPS.System.USB.iVersion
+        // mge-hid.c:2021 UPS.System.USB.iVersion
         { "device.usb.version", ST_FLAG_STRING, 20, "UPS.0xFFFF00E5.0xFFFF0005.0xFFFF00F1", nullptr, HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // device.usb.mode (mge-hid.c:2008): commented out upstream
-        // device.gateway.power.rate (mge-hid.c:2009): commented out upstream
+        // device.usb.mode (mge-hid.c:2022): commented out upstream
+        // device.gateway.power.rate (mge-hid.c:2023): commented out upstream
 
         // --- Battery page
-        // mge-hid.c:2012 UPS.PowerSummary.RemainingCapacity
+        // mge-hid.c:2026 UPS.PowerSummary.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2013 UPS.PowerSummary.RemainingCapacityLimitSetting
+        // mge-hid.c:2027 UPS.PowerSummary.RemainingCapacityLimitSetting
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerSummary.0xFFFF004D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2014 UPS.PowerSummary.RemainingCapacityLimit
+        // mge-hid.c:2028 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2015 UPS.PowerSummary.RestartLevel
+        // mge-hid.c:2029 UPS.PowerSummary.RestartLevel
         { "battery.charge.restart", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.PowerSummary.0xFFFF005F", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2016 UPS.BatterySystem.Battery.DesignCapacity
+        // mge-hid.c:2030 UPS.BatterySystem.Battery.DesignCapacity
         { "battery.capacity", 0, 0, "UPS.BatterySystem.Battery.DesignCapacity", "%s", HU_FLAG_STATIC, Conv::MgeBatteryCapacity, nullptr, 0 },
-        // mge-hid.c:2017 UPS.PowerSummary.RunTimeToEmpty
+        // mge-hid.c:2031 UPS.PowerSummary.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2018 UPS.PowerSummary.RemainingTimeLimit
+        // mge-hid.c:2032 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2019 UPS.StatisticSystem.Input.[1].Statistic.[1].Time
+        // mge-hid.c:2033 UPS.StatisticSystem.Input.[1].Statistic.[1].Time
         { "battery.runtime.elapsed", 0, 0, "UPS.0xFFFF0004.Input.[1].0xFFFF0003.[1].0xFFFF0097", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2020 UPS.PowerSummary.RemainingTimeLimit
+        // mge-hid.c:2034 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2021 UPS.BatterySystem.Battery.Temperature
+        // mge-hid.c:2035 UPS.BatterySystem.Battery.Temperature
         { "battery.temperature", 0, 0, "UPS.BatterySystem.Battery.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
-        // mge-hid.c:2022 UPS.PowerSummary.iDeviceChemistry
+        // mge-hid.c:2036 UPS.PowerSummary.iDeviceChemistry
         { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // mge-hid.c:2023 UPS.BatterySystem.Voltage
+        // mge-hid.c:2037 UPS.BatterySystem.Voltage
         { "battery.voltage", 0, 0, "UPS.BatterySystem.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2024 UPS.PowerSummary.Voltage
+        // mge-hid.c:2038 UPS.PowerSummary.Voltage
         { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%s", 0, Conv::MgeBatteryVoltage, nullptr, 0 },
-        // mge-hid.c:2025 UPS.BatterySystem.ConfigVoltage
+        // mge-hid.c:2039 UPS.BatterySystem.ConfigVoltage
         { "battery.voltage.nominal", 0, 0, "UPS.BatterySystem.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2026 UPS.PowerSummary.ConfigVoltage
+        // mge-hid.c:2040 UPS.PowerSummary.ConfigVoltage
         { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%s", HU_FLAG_STATIC, Conv::MgeBatteryVoltageNominal, nullptr, 0 },
-        // mge-hid.c:2027 UPS.BatterySystem.Battery.DeepDischargeProtection
+        // mge-hid.c:2041 UPS.BatterySystem.Battery.DeepDischargeProtection
         { "battery.protection", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.BatterySystem.Battery.0xFFFF0049", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2028 UPS.PowerConverter.Input.[3].EnergySaving
+        // mge-hid.c:2042 UPS.PowerConverter.Input.[3].EnergySaving
         { "battery.energysave", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF0046", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2029 UPS.PowerConverter.Input.[3].ConfigPercentLoad
+        // mge-hid.c:2043 UPS.PowerConverter.Input.[3].ConfigPercentLoad
         { "battery.energysave.load", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].ConfigPercentLoad", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2031 UPS.PowerConverter.Input.[3].EnergySaving.ShutdownTimer
+        // mge-hid.c:2045 UPS.PowerConverter.Input.[3].EnergySaving.ShutdownTimer
         { "battery.energysave.delay", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF0046.0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2033 UPS.PowerConverter.Input.[3].ShutdownTimer
+        // mge-hid.c:2047 UPS.PowerConverter.Input.[3].ShutdownTimer
         { "battery.energysave.delay", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2034 UPS.PowerConverter.Input.[3].ConfigActivePower
+        // mge-hid.c:2048 UPS.PowerConverter.Input.[3].ConfigActivePower
         { "battery.energysave.realpower", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].ConfigActivePower", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
 
         // --- ABM (Advanced Battery Monitoring) processing
-        // mge-hid.c:2040 UPS.BatterySystem.Charger.ABMEnable
+        // mge-hid.c:2054 UPS.BatterySystem.Charger.ABMEnable
         { "battery.charger.abm.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0087", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmEnabled, nullptr, 0 },
-        // mge-hid.c:2047 UPS.BatterySystem.Charger.Mode
+        // mge-hid.c:2061 UPS.BatterySystem.Charger.Mode
         { "battery.charger.mode.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathMode, nullptr, 0 },
-        // mge-hid.c:2048 UPS.BatterySystem.Charger.Status
+        // mge-hid.c:2062 UPS.BatterySystem.Charger.Status
         { "battery.charger.type.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmPathStatus, nullptr, 0 },
-        // mge-hid.c:2051 UPS.BatterySystem.Charger.Mode
+        // mge-hid.c:2065 UPS.BatterySystem.Charger.Mode
         { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
-        // mge-hid.c:2052 UPS.BatterySystem.Charger.Status
+        // mge-hid.c:2066 UPS.BatterySystem.Charger.Status
         { "battery.charger.status", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmStatus, nullptr, 0 },
-        // battery.charger.status (mge-hid.c:2056): commented out upstream
-        // mge-hid.c:2059 UPS.BatterySystem.Charger.ChargerType
+        // battery.charger.status (mge-hid.c:2070): commented out upstream
+        // mge-hid.c:2073 UPS.BatterySystem.Charger.ChargerType
         { "battery.charger.type", 0, 0, "UPS.BatterySystem.Charger.0xFFFF006B", "%.0f", HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kEatonChargerType) },
 
         // --- UPS page
-        // mge-hid.c:2062 UPS.PowerConverter.Output.Efficiency
+        // mge-hid.c:2076 UPS.PowerConverter.Output.Efficiency
         { "ups.efficiency", 0, 0, "UPS.PowerConverter.Output.0xFFFF0086", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2063 UPS.PowerSummary.iVersion
+        // mge-hid.c:2077 UPS.PowerSummary.iVersion
         { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFFFF00F1", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // mge-hid.c:2064 UPS.PowerSummary.PercentLoad
+        // mge-hid.c:2078 UPS.PowerSummary.PercentLoad
         { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2065 UPS.Flow.[4].ConfigPercentLoad
+        // mge-hid.c:2079 UPS.Flow.[4].ConfigPercentLoad
         { "ups.load.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.Flow.[4].ConfigPercentLoad", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ups.delay.start (mge-hid.c:2066) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
-        // ups.delay.shutdown (mge-hid.c:2067) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
-        // mge-hid.c:2068 UPS.PowerSummary.DelayBeforeStartup
+        // ups.delay.start (mge-hid.c:2080) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (mge-hid.c:2081) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // mge-hid.c:2082 UPS.PowerSummary.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2069 UPS.PowerSummary.DelayBeforeShutdown
+        // mge-hid.c:2083 UPS.PowerSummary.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2070 UPS.PowerSummary.DelayBeforeReboot
+        // mge-hid.c:2084 UPS.PowerSummary.DelayBeforeReboot
         { "ups.timer.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2071 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2085 UPS.BatterySystem.Battery.Test
         { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
-        // mge-hid.c:2072 UPS.BatterySystem.Battery.TestPeriod
+        // mge-hid.c:2086 UPS.BatterySystem.Battery.TestPeriod
         { "ups.test.interval", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.BatterySystem.Battery.0xFFFF0045", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2075 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2089 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
-        // mge-hid.c:2076 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2090 UPS.PowerSummary.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
-        // mge-hid.c:2077 UPS.AudibleAlarmControl
+        // mge-hid.c:2091 UPS.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
-        // mge-hid.c:2078 UPS.PowerSummary.Temperature
+        // mge-hid.c:2092 UPS.PowerSummary.Temperature
         { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
-        // mge-hid.c:2079 UPS.PowerConverter.Output.ApparentPower
+        // mge-hid.c:2093 UPS.PowerConverter.Output.ApparentPower
         { "ups.power", 0, 0, "UPS.PowerConverter.Output.ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2080 UPS.PowerConverter.Output.Phase.[1].ApparentPower
+        // mge-hid.c:2094 UPS.PowerConverter.Output.Phase.[1].ApparentPower
         { "ups.L1.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2081 UPS.PowerConverter.Output.Phase.[2].ApparentPower
+        // mge-hid.c:2095 UPS.PowerConverter.Output.Phase.[2].ApparentPower
         { "ups.L2.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2082 UPS.PowerConverter.Output.Phase.[3].ApparentPower
+        // mge-hid.c:2096 UPS.PowerConverter.Output.Phase.[3].ApparentPower
         { "ups.L3.power", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2083 UPS.Flow.[4].ConfigApparentPower
+        // mge-hid.c:2097 UPS.Flow.[4].ConfigApparentPower
         { "ups.power.nominal", 0, 0, "UPS.Flow.[4].ConfigApparentPower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2084 UPS.PowerConverter.Output.ActivePower
+        // mge-hid.c:2098 UPS.PowerConverter.Output.ActivePower
         { "ups.realpower", 0, 0, "UPS.PowerConverter.Output.ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2087 UPS.Flow.[4].ConfigApparentPower
+        // mge-hid.c:2101 UPS.Flow.[4].ConfigApparentPower
         { "ups.realpower", 0, 0, "UPS.Flow.[4].ConfigApparentPower", "-1", 0, Conv::EatonComputeRealpower, nullptr, 0 },
-        // mge-hid.c:2088 UPS.PowerConverter.Output.Phase.[1].ActivePower
+        // mge-hid.c:2102 UPS.PowerConverter.Output.Phase.[1].ActivePower
         { "ups.L1.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2089 UPS.PowerConverter.Output.Phase.[2].ActivePower
+        // mge-hid.c:2103 UPS.PowerConverter.Output.Phase.[2].ActivePower
         { "ups.L2.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2090 UPS.PowerConverter.Output.Phase.[3].ActivePower
+        // mge-hid.c:2104 UPS.PowerConverter.Output.Phase.[3].ActivePower
         { "ups.L3.realpower", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2091 UPS.Flow.[4].ConfigActivePower
+        // mge-hid.c:2105 UPS.Flow.[4].ConfigActivePower
         { "ups.realpower.nominal", 0, 0, "UPS.Flow.[4].ConfigActivePower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2092 UPS.PowerConverter.Input.[1].AutomaticRestart
+        // mge-hid.c:2106 UPS.PowerConverter.Input.[1].AutomaticRestart
         { "ups.start.auto", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[1].0xFFFF0043", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2093 UPS.PowerConverter.Input.[3].StartOnBattery
+        // mge-hid.c:2107 UPS.PowerConverter.Input.[3].StartOnBattery
         { "ups.start.battery", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Input.[3].0xFFFF0047", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2094 UPS.PowerConverter.Output.ForcedReboot
+        // mge-hid.c:2108 UPS.PowerConverter.Output.ForcedReboot
         { "ups.start.reboot", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0044", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2095 UPS.PowerSummary.PresentStatus.Switchable
+        // mge-hid.c:2109 UPS.PowerSummary.PresentStatus.Switchable
         { "ups.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.PresentStatus.Switchable", "%s", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::Lookup, NUT_LKP(kEnableDisable) },
-        // mge-hid.c:2097 UPS.PowerSummary.Time
+        // mge-hid.c:2111 UPS.PowerSummary.Time
         { "ups.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeDate, nullptr, 0 },
-        // mge-hid.c:2098 UPS.PowerSummary.Time
+        // mge-hid.c:2112 UPS.PowerSummary.Time
         { "ups.time", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.0xFFFF0097", "%s", 0, Conv::MgeTime, nullptr, 0 },
-        // ups.date (mge-hid.c:2100): in a disabled preprocessor branch upstream
-        // ups.time (mge-hid.c:2101): in a disabled preprocessor branch upstream
-        // mge-hid.c:2103 UPS.PowerConverter.ConverterType
+        // ups.date (mge-hid.c:2114): in a disabled preprocessor branch upstream
+        // ups.time (mge-hid.c:2115): in a disabled preprocessor branch upstream
+        // mge-hid.c:2117 UPS.PowerConverter.ConverterType
         { "ups.type", 0, 0, "UPS.PowerConverter.0xFFFF0041", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kUpsType) },
 
         // --- Special case: boolean values that are mapped to ups.status and ups.alarm
-        // mge-hid.c:2106 UPS.PowerSummary.PresentStatus.ACPresent
+        // mge-hid.c:2120 UPS.PowerSummary.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
-        // mge-hid.c:2107 UPS.PowerConverter.Input.[3].PresentStatus.Used
+        // mge-hid.c:2121 UPS.PowerConverter.Input.[3].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[3].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeOnbattInfo) },
         // #if 0 upstream (line 2108): the row below is disabled there
-        // BOOL (mge-hid.c:2110): in a disabled preprocessor branch upstream
-        // mge-hid.c:2113 UPS.PowerSummary.PresentStatus.Discharging
+        // BOOL (mge-hid.c:2124): in a disabled preprocessor branch upstream
+        // mge-hid.c:2127 UPS.PowerSummary.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonDischarging, nullptr, 0 },
-        // mge-hid.c:2114 UPS.PowerSummary.PresentStatus.Charging
+        // mge-hid.c:2128 UPS.PowerSummary.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::EatonCharging, nullptr, 0 },
-        // mge-hid.c:2116 UPS.BatterySystem.Charger.Mode
+        // mge-hid.c:2130 UPS.BatterySystem.Charger.Mode
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF0094", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
-        // mge-hid.c:2117 UPS.BatterySystem.Charger.Status
+        // mge-hid.c:2131 UPS.BatterySystem.Charger.Status
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.0xFFFF00E9", "%.0f", HU_FLAG_QUICK_POLL, Conv::AbmChrgDischrg, nullptr, 0 },
-        // mge-hid.c:2119 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        // mge-hid.c:2133 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
-        // mge-hid.c:2121 UPS.PowerConverter.Output.Overload.[1].PresentStatus.OverThreshold
+        // mge-hid.c:2135 UPS.PowerConverter.Output.Overload.[1].PresentStatus.OverThreshold
         { "BOOL", 0, 0, "UPS.PowerConverter.Output.Overload.[1].PresentStatus.0xFFFF007E", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // mge-hid.c:2123 UPS.PowerConverter.Output.Overload.[2].PresentStatus.OverThreshold
+        // mge-hid.c:2137 UPS.PowerConverter.Output.Overload.[2].PresentStatus.OverThreshold
         { "BOOL", 0, 0, "UPS.PowerConverter.Output.Overload.[2].PresentStatus.0xFFFF007E", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // mge-hid.c:2125 UPS.PowerSummary.PresentStatus.Overload
+        // mge-hid.c:2139 UPS.PowerSummary.PresentStatus.Overload
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // mge-hid.c:2126 UPS.PowerSummary.PresentStatus.NeedReplacement
+        // mge-hid.c:2140 UPS.PowerSummary.PresentStatus.NeedReplacement
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // mge-hid.c:2128 UPS.LCMSystem.LCMAlarm.[2].PresentStatus.TimerExpired
+        // mge-hid.c:2142 UPS.LCMSystem.LCMAlarm.[2].PresentStatus.TimerExpired
         { "BOOL", 0, 0, "UPS.0xFFFF0018.0xFFFF001A.[2].PresentStatus.0xFFFF0093", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // mge-hid.c:2129 UPS.PowerConverter.Input.[1].PresentStatus.Buck
+        // mge-hid.c:2143 UPS.PowerConverter.Input.[1].PresentStatus.Buck
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Buck", nullptr, 0, Conv::Lookup, NUT_LKP(kTrimInfo) },
-        // mge-hid.c:2130 UPS.PowerConverter.Input.[1].PresentStatus.Boost
+        // mge-hid.c:2144 UPS.PowerConverter.Input.[1].PresentStatus.Boost
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
-        // mge-hid.c:2131 UPS.PowerConverter.Input.[1].PresentStatus.VoltageOutOfRange
+        // mge-hid.c:2145 UPS.PowerConverter.Input.[1].PresentStatus.VoltageOutOfRange
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.VoltageOutOfRange", nullptr, 0, Conv::Lookup, NUT_LKP(kVrangeInfo) },
-        // mge-hid.c:2132 UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange
+        // mge-hid.c:2146 UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.FrequencyOutOfRange", nullptr, 0, Conv::Lookup, NUT_LKP(kFrangeInfo) },
-        // mge-hid.c:2133 UPS.PowerSummary.PresentStatus.Good
+        // mge-hid.c:2147 UPS.PowerSummary.PresentStatus.Good
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Good", nullptr, 0, Conv::Lookup, NUT_LKP(kOffInfo) },
-        // mge-hid.c:2136 UPS.PowerConverter.Input.[1].PresentStatus.Used
+        // mge-hid.c:2150 UPS.PowerConverter.Input.[1].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.Used", nullptr, 0, Conv::EatonConverterOnline, nullptr, 0 },
-        // mge-hid.c:2137 UPS.PowerConverter.Input.[2].PresentStatus.Used
+        // mge-hid.c:2151 UPS.PowerConverter.Input.[2].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[2].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassAutoInfo) },
-        // mge-hid.c:2139 UPS.PowerConverter.Input.[4].PresentStatus.Used
+        // mge-hid.c:2153 UPS.PowerConverter.Input.[4].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[4].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kBypassManualInfo) },
-        // mge-hid.c:2140 UPS.PowerConverter.Input.[5].PresentStatus.Used
+        // mge-hid.c:2154 UPS.PowerConverter.Input.[5].PresentStatus.Used
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[5].PresentStatus.Used", nullptr, 0, Conv::Lookup, NUT_LKP(kEcoModeInfo) },
-        // mge-hid.c:2141 UPS.PowerSummary.PresentStatus.FanFailure
+        // mge-hid.c:2155 UPS.PowerSummary.PresentStatus.FanFailure
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF0077", nullptr, 0, Conv::Lookup, NUT_LKP(kFanfailInfo) },
-        // mge-hid.c:2142 UPS.BatterySystem.Battery.PresentStatus.Present
+        // mge-hid.c:2156 UPS.BatterySystem.Battery.PresentStatus.Present
         { "BOOL", 0, 0, "UPS.BatterySystem.Battery.PresentStatus.Present", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
-        // mge-hid.c:2143 UPS.BatterySystem.Charger.PresentStatus.InternalFailure
+        // mge-hid.c:2157 UPS.BatterySystem.Charger.PresentStatus.InternalFailure
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.InternalFailure", nullptr, 0, Conv::Lookup, NUT_LKP(kChargerfailInfo) },
-        // mge-hid.c:2144 UPS.BatterySystem.Charger.PresentStatus.VoltageTooHigh
+        // mge-hid.c:2158 UPS.BatterySystem.Charger.PresentStatus.VoltageTooHigh
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
-        // mge-hid.c:2145 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooHigh
+        // mge-hid.c:2159 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooHigh
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
-        // mge-hid.c:2147 UPS.BatterySystem.Battery.PresentStatus.VoltageTooHigh
+        // mge-hid.c:2161 UPS.BatterySystem.Battery.PresentStatus.VoltageTooHigh
         { "BOOL", 0, 0, "UPS.BatterySystem.Battery.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvolthiInfo) },
-        // mge-hid.c:2148 UPS.BatterySystem.Charger.PresentStatus.VoltageTooLow
+        // mge-hid.c:2162 UPS.BatterySystem.Charger.PresentStatus.VoltageTooLow
         { "BOOL", 0, 0, "UPS.BatterySystem.Charger.PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kBattvoltloInfo) },
-        // mge-hid.c:2149 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooLow
+        // mge-hid.c:2163 UPS.PowerConverter.Input.[1].PresentStatus.VoltageTooLow
         { "BOOL", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeOnbattInfo) },
-        // mge-hid.c:2150 UPS.PowerSummary.PresentStatus.InternalFailure
+        // mge-hid.c:2164 UPS.PowerSummary.PresentStatus.InternalFailure
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.InternalFailure", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
-        // mge-hid.c:2151 UPS.PowerSummary.PresentStatus.OverTemperature
+        // mge-hid.c:2165 UPS.PowerSummary.PresentStatus.OverTemperature
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.OverTemperature", nullptr, 0, Conv::Lookup, NUT_LKP(kOverheatInfo) },
-        // mge-hid.c:2152 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        // mge-hid.c:2166 UPS.PowerSummary.PresentStatus.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
 
         // --- Vendor specific ups.alarm
-        // mge-hid.c:2155 UPS.PowerSummary.PresentStatus.EmergencyStop
+        // mge-hid.c:2169 UPS.PowerSummary.PresentStatus.EmergencyStop
         { "ups.alarm", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF0068", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeEmergencyStop) },
-        // mge-hid.c:2156 UPS.PowerConverter.Input.[1].PresentStatus.WiringFault
+        // mge-hid.c:2170 UPS.PowerConverter.Input.[1].PresentStatus.WiringFault
         { "ups.alarm", 0, 0, "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeWiringFault) },
-        // mge-hid.c:2157 UPS.PowerSummary.PresentStatus.ConfigurationFailure
+        // mge-hid.c:2171 UPS.PowerSummary.PresentStatus.ConfigurationFailure
         { "ups.alarm", 0, 0, "UPS.PowerSummary.PresentStatus.0xFFFF002D", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeConfigFailure) },
-        // mge-hid.c:2158 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooHigh
+        // mge-hid.c:2172 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooHigh
         { "ups.alarm", 0, 0, "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeInverterVolthi) },
-        // mge-hid.c:2159 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooLow
+        // mge-hid.c:2173 UPS.PowerConverter.Inverter.PresentStatus.VoltageTooLow
         { "ups.alarm", 0, 0, "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeInverterVoltlo) },
-        // mge-hid.c:2160 UPS.PowerConverter.Output.PresentStatus.ShortCircuit
+        // mge-hid.c:2174 UPS.PowerConverter.Output.PresentStatus.ShortCircuit
         { "ups.alarm", 0, 0, "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", nullptr, 0, Conv::Lookup, NUT_LKP(kMgeShortCircuit) },
 
         // --- Input page
-        // mge-hid.c:2163 UPS.PowerConverter.Input.[1].Voltage
+        // mge-hid.c:2177 UPS.PowerConverter.Input.[1].Voltage
         { "input.voltage", 0, 0, "UPS.PowerConverter.Input.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2164 UPS.PowerConverter.Input.[1].Phase.[1].Voltage
+        // mge-hid.c:2178 UPS.PowerConverter.Input.[1].Phase.[1].Voltage
         { "input.L1-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2165 UPS.PowerConverter.Input.[1].Phase.[2].Voltage
+        // mge-hid.c:2179 UPS.PowerConverter.Input.[1].Phase.[2].Voltage
         { "input.L2-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2166 UPS.PowerConverter.Input.[1].Phase.[3].Voltage
+        // mge-hid.c:2180 UPS.PowerConverter.Input.[1].Phase.[3].Voltage
         { "input.L3-N.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2167 UPS.PowerConverter.Input.[1].Phase.[12].Voltage
+        // mge-hid.c:2181 UPS.PowerConverter.Input.[1].Phase.[12].Voltage
         { "input.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2168 UPS.PowerConverter.Input.[1].Phase.[23].Voltage
+        // mge-hid.c:2182 UPS.PowerConverter.Input.[1].Phase.[23].Voltage
         { "input.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2169 UPS.PowerConverter.Input.[1].Phase.[31].Voltage
+        // mge-hid.c:2183 UPS.PowerConverter.Input.[1].Phase.[31].Voltage
         { "input.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2170 UPS.Flow.[1].ConfigVoltage
+        // mge-hid.c:2184 UPS.Flow.[1].ConfigVoltage
         { "input.voltage.nominal", 0, 0, "UPS.Flow.[1].ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2171 UPS.PowerConverter.Input.[1].Current
+        // mge-hid.c:2185 UPS.PowerConverter.Input.[1].Current
         { "input.current", 0, 0, "UPS.PowerConverter.Input.[1].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2172 UPS.PowerConverter.Input.[1].Phase.[1].Current
+        // mge-hid.c:2186 UPS.PowerConverter.Input.[1].Phase.[1].Current
         { "input.L1.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2173 UPS.PowerConverter.Input.[1].Phase.[2].Current
+        // mge-hid.c:2187 UPS.PowerConverter.Input.[1].Phase.[2].Current
         { "input.L2.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2174 UPS.PowerConverter.Input.[1].Phase.[3].Current
+        // mge-hid.c:2188 UPS.PowerConverter.Input.[1].Phase.[3].Current
         { "input.L3.current", 0, 0, "UPS.PowerConverter.Input.[1].0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2175 UPS.Flow.[1].ConfigCurrent
+        // mge-hid.c:2189 UPS.Flow.[1].ConfigCurrent
         { "input.current.nominal", 0, 0, "UPS.Flow.[1].ConfigCurrent", "%.2f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2176 UPS.PowerConverter.Input.[1].Frequency
+        // mge-hid.c:2190 UPS.PowerConverter.Input.[1].Frequency
         { "input.frequency", 0, 0, "UPS.PowerConverter.Input.[1].Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2177 UPS.Flow.[1].ConfigFrequency
+        // mge-hid.c:2191 UPS.Flow.[1].ConfigFrequency
         { "input.frequency.nominal", 0, 0, "UPS.Flow.[1].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2179 UPS.PowerConverter.Output.LowVoltageTransfer
+        // mge-hid.c:2193 UPS.PowerConverter.Output.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2180 UPS.PowerConverter.Output.LowVoltageEcoTransfer
+        // mge-hid.c:2194 UPS.PowerConverter.Output.LowVoltageEcoTransfer
         { "input.transfer.eco.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF005A", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2181 UPS.PowerConverter.Output.LowVoltageBypassTransfer
+        // mge-hid.c:2195 UPS.PowerConverter.Output.LowVoltageBypassTransfer
         { "input.transfer.bypass.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0057", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2182 UPS.PowerConverter.Output.LowVoltageBoostTransfer
+        // mge-hid.c:2196 UPS.PowerConverter.Output.LowVoltageBoostTransfer
         { "input.transfer.boost.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0050", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2183 UPS.PowerConverter.Output.HighVoltageBoostTransfer
+        // mge-hid.c:2197 UPS.PowerConverter.Output.HighVoltageBoostTransfer
         { "input.transfer.boost.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0051", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2184 UPS.PowerConverter.Output.LowVoltageBuckTransfer
+        // mge-hid.c:2198 UPS.PowerConverter.Output.LowVoltageBuckTransfer
         { "input.transfer.trim.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0052", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2186 UPS.PowerConverter.Output.HighVoltageTransfer
+        // mge-hid.c:2200 UPS.PowerConverter.Output.HighVoltageTransfer
         { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.HighVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2187 UPS.PowerConverter.Output.HighVoltageEcoTransfer
+        // mge-hid.c:2201 UPS.PowerConverter.Output.HighVoltageEcoTransfer
         { "input.transfer.eco.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF005B", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2188 UPS.PowerConverter.Output.HighVoltageBypassTransfer
+        // mge-hid.c:2202 UPS.PowerConverter.Output.HighVoltageBypassTransfer
         { "input.transfer.bypass.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0058", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2189 UPS.PowerConverter.Output.FrequencyRangeBypassTransfer
+        // mge-hid.c:2203 UPS.PowerConverter.Output.FrequencyRangeBypassTransfer
         { "input.transfer.frequency.bypass.range", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0059", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2190 UPS.PowerConverter.Output.FrequencyRangeEcoTransfer
+        // mge-hid.c:2204 UPS.PowerConverter.Output.FrequencyRangeEcoTransfer
         { "input.transfer.frequency.eco.range", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF005C", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2191 UPS.PowerConverter.Output.HysteresisVoltageTransfer
+        // mge-hid.c:2205 UPS.PowerConverter.Output.HysteresisVoltageTransfer
         { "input.transfer.hysteresis", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF009C", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2192 UPS.PowerConverter.Input.[2].ForcedTransferEnable
+        // mge-hid.c:2206 UPS.PowerConverter.Input.[2].ForcedTransferEnable
         { "input.transfer.bypass.forced", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.PowerConverter.Input.[2].0xFFFF0056", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kEnableDisable) },
-        // mge-hid.c:2193 UPS.PowerConverter.Input.[2].OverloadTransferEnable
+        // mge-hid.c:2207 UPS.PowerConverter.Input.[2].OverloadTransferEnable
         { "input.transfer.bypass.overload", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.PowerConverter.Input.[2].0xFFFF0054", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kEnableDisable) },
-        // mge-hid.c:2194 UPS.PowerConverter.Input.[2].OutOfToleranceTransferEnable
+        // mge-hid.c:2208 UPS.PowerConverter.Input.[2].OutOfToleranceTransferEnable
         { "input.transfer.bypass.outlimits", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.PowerConverter.Input.[2].0xFFFF0055", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kEnableDisable) },
-        // mge-hid.c:2195 UPS.PowerConverter.Output.HighVoltageBuckTransfer
+        // mge-hid.c:2209 UPS.PowerConverter.Output.HighVoltageBuckTransfer
         { "input.transfer.trim.high", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF0053", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2196 UPS.PowerConverter.Output.SensitivityMode
+        // mge-hid.c:2210 UPS.PowerConverter.Output.SensitivityMode
         { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerConverter.Output.0xFFFF004C", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kMgeSensitivity) },
-        // mge-hid.c:2197 UPS.PowerConverter.Output.ExtendedVoltageMode
+        // mge-hid.c:2211 UPS.PowerConverter.Output.ExtendedVoltageMode
         { "input.voltage.extended", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF004B", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2198 UPS.PowerConverter.Output.ExtendedFrequencyMode
+        // mge-hid.c:2212 UPS.PowerConverter.Output.ExtendedFrequencyMode
         { "input.frequency.extended", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerConverter.Output.0xFFFF004E", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
 
         // --- Bypass page
-        // mge-hid.c:2201 UPS.PowerConverter.Input.[2].Voltage
+        // mge-hid.c:2215 UPS.PowerConverter.Input.[2].Voltage
         { "input.bypass.voltage", 0, 0, "UPS.PowerConverter.Input.[2].Voltage", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2202 UPS.PowerConverter.Input.[2].Phase.[1].Voltage
+        // mge-hid.c:2216 UPS.PowerConverter.Input.[2].Phase.[1].Voltage
         { "input.bypass.L1-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2203 UPS.PowerConverter.Input.[2].Phase.[2].Voltage
+        // mge-hid.c:2217 UPS.PowerConverter.Input.[2].Phase.[2].Voltage
         { "input.bypass.L2-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2204 UPS.PowerConverter.Input.[2].Phase.[3].Voltage
+        // mge-hid.c:2218 UPS.PowerConverter.Input.[2].Phase.[3].Voltage
         { "input.bypass.L3-N.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2205 UPS.PowerConverter.Input.[2].Phase.[12].Voltage
+        // mge-hid.c:2219 UPS.PowerConverter.Input.[2].Phase.[12].Voltage
         { "input.bypass.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2206 UPS.PowerConverter.Input.[2].Phase.[23].Voltage
+        // mge-hid.c:2220 UPS.PowerConverter.Input.[2].Phase.[23].Voltage
         { "input.bypass.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2207 UPS.PowerConverter.Input.[2].Phase.[31].Voltage
+        // mge-hid.c:2221 UPS.PowerConverter.Input.[2].Phase.[31].Voltage
         { "input.bypass.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2208 UPS.Flow.[2].ConfigVoltage
+        // mge-hid.c:2222 UPS.Flow.[2].ConfigVoltage
         { "input.bypass.voltage.nominal", 0, 0, "UPS.Flow.[2].ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2209 UPS.PowerConverter.Input.[2].Current
+        // mge-hid.c:2223 UPS.PowerConverter.Input.[2].Current
         { "input.bypass.current", 0, 0, "UPS.PowerConverter.Input.[2].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2210 UPS.PowerConverter.Input.[2].Phase.[1].Current
+        // mge-hid.c:2224 UPS.PowerConverter.Input.[2].Phase.[1].Current
         { "input.bypass.L1.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2211 UPS.PowerConverter.Input.[2].Phase.[2].Current
+        // mge-hid.c:2225 UPS.PowerConverter.Input.[2].Phase.[2].Current
         { "input.bypass.L2.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2212 UPS.PowerConverter.Input.[2].Phase.[3].Current
+        // mge-hid.c:2226 UPS.PowerConverter.Input.[2].Phase.[3].Current
         { "input.bypass.L3.current", 0, 0, "UPS.PowerConverter.Input.[2].0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2213 UPS.Flow.[2].ConfigCurrent
+        // mge-hid.c:2227 UPS.Flow.[2].ConfigCurrent
         { "input.bypass.current.nominal", 0, 0, "UPS.Flow.[2].ConfigCurrent", "%.2f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2214 UPS.PowerConverter.Input.[2].Frequency
+        // mge-hid.c:2228 UPS.PowerConverter.Input.[2].Frequency
         { "input.bypass.frequency", 0, 0, "UPS.PowerConverter.Input.[2].Frequency", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2215 UPS.Flow.[2].ConfigFrequency
+        // mge-hid.c:2229 UPS.Flow.[2].ConfigFrequency
         { "input.bypass.frequency.nominal", 0, 0, "UPS.Flow.[2].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // input.bypass.switch.on (mge-hid.c:2218) excluded: stateful mge function, US-070
-        // input.bypass.switch.off (mge-hid.c:2219) excluded: stateful mge function, US-070
-        // mge-hid.c:2222 UPS.PowerConverter.Input.[2].Switchable
+        // input.bypass.switch.on (mge-hid.c:2232) excluded: stateful mge function, US-070
+        // input.bypass.switch.off (mge-hid.c:2233) excluded: stateful mge function, US-070
+        // mge-hid.c:2236 UPS.PowerConverter.Input.[2].Switchable
         { "input.bypass.switchable", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.PowerConverter.Input.[2].Switchable", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kEnableDisable) },
 
         // --- Output page
-        // mge-hid.c:2225 UPS.PowerConverter.Output.Voltage
+        // mge-hid.c:2239 UPS.PowerConverter.Output.Voltage
         { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2226 UPS.PowerConverter.Output.Phase.[1].Voltage
+        // mge-hid.c:2240 UPS.PowerConverter.Output.Phase.[1].Voltage
         { "output.L1-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2227 UPS.PowerConverter.Output.Phase.[2].Voltage
+        // mge-hid.c:2241 UPS.PowerConverter.Output.Phase.[2].Voltage
         { "output.L2-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2228 UPS.PowerConverter.Output.Phase.[3].Voltage
+        // mge-hid.c:2242 UPS.PowerConverter.Output.Phase.[3].Voltage
         { "output.L3-N.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2229 UPS.PowerConverter.Output.Phase.[12].Voltage
+        // mge-hid.c:2243 UPS.PowerConverter.Output.Phase.[12].Voltage
         { "output.L1-L2.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[12].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2230 UPS.PowerConverter.Output.Phase.[23].Voltage
+        // mge-hid.c:2244 UPS.PowerConverter.Output.Phase.[23].Voltage
         { "output.L2-L3.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[23].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2231 UPS.PowerConverter.Output.Phase.[31].Voltage
+        // mge-hid.c:2245 UPS.PowerConverter.Output.Phase.[31].Voltage
         { "output.L3-L1.voltage", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[31].Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2232 UPS.Flow.[4].ConfigVoltage
+        // mge-hid.c:2246 UPS.Flow.[4].ConfigVoltage
         { "output.voltage.nominal", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.Flow.[4].ConfigVoltage", "%.0f", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::NominalVoltage, NUT_LKP(kNominalOutputVoltage) },
-        // mge-hid.c:2233 UPS.PowerConverter.Output.Current
+        // mge-hid.c:2247 UPS.PowerConverter.Output.Current
         { "output.current", 0, 0, "UPS.PowerConverter.Output.Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2234 UPS.PowerConverter.Output.Phase.[1].Current
+        // mge-hid.c:2248 UPS.PowerConverter.Output.Phase.[1].Current
         { "output.L1.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[1].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2235 UPS.PowerConverter.Output.Phase.[2].Current
+        // mge-hid.c:2249 UPS.PowerConverter.Output.Phase.[2].Current
         { "output.L2.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[2].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2236 UPS.PowerConverter.Output.Phase.[3].Current
+        // mge-hid.c:2250 UPS.PowerConverter.Output.Phase.[3].Current
         { "output.L3.current", 0, 0, "UPS.PowerConverter.Output.0xFFFF0010.[3].Current", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2237 UPS.Flow.[4].ConfigCurrent
+        // mge-hid.c:2251 UPS.Flow.[4].ConfigCurrent
         { "output.current.nominal", 0, 0, "UPS.Flow.[4].ConfigCurrent", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2238 UPS.PowerConverter.Output.Frequency
+        // mge-hid.c:2252 UPS.PowerConverter.Output.Frequency
         { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2240 UPS.Flow.[4].ConfigFrequency
+        // mge-hid.c:2254 UPS.Flow.[4].ConfigFrequency
         { "output.frequency.nominal", 0, 0, "UPS.Flow.[4].ConfigFrequency", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2241 UPS.PowerConverter.Output.PowerFactor
+        // mge-hid.c:2255 UPS.PowerConverter.Output.PowerFactor
         { "output.powerfactor", 0, 0, "UPS.PowerConverter.Output.0xFFFF0069", "%s", 0, Conv::MgePowerFactor, nullptr, 0 },
 
         // --- Outlet page (using MGE UPS SYSTEMS - PowerShare technology)
-        // mge-hid.c:2246 UPS.OutletSystem.Outlet.[1].OutletID
+        // mge-hid.c:2260 UPS.OutletSystem.Outlet.[1].OutletID
         { "outlet.id", 0, 0, "UPS.OutletSystem.Outlet.[1].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2247 UPS.OutletSystem.Outlet.[1].OutletID
+        // mge-hid.c:2261 UPS.OutletSystem.Outlet.[1].OutletID
         { "outlet.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[1].OutletID", "Main Outlet", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2248 UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable
+        // mge-hid.c:2262 UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable
         { "outlet.switchable", 0, 0, "UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2252 UPS.OutletSystem.Outlet.[1].ConfigApparentPower
+        // mge-hid.c:2266 UPS.OutletSystem.Outlet.[1].ConfigApparentPower
         { "outlet.power", ST_FLAG_RW | ST_FLAG_STRING, 6, "UPS.OutletSystem.Outlet.[1].ConfigApparentPower", "%s", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::PegasusThreshold, NUT_LKP(kPegasusThreshold) },
-        // mge-hid.c:2254 UPS.OutletSystem.Outlet.[1].ApparentPower
+        // mge-hid.c:2268 UPS.OutletSystem.Outlet.[1].ApparentPower
         { "outlet.power", 0, 0, "UPS.OutletSystem.Outlet.[1].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2255 UPS.OutletSystem.Outlet.[1].ActivePower
+        // mge-hid.c:2269 UPS.OutletSystem.Outlet.[1].ActivePower
         { "outlet.realpower", 0, 0, "UPS.OutletSystem.Outlet.[1].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2256 UPS.OutletSystem.Outlet.[1].Current
+        // mge-hid.c:2270 UPS.OutletSystem.Outlet.[1].Current
         { "outlet.current", 0, 0, "UPS.OutletSystem.Outlet.[1].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2257 UPS.OutletSystem.Outlet.[1].PowerFactor
+        // mge-hid.c:2271 UPS.OutletSystem.Outlet.[1].PowerFactor
         { "outlet.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[1].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
 
         // --- First outlet (group) [2]
-        // mge-hid.c:2260 UPS.OutletSystem.Outlet.[2].OutletID
+        // mge-hid.c:2274 UPS.OutletSystem.Outlet.[2].OutletID
         { "outlet.1.id", 0, 0, "UPS.OutletSystem.Outlet.[2].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2261 UPS.OutletSystem.Outlet.[2].OutletID
+        // mge-hid.c:2275 UPS.OutletSystem.Outlet.[2].OutletID
         { "outlet.1.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[2].OutletID", "PowerShare Outlet 1", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2262 UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable
+        // mge-hid.c:2276 UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable
         { "outlet.1.switchable", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable", "%s", HU_FLAG_STATIC, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2264 UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off
+        // mge-hid.c:2278 UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off
         { "outlet.1.status", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
-        // mge-hid.c:2265 UPS.OutletSystem.Outlet.[2].Status
+        // mge-hid.c:2279 UPS.OutletSystem.Outlet.[2].Status
         { "outlet.1.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
-        // mge-hid.c:2266 UPS.OutletSystem.Outlet.[2].iDesignator
+        // mge-hid.c:2280 UPS.OutletSystem.Outlet.[2].iDesignator
         { "outlet.1.designator", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF00BA", nullptr, HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // mge-hid.c:2268 UPS.PowerSummary.PresentStatus.ACPresent
+        // mge-hid.c:2282 UPS.PowerSummary.PresentStatus.ACPresent
         { "outlet.1.status", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
-        // mge-hid.c:2270 UPS.OutletSystem.Outlet.[2].RemainingCapacityLimit
+        // mge-hid.c:2284 UPS.OutletSystem.Outlet.[2].RemainingCapacityLimit
         { "outlet.1.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[2].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2271 UPS.OutletSystem.Outlet.[2].ShutdownTimer
+        // mge-hid.c:2285 UPS.OutletSystem.Outlet.[2].ShutdownTimer
         { "outlet.1.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[2].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2272 UPS.OutletSystem.Outlet.[2].StartupTimer
+        // mge-hid.c:2286 UPS.OutletSystem.Outlet.[2].StartupTimer
         { "outlet.1.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[2].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2273 UPS.OutletSystem.Outlet.[2].ApparentPower
+        // mge-hid.c:2287 UPS.OutletSystem.Outlet.[2].ApparentPower
         { "outlet.1.power", 0, 0, "UPS.OutletSystem.Outlet.[2].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2274 UPS.OutletSystem.Outlet.[2].ActivePower
+        // mge-hid.c:2288 UPS.OutletSystem.Outlet.[2].ActivePower
         { "outlet.1.realpower", 0, 0, "UPS.OutletSystem.Outlet.[2].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2275 UPS.OutletSystem.Outlet.[2].Current
+        // mge-hid.c:2289 UPS.OutletSystem.Outlet.[2].Current
         { "outlet.1.current", 0, 0, "UPS.OutletSystem.Outlet.[2].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2276 UPS.OutletSystem.Outlet.[2].PowerFactor
+        // mge-hid.c:2290 UPS.OutletSystem.Outlet.[2].PowerFactor
         { "outlet.1.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2278 UPS.OutletSystem.Outlet.[2].ECOControl
+        // mge-hid.c:2292 UPS.OutletSystem.Outlet.[2].ECOControl
         { "outlet.1.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[2].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
 
         // --- Second outlet (group) [3]
-        // mge-hid.c:2281 UPS.OutletSystem.Outlet.[3].OutletID
+        // mge-hid.c:2295 UPS.OutletSystem.Outlet.[3].OutletID
         { "outlet.2.id", 0, 0, "UPS.OutletSystem.Outlet.[3].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2282 UPS.OutletSystem.Outlet.[3].OutletID
+        // mge-hid.c:2296 UPS.OutletSystem.Outlet.[3].OutletID
         { "outlet.2.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[3].OutletID", "PowerShare Outlet 2", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2285 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
+        // mge-hid.c:2299 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
         { "outlet.2.switchable", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable", "%s", HU_FLAG_SEMI_STATIC, Conv::PegasusYesNo, NUT_LKP(kYesNo) },
-        // mge-hid.c:2287 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
+        // mge-hid.c:2301 UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable
         { "outlet.2.switchable", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable", "%s", 0, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2288 UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off
+        // mge-hid.c:2302 UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off
         { "outlet.2.status", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
-        // mge-hid.c:2289 UPS.OutletSystem.Outlet.[3].Status
+        // mge-hid.c:2303 UPS.OutletSystem.Outlet.[3].Status
         { "outlet.2.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
-        // mge-hid.c:2291 UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit
+        // mge-hid.c:2305 UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit
         { "outlet.2.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2292 UPS.OutletSystem.Outlet.[3].ShutdownTimer
+        // mge-hid.c:2306 UPS.OutletSystem.Outlet.[3].ShutdownTimer
         { "outlet.2.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2293 UPS.OutletSystem.Outlet.[3].StartupTimer
+        // mge-hid.c:2307 UPS.OutletSystem.Outlet.[3].StartupTimer
         { "outlet.2.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2294 UPS.OutletSystem.Outlet.[3].ApparentPower
+        // mge-hid.c:2308 UPS.OutletSystem.Outlet.[3].ApparentPower
         { "outlet.2.power", 0, 0, "UPS.OutletSystem.Outlet.[3].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2295 UPS.OutletSystem.Outlet.[3].ActivePower
+        // mge-hid.c:2309 UPS.OutletSystem.Outlet.[3].ActivePower
         { "outlet.2.realpower", 0, 0, "UPS.OutletSystem.Outlet.[3].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2296 UPS.OutletSystem.Outlet.[3].Current
+        // mge-hid.c:2310 UPS.OutletSystem.Outlet.[3].Current
         { "outlet.2.current", 0, 0, "UPS.OutletSystem.Outlet.[3].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2297 UPS.OutletSystem.Outlet.[3].PowerFactor
+        // mge-hid.c:2311 UPS.OutletSystem.Outlet.[3].PowerFactor
         { "outlet.2.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2299 UPS.OutletSystem.Outlet.[3].ECOControl
+        // mge-hid.c:2313 UPS.OutletSystem.Outlet.[3].ECOControl
         { "outlet.2.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[3].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
 
         // --- Third outlet (group) [4]
-        // mge-hid.c:2302 UPS.OutletSystem.Outlet.[4].OutletID
+        // mge-hid.c:2316 UPS.OutletSystem.Outlet.[4].OutletID
         { "outlet.3.id", 0, 0, "UPS.OutletSystem.Outlet.[4].OutletID", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2303 UPS.OutletSystem.Outlet.[4].OutletID
+        // mge-hid.c:2317 UPS.OutletSystem.Outlet.[4].OutletID
         { "outlet.3.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[4].OutletID", "PowerShare Outlet 2", HU_FLAG_ABSENT, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2306 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
+        // mge-hid.c:2320 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
         { "outlet.3.switchable", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", "%s", HU_FLAG_SEMI_STATIC, Conv::PegasusYesNo, NUT_LKP(kYesNo) },
-        // mge-hid.c:2308 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
+        // mge-hid.c:2322 UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable
         { "outlet.3.switchable", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", "%s", 0, Conv::Lookup, NUT_LKP(kYesNo) },
-        // mge-hid.c:2309 UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off
+        // mge-hid.c:2323 UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off
         { "outlet.3.status", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off", "%s", 0, Conv::Lookup, NUT_LKP(kOnOff) },
-        // mge-hid.c:2310 UPS.OutletSystem.Outlet.[4].Status
+        // mge-hid.c:2324 UPS.OutletSystem.Outlet.[4].Status
         { "outlet.3.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF00E9", "%s", 0, Conv::Lookup, NUT_LKP(kOutletProtection) },
-        // mge-hid.c:2312 UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit
+        // mge-hid.c:2326 UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit
         { "outlet.3.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2313 UPS.OutletSystem.Outlet.[4].ShutdownTimer
+        // mge-hid.c:2327 UPS.OutletSystem.Outlet.[4].ShutdownTimer
         { "outlet.3.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].0xFFFF005D", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2314 UPS.OutletSystem.Outlet.[4].StartupTimer
+        // mge-hid.c:2328 UPS.OutletSystem.Outlet.[4].StartupTimer
         { "outlet.3.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].0xFFFF005E", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2315 UPS.OutletSystem.Outlet.[4].ApparentPower
+        // mge-hid.c:2329 UPS.OutletSystem.Outlet.[4].ApparentPower
         { "outlet.3.power", 0, 0, "UPS.OutletSystem.Outlet.[4].ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2316 UPS.OutletSystem.Outlet.[4].ActivePower
+        // mge-hid.c:2330 UPS.OutletSystem.Outlet.[4].ActivePower
         { "outlet.3.realpower", 0, 0, "UPS.OutletSystem.Outlet.[4].ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2317 UPS.OutletSystem.Outlet.[4].Current
+        // mge-hid.c:2331 UPS.OutletSystem.Outlet.[4].Current
         { "outlet.3.current", 0, 0, "UPS.OutletSystem.Outlet.[4].Current", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2318 UPS.OutletSystem.Outlet.[4].PowerFactor
+        // mge-hid.c:2332 UPS.OutletSystem.Outlet.[4].PowerFactor
         { "outlet.3.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF0069", "%.2f", 0, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2320 UPS.OutletSystem.Outlet.[4].ECOControl
+        // mge-hid.c:2334 UPS.OutletSystem.Outlet.[4].ECOControl
         { "outlet.3.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[4].0xFFFF0085", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kOutletEco) },
 
         // --- instant commands.
-        // mge-hid.c:2326 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2340 UPS.BatterySystem.Battery.Test
         { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2327 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2341 UPS.BatterySystem.Battery.Test
         { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2328 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2342 UPS.BatterySystem.Battery.Test
         { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2329 UPS.PowerSummary.DelayBeforeShutdown
+        // mge-hid.c:2343 UPS.PowerSummary.DelayBeforeShutdown
         { "load.off.delay", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2330 UPS.PowerSummary.DelayBeforeStartup
+        // mge-hid.c:2344 UPS.PowerSummary.DelayBeforeStartup
         { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2331 UPS.PowerSummary.DelayBeforeShutdown
+        // mge-hid.c:2345 UPS.PowerSummary.DelayBeforeShutdown
         { "shutdown.stop", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2332 UPS.PowerSummary.DelayBeforeReboot
+        // mge-hid.c:2346 UPS.PowerSummary.DelayBeforeReboot
         { "shutdown.reboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2333 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2347 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2334 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2348 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2337 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2351 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2338 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2352 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2339 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2353 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2340 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2354 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2341 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2355 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2342 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2356 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2343 UPS.AudibleAlarmControl
+        // mge-hid.c:2357 UPS.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2344 UPS.AudibleAlarmControl
+        // mge-hid.c:2358 UPS.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
 
         // --- Command for the outlet collection
-        // mge-hid.c:2347 UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown
+        // mge-hid.c:2361 UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown
         { "outlet.1.load.off", 0, 0, "UPS.OutletSystem.Outlet.[2].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2348 UPS.OutletSystem.Outlet.[2].DelayBeforeStartup
+        // mge-hid.c:2362 UPS.OutletSystem.Outlet.[2].DelayBeforeStartup
         { "outlet.1.load.on", 0, 0, "UPS.OutletSystem.Outlet.[2].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2349 UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown
+        // mge-hid.c:2363 UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown
         { "outlet.2.load.off", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2350 UPS.OutletSystem.Outlet.[3].DelayBeforeStartup
+        // mge-hid.c:2364 UPS.OutletSystem.Outlet.[3].DelayBeforeStartup
         { "outlet.2.load.on", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2351 UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown
+        // mge-hid.c:2365 UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown
         { "outlet.3.load.off", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2352 UPS.OutletSystem.Outlet.[4].DelayBeforeStartup
+        // mge-hid.c:2366 UPS.OutletSystem.Outlet.[4].DelayBeforeStartup
         { "outlet.3.load.on", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeStartup", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
 
         // --- Command to switch ECO(HE), ESS Mode
-        // mge-hid.c:2355 UPS.PowerConverter.Input.[5].Switchable
+        // mge-hid.c:2369 UPS.PowerConverter.Input.[5].Switchable
         { "experimental.ecomode.stop", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2356 UPS.PowerConverter.Input.[5].Switchable
+        // mge-hid.c:2370 UPS.PowerConverter.Input.[5].Switchable
         { "experimental.ecomode.start", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2357 UPS.PowerConverter.Input.[5].Switchable
+        // mge-hid.c:2371 UPS.PowerConverter.Input.[5].Switchable
         { "experimental.essmode.start", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2358 UPS.PowerConverter.Input.[5].Switchable
+        // mge-hid.c:2372 UPS.PowerConverter.Input.[5].Switchable
         { "experimental.essmode.stop", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
 
         // --- Command to switch ECO(HE) Mode with switch to Automatic Bypass Mode on before
-        // experimental.bypass.ecomode.start (mge-hid.c:2361) excluded: stateful mge function, US-070
+        // experimental.bypass.ecomode.start (mge-hid.c:2375) excluded: stateful mge function, US-070
 
         // --- Command to switch from ECO(HE) Mode with switch from Automatic Bypass Mode on before
-        // experimental.bypass.ecomode.stop (mge-hid.c:2363) excluded: stateful mge function, US-070
+        // experimental.bypass.ecomode.stop (mge-hid.c:2377) excluded: stateful mge function, US-070
 
         // --- Command to switch Automatic Bypass Mode on/off
-        // mge-hid.c:2366 UPS.PowerConverter.Input.[2].SwitchOnControl
+        // mge-hid.c:2380 UPS.PowerConverter.Input.[2].SwitchOnControl
         { "bypass.start", 0, 0, "UPS.PowerConverter.Input.[2].SwitchOnControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2367 UPS.PowerConverter.Input.[2].SwitchOffControl
+        // mge-hid.c:2381 UPS.PowerConverter.Input.[2].SwitchOffControl
         { "bypass.stop", 0, 0, "UPS.PowerConverter.Input.[2].SwitchOffControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // input.eco.switchable (mge-hid.c:2373) excluded: stateful mge function, US-070
+        // input.eco.switchable (mge-hid.c:2387) excluded: stateful mge function, US-070
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;
@@ -2449,17 +2457,20 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
         { "shutdown.stop", 0, 0, "UPS.0xFF860005.0xFF86007D", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
         // apc-hid.c:459 UPS.APCGeneralCollection.APCDelayBeforeReboot
         { "shutdown.reboot", 0, 0, "UPS.0xFF860005.0xFF86007C", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:461 UPS.Output.APCDelayBeforeReboot
+        // apc-hid.c:466 UPS.APCGeneralCollection.APCDelayBeforeReboot (Back-UPS BX*MI, NUT #2683):
+        // the only shutdown their firmware runs, the "10" of shutdown.reboot is ACKed and ignored
+        { "shutdown.return", 0, 0, "UPS.0xFF860005.0xFF86007C", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // apc-hid.c:468 UPS.Output.APCDelayBeforeReboot (Back-UPS CS)
         { "shutdown.return", 0, 0, "UPS.Output.0xFF86007C", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:463 UPS.PowerSummary.AudibleAlarmControl
+        // apc-hid.c:470 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:464 UPS.PowerSummary.AudibleAlarmControl
+        // apc-hid.c:471 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:465 UPS.PowerSummary.AudibleAlarmControl
+        // apc-hid.c:472 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:466 UPS.PowerSummary.AudibleAlarmControl
+        // apc-hid.c:473 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // apc-hid.c:467 UPS.PowerSummary.AudibleAlarmControl
+        // apc-hid.c:474 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
@@ -2472,141 +2483,141 @@ inline const HidInfo* apcHid2Nut(size_t& n) {
 inline const HidInfo* cpsHid2Nut(size_t& n) {
     static const HidInfo t[] = {
 #if WITH_UNMAPPED_DATA_POINTS
-        // cps-hid.c:358 UPS.PowerSummary.Rechargeable
+        // cps-hid.c:374 UPS.PowerSummary.Rechargeable
         { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:359 UPS.PowerSummary.CapacityMode
+        // cps-hid.c:375 UPS.PowerSummary.CapacityMode
         { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:360 UPS.PowerSummary.DesignCapacity
+        // cps-hid.c:376 UPS.PowerSummary.DesignCapacity
         { "unmapped.ups.powersummary.designcapacity", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:361 UPS.PowerSummary.CapacityGranularity1
+        // cps-hid.c:377 UPS.PowerSummary.CapacityGranularity1
         { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:362 UPS.PowerSummary.CapacityGranularity2
+        // cps-hid.c:378 UPS.PowerSummary.CapacityGranularity2
         { "unmapped.ups.powersummary.capacitygranularity2", 0, 0, "UPS.PowerSummary.CapacityGranularity2", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
 
         // Battery page
-        // cps-hid.c:366 UPS.PowerSummary.iDeviceChemistry
+        // cps-hid.c:382 UPS.PowerSummary.iDeviceChemistry
         { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", 0, Conv::StringId, nullptr, 0 },
-        // cps-hid.c:367 UPS.Battery.ManufacturerDate
+        // cps-hid.c:383 UPS.Battery.ManufacturerDate
         { "battery.mfr.date", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_SEMI_STATIC, Conv::BatteryDate, nullptr, 0 },
-        // cps-hid.c:368 UPS.PowerSummary.iOEMInformation
+        // cps-hid.c:384 UPS.PowerSummary.iOEMInformation
         { "battery.mfr.date", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", 0, Conv::StringId, nullptr, 0 },
-        // cps-hid.c:369 UPS.PowerSummary.WarningCapacityLimit
+        // cps-hid.c:385 UPS.PowerSummary.WarningCapacityLimit
         { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:370 UPS.PowerSummary.RemainingCapacityLimit
+        // cps-hid.c:386 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:371 UPS.PowerSummary.RemainingCapacity
+        // cps-hid.c:387 UPS.PowerSummary.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%s", 0, Conv::CpsBattCharge, nullptr, 0 },
-        // cps-hid.c:372 UPS.PowerSummary.RunTimeToEmpty
+        // cps-hid.c:388 UPS.PowerSummary.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:373 UPS.PowerSummary.RemainingTimeLimit
+        // cps-hid.c:389 UPS.PowerSummary.RemainingTimeLimit
         { "battery.runtime.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:374 UPS.PowerSummary.ConfigVoltage
+        // cps-hid.c:390 UPS.PowerSummary.ConfigVoltage
         { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:375 UPS.PowerSummary.Voltage
+        // cps-hid.c:391 UPS.PowerSummary.Voltage
         { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%s", 0, Conv::CpsBattVolt, nullptr, 0 },
-        // cps-hid.c:376 UPS.PowerSummary.FullChargeCapacity
+        // cps-hid.c:392 UPS.PowerSummary.FullChargeCapacity
         { "battery.status", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%s", 0, Conv::CpsBattStatus, nullptr, 0 },
 
         // UPS page
-        // cps-hid.c:379 UPS.Output.PercentLoad
+        // cps-hid.c:395 UPS.Output.PercentLoad
         { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:380 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:396 UPS.PowerSummary.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kBeeperInfo) },
-        // cps-hid.c:381 UPS.Output.Test
+        // cps-hid.c:397 UPS.Output.Test
         { "ups.test.result", 0, 0, "UPS.Output.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
-        // cps-hid.c:382 UPS.Output.ApparentPower
+        // cps-hid.c:398 UPS.Output.ApparentPower
         { "ups.power", 0, 0, "UPS.Output.ApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:383 UPS.Output.ConfigApparentPower
+        // cps-hid.c:399 UPS.Output.ConfigApparentPower
         { "ups.power.nominal", 0, 0, "UPS.Output.ConfigApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:384 UPS.Output.ActivePower
+        // cps-hid.c:400 UPS.Output.ActivePower
         { "ups.realpower", 0, 0, "UPS.Output.ActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:385 UPS.Output.ConfigActivePower
+        // cps-hid.c:401 UPS.Output.ConfigActivePower
         { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ups.delay.start (cps-hid.c:386) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
-        // ups.delay.shutdown (cps-hid.c:387) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
-        // cps-hid.c:388 UPS.Output.DelayBeforeStartup
+        // ups.delay.start (cps-hid.c:402) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // ups.delay.shutdown (cps-hid.c:403) excluded: ups.delay.* comes from NutTable::applyDefaultDelays
+        // cps-hid.c:404 UPS.Output.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.Output.DelayBeforeStartup", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // cps-hid.c:389 UPS.Output.DelayBeforeShutdown
+        // cps-hid.c:405 UPS.Output.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.Output.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // cps-hid.c:390 UPS.Output.DelayBeforeReboot
+        // cps-hid.c:406 UPS.Output.DelayBeforeReboot
         { "ups.timer.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // cps-hid.c:391 UPS.PowerSummary.CPSFirmwareVersion
+        // cps-hid.c:407 UPS.PowerSummary.CPSFirmwareVersion
         { "ups.firmware", 0, 0, "UPS.PowerSummary.0xFF0100D0", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // cps-hid.c:392 UPS.PowerSummary.Temperature
+        // cps-hid.c:408 UPS.PowerSummary.Temperature
         { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", 0, Conv::KelvinCelsius, nullptr, 0 },
 
         // Special case: ups.status & ups.alarm
-        // cps-hid.c:395 UPS.PowerSummary.PresentStatus.ACPresent
+        // cps-hid.c:411 UPS.PowerSummary.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
-        // cps-hid.c:396 UPS.PowerSummary.PresentStatus.Charging
+        // cps-hid.c:412 UPS.PowerSummary.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
-        // cps-hid.c:397 UPS.PowerSummary.PresentStatus.Discharging
+        // cps-hid.c:413 UPS.PowerSummary.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
-        // cps-hid.c:398 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        // cps-hid.c:414 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
-        // cps-hid.c:399 UPS.PowerSummary.PresentStatus.FullyCharged
+        // cps-hid.c:415 UPS.PowerSummary.PresentStatus.FullyCharged
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, 0, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
-        // cps-hid.c:400 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        // cps-hid.c:416 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
-        // cps-hid.c:401 UPS.PowerSummary.PresentStatus.NeedReplacement
+        // cps-hid.c:417 UPS.PowerSummary.PresentStatus.NeedReplacement
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // cps-hid.c:402 UPS.Output.Boost
+        // cps-hid.c:418 UPS.Output.Boost
         { "BOOL", 0, 0, "UPS.Output.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
-        // cps-hid.c:403 UPS.Output.Overload
+        // cps-hid.c:419 UPS.Output.Overload
         { "BOOL", 0, 0, "UPS.Output.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
 
         // Input page
-        // cps-hid.c:408 UPS.Input.Frequency
+        // cps-hid.c:424 UPS.Input.Frequency
         { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", 0, Conv::CpsInputFreq, nullptr, 0 },
-        // cps-hid.c:409 UPS.Input.ConfigVoltage
+        // cps-hid.c:425 UPS.Input.ConfigVoltage
         { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:410 UPS.Input.Voltage
+        // cps-hid.c:426 UPS.Input.Voltage
         { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:411 UPS.Input.LowVoltageTransfer
+        // cps-hid.c:427 UPS.Input.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Input.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:412 UPS.Input.HighVoltageTransfer
+        // cps-hid.c:428 UPS.Input.HighVoltageTransfer
         { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Input.HighVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:414 UPS.Output.LowVoltageTransfer
+        // cps-hid.c:430 UPS.Output.LowVoltageTransfer
         { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Output.LowVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:415 UPS.Output.HighVoltageTransfer
+        // cps-hid.c:431 UPS.Output.HighVoltageTransfer
         { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.Output.HighVoltageTransfer", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // cps-hid.c:416 UPS.Output.CPSInputSensitivity
+        // cps-hid.c:432 UPS.Output.CPSInputSensitivity
         { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 0, "UPS.Output.0xFF010043", "%s", HU_FLAG_SEMI_STATIC | HU_FLAG_ENUM, Conv::Lookup, NUT_LKP(kCpsSensitivity) },
 
         // Output page
-        // cps-hid.c:421 UPS.Output.Frequency
+        // cps-hid.c:437 UPS.Output.Frequency
         { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", 0, Conv::CpsOutputFreq, nullptr, 0 },
-        // cps-hid.c:422 UPS.Output.Voltage
+        // cps-hid.c:438 UPS.Output.Voltage
         { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // cps-hid.c:423 UPS.Output.ConfigVoltage
+        // cps-hid.c:439 UPS.Output.ConfigVoltage
         { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
 
         // Instant commands (read by HidControl since US-074): beeper.on/off are not in
         // UpsCommands.h, never listed
-        // cps-hid.c:426 UPS.Output.Test
+        // cps-hid.c:442 UPS.Output.Test
         { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:427 UPS.Output.Test
+        // cps-hid.c:443 UPS.Output.Test
         { "test.battery.start.deep", 0, 0, "UPS.Output.Test", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:428 UPS.Output.Test
+        // cps-hid.c:444 UPS.Output.Test
         { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:429 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY_CPS (usbhid-ups.h:66-67)
+        // cps-hid.c:445 UPS.Output.DelayBeforeShutdown, DEFAULT_OFFDELAY_CPS (usbhid-ups.h:66-67)
         { "load.off.delay", 0, 0, "UPS.Output.DelayBeforeShutdown", "60", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:430 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY_CPS (usbhid-ups.h:66-67)
+        // cps-hid.c:446 UPS.Output.DelayBeforeStartup, DEFAULT_ONDELAY_CPS (usbhid-ups.h:66-67)
         { "load.on.delay", 0, 0, "UPS.Output.DelayBeforeStartup", "120", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:431 UPS.Output.DelayBeforeShutdown
+        // cps-hid.c:447 UPS.Output.DelayBeforeShutdown
         { "shutdown.stop", 0, 0, "UPS.Output.DelayBeforeShutdown", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:432 UPS.Output.DelayBeforeReboot
+        // cps-hid.c:448 UPS.Output.DelayBeforeReboot
         { "shutdown.reboot", 0, 0, "UPS.Output.DelayBeforeReboot", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:433 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:449 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.on", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:434 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:450 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.off", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:435 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:451 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:436 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:452 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // cps-hid.c:437 UPS.PowerSummary.AudibleAlarmControl
+        // cps-hid.c:453 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
@@ -2619,111 +2630,111 @@ inline const HidInfo* cpsHid2Nut(size_t& n) {
 // (US-054, US-058). battery.charge.low is the RW row of US-066.
 inline const HidInfo* ecoflowHid2Nut(size_t& n) {
     static const HidInfo t[] = {
-        // ecoflow-hid.c:114 UPS.PowerSummary.AudibleAlarmControl
+        // ecoflow-hid.c:117 UPS.PowerSummary.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kBeeperInfo) },
-        // ecoflow-hid.c:122 UPS.Flow.[4].ConfigActivePower
+        // ecoflow-hid.c:125 UPS.Flow.[4].ConfigActivePower
         { "ups.power.nominal", 0, 0, "UPS.Flow.[4].ConfigActivePower", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:125 UPS.PowerSummary.ConfigVoltage
+        // ecoflow-hid.c:128 UPS.PowerSummary.ConfigVoltage
         { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.1f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:126 UPS.OutletSystem.Outlet.DelayBeforeReboot
+        // ecoflow-hid.c:129 UPS.OutletSystem.Outlet.DelayBeforeReboot
         { "ups.timer.reboot", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeReboot", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:127 UPS.OutletSystem.Outlet.DelayBeforeShutdown
+        // ecoflow-hid.c:130 UPS.OutletSystem.Outlet.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.OutletSystem.Outlet.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:130 UPS.PowerSummary.DesignCapacity (unit %)
+        // ecoflow-hid.c:133 UPS.PowerSummary.DesignCapacity (unit %)
         { "battery.capacity.nominal", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:133 UPS.PowerSummary.FullChargeCapacity (unit %)
+        // ecoflow-hid.c:136 UPS.PowerSummary.FullChargeCapacity (unit %)
         { "battery.capacity", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:135 UPS.PowerSummary.iDeviceChemistry
+        // ecoflow-hid.c:138 UPS.PowerSummary.iDeviceChemistry
         { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // ecoflow-hid.c:136 UPS.PowerSummary.iOEMInformation
+        // ecoflow-hid.c:139 UPS.PowerSummary.iOEMInformation
         { "experimental.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // ecoflow-hid.c:137 UPS.PowerSummary.ManufacturerDate
+        // ecoflow-hid.c:140 UPS.PowerSummary.ManufacturerDate
         { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", 0, Conv::BatteryDate, nullptr, 0 },
-        // ecoflow-hid.c:140 UPS.PowerSummary.PresentStatus.ACPresent
+        // ecoflow-hid.c:143 UPS.PowerSummary.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOnlineInfo) },
-        // ecoflow-hid.c:143 UPS.PowerSummary.PresentStatus.BatteryPresent
+        // ecoflow-hid.c:146 UPS.PowerSummary.PresentStatus.BatteryPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
-        // ecoflow-hid.c:144 experimental.ups.powersummary.presentstatus.batterypresent: commented out upstream
-        // ecoflow-hid.c:147 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        // ecoflow-hid.c:147 experimental.ups.powersummary.presentstatus.batterypresent: commented out upstream
+        // ecoflow-hid.c:150 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kLowbattInfo) },
-        // ecoflow-hid.c:150 UPS.PowerSummary.PresentStatus.CommunicationLost
+        // ecoflow-hid.c:153 UPS.PowerSummary.PresentStatus.CommunicationLost
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
-        // ecoflow-hid.c:152 UPS.PowerSummary.PresentStatus.Charging
+        // ecoflow-hid.c:155 UPS.PowerSummary.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kChargingInfo) },
-        // ecoflow-hid.c:153 UPS.PowerSummary.PresentStatus.Charging (BOOL, no quick poll): commented out upstream
-        // ecoflow-hid.c:154 UPS.PowerSummary.PresentStatus.Discharging
+        // ecoflow-hid.c:156 UPS.PowerSummary.PresentStatus.Charging (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:157 UPS.PowerSummary.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDischargingInfo) },
-        // ecoflow-hid.c:155 UPS.PowerSummary.PresentStatus.Discharging (BOOL, no quick poll): commented out upstream
-        // ecoflow-hid.c:156 UPS.PowerSummary.PresentStatus.FullyCharged
+        // ecoflow-hid.c:158 UPS.PowerSummary.PresentStatus.Discharging (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:159 UPS.PowerSummary.PresentStatus.FullyCharged
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
-        // ecoflow-hid.c:158 UPS.PowerSummary.PresentStatus.FullyDischarged
+        // ecoflow-hid.c:161 UPS.PowerSummary.PresentStatus.FullyDischarged
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kDepletedInfo) },
-        // ecoflow-hid.c:160 UPS.PowerSummary.PresentStatus.NeedReplacement
+        // ecoflow-hid.c:163 UPS.PowerSummary.PresentStatus.NeedReplacement
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // ecoflow-hid.c:162 UPS.PowerSummary.PresentStatus.Overload
+        // ecoflow-hid.c:165 UPS.PowerSummary.PresentStatus.Overload
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // ecoflow-hid.c:164 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        // ecoflow-hid.c:167 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
-        // ecoflow-hid.c:165 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired (BOOL, no quick poll): commented out upstream
-        // ecoflow-hid.c:167 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        // ecoflow-hid.c:168 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired (BOOL, no quick poll): commented out upstream
+        // ecoflow-hid.c:170 UPS.PowerSummary.PresentStatus.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_QUICK_POLL, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
-        // ecoflow-hid.c:170 UPS.PowerSummary.PresentStatus.ShutdownRequested
+        // ecoflow-hid.c:173 UPS.PowerSummary.PresentStatus.ShutdownRequested
         { "experimental.ups.powersummary.presentstatus.shutdownrequested", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownRequested", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:172 UPS.PowerSummary.PresentStatus.VoltageNotRegulated
+        // ecoflow-hid.c:175 UPS.PowerSummary.PresentStatus.VoltageNotRegulated
         { "experimental.ups.powersummary.presentstatus.voltagenotregulated", 0, 0, "UPS.PowerSummary.PresentStatus.VoltageNotRegulated", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:173 UPS.PowerSummary.Rechargeable
+        // ecoflow-hid.c:176 UPS.PowerSummary.Rechargeable
         { "experimental.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:176 UPS.PowerSummary.RemainingCapacity
+        // ecoflow-hid.c:179 UPS.PowerSummary.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:181 UPS.PowerSummary.RemainingCapacityLimit
+        // ecoflow-hid.c:184 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:184 UPS.PowerSummary.RemainingTimeLimit, in minutes as upstream (US-078)
+        // ecoflow-hid.c:187 UPS.PowerSummary.RemainingTimeLimit, in minutes as upstream (US-078)
         { "battery.runtime.low", 0, 0, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:193 UPS.PowerSummary.RunTimeToEmpty
+        // ecoflow-hid.c:196 UPS.PowerSummary.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", HU_FLAG_QUICK_POLL, Conv::EcoflowRuntime, nullptr, 0 },
-        // ecoflow-hid.c:194 battery.runtime without the minutes conversion: commented out upstream
-        // ecoflow-hid.c:197 UPS.PowerSummary.Voltage
+        // ecoflow-hid.c:197 battery.runtime without the minutes conversion: commented out upstream
+        // ecoflow-hid.c:200 UPS.PowerSummary.Voltage
         { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:200 UPS.PowerSummary.WarningCapacityLimit
+        // ecoflow-hid.c:203 UPS.PowerSummary.WarningCapacityLimit
         { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", HU_FLAG_SEMI_STATIC, Conv::Number, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // ecoflow-hid.c:207 UPS.PowerSummary.AverageTimeToEmpty
+        // ecoflow-hid.c:210 UPS.PowerSummary.AverageTimeToEmpty
         { "unmapped.ups.powersummary.averagetimetoempty", 0, 0, "UPS.PowerSummary.AverageTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:209 UPS.PowerSummary.AverageTimeToFull
+        // ecoflow-hid.c:212 UPS.PowerSummary.AverageTimeToFull
         { "unmapped.ups.powersummary.averagetimetofull", 0, 0, "UPS.PowerSummary.AverageTimeToFull", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:210 UPS.PowerSummary.CapacityGranularity1
+        // ecoflow-hid.c:213 UPS.PowerSummary.CapacityGranularity1
         { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:211 UPS.PowerSummary.CapacityGranularity2
+        // ecoflow-hid.c:214 UPS.PowerSummary.CapacityGranularity2
         { "unmapped.ups.powersummary.capacitygranularity2", 0, 0, "UPS.PowerSummary.CapacityGranularity2", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:212 UPS.PowerSummary.CapacityMode
+        // ecoflow-hid.c:215 UPS.PowerSummary.CapacityMode
         { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:215 UPS.PowerSummary.DelayBeforeReboot
+        // ecoflow-hid.c:218 UPS.PowerSummary.DelayBeforeReboot
         { "unmapped.ups.powersummary.delaybeforereboot", 0, 0, "UPS.PowerSummary.DelayBeforeReboot", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:217 UPS.PowerSummary.DelayBeforeShutdown
+        // ecoflow-hid.c:220 UPS.PowerSummary.DelayBeforeShutdown
         { "unmapped.ups.powersummary.delaybeforeshutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:220 UPS.PowerSummary.iDeviceChemistry
+        // ecoflow-hid.c:223 UPS.PowerSummary.iDeviceChemistry
         { "unmapped.ups.powersummary.idevicechemistry", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:221 UPS.PowerSummary.iOEMInformation
+        // ecoflow-hid.c:224 UPS.PowerSummary.iOEMInformation
         { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:222 UPS.PowerSummary.PresentStatus.ACPresent
+        // ecoflow-hid.c:225 UPS.PowerSummary.PresentStatus.ACPresent
         { "unmapped.ups.powersummary.presentstatus.acpresent", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:223 UPS.PowerSummary.PresentStatus.BatteryPresent
+        // ecoflow-hid.c:226 UPS.PowerSummary.PresentStatus.BatteryPresent
         { "unmapped.ups.powersummary.presentstatus.batterypresent", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:224 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        // ecoflow-hid.c:227 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "unmapped.ups.powersummary.presentstatus.belowremainingcapacitylimit", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:225 UPS.PowerSummary.PresentStatus.Charging
+        // ecoflow-hid.c:228 UPS.PowerSummary.PresentStatus.Charging
         { "unmapped.ups.powersummary.presentstatus.charging", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:226 UPS.PowerSummary.PresentStatus.Discharging
+        // ecoflow-hid.c:229 UPS.PowerSummary.PresentStatus.Discharging
         { "unmapped.ups.powersummary.presentstatus.discharging", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:227 UPS.PowerSummary.PresentStatus.FullyCharged
+        // ecoflow-hid.c:230 UPS.PowerSummary.PresentStatus.FullyCharged
         { "unmapped.ups.powersummary.presentstatus.fullycharged", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:228 UPS.PowerSummary.PresentStatus.FullyDischarged
+        // ecoflow-hid.c:231 UPS.PowerSummary.PresentStatus.FullyDischarged
         { "unmapped.ups.powersummary.presentstatus.fullydischarged", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:229 UPS.PowerSummary.PresentStatus.NeedReplacement
+        // ecoflow-hid.c:232 UPS.PowerSummary.PresentStatus.NeedReplacement
         { "unmapped.ups.powersummary.presentstatus.needreplacement", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:230 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        // ecoflow-hid.c:233 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
         { "unmapped.ups.powersummary.presentstatus.remainingtimelimitexpired", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // ecoflow-hid.c:231 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        // ecoflow-hid.c:234 UPS.PowerSummary.PresentStatus.ShutdownImminent
         { "unmapped.ups.powersummary.presentstatus.shutdownimminent", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
     };
@@ -2813,221 +2824,221 @@ inline const HidInfo* openupsHid2Nut(size_t& n) {
 // POWERCOM2 0xFF860060, POWERCOM3 0xFF860080.
 inline const HidInfo* powercomHid2Nut(size_t& n) {
     static const HidInfo t[] = {
-        // powercom-hid.c:544 UPS.PowerSummary.PresentStatus.ACPresent
+        // powercom-hid.c:534 UPS.PowerSummary.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kOnlineInfo) },
-        // powercom-hid.c:545 UPS.PowerSummary.PresentStatus.BatteryPresent
+        // powercom-hid.c:535 UPS.PowerSummary.PresentStatus.BatteryPresent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
-        // powercom-hid.c:546 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        // powercom-hid.c:536 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, 0, Conv::Lookup, NUT_LKP(kLowbattInfo) },
-        // powercom-hid.c:547 UPS.PowerSummary.PresentStatus.Charging
+        // powercom-hid.c:537 UPS.PowerSummary.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, 0, Conv::Lookup, NUT_LKP(kChargingInfo) },
-        // powercom-hid.c:548 UPS.PowerSummary.PresentStatus.CommunicationLost
+        // powercom-hid.c:538 UPS.PowerSummary.PresentStatus.CommunicationLost
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
-        // powercom-hid.c:549 UPS.PowerSummary.PresentStatus.Discharging
+        // powercom-hid.c:539 UPS.PowerSummary.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, 0, Conv::Lookup, NUT_LKP(kDischargingInfo) },
-        // powercom-hid.c:550 UPS.PowerSummary.PresentStatus.NeedReplacement
+        // powercom-hid.c:540 UPS.PowerSummary.PresentStatus.NeedReplacement
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // powercom-hid.c:551 UPS.PowerSummary.PresentStatus.Overload
+        // powercom-hid.c:541 UPS.PowerSummary.PresentStatus.Overload
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // powercom-hid.c:552 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
+        // powercom-hid.c:542 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
-        // powercom-hid.c:553 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        // powercom-hid.c:543 UPS.PowerSummary.PresentStatus.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
-        // powercom-hid.c:554 UPS.PowerSummary.PresentStatus.POWERCOM3 (BOOL): commented out upstream
-        // powercom-hid.c:555 UPS.PowerSummary.PresentStatus.ShutdownRequested (BOOL): commented out upstream
-        // powercom-hid.c:556 UPS.PowerSummary.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
-        // powercom-hid.c:557 UPS.PresentStatus.ACPresent
+        // powercom-hid.c:544 UPS.PowerSummary.PresentStatus.POWERCOM3 (BOOL): commented out upstream
+        // powercom-hid.c:545 UPS.PowerSummary.PresentStatus.ShutdownRequested (BOOL): commented out upstream
+        // powercom-hid.c:546 UPS.PowerSummary.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
+        // powercom-hid.c:547 UPS.PresentStatus.ACPresent
         { "BOOL", 0, 0, "UPS.PresentStatus.ACPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kOnlineInfo) },
-        // powercom-hid.c:558 UPS.PresentStatus.BatteryPresent
+        // powercom-hid.c:548 UPS.PresentStatus.BatteryPresent
         { "BOOL", 0, 0, "UPS.PresentStatus.BatteryPresent", nullptr, 0, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
-        // powercom-hid.c:559 UPS.PresentStatus.BelowRemainingCapacityLimit
+        // powercom-hid.c:549 UPS.PresentStatus.BelowRemainingCapacityLimit
         { "BOOL", 0, 0, "UPS.PresentStatus.BelowRemainingCapacityLimit", nullptr, 0, Conv::Lookup, NUT_LKP(kLowbattInfo) },
-        // powercom-hid.c:560 UPS.PresentStatus.Boost
+        // powercom-hid.c:550 UPS.PresentStatus.Boost
         { "BOOL", 0, 0, "UPS.PresentStatus.Boost", nullptr, 0, Conv::Lookup, NUT_LKP(kBoostInfo) },
-        // powercom-hid.c:561 UPS.PresentStatus.Buck
+        // powercom-hid.c:551 UPS.PresentStatus.Buck
         { "BOOL", 0, 0, "UPS.PresentStatus.Buck", nullptr, 0, Conv::Lookup, NUT_LKP(kTrimInfo) },
-        // powercom-hid.c:562 UPS.PresentStatus.Charging
+        // powercom-hid.c:552 UPS.PresentStatus.Charging
         { "BOOL", 0, 0, "UPS.PresentStatus.Charging", nullptr, 0, Conv::Lookup, NUT_LKP(kChargingInfo) },
-        // powercom-hid.c:563 UPS.PresentStatus.CommunicationLost
+        // powercom-hid.c:553 UPS.PresentStatus.CommunicationLost
         { "BOOL", 0, 0, "UPS.PresentStatus.CommunicationLost", nullptr, 0, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
-        // powercom-hid.c:564 UPS.PresentStatus.Discharging
+        // powercom-hid.c:554 UPS.PresentStatus.Discharging
         { "BOOL", 0, 0, "UPS.PresentStatus.Discharging", nullptr, 0, Conv::Lookup, NUT_LKP(kDischargingInfo) },
-        // powercom-hid.c:565 UPS.PresentStatus.NeedReplacement
+        // powercom-hid.c:555 UPS.PresentStatus.NeedReplacement
         { "BOOL", 0, 0, "UPS.PresentStatus.NeedReplacement", nullptr, 0, Conv::Lookup, NUT_LKP(kReplacebattInfo) },
-        // powercom-hid.c:566 UPS.PresentStatus.Overload
+        // powercom-hid.c:556 UPS.PresentStatus.Overload
         { "BOOL", 0, 0, "UPS.PresentStatus.Overload", nullptr, 0, Conv::Lookup, NUT_LKP(kOverloadInfo) },
-        // powercom-hid.c:567 UPS.PresentStatus.RemainingTimeLimitExpired
+        // powercom-hid.c:557 UPS.PresentStatus.RemainingTimeLimitExpired
         { "BOOL", 0, 0, "UPS.PresentStatus.RemainingTimeLimitExpired", nullptr, 0, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
-        // powercom-hid.c:568 UPS.PresentStatus.ShutdownImminent
+        // powercom-hid.c:558 UPS.PresentStatus.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PresentStatus.ShutdownImminent", nullptr, 0, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
-        // powercom-hid.c:569 UPS.PresentStatus.POWERCOM3 (BOOL): commented out upstream
-        // powercom-hid.c:570 UPS.PresentStatus.ShutdownRequested (BOOL): commented out upstream
-        // powercom-hid.c:571 UPS.PresentStatus.Tested (BOOL): commented out upstream
-        // powercom-hid.c:572 UPS.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
+        // powercom-hid.c:559 UPS.PresentStatus.POWERCOM3 (BOOL): commented out upstream
+        // powercom-hid.c:560 UPS.PresentStatus.ShutdownRequested (BOOL): commented out upstream
+        // powercom-hid.c:561 UPS.PresentStatus.Tested (BOOL): commented out upstream
+        // powercom-hid.c:562 UPS.PresentStatus.VoltageNotRegulated (BOOL): commented out upstream
         // battery.voltage(.nominal) on UPS.PowerSummary/Battery Voltage and ConfigVoltage (lines 577-580
         // of the upstream file), commented out there: PowerCOM duplicates output.voltage(.nominal)
-        // powercom-hid.c:587 UPS.PowerSummary.PresentStatus.ACPresent
+        // powercom-hid.c:577 UPS.PowerSummary.PresentStatus.ACPresent
         { "battery.voltage", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", "%s", 0, Conv::PowercomHackVoltage, nullptr, 0 },
-        // powercom-hid.c:589 UPS.PowerSummary.RemainingCapacity
+        // powercom-hid.c:579 UPS.PowerSummary.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:590 UPS.Battery.RemainingCapacity
+        // powercom-hid.c:580 UPS.Battery.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.Battery.RemainingCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:591 UPS.PowerSummary.RemainingCapacityLimit
+        // powercom-hid.c:581 UPS.PowerSummary.RemainingCapacityLimit
         { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:592 UPS.PowerSummary.WarningCapacityLimit
+        // powercom-hid.c:582 UPS.PowerSummary.WarningCapacityLimit
         { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:593 UPS.PowerSummary.RunTimeToEmpty
+        // powercom-hid.c:583 UPS.PowerSummary.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:594 UPS.Battery.ManufacturerDate
+        // powercom-hid.c:584 UPS.Battery.ManufacturerDate
         { "battery.mfr.date", 0, 0, "UPS.Battery.ManufacturerDate", "%s", HU_FLAG_STATIC, Conv::BatteryDate, nullptr, 0 },
-        // powercom-hid.c:595 UPS.PowerSummary.iDeviceChemistry
+        // powercom-hid.c:585 UPS.PowerSummary.iDeviceChemistry
         { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:597 UPS.Battery.DelayBeforeStartup
+        // powercom-hid.c:587 UPS.Battery.DelayBeforeStartup
         { "unmapped.ups.battery.delaybeforestartup", 0, 0, "UPS.Battery.DelayBeforeStartup", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:598 UPS.Battery.Initialized
+        // powercom-hid.c:588 UPS.Battery.Initialized
         { "unmapped.ups.battery.initialized", 0, 0, "UPS.Battery.Initialized", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:601 UPS.PowerSummary.AudibleAlarmControl
+        // powercom-hid.c:591 UPS.PowerSummary.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kPowercomBeeperInfo) },
-        // powercom-hid.c:602 UPS.AudibleAlarmControl
+        // powercom-hid.c:592 UPS.AudibleAlarmControl
         { "ups.beeper.status", 0, 0, "UPS.AudibleAlarmControl", "%s", 0, Conv::Lookup, NUT_LKP(kPowercomBeeperInfo) },
-        // powercom-hid.c:603 UPS.Output.PercentLoad
+        // powercom-hid.c:593 UPS.Output.PercentLoad
         { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:604 UPS.PowerSummary.ManufacturerDate
+        // powercom-hid.c:594 UPS.PowerSummary.ManufacturerDate
         { "ups.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", HU_FLAG_STATIC, Conv::BatteryDate, nullptr, 0 },
-        // powercom-hid.c:605 UPS.Battery.Test
+        // powercom-hid.c:595 UPS.Battery.Test
         { "ups.test.result", 0, 0, "UPS.Battery.Test", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:607 UPS.PowerSummary.iManufacturer
+        // powercom-hid.c:597 UPS.PowerSummary.iManufacturer
         { "unmapped.ups.powersummary.imanufacturer", 0, 0, "UPS.PowerSummary.iManufacturer", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // powercom-hid.c:608 UPS.PowerSummary.iProduct
+        // powercom-hid.c:598 UPS.PowerSummary.iProduct
         { "unmapped.ups.powersummary.iproduct", 0, 0, "UPS.PowerSummary.iProduct", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // powercom-hid.c:609 UPS.PowerSummary.iSerialNumber
+        // powercom-hid.c:599 UPS.PowerSummary.iSerialNumber
         { "unmapped.ups.powersummary.iserialnumber", 0, 0, "UPS.PowerSummary.iSerialNumber", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // powercom-hid.c:610 UPS.iName
+        // powercom-hid.c:600 UPS.iName
         { "unmapped.ups.iname", 0, 0, "UPS.iName", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
-        // powercom-hid.c:611 UPS.PowerSummary.iOEMInformation
+        // powercom-hid.c:601 UPS.PowerSummary.iOEMInformation
         { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", HU_FLAG_STATIC, Conv::StringId, nullptr, 0 },
 #endif
-        // ups.delay.start (powercom-hid.c:620) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
-        // powercom-hid.c:621 UPS.PowerSummary.DelayBeforeStartup
+        // ups.delay.start (powercom-hid.c:610) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:611 UPS.PowerSummary.DelayBeforeStartup
         { "ups.timer.start", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", "%.0f", 0, Conv::PowercomStartup, nullptr, 0 },
-        // ups.delay.shutdown (powercom-hid.c:637) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
-        // powercom-hid.c:638 UPS.PowerSummary.DelayBeforeShutdown
+        // ups.delay.shutdown (powercom-hid.c:627) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:628 UPS.PowerSummary.DelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
-        // ups.delay.shutdown (powercom-hid.c:639) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
-        // powercom-hid.c:640 UPS.PowerSummary.PCMDelayBeforeShutdown
+        // ups.delay.shutdown (powercom-hid.c:629) excluded: ups.delay.* comes from NutTable::applyDefaultDelays (delayPaths(), US-066)
+        // powercom-hid.c:630 UPS.PowerSummary.PCMDelayBeforeShutdown
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.0x00FF0057", "%.0f", HU_FLAG_QUICK_POLL, Conv::PowercomShutdown, nullptr, 0 },
-        // powercom-hid.c:642 UPS.Input.Voltage
+        // powercom-hid.c:632 UPS.Input.Voltage
         { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:643 UPS.Input.ConfigVoltage
+        // powercom-hid.c:633 UPS.Input.ConfigVoltage
         { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:644 UPS.Input.Frequency
+        // powercom-hid.c:634 UPS.Input.Frequency
         { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:646 UPS.Output.Voltage
+        // powercom-hid.c:636 UPS.Output.Voltage
         { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:647 UPS.Output.ConfigVoltage
+        // powercom-hid.c:637 UPS.Output.ConfigVoltage
         { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", HU_FLAG_STATIC, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:648 UPS.Output.Frequency
+        // powercom-hid.c:638 UPS.Output.Frequency
         { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", 0, Conv::Number, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:651 UPS.POWERCOM1
+        // powercom-hid.c:641 UPS.POWERCOM1
         { "unmapped.ups.powercom1", 0, 0, "UPS.0x0084002F", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:652 UPS.POWERCOM2
+        // powercom-hid.c:642 UPS.POWERCOM2
         { "unmapped.ups.powercom2", 0, 0, "UPS.0xFF860060", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:653 UPS.PowerSummary.Rechargeable
+        // powercom-hid.c:643 UPS.PowerSummary.Rechargeable
         { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:654 UPS.ShutdownImminent
+        // powercom-hid.c:644 UPS.ShutdownImminent
         { "unmapped.ups.shutdownimminent", 0, 0, "UPS.ShutdownImminent", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:658 UPS.PowerSummary.AudibleAlarmControl, not used: HidControl::buildCommands builds beeper.toggle from beeper.enable and beeper.disable
+        // powercom-hid.c:648 UPS.PowerSummary.AudibleAlarmControl, not used: HidControl::buildCommands builds beeper.toggle from beeper.enable and beeper.disable
         { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:659 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 1)
+        // powercom-hid.c:649 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 1)
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:660 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 0)
+        // powercom-hid.c:650 UPS.PowerSummary.AudibleAlarmControl (written through encodeBeeperValue(), same 0)
         { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:661 UPS.Battery.Test
+        // powercom-hid.c:651 UPS.Battery.Test
         { "test.battery.start.quick", 0, 0, "UPS.Battery.Test", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:662 UPS.PowerSummary.DelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
+        // powercom-hid.c:652 UPS.PowerSummary.DelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
         { "load.on.delay", 0, 0, "UPS.PowerSummary.DelayBeforeStartup", nullptr, HU_TYPE_CMD, Conv::PowercomStartup, nullptr, 0 },
-        // powercom-hid.c:663 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
+        // powercom-hid.c:653 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
         { "shutdown.return", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", nullptr, HU_TYPE_CMD, Conv::PowercomShutdown, nullptr, 0 },
-        // powercom-hid.c:664 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        // powercom-hid.c:654 UPS.PowerSummary.DelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
         { "shutdown.stayoff", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", nullptr, HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:665 UPS.PowerSummary.PCMDelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
+        // powercom-hid.c:655 UPS.PowerSummary.PCMDelayBeforeStartup, not exposed: shutdownCommandsSupported() is false (US-058, powercom_startup_info not ported)
         { "load.on", 0, 0, "UPS.PowerSummary.0x00FF0056", "0", HU_TYPE_CMD, Conv::PowercomStartup, nullptr, 0 },
-        // powercom-hid.c:666 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        // powercom-hid.c:656 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
         { "load.off", 0, 0, "UPS.PowerSummary.0x00FF0057", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:667 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
+        // powercom-hid.c:657 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_shutdown_info not ported)
         { "shutdown.return", 0, 0, "UPS.PowerSummary.0x00FF0057", nullptr, HU_TYPE_CMD, Conv::PowercomShutdown, nullptr, 0 },
-        // powercom-hid.c:668 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
+        // powercom-hid.c:658 UPS.PowerSummary.PCMDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058, powercom_stayoff_info not ported)
         { "shutdown.stayoff", 0, 0, "UPS.PowerSummary.0x00FF0057", nullptr, HU_TYPE_CMD, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:670 PowercomUPS.PowercomSerialNumber
+        // powercom-hid.c:660 PowercomUPS.PowercomSerialNumber
         { "ups.serial", 0, 0, "0x00020004.0x00020086", "%s", 0, Conv::StringId, nullptr, 0 },
-        // powercom-hid.c:671 PowercomUPS.PowercomManufacturerName
+        // powercom-hid.c:661 PowercomUPS.PowercomManufacturerName
         { "ups.mfr", 0, 0, "0x00020004.0x00020087", "%s", 0, Conv::StringId, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:673 PowercomUPS.PowercomDesignCapacity
+        // powercom-hid.c:663 PowercomUPS.PowercomDesignCapacity
         { "UPS.DesignCapacity", 0, 0, "0x00020004.0x00020083", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:675 PowercomUPS.PowercomManufacturerDate
+        // powercom-hid.c:665 PowercomUPS.PowercomManufacturerDate
         { "ups.mfr.date", 0, 0, "0x00020004.0x00020085", "%s", 0, Conv::BatteryDate, nullptr, 0 },
-        // powercom-hid.c:676 PowercomUPS.PowercomBatterySystem.PowercomTemperature
+        // powercom-hid.c:666 PowercomUPS.PowercomBatterySystem.PowercomTemperature
         { "battery.temperature", 0, 0, "0x00020004.0x00020010.0x00020036", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:677 UPS.Battery.Temperature
+        // powercom-hid.c:667 UPS.Battery.Temperature
         { "battery.temperature", 0, 0, "UPS.Battery.Temperature", "%.1f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:678 PowercomUPS.PowercomBatterySystem.PowercomVoltage
+        // powercom-hid.c:668 PowercomUPS.PowercomBatterySystem.PowercomVoltage
         { "battery.charge", 0, 0, "0x00020004.0x00020010.0x00020030", "%.0f", 0, Conv::Number, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:680 PowercomUPS.PowercomBatterySystem.PowercomSpecificationInfo
+        // powercom-hid.c:670 PowercomUPS.PowercomBatterySystem.PowercomSpecificationInfo
         { "UPS.BatterySystem.SpecificationInfo", 0, 0, "0x00020004.0x00020010.0x00020084", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:682 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomFrequency
+        // powercom-hid.c:672 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomFrequency
         { "input.frequency", 0, 0, "0x00020004.0x00020016.0x0002001A.0x00020032", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:683 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomVoltage
+        // powercom-hid.c:673 PowercomUPS.PowercomPowerConverter.PowercomInput.PowercomVoltage
         { "input.voltage", 0, 0, "0x00020004.0x00020016.0x0002001A.0x00020030", "%.0f", 0, Conv::PowercomVoltage, nullptr, 0 },
-        // powercom-hid.c:684 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomVoltage
+        // powercom-hid.c:674 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomVoltage
         { "output.voltage", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020030", "%.0f", 0, Conv::PowercomVoltage, nullptr, 0 },
-        // powercom-hid.c:685 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPercentLoad
+        // powercom-hid.c:675 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPercentLoad
         { "ups.load", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020035", "%.0f", 0, Conv::Number, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:697 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        // powercom-hid.c:687 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
         { "UPS.PowerConverter.Output.InternalChargeController", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:699 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        // powercom-hid.c:689 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomUpsfail, nullptr, 0 },
-        // powercom-hid.c:700 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        // powercom-hid.c:690 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomReplacebatt, nullptr, 0 },
-        // powercom-hid.c:701 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        // powercom-hid.c:691 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomTest, nullptr, 0 },
-        // powercom-hid.c:702 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
+        // powercom-hid.c:692 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomInternalChargeController
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020081", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomShutdownimm, nullptr, 0 },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:714 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:704 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "UPS.PowerConverter.Output.PrimaryBatterySupport", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // powercom-hid.c:716 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:706 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomOnline, nullptr, 0 },
-        // powercom-hid.c:718 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:708 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomLowbatt, nullptr, 0 },
-        // powercom-hid.c:719 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:709 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomTrim, nullptr, 0 },
-        // powercom-hid.c:720 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:710 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomBoost, nullptr, 0 },
-        // powercom-hid.c:721 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
+        // powercom-hid.c:711 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomPrimaryBatterySupport
         { "BOOL", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020082", nullptr, HU_FLAG_QUICK_POLL, Conv::PowercomOverload, nullptr, 0 },
-        // powercom-hid.c:722 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomFrequency
+        // powercom-hid.c:712 PowercomUPS.PowercomPowerConverter.PowercomOutput.PowercomFrequency
         { "output.frequency", 0, 0, "0x00020004.0x00020016.0x0002001C.0x00020032", "%.0f", 0, Conv::Number, nullptr, 0 },
-        // powercom-hid.c:723 PowercomUPS.PowercomPowerConverter.PowercomTest
+        // powercom-hid.c:713 PowercomUPS.PowercomPowerConverter.PowercomTest
         { "ups.test.result", 0, 0, "0x00020004.0x00020016.0x00020058", "%s", 0, Conv::Lookup, NUT_LKP(kTestRead) },
 #if WITH_UNMAPPED_DATA_POINTS
-        // powercom-hid.c:725 PowercomUPS.PowercomPowerConverter.PowercomShutdownRequested
+        // powercom-hid.c:715 PowercomUPS.PowercomPowerConverter.PowercomShutdownRequested
         { "UPS.PowerConverter.ShutdownRequested", 0, 0, "0x00020004.0x00020016.0x00020068", "%.0f", 0, Conv::Number, nullptr, 0 },
 #endif
-        // ups.delay.shutdown (powercom-hid.c:727) excluded: ups.delay.* are the configured delays, not device values (US-058)
-        // ups.delay.start (powercom-hid.c:728) excluded: ups.delay.* are the configured delays, not device values (US-058)
-        // powercom-hid.c:729 PowercomUPS.PowercomPowerConverter.PowercomDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058)
+        // ups.delay.shutdown (powercom-hid.c:717) excluded: ups.delay.* are the configured delays, not device values (US-058)
+        // ups.delay.start (powercom-hid.c:718) excluded: ups.delay.* are the configured delays, not device values (US-058)
+        // powercom-hid.c:719 PowercomUPS.PowercomPowerConverter.PowercomDelayBeforeShutdown, not exposed: shutdownCommandsSupported() is false (US-058)
         { "load.off", 0, 0, "0x00020004.0x00020016.0x00020057", "0", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
@@ -3123,9 +3134,13 @@ inline const HidInfo* legrandHid2Nut(size_t& n) {
         // legrand-hid.c:180 UPS.Output.Test
         { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
         // legrand-hid.c:183 UPS.PowerSummary.AudibleAlarmControl
-        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        { "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "%s", HU_FLAG_SEMI_STATIC, Conv::Lookup, NUT_LKP(kBeeperInfo) },
         // legrand-hid.c:184 UPS.PowerSummary.AudibleAlarmControl
-        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:185 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // legrand-hid.c:186 UPS.PowerSummary.AudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;
@@ -3282,7 +3297,7 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
         // apc-hid.c:398 UPS.PowerSummary.ShutdownImminent
         { "BOOL", 0, 0, "UPS.PowerSummary.ShutdownImminent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kShutdownimmInfo) },
-        // ecoflow-hid.c:150 UPS.PowerSummary.PresentStatus.CommunicationLost (idowell-hid.c:101):
+        // ecoflow-hid.c:153 UPS.PowerSummary.PresentStatus.CommunicationLost (idowell-hid.c:101):
         // commfault, no longer the ups.status.comm_lost key of the hand-written mapping
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.CommunicationLost", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kCommfaultInfo) },
         // esp32-nut: PowerSummary.CommunicationLost outside PresentStatus, as the Back-UPS 500 flags of apc-hid.c:394-398
@@ -3291,57 +3306,57 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BatteryPresent", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kNobatteryInfo) },
         // apc-hid.c:391 UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.RemainingTimeLimitExpired", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTimelimitexpiredInfo) },
-        // cps-hid.c:399 UPS.PowerSummary.PresentStatus.FullyCharged
+        // cps-hid.c:415 UPS.PowerSummary.PresentStatus.FullyCharged
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyCharged", nullptr, HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kFullychargedInfo) },
-        // ecoflow-hid.c:158 UPS.PowerSummary.PresentStatus.FullyDischarged
+        // ecoflow-hid.c:161 UPS.PowerSummary.PresentStatus.FullyDischarged
         { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.FullyDischarged", nullptr, HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kDepletedInfo) },
 
         // Input and output
-        // esp32-nut: PowerConverter.Input.Voltage without the [1] of mge-hid.c:2163
+        // esp32-nut: PowerConverter.Input.Voltage without the [1] of mge-hid.c:2177
         { "input.voltage", 0, 0, "UPS.PowerConverter.Input.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:407 UPS.Input.Voltage
         { "input.voltage", 0, 0, "UPS.Input.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // esp32-nut: UPS.Flow.Voltage, as the line voltage of a device without Input collection
         { "input.voltage", 0, 0, "UPS.Flow.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // esp32-nut: PowerConverter.Input.Frequency without the [1] of mge-hid.c:2176
+        // esp32-nut: PowerConverter.Input.Frequency without the [1] of mge-hid.c:2190
         { "input.frequency", 0, 0, "UPS.PowerConverter.Input.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // esp32-nut: UPS.Input.Frequency, the path of cps-hid.c:408 without cps_input_freq
+        // esp32-nut: UPS.Input.Frequency, the path of cps-hid.c:424 without cps_input_freq
         { "input.frequency", 0, 0, "UPS.Input.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // esp32-nut: UPS.Flow.Frequency, as UPS.Flow.Voltage
         { "input.frequency", 0, 0, "UPS.Flow.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2225 UPS.PowerConverter.Output.Voltage
+        // mge-hid.c:2239 UPS.PowerConverter.Output.Voltage
         { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:417 UPS.Output.Voltage
         { "output.voltage", 0, 0, "UPS.Output.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2238 UPS.PowerConverter.Output.Frequency
+        // mge-hid.c:2252 UPS.PowerConverter.Output.Frequency
         { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:420 UPS.Output.Frequency
         { "output.frequency", 0, 0, "UPS.Output.Frequency", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2084 UPS.PowerConverter.Output.ActivePower
+        // mge-hid.c:2098 UPS.PowerConverter.Output.ActivePower
         { "ups.realpower", 0, 0, "UPS.PowerConverter.Output.ActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:384 UPS.Output.ActivePower
+        // cps-hid.c:400 UPS.Output.ActivePower
         { "ups.realpower", 0, 0, "UPS.Output.ActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2079 UPS.PowerConverter.Output.ApparentPower
+        // mge-hid.c:2093 UPS.PowerConverter.Output.ApparentPower
         { "ups.power", 0, 0, "UPS.PowerConverter.Output.ApparentPower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:382 UPS.Output.ApparentPower
+        // cps-hid.c:398 UPS.Output.ApparentPower
         { "ups.power", 0, 0, "UPS.Output.ApparentPower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
 
         // Battery
         // apc-hid.c:342 UPS.PowerSummary.Voltage
         { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2023 UPS.BatterySystem.Voltage
+        // mge-hid.c:2037 UPS.BatterySystem.Voltage
         { "battery.voltage", 0, 0, "UPS.BatterySystem.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:341 UPS.Battery.Voltage
         { "battery.voltage", 0, 0, "UPS.Battery.Voltage", "%.1f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2012 UPS.PowerSummary.RemainingCapacity
+        // mge-hid.c:2026 UPS.PowerSummary.RemainingCapacity
         { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2014 UPS.PowerSummary.RemainingCapacityLimit (read only)
+        // mge-hid.c:2028 UPS.PowerSummary.RemainingCapacityLimit (read only)
         { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2017 UPS.PowerSummary.RunTimeToEmpty
+        // mge-hid.c:2031 UPS.PowerSummary.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:337 UPS.Battery.RunTimeToEmpty
         { "battery.runtime", 0, 0, "UPS.Battery.RunTimeToEmpty", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2064 UPS.PowerSummary.PercentLoad
+        // mge-hid.c:2078 UPS.PowerSummary.PercentLoad
         { "ups.load", 0, 0, "UPS.PowerSummary.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:375 UPS.PowerSummary.ManufacturerDate
         { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", HU_FLAG_ANY_INDEX, Conv::BatteryDate, nullptr, 0 },
@@ -3353,21 +3368,21 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "battery.mfr.date", 0, 0, "UPS.BatterySystem.Battery.Date", "%s", HU_FLAG_ANY_INDEX, Conv::StringId, nullptr, 0 },
         // esp32-nut: as above, Battery collection directly under UPS
         { "battery.mfr.date", 0, 0, "UPS.Battery.Date", "%s", HU_FLAG_ANY_INDEX, Conv::StringId, nullptr, 0 },
-        // mge-hid.c:2078 UPS.PowerSummary.Temperature
+        // mge-hid.c:2092 UPS.PowerSummary.Temperature
         { "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", "%s", HU_FLAG_ANY_INDEX, Conv::KelvinCelsius, nullptr, 0 },
         // apc-hid.c:345 UPS.Battery.Temperature
         { "battery.temperature", 0, 0, "UPS.Battery.Temperature", "%s", HU_FLAG_ANY_INDEX, Conv::KelvinCelsius, nullptr, 0 },
         // esp32-nut: PowerConverter.Output.PercentLoad, the load of a PowerConverter collection
         { "ups.load", 0, 0, "UPS.PowerConverter.Output.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:379 UPS.Output.PercentLoad
+        // cps-hid.c:395 UPS.Output.PercentLoad
         { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2016 UPS.BatterySystem.Battery.DesignCapacity
+        // mge-hid.c:2030 UPS.BatterySystem.Battery.DesignCapacity
         { "battery.capacity", 0, 0, "UPS.BatterySystem.Battery.DesignCapacity", "%s", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::MgeBatteryCapacity, nullptr, 0 },
         // battery.capacity.full (UPS.BatterySystem.Battery.FullChargeCapacity) removed: not in
         // docs/nut-names.txt (ADR 0011 rule 2)
 
         // Nominal values
-        // esp32-nut: UPS.Flow.ConfigActivePower, Flow without the [4] of mge-hid.c:2091
+        // esp32-nut: UPS.Flow.ConfigActivePower, Flow without the [4] of mge-hid.c:2105
         { "ups.realpower.nominal", 0, 0, "UPS.Flow.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:376 UPS.PowerConverter.ConfigActivePower
         { "ups.realpower.nominal", 0, 0, "UPS.PowerConverter.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
@@ -3375,9 +3390,9 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "ups.realpower.nominal", 0, 0, "UPS.Output.ConfigActivePower", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // tripplite-hid.c:377 UPS.Flow.ConfigApparentPower
         { "ups.power.nominal", 0, 0, "UPS.Flow.ConfigApparentPower", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:374 UPS.PowerSummary.ConfigVoltage
+        // cps-hid.c:390 UPS.PowerSummary.ConfigVoltage
         { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // esp32-nut: UPS.Battery.ConfigVoltage, the path of apc-hid.c:343 with "%.0f" as cps-hid.c:374
+        // esp32-nut: UPS.Battery.ConfigVoltage, the path of apc-hid.c:343 with "%.0f" as cps-hid.c:390
         { "battery.voltage.nominal", 0, 0, "UPS.Battery.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // belkin-hid.c:519 UPS.Flow.ConfigVoltage
         { "input.voltage.nominal", 0, 0, "UPS.Flow.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
@@ -3385,7 +3400,7 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "input.voltage.nominal", 0, 0, "UPS.Input.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // esp32-nut: PowerConverter.Output.ConfigVoltage, as PowerConverter.Output.Voltage
         { "output.voltage.nominal", 0, 0, "UPS.PowerConverter.Output.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:423 UPS.Output.ConfigVoltage
+        // cps-hid.c:439 UPS.Output.ConfigVoltage
         { "output.voltage.nominal", 0, 0, "UPS.Output.ConfigVoltage", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // idowell-hid.c:132 UPS.PowerConverter.Output.HighVoltageTransfer
         { "input.transfer.high", 0, 0, "UPS.PowerConverter.Output.HighVoltageTransfer", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
@@ -3393,35 +3408,35 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "input.transfer.low", 0, 0, "UPS.PowerConverter.Output.LowVoltageTransfer", "%.0f", HU_FLAG_STATIC | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
 
         // ups.beeper.status (beeper_info on UPS.PowerSummary.AudibleAlarmControl,
-        // UPS.BatterySystem.Battery.AudibleAlarmControl and UPS.AudibleAlarmControl, mge-hid.c:2075-2077)
+        // UPS.BatterySystem.Battery.AudibleAlarmControl and UPS.AudibleAlarmControl, mge-hid.c:2089-2091)
         // is not a row: GenericDriver::decodeBeeperStatus() reads the active beeper only, with the
         // 1-bit fields as on/off (ADR 0011 rule 1, beeper encoding)
 
         // Tests and timers
-        // mge-hid.c:2071 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2085 UPS.BatterySystem.Battery.Test
         { "ups.test.result", 0, 0, "UPS.BatterySystem.Battery.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
         // apc-hid.c:372 UPS.Battery.Test
         { "ups.test.result", 0, 0, "UPS.Battery.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
-        // cps-hid.c:381 UPS.Output.Test
+        // cps-hid.c:397 UPS.Output.Test
         { "ups.test.result", 0, 0, "UPS.Output.Test", "%s", HU_FLAG_ANY_INDEX, Conv::Lookup, NUT_LKP(kTestRead) },
-        // mge-hid.c:2069 UPS.PowerSummary.DelayBeforeShutdown; ups.delay.* are the configured
+        // mge-hid.c:2083 UPS.PowerSummary.DelayBeforeShutdown; ups.delay.* are the configured
         // delays (genericDelayPaths(), applyDefaultDelays)
         { "ups.timer.shutdown", 0, 0, "UPS.PowerSummary.DelayBeforeShutdown", "%.0f", HU_FLAG_QUICK_POLL | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:409 UPS.Output.LowVoltageTransfer, read only here
         { "input.transfer.low", 0, 0, "UPS.Output.LowVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:411 UPS.Input.LowVoltageTransfer, read only here
+        // cps-hid.c:427 UPS.Input.LowVoltageTransfer, read only here
         { "input.transfer.low", 0, 0, "UPS.Input.LowVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:410 UPS.Output.HighVoltageTransfer, read only here
         { "input.transfer.high", 0, 0, "UPS.Output.HighVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:412 UPS.Input.HighVoltageTransfer, read only here
+        // cps-hid.c:428 UPS.Input.HighVoltageTransfer, read only here
         { "input.transfer.high", 0, 0, "UPS.Input.HighVoltageTransfer", "%.0f", HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
 
         // Instant commands (HidControl): the rows of the subdrivers that have each path
-        // mge-hid.c:2326 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2340 UPS.BatterySystem.Battery.Test
         { "test.battery.start.quick", 0, 0, "UPS.BatterySystem.Battery.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2327 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2341 UPS.BatterySystem.Battery.Test
         { "test.battery.start.deep", 0, 0, "UPS.BatterySystem.Battery.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2328 UPS.BatterySystem.Battery.Test
+        // mge-hid.c:2342 UPS.BatterySystem.Battery.Test
         { "test.battery.stop", 0, 0, "UPS.BatterySystem.Battery.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:435 UPS.Battery.Test
         { "test.battery.start.quick", 0, 0, "UPS.Battery.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
@@ -3429,11 +3444,11 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "test.battery.start.deep", 0, 0, "UPS.Battery.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:439 UPS.Battery.Test
         { "test.battery.stop", 0, 0, "UPS.Battery.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:426 UPS.Output.Test
+        // cps-hid.c:442 UPS.Output.Test
         { "test.battery.start.quick", 0, 0, "UPS.Output.Test", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:427 UPS.Output.Test
+        // cps-hid.c:443 UPS.Output.Test
         { "test.battery.start.deep", 0, 0, "UPS.Output.Test", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // cps-hid.c:428 UPS.Output.Test
+        // cps-hid.c:444 UPS.Output.Test
         { "test.battery.stop", 0, 0, "UPS.Output.Test", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:440 UPS.APCPanelTest
         { "test.panel.start", 0, 0, "UPS.0xFF860072", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
@@ -3467,23 +3482,23 @@ inline const HidInfo* genericHid2Nut(size_t& n) {
         { "shutdown.stop", 0, 0, "UPS.0xFF860005.0xFF86007D", "-1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // apc-hid.c:459 UPS.APCGeneralCollection.APCDelayBeforeReboot
         { "shutdown.reboot", 0, 0, "UPS.0xFF860005.0xFF86007C", "10", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // apc-hid.c:461 UPS.Output.APCDelayBeforeReboot (Back-UPS CS)
+        // apc-hid.c:468 UPS.Output.APCDelayBeforeReboot (Back-UPS CS)
         { "shutdown.return", 0, 0, "UPS.Output.0xFF86007C", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2337 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2351 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2338 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2352 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.mute", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "3", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2339 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2353 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2340 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2354 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2341 UPS.BatterySystem.Battery.AudibleAlarmControl
+        // mge-hid.c:2355 UPS.BatterySystem.Battery.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2342 UPS.PowerSummary.AudibleAlarmControl
+        // mge-hid.c:2356 UPS.PowerSummary.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2343 UPS.AudibleAlarmControl
+        // mge-hid.c:2357 UPS.AudibleAlarmControl
         { "beeper.disable", 0, 0, "UPS.AudibleAlarmControl", "1", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
-        // mge-hid.c:2344 UPS.AudibleAlarmControl
+        // mge-hid.c:2358 UPS.AudibleAlarmControl
         { "beeper.enable", 0, 0, "UPS.AudibleAlarmControl", "2", HU_TYPE_CMD | HU_FLAG_ANY_INDEX, Conv::Number, nullptr, 0 },
         // esp32-nut: beeper.mute on UPS.AudibleAlarmControl as on the other two paths (mge-hid.c has
         // no row; before US-079 the beeper commands used the active beeper, any of the three)

@@ -7,6 +7,16 @@
 #include <fstream>
 #include <set>
 #include <sstream>
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(p) _mkdir(p)
+#define RMDIR(p) _rmdir(p)
+#else
+#include <sys/stat.h>
+#define MKDIR(p) mkdir(p, 0755)
+#include <unistd.h>
+#define RMDIR(p) rmdir(p)
+#endif
 
 // Counts the allocations of this suite (US-073 rework): String is std::string in the mock,
 // whose texts longer than 15 characters go to the heap
@@ -152,7 +162,7 @@ void test_plain_lookups() {
 }
 
 void test_model_types() {
-    // mge_model_names (mge-hid.c:1760-1990)
+    // mge_model_names (mge-hid.c:1760-2004)
     TEST_ASSERT_EQUAL_HEX(MGE_3S, mgeModelType("3S", "700"));
     TEST_ASSERT_EQUAL_HEX(MGE_DEFAULT_OFFLINE, mgeModelType("3S", "550"));
     TEST_ASSERT_EQUAL_HEX(EATON_5P, mgeModelType("Eaton 5P", "1550"));
@@ -344,7 +354,7 @@ void test_internal_rows_always_active() {
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<Bound> b = bind(t, n, usages);
     // BOOL ACPresent, Good, device.country, battery.charge, and since US-074 outlet.1.status
-    // (mge-hid.c:2268, on_off_info on ACPresent for the low end models)
+    // (mge-hid.c:2282, on_off_info on ACPresent for the low end models)
     TEST_ASSERT_EQUAL(5, b.size());
     Context ctx;
     for (const Bound& x : b) {
@@ -410,7 +420,7 @@ void test_allocation_counter_sees_strings() {
 }
 
 void test_lookup_same_value_does_not_allocate() {
-    // mge-hid.c:2059, eaton_charger_type_info: 5 is "Constant Charge (CC)", 20 characters
+    // mge-hid.c:2073, eaton_charger_type_info: 5 is "Constant Charge (CC)", 20 characters
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Charger.0xFFFF006B", 0xffff006b, 3, 38) };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
@@ -427,7 +437,7 @@ void test_lookup_same_value_does_not_allocate() {
 }
 
 void test_abm_status_same_value_does_not_allocate() {
-    // mge-hid.c:2052, eaton_abm_status_fun on the Status path: 4 is "discharging"
+    // mge-hid.c:2066, eaton_abm_status_fun on the Status path: 4 is "discharging"
     std::vector<HIDUsageDef> usages = { mk("UPS.BatterySystem.Charger.0xFFFF00E9", 0xffff00e9, 3, 7) };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
@@ -645,7 +655,7 @@ void test_apc_status_lookups() {
 // --- powercom-hid.c conversions (US-077)
 
 void test_powercom_status_functions() {
-    // powercom-hid.c:308-423: one bit (or the AVR pair 0x18) of a status byte per function
+    // powercom-hid.c:298-413: one bit (or the AVR pair 0x18) of a status byte per function
     struct Case { Conv conv; double on; const char* on_token; double off; const char* off_token; };
     static const Case cases[] = {
         { Conv::PowercomUpsfail, 0x01, "fanfail", 0x02, "!fanfail" },
@@ -855,19 +865,19 @@ void test_command_rows_never_published() {
 
 void test_alarm_rows_of_mge_table() {
     static const struct { const char* path; const char* text; } rows[] = {
-        { "UPS.PowerSummary.PresentStatus.0xFFFF0068", "Emergency stop!" },                         // mge-hid.c:2155
-        { "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078", "Wiring fault!" },               // mge-hid.c:2156
-        { "UPS.PowerSummary.PresentStatus.0xFFFF002D", "Fatal EEPROM fault!" },                     // mge-hid.c:2157
-        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074", "Inverter AC voltage too high!" }, // mge-hid.c:2158
-        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075", "Inverter AC voltage too low!" },  // mge-hid.c:2159
-        { "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", "Output short circuit!" },          // mge-hid.c:2160
+        { "UPS.PowerSummary.PresentStatus.0xFFFF0068", "Emergency stop!" },                         // mge-hid.c:2169
+        { "UPS.PowerConverter.Input.[1].PresentStatus.0xFFFF0078", "Wiring fault!" },               // mge-hid.c:2170
+        { "UPS.PowerSummary.PresentStatus.0xFFFF002D", "Fatal EEPROM fault!" },                     // mge-hid.c:2171
+        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0074", "Inverter AC voltage too high!" }, // mge-hid.c:2172
+        { "UPS.PowerConverter.0xFFFF0014.PresentStatus.0xFFFF0075", "Inverter AC voltage too low!" },  // mge-hid.c:2173
+        { "UPS.PowerConverter.Output.PresentStatus.0xFFFF004A", "Output short circuit!" },          // mge-hid.c:2174
     };
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
     size_t count = 0;
     for (size_t i = 0; i < n; i++) {
         if (!isAlarmRow(t[i])) continue;
-        TEST_ASSERT_TRUE_MESSAGE(count < 6, "more ups.alarm rows than mge-hid.c:2155-2160");
+        TEST_ASSERT_TRUE_MESSAGE(count < 6, "more ups.alarm rows than mge-hid.c:2169-2174");
         TEST_ASSERT_EQUAL_STRING(rows[count].path, t[i].hidpath);
         TEST_ASSERT_TRUE(isInternalRow(t[i]));
         TEST_ASSERT_EQUAL(0, t[i].info_flags & ST_FLAG_RW); // never in LIST RW
@@ -1018,6 +1028,115 @@ static std::vector<std::string> readLines(const char* path) {
     std::string line;
     while (std::getline(f, line)) lines.push_back(line);
     return lines;
+}
+
+// --- Commit of nut_repo the citations are written for (US-143) ---
+
+static std::string firstWord(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_first_of(" \t\r", a);
+    return s.substr(a, b == std::string::npos ? std::string::npos : b - a);
+}
+
+static bool isHash(const std::string& s) {
+    if (s.size() != 40) return false;
+    for (char c : s) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+// The git directory of nut_repo: nut_repo/.git, or the "gitdir:" of a nut_repo/.git file
+// (a worktree or a submodule). Empty when nut_repo is missing.
+static std::string nutRepoGitDir() {
+    if (std::ifstream("nut_repo/.git/HEAD").is_open()) return "nut_repo/.git";
+    std::ifstream f("nut_repo/.git");
+    std::string line;
+    if (f.is_open() && std::getline(f, line) && line.compare(0, 7, "gitdir:") == 0) {
+        std::string dir = firstWord(line.substr(7));
+        if (!dir.empty() && dir[0] != '/' && !(dir.size() > 1 && dir[1] == ':')) dir = "nut_repo/" + dir;
+        if (std::ifstream(dir + "/HEAD").is_open()) return dir;
+    }
+    return "";
+}
+
+// HEAD of nut_repo as a 40-character hash: detached HEAD, loose ref or packed-refs. Empty when
+// it cannot be read.
+static std::string nutRepoHead(const std::string& git_dir) {
+    std::ifstream head(git_dir + "/HEAD");
+    std::string line;
+    if (!std::getline(head, line)) return "";
+    if (isHash(firstWord(line))) return firstWord(line);
+    if (line.compare(0, 4, "ref:") != 0) return "";
+    std::string ref = firstWord(line.substr(4));
+    // A worktree keeps its refs in the common directory ("commondir")
+    std::vector<std::string> dirs = { git_dir };
+    std::ifstream common(git_dir + "/commondir");
+    std::string c;
+    if (std::getline(common, c) && !firstWord(c).empty()) {
+        std::string cd = firstWord(c);
+        dirs.push_back((cd[0] == '/' || (cd.size() > 1 && cd[1] == ':')) ? cd : git_dir + "/" + cd);
+    }
+    for (const std::string& d : dirs) {
+        std::ifstream loose(d + "/" + ref);
+        if (std::getline(loose, line) && isHash(firstWord(line))) return firstWord(line);
+        std::ifstream packed(d + "/packed-refs");
+        while (std::getline(packed, line)) {
+            if (line.empty() || line[0] == '#' || line[0] == '^') continue;
+            size_t sp = line.find(' ');
+            if (sp != std::string::npos && firstWord(line.substr(sp + 1)) == ref && isHash(line.substr(0, sp))) {
+                return line.substr(0, sp);
+            }
+        }
+    }
+    return "";
+}
+
+// The citations of NutTable.h are line numbers of one NUT commit (nut_repo.commit): with
+// nut_repo elsewhere the coverage cases below would fail on renumbered lines without saying why
+void test_nut_repo_matches_reference_commit() {
+    std::ifstream f("nut_repo.commit");
+    std::string expected;
+    TEST_ASSERT_TRUE_MESSAGE(f.is_open() && std::getline(f, expected), "cannot read nut_repo.commit");
+    expected = firstWord(expected);
+    TEST_ASSERT_TRUE_MESSAGE(isHash(expected), "the first line of nut_repo.commit is not a 40-character commit hash");
+
+    std::string git_dir = nutRepoGitDir();
+    std::string msg = "nut_repo missing: clone networkupstools/nut into nut_repo and check out " + expected;
+    TEST_ASSERT_TRUE_MESSAGE(!git_dir.empty(), msg.c_str());
+    std::string head = nutRepoHead(git_dir);
+    msg = "cannot read the commit of nut_repo (" + git_dir + "/HEAD); expected " + expected;
+    TEST_ASSERT_TRUE_MESSAGE(!head.empty(), msg.c_str());
+    msg = "nut_repo is at " + head + ", NutTable.h citations are written for " + expected + " (nut_repo.commit)";
+    TEST_ASSERT_TRUE_MESSAGE(head == expected, msg.c_str());
+}
+
+// nutRepoHead() on the three forms of HEAD, in a git directory written by the test
+void test_nut_repo_head_reads_detached_loose_and_packed() {
+    const char* tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMPDIR");
+    std::string dir = std::string(tmp ? tmp : ".") + "/us143_git";
+    const std::string a = "1c4ab78c615a7b2b8231bdb023d553abd64b541d";
+    const std::string b = "6c63f7745ab58a8bde1725d94551b912c550ac58";
+    for (const std::string& d : { dir, dir + "/refs", dir + "/refs/heads" }) MKDIR(d.c_str());
+    auto write = [](const std::string& path, const std::string& text) {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        TEST_ASSERT_TRUE_MESSAGE(out.is_open(), path.c_str());
+        out << text;
+    };
+    write(dir + "/HEAD", a + "\n");  // detached
+    TEST_ASSERT_EQUAL_STRING(a.c_str(), nutRepoHead(dir).c_str());
+    write(dir + "/HEAD", "ref: refs/heads/master\n");
+    write(dir + "/packed-refs", "# pack-refs with: peeled fully-peeled sorted \n" + b + " refs/remotes/origin/master\n" +
+                                a + " refs/heads/master\n^" + b + "\n");
+    TEST_ASSERT_EQUAL_STRING(a.c_str(), nutRepoHead(dir).c_str());  // packed-refs only
+    write(dir + "/refs/heads/master", b + "\n");
+    TEST_ASSERT_EQUAL_STRING(b.c_str(), nutRepoHead(dir).c_str());  // the loose ref wins
+    write(dir + "/HEAD", "ref: refs/heads/other\n");
+    TEST_ASSERT_EQUAL_STRING("", nutRepoHead(dir).c_str());
+    for (const char* f : { "/refs/heads/master", "/packed-refs", "/HEAD" }) remove((dir + f).c_str());
+    for (const std::string& d : { dir + "/refs/heads", dir + "/refs", dir }) RMDIR(d.c_str());
 }
 
 static std::string joinNumbers(const std::vector<int>& v) {
@@ -1363,6 +1482,8 @@ void test_apply_default_delays_follows_paths(void) {
 
 int main(int argc, char** argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_nut_repo_matches_reference_commit);
+    RUN_TEST(test_nut_repo_head_reads_detached_loose_and_packed);
     RUN_TEST(test_generic_rows_publish_only_standard_names);
     RUN_TEST(test_generic_rows_cite_their_source);
     RUN_TEST(test_generic_rows_bind_a_standard_pdc_descriptor);

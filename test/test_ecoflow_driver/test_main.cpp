@@ -92,7 +92,7 @@ static void stringDescriptor(uint8_t index, const char* text) {
 
 static std::string status() { return UPSData::computeUPSStatusString(ups_data).c_str(); }
 
-// ecoflow-hid.c:193: RunTimeToEmpty is in minutes, ecoflow_runtime_conversion_lkp gives seconds
+// ecoflow-hid.c:196: RunTimeToEmpty is in minutes, ecoflow_runtime_conversion_lkp gives seconds
 void test_ecoflow_runtime_minutes_to_seconds(void) {
     addUsage("UPS.PowerSummary.RunTimeToEmpty", 0x0D, 1, 0, 16);
 
@@ -101,7 +101,7 @@ void test_ecoflow_runtime_minutes_to_seconds(void) {
     TEST_ASSERT_EQUAL_STRING("115680", ups_data.get("battery.runtime").c_str()); // 1928 * 60
 }
 
-// ecoflow-hid.c:130, 133, 184, 200: DesignCapacity and FullChargeCapacity are percentages;
+// ecoflow-hid.c:133, 136, 187, 203: DesignCapacity and FullChargeCapacity are percentages;
 // RemainingTimeLimit stays in minutes, as upstream (US-078 user decision of 2026-10-30)
 void test_ecoflow_capacity_and_warning_mappings(void) {
     addUsage("UPS.PowerSummary.DesignCapacity", 0x17, 3, 0, 8);
@@ -120,7 +120,7 @@ void test_ecoflow_capacity_and_warning_mappings(void) {
     TEST_ASSERT_EQUAL_STRING("600", ups_data.get("battery.runtime.low").c_str());
 }
 
-// ecoflow-hid.c:122 maps UPS.Flow.[4].ConfigActivePower to ups.power.nominal; the generic
+// ecoflow-hid.c:125 maps UPS.Flow.[4].ConfigActivePower to ups.power.nominal; the generic
 // mapping of the same usage to ups.realpower.nominal is kept (ADR 0011 rule 2)
 void test_ecoflow_config_active_power_keeps_generic_realpower_nominal(void) {
     addUsage("UPS.Flow.ConfigActivePower", 0x01, 3, 0, 16);
@@ -132,7 +132,7 @@ void test_ecoflow_config_active_power_keeps_generic_realpower_nominal(void) {
     TEST_ASSERT_EQUAL_STRING("260", ups_data.get("ups.realpower.nominal").c_str());
 }
 
-// Without the [4] index the usage is not the one of ecoflow-hid.c:122
+// Without the [4] index the usage is not the one of ecoflow-hid.c:125
 void test_ecoflow_config_active_power_needs_flow_index(void) {
     addUsage("UPS.Flow.ConfigActivePower", 0x01, 3, 0, 16);
 
@@ -142,7 +142,7 @@ void test_ecoflow_config_active_power_needs_flow_index(void) {
     TEST_ASSERT_EQUAL_STRING("260", ups_data.get("ups.realpower.nominal").c_str());
 }
 
-// ecoflow-hid.c:126-127
+// ecoflow-hid.c:129-130
 void test_ecoflow_outlet_timers(void) {
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeReboot", 0x13, 3, 0, 16);
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x12, 3, 0, 16);
@@ -154,7 +154,7 @@ void test_ecoflow_outlet_timers(void) {
     TEST_ASSERT_EQUAL_STRING("60", ups_data.get("ups.timer.shutdown").c_str());
 }
 
-// ecoflow-hid.c:135: iDeviceChemistry via stringid_conversion -> battery.type
+// ecoflow-hid.c:138: iDeviceChemistry via stringid_conversion -> battery.type
 void test_ecoflow_chemistry_string_descriptor(void) {
     addUsage("UPS.PowerSummary.iDeviceChemistry", 0x1F, 3, 0, 8);
 
@@ -233,7 +233,7 @@ void test_ecoflow_beeper_not_controllable(void) {
     TEST_ASSERT_FALSE(driver.beeperControllable());
 }
 
-// ecoflow-hid.c:114: ups.beeper.status from beeper_info
+// ecoflow-hid.c:117: ups.beeper.status from beeper_info
 void test_ecoflow_beeper_status(void) {
     addUsage("UPS.PowerSummary.AudibleAlarmControl", 0x02, 3, 0, 8);
 
@@ -245,7 +245,7 @@ void test_ecoflow_beeper_status(void) {
     TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
 }
 
-// ecoflow-hid.c:127 maps only UPS.OutletSystem.Outlet.DelayBeforeShutdown to
+// ecoflow-hid.c:130 maps only UPS.OutletSystem.Outlet.DelayBeforeShutdown to
 // ups.timer.shutdown; the PowerSummary usage is an unmapped row upstream, whatever the order
 void test_ecoflow_shutdown_timer_outlet_wins_when_outlet_first(void) {
     addUsage("UPS.OutletSystem.Outlet.DelayBeforeShutdown", 0x12, 3, 0, 16);
@@ -282,7 +282,7 @@ void test_ecoflow_shutdown_timer_absent_without_outlet(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.delay.shutdown"));
 }
 
-// ecoflow-hid.c:125 maps UPS.PowerSummary.ConfigVoltage with "%.1f" (issue 67)
+// ecoflow-hid.c:128 maps UPS.PowerSummary.ConfigVoltage with "%.1f" (issue 67)
 void test_ecoflow_battery_voltage_nominal_one_decimal(void) {
     addUsage("UPS.PowerSummary.ConfigVoltage", 0x08, 3, 0, 16);
     mockHost._usages.back().exponent = -2;
@@ -432,9 +432,9 @@ static const char* const kEcoflowPollBefore =
     "quick: 1/3 | full: 1/3 2/3 3/3 4/3 5/3 6/3 7/3 8/3 9/3 10/3 11/3 12/3 13/3 14/3 15/3 16/3 17/3";
 
 // After US-078, every value from ecoflowHid2Nut(). Differences from kEcoflowSnapshotBefore:
-// - battery.runtime.low 7200 -> 120: RemainingTimeLimit in minutes, as ecoflow-hid.c:184
+// - battery.runtime.low 7200 -> 120: RemainingTimeLimit in minutes, as ecoflow-hid.c:187
 //   (user decision of 2026-10-30);
-// - battery.voltage 51.00 -> 51.0: "%.1f" of ecoflow-hid.c:197;
+// - battery.voltage 51.00 -> 51.0: "%.1f" of ecoflow-hid.c:200;
 // - experimental.ups.powersummary.*: the active rows 136, 170, 172 and 173;
 // - ups.beeper.status: row 114 (beeper_info); the generic mapping did not publish it;
 // - ups.status.comm_lost -> ups.status.commfault: internal key of commfault_info (row 150),
@@ -505,7 +505,7 @@ void test_ecoflow_status_rows(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm"));
 }
 
-// The experimental.* rows of ecoflow-hid.c:136, 170, 172, 173 are published as upstream
+// The experimental.* rows of ecoflow-hid.c:139, 173, 175, 176 are published as upstream
 void test_ecoflow_experimental_rows(void) {
     ecoflowLayout();
     decode(3, { 1, 0x00, 0x30 }); // ShutdownRequested, VoltageNotRegulated

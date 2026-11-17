@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-143
+title: 'Tabelle HID allineate a NUT 1c4ab78: citazioni rinumerate, righe nuove e commit di riferimento'
+epic:
+  code: EP-001
+  title: Gestione USB Host
+priority: HIGH
+points: 5
+status: DONE
+body: |
+  #### US-143: Tabelle HID allineate a NUT 1c4ab78: citazioni rinumerate, righe nuove e commit di riferimento
+
+  **Epic:** EP-001 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore che porta le tabelle HID da NUT,
+  voglio le tabelle di `NutTable.h` allineate a NUT 1c4ab78 e il commit di riferimento scritto nel repo,
+  in modo che `test_nut_table` torni a controllare davvero la copertura delle righe upstream e che gli utenti APC BX, Legrand ed Eaton 5P Gen2 abbiano quello che NUT offre oggi.
+
+  **Dimostrazione**
+  Con `nut_repo` su 1c4ab78, `pio test -e native -f test_nut_table` passa: oggi falliscono 6 casi. Spostando `nut_repo` su un altro commit, il test dice in chiaro su quale commit si trova `nut_repo` e su quale sono scritte le citazioni. Su un Back-UPS BX*MI `shutdown.return` compare tra i comandi e scrive 1 su `APCDelayBeforeReboot`. Sui Legrand compaiono `beeper.mute` e lo stato `muted`.
+
+  **Contesto**
+  Il 17/11 `nut_repo` è passato da 6c63f77 (6 agosto; tag locale `esp32nut-base-2026-08-06`) a 1c4ab78 (23 ottobre). Le citazioni `xxx-hid.c:NNN` in `NutTable.h` puntano alle righe vecchie, quindi falliscono le coperture di mge, apc, cps, powercom, legrand ed ecoflow. La CI non esegue i test nativi e non se ne accorge. Upstream nel frattempo ha aggiunto:
+  - APC: `shutdown.return` su `UPS.APCGeneralCollection.APCDelayBeforeReboot` = "1" (NUT #2683). È l'unico spegnimento che il firmware dei BX esegue davvero: il "10" di `shutdown.reboot` viene accettato ma ignorato.
+  - Legrand: `ups.beeper.status` con `beeper_info`, `beeper.disable` = 1, `beeper.mute` = 3.
+  - mge: Eaton 5P Gen2 in `mge_model_names`.
+
+  **Criteri di Accettazione**
+  - [ ] Le citazioni `<file>-hid.c:N` e `:N-M` di `NutTable.h` puntano alle righe di 1c4ab78. La corrispondenza tra righe vecchie e nuove si ricava dal diff `esp32nut-base-2026-08-06..1c4ab78`, non a mano riga per riga. Le righe upstream eliminate o cambiate si trattano come nella regola 1 di ADR 0011: se cambiano davvero, si aggiornano. Lo stesso vale per le citazioni di quei sei file nei commenti degli altri sorgenti di `lib/USBHostUPS/src`.
+  - [ ] Con `nut_repo` su 1c4ab78, tutti i casi di `test_nut_table` passano.
+  - [ ] APC: nuova riga `shutdown.return` su `UPS.0xFF860005.0xFF86007C` con valore 1, nella posizione upstream e con la citazione. Il comando si offre solo se l'UPS ha quel campo. Come in NUT, su quegli UPS vince la riga diretta e non si usa più `shutdown.return` composto (load.on.delay più load.off.delay). Un test lo verifica con un descrittore BX.
+  - [ ] Legrand: righe di `ups.beeper.status`, `beeper.disable` = 1 e `beeper.mute` = 3 come in legrand-hid.c. Lo stato si decodifica con `beeper_info` (1 disabled, 2 enabled, 3 muted) come negli altri driver. Spariscono l'override `decodeBeeperStatus` e `beeperMuteSupported() = false`, e la deviazione 2 esce dall'intestazione di `LegrandDriver.cpp`. `beeper.toggle` resta (deviazione 3). I test Legrand esistenti si aggiornano sui nuovi valori.
+  - [ ] mge: le 8 voci Eaton 5P Gen2 (650/850/1150/1550 `i G2` e `iR G2`) entrano in `mge_model_names` nell'ordine upstream, con tipo `EATON_5P`. Un test verifica che "Eaton 5P 1150i G2" dia `EATON_5P`.
+  - [ ] Il commit di riferimento (1c4ab78) è scritto in un file del repo, citato dalla regola di copia di ADR 0011. Un caso di `test_nut_table` legge il commit di `nut_repo`: HEAD staccato, ref sciolto o `packed-refs`. Se non coincide, il caso fallisce con un messaggio che riporta entrambi gli hash. Se `nut_repo` manca, l'errore lo dice in chiaro.
+  - [ ] Gli altri test nativi restano verdi e le tre build compilano.
+  - [ ] Fuori ambito: descrittore lungo EcoFlow; `max_report_size` 8 contro 256 (resta una deviazione documentata in `APCDriver.h`); nuovi sottodriver vertiv e microdowell, trasporto `richcomm-svc`, protocollo `santak`; `nut_repo` in CI; citazioni di file NUT non controllate dai test (`nutdrv_qx.c`, `usbhid-ups.c`, `libhid.c`).
+
+  **Assunzioni**
+  - "Avvisa" vuol dire che il caso dedicato fallisce, separato dalle coperture. Un fallimento si nota, un messaggio a test verde no.
+  - Le altre righe cambiate tra i due commit, se ce ne sono, si portano dentro questa spec solo se sono modifiche di tabella. Se servono cambi al motore, si annotano per una spec a parte.
+history:
+  - status: TODO
+    at: "2026-11-17T21:05:01Z"
+  - status: PLANNED
+    at: "2026-11-17T21:08:58Z"
+  - status: IN PROGRESS
+    at: "2026-11-17T21:11:14Z"
+  - status: REVIEW
+    at: "2026-11-17T21:49:10Z"
+  - status: DONE
+    at: "2026-11-17T21:52:22Z"

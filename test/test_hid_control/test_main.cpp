@@ -560,7 +560,7 @@ static void addEatonBeepers(FakePort& port, const char* status) {
 }
 
 void test_table_beeper_writes_row_field(void) {
-    // mge-hid.c:2339-2342: the Battery.AudibleAlarmControl rows come first (find_nut_info)
+    // mge-hid.c:2353-2356: the Battery.AudibleAlarmControl rows come first (find_nut_info)
     FakePort port;
     port.useTable = true;
     addEatonBeepers(port, "disabled");
@@ -621,7 +621,7 @@ void test_table_shutdown_sets_start_auto_first(void) {
 }
 
 void test_table_return_row_leaves_start_auto(void) {
-    // apc-hid.c:461: the Back-UPS CS shutdown.return row is one write of its dfl; upstream
+    // apc-hid.c:468: the Back-UPS CS shutdown.return row is one write of its dfl; upstream
     // finds it with find_nut_info() and never reaches the composite branch that sets
     // ups.start.auto (US-076)
     FakePort port;

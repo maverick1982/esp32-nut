@@ -255,7 +255,7 @@ static void feed(uint8_t report_id, uint8_t report_type, uint8_t value) {
     decode(report_id, report_type, data, sizeof(data));
 }
 
-// cps-hid.c:416 + cps_sensitivity_info: UPS.Output.CPSInputSensitivity (0xff010043)
+// cps-hid.c:432 + cps_sensitivity_info: UPS.Output.CPSInputSensitivity (0xff010043)
 void test_cyberpower_input_sensitivity_from_nut_table(void) {
     mockHost._usages.push_back(nutField("UPS.Output.0xFF010043", 0xff010043, 0x1A, 3));
     feed(0x1A, 3, 0);
@@ -473,7 +473,7 @@ void test_cyberpower_extensions_kept(void) {
     feed16(0x03, 3, 36000);
     TEST_ASSERT_EQUAL_STRING("2026/03/15", ups_data.get("ups.mfr.date").c_str());
     TEST_ASSERT_EQUAL_STRING("26.9", ups_data.get("battery.temperature").c_str());
-    // mge_battery_capacity of the genericHid2Nut() row (mge-hid.c:2016, US-079): "%.2f"
+    // mge_battery_capacity of the genericHid2Nut() row (mge-hid.c:2030, US-079): "%.2f"
     TEST_ASSERT_EQUAL_STRING("10.00", ups_data.get("battery.capacity").c_str());
 }
 
@@ -512,7 +512,7 @@ static bool reportRequested(uint8_t report_id) {
 }
 
 // CP2000EIPFCRM2U layout (issue #108): iOEMInformation on FEATURE 4, no vendor report. The full
-// poll reads report 4, then asks for the string of its index: battery.mfr.date as cps-hid.c:368,
+// poll reads report 4, then asks for the string of its index: battery.mfr.date as cps-hid.c:384,
 // at most 19 characters (US-111)
 void test_cyberpower_cp2000_layout_reads_battery_date_from_report_4(void) {
     mockHost._pid = 0x0601;

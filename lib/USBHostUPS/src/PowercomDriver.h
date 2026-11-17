@@ -26,7 +26,7 @@ public:
     // sequences: none are offered here (US-058). Their rows stay in powercomHid2Nut()
     bool shutdownCommandsSupported() const override { return false; }
 
-    // powercom-hid.c:620-639 still declares ups.delay.start ("60") and ups.delay.shutdown
+    // powercom-hid.c:610-629 still declares ups.delay.start ("60") and ups.delay.shutdown
     // (DEFAULT_OFFDELAY) with info_len 8, also on PCMDelayBeforeShutdown (0x00ff0057 in
     // powercom_usage_lkp): the variables exist without the commands (US-066)
     bool delayVariablesSupported() const override { return true; }

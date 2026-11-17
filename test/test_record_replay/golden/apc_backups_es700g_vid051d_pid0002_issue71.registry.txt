@@ -37,7 +37,7 @@ ups.timer.reboot=0
 ups.timer.shutdown=-1
 ups.status=OL CHRG
 [cmd]
-beeper.enable beeper.disable beeper.toggle beeper.mute test.panel.start test.panel.stop load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+beeper.enable beeper.disable beeper.toggle beeper.mute test.panel.start test.panel.stop load.off load.off.delay shutdown.return shutdown.stop shutdown.reboot shutdown.default
 [rw]
 battery.charge.low:10 battery.mfr.date:10 battery.runtime.low:10 input.sensitivity:10 input.transfer.high:10 input.transfer.low:10 ups.delay.shutdown:10
 [rw.final]

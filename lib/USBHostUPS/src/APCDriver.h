@@ -19,6 +19,11 @@ public:
     // usbhid-ups "maxreport", the tweak "for buggy APC Back-UPS firmware" that returns a
     // wrong report size: libhid.c asks sizeof(rbuf->data[id]) bytes, a pointer (8 bytes on
     // 64 bit) instead of the declared length. Here at least 8, never less than declared.
+    // Deviation kept on purpose: NUT ab2ccd7 (2026-10-03, after the 6c63f77 snapshot of the
+    // port) fixed that pointer-size bug and now asks MAX_REPORT_ALLOC = 256 bytes. That change
+    // came from a buffer overflow, not from a BX failure, and 8 bytes are field-proven on the
+    // BX units of #60 and #138, so the port stays at 8 until a BX user reports reports that are
+    // refused or cut short.
     static const uint16_t BX_MIN_REQUEST_LENGTH = 8;
     static bool isBackUpsBX(const String& model) { return model.startsWith("Back-UPS BX"); }
     // The newer BXR series (issue #123) also matches isBackUpsBX(), but keeps sending INPUT

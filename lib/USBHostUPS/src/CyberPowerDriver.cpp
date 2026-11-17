@@ -34,7 +34,7 @@
 bool CyberPowerDriver::acceptPollReport(uint8_t report_type, uint8_t report_id) const {
     // Vendor-defined reports (>= 130) and report 6 hang some firmwares. Report 4 hung the
     // BR700ELCD (issue #40), a layout with vendor reports: it is skipped only there. On the
-    // other layouts it carries iOEMInformation, the index of battery.mfr.date (cps-hid.c:368, US-111)
+    // other layouts it carries iOEMInformation, the index of battery.mfr.date (cps-hid.c:384, US-111)
     return !(report_id >= FIRST_VENDOR_REPORT || report_id == 6 || (report_id == 4 && _vendor_layout));
 }
 

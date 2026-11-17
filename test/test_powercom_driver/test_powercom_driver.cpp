@@ -131,7 +131,7 @@ void test_powercom_0xa4_keeps_last_valid(void) {
 }
 
 void test_powercom_beeper_mapping(void) {
-    // powercom_beeper_info (powercom-hid.c:601): 1 = enabled, 2 = disabled
+    // powercom_beeper_info (powercom-hid.c:591): 1 = enabled, 2 = disabled
     PowercomDriver driver;
     driver.setup();
     UPSData ups_data;
@@ -153,7 +153,7 @@ void test_powercom_beeper_mapping(void) {
     TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
 
     // The beeper is written with the values of the beeper.enable / beeper.disable rows
-    // (powercom-hid.c:659-660), 1 and 0, whatever the field size
+    // (powercom-hid.c:649-650), 1 and 0, whatever the field size
     TEST_ASSERT_EQUAL_UINT8(1, driver.encodeBeeperValue(true, 8));
     TEST_ASSERT_EQUAL_UINT8(0, driver.encodeBeeperValue(false, 8));
     TEST_ASSERT_EQUAL_UINT8(1, driver.encodeBeeperValue(true, 1));
@@ -267,7 +267,7 @@ void test_powercom_full_poll_spd750u_descriptor(void) {
     TEST_ASSERT_EQUAL_UINT16(8, host._requestedLengths[14]); // 0x1D input voltage, as in issue #36
     TEST_ASSERT_EQUAL_UINT16(8, host._requestedLengths[21]); // 0xA4
 
-    // UPS.Battery.Temperature becomes battery.temperature (powercom-hid.c:677, "%.1f")
+    // UPS.Battery.Temperature becomes battery.temperature (powercom-hid.c:667, "%.1f")
     decode(driver, host, ups_data, 3, { 0x2D, 41 });
     TEST_ASSERT_EQUAL_STRING("41.0", ups_data.get("battery.temperature").c_str());
 }
@@ -298,10 +298,10 @@ void test_powercom_static_reports_read_once(void) {
 }
 
 // US-058, user decision of 2026-10-09: DelayBeforeShutdown (minutes/seconds bytes) is the
-// timer only (powercom-hid.c:638, powercom_shutdown_info), and there are no load/shutdown
+// timer only (powercom-hid.c:628, powercom_shutdown_info), and there are no load/shutdown
 // commands (powercom-hid.c uses its own encodings). ups.delay.* is never read from the
 // device: the host sets it (see test_powercom_delay_variables_as_upstream, US-066). The
-// vendor PowercomDelayBeforeShutdown is ups.delay.shutdown upstream (powercom-hid.c:727),
+// vendor PowercomDelayBeforeShutdown is ups.delay.shutdown upstream (powercom-hid.c:717),
 // excluded for the same reason: it gives nothing.
 void test_powercom_delay_sets_only_timer(void) {
     PowercomDriver driver;
@@ -333,7 +333,7 @@ void test_powercom_delay_sets_only_timer(void) {
     TEST_ASSERT_FALSE(driver.shutdownCommandsSupported());
 }
 
-// US-066: powercom-hid.c:620-639 declares ups.delay.start (default "60") and
+// US-066: powercom-hid.c:610-629 declares ups.delay.start (default "60") and
 // ups.delay.shutdown (DEFAULT_OFFDELAY, 20) as RW with info_len 8, on
 // UPS.PowerSummary.DelayBeforeStartup/Shutdown or PCMDelayBeforeShutdown (0x00ff0057).
 // The variables exist even without the shutdown commands.
@@ -363,7 +363,7 @@ void test_powercom_delay_variables_as_upstream(void) {
     TEST_ASSERT_EQUAL_STRING("ups.delay.start", rw[1].name);
     TEST_ASSERT_EQUAL(8, rw[1].aux);
 
-    // PCMDelayBeforeShutdown alone gives ups.delay.shutdown only (powercom-hid.c:639)
+    // PCMDelayBeforeShutdown alone gives ups.delay.shutdown only (powercom-hid.c:629)
     std::vector<HIDUsageDef> pcm(1);
     strcpy(pcm[0].path, "UPS.PowerSummary.0x00FF0057");
     pcm[0].usage = 0x00ff0057;
@@ -456,16 +456,16 @@ static const char* const kPowercomSnapshotBefore =
     "ups.status=OL CHRG\n";
 
 // After US-077, every key from powercomHid2Nut(). Differences from kPowercomSnapshotBefore:
-// + battery.charge.warning=20      powercom-hid.c:592
+// + battery.charge.warning=20      powercom-hid.c:582
 // - battery.voltage.nominal=12     PowerSummary/Battery ConfigVoltage dropped upstream (lines
 //                                  577-580: PowerCOM duplicates output.voltage.nominal there)
-// ~ battery.voltage 13.70 -> 13.7  powercom-hid.c:587, the text of report 0xA4 as it is ("%s")
-// + ups.date=2019/03/15            powercom-hid.c:604 (PowerSummary.ManufacturerDate)
+// ~ battery.voltage 13.70 -> 13.7  powercom-hid.c:577, the text of report 0xA4 as it is ("%s")
+// + ups.date=2019/03/15            powercom-hid.c:594 (PowerSummary.ManufacturerDate)
 // - ups.mfr.date=2019/03/15        upstream ups.mfr.date is the vendor PowercomManufacturerDate (675)
-// + ups.status.boost/trim=0        powercom-hid.c:560-561, Boost/Buck of report 38 (internal keys)
-// ~ ups.status.comm_lost -> commfault  powercom-hid.c:548 commfault_info (internal key, ALARM when set)
-// ~ ups.timer.shutdown 258 -> 62   powercom-hid.c:638 powercom_shutdown_info: 0x0102 = 1 min 2 s
-// + ups.timer.start=180            powercom-hid.c:621 powercom_startup_info: 0x0300 = 3 min
+// + ups.status.boost/trim=0        powercom-hid.c:550-551, Boost/Buck of report 38 (internal keys)
+// ~ ups.status.comm_lost -> commfault  powercom-hid.c:538 commfault_info (internal key, ALARM when set)
+// ~ ups.timer.shutdown 258 -> 62   powercom-hid.c:628 powercom_shutdown_info: 0x0102 = 1 min 2 s
+// + ups.timer.start=180            powercom-hid.c:611 powercom_startup_info: 0x0300 = 3 min
 // = ups.temperature=50.0           kept extension (PowerSummary.Temperature, ADR 0011 rule 2);
 //                                  report 44 is not polled, so the UPS never shows it
 // ups.status unchanged.
@@ -578,7 +578,7 @@ void test_powercom_vendor_page_paths(void) {
     UPSData data;
     decode(driver, host, data, 3, { 1, 55 });
     decode(driver, host, data, 3, { 2, 0x00, 0x00, 57, 33 });
-    // powercom-hid.c:683-685: voltages times 4, the load as it is
+    // powercom-hid.c:673-675: voltages times 4, the load as it is
     TEST_ASSERT_EQUAL_STRING("220", data.get("input.voltage").c_str());
     TEST_ASSERT_EQUAL_STRING("228", data.get("output.voltage").c_str());
     TEST_ASSERT_EQUAL_STRING("33", data.get("ups.load").c_str());

@@ -41,7 +41,7 @@ Chosen option: **Option 3, incremental convergence**, because each step is small
 
 ### Rule 1: one table per subdriver, upstream shape and order
 
-* Each subdriver has one table `xxxHid2Nut()` in `NutTable.h`, with the rows of `xxx_hid2nut` of upstream in the same order, each with its source line (`// mge-hid.c:2013`).
+* Each subdriver has one table `xxxHid2Nut()` in `NutTable.h`, with the rows of `xxx_hid2nut` of upstream in the same order, each with its source line (`// mge-hid.c:2027`).
 * A row we do not take stays in the table as a comment with the reason (for example a conversion that cannot be ported, or a choice made in a spec such as US-087's `divide_by_10`).
 * The engine handles read-only rows with their formats and `info_lkp` conversions, `BOOL` rows that set the internal `ups.status.*` keys, writable rows, `HU_FLAG_ABSENT` rows and, through `HidControl`, `HU_TYPE_CMD` rows.
 * The engine writes a key to UPSData only when its value changes, not at every report: read-only rows would otherwise allocate many Strings per report (ADR 0007).
@@ -104,6 +104,7 @@ US-073 and US-074 (Eaton, mge-hid; US-073 also builds the engine), then US-075 (
 
 * Do not add new hand-written `Mapping` entries for a subdriver that already has, or is being given, its table: add or fix the row in `xxxHid2Nut()`. After US-073, a new driver gets its table first.
 * Copy rows from `nut_repo/drivers/<subdriver>.c` in the upstream order, with the `// file.c:line` comment. Do not reorder, merge or rename rows; exclude a row only with a comment that gives the reason.
+* The `file.c:line` citations are line numbers of the NUT commit written in `nut_repo.commit` (first line), and `nut_repo` must be on that commit: `test_nut_table` fails and prints both hashes when it is not (US-143). To move to a newer NUT commit, renumber every citation with `scripts/nut_line_map.py --old <hash in nut_repo.commit> --new <new hash>` (the map comes from the diff, not from hand-written offsets), port or document the rows that changed upstream as rule 1 says, then write the new hash in `nut_repo.commit` in the same commit as the citations.
 * Never define `WITH_UNMAPPED_DATA_POINTS`, and never publish a key whose name is not in `docs/nut-names.txt`, except the documented extensions of rule 2.
 * Before inventing a key, look it up in `docs/nut-names.txt`; if the concept has no name, leave it unpublished.
 * Keep `NutTable.h` inside the `ups-protocol` module (ADR 0010): the NUT server, the web API and the web UI see only `IUpsSource` and `UpsCommands.h`.

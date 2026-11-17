@@ -1,0 +1,6 @@
+1c4ab78c615a7b2b8231bdb023d553abd64b541d
+# Commit of networkupstools/nut that nut_repo/ must be on: the <file>-hid.c:N citations of
+# lib/USBHostUPS/src/NutTable.h (and of the other sources and tests) are written for it.
+# test_nut_table reads this first line and fails when nut_repo is elsewhere (ADR 0011).
+# Moving nut_repo: renumber the citations with scripts/nut_line_map.py --old <this hash>
+# --new <new hash>, port the table changes, then write the new hash here (US-143).

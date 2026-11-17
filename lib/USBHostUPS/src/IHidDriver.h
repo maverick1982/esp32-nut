@@ -147,8 +147,8 @@ public:
     /**
      * @brief True when beeper.mute is offered (US-087).
      *
-     * beeper.mute writes 3 to the beeper field (beeper_info "muted" in usbhid-ups). On
-     * Legrand 3 means disabled and legrand-hid.c has no beeper.mute: the driver returns false.
+     * beeper.mute writes 3 to the beeper field (beeper_info "muted" in usbhid-ups). Legrand,
+     * the only driver that returned false, follows legrand-hid.c of NUT 1c4ab78 since US-143.
      */
     virtual bool beeperMuteSupported() const { return true; }
 

@@ -245,7 +245,7 @@ void test_cyberpower_policy(void) {
 }
 
 // Layout without vendor reports (CP1350C, CP1500, CP1600, CP2000): report 4 carries
-// iOEMInformation (battery.mfr.date, cps-hid.c:368) and is read; report 6 never (US-111)
+// iOEMInformation (battery.mfr.date, cps-hid.c:384) and is read; report 6 never (US-111)
 void test_cyberpower_standard_layout_reads_report_4(void) {
     standardDeviceReport2("UPS.Input.ConfigVoltage");
     host.addUsage(0x0085008F, 4, 3, "UPS.PowerSummary.iOEMInformation");
@@ -274,7 +274,7 @@ void test_eaton_skips_reports_254_255(void) {
     }
 }
 
-// mge-hid.c:2040-2052, 2116-2117: the ABM rows are HU_FLAG_QUICK_POLL status rows, so their
+// mge-hid.c:2054-2066, 2130-2131: the ABM rows are HU_FLAG_QUICK_POLL status rows, so their
 // report (Charger.Mode, FEATURE 0x26 on the Eaton 5P) is in the quick poll, as the quick
 // update upstream; a report of nominal values is not (US-073)
 void test_eaton_abm_report_in_quick_poll(void) {

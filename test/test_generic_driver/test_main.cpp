@@ -220,7 +220,7 @@ void test_need_replacement_gives_alarm(void) {
     TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(ups_data).c_str());
 }
 
-// CommunicationLost is commfault_info (ecoflow-hid.c:150, idowell-hid.c:101) since the
+// CommunicationLost is commfault_info (ecoflow-hid.c:153, idowell-hid.c:101) since the
 // generic table (US-079): ups.alarm "Internal UPS fault!", no more ups.status.comm_lost
 void test_communication_lost_is_commfault(void) {
     addUsage("UPS.PowerSummary.PresentStatus.ACPresent", 0x01, 1, 0, 1);
@@ -309,7 +309,7 @@ void test_battery_date_string(void) {
     TEST_ASSERT_EQUAL_STRING("2024/03/01", ups_data.get("battery.mfr.date").c_str());
 }
 
-// battery.capacity with mge_battery_capacity (mge-hid.c:2016); battery.capacity.full is not a
+// battery.capacity with mge_battery_capacity (mge-hid.c:2030); battery.capacity.full is not a
 // NUT name and is gone (ADR 0011 rule 2)
 void test_battery_capacity_and_no_capacity_full(void) {
     addUsage("UPS.BatterySystem.Battery.DesignCapacity", 0x0C, 3, 0, 16);

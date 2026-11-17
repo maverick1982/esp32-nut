@@ -1,0 +1,360 @@
+schema: archetipo/plan/v2
+spec_code: US-143
+body: |
+  ---
+  type: plan
+  title: "US-143: Tabelle HID allineate a NUT 1c4ab78: citazioni rinumerate, righe nuove e commit di riferimento — Piano di implementazione"
+  description: "Piano di implementazione per US-143"
+  tags: [plan, implementation, US-143]
+  ---
+  # US-143: Tabelle HID allineate a NUT 1c4ab78 — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-17
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-001 — Gestione USB Host
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come sviluppatore che porta le tabelle HID da NUT, voglio le tabelle di `NutTable.h` allineate a NUT 1c4ab78 e il commit di riferimento scritto nel repo, in modo che `test_nut_table` torni a controllare davvero la copertura delle righe upstream e che gli utenti APC BX, Legrand ed Eaton 5P Gen2 abbiano quello che NUT offre oggi.
+
+  **Criteri di Accettazione**
+  Vedi la spec: rinumerazione dal diff, `test_nut_table` verde, riga APC `shutdown.return`, righe Legrand del cicalino, Eaton 5P Gen2, commit di riferimento controllato dal test, suite e build verdi, fuori ambito.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Tra `esp32nut-base-2026-08-06` (6c63f77) e 1c4ab78 le tabelle dei sei sottodriver cambiano solo in tre punti (verificato con `git diff` sulle righe `{ "`): 8 voci Eaton 5P G2 in `mge_model_names`, una riga `shutdown.return` in `apc_hid2nut`, il blocco Buzzer di `legrand_hid2nut`. Tutto il resto è spostamento di righe. Il lavoro si divide quindi in una rinumerazione meccanica e tre piccoli innesti di tabella, più il controllo del commit.
+
+  - **Rinumerazione con uno script, non a mano.** Nuovo `scripts/nut_line_map.py` (Python 3, solo libreria standard): per ogni file NUT confronta il contenuto ai due commit (`git -C nut_repo show <ref>:drivers/<f>`) con `difflib.SequenceMatcher`, costruisce la mappa riga vecchia → riga nuova per le righe uguali e riscrive le citazioni `<f>:N` e `<f>:N-M` nei sorgenti indicati. Una citazione la cui riga vecchia non ha corrispondente (riga cambiata o eliminata) non viene toccata e viene elencata in uscita: quelle si sistemano a mano con Edit. I file si leggono e scrivono in binario (`rb`/`wb`), si sostituiscono solo le cifre e alla fine lo script verifica che il file non contenga NUL né CR: niente fine riga cambiati (vedi la regola di progetto sugli script). Si applica a `NutTable.h` e agli altri sorgenti di `lib/USBHostUPS/src` che citano i sei file (CyberPowerDriver.cpp, EcoFlowDriver.cpp, HidControl.h, LegrandDriver.h/.cpp, PowercomDriver.cpp/.h, Quirks.h, USBHostUPS.cpp, APCDriver.h) e ai test che li citano. Lo script resta nel repo per i prossimi aggiornamenti.
+  - **APC.** Nuova riga dopo `apc-hid.c:459` (riga upstream 466 a 1c4ab78): `{ "shutdown.return", 0, 0, "UPS.0xFF860005.0xFF86007C", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 }`. Il motore la usa già come riga diretta (`return_row` in `HidControl::buildCommands`, ramo `shutdown.return` di `HidControl` intorno a :124/:143), quindi non servono cambi al motore. Effetto voluto e uguale a NUT: su ogni APC con `APCGeneralCollection.APCDelayBeforeReboot`, `shutdown.return` (e quindi anche `shutdown.default` e lo spegnimento automatico che lo prova per primo) scrive 1 invece del composto load.on.delay + load.off.delay. `test_steps_*` in `test_hid_commands` oggi afferma il contrario e va aggiornato.
+  - **Legrand.** Il blocco Buzzer di `legrandHid2Nut()` diventa quello upstream: `ups.beeper.status` (`Conv::Lookup`, `NUT_LKP(kBeeperInfo)`, `HU_FLAG_SEMI_STATIC`), `beeper.disable` = 1, `beeper.enable` = 2, `beeper.mute` = 3, nell'ordine upstream. Con una riga `ups.beeper.status` in tabella `GenericDriver` non chiama più `decodeBeeperStatus()` (`_beeper_row`), quindi l'override di `LegrandDriver` si elimina. `encodeBeeperValue()` passa a disable = 1 (abilita 2; il campo a 1 bit resta 1/0). `beeperMuteSupported()` override si elimina (default true): `beeper.mute` compare quando 3 entra nel campo. Le righe generiche `ups.beeper.status` su `UPS.PowerSummary.AudibleAlarmControl` vanno in `kSupersededGenericPaths` (regola 2 di ADR 0011). L'intestazione di `LegrandDriver.cpp` perde la deviazione 2; le altre si rinumerano e i rimandi ("deviation 3") si aggiornano.
+  - **mge.** Le 8 voci G2 entrano in `mgeModelType()` nella posizione upstream (dopo le righe "Eaton 5P"/"1550", prima di "Eaton 5PX", da verificare sul file a 1c4ab78), stesso formato `{ "Eaton 5P", "650iR G2", EATON_5P }`.
+  - **Commit di riferimento.** Nuovo file `nut_repo.commit` alla radice del repo con l'hash completo `1c4ab78c615a7b2b8231bdb023d553abd64b541d` e una riga di commento. Nuovo caso `test_nut_repo_matches_reference_commit` in `test_nut_table`: legge `nut_repo/.git/HEAD`; se è un hash lo usa, se è `ref: <r>` legge `nut_repo/.git/<r>` o, se manca, la riga corrispondente di `nut_repo/.git/packed-refs`. Se `nut_repo` manca il messaggio dice di clonarlo e portarlo al commit del file; se l'hash differisce il messaggio riporta entrambi. Il caso gira per primo in `RUN_TEST`. La regola di copia di ADR 0011 cita `nut_repo.commit`.
+
+  ---
+
+  ## Strategia di test
+
+  Tutto è verificabile con i test nativi; non c'è UI né e2e.
+
+  - `test_nut_table`: le 6 coperture tornano verdi; nuovo caso sul commit di riferimento (verificato anche a mano: con `nut_repo` su `esp32nut-base-2026-08-06` fallisce con i due hash, poi si torna su 1c4ab78).
+  - `test_hid_commands`: `shutdown.return` su `UPS.0xFF860005.0xFF86007C` risolve a `=1` (riga diretta), anche con i ritardi APC presenti; `shutdown.reboot` resta `=10`; il comportamento del Back-UPS CS (`UPS.Output.0xFF86007C`) invariato. `test_auto_shutdown` e `test_hid_control` restano verdi o si aggiornano se affermano il composto su quel campo.
+  - `test_legrand_driver`: codifica 2/1 (1 bit: 1/0); stato da `beeper_info` (1 disabled, 2 enabled, 3 muted) col descrittore Keor PDU 800 (8 bit, 1..3); `beeper.mute` tra i comandi; `beeper.toggle` ancora offerto.
+  - `test_eaton_driver`: "Eaton 5P" + "1150i G2" e "650iR G2" danno `EATON_5P`; "1550" resta `EATON_5P`.
+  - Regressione: suite nativa completa e le tre build (`esp32-s3-standard` e i due ambienti P4).
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-17_
+tasks:
+  - id: TASK-01
+    title: Script di rinumerazione delle citazioni NUT (scripts/nut_line_map.py)
+    type: Impl
+    status: DONE
+    body: |
+      ## Descrizione
+      Objective: uno script che ricava dal diff la mappa delle righe tra due commit di `nut_repo` e riscrive le citazioni `<file>:N` / `<file>:N-M` nei sorgenti, senza toccare altro.
+
+      Read: `test/test_nut_table/test_main.cpp` (`checkTableCoverage`, formato delle citazioni accettato), una manciata di citazioni in `lib/USBHostUPS/src/NutTable.h`.
+
+      Change: nuovo `scripts/nut_line_map.py`.
+
+      Steps:
+      1. Argomenti: `--repo nut_repo --old <ref> --new <ref> --upstream drivers/mge-hid.c ... --sources <file> ...` (più file NUT e più sorgenti).
+      2. Per ogni file NUT: contenuto ai due ref con `git -C <repo> show <ref>:<path>`, `difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)`, mappa 1-based dalle opcode `equal`.
+      3. Nei sorgenti, regex sul basename (`mge-hid\.c:(\d+)(?:-(\d+))?`): sostituisce i numeri mappati; se un numero non è mappato lascia la citazione e la stampa (`file:riga sorgente -> citazione`).
+      4. I/O in binario (`rb`/`wb`), decodifica UTF-8, nessuna conversione dei fine riga; dopo la scrittura verifica che il file non contenga `\x00` né `\r` (se il file originale non ne aveva) ed esce con errore altrimenti.
+      5. `--dry-run` stampa le sostituzioni senza scrivere.
+
+      Verify: `python -I scripts/nut_line_map.py --dry-run ...` sui sei file e `NutTable.h` elenca solo spostamenti coerenti (es. `apc-hid.c:461` → `:468`).
+
+      Done: script presente, dry-run leggibile, nessuna dipendenza esterna.
+
+      Blockers: nessuno.
+
+      ## File Coinvolti
+      - scripts/nut_line_map.py — nuovo
+
+      ## Criteri di Completamento
+      - [ ] La mappa viene dal diff tra i due ref, non da offset scritti a mano
+      - [ ] Le citazioni non mappabili sono elencate e non modificate
+      - [ ] I file riscritti non contengono NUL né CR nuovi
+    ref: TASK-01
+  - id: TASK-02
+    title: Rinumerare le citazioni dei sei sottodriver su 1c4ab78
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |
+      ## Descrizione
+      Objective: tutte le citazioni di mge/apc/cps/powercom/legrand/ecoflow `-hid.c` puntano alle righe di 1c4ab78.
+
+      Read: output del dry-run di TASK-01; `git grep -l -E "(mge|apc|cps|powercom|legrand|ecoflow)-hid\.c:[0-9]" -- lib test`.
+
+      Change: `lib/USBHostUPS/src/NutTable.h` e gli altri file trovati dal grep (oggi CyberPowerDriver.cpp, EcoFlowDriver.cpp, HidControl.h, LegrandDriver.h/.cpp, PowercomDriver.cpp/.h, Quirks.h, USBHostUPS.cpp, APCDriver.h, più eventuali test).
+
+      Steps:
+      1. Eseguire lo script con `--old esp32nut-base-2026-08-06 --new 1c4ab78` sui sei file NUT e su tutti i sorgenti trovati.
+      2. Le citazioni non mappate (solo il blocco Buzzer di legrand-hid.c, righe vecchie 183-184) si lasciano a TASK-04.
+      3. `git diff --stat` e `git diff` a campione: cambiano solo numeri dopo `-hid.c:`.
+
+      Verify: `pio test -e native -f test_nut_table`: le coperture di mge (a parte le voci model names che non sono righe di tabella), cps, powercom ed ecoflow passano; restano mancanti solo apc 466 e le righe Buzzer di legrand.
+
+      Done: nessuna citazione vecchia dei sei file, oltre a quelle del Buzzer.
+
+      Blockers: TASK-01.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — citazioni rinumerate
+      - lib/USBHostUPS/src/*.cpp, *.h che citano i sei file — citazioni nei commenti
+
+      ## Criteri di Completamento
+      - [ ] Il diff contiene solo numeri di riga cambiati
+      - [ ] Le coperture di mge, cps, powercom ed ecoflow passano
+    ref: TASK-02
+  - id: TASK-03
+    title: 'APC: riga shutdown.return su APCGeneralCollection.APCDelayBeforeReboot'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Descrizione
+      Objective: la riga upstream `apc-hid.c:466` (NUT #2683) nel port, così i Back-UPS BX*MI hanno uno `shutdown.return` che il loro firmware esegue.
+
+      Read: `nut_repo/drivers/apc-hid.c:459-468`; `apcHid2Nut()` in `NutTable.h` intorno alle righe `shutdown.reboot` / `shutdown.return`; `HidControl.h` (`return_row`, ramo `shutdown.return`).
+
+      Change: `lib/USBHostUPS/src/NutTable.h`.
+
+      Steps:
+      1. Dopo la riga citata `apc-hid.c:459` (shutdown.reboot su `UPS.0xFF860005.0xFF86007C`) aggiungere il commento `// apc-hid.c:466 UPS.APCGeneralCollection.APCDelayBeforeReboot (Back-UPS BX*MI, NUT #2683)` e la riga `{ "shutdown.return", 0, 0, "UPS.0xFF860005.0xFF86007C", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },`.
+      2. Nessuna modifica al motore: verificare leggendo `HidControl.h` che la prima riga `shutdown.return` con campo presente vinca sul composto, come `find_nut_info()`.
+      3. Se commenti di `HidControl.h` citano solo `apc-hid.c:461` come unica riga `shutdown.return`, aggiungere la nuova.
+
+      Verify: `test_nut_table` copertura apc verde.
+
+      Done: riga presente nella posizione upstream con la citazione.
+
+      Blockers: TASK-02.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — nuova riga
+      - lib/USBHostUPS/src/HidControl.h — eventuale commento
+
+      ## Criteri di Completamento
+      - [ ] Copertura apc di test_nut_table verde
+      - [ ] Nessun cambio di logica in HidControl
+    ref: TASK-03
+  - id: TASK-04
+    title: 'APC: test di shutdown.return sui BX e aggiornamento dei test esistenti'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |
+      ## Descrizione
+      Objective: provare che su un campo `UPS.0xFF860005.0xFF86007C` `shutdown.return` scrive 1 e che il resto non cambia.
+
+      Read: `test/test_hid_commands/test_main.cpp` (blocco `apc` intorno a :361-371, `test_steps_apc_cs_return_quirk`), `test/test_apc_driver/test_main.cpp:478`, `test/test_auto_shutdown/test_main.cpp`.
+
+      Change: `test/test_hid_commands/test_main.cpp`, eventualmente `test_apc_driver` e `test_auto_shutdown`.
+
+      Steps:
+      1. Nel blocco `apc` l'attesa per `shutdown.return` diventa `"UPS.0xFF860005.0xFF86007C=1"`; il commento "APCGeneralCollection's reboot field is not the Back-UPS CS quirk" si riscrive citando `apc-hid.c:466`.
+      2. Nuovo caso: descrittore con i soli campi BX (APCGeneralCollection 7C/7D/7E): `shutdown.return` = 1 su 7C, `shutdown.reboot` = 10 su 7C, `shutdown.stayoff` invariato; `buildCommands` offre `shutdown.return`.
+      3. Il caso Back-UPS CS (`UPS.Output.0xFF86007C`) resta invariato.
+      4. Eseguire `test_hid_commands`, `test_hid_control`, `test_apc_driver`, `test_auto_shutdown`; aggiornare solo le attese che affermano il composto su quel campo, motivandolo nel commento.
+
+      Verify: le quattro suite verdi.
+
+      Done: nuovo caso presente, nessuna attesa rimossa senza motivo.
+
+      Blockers: TASK-03.
+
+      ## File Coinvolti
+      - test/test_hid_commands/test_main.cpp — attese e nuovo caso
+      - test/test_apc_driver/test_main.cpp, test/test_auto_shutdown/test_main.cpp — solo se affermano il composto
+
+      ## Criteri di Completamento
+      - [ ] shutdown.return su APCGeneralCollection risolve a =1
+      - [ ] test_hid_commands, test_hid_control, test_apc_driver, test_auto_shutdown verdi
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Legrand: blocco Buzzer come legrand-hid.c attuale, via la deviazione 2'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Descrizione
+      Objective: righe e codifica del cicalino Legrand uguali a legrand-hid.c di 1c4ab78.
+
+      Read: `nut_repo/drivers/legrand-hid.c:182-186`; `legrandHid2Nut()` (fine tabella) e `kBeeperInfo` in `NutTable.h`; `LegrandDriver.h/.cpp`; `GenericDriver.cpp` (`_beeper_row`, `decodeBeeperStatus`); `BeeperLogic.h:43`; `HidControl.h` (`beeper.mute` e `mute_allowed`).
+
+      Change: `NutTable.h`, `LegrandDriver.h`, `LegrandDriver.cpp`.
+
+      Steps:
+      1. In `legrandHid2Nut()` sostituire le due righe del cicalino con, nell'ordine upstream e con le citazioni nuove: `ups.beeper.status` (`"%s"`, `HU_FLAG_SEMI_STATIC`, `Conv::Lookup`, `NUT_LKP(kBeeperInfo)`), `beeper.disable` "1", `beeper.enable` "2", `beeper.mute` "3".
+      2. `LegrandDriver::encodeBeeperValue()`: 8 bit → enable 2, disable 1; 1 bit invariato. Aggiornare il commento.
+      3. Eliminare l'override `beeperMuteSupported()` e l'override `decodeBeeperStatus()` (dichiarazione e definizione).
+      4. Aggiungere a `kSupersededGenericPaths` il percorso generico `UPS.PowerSummary.AudibleAlarmControl` delle righe `ups.beeper.status` di `genericHid2Nut()`, se la regola 2 lo richiede (verificare come sono trattati gli altri driver con riga beeper propria, es. apc).
+      5. Intestazione di `LegrandDriver.cpp`: togliere la deviazione 2, rinumerare le successive, aggiornare i rimandi ("deviation 3" ecc.) nel file e in `LegrandDriver.h`; la riga "Hooks that are not table rows" non elenca più `decodeBeeperStatus` e `beeperMuteSupported`.
+
+      Verify: `test_nut_table` copertura legrand verde; build nativa compila.
+
+      Done: nessuna traccia della codifica 3 = disabled.
+
+      Blockers: TASK-02.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — blocco Buzzer di legrandHid2Nut()
+      - lib/USBHostUPS/src/LegrandDriver.h — encodeBeeperValue, via beeperMuteSupported
+      - lib/USBHostUPS/src/LegrandDriver.cpp — via decodeBeeperStatus, intestazione, superseded
+
+      ## Criteri di Completamento
+      - [ ] Righe del cicalino identiche a legrand-hid.c di 1c4ab78
+      - [ ] Copertura legrand di test_nut_table verde
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Legrand: test del cicalino sui nuovi valori'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |
+      ## Descrizione
+      Objective: i test Legrand seguono legrand-hid.c attuale.
+
+      Read: `test/test_legrand_driver/test_main.cpp` (:54-120, `addKeorBeeper`, `test_beeper_encoding_uses_legrand_values`, `test_beeper_status_uses_legrand_meaning`, test dei comandi intorno a :261).
+
+      Change: `test/test_legrand_driver/test_main.cpp`.
+
+      Steps:
+      1. Codifica: `encodeBeeperValue(true, 8)` = 2, `(false, 8)` = 1, 1 bit 1/0.
+      2. Stato col descrittore Keor PDU 800 (8 bit, 1..3): 1 → disabled, 2 → enabled, 3 → muted, decodificati dalla riga di tabella; rinominare il test (non più "legrand meaning").
+      3. Comandi: `beeper.mute` presente, `beeper.enable`/`beeper.disable`/`beeper.toggle` presenti.
+      4. Eseguire `test_legrand_driver`, `test_hid_control`, `test_hid_commands`.
+
+      Verify: suite verdi.
+
+      Done: nessun test afferma più 3 = disabled.
+
+      Blockers: TASK-05.
+
+      ## File Coinvolti
+      - test/test_legrand_driver/test_main.cpp — attese aggiornate
+
+      ## Criteri di Completamento
+      - [ ] Codifica, stato (incluso muted) e comandi verificati
+      - [ ] test_legrand_driver verde
+    ref: TASK-06
+  - id: TASK-07
+    title: 'mge: Eaton 5P Gen2 in mgeModelType() con test'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Descrizione
+      Objective: le 8 voci G2 di `mge_model_names` nel port.
+
+      Read: `mge_model_names` in `nut_repo/drivers/mge-hid.c` a 1c4ab78 (posizione delle voci G2); `mgeModelType()` in `NutTable.h`; `test/test_eaton_driver/test_main.cpp:445-456`.
+
+      Change: `NutTable.h`, `test/test_eaton_driver/test_main.cpp`.
+
+      Steps:
+      1. Inserire `{ "Eaton 5P", "650iR G2", EATON_5P }` … `{ "Eaton 5P", "1550i G2", EATON_5P }` nell'ordine e nella posizione upstream.
+      2. Test sul modello del caso esistente: "Eaton 5P" + "1150i G2" → `EATON_5P`, "Eaton 5P" + "650iR G2" → `EATON_5P`; il caso "1550" invariato.
+
+      Verify: `test_eaton_driver` e `test_nut_table` verdi.
+
+      Done: 8 voci presenti, test aggiunti.
+
+      Blockers: TASK-02.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/NutTable.h — mgeModelType()
+      - test/test_eaton_driver/test_main.cpp — nuovi casi
+
+      ## Criteri di Completamento
+      - [ ] Le 8 voci sono nell'ordine upstream
+      - [ ] "Eaton 5P 1150i G2" dà EATON_5P
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Commit NUT di riferimento: nut_repo.commit, ADR 0011 e caso di test'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Descrizione
+      Objective: il commit su cui sono scritte le citazioni è nel repo e `test_nut_table` fallisce in chiaro se `nut_repo` è altrove.
+
+      Read: `test/test_nut_table/test_main.cpp` (`readLines`, `RUN_TEST` in `main`); `docs/adr/0011-single-hid-to-nut-table-per-subdriver.md:106`.
+
+      Change: nuovo `nut_repo.commit`; `test/test_nut_table/test_main.cpp`; `docs/adr/0011-single-hid-to-nut-table-per-subdriver.md`.
+
+      Steps:
+      1. `nut_repo.commit`: prima riga l'hash `1c4ab78c615a7b2b8231bdb023d553abd64b541d`; righe successive che iniziano con `#` spiegano a cosa serve (le ignora il test).
+      2. Nel test, helper `nutRepoHead()`: legge `nut_repo/.git/HEAD`; hash di 40 caratteri → quello; `ref: refs/...` → `nut_repo/.git/refs/...`, altrimenti la riga `<hash> refs/...` di `nut_repo/.git/packed-refs`. Restituisce stringa vuota se non trova nulla.
+      3. Caso `test_nut_repo_matches_reference_commit`: se `nut_repo/.git/HEAD` non esiste → fallisce con "nut_repo missing: clone networkupstools/nut into nut_repo and check out <hash>"; se l'hash differisce → "nut_repo is at <a>, NutTable.h citations are written for <b> (nut_repo.commit)". Registrato come primo `RUN_TEST`.
+      4. ADR 0011, regola di copia: le righe si citano sul commit di `nut_repo.commit`; aggiornare quel file insieme alle citazioni (con `scripts/nut_line_map.py`).
+
+      Verify: test verde su 1c4ab78; prova manuale `git -C nut_repo checkout esp32nut-base-2026-08-06` → il caso fallisce con i due hash; poi `git -C nut_repo checkout master` (1c4ab78).
+
+      Done: file, caso e ADR presenti.
+
+      Blockers: TASK-02.
+
+      ## File Coinvolti
+      - nut_repo.commit — nuovo
+      - test/test_nut_table/test_main.cpp — helper e caso nuovo
+      - docs/adr/0011-single-hid-to-nut-table-per-subdriver.md — regola di copia
+
+      ## Criteri di Completamento
+      - [ ] HEAD staccato, ref sciolto e packed-refs gestiti
+      - [ ] Messaggi chiari per nut_repo mancante e per hash diverso
+    ref: TASK-08
+  - id: TASK-09
+    title: 'Regressione: suite nativa completa e tre build'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |
+      ## Descrizione
+      Objective: nessuna regressione fuori dai punti toccati.
+
+      Read: `platformio.ini` (ambienti).
+
+      Change: nessuno, salvo correzioni emerse.
+
+      Steps:
+      1. `pio test -e native` completo: tutti i casi verdi (oggi 6 falliti in `test_nut_table`).
+      2. `pio run -e esp32-s3-standard` e i due ambienti P4.
+      3. `grep -c $'\r'` e ricerca di NUL sui file modificati: zero.
+
+      Verify: output della suite e delle build.
+
+      Done: suite verde, tre build ok, file puliti.
+
+      Blockers: TASK-04, TASK-06, TASK-07, TASK-08.
+
+      ## File Coinvolti
+      - nessuno (verifica)
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] Tre build compilano
+      - [ ] Nessun CR o NUL nei file toccati
+    ref: TASK-09

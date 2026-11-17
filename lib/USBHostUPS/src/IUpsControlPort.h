@@ -36,7 +36,7 @@ public:
     virtual bool supportsBeeperToggle() const { return true; }
     // False when the driver offers no load.* or shutdown.* command (US-058)
     virtual bool shutdownCommandsSupported() const { return true; }
-    // False when the driver does not offer beeper.mute (US-087, Legrand)
+    // False when the driver does not offer beeper.mute (US-087)
     virtual bool beeperMuteSupported() const { return true; }
 
     // Runs a command as an INSTCMD does, with its System Log line (shutdown.default attempts)

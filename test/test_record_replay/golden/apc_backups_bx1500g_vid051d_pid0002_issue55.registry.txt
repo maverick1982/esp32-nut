@@ -6,7 +6,7 @@ ups.mfr=American Power Conversion
 ups.model=Back-UPS BX1500G
 ups.status=Unknown
 [cmd]
-test.battery.start.quick test.battery.start.deep test.battery.stop test.panel.start test.panel.stop load.off load.off.delay shutdown.stop shutdown.reboot shutdown.default
+test.battery.start.quick test.battery.start.deep test.battery.stop test.panel.start test.panel.stop load.off load.off.delay shutdown.return shutdown.stop shutdown.reboot shutdown.default
 [rw]
 ups.delay.shutdown:10
 [rw.final]

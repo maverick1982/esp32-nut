@@ -89,33 +89,35 @@ void test_registry_selects_legrand_for_keor_pdu_and_sp(void) {
     TEST_ASSERT_EQUAL_STRING("GenericDriver", other->getDriverName());
 }
 
-// legrand-hid.c: beeper.enable writes 2, beeper.disable writes 3
-void test_beeper_encoding_uses_legrand_values(void) {
+// legrand-hid.c:184-186 (NUT 1c4ab78): beeper.disable writes 1, beeper.enable 2, as beeper_info;
+// a 1-bit field keeps the on/off encoding
+void test_beeper_encoding_follows_beeper_info(void) {
     TEST_ASSERT_EQUAL_UINT8(2, driver.encodeBeeperValue(true, 8));
-    TEST_ASSERT_EQUAL_UINT8(3, driver.encodeBeeperValue(false, 8));
+    TEST_ASSERT_EQUAL_UINT8(1, driver.encodeBeeperValue(false, 8));
     TEST_ASSERT_EQUAL_UINT8(1, driver.encodeBeeperValue(true, 1));
     TEST_ASSERT_EQUAL_UINT8(0, driver.encodeBeeperValue(false, 1));
 }
 
+// As USBHostUPS: decodeReport() and then postDecode(), where the table rows are written
 static void decodeBeeper(uint8_t value) {
     uint8_t report[] = { 0x0C, value };
     driver.decodeReport(&mockHost, 0x0C, 3, report, sizeof(report), ups_data);
+    driver.postDecode(&mockHost, 0x0C, 3, report, sizeof(report), ups_data);
 }
 
-// Deviation 2 of the plan: ups.beeper.status with the Legrand meaning of the field
-void test_beeper_status_uses_legrand_meaning(void) {
+// legrand-hid.c:183: ups.beeper.status is a row with beeper_info (1 disabled, 2 enabled, 3 muted)
+void test_beeper_status_from_table_row(void) {
     addKeorBeeper();
     decodeBeeper(2);
     TEST_ASSERT_EQUAL_STRING("enabled", ups_data.get("ups.beeper.status").c_str());
     decodeBeeper(3);
-    TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
-    decodeBeeper(2);
+    TEST_ASSERT_EQUAL_STRING("muted", ups_data.get("ups.beeper.status").c_str());
     decodeBeeper(1);
     TEST_ASSERT_EQUAL_STRING("disabled", ups_data.get("ups.beeper.status").c_str());
 }
 
-// No beeper.mute (3 would disable the beeper); enable, disable and toggle stay
-void test_catalog_has_no_beeper_mute(void) {
+// legrand-hid.c:184-186: beeper.mute writes 3; enable, disable and toggle stay
+void test_beeper_commands_follow_legrand_table(void) {
     addKeorBeeper();
     size_t n = 0;
     const NutTable::HidInfo* t = driver.commandTable(n);
@@ -124,13 +126,20 @@ void test_catalog_has_no_beeper_mute(void) {
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.enable"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.disable"));
     TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.toggle"));
-    TEST_ASSERT_FALSE(hasCommand(cmds, "beeper.mute"));
+    TEST_ASSERT_TRUE(hasCommand(cmds, "beeper.mute"));
 
-    // Same field, GenericDriver (genericHid2Nut(), which allows it): beeper.mute is offered
-    size_t ng = 0;
-    const NutTable::HidInfo* g = NutTable::genericHid2Nut(ng);
-    auto generic = HidControl::buildCommands(mockHost._usages, true, true, true, g, ng);
-    TEST_ASSERT_TRUE(hasCommand(generic, "beeper.mute"));
+    HIDUsageDef def;
+    uint32_t value = 0;
+    TEST_ASSERT_TRUE(HidControl::resolveWrite("beeper.mute", mockHost._usages, def, value, t, n));
+    TEST_ASSERT_EQUAL_STRING("UPS.PowerSummary.AudibleAlarmControl", def.path);
+    TEST_ASSERT_EQUAL_UINT32(3, value);
+    // beeper.enable / disable go through setBeeperField() with encodeBeeperValue() (checked
+    // above); the rows hold the same values
+    const char* dfl = nullptr;
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(t, n, mockHost._usages, "beeper.disable", &dfl));
+    TEST_ASSERT_EQUAL_STRING("1", dfl);
+    TEST_ASSERT_NOT_NULL(HidControl::cmdField(t, n, mockHost._usages, "beeper.enable", &dfl));
+    TEST_ASSERT_EQUAL_STRING("2", dfl);
 }
 
 // legrand-hid.c: test.battery.* on UPS.Output.Test with 1 / 2 / 3
@@ -243,8 +252,8 @@ void test_mfr_fallback_without_vendor_string(void) {
     TEST_ASSERT_EQUAL_STRING("LEGRAND", ups_data.get("ups.mfr").c_str());
 }
 
-// Commands from the HU_TYPE_CMD rows of legrand_hid2nut on the Keor PDU usages: beeper.enable /
-// disable (183-184) write 2 and 3, test.battery.* on UPS.Output.Test (178-180), load.*.delay on
+// Commands from the HU_TYPE_CMD rows of legrand_hid2nut on the Keor PDU usages: beeper.disable /
+// enable / mute (184-186) write 1, 2 and 3, test.battery.* on UPS.Output.Test (178-180), load.*.delay on
 // UPS.Output.DelayBefore* (171-172) and what usbhid-ups derives from them. No shutdown.stop:
 // legrand-hid has no row for it (US-106)
 void test_commands_from_legrand_table(void) {
@@ -256,14 +265,13 @@ void test_commands_from_legrand_table(void) {
     const NutTable::HidInfo* t = driver.commandTable(n);
     auto cmds = HidControl::buildCommands(mockHost._usages, true, driver.shutdownCommandsSupported(),
                                           driver.beeperMuteSupported(), t, n);
-    for (const char* name : { "beeper.enable", "beeper.disable", "beeper.toggle", "test.battery.start.quick",
+    for (const char* name : { "beeper.enable", "beeper.disable", "beeper.toggle", "beeper.mute", "test.battery.start.quick",
                               "test.battery.start.deep", "test.battery.stop", "load.off", "load.on",
                               "load.off.delay", "load.on.delay", "shutdown.return", "shutdown.stayoff",
                               "shutdown.default" }) {
         TEST_ASSERT_TRUE_MESSAGE(hasCommand(cmds, name), name);
     }
     TEST_ASSERT_FALSE(hasCommand(cmds, "shutdown.stop"));
-    TEST_ASSERT_FALSE(hasCommand(cmds, "beeper.mute"));
 
     HIDUsageDef def;
     uint32_t value = 0;
@@ -288,9 +296,9 @@ void test_delay_paths_follow_legrand_table(void) {
 #ifdef PIO_UNIT_TESTING
 static void runAll() {
     RUN_TEST(test_registry_selects_legrand_for_keor_pdu_and_sp);
-    RUN_TEST(test_beeper_encoding_uses_legrand_values);
-    RUN_TEST(test_beeper_status_uses_legrand_meaning);
-    RUN_TEST(test_catalog_has_no_beeper_mute);
+    RUN_TEST(test_beeper_encoding_follows_beeper_info);
+    RUN_TEST(test_beeper_status_from_table_row);
+    RUN_TEST(test_beeper_commands_follow_legrand_table);
     RUN_TEST(test_battery_test_on_output_test);
     RUN_TEST(test_no_legrand_voltage_conversions);
     RUN_TEST(test_input_output_voltage_upstream_format);

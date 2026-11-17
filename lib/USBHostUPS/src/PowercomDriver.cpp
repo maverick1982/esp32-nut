@@ -22,7 +22,7 @@
  *   the bound rows (static ones once, the BOOL ones in the quick poll) and the legacy
  *   report 0xA4, whose text battery.voltage serves (powercom_hack_voltage);
  * - beeper encoding: the values of the beeper.enable / beeper.disable rows, 1 and 0
- *   (powercom-hid.c:659-660), although powercom_beeper_info reads 2 as disabled;
+ *   (powercom-hid.c:649-650), although powercom_beeper_info reads 2 as disabled;
  * - powercom_format_mfr / powercom_format_model / powercom_format_serial
  *   (formatDeviceStrings): the USB strings, "PowerCOM" when there is no manufacturer
  *   string, no ups.model / ups.serial without theirs; the string descriptors are not
@@ -44,7 +44,7 @@ void PowercomDriver::setup() {
     _status_report_len = 0;
 }
 
-// powercom_format_mfr (powercom-hid.c:739): hd->Vendor, "PowerCOM" without it. ups.model and
+// powercom_format_mfr (powercom-hid.c:729): hd->Vendor, "PowerCOM" without it. ups.model and
 // ups.serial are hd->Product and hd->Serial (powercom_format_model/_serial): the USB strings
 // as they are, and no variable when the device has none (usbhid-ups.c:2179-2195)
 void PowercomDriver::formatDeviceStrings(UPSData& data) {
@@ -94,7 +94,7 @@ void PowercomDriver::buildPollLists(IHidTransport* host, std::vector<PollItem>& 
     for (auto& item : full) {
         if (item.id == 0x1D || item.id == 0x1F || item.id == 0x21) item.length = 8;
     }
-    // Unmapped in NUT too: read as FEATURE of exactly 8 bytes (powercom-hid.c:457)
+    // Unmapped in NUT too: read as FEATURE of exactly 8 bytes (powercom-hid.c:447)
     full.push_back(PollItem{3, 0xA4, 8});
 }
 
@@ -127,7 +127,7 @@ void PowercomDriver::decodeReport(IHidTransport* host, uint8_t report_id, uint8_
 #endif
 
     if (report_id == 0xA4 && report_type == 3) {
-        // powercom_hack_voltage (powercom-hid.c:432-493): " 13.7 2" -> "13.7", kept as the
+        // powercom_hack_voltage (powercom-hid.c:422-483): " 13.7 2" -> "13.7", kept as the
         // last valid reading only when it has a dot; Conv::PowercomHackVoltage serves it
         char msg[9];
         size_t j = 0;
@@ -191,7 +191,7 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.PowerConverter.Input.Frequency", "UPS.Input.Frequency", "UPS.Flow.Frequency",
     "UPS.PowerConverter.Output.Voltage", "UPS.Output.Voltage",
     "UPS.PowerConverter.Output.Frequency", "UPS.Output.Frequency",
-    // battery.voltage: on PowerCOM these duplicate output.voltage (powercom-hid.c:574-581)
+    // battery.voltage: on PowerCOM these duplicate output.voltage (powercom-hid.c:564-571)
     "UPS.PowerSummary.Voltage", "UPS.BatterySystem.Voltage", "UPS.Battery.Voltage",
     // battery.charge, battery.charge.low, battery.runtime
     "UPS.PowerSummary.RemainingCapacity", "UPS.PowerSummary.RemainingCapacityLimit",
@@ -205,7 +205,7 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.Battery.Temperature",
     // battery.capacity.full: ADR 0011 rule 2, not in nut-names.txt
     "UPS.BatterySystem.Battery.FullChargeCapacity",
-    // battery.voltage.nominal: the output nominal voltage on PowerCOM (powercom-hid.c:574-581)
+    // battery.voltage.nominal: the output nominal voltage on PowerCOM (powercom-hid.c:564-571)
     "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
     // input.voltage.nominal, output.voltage.nominal
     "UPS.Flow.ConfigVoltage", "UPS.Input.ConfigVoltage",
@@ -227,7 +227,7 @@ const char* const* PowercomDriver::supersededGenericPaths(size_t& n) const {
     return kSupersededGenericPaths;
 }
 
-// The values of the beeper.enable / beeper.disable rows (powercom-hid.c:659-660)
+// The values of the beeper.enable / beeper.disable rows (powercom-hid.c:649-650)
 uint8_t PowercomDriver::encodeBeeperValue(bool enable, uint16_t bit_size) const {
     (void)bit_size;
     return enable ? 1 : 0;

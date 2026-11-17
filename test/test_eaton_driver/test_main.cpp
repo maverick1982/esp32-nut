@@ -186,7 +186,7 @@ static void feedString(uint8_t index, const char* s) {
     driver.parseStringDescriptor(&mockHost, index, buf, buf[0], ups_data);
 }
 
-// mge-hid.c:2013-2014: battery.charge.low comes from RemainingCapacityLimitSetting, the
+// mge-hid.c:2027-2028: battery.charge.low comes from RemainingCapacityLimitSetting, the
 // first row; the generic RemainingCapacityLimit mapping never overrides it
 void test_eaton_battery_charge_low_owned_by_table(void) {
     mockHost._usages.push_back(nutField("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 0x08, 3));
@@ -202,7 +202,7 @@ void test_eaton_battery_charge_low_owned_by_table(void) {
     TEST_ASSERT_EQUAL_STRING("20", ups_data.get("battery.charge.low").c_str());
 }
 
-// mge-hid.c:2247: outlet.desc, HU_FLAG_ABSENT, default "Main Outlet" when
+// mge-hid.c:2261: outlet.desc, HU_FLAG_ABSENT, default "Main Outlet" when
 // UPS.OutletSystem.Outlet.[1].OutletID exists
 void test_eaton_outlet_desc_default(void) {
     mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 0x0B, 3, 8, { 0, 0, 2 }));
@@ -339,8 +339,8 @@ void test_eaton_status_good_is_off_info(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("ups.alarm")); // OFF is no alarm upstream
 }
 
-// Input.[1] Buck and VoltageOutOfRange (mge-hid.c:2129, 2131) and the vendor ups.alarm row of
-// Output.ShortCircuit (mge-hid.c:2160), in FEATURE report 0x05 (US-107)
+// Input.[1] Buck and VoltageOutOfRange (mge-hid.c:2143, 2145) and the vendor ups.alarm row of
+// Output.ShortCircuit (mge-hid.c:2174), in FEATURE report 0x05 (US-107)
 static const uint8_t BUCK = 0x01, VRANGE = 0x02, SHORTC = 0x04;
 static void addInputFields() {
     HIDUsageDef buck = nutField("UPS.PowerConverter.Input.PresentStatus.Buck", 0x0084006f, 0x05, 3, 1, { 0, 0, 2 });
@@ -455,6 +455,28 @@ void test_eaton_battery_voltage_depends_on_series(void) {
     TEST_ASSERT_EQUAL_STRING("27.0", ups_data.get("battery.voltage").c_str());
 }
 
+// mge_model_names (mge-hid.c:1834-1846, NUT 1c4ab78): the Eaton 5P Gen2 "i G2" / "iR G2" names
+// are EATON_5P, so UPS.PowerSummary.Voltage is battery.voltage as on the 5P 1550
+void test_eaton_5p_gen2_model_type(void) {
+    for (const char* model : { "1150i G2", "650iR G2" }) {
+        driver.setup();
+        ups_data = UPSData();
+        mockHost._usages.clear();
+        mockHost._iProduct = 2;
+        mockHost._usages.push_back(nutField("UPS.PowerSummary.0xFFFF00F0", 0xffff00f0, 0x10, 3));
+        mockHost._usages.push_back(nutField("UPS.PowerSummary.Voltage", 0x00840030, 0x0E, 3));
+        feed(0x10, 3, 5);   // iModel string index
+        feedString(2, "Eaton 5P");
+        feedString(5, model);
+        driver.loop(&mockHost, ups_data, 1000);
+        TEST_ASSERT_EQUAL_HEX_MESSAGE(NutTable::EATON_5P, driver.nutContext().mge_type, model);
+        feed(0x0E, 3, 27);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("27.0", ups_data.get("battery.voltage").c_str(), model);
+    }
+    TEST_ASSERT_EQUAL_HEX(NutTable::EATON_5P, NutTable::mgeModelType("Eaton 5P", "1550i G2"));
+    TEST_ASSERT_EQUAL_HEX(NutTable::EATON_5P, NutTable::mgeModelType("Eaton 5P", "850iR G2"));
+}
+
 // stringid_conversion: battery.type from the iDeviceChemistry string
 void test_eaton_battery_type_from_string_row(void) {
     mockHost._usages.push_back(nutField("UPS.PowerSummary.iDeviceChemistry", 0x00850089, 0x10, 3));
@@ -467,7 +489,7 @@ void test_eaton_battery_type_from_string_row(void) {
 }
 
 // ABM enabled (5P/9E): eaton_discharging_info gives "!dischrg" and the Charger.Mode row
-// (eaton_abm_chrg_dischrg_info, mge-hid.c:2116) gives "dischrg". Upstream applies both in
+// (eaton_abm_chrg_dischrg_info, mge-hid.c:2130) gives "dischrg". Upstream applies both in
 // table order at every walk; here they live in different reports, and DISCHRG must not
 // depend on which report came last.
 void test_eaton_abm_discharging_whatever_the_report_order(void) {
@@ -506,7 +528,7 @@ void test_eaton_country_from_table_row(void) {
 
 // --- mgeHid2Nut() UPS, Input, Output and Outlet pages (US-074) ---
 
-// eaton_compute_realpower_info (mge-hid.c:2087): ups.realpower from the load and the nominal
+// eaton_compute_realpower_info (mge-hid.c:2101): ups.realpower from the load and the nominal
 // apparent power with powerfactor 0.80, once UPS.Flow.[4].ConfigApparentPower is read. No
 // estimate from ups.realpower.nominal any more (it was 40 % of 1000 W = 400 here).
 void test_eaton_realpower_computed_as_mge_hid(void) {
@@ -525,7 +547,7 @@ void test_eaton_realpower_computed_as_mge_hid(void) {
     TEST_ASSERT_EQUAL_STRING("320", ups_data.get("ups.realpower").c_str()); // round(40 * 0.01 * 1000 * 0.8)
 }
 
-// mge-hid.c:2264, on_off_info: outlet.1.status per outlet; outlet.N.switch is gone (ADR 0011 rule 2)
+// mge-hid.c:2278, on_off_info: outlet.1.status per outlet; outlet.N.switch is gone (ADR 0011 rule 2)
 void test_eaton_outlet_status_on_off(void) {
     mockHost._usages.push_back(nutField("UPS.OutletSystem.Outlet.PresentStatus.SwitchOn/Off", 0x00840049, 0x02, 3, 1, { 0, 0, 3 }));
     feed(0x02, 3, 1);
@@ -536,7 +558,7 @@ void test_eaton_outlet_status_on_off(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("outlet.2.switch"));
 }
 
-// mge-hid.c:2170/2177: input.*.nominal come from Flow.[1]. A device with Flow.[4] only (the 3S)
+// mge-hid.c:2184/2177: input.*.nominal come from Flow.[1]. A device with Flow.[4] only (the 3S)
 // has output.*.nominal and no input nominal values (they were the Flow.[4] values)
 void test_eaton_flow4_is_output_only(void) {
     mockHost._iProduct = 2;
@@ -552,7 +574,7 @@ void test_eaton_flow4_is_output_only(void) {
     TEST_ASSERT_FALSE(ups_data.hasKey("input.frequency.nominal"));
 }
 
-// mge-hid.c:2103 mge_upstype_conversion and 2075 beeper_info
+// mge-hid.c:2117 mge_upstype_conversion and 2075 beeper_info
 void test_eaton_ups_type_and_beeper_from_table(void) {
     mockHost._usages.push_back(nutField("UPS.PowerConverter.0xFFFF0041", 0xffff0041, 0x0C, 3));
     mockHost._usages.push_back(nutField("UPS.BatterySystem.Battery.AudibleAlarmControl", 0x0084005a, 0x20, 3));
@@ -626,6 +648,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_capacity_full_never_published);
     RUN_TEST(test_eaton_mfr_dates_kept);
     RUN_TEST(test_eaton_battery_voltage_depends_on_series);
+    RUN_TEST(test_eaton_5p_gen2_model_type);
     RUN_TEST(test_eaton_battery_type_from_string_row);
     RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
     RUN_TEST(test_eaton_country_from_table_row);
@@ -660,6 +683,7 @@ void setup() {
     RUN_TEST(test_eaton_capacity_full_never_published);
     RUN_TEST(test_eaton_mfr_dates_kept);
     RUN_TEST(test_eaton_battery_voltage_depends_on_series);
+    RUN_TEST(test_eaton_5p_gen2_model_type);
     RUN_TEST(test_eaton_battery_type_from_string_row);
     RUN_TEST(test_eaton_abm_discharging_whatever_the_report_order);
     RUN_TEST(test_eaton_country_from_table_row);

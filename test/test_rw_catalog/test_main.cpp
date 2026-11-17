@@ -104,7 +104,7 @@ void test_bind_skips_rows_without_path() {
 }
 
 void test_mge_first_row_wins_battery_charge_low() {
-    // mge-hid.c:2013-2014: the RW RemainingCapacityLimitSetting row comes first
+    // mge-hid.c:2027-2028: the RW RemainingCapacityLimitSetting row comes first
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<HIDUsageDef> usages = {
@@ -175,12 +175,12 @@ void test_finish_init_fails_unread_rows() {
 }
 
 void test_absent_rows_take_default() {
-    // mge-hid.c:2247: outlet.desc, HU_FLAG_ABSENT, default "Main Outlet"
+    // mge-hid.c:2261: outlet.desc, HU_FLAG_ABSENT, default "Main Outlet"
     size_t n;
     const HidInfo* t = mgeHid2Nut(n);
     std::vector<HIDUsageDef> usages = { mk("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 3, 11, { 0, 0, 2 }) };
     std::vector<Bound> b = bind(t, n, usages);
-    // Since US-074 outlet.id (mge-hid.c:2246) reads the same OutletID, before outlet.desc
+    // Since US-074 outlet.id (mge-hid.c:2260) reads the same OutletID, before outlet.desc
     TEST_ASSERT_EQUAL(2, b.size());
     TEST_ASSERT_EQUAL_STRING("outlet.id", b[0].info->info_type);
     TEST_ASSERT_EQUAL_STRING("outlet.desc", b[1].info->info_type);
@@ -253,12 +253,12 @@ void test_enum_values_plain_lookup() {
     size_t n;
     const HidInfo* mge = mgeHid2Nut(n);
     Context ctx;
-    // mge-hid.c:2095, HU_FLAG_ENUM with eaton_enable_disable_info
+    // mge-hid.c:2109, HU_FLAG_ENUM with eaton_enable_disable_info
     TEST_ASSERT_EQUAL_STRING("disabled enabled", joined(enumValues(*findRow(mge, n, "ups.shutdown"), ctx)).c_str());
-    // mge-hid.c:2196: SensitivityMode has no HU_FLAG_ENUM, so no ENUM list
+    // mge-hid.c:2210: SensitivityMode has no HU_FLAG_ENUM, so no ENUM list
     TEST_ASSERT_EQUAL(0, enumValues(*findRow(mge, n, "input.sensitivity"), ctx).size());
     const HidInfo* cps = cpsHid2Nut(n);
-    // cps-hid.c:416, HU_FLAG_ENUM with cps_sensitivity_info
+    // cps-hid.c:432, HU_FLAG_ENUM with cps_sensitivity_info
     TEST_ASSERT_EQUAL_STRING("low normal high", joined(enumValues(*findRow(cps, n, "input.sensitivity"), ctx)).c_str());
 }
 
@@ -598,7 +598,7 @@ public:
     }
 };
 
-// mge-hid.c:2013 battery.charge.low = UPS.PowerSummary.0xFFFF004D, a FEATURE byte 0..100
+// mge-hid.c:2027 battery.charge.low = UPS.PowerSummary.0xFFFF004D, a FEATURE byte 0..100
 static void eatonChargeLow(PlanHost& host) {
     host._usages.push_back(field("UPS.PowerSummary.0xFFFF004D", 0xffff004d, 0x22, 3, 8, 0, 100));
 }
@@ -798,7 +798,7 @@ void test_plan_set_lookup() {
     ASSERT_STATUS(SetStatus::CONVERSION_FAILED, drv.planSet(data, host._usages, "input.sensitivity", "High", plan));
 }
 
-// mge-hid.c:2247 outlet.desc, HU_FLAG_ABSENT with dfl "Main Outlet", bound when
+// mge-hid.c:2261 outlet.desc, HU_FLAG_ABSENT with dfl "Main Outlet", bound when
 // UPS.OutletSystem.Outlet.[1].OutletID exists (Outlet is the collection at depth 2)
 static void eatonOutletId(PlanHost& host) {
     host._usages.push_back(field("UPS.OutletSystem.Outlet.OutletID", 0x00840021, 0x0B, 3, 8, 0, 0, 0, { 0, 0, 2 }));
@@ -908,7 +908,7 @@ void test_reset_driver_side_value_back_to_dfl() {
     feedReport(drv, host, data, 0x0B, 3, 1);
     TEST_ASSERT_EQUAL_STRING("Rack A", data.get("outlet.desc").c_str());
 
-    // The dfl of mge-hid.c:2247 comes back, in the reset and in the next postDecode
+    // The dfl of mge-hid.c:2261 comes back, in the reset and in the next postDecode
     String value = "stale";
     TEST_ASSERT_TRUE(drv.resetDriverSideValue("outlet.desc", value));
     TEST_ASSERT_EQUAL_STRING("Main Outlet", value.c_str());
@@ -1055,7 +1055,7 @@ void test_check_set_value_invalid_enum() {
 
 void test_writable_variables_driver_side_flag() {
     // Eaton: battery.charge.low is a HID FEATURE row, outlet.desc is HU_FLAG_ABSENT
-    // (mge-hid.c:2247) and ups.delay.* is set by NutTable::applyDefaultDelays
+    // (mge-hid.c:2261) and ups.delay.* is set by NutTable::applyDefaultDelays
     PlanHost host;
     EatonDriver drv;
     drv.setup();
@@ -1092,7 +1092,7 @@ void test_describe_case_insensitive() {
 }
 
 void test_ecoflow_table() {
-    // ecoflow-hid.c:181
+    // ecoflow-hid.c:184
     size_t n;
     const HidInfo* t = ecoflowHid2Nut(n);
     std::vector<HIDUsageDef> usages = { mk("UPS.PowerSummary.RemainingCapacityLimit", 0x00850029, 3) };

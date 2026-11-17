@@ -24,15 +24,8 @@ class LegrandDriver : public GenericDriver {
 public:
     const char* getDriverName() const override { return "LegrandDriver"; }
 
-    // legrand-hid.c: beeper.enable writes 2 and beeper.disable writes 3 on
-    // UPS.PowerSummary.AudibleAlarmControl. A 1-bit field keeps the on/off encoding.
-    uint8_t encodeBeeperValue(bool enable, uint16_t bit_size) const override {
-        if (bit_size == 1) return enable ? 1 : 0;
-        return enable ? 2 : 3;
-    }
-
-    // legrand-hid.c has no beeper.mute, and 3 means disabled here
-    bool beeperMuteSupported() const override { return false; }
+    // The beeper (legrand-hid.c:183-186) is beeper_info as in the other subdrivers: disable 1,
+    // enable 2, mute 3, the encoding of IHidDriver::encodeBeeperValue() and the table rows
 
     // ups.delay.* rows of legrand_hid2nut (legrand-hid.c:165-168): applyDefaultDelays() sets
     // them, legrandHid2Nut() cites them as excluded (US-066)
@@ -49,10 +42,6 @@ public:
 
     LegrandDriver() = default;
     virtual ~LegrandDriver() = default;
-
-protected:
-    // ups.beeper.status with the Legrand meaning of the field: not a row of legrand_hid2nut
-    void decodeBeeperStatus(UPSData& data, double v, const HIDUsageDef& def) override;
 };
 
 #endif // LEGRAND_DRIVER_H

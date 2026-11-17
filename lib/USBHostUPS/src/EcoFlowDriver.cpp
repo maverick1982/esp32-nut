@@ -59,7 +59,7 @@ static const char* const kSupersededGenericPaths[] = {
     "UPS.PowerSummary.ConfigVoltage", "UPS.Battery.ConfigVoltage",
     // ups.beeper.status
     "UPS.PowerSummary.AudibleAlarmControl", "UPS.BatterySystem.Battery.AudibleAlarmControl", "UPS.AudibleAlarmControl",
-    // ups.timer.shutdown: only UPS.OutletSystem.Outlet.DelayBeforeShutdown (ecoflow-hid.c:127);
+    // ups.timer.shutdown: only UPS.OutletSystem.Outlet.DelayBeforeShutdown (ecoflow-hid.c:130);
     // the PowerSummary one is an unmapped row upstream ("does not seem to work")
     "UPS.PowerSummary.DelayBeforeShutdown",
     // Kept (ADR 0011 rule 2, standard names ecoflow-hid does not read): ups.realpower.nominal

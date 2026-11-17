@@ -140,7 +140,7 @@ public:
             // instcmd() of usbhid-ups: ups.start.auto set to "yes" (return) or "no" (stayoff)
             // first, when supported, whatever the result (decided 2026-10-29, US-074). Only once
             // the sequence can run, so a refused command leaves the setting alone, and only for
-            // the composite command: a shutdown.return row of the table (one step, apc-hid.c:461)
+            // the composite command: a shutdown.return row of the table (one step, apc-hid.c:466, 468)
             // is run as it is, as upstream does when find_nut_info() finds it (US-076)
             if (start_auto && steps.size() == 2) setVariable(port, "ups.start.auto", ret ? "yes" : "no");
             for (size_t i = 0; i < steps.size(); i++) {
@@ -264,7 +264,7 @@ public:
         const bool startup = shutdown_cmds && has("load.on.delay");
         const bool stop = shutdown_cmds && has("shutdown.stop");
         const bool reboot = shutdown_cmds && has("shutdown.reboot");
-        // A shutdown.return row of its own (apc-hid.c:461, US-076), besides the composite command
+        // A shutdown.return row of its own (apc-hid.c:466, 468, US-076), besides the composite command
         const bool return_row = shutdown_cmds && has("shutdown.return");
 
         size_t count;
@@ -379,7 +379,7 @@ public:
         if (strcmp(name, "load.off.delay") == 0) return single(sd, off_delay, true);
         if (strcmp(name, "load.on.delay") == 0) return single(st, on_delay, true);
         if (strcmp(name, "shutdown.stop") == 0 || strcmp(name, "shutdown.reboot") == 0) {
-            // The row's field and dfl: -1 for shutdown.stop, 10 for shutdown.reboot (mge-hid.c:2331-2332)
+            // The row's field and dfl: -1 for shutdown.stop, 10 for shutdown.reboot (mge-hid.c:2345-2346)
             const char* dfl = nullptr;
             const HIDUsageDef* f = cmdField(cmd_table, n_cmd_table, usages, name, &dfl);
             return single(f, cmdDefault(dfl), strcmp(name, "shutdown.reboot") == 0);
@@ -387,7 +387,7 @@ public:
         if (strcmp(name, "shutdown.return") == 0) {
             // A shutdown.return row of the table is found by find_nut_info() before the composite
             // command: one write on its field of the parameter, or of the row's dfl (instcmd(),
-            // usbhid-ups.c:1112; the Back-UPS CS row of apc-hid.c:461, US-076)
+            // usbhid-ups.c:1112; the Back-UPS BX and CS rows of apc-hid.c:466, 468, US-076)
             const char* dfl = nullptr;
             const HIDUsageDef* row = cmdField(cmd_table, n_cmd_table, usages, "shutdown.return", &dfl);
             if (row) return single(row, cmdDefault(dfl), true);
