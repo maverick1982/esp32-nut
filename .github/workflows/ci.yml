@@ -88,5 +88,11 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
+      # As on the development PCs: the native tests need the MinGW toolchain of
+      # platform_packages in PATH, not the g++ preinstalled on the runner
+      - name: Use the PlatformIO MinGW toolchain
+        shell: pwsh
+        run: echo "$env:USERPROFILE\.platformio\packages\toolchain-gccmingw32\bin" >> $env:GITHUB_PATH
+
       - name: Test Arduino Nano ESP32 profile
         run: pio test -e native-arduino-nano-esp32
