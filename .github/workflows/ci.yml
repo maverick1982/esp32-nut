@@ -1,6 +1,6 @@
 name: CI
 
-# Builds the three release images (US-102) on main and on the pull requests to
+# Builds every release image (US-102) on main and on the pull requests to
 # main: a board profile or a platform change that breaks one image shows up
 # before the release tag. Pushes to other branches do not run it.
 
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32-s3-standard, esp32-p4-eth, esp32-p4-eth-v1]
+        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1]
 
     steps:
       - name: Checkout code
@@ -55,3 +55,44 @@ jobs:
 
       - name: Build firmware
         run: pio run -e ${{ matrix.env }}
+
+  release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Verify board manifests
+        run: |
+          python scripts/release_package.py manifests --version v0.0.0 --out manifests
+          python scripts/check_release_manifests.py --out manifests --version v0.0.0
+
+  # The native environment uses the MinGW toolchain (platform_packages), as on
+  # the development PCs: the board profile tests run on Windows
+  board-profile-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      # As on the development PCs: the native tests need the MinGW toolchain of
+      # platform_packages in PATH, not the g++ preinstalled on the runner
+      - name: Use the PlatformIO MinGW toolchain
+        shell: pwsh
+        run: echo "$env:USERPROFILE\.platformio\packages\toolchain-gccmingw32\bin" >> $env:GITHUB_PATH
+
+      - name: Test Arduino Nano ESP32 profile
+        run: pio test -e native-arduino-nano-esp32

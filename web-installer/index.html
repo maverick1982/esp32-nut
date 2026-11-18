@@ -32,7 +32,7 @@
             </div>
 
             <div class="install-action">
-                <!-- Standard ESP Web Install Button: ESP32-S3 only, as before the P4 -->
+                <!-- Standard ESP Web Install Button: generic ESP32-S3, as before the P4 -->
                 <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
             </div>
 
@@ -88,6 +88,26 @@
                 <p class="p4-boards">
                     <span class="mono">Supported boards:</span> Waveshare ESP32-P4-ETH (also PoE) and boards following the Espressif reference design (IP101 PHY).
                 </p>
+            </section>
+
+            <section class="nano-section" aria-labelledby="nano-title">
+                <div class="p4-header">
+                    <h3 id="nano-title">Arduino Nano ESP32</h3>
+                    <p class="p4-lead">Use this image for an Arduino Nano ESP32. The main button above is for generic ESP32-S3 boards.</p>
+                </div>
+
+                <div class="p4-options">
+                    <div class="p4-option">
+                        <esp-web-install-button manifest="manifest-arduino-nano-esp32.json">
+                            <button slot="activate" type="button" class="p4-button">
+                                <span class="p4-button-label">Arduino Nano ESP32</span>
+                                <span class="p4-button-sub mono">manifest-arduino-nano-esp32.json</span>
+                            </button>
+                        </esp-web-install-button>
+                    </div>
+                </div>
+
+                <p class="nano-help">To install or recover the Nano, enter ROM download mode: connect <strong>B1 to GND</strong>, reset the board, then select its port. This firmware keeps the USB-C controller for the UPS, so it does not provide Arduino USB DFU while running.</p>
             </section>
 
             <div class="support-text">

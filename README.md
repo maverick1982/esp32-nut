@@ -169,6 +169,14 @@ Many generic ESP32-S3 boards with two USB-C ports have hidden solder pads on the
 3. **Power**: Connect a USB wall charger to the port labeled `COM` (or `UART`).
 4. **Data**: Connect a USB-C OTG adapter to the port labeled `USB`, and plug the UPS into it.
 
+### Arduino Nano ESP32
+
+The `arduino-nano-esp32` PlatformIO environment targets the Arduino Nano ESP32 (ESP32-S3, 16 MB flash). Its USB-C connector is the chip's only USB OTG controller, so the firmware uses a generic ESP32-S3 Arduino variant without Arduino's CDC, DFU or double-tap recovery code. This leaves the controller exclusively to ESP-IDF USB Host and keeps ESP32-NUT's double reset available for Wi-Fi recovery.
+
+Build it with `pio run -e arduino-nano-esp32`. The USB-C serial port and Arduino DFU are unavailable while this firmware runs; use the Web UI/System Logs, Wi-Fi OTA, or the hardware UART pins for diagnostics. For a first install or recovery, enter ROM download mode by connecting **B1 to GND** during reset, then flash the complete image with the Web Installer or `esptool` at `0x0`.
+
+The UPS needs host VBUS as well as D+, D- and GND. **Hardware tested:** a USB-C OTG adapter with a USB-A host port and USB-C power input, powered by an Apple 5 W USB-A power adapter, enumerated and reported data from CyberPower CP1500PFCLCDa and CP685AVRG UPSes. Use a power supply suitable for both the Nano and the UPS; this result does not guarantee the current capacity of every adapter or UPS combination.
+
 ### ESP32-P4 (Ethernet)
 
 An ESP32-P4 board with a wired Ethernet port can take the place of the ESP32-S3:
@@ -231,7 +239,7 @@ Source `.3mf` models, original `.f3d` CAD files, and additional photos are avail
 You can install the firmware directly from your browser without downloading any tools!
 👉 <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Install via Browser**</a>
 
-The installer has one button for ESP32-S3 boards and two for ESP32-P4 boards, one per chip revision (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)).
+The installer has a button for generic ESP32-S3 boards, one for the Arduino Nano ESP32 and two for ESP32-P4 boards, one per chip revision (see [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)). For the Nano, connect **B1 to GND** during reset before selecting its serial port.
 
 If the installer finds the board but stops with "Failed to initialize", the board did not enter download mode by itself. Hold the **BOOT** button while you click **Install** (or while you plug in the USB cable) and release it once the installer connects. If it still fails, write the release package with esptool (see **Release packages** below).
 
@@ -241,10 +249,10 @@ If the installer finds the board but stops with "Failed to initialize", the boar
 3. Connect your ESP32-S3 to your PC (using the UART/UART-Prog USB port).
 4. Click **Build** and then **Upload**.
 
-The PlatformIO environments are `esp32-s3-standard`, `esp32-p4-eth` (ESP32-P4 v3.1 or later) and `esp32-p4-eth-v1` (ESP32-P4 before v3).
+The PlatformIO environments are `esp32-s3-standard`, `arduino-nano-esp32`, `esp32-p4-eth` (ESP32-P4 v3.1 or later) and `esp32-p4-eth-v1` (ESP32-P4 before v3). For the Nano, enter ROM download mode (B1 to GND during reset) and upload the complete image; a regular Arduino DFU upload is not supported by this firmware.
 
 **Release packages**
-Every [release](https://github.com/maverick1982/esp32-nut/releases) has one zip per board: `esp32-nut-vX.Y.Z.zip` (ESP32-S3), `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` (ESP32-P4 v3.1 or later) and `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` (ESP32-P4 before v3). Inside, `firmware.factory.bin` is the complete image to write at `0x0` (for example `esptool write-flash 0x0 firmware.factory.bin`, or `esptool.py write_flash 0x0 firmware.factory.bin` with esptool v4), and `README.txt` explains the other files. For an OTA update, upload the zip or its `firmware.bin`.
+Every [release](https://github.com/maverick1982/esp32-nut/releases) has one zip per board: `esp32-nut-vX.Y.Z.zip` (ESP32-S3), `esp32-nut-vX.Y.Z-arduino-nano-esp32.zip` (Arduino Nano ESP32), `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` (ESP32-P4 v3.1 or later) and `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` (ESP32-P4 before v3). Inside, `firmware.factory.bin` is the complete image to write at `0x0` (for example `esptool write-flash 0x0 firmware.factory.bin`, or `esptool.py write_flash 0x0 firmware.factory.bin` with esptool v4), and `README.txt` explains the other files. For an OTA update, upload the zip or its `firmware.bin`.
 
 ### 2. First Boot & Configuration
 

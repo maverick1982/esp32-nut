@@ -40,6 +40,16 @@ BOARDS = {
         "label": "ESP32-S3",
         "button": "the main install button",
         "tested": "tested",
+        "root_manifest": True,
+    },
+    "arduino-nano-esp32": {
+        "chip_family": "ESP32-S3",
+        "esptool_chip": "esp32s3",
+        "bootloader_offset": 0x0,
+        "zip_suffix": "-arduino-nano-esp32",
+        "label": "Arduino Nano ESP32",
+        "button": "the \"Arduino Nano ESP32\" button",
+        "tested": "tested with CyberPower CP1500PFCLCDa and CP685AVRG via powered USB-C OTG",
     },
     "esp32-p4-eth": {
         "chip_family": "ESP32-P4",
@@ -174,12 +184,12 @@ def package(args):
 
 
 def manifests(args):
-    # Root of the web installer: manifest.json stays ESP32-S3 only with the
-    # binaries next to it, as before the P4; the P4 manifests point into the
-    # board folders of this version
+    # Root of the web installer stays the standard ESP32-S3 image so existing
+    # links do not change. Every additional board, including another ESP32-S3,
+    # gets an explicit manifest whose files live in its versioned folder.
     os.makedirs(args.out, exist_ok=True)
     for env in BOARDS:
-        if BOARDS[env]["chip_family"] == "ESP32-S3":
+        if BOARDS[env].get("root_manifest"):
             write_json(os.path.join(args.out, "manifest.json"), manifest(env, args.version))
         else:
             write_json(os.path.join(args.out, "manifest-%s.json" % env),
