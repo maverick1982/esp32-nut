@@ -257,6 +257,35 @@ void test_ups_status_connected_without_model() {
     TEST_ASSERT_EQUAL_STRING("Unknown Model", doc["ups"]["status"].as<const char*>());
 }
 
+// #12: a Q* UPS without the I command (Ippon, INNOVATAE) has only device.mfr
+void test_ups_status_without_model_shows_manufacturer() {
+    mockHost.data.set("device.mfr", "Ippon");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Ippon", doc["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_model_before_manufacturer() {
+    mockHost.data.set("device.mfr", "Ippon");
+    mockHost.data.set("ups.mfr", "EATON");
+    mockHost.data.set("device.model", "3S 700");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("3S 700", doc["ups"]["status"].as<const char*>());
+    mockHost.data.set("ups.model", "Eaton 3S 700");
+    JsonDocument doc2;
+    upsStatus(doc2, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Eaton 3S 700", doc2["ups"]["status"].as<const char*>());
+}
+
+void test_ups_status_empty_model_falls_back() {
+    mockHost.data.set("ups.model", "");
+    mockHost.data.set("ups.mfr", "EATON");
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("EATON", doc["ups"]["status"].as<const char*>());
+}
+
 void test_ups_status_stale_data() {
     mockHost.data.set("ups.model", "Eaton 3S 700");
     mockHost.stale = true;
@@ -2433,6 +2462,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_ups_status_unsupported_qx);
     RUN_TEST(test_ups_status_connected_with_model);
     RUN_TEST(test_ups_status_connected_without_model);
+    RUN_TEST(test_ups_status_without_model_shows_manufacturer);
+    RUN_TEST(test_ups_status_model_before_manufacturer);
+    RUN_TEST(test_ups_status_empty_model_falls_back);
     RUN_TEST(test_ups_status_stale_data);
     RUN_TEST(test_ups_status_waiting_first_data_is_not_stale);
     RUN_TEST(test_commands_null_host);

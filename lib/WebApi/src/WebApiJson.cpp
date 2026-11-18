@@ -65,8 +65,16 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
 void WebApiJson::upsStatusJson(JsonObject ups, IUpsSource* src) {
     if (src && src->isConnected()) {
         {
+            // The model, else the manufacturer: a Q* UPS without the I command has no
+            // ups.model, only the device.mfr its subdriver sets (Ippon, #12)
             auto data = src->getUPSData();
-            ups["status"] = data->hasKey("ups.model") ? data->get("ups.model") : String("Unknown Model");
+            static const char* const NAME_KEYS[] = {"ups.model", "device.model", "ups.mfr", "device.mfr"};
+            String name;
+            for (const char* key : NAME_KEYS) {
+                if (data->hasKey(key)) name = data->get(key);
+                if (name.length() > 0) break;
+            }
+            ups["status"] = name.length() > 0 ? name : String("Unknown Model");
         }
         // The stale banner is for an attached UPS, and not for the first seconds after the
         // claim, while the first full poll runs

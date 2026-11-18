@@ -143,7 +143,8 @@ public:
     // rssi, Ethernet also link_speed and full_duplex. Fields the link does not have now are
     // left out (no gateway in AP mode, no rssi while connecting, ...)
     static void networkStatusJson(JsonObject net, const NetLinkInfo& info);
-    // "ups" of GET /api/system-status: status = ups.model ("Unknown Model" without it) and
+    // "ups" of GET /api/system-status: status = ups.model, else device.model, ups.mfr or
+    // device.mfr, the first not empty ("Unknown Model" without any of them), and
     // stale (attached UPS with stale data, not while waiting for the first poll), or
     // "Disconnected". US-132: a recognised but unsupported UPS gives status
     // "Not supported yet" and unsupported = IUpsSource::unsupportedDevice()
