@@ -1,0 +1,58 @@
+[snapshot]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=8202
+battery.voltage.nominal=12
+battery.voltage=13.8
+driver.name=GenericDriver
+input.voltage.nominal=120
+input.voltage=121.0
+output.voltage=121.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=CPS
+ups.model=ST Series
+ups.realpower.nominal=375
+ups.realpower=0
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.remaining_time_limit_expired=0
+ups.status=OL
+[cmd]
+beeper.enable beeper.disable beeper.toggle beeper.mute test.battery.start.quick test.battery.start.deep test.battery.stop load.off load.on load.off.delay load.on.delay shutdown.return shutdown.stayoff shutdown.stop shutdown.default
+[rw]
+ups.delay.shutdown:10 ups.delay.start:10
+[rw.final]
+ups.delay.shutdown:10 ups.delay.start:10
+[snapshot.final]
+battery.charge.low=10
+battery.charge=100
+battery.runtime=8202
+battery.voltage.nominal=12
+battery.voltage=13.8
+driver.name=GenericDriver
+input.voltage.nominal=120
+input.voltage=121.0
+output.voltage=121.0
+ups.beeper.status=disabled
+ups.delay.shutdown=20
+ups.delay.start=30
+ups.load=0
+ups.mfr=CPS
+ups.model=ST Series
+ups.realpower.nominal=375
+ups.realpower=0
+ups.status.ac_present=1
+ups.status.battery_low=0
+ups.status.charging=0
+ups.status.discharging=0
+ups.status.fully_charged=1
+ups.status.remaining_time_limit_expired=0
+ups.status=OL
+[requests]
+ 32/3 33/3 63/3 34/3 128/3 35/3 136/3 37/3 62/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 63/3 34/3 128/3 35/3 136/3 37/3 62/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3 32/3 33/3 34/3 37/3 40/3

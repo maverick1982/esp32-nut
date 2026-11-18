@@ -789,6 +789,11 @@ void test_replay_powercom_spd750u(void) {
 // 0xFF010043 is under UPS.0xFF0100BA, not UPS.Output: no input.sensitivity row
 #define NUT_ROWS_CPS_UT850EG NUT_ROWS_CPS_COMMON_1 "input.frequency " NUT_ROWS_CPS_COMMON_2 \
     "ups.firmware ups.load ups.power.nominal ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
+// SL700U: the UT850EG layout without Input.Frequency and without Output.ConfigApparentPower
+// (its FEATURE 62 has only ConfigActivePower): no input.frequency, no ups.power.nominal
+// (discussion #79)
+#define NUT_ROWS_CPS_SL700U NUT_ROWS_CPS_COMMON_1 NUT_ROWS_CPS_COMMON_2 \
+    "ups.firmware ups.load ups.realpower.nominal ups.test.result ups.timer.shutdown ups.timer.start"
 
 // Descriptor only, no scenarios: checks the NUT table rows (US-066, US-075)
 void test_replay_cyberpower_br700elcd(void) {
@@ -846,6 +851,20 @@ void test_replay_cyberpower_ut850eg_discussion95(void) {
         // cps_adjust_frequency_scale 0.1 (v1.8.0 served 501.0); battery.voltage "%.1f" as
         // cps_battvolt. No UPS.Battery collection, so no battery.mfr.date row (discussion #95)
         { { "input.frequency", "50.1" }, { "battery.voltage", "13.2" }, { "battery.charge.warning", "20" } },
+        // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x82 [130, 44, 1] = 300.
+        // Input.*VoltageTransfer (FEATURE 0x83/0x84) is bound but not in the dump: not listed
+        "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS,
+        "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS);
+}
+
+// Live dump of v1.16.0 attached to discussion #79 (product string "ST Series"): same layout as
+// the UT850EG, without Input.Frequency. battery.voltage "%.1f" as cps_battvolt (INPUT 0x20
+// [32, 100, 138, 0] = 13.8)
+void test_replay_cyberpower_sl700u_discussion79(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/cyberpower/cyberpower_sl700u_vid0764_pid0501_discussion79.json",
+        CMD_BEEPER CMD_BATTERY_TEST CMD_LOAD_FULL CMD_DEFAULT, nullptr, /* NUT table rows (US-066, US-075) */ NUT_ROWS_CPS_SL700U,
+        { { "battery.voltage", "13.8" }, { "battery.charge.warning", "20" }, { "battery.runtime", "8202" },
+          { "input.voltage", "121.0" }, { "output.voltage", "121.0" }, { "ups.realpower.nominal", "375" } },
         // cps-hid.c rows: FEATURE 0x07 byte 4 = 10; INPUT 0x82 [130, 44, 1] = 300.
         // Input.*VoltageTransfer (FEATURE 0x83/0x84) is bound but not in the dump: not listed
         "battery.charge.low:10 battery.runtime.low:10 " RW_DELAYS,
@@ -1027,6 +1046,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108_report4.json", "OL", nullptr, nullptr },
+        { "test/fixtures/cyberpower/cyberpower_sl700u_vid0764_pid0501_discussion79.json", "OL", nullptr, nullptr },
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json", "OL", nullptr, nullptr },
         { "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json", "Unknown", nullptr, nullptr },
@@ -1040,7 +1060,7 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(31, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(32, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -1067,6 +1087,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json",
     "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json",
     "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108_report4.json",
+    "test/fixtures/cyberpower/cyberpower_sl700u_vid0764_pid0501_discussion79.json",
     "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json",
     "test/fixtures/eaton/eaton_3s_vid0463_pidffff.json",
     "test/fixtures/eaton/eaton_5p_vid0463_pidffff_issue18.json",
@@ -1084,7 +1105,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(31, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(32, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -1133,21 +1154,23 @@ void test_full_poll_reads_only_reports_with_readers(void) {
 // CS500 (INPUT report 51, requested with GET_REPORT INPUT) and the Smart-UPS of #22 (vendor
 // INPUT 137, read by no row). The MGE Protection Center of #111 sends one INPUT report a
 // minute and restarted after 5 minutes of silence before this change.
-// The one exception: on the UT850EG CyberPowerDriver reads battery.runtime.low
-// (PowerSummary.RemainingTimeLimit) from report 130, a vendor report acceptPollReport() never
-// requests, so only INPUT report 130 carries it and the watchdog stays active there.
-// GenericDriver requests report 130, so with it the UT850EG is covered too.
+// The exceptions: on the UT850EG and on the SL700U (same layout) CyberPowerDriver reads
+// battery.runtime.low (PowerSummary.RemainingTimeLimit) from report 130, a vendor report
+// acceptPollReport() never requests, so only INPUT report 130 carries it and the watchdog stays
+// active there. GenericDriver requests report 130, so with it both are covered too.
 void test_input_values_polled_on_every_fixture(void) {
     const char* ut850eg = "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json";
+    const char* sl700u = "test/fixtures/cyberpower/cyberpower_sl700u_vid0764_pid0501_discussion79.json";
     for (const char* f : kAllFixtures) {
         std::string msg = std::string(f) + ": every INPUT value polled";
-        bool expected = strcmp(f, ut850eg) != 0;
+        bool expected = strcmp(f, ut850eg) != 0 && strcmp(f, sl700u) != 0;
         TEST_ASSERT_EQUAL_MESSAGE(expected, FixtureReplayRunner::inputValuesPolled(f, false), msg.c_str());
         TEST_ASSERT_TRUE_MESSAGE(FixtureReplayRunner::inputValuesPolled(f, true), (msg + " (generic)").c_str());
     }
     TEST_ASSERT_TRUE(FixtureReplayRunner::inputValuesPolled(
         "test/fixtures/eaton/mge_protection_center_vid0463_pidffff_issue111.json", false));
     TEST_ASSERT_FALSE(FixtureReplayRunner::inputValuesPolled(ut850eg, false));
+    TEST_ASSERT_FALSE(FixtureReplayRunner::inputValuesPolled(sl700u, false));
 }
 
 // US-075 baseline: everything the five CyberPower fixtures serve after the replay, taken from
@@ -1368,6 +1391,40 @@ static const char* const kCpsSnapshotUt850eg =
     "ups.timer.start=-1\n"
     "ups.status=OL\n";
 
+// SL700U (discussion #79, after the migration): the expected_ups_data of the v1.16.0 dump, key by
+// key. Empty serial, so no ups.serial; no Output.Boost and no ups.test.result (INPUT 0x85 = 0)
+static const char* const kCpsSnapshotSl700u =
+    "battery.charge.low=10\n"
+    "battery.charge.warning=20\n"
+    "battery.charge=100\n"
+    "battery.runtime.low=300\n"
+    "battery.runtime=8202\n"
+    "battery.status=100%\n"
+    "battery.voltage.nominal=12\n"
+    "battery.voltage=13.8\n"
+    "driver.name=CyberPowerDriver\n"
+    "input.voltage.nominal=120\n"
+    "input.voltage=121.0\n"
+    "output.voltage=121.0\n"
+    "ups.beeper.status=disabled\n"
+    "ups.delay.shutdown=60\n"
+    "ups.delay.start=120\n"
+    "ups.load=0\n"
+    "ups.mfr=CPS\n"
+    "ups.model=ST Series\n"
+    "ups.realpower.nominal=375\n"
+    "ups.realpower=0\n"
+    "ups.status.ac_present=1\n"
+    "ups.status.battery_low=0\n"
+    "ups.status.charging=0\n"
+    "ups.status.discharging=0\n"
+    "ups.status.fully_charged=1\n"
+    "ups.status.overload=0\n"
+    "ups.status.remaining_time_limit_expired=0\n"
+    "ups.timer.shutdown=-1\n"
+    "ups.timer.start=-1\n"
+    "ups.status=OL\n";
+
 // A fixture and what it must give
 struct SnapshotCase { const char* file; const char* expected; };
 
@@ -1386,6 +1443,7 @@ void test_cyberpower_snapshot_baseline(void) {
         { "test/fixtures/cyberpower/cyberpower_cp1600epfclcd_vid0764_pid0601_issue48.json", kCpsSnapshotCp1600epfclcd },
         { "test/fixtures/cyberpower/cyberpower_cp2000eipfcrm2u_vid0764_pid0601_issue108.json", kCpsSnapshotCp2000eipfcrm2u },
         { "test/fixtures/cyberpower/cyberpower_ut850eg_vid0764_pid0501_discussion95.json", kCpsSnapshotUt850eg },
+        { "test/fixtures/cyberpower/cyberpower_sl700u_vid0764_pid0501_discussion79.json", kCpsSnapshotSl700u },
     };
     checkSnapshots(fixtures, sizeof(fixtures) / sizeof(fixtures[0]));
 }
@@ -2278,6 +2336,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
+    RUN_TEST(test_replay_cyberpower_sl700u_discussion79);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
@@ -2338,6 +2397,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108);
     RUN_TEST(test_replay_cyberpower_cp2000eipfcrm2u_issue108_report4);
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
+    RUN_TEST(test_replay_cyberpower_sl700u_discussion79);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
