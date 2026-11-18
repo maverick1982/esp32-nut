@@ -58,9 +58,10 @@ test.describe('ESP Web Installer', () => {
     await expect(help).toContainText('Not supported by either image');
   });
 
-  test('ESP Web Tools is pinned to a version that knows the ESP32-P4', async ({ page }) => {
+  // 10.5.2 bundles esptool-js 0.7, which powers on the flash of the ESP32-P4 v3.1/v3.2 (#136)
+  test('ESP Web Tools is pinned to a version that flashes the ESP32-P4 v3.1+', async ({ page }) => {
     await page.goto(indexUrl);
-    await expect(page.locator('script[src*="esp-web-tools@"]')).toHaveAttribute('src', /esp-web-tools@10\.4\.0\//);
+    await expect(page.locator('script[src*="esp-web-tools@"]')).toHaveAttribute('src', /esp-web-tools@10\.5\.2\//);
   });
 
   test('no horizontal scroll on a 375 px phone', async ({ page }) => {
