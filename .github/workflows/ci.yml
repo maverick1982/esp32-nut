@@ -65,9 +65,7 @@ jobs:
       - name: Verify board manifests
         run: |
           python scripts/release_package.py manifests --version v0.0.0 --out manifests
-          test -f manifests/manifest.json
-          test -f manifests/manifest-arduino-nano-esp32.json
-          python -c "import json; root=json.load(open('manifests/manifest.json')); nano=json.load(open('manifests/manifest-arduino-nano-esp32.json')); assert root['builds'][0]['parts'][-1]['path'] == 'firmware.bin'; assert nano['builds'][0]['parts'][-1]['path'] == 'v0.0.0/arduino-nano-esp32/firmware.bin'"
+          python scripts/check_release_manifests.py --out manifests --version v0.0.0
 
   board-profile-tests:
     runs-on: ubuntu-latest
