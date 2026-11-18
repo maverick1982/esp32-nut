@@ -1,0 +1,301 @@
+schema: archetipo/plan/v2
+spec_code: US-141
+body: |
+  ---
+  type: plan
+  title: "US-141: Trasporto USB cypress copiato da nutdrv_qx (#150, #12) — Piano di implementazione"
+  description: "Piano di implementazione per US-141"
+  tags: [plan, implementation, US-141]
+  ---
+  # US-141: Trasporto USB cypress copiato da nutdrv_qx (#150, #12) — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-17
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-007 — Supporto UPS Q* (nutdrv_qx)
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come utente di un UPS Q* con il bridge USB-seriale Cypress (0665:5161, come il Legrand KEOR SP 600 VA della #150 e l'IPPON della #12), voglio che la scheda parli con il mio UPS come fa `nutdrv_qx`, mandando i comandi con SET_REPORT e leggendo le risposte dall'endpoint interrupt IN, in modo che il mio UPS smetta di essere "not supported yet" e i dati arrivino a Home Assistant.
+
+  **Criteri di Accettazione**
+  - `cypress_command()` (`nut_repo/drivers/nutdrv_qx.c:734`) copiato fedelmente: blocchi SET_REPORT da 8 byte (classe, interfaccia, `0x09`, wValue `0x200`) da un buffer azzerato; letture interrupt IN da 8 byte con 1000 ms ciascuna fino al CR o al buffer pieno; ogni risultato `<= 0` fa fallire il comando.
+  - Le righe Q* `cypress` del registro usano questo trasporto; gli altri trasporti non copiati restano "not supported yet".
+  - Il trasporto chiede la pipe interrupt IN; i blocchi arrivati fuori da un comando non finiscono nella risposta successiva.
+  - Limite di attesa entro il criterio di US-136 (passo ≤ 12 s), riportato nella tabella di `QxUsbTransport.h`.
+  - Scambi nella sezione Q* dell'export diagnostico.
+  - Test nativi del trasporto con primitive finte (casi elencati nella spec).
+  - Suite nativa verde e tre build ok.
+  - Zip di test per il reporter della #150, annunciato nella issue.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Quasi tutto c'è già da US-136/US-137: le primitive `setReport()` e `readInterrupt()` di `IQxUsbPrimitives`, la loro implementazione nell'host (`USBHostUPS.cpp:2106-2160`), l'avvio della pipe IN quando il trasporto lo chiede (`needsInterruptIn()` → `_in_pipe_wanted` → `hid_host_device_start()`, `USBHostUPS.cpp:898-950`), la registrazione degli scambi (`QxDriver::Recorder`) e il fake che fa da dispositivo cypress (`FakeQxUsbPrimitives`: raccoglie i blocchi SET_REPORT fino al CR e mette la risposta in blocchi interrupt da 8 byte). Manca solo la classe del trasporto, la sua riga nella tabella e il testo della web UI che elenca i trasporti.
+
+  ### 1. `QxCypressTransport` in `lib/USBHostUPS/src/QxUsbCypress.h/.cpp`
+
+  File nuovi, puri (compilati anche in nativo), con l'intestazione GPL di NUT copiata da `QxUsbKrauler.h` (le righe di `drivers/nutdrv_qx.c`). Copia riga per riga di `cypress_command()` (`nutdrv_qx.c:734-812`):
+
+  - `name()` = `"cypress"`, `BUDGET_MS = 4500`, `needsInterruptIn()` = `true`.
+  - `doCommand(cmd, cmdlen, buf, buflen)`:
+    1. `_usb.discardInput()` (adattamento, vedi sotto);
+    2. `char tmp[QX_SMALLBUF]` azzerato, `tmplen = min(cmdlen, sizeof(tmp))`, `memcpy(tmp, cmd, tmplen)`;
+    3. `for (i = 0; i < tmplen; i += ret)`: `ret = _usb.setReport(0x02 /* Output */, 0, (const uint8_t*)&tmp[i], 8)`; `ret <= 0` → `return ret`. Con `hid_class_request_set_report()` tipo 2 e ID 0 danno esattamente `bmRequestType` classe/interfaccia OUT, `bRequest 0x09`, `wValue 0x200` di NUT; l'ultimo blocco è completato con gli zeri di `tmp`, come upstream;
+    4. `memset(buf, 0, buflen)`; `for (i = 0; (i <= buflen - 8) && memchr(buf, '\r', buflen) == NULL; i += ret)`: `ret = _usb.readInterrupt((uint8_t*)&buf[i], 8, 1000)`; `ret <= 0` → `return ret`;
+    5. `return (int)i` (come upstream: i byte letti, compresi quelli dopo il CR nell'ultimo blocco).
+  - Guardia aggiunta: `buflen < 8` → `QX_USB_ERR_IO` senza traffico (in NUT `buflen - 8` andrebbe in underflow su `size_t`; il motore passa sempre `QX_SMALLBUF` = 512, quindi non cambia nulla in pratica).
+  - Niente `upsdebugx`: comandi, risposte ed errori li registra già `QxDriver::Recorder`.
+
+  **Adattamento registrato nel commento della classe: `discardInput()` prima di ogni comando.** In NUT libusb legge l'endpoint solo durante `usb_interrupt_read()`; qui l'host tiene la pipe IN sempre attiva e accoda ogni blocco ricevuto. Senza lo svuotamento, la coda di una risposta arrivata dopo il timeout di un comando (o un blocco spontaneo) finirebbe in testa alla risposta del comando successivo. Lo fa già `QxLoopbackTransport` (`test/mocks/QxLoopbackTransport.h`), che diventa il riferimento del comportamento.
+
+  **Differenze da NUT accettate (assunzioni della spec):** timeout del control transfer 1500 ms (`QX_CTRL_TIMEOUT_MS`, quello di `hid_host`) invece di 5000 ms; wIndex = interfaccia agganciata invece di 0 fisso.
+
+  ### 2. Registrazione e limite di attesa
+
+  - `QxUsbTransports.cpp`, tabella `ROWS`: riga `{ "cypress", &make<QxCypressTransport>, QxCypressTransport::BUDGET_MS }` con commento `// US-141`, include di `QxUsbCypress.h`. Le righe `cypress` di `DriverRegistry.cpp:117-128` (0665:5161, 05B8:0000, 06DA:0002/0004/0005/0201, 0F03:0001) la usano senza altre modifiche: `claimQxInterface()` crea il driver Q* quando `QxUsbTransports::create()` restituisce un trasporto.
+  - Limite: `qxStepBoundMs(4500)` = 10,5 s ≤ `QX_STEP_BOUND_MAX_MS` (12 s). In un comando normale: 1-2 blocchi SET_REPORT (≤ 1,5 s ciascuno se l'UPS non risponde) e fino a 6-7 letture per una risposta Q1 da 47 byte, che arrivano in pochi ms; con l'UPS muto il comando finisce alla prima attesa scaduta. La scadenza del budget taglia le attese di `readInterrupt()` (già nella primitiva).
+  - Commento della tabella dei budget in `QxUsbTransport.h:54`: la riga `SET_REPORT + interrupt IN (cypress...) <= 4500 ms, set when ported` diventa `cypress (US-141) 4500 ms -> 10.5 s   1-2 SET_REPORT + interrupt reads of 1 s`.
+  - `platformio.ini`, ambiente native: `+<../lib/USBHostUPS/src/QxUsbCypress.cpp>` accanto a `QxUsbKrauler.cpp` (riga 118).
+
+  ### 3. Web UI
+
+  - `data/www/bundle.js:2097`: "So far only the krauler, fabula and hunnox USB transports work." → "So far only the krauler, fabula, hunnox and cypress USB transports work."; commento alle righe 2089-2091 aggiornato. Asset rigenerati con `python scripts/embed_web.py`.
+  - Gli e2e che usano `cypress` come esempio di trasporto non supportato (`e2e/unsupported-ups.spec.ts`, `e2e/system-status.spec.js:31`) passano a `sgs`, che resta non supportato.
+
+  ### 4. Host
+
+  Nessuna modifica prevista. Rischi da guardare nella prova sul campo (non nei test nativi, che non compilano l'host):
+  - `readInterrupt()` non è mai stato usato da un trasporto reale. Se l'endpoint IN avesse MPS > 8, `readInterruptChunk()` copierebbe solo i primi 8 byte del blocco: l'export mostra `ep_in_mps`, che sul Cypress dovrebbe essere 8.
+  - Se l'avvio della pipe IN fallisce, l'host lo riprova già (riga WARN "INPUT pipe not started").
+
+  ---
+
+  ## Strategia di test
+
+  Tutto in nativo: il trasporto è puro e il fake fa già da dispositivo cypress. Nessuna superficie utente nuova oltre a una frase del banner, coperta dagli e2e esistenti: niente nuovi scenari e2e né video dimostrativo. La prova sull'UPS reale la fa il reporter della #150 con lo zip di test: l'Eaton 3S della scheda di test è HID e non passa da qui.
+
+  - **`test/test_qx_usb_transports`**: casi cypress con `FakeQxUsbPrimitives` esteso (registro dei SET_REPORT con tipo, ID e 8 byte; blocchi interrupt iniettati a mano; errore di SET_REPORT a comando): comando di un blocco (`Q1\r`, padding a zero), comando di più blocchi (`S.5R0001\r`, 2 blocchi), risposta su più blocchi, CR nel primo blocco (una sola lettura), buffer pieno senza CR (si ferma a `i > buflen - 8`), errore di SET_REPORT (nessuna lettura), timeout di lettura (`QX_USB_ERR_TIMEOUT` ritornato), budget esaurito con l'UPS muto, `discardInput()` chiamato prima dell'invio, `buflen < 8`.
+  - **`test/test_qx_driver`**: `test_transports_of_the_registry_rows` aggiornato (cypress registrato, 4500 ms, `needsInterruptIn()` vero; `count()` = 4; cypress tolto dai nomi non supportati); rig cypress su 0665:5161 con la tabella Megatec: riconoscimento del protocollo e primo giro completo, scambi `Q1\r` nell'export, passo entro `qxStepBoundMs()` con l'UPS muto, blocco spurio scartato prima del comando successivo.
+  - **e2e**: `e2e/unsupported-ups.spec.ts` e `e2e/system-status.spec.js` con il nuovo testo e `sgs`.
+  - **Regressione:** suite nativa completa, tre build (`esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`), suite e2e completa.
+
+  ---
+
+  _Piano generato via ARchetipo Planning — 2026-11-17_
+tasks:
+  - id: TASK-01
+    title: 'QxCypressTransport: copia di cypress_command() e registrazione nella tabella dei trasporti'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare alle righe `cypress` del registro un trasporto Q* che manda i comandi a blocchi SET_REPORT da 8 byte e legge le risposte a blocchi interrupt IN, come `cypress_command()` di NUT.
+
+      **Leggere:** `nut_repo/drivers/nutdrv_qx.c:734-812` (`cypress_command`), `lib/USBHostUPS/src/QxUsbTransport.h`, `lib/USBHostUPS/src/IQxUsbPrimitives.h`, `lib/USBHostUPS/src/QxUsbKrauler.h` (intestazione GPL e forma delle classi), `lib/USBHostUPS/src/QxUsbTransports.cpp`, `test/mocks/QxLoopbackTransport.h` (forma simile, con `discardInput()`), sezioni 1 e 2 del piano.
+
+      **Modificare:**
+      1. Nuovo `lib/USBHostUPS/src/QxUsbCypress.h`: intestazione SPDX GPL-3.0-or-later con le righe di copyright di `drivers/nutdrv_qx.c` copiate da `QxUsbKrauler.h`; `class QxCypressTransport : public QxUsbTransport` con `static const uint32_t BUDGET_MS = 4500;`, `name()` = "cypress", `commandBudgetMs()`, `needsInterruptIn()` = true, `doCommand()` protetto. Commento della classe: porta di `cypress_command()` (`nutdrv_qx.c:734-812`), adattamento `discardInput()` (pipe IN sempre attiva nell'host, libusb legge solo su richiesta), differenze accettate (1500 ms di control transfer, wIndex = interfaccia agganciata).
+      2. Nuovo `lib/USBHostUPS/src/QxUsbCypress.cpp`: `doCommand()` esattamente come la sezione 1 del piano (passi 1-5 e guardia `buflen < 8` → `QX_USB_ERR_IO`). Il tipo di report è `0x02` (Output), l'ID `0`, ogni blocco 8 byte da `tmp` azzerato; le letture `readInterrupt(&buf[i], 8, 1000)`; ritorna `(int)i`.
+      3. `lib/USBHostUPS/src/QxUsbTransports.cpp`: `#include "QxUsbCypress.h"` e la riga `{ "cypress", &make<QxCypressTransport>, QxCypressTransport::BUDGET_MS }, // US-141` dopo hunnox.
+      4. `lib/USBHostUPS/src/QxUsbTransport.h:54`: riga della tabella dei budget come nella sezione 2 del piano.
+      5. `platformio.ini`, ambiente native (vicino a riga 118): `+<../lib/USBHostUPS/src/QxUsbCypress.cpp>`.
+
+      **Passi:** scrivere i file, compilare la suite `test_qx_driver` in nativo (fallirà solo `test_transports_of_the_registry_rows`, aggiornato in TASK-03).
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" pio test -e native -f test_qx_usb_transports` compila; `pio run -e esp32-s3-standard` ok.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/QxUsbCypress.h — nuovo, classe del trasporto
+      - lib/USBHostUPS/src/QxUsbCypress.cpp — nuovo, copia di cypress_command()
+      - lib/USBHostUPS/src/QxUsbTransports.cpp — riga cypress nella tabella ROWS
+      - lib/USBHostUPS/src/QxUsbTransport.h — commento della tabella dei budget
+      - platformio.ini — QxUsbCypress.cpp nel build_src_filter native
+
+      ## Criteri di Completamento
+      - [ ] `QxUsbTransports::create("cypress", usb)` restituisce un `QxCypressTransport` con budget 4500 ms e `needsInterruptIn()` vero
+      - [ ] `doCommand()` segue riga per riga `cypress_command()` (blocchi da 8 byte, tipo Output ID 0, letture da 8 byte con 1000 ms, uscita a `ret <= 0`, ritorno `i`) più `discardInput()` iniziale e guardia `buflen < 8`
+      - [ ] `qxStepBoundMs(4500)` ≤ `QX_STEP_BOUND_MAX_MS`
+      - [ ] Build `esp32-s3-standard` ok e suite native compilabili
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi del trasporto cypress con FakeQxUsbPrimitives esteso
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** provare in nativo ogni ramo di `QxCypressTransport::doCommand()` contro il comportamento di `cypress_command()`.
+
+      **Leggere:** `test/mocks/FakeQxUsbPrimitives.h`, `test/test_qx_usb_transports/test_main.cpp` (forma dei test krauler/fabula/hunnox e `RUN_TEST`), `lib/USBHostUPS/src/QxUsbCypress.cpp`, strategia di test del piano.
+
+      **Modificare:**
+      1. `test/mocks/FakeQxUsbPrimitives.h` (senza cambiare il comportamento dei test esistenti):
+         - `struct ReportCall { uint8_t type; uint8_t id; std::vector<uint8_t> bytes; }; std::vector<ReportCall> reportCalls;` riempito in `setReport()` per ogni trasferimento partito;
+         - `int failNextSetReport = 0;` se diverso da 0, il prossimo `setReport()` ritorna quel codice (e lo azzera) senza consegnare nulla al dispositivo;
+         - `void queueChunk(const std::string& c)` che accoda un blocco interrupt grezzo in `_chunks`;
+         - `std::vector<uint32_t> readTimeouts;` con il `timeoutMs` di ogni `readInterrupt()` partito.
+      2. `test/test_qx_usb_transports/test_main.cpp`, nuovi test (prefisso `test_cypress_`), con `FakeQxUsbPrimitives usb(MEGATEC_TESTING, QX_MEGATEC.rejected)` o `usb(nullptr)` + `queueChunk()` dove serve:
+         - un comando da un blocco (`Q1\r`): un SET_REPORT tipo 0x02, ID 0, 8 byte = `Q1\r` + 5 zeri; risposta ricostruita uguale a quella della tabella; ritorno = byte letti;
+         - un comando da 9 byte (`S.5R0001\r`): due SET_REPORT, il secondo `\r` + 7 zeri;
+         - risposta su più blocchi: le letture si fermano al blocco con il CR; ogni `readTimeouts` = 1000;
+         - CR nel primo blocco: una sola lettura;
+         - buffer pieno senza CR (`buflen` = 24 e blocchi senza CR): letture a i = 0, 8, 16 e stop, ritorno 24;
+         - errore di SET_REPORT (`failNextSetReport = QX_USB_ERR_PIPE`): ritorna l'errore, nessuna lettura;
+         - timeout di lettura (nessun blocco): ritorna `QX_USB_ERR_TIMEOUT` dopo 1000 ms di clock;
+         - UPS muto con `command()`: il tempo totale resta ≤ `BUDGET_MS` + `QX_CTRL_TIMEOUT_MS`;
+         - `discardInput()` prima dell'invio: un blocco accodato prima del comando non compare nella risposta e `discards` sale di 1;
+         - `buflen < 8`: `QX_USB_ERR_IO`, nessun trasferimento.
+         Aggiungere i `RUN_TEST` corrispondenti.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" pio test -e native -f test_qx_usb_transports` verde.
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - test/mocks/FakeQxUsbPrimitives.h — registro dei SET_REPORT, errore a comando, blocchi iniettati, timeout delle letture
+      - test/test_qx_usb_transports/test_main.cpp — test test_cypress_*
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati hanno un test e passano
+      - [ ] I test krauler/fabula/hunnox esistenti passano senza modifiche alle asserzioni
+      - [ ] Una mutazione di prova (per esempio togliere `discardInput()` o il padding a zero) fa fallire almeno un test, verificato a mano e poi annullato
+    ref: TASK-02
+  - id: TASK-03
+    title: 'test_qx_driver: cypress registrato e rig cypress fino al primo giro completo'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dimostrare in nativo che un UPS sulla riga 0665:5161 arriva al riconoscimento del protocollo e al primo giro con il trasporto cypress, con gli scambi nell'export e il passo entro il limite.
+
+      **Leggere:** `test/test_qx_driver/test_main.cpp` (struct `Rig` righe 25-80, `test_transports_of_the_registry_rows` righe 312-338, `test_krauler_family_reaches_the_protocol_and_first_walk`, `test_krauler_exchanges_in_the_export`, `test_krauler_family_step_bound_with_a_mute_ups`), `test/mocks/FakeQxUsbPrimitives.h`.
+
+      **Modificare:**
+      1. `test_transports_of_the_registry_rows`: aggiungere `{ "cypress", 4500 }` ai trasporti copiati, con `needsInterruptIn()` vero solo per cypress (asserzione per nome); `count()` = 4; togliere "cypress" dall'elenco dei nomi non supportati; aggiornare il commento (US-141).
+      2. `Rig`: nuovo costruttore `Rig(const char* transport, uint16_t vid, uint16_t pid)` che crea il trasporto con `QxUsbTransports::create()` **senza** `usb.stringDevice = true` (il fake risponde con SET_REPORT/interrupt), imposta `lockFlag` e chiama `setup()`. Il costruttore esistente `Rig(const char*)` non cambia.
+      3. Nuovi test:
+         - `test_cypress_reaches_the_protocol_and_first_walk`: `Rig r("cypress", 0x0665, 0x5161)`; `runUntilFirstData()` (alzare n se serve, con un commento: i comandi senza risposta costano 1 s di timeout); diagnostica con `transport` = "cypress", `protocol` = "Megatec 0.10", `probe` = "claimed"; `input.voltage` = "215.0"; stato OL; `ups.vendorid` = "0665"; `needsInterruptIn()` vero; `callsUnderLock` = 0; `longestStep` ≤ `qxStepBoundMs(4500)`;
+         - `test_cypress_exchanges_in_the_export`: dopo il primo giro, uno scambio `Q1\r` con risposta che inizia con `(` e contiene `\r`;
+         - `test_cypress_step_bound_with_a_mute_ups`: `usb.muted = true`, `runFor(60000)`, `longestStep` ≤ `qxStepBoundMs(4500)` e nessun primo giro;
+         - `test_cypress_stray_chunk_is_dropped_before_the_next_command`: dopo il primo giro `usb.queueChunk("junk\r")`, un altro passo: `input.voltage` resta "215.0" e `usb.discards` è aumentato.
+         Aggiungere i `RUN_TEST`.
+
+      **Verifica:** `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" pio test -e native -f test_qx_driver` verde.
+
+      **Blocchi:** TASK-01. `queueChunk()` arriva con TASK-02: se TASK-02 non è ancora fatto, aggiungerlo qui con la stessa firma.
+
+      ## File Coinvolti
+      - test/test_qx_driver/test_main.cpp — registro aggiornato, costruttore Rig, quattro test cypress
+
+      ## Criteri di Completamento
+      - [ ] `test_transports_of_the_registry_rows` riflette cypress copiato e passa
+      - [ ] Il rig cypress raggiunge Megatec 0.10 e il primo giro, con scambi nell'export
+      - [ ] Con l'UPS muto ogni passo resta entro `qxStepBoundMs(4500)`
+      - [ ] Il blocco spurio non altera i valori
+      - [ ] I test esistenti di test_qx_driver passano senza modifiche alle asserzioni (salvo il registro)
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Web UI: cypress nell''elenco dei trasporti del banner, e2e con un trasporto ancora non supportato'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** il banner "not supported yet" elenca anche cypress, e gli e2e smettono di usare cypress come esempio di trasporto non supportato.
+
+      **Leggere:** `data/www/bundle.js:2085-2105`, `e2e/unsupported-ups.spec.ts`, `e2e/system-status.spec.js:25-40`, `scripts/embed_web.py`.
+
+      **Modificare:**
+      1. `data/www/bundle.js`: testo "So far only the krauler, fabula and hunnox USB transports work." → "So far only the krauler, fabula, hunnox and cypress USB transports work."; nel commento sopra, "krauler, fabula and hunnox are ported" → "krauler, fabula, hunnox and cypress are ported" ed esempio `(USB transport: sgs)`.
+      2. Rigenerare gli asset: `python scripts/embed_web.py`.
+      3. `e2e/unsupported-ups.spec.ts`: `QX_TEXT` = 'Q* UPS (USB transport: sgs)', asserzioni con `sgs` e con il nuovo testo "only the krauler, fabula, hunnox and cypress USB transports work"; commento iniziale aggiornato (cypress copiato in US-141).
+      4. `e2e/system-status.spec.js:31`: `unsupported: 'Q* UPS (USB transport: sgs)'` (e le asserzioni collegate, se citano cypress).
+
+      **Verifica:** `npx playwright test e2e/unsupported-ups.spec.ts e2e/system-status.spec.js` verde.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — testo e commento del banner
+      - asset generati da scripts/embed_web.py — rigenerati
+      - e2e/unsupported-ups.spec.ts — esempio sgs e nuovo testo
+      - e2e/system-status.spec.js — esempio sgs
+
+      ## Criteri di Completamento
+      - [ ] Il banner elenca krauler, fabula, hunnox e cypress
+      - [ ] Nessun e2e usa più cypress come trasporto non supportato
+      - [ ] I due file e2e passano
+      - [ ] Gli asset incorporati sono rigenerati (il diff li include)
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Regressione: suite nativa completa, tre build ed e2e'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che il nuovo trasporto non rompe nulla e che il firmware si compila per le tre schede.
+
+      **Leggere:** nessun file nuovo; usare i comandi sotto.
+
+      **Passi:**
+      1. `PATH="$HOME/.platformio/packages/toolchain-gccmingw32/bin:$PATH" pio test -e native` (una suite ERRORED transitoria su Windows va rilanciata da sola prima di considerarla un errore).
+      2. `pio run -e esp32-s3-standard`, `pio run -e esp32-p4-eth`, `pio run -e esp32-p4-eth-v1`; annotare l'uso della flash S3 rispetto a main 7225d4c.
+      3. `npx playwright test` (suite e2e completa).
+
+      **Verifica:** tutte e tre le fasi verdi; numeri (test nativi, e2e, flash) riportati nel riepilogo dell'implementazione.
+
+      **Blocchi:** TASK-02, TASK-03, TASK-04.
+
+      ## File Coinvolti
+      - nessuna modifica prevista; solo esecuzione di test e build
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa completa verde
+      - [ ] Tre build ok, flash S3 annotata
+      - [ ] Suite e2e completa verde
+    ref: TASK-05
+  - id: TASK-06
+    title: 'Zip di test per la #150 e bozza dell''annuncio'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dare al reporter della #150 (ESP32-S3 N16R8 generica) una build da installare e una bozza di commento da pubblicare.
+
+      **Leggere:** `scripts/release_package.py` (comando `package`, `BOARDS`), lo zip esistente `esp32-nut-enum-delay-v3.zip` nella root (struttura e README.txt come modello).
+
+      **Passi:**
+      1. Build con versione di test: `$env:PLATFORMIO_BUILD_FLAGS='-DFIRMWARE_VERSION=\"cypress-v1\"'` (PowerShell) poi `pio run -e esp32-s3-standard`.
+      2. `python scripts/release_package.py package --env esp32-s3-standard --version cypress-v1 --build-dir .pio/build/esp32-s3-standard --out <scratchpad>/pkg/esp32-s3-standard --zip-dir .` → zip nella root, non tracciato.
+      3. Sostituire nel zip il README generato (che rimanda al web installer, che installa l'ultima release) con un README di test in inglese: installazione via OTA dalla web UI con `firmware.bin` oppure flash completo con esptool all'indirizzo 0x0 di `firmware.factory.bin`; cosa cambia (trasporto cypress); cosa mandare dopo 10-15 minuti (System Log ed export USB Diagnostics, sezione `qx` con `ep_in_mps` e gli scambi); come tornare alla v1.16.0.
+      4. Bozza del commento per la #150 in inglese (file nella scratchpad): cosa è stato fatto, come installare, cosa allegare; segnaposto `ZIP_LINK` per lo zip, che allega l'utente. Facoltativa una riga per la #12 (stesso VID/PID). **Non pubblicare:** il commento lo pubblica Claude solo dopo l'ok esplicito dell'utente.
+
+      **Verifica:** `firmware.bin` del zip contiene la stringa `cypress-v1`; lo zip contiene firmware, bootloader, partizioni, boot_app0, factory, manifest e il README di test.
+
+      **Blocchi:** TASK-05. Se la review cambia il codice, rifare lo zip.
+
+      ## File Coinvolti
+      - esp32-nut-cypress-v1.zip (root, non tracciato) — zip di test
+      - file nella scratchpad — README di test e bozza del commento
+
+      ## Criteri di Completamento
+      - [ ] Zip `esp32-nut-cypress-v1.zip` per esp32-s3-standard con la versione cypress-v1
+      - [ ] README di test al posto di quello generato
+      - [ ] Bozza del commento per la #150 pronta, non pubblicata
+    ref: TASK-06

@@ -27,6 +27,16 @@ public:
 
     bool pollingPaused() const override { return paused; }
 
+    std::vector<int> results; // transportResult() of every Q* command (US-141)
+    void transportResult(int ret) override { results.push_back(ret); }
+    int resultCount(int ret) const {
+        int n = 0;
+        for (int r : results) {
+            if (r == ret) n++;
+        }
+        return n;
+    }
+
     int count(const char* fragment) const {
         int n = 0;
         for (const auto& l : lines) {

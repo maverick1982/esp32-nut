@@ -12,6 +12,10 @@ static const int QX_USB_ERR_INVALID_PARAM = -2;
 static const int QX_USB_ERR_NO_DEVICE = -4;
 static const int QX_USB_ERR_TIMEOUT = -7;
 static const int QX_USB_ERR_PIPE = -9;
+// Not a libusb code (QX_USB_ERROR_DESYNC of nutdrv_qx.c): the replies of the device stay out
+// of step with the commands and draining could not fix that (cypress 0665:5161 quirk, US-141).
+// The host resets the device (IQxHostPort::transportResult())
+static const int QX_USB_ERR_DESYNC = -1000;
 
 /**
  * @brief The USB requests a Q* transport needs (ADR 0013, section 3; US-136), on the
@@ -43,8 +47,9 @@ public:
     // QX_USB_ERR_TIMEOUT after timeoutMs, or another error < 0
     virtual int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) = 0;
 
-    // Drops the interrupt IN chunks received outside a command; the other events stay
-    virtual void discardInput() = 0;
+    // Drops the interrupt IN chunks received outside a command; the other events stay.
+    // Returns how many chunks of the bound interface were dropped
+    virtual size_t discardInput() = 0;
 
     /**
      * @brief Budget of the running command (QxUsbTransport::command()).

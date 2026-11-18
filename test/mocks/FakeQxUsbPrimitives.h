@@ -34,11 +34,16 @@ public:
     int discards = 0;
 
     int setReport(uint8_t reportType, uint8_t reportId, const uint8_t* data, size_t len) override {
-        (void)reportType;
-        (void)reportId;
         checkLock();
         if (pastDeadline()) return fail(QX_USB_ERR_TIMEOUT, "budget");
         setReports++;
+        reportCalls.push_back(ReportCall{reportType, reportId, std::vector<uint8_t>(data, data + len)});
+        if (failNextSetReport != 0) {
+            int code = failNextSetReport;
+            failNextSetReport = 0;
+            clock += 2;
+            return fail(code, "scripted");
+        }
         if (muted) {
             clock += QX_CTRL_TIMEOUT_MS;
             return fail(QX_USB_ERR_TIMEOUT, "ESP_ERR_TIMEOUT");
@@ -99,24 +104,34 @@ public:
         checkLock();
         if (pastDeadline()) return fail(QX_USB_ERR_TIMEOUT, "budget");
         reads++;
-        if (_chunks.empty()) {
-            uint32_t wait = timeoutMs;
-            if (_deadline && _deadline - clock < wait) wait = _deadline - clock;
+        readTimeouts.push_back(timeoutMs);
+        uint32_t wait = timeoutMs;
+        if (_deadline && _deadline - clock < wait) wait = _deadline - clock;
+        // No chunk, or the next one arrives after the wait
+        if (_chunks.empty() || (int32_t)(_chunks.front().at - (clock + wait)) > 0) {
             clock += wait;
             return fail(QX_USB_ERR_TIMEOUT, "ESP_ERR_TIMEOUT");
         }
-        clock += 8;
-        std::string c = _chunks.front();
+        if ((int32_t)(_chunks.front().at - clock) > 0) clock = _chunks.front().at; // waited for it
+        else clock += 8;                                                           // already queued
+        std::string c = _chunks.front().bytes;
         _chunks.pop_front();
         size_t n = c.size() < buflen ? c.size() : buflen;
         memcpy(buf, c.data(), n);
         return (int)n;
     }
 
-    void discardInput() override {
+    // Drops the chunks that already arrived, as the host drops the queued ones
+    size_t discardInput() override {
         checkLock();
         discards++;
-        _chunks.clear();
+        size_t n = 0;
+        while (!_chunks.empty() && (int32_t)(_chunks.front().at - clock) <= 0) {
+            _chunks.pop_front();
+            n++;
+        }
+        discarded += n;
+        return n;
     }
 
     void setDeadline(uint32_t deadlineMs) override { _deadline = deadlineMs; }
@@ -130,6 +145,32 @@ public:
 
     // Commands the device received, as QxTestingTransport recorded them
     const std::vector<std::string>& received() const { return device.sent; }
+
+    // --- SET_REPORT and interrupt IN (cypress, US-141) ---
+
+    // One SET_REPORT that started (not the ones refused past the deadline)
+    struct ReportCall {
+        uint8_t type;
+        uint8_t id;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<ReportCall> reportCalls;
+    // != 0: the next SET_REPORT fails with this code, nothing reaches the device
+    int failNextSetReport = 0;
+    // timeoutMs of every readInterrupt() that started
+    std::vector<uint32_t> readTimeouts;
+    // Chunks dropped by discardInput() in all
+    size_t discarded = 0;
+    // Timing of the answers: the first chunk arrives answerDelayMs after the command, the
+    // others chunkGapMs apart (0, 0: all of them at once, already queued)
+    uint32_t answerDelayMs = 0;
+    uint32_t chunkGapMs = 0;
+    // Queues a raw interrupt IN chunk, as if the device had sent it already
+    void queueChunk(const std::string& chunk) { insert(Chunk{clock, chunk}); }
+    // Queues a chunk that arrives at the given fake time
+    void queueChunkAt(uint32_t at, const std::string& chunk) { insert(Chunk{at, chunk}); }
+    // Chunks still queued, arrived or not
+    size_t queuedChunks() const { return _chunks.size(); }
 
     // --- String descriptors (krauler family, US-137) ---
 
@@ -212,13 +253,27 @@ private:
         char buf[512] = {0};
         int n = device.command(_pending.c_str(), _pending.size(), buf, sizeof(buf));
         _pending.clear();
+        uint32_t at = clock + answerDelayMs;
         for (int i = 0; i < n; i += 8) {
-            _chunks.push_back(std::string(buf + i, (size_t)(n - i < 8 ? n - i : 8)));
+            insert(Chunk{at, std::string(buf + i, (size_t)(n - i < 8 ? n - i : 8))});
+            at += chunkGapMs;
         }
     }
 
+    struct Chunk {
+        uint32_t at; // fake time of arrival
+        std::string bytes;
+    };
+
+    // In order of arrival, after the chunks that arrive at the same time
+    void insert(const Chunk& c) {
+        auto it = _chunks.end();
+        while (it != _chunks.begin() && (int32_t)((it - 1)->at - c.at) > 0) --it;
+        _chunks.insert(it, c);
+    }
+
     std::string _pending;
-    std::deque<std::string> _chunks;
+    std::deque<Chunk> _chunks;
     uint32_t _deadline = 0;
     const char* _error = "";
 };

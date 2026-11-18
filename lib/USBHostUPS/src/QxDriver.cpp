@@ -52,7 +52,10 @@ private:
 QxDriver::QxDriver(std::unique_ptr<QxUsbTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
                    const QxSubdriver* const* list)
     : _transport(std::move(transport)), _host(host), _vid(vid), _pid(pid), _recorder(*this),
-      _prober(_recorder, list, &QxDriver::logThunk, this) {}
+      _prober(_recorder, list, &QxDriver::logThunk, this) {
+    // The defaults upsdrv_initups() picks by USB ID once the device is open (US-141)
+    _transport->setDevice(vid, pid);
+}
 
 QxDriver::~QxDriver() = default;
 
@@ -75,6 +78,10 @@ int QxDriver::Recorder::command(const char* cmd, size_t cmdlen, char* buf, size_
         _d._exchanges.add(cmd, len, reinterpret_cast<const uint8_t*>(buf), ret, start, duration,
                           _d._transport->lastError());
     }
+    // upslogx() of the USB subdriver (cypress stale data, US-141)
+    if (const char* notice = _d._transport->takeNotice()) _d._host.log("INFO", notice);
+    // qx_command(): the host resets the device on QX_USB_ERR_DESYNC (US-141)
+    _d._host.transportResult(ret);
     // Issue #91: once per attach, when the transport switched to langid_fix by itself
     if (!_d._langidFixLogged && _d._transport->langidFix()) {
         _d._langidFixLogged = true;

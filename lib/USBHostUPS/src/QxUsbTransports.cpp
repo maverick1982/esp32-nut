@@ -1,5 +1,6 @@
 #include "QxUsbTransports.h"
 #include <string.h>
+#include "QxUsbCypress.h"
 #include "QxUsbKrauler.h"
 
 namespace {
@@ -23,6 +24,7 @@ const Row ROWS[] = {
     { "krauler", &make<QxKraulerTransport>, QxKraulerTransport::BUDGET_MS }, // US-137
     { "fabula",  &make<QxFabulaTransport>,  QxFabulaTransport::BUDGET_MS },  // US-137
     { "hunnox",  &make<QxHunnoxTransport>,  QxHunnoxTransport::BUDGET_MS },  // US-137
+    { "cypress", &make<QxCypressTransport>, QxCypressTransport::BUDGET_MS }, // US-141
     { nullptr, nullptr, 0 }
 };
 

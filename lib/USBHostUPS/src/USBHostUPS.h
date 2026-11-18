@@ -22,6 +22,7 @@
 #include "DiagSweep.h"
 #include "EnumWatchdog.h"
 #include "PortCyclePolicy.h"
+#include "QxDesyncPolicy.h"
 #include "DriverRegistry.h"
 #include "IQxUsbPrimitives.h"
 #include "IQxHostPort.h"
@@ -217,7 +218,7 @@ private:
         int setReport(uint8_t reportType, uint8_t reportId, const uint8_t* data, size_t len) override;
         int getStringDescriptor(uint8_t index, uint16_t langid, uint8_t* buf, size_t buflen) override;
         int readInterrupt(uint8_t* buf, size_t buflen, uint32_t timeoutMs) override;
-        void discardInput() override;
+        size_t discardInput() override;
         void setDeadline(uint32_t deadlineMs) override { _deadline = deadlineMs; }
         void sleepMs(uint32_t ms) override { vTaskDelay(pdMS_TO_TICKS(ms)); }
         uint32_t nowMs() const override { return millis(); }
@@ -226,6 +227,7 @@ private:
         void unlock() const override { _h._mutex.unlock(); }
         void log(const char* level, const char* text) const override { _h.log(level, "%s", text); }
         bool pollingPaused() const override { return _h.isPollingPaused(); }
+        void transportResult(int ret) override { _h.onQxTransportResult(ret); }
     private:
         // QX_USB_ERR_* when no control transfer may start now (no device, link back-off,
         // budget over), 0 otherwise
@@ -349,6 +351,11 @@ private:
     void recoverStuckTransfer(uint32_t now);
     // After a port cycle: true when the poll must not go on (US-122)
     bool servicePortCycleWait(uint32_t now);
+    // Stale at once, then the root port power cycle (US-122, US-141)
+    void powerCyclePort(uint32_t now);
+    // QxDesyncPolicy on the result of a Q* command (US-141), and the reset it asked for
+    void onQxTransportResult(int ret);
+    void resetQxDevice(uint32_t now);
     void logStats(uint32_t now);
     // _op_mutex held; field: the beeper usage to write, nullptr = the active beeper (US-074)
     bool setBeeperLocked(bool enable, const HIDUsageDef* field = nullptr);
@@ -427,7 +434,7 @@ private:
     uint32_t _stat_get_ok;
     uint32_t _stat_get_failed;
     uint32_t _stat_diag_empty = 0; // empty answers of the export read (US-119)
-    uint32_t _stat_port_cycles = 0; // USB port power cycles for a stuck transfer (US-122)
+    uint32_t _stat_port_cycles = 0; // USB port power cycles for a stuck transfer (US-122) or a Q* DESYNC (US-141)
     bool _in_restart_pending;
     uint8_t _in_start_attempts;
     uint32_t _in_restart_at;
@@ -442,6 +449,10 @@ private:
 
     // Stuck control transfer recovered with a USB port power cycle (US-122): poll task only
     PortCyclePolicy _port_cycles;
+    // Q* replies out of step with the commands (US-141): poll task only. The reset runs at
+    // the next service(), after the driver's step returned
+    QxDesyncPolicy _qx_desync;
+    bool _qx_reset_due = false;
 #if defined(NUT_TEST_STUCK_CYCLE) && NUT_TEST_STUCK_CYCLE
     static const uint32_t TEST_STUCK_EVERY_MS = 90000;
     uint32_t _test_stuck_at = 0;    // last time the pipe was not proven, or a cycle waited

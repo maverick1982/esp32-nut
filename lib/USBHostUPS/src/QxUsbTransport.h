@@ -51,7 +51,9 @@ struct QxStringFailure {
  *   krauler, fabula (US-137)                3000 ms -> 7.5 s   2 GET_DESCRIPTOR per command
  *                                                              (langid + index), each <= 1.5 s
  *   hunnox (US-137)                         4500 ms -> 10.5 s  preamble up to 3 GET_DESCRIPTOR + 2
- *   SET_REPORT + interrupt IN (cypress...) <= 4500 ms, set when ported
+ *   cypress (US-141)                        5250 ms -> 12 s    drain of stale input (0665:5161),
+ *                                                              1-2 SET_REPORT + interrupt reads
+ *                                                              of 1 s (3 s on 0665:5161)
  */
 class QxUsbTransport : public IQxTransport {
 public:
@@ -76,6 +78,15 @@ public:
     // The langid_fix in use (issue #91): 0 as NUT without the option, 0x0409 once the
     // krauler or hunnox transport has switched to it by itself (QxLangidFallback)
     virtual uint16_t langidFix() const { return 0; }
+    // VID/PID of the attached device, from QxDriver's constructor before any command: the
+    // defaults upsdrv_initups() picks by USB ID (the cypress 0665:5161 quirk, US-141)
+    virtual void setDevice(uint16_t vid, uint16_t pid) {
+        (void)vid;
+        (void)pid;
+    }
+    // A line for the System Log left by the last command (upslogx() of the subdriver), once;
+    // nullptr when there is none. QxDriver::Recorder logs it as INFO
+    virtual const char* takeNotice() { return nullptr; }
     // The last string read refused by usb_get_string_simple() (issue #91); not present by default
     virtual const QxStringFailure& stringFailure() const {
         static const QxStringFailure none;

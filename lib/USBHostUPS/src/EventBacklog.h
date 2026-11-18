@@ -95,19 +95,22 @@ ChunkRead readInterruptChunk(Source& src, EventBacklog<typename Traits::Event, N
 /**
  * @brief Drops the interrupt IN chunks of the bound interface already queued (received
  * outside a command), with the same rules for the other events. Stops at the first empty
- * receive, or when the backlog is full.
+ * receive, or when the backlog is full. Returns the chunks of the bound interface dropped.
  */
 template <typename Traits, typename Source, size_t N>
-void discardInputChunks(Source& src, EventBacklog<typename Traits::Event, N>& backlog,
-                        typename Traits::Handle bound, uint32_t& dropped) {
+size_t discardInputChunks(Source& src, EventBacklog<typename Traits::Event, N>& backlog,
+                          typename Traits::Handle bound, uint32_t& dropped) {
     typename Traits::Event ev;
+    size_t mine = 0;
     while (!backlog.full() && src.receive(ev, 0)) {
         if (Traits::isInput(ev)) {
             if (Traits::handle(ev) != bound) dropped++;
+            else mine++;
             continue;
         }
         backlog.push(ev);
     }
+    return mine;
 }
 
 #endif // EVENT_BACKLOG_H

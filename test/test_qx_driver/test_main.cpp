@@ -5,6 +5,7 @@
 #include "QxDriver.h"
 #include "QxControl.h"
 #include "QxUsbTransports.h"
+#include "QxUsbCypress.h"
 #include "FirstData.h"
 #include "IUpsControlPort.h"
 #include "FakeQxUsbPrimitives.h"
@@ -39,6 +40,14 @@ struct Rig {
     explicit Rig(const char* transport)
         : driver(QxUsbTransports::create(transport, usb), host, 0x0001, 0x0000) {
         usb.stringDevice = true;
+        usb.lockFlag = &host.locked;
+        driver.setup();
+    }
+
+    // A ported transport of QxUsbTransports on the SET_REPORT + interrupt IN fake device
+    // (cypress, US-141), answered from the Megatec testing_t table
+    Rig(const char* transport, uint16_t vid, uint16_t pid)
+        : driver(QxUsbTransports::create(transport, usb), host, vid, pid) {
         usb.lockFlag = &host.locked;
         driver.setup();
     }
@@ -312,18 +321,19 @@ void test_setup_after_a_recovery_probes_again_and_keeps_the_values(void) {
 void test_transports_of_the_registry_rows(void) {
     FakeQxUsbPrimitives usb(nullptr);
     // The transports of the DriverRegistry Q* rows (qx_usb_id[] of nutdrv_qx): the krauler
-    // family is ported (US-137), the others stay "not supported yet"
-    struct Ported { const char* name; uint32_t budget; };
-    const Ported ported[] = { { "krauler", 3000 }, { "fabula", 3000 }, { "hunnox", 4500 } };
+    // family (US-137) and cypress (US-141) are ported, the others stay "not supported yet"
+    struct Ported { const char* name; uint32_t budget; bool interruptIn; };
+    const Ported ported[] = { { "krauler", 3000, false }, { "fabula", 3000, false }, { "hunnox", 4500, false },
+                              { "cypress", 5250, true } };
     for (const Ported& p : ported) {
         std::unique_ptr<QxUsbTransport> t = QxUsbTransports::create(p.name, usb);
         TEST_ASSERT_NOT_NULL_MESSAGE(t.get(), p.name);
         TEST_ASSERT_EQUAL_STRING(p.name, t->name());
         TEST_ASSERT_EQUAL_UINT32(p.budget, t->commandBudgetMs());
-        TEST_ASSERT_FALSE(t->needsInterruptIn());
+        TEST_ASSERT_EQUAL_MESSAGE(p.interruptIn, t->needsInterruptIn(), p.name);
     }
-    TEST_ASSERT_EQUAL(3, (int)QxUsbTransports::count());
-    const char* names[] = { "cypress", "ablerex", "phoenixtec", "ippon", "phoenix",
+    TEST_ASSERT_EQUAL(4, (int)QxUsbTransports::count());
+    const char* names[] = { "ablerex", "phoenixtec", "ippon", "phoenix",
                             "sgs", "omron", "fuji", "snr", "armac" };
     for (const char* n : names) {
         TEST_ASSERT_NULL_MESSAGE(QxUsbTransports::create(n, usb).get(), n);
@@ -628,6 +638,117 @@ void test_krauler_family_step_bound_with_a_mute_ups(void) {
     }
 }
 
+// The demonstration of US-141: a UPS on the 0665:5161 cypress row (Legrand KEOR SP of #150,
+// IPPON of #12) reaches the protocol claim and the first full walk through SET_REPORT blocks
+// and interrupt IN chunks, as with nutdrv_qx
+void test_cypress_reaches_the_protocol_and_first_walk(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    UsbDiagQx d;
+    r.host.lock();
+    r.driver.fillDiagnostics(d);
+    r.host.unlock();
+    TEST_ASSERT_EQUAL_STRING("cypress", d.transport.c_str());
+    TEST_ASSERT_EQUAL_STRING("Megatec 0.10", d.protocol.c_str());
+    TEST_ASSERT_EQUAL_STRING("claimed", d.probe.c_str());
+    TEST_ASSERT_EQUAL(1, r.host.count("[Q*] Using protocol: Megatec 0.10"));
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(r.data).c_str());
+    TEST_ASSERT_EQUAL_STRING("0665", r.get("ups.vendorid").c_str());
+    TEST_ASSERT_EQUAL_STRING("5161", r.get("ups.productid").c_str());
+    TEST_ASSERT_TRUE(r.driver.needsInterruptIn());
+    TEST_ASSERT_TRUE(r.usb.setReports > 0);
+    TEST_ASSERT_TRUE(r.usb.reads > 0);
+    TEST_ASSERT_EQUAL(0, r.usb.callsUnderLock);
+    TEST_ASSERT_TRUE(r.longestStep <= qxStepBoundMs(r.driver.transportBudgetMs()));
+}
+
+void test_cypress_exchanges_in_the_export(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    UsbDiagQx d;
+    r.host.lock();
+    r.driver.fillDiagnostics(d);
+    r.host.unlock();
+    bool q1Seen = false;
+    for (const UsbDiagQxExchange& x : d.exchanges) {
+        if (x.command != "Q1\r") continue;
+        TEST_ASSERT_EQUAL_INT32(47, x.length);
+        TEST_ASSERT_EQUAL('(', x.answer[0]);
+        TEST_ASSERT_EQUAL('\r', x.answer.back());
+        TEST_ASSERT_EQUAL_STRING("", x.error.c_str());
+        q1Seen = true;
+    }
+    TEST_ASSERT_TRUE(q1Seen);
+}
+
+void test_cypress_step_bound_with_a_mute_ups(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    r.usb.muted = true;
+    r.runFor(60000);
+    TEST_ASSERT_TRUE(r.longestStep > 0);
+    TEST_ASSERT_TRUE(r.longestStep <= qxStepBoundMs(r.driver.transportBudgetMs()));
+    TEST_ASSERT_FALSE(r.driver.initialPollDone());
+    // Mute while polling too
+    Rig p("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(p.runUntilFirstData());
+    p.usb.muted = true;
+    p.runFor(60000);
+    TEST_ASSERT_TRUE(p.longestStep <= qxStepBoundMs(p.driver.transportBudgetMs()));
+}
+
+void test_cypress_stray_chunk_is_dropped_before_the_next_command(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    const int discards = r.usb.discards;
+    r.usb.queueChunk("(999.9 \r"); // the tail of a late answer
+    r.runFor(5000);
+    TEST_ASSERT_TRUE(r.usb.discards > discards);
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage").c_str());
+    TEST_ASSERT_EQUAL_STRING("OL", UPSData::computeUPSStatusString(r.data).c_str());
+}
+
+// 0665:5161 gets the drain quirk from the driver's VID/PID (upsdrv_initups() of NUT), the other
+// cypress rows do not
+void test_cypress_quirk_from_the_vid_pid_of_the_driver(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    bool shortRead = false;
+    for (uint32_t ms : r.usb.readTimeouts) shortRead = shortRead || ms == QxCypressTransport::FLUSH_TIMEOUT_MS;
+    TEST_ASSERT_TRUE(shortRead);
+    Rig p("cypress", 0x06da, 0x0002);
+    TEST_ASSERT_TRUE(p.runUntilFirstData());
+    for (uint32_t ms : p.usb.readTimeouts) TEST_ASSERT_EQUAL_UINT32(QxCypressTransport::READ_TIMEOUT_MS, ms);
+}
+
+// Stale data the UPS sent unasked reaches the System Log once (upslogx(LOG_NOTICE) of NUT)
+void test_cypress_stale_data_notice_in_the_system_log(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    r.usb.queueChunk("(999.9 \r");
+    r.runFor(5000);
+    TEST_ASSERT_EQUAL(1, r.host.count("INFO [Q*] cypress: discarded 1 stale input report(s) before"));
+    r.usb.queueChunk("(999.9 \r");
+    r.runFor(500);
+    TEST_ASSERT_EQUAL_STRING("215.0", r.get("input.voltage").c_str());
+}
+
+// Every command result reaches the host; an endpoint that keeps sending gives
+// QX_USB_ERR_DESYNC, which the host turns into a device reset (QxDesyncPolicy)
+void test_cypress_desync_reaches_the_host(void) {
+    Rig r("cypress", 0x0665, 0x5161);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    TEST_ASSERT_TRUE(r.host.resultCount(QX_USB_ERR_DESYNC) == 0);
+    TEST_ASSERT_FALSE(r.host.results.empty());
+    const int sent = (int)r.usb.received().size();
+    // 8 s of reports, 10 ms apart; the run stops well before they do
+    for (uint32_t k = 1; k <= 800; k++) r.usb.queueChunkAt(r.usb.clock + 10 * k, "(999.9 \r");
+    r.runFor(4000);
+    TEST_ASSERT_TRUE(r.host.resultCount(QX_USB_ERR_DESYNC) >= 1);
+    TEST_ASSERT_EQUAL(sent, (int)r.usb.received().size()); // no command went out meanwhile
+    TEST_ASSERT_TRUE(r.longestStep <= qxStepBoundMs(r.driver.transportBudgetMs()));
+}
+
 #ifdef PIO_UNIT_TESTING
 #ifndef ARDUINO
 int main(int argc, char **argv) {
@@ -656,6 +777,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_krauler_family_reaches_the_protocol_and_first_walk);
     RUN_TEST(test_krauler_exchanges_in_the_export);
     RUN_TEST(test_krauler_family_step_bound_with_a_mute_ups);
+    RUN_TEST(test_cypress_reaches_the_protocol_and_first_walk);
+    RUN_TEST(test_cypress_exchanges_in_the_export);
+    RUN_TEST(test_cypress_step_bound_with_a_mute_ups);
+    RUN_TEST(test_cypress_stray_chunk_is_dropped_before_the_next_command);
+    RUN_TEST(test_cypress_quirk_from_the_vid_pid_of_the_driver);
+    RUN_TEST(test_cypress_stale_data_notice_in_the_system_log);
+    RUN_TEST(test_cypress_desync_reaches_the_host);
     return UNITY_END();
 }
 #endif

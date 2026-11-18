@@ -126,11 +126,13 @@ Some UPS units show up on USB as HID devices but send their data with a protocol
 <summary><b>Q* UPS units</b> (Click to expand tested models)</summary>
 
 - VIDA Armour 1200VA (Protocol `hunnox`, novendor on)
+- IPPON (Protocol `innovatae`)
+- Legrand KEOR SP 600 VA (Protocol `mustek`)
 </details>
 
-- **Supported**: UPS units with USB ID `0001:0000` that NUT handles with the `krauler`, `fabula` or `hunnox` USB subdriver (for example Krauler, Fideltronik/MEC LUPUS, Hunnox and other units whose USB product name is `MEC0003`). Protocols: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` and `q1`.
+- **Supported**: UPS units that NUT handles with the `krauler`, `fabula`, `hunnox` or `cypress` USB subdriver: units with USB ID `0001:0000` (for example Krauler, Fideltronik/MEC LUPUS, Hunnox and other units whose USB product name is `MEC0003`) and units with the Cypress USB bridge (for example the Voltronic Power units with USB ID `0665:5161`, sold as Legrand KEOR SP, IPPON and other brands, Phoenixtec Innova, Unitek Alpha 1200Sx). Protocols: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` and `q1`.
 - **Settings**: if your UPS needs `protocol` or `novendor` in NUT's `ups.conf`, set them in **Board Settings** > **Q\* UPS driver** (see [More Settings](#5-more-settings)). `langid_fix` is applied by itself when the UPS needs it.
-- **Not supported yet**: Q\* UPS units with other USB adapters (Cypress, Phoenix, Ippon, …, such as the Voltronic Power units with USB ID `0665:5161`). The board recognizes them and the Web UI says they are not supported yet.
+- **Not supported yet**: Q\* UPS units with other USB adapters (`phoenix`, `ippon`, `sgs`, … in NUT, for example Mustek Powermust `06da:0003` and GE EP series). The board recognizes them and the Web UI says they are not supported yet.
 
 > [!NOTE]
 > UPS units with a USB-to-serial adapter (USB CDC, CH340, …) or a proprietary protocol are not supported.

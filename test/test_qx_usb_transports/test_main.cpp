@@ -2,6 +2,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include "QxUsbCypress.h"
 #include "QxUsbKrauler.h"
 #include "FakeQxUsbPrimitives.h"
 #include "QxTestingTables.h"
@@ -805,10 +806,336 @@ void test_fabula_has_no_langid_fix(void) {
     TEST_ASSERT_EQUAL(0, t.langidFix());
 }
 
+// --- cypress (US-141): cypress_command(), nutdrv_qx.c:734-812 ---
+
+namespace {
+
+const char Q1_ANSWER[] = "(215.0 195.0 230.0 014 49.0 22.7 30.0 00000000\r"; // 47 bytes
+
+void assertBlock(const FakeQxUsbPrimitives::ReportCall& c, const char* bytes, size_t n) {
+    TEST_ASSERT_EQUAL_HEX8(0x02, c.type); // Output: wValue 0x200 with report ID 0
+    TEST_ASSERT_EQUAL_HEX8(0x00, c.id);
+    TEST_ASSERT_EQUAL(8, (int)c.bytes.size());
+    for (size_t i = 0; i < 8; i++) {
+        TEST_ASSERT_EQUAL_HEX8(i < n ? (uint8_t)bytes[i] : 0, c.bytes[i]);
+    }
+}
+
+} // namespace
+
+void test_cypress_one_block_command_and_multi_chunk_answer(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "Q1\r");
+    // One 8-byte block, padded with zeros
+    TEST_ASSERT_EQUAL(1, (int)usb.reportCalls.size());
+    assertBlock(usb.reportCalls[0], "Q1\r", 3);
+    // 47 bytes in 8-byte chunks: 6 reads of 1000 ms each, the last one carries the CR
+    TEST_ASSERT_EQUAL(47, r.ret);
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, r.text.c_str());
+    TEST_ASSERT_EQUAL(6, (int)usb.readTimeouts.size());
+    for (uint32_t ms : usb.readTimeouts) TEST_ASSERT_EQUAL_UINT32(1000, ms);
+    TEST_ASSERT_EQUAL(1, (int)usb.received().size());
+    TEST_ASSERT_EQUAL_STRING("Q1\r", usb.received()[0].c_str());
+}
+
+void test_cypress_long_command_goes_out_in_two_blocks(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING); // no rejected answer: the fake echoes
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "S.5R0001\r");
+    TEST_ASSERT_EQUAL(2, (int)usb.reportCalls.size());
+    assertBlock(usb.reportCalls[0], "S.5R0001", 8);
+    assertBlock(usb.reportCalls[1], "\r", 1);
+    TEST_ASSERT_EQUAL_STRING("S.5R0001\r", usb.received()[0].c_str());
+    TEST_ASSERT_EQUAL(9, r.ret);
+    TEST_ASSERT_EQUAL_STRING("S.5R0001\r", r.text.c_str());
+}
+
+void test_cypress_cr_in_the_first_chunk_ends_the_read(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.device.override("Q\r", "#OK\r");
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "Q\r");
+    TEST_ASSERT_EQUAL(4, r.ret);
+    TEST_ASSERT_EQUAL_STRING("#OK\r", r.text.c_str());
+    TEST_ASSERT_EQUAL(1, usb.reads);
+}
+
+void test_cypress_full_buffer_without_cr_stops_reading(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.device.override("Q1\r", "AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD"); // 4 chunks, no CR
+    QxCypressTransport t(usb);
+    char buf[32] = {0}; // buflen 24: reads at 0, 8 and 16, then i = 24 > buflen - 8; buf[24] ends the text
+    Run r = send(t, usb, "Q1\r", buf, 24);
+    TEST_ASSERT_EQUAL(24, r.ret);
+    TEST_ASSERT_EQUAL_STRING("AAAAAAAABBBBBBBBCCCCCCCC", r.text.c_str());
+    TEST_ASSERT_EQUAL(3, usb.reads);
+}
+
+void test_cypress_set_report_error_is_returned_without_reads(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.failNextSetReport = QX_USB_ERR_PIPE;
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_PIPE, r.ret);
+    TEST_ASSERT_EQUAL(0, usb.reads);
+    TEST_ASSERT_TRUE(usb.received().empty());
+}
+
+void test_cypress_read_timeout_is_returned(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.device.override("Q1\r", ""); // the UPS takes the command and says nothing
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_TIMEOUT, r.ret);
+    TEST_ASSERT_EQUAL(1, usb.reads);
+    TEST_ASSERT_TRUE(r.tookMs >= 1000);
+    TEST_ASSERT_TRUE(r.tookMs <= 1000 + 10);
+}
+
+void test_cypress_mute_ups_stays_within_the_budget(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.muted = true;
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "S.5R0001\r");
+    TEST_ASSERT_TRUE(r.ret < 0);
+    TEST_ASSERT_TRUE(r.tookMs <= QxCypressTransport::BUDGET_MS + QX_CTRL_TIMEOUT_MS);
+    TEST_ASSERT_EQUAL(0, usb.reads);
+}
+
+void test_cypress_chunks_received_before_the_command_are_dropped(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    usb.queueChunk("(999.9 \r"); // tail of a late answer, or an unsolicited chunk
+    QxCypressTransport t(usb);
+    Run r = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL(1, usb.discards);
+    TEST_ASSERT_EQUAL(47, r.ret);
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, r.text.c_str());
+}
+
+void test_cypress_buffer_shorter_than_a_chunk_fails_without_traffic(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    QxCypressTransport t(usb);
+    char buf[8];
+    Run r = send(t, usb, "Q1\r", buf, 7);
+    TEST_ASSERT_EQUAL(QX_USB_ERR_IO, r.ret);
+    TEST_ASSERT_EQUAL(0, usb.setReports);
+    TEST_ASSERT_EQUAL(0, usb.reads);
+    TEST_ASSERT_EQUAL(0, usb.discards);
+}
+
+void test_cypress_identity(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxCypressTransport t(usb);
+    TEST_ASSERT_EQUAL_STRING("cypress", t.name());
+    TEST_ASSERT_EQUAL_UINT32(5250, t.commandBudgetMs());
+    TEST_ASSERT_TRUE(t.needsInterruptIn());
+}
+
+// --- cypress, 0665:5161 quirk (US-141): NUT PR #3563 and #3720, nutdrv_qx.c:782-856 ---
+
+namespace {
+
+const char F_ANSWER[] = "#230.0 000 024.0 50.0\r";
+
+// A cypress transport on 0665:5161, the quirk on as the default of upsdrv_initups()
+struct QuirkRig {
+    FakeQxUsbPrimitives usb{MEGATEC_TESTING};
+    QxCypressTransport t{usb};
+    QuirkRig() { t.setDevice(0x0665, 0x5161); }
+};
+
+} // namespace
+
+void test_cypress_quirk_follows_the_usb_id(void) {
+    FakeQxUsbPrimitives usb(nullptr);
+    QxCypressTransport t(usb);
+    TEST_ASSERT_FALSE(t.quirk()); // no device yet
+    t.setDevice(0x0665, 0x5161);
+    TEST_ASSERT_TRUE(t.quirk());
+    // The other cypress rows of qx_usb_id[] (Agiler 05b8:0000, Phoenixtec 06da:0002...)
+    t.setDevice(0x06da, 0x0002);
+    TEST_ASSERT_FALSE(t.quirk());
+    t.setDevice(0x0665, 0x5162);
+    TEST_ASSERT_FALSE(t.quirk());
+}
+
+// An idle endpoint: one 25 ms read confirms it, then the reply chunks wait up to 3000 ms each
+void test_cypress_quirk_idle_endpoint_costs_one_short_read(void) {
+    QuirkRig r;
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(47, x.ret);
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, x.text.c_str());
+    TEST_ASSERT_EQUAL(7, (int)r.usb.readTimeouts.size());
+    TEST_ASSERT_EQUAL_UINT32(25, r.usb.readTimeouts[0]);
+    for (size_t i = 1; i < r.usb.readTimeouts.size(); i++) TEST_ASSERT_EQUAL_UINT32(3000, r.usb.readTimeouts[i]);
+    TEST_ASSERT_NULL(r.t.takeNotice());
+}
+
+// Without the quirk the reply chunks keep the 1000 ms of CYPRESS_REPLY_TIMEOUT and no drain read
+void test_cypress_without_quirk_has_no_drain_read(void) {
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    QxCypressTransport t(usb);
+    t.setDevice(0x06da, 0x0002);
+    usb.device.override("Q1\r", "");
+    Run x = send(t, usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_TIMEOUT, x.ret);
+    TEST_ASSERT_EQUAL(1, (int)usb.readTimeouts.size());
+    TEST_ASSERT_EQUAL_UINT32(1000, usb.readTimeouts[0]);
+}
+
+void test_cypress_quirk_reply_timeout_is_3000_ms(void) {
+    QuirkRig r;
+    r.usb.device.override("Q1\r", "");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_TIMEOUT, x.ret);
+    TEST_ASSERT_EQUAL(2, (int)r.usb.readTimeouts.size());
+    TEST_ASSERT_EQUAL_UINT32(3000, r.usb.readTimeouts[1]);
+    TEST_ASSERT_TRUE(x.tookMs >= 25 + 3000);
+    TEST_ASSERT_TRUE(x.tookMs <= 25 + 3000 + 10);
+}
+
+// The field failure of NUT PR #3720: a reply that came after its command timed out must not be
+// taken for the reply of the next command. The drain waits for the rest of it (500 ms quiet)
+void test_cypress_quirk_late_reply_is_drained_not_taken_for_the_next(void) {
+    QuirkRig r;
+    r.usb.answerDelayMs = 3500; // later than the 3000 ms reply timeout
+    Run first = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_TIMEOUT, first.ret);
+    TEST_ASSERT_EQUAL(6, (int)r.usb.queuedChunks()); // the Q1 reply, still on its way
+    r.usb.answerDelayMs = 300; // a UPS takes 80-408 ms to start answering (#3720)
+    r.usb.readTimeouts.clear();
+    Run second = send(r.t, r.usb, "F\r");
+    TEST_ASSERT_EQUAL_STRING(F_ANSWER, second.text.c_str());
+    TEST_ASSERT_EQUAL((int)strlen(F_ANSWER), second.ret);
+    // A reply was outstanding: the first drain read already waits 500 ms
+    TEST_ASSERT_EQUAL_UINT32(500, r.usb.readTimeouts[0]);
+    // The rest of an unread reply is expected: no notice
+    TEST_ASSERT_NULL(r.t.takeNotice());
+    // Without the quirk, a late reply arriving after the next command leads its answer (what
+    // #3720 saw in the field): the Q1 reply comes 100 ms after F was sent, F's 200 ms later
+    FakeQxUsbPrimitives usb(MEGATEC_TESTING);
+    QxCypressTransport plain(usb);
+    usb.answerDelayMs = 1100; // later than the 1000 ms reply timeout
+    TEST_ASSERT_EQUAL(QX_USB_ERR_TIMEOUT, send(plain, usb, "Q1\r").ret);
+    usb.answerDelayMs = 300;
+    TEST_ASSERT_EQUAL('(', send(plain, usb, "F\r").text[0]);
+}
+
+// Data the UPS sent unasked: dropped, logged once, then again only after an idle endpoint
+void test_cypress_quirk_unsolicited_data_is_logged_once(void) {
+    QuirkRig r;
+    r.usb.queueChunk("(999.9 \r");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, x.text.c_str());
+    TEST_ASSERT_EQUAL(1, (int)r.usb.discarded);
+    // After stale data the drain waits 500 ms of quiet, as upstream after its first report
+    TEST_ASSERT_EQUAL_UINT32(500, r.usb.readTimeouts[0]);
+    const char* n = r.t.takeNotice();
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_EQUAL_STRING(
+        "[Q*] cypress: discarded 1 stale input report(s) before Q1: replies were out of step with commands", n);
+    TEST_ASSERT_NULL(r.t.takeNotice()); // taken once
+    // Again: already reported
+    r.usb.queueChunk("(999.9 \r");
+    send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_NULL(r.t.takeNotice());
+    // An idle endpoint before a command ends the report
+    send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_NULL(r.t.takeNotice());
+    r.usb.queueChunk("(999.9 \r");
+    r.usb.queueChunk("(999.9 \r");
+    send(r.t, r.usb, "Q1\r");
+    n = r.t.takeNotice();
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_TRUE(strstr(n, "discarded 2 stale input report(s) before Q1") != nullptr);
+}
+
+// Stale data arriving during the drain counts too, read by read
+void test_cypress_quirk_stale_data_arriving_during_the_drain(void) {
+    QuirkRig r;
+    r.usb.queueChunkAt(r.usb.clock + 10, "(999.9 \r");
+    r.usb.queueChunkAt(r.usb.clock + 200, "(999.9 \r");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, x.text.c_str());
+    // 25 ms (finds the first), 500 ms (the second), 500 ms quiet, then the reply
+    TEST_ASSERT_EQUAL_UINT32(25, r.usb.readTimeouts[0]);
+    TEST_ASSERT_EQUAL_UINT32(500, r.usb.readTimeouts[1]);
+    TEST_ASSERT_EQUAL_UINT32(500, r.usb.readTimeouts[2]);
+    TEST_ASSERT_EQUAL_UINT32(3000, r.usb.readTimeouts[3]);
+    const char* n = r.t.takeNotice();
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_TRUE(strstr(n, "discarded 2 stale") != nullptr);
+}
+
+// An empty report is no reply either: discarded like any other
+void test_cypress_quirk_empty_report_is_discarded(void) {
+    QuirkRig r;
+    r.usb.queueChunkAt(r.usb.clock + 5, "");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(47, x.ret);
+    TEST_ASSERT_EQUAL_STRING(Q1_ANSWER, x.text.c_str());
+}
+
+// An endpoint that keeps sending: QX_USB_ERR_DESYNC after 32 reports, no command sent
+void test_cypress_quirk_busy_endpoint_gives_desync_after_32_reports(void) {
+    QuirkRig r;
+    for (uint32_t k = 1; k <= 40; k++) r.usb.queueChunkAt(r.usb.clock + 10 * k, "(999.9 \r");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_DESYNC, x.ret);
+    TEST_ASSERT_EQUAL(0, r.usb.setReports);
+    TEST_ASSERT_TRUE(r.usb.received().empty());
+    TEST_ASSERT_EQUAL(33, r.usb.reads); // once more than FLUSH_REPORTS
+}
+
+// ... or after 3 s of reports, whichever comes first
+void test_cypress_quirk_busy_endpoint_gives_desync_after_3_seconds(void) {
+    QuirkRig r;
+    for (uint32_t k = 1; k <= 30; k++) r.usb.queueChunkAt(r.usb.clock + 10 + 200 * k, "(999.9 \r");
+    r.usb.queueChunk("(999.9 \r"); // queued already: the drain starts with 500 ms reads
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(QX_USB_ERR_DESYNC, x.ret);
+    TEST_ASSERT_EQUAL(0, r.usb.setReports);
+    TEST_ASSERT_TRUE(r.usb.reads < 32);
+    TEST_ASSERT_TRUE(x.tookMs > QxCypressTransport::FLUSH_BUDGET_MS);
+    TEST_ASSERT_TRUE(x.tookMs <= QxCypressTransport::FLUSH_BUDGET_MS + 250);
+}
+
+// The chunks queued before the drain do not count towards the 32 reports (see the class)
+void test_cypress_quirk_many_queued_chunks_are_no_desync(void) {
+    QuirkRig r;
+    for (int k = 0; k < 40; k++) r.usb.queueChunk("(999.9 \r");
+    Run x = send(r.t, r.usb, "Q1\r");
+    TEST_ASSERT_EQUAL(47, x.ret);
+    TEST_ASSERT_EQUAL(40, (int)r.usb.discarded);
+    const char* n = r.t.takeNotice();
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_TRUE(strstr(n, "discarded 40 stale") != nullptr);
+}
+
+// The readable start of a command names it in the notice (CRC bytes of some protocols)
+void test_cypress_quirk_notice_names_only_the_readable_start(void) {
+    QuirkRig r;
+    r.usb.queueChunk("(999.9 \r");
+    send(r.t, r.usb, "QPI\x01\x02\r");
+    const char* n = r.t.takeNotice();
+    TEST_ASSERT_NOT_NULL(n);
+    TEST_ASSERT_TRUE(strstr(n, "before QPI: replies") != nullptr);
+}
+
+void test_cypress_quirk_mute_ups_stays_within_the_budget(void) {
+    QuirkRig r;
+    r.usb.muted = true;
+    Run x = send(r.t, r.usb, "S.5R0001\r");
+    TEST_ASSERT_TRUE(x.ret < 0);
+    TEST_ASSERT_TRUE(x.tookMs <= QxCypressTransport::BUDGET_MS + QX_CTRL_TIMEOUT_MS);
+}
+
 void test_budgets_keep_the_poll_step_bound(void) {
     TEST_ASSERT_TRUE(qxStepBoundMs(QxKraulerTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
     TEST_ASSERT_TRUE(qxStepBoundMs(QxFabulaTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
     TEST_ASSERT_TRUE(qxStepBoundMs(QxHunnoxTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
+    TEST_ASSERT_TRUE(qxStepBoundMs(QxCypressTransport::BUDGET_MS) <= QX_STEP_BOUND_MAX_MS);
 }
 
 int main(int, char**) {
@@ -856,6 +1183,29 @@ int main(int, char**) {
     RUN_TEST(test_hunnox_preamble_errors_are_ignored);
     RUN_TEST(test_hunnox_empty_answer_and_errors);
     RUN_TEST(test_hunnox_mute_ups_stays_within_the_budget);
+    RUN_TEST(test_cypress_one_block_command_and_multi_chunk_answer);
+    RUN_TEST(test_cypress_long_command_goes_out_in_two_blocks);
+    RUN_TEST(test_cypress_cr_in_the_first_chunk_ends_the_read);
+    RUN_TEST(test_cypress_full_buffer_without_cr_stops_reading);
+    RUN_TEST(test_cypress_quirk_follows_the_usb_id);
+    RUN_TEST(test_cypress_quirk_idle_endpoint_costs_one_short_read);
+    RUN_TEST(test_cypress_without_quirk_has_no_drain_read);
+    RUN_TEST(test_cypress_quirk_reply_timeout_is_3000_ms);
+    RUN_TEST(test_cypress_quirk_late_reply_is_drained_not_taken_for_the_next);
+    RUN_TEST(test_cypress_quirk_unsolicited_data_is_logged_once);
+    RUN_TEST(test_cypress_quirk_stale_data_arriving_during_the_drain);
+    RUN_TEST(test_cypress_quirk_empty_report_is_discarded);
+    RUN_TEST(test_cypress_quirk_busy_endpoint_gives_desync_after_32_reports);
+    RUN_TEST(test_cypress_quirk_busy_endpoint_gives_desync_after_3_seconds);
+    RUN_TEST(test_cypress_quirk_many_queued_chunks_are_no_desync);
+    RUN_TEST(test_cypress_quirk_notice_names_only_the_readable_start);
+    RUN_TEST(test_cypress_quirk_mute_ups_stays_within_the_budget);
+    RUN_TEST(test_cypress_set_report_error_is_returned_without_reads);
+    RUN_TEST(test_cypress_read_timeout_is_returned);
+    RUN_TEST(test_cypress_mute_ups_stays_within_the_budget);
+    RUN_TEST(test_cypress_chunks_received_before_the_command_are_dropped);
+    RUN_TEST(test_cypress_buffer_shorter_than_a_chunk_fails_without_traffic);
+    RUN_TEST(test_cypress_identity);
     RUN_TEST(test_budgets_keep_the_poll_step_bound);
     return UNITY_END();
 }

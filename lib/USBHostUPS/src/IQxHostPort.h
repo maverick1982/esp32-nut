@@ -18,6 +18,9 @@ public:
     // True during the link back-off (USBHostUPS::isPollingPaused()): the driver skips its
     // step, as the HID drivers do, instead of counting refused transfers as failed attempts
     virtual bool pollingPaused() const { return false; }
+    // Result of every Q* command of the transport (qx_command() of NUT, US-141): >= 0 ends a
+    // streak of QX_USB_ERR_DESYNC, which asks the host to reset the device (QxDesyncPolicy)
+    virtual void transportResult(int ret) { (void)ret; }
 };
 
 #endif // I_QX_HOST_PORT_H

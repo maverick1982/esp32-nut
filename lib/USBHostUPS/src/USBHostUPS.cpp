@@ -345,7 +345,16 @@ void USBHostUPS::service() {
     }
 
     if (!_is_ready_to_poll || !_driver) {
+        _qx_reset_due = false; // the device is already gone
         serviceQxRequest(false);
+        return;
+    }
+
+    // US-141: the Q* transport returned QX_USB_ERR_DESYNC during the last step
+    if (_qx_reset_due) {
+        _qx_reset_due = false;
+        serviceQxRequest(false);
+        resetQxDevice(now);
         return;
     }
 
@@ -1173,6 +1182,10 @@ void USBHostUPS::recoverStuckTransfer(uint32_t now) {
     }
     log("WARN", "[USB] Control transfer stuck: power-cycling the USB port (cycle %u since boot)",
         (unsigned)_port_cycles.cyclesSinceBoot());
+    powerCyclePort(now);
+}
+
+void USBHostUPS::powerCyclePort(uint32_t now) {
     {
         // Stale at once, and no more requests to a device that is going away
         std::lock_guard<std::recursive_mutex> lock(_mutex);
@@ -1182,6 +1195,31 @@ void USBHostUPS::recoverStuckTransfer(uint32_t now) {
     _link.reset(now);
     _stat_port_cycles++;
     cycleRootPort();
+}
+
+// IQxHostPort::transportResult(): in the poll task, from inside the Q* driver's step (or a Q*
+// request). The reset waits for the next service(), so the driver is not detached under its
+// own call.
+void USBHostUPS::onQxTransportResult(int ret) {
+    switch (_qx_desync.onResult(ret)) {
+    case QxDesyncPolicy::Action::RESET_DEVICE:
+        _qx_reset_due = true;
+        break;
+    case QxDesyncPolicy::Action::RESTART:
+        // fatalx() of qx_command(): NUT ends the driver
+        requestRestart(QxDesyncPolicy::RESTART_REASON);
+        break;
+    default:
+        break;
+    }
+}
+
+// The QX_USB_ERROR_DESYNC case of qx_command() (US-141): usb_reset() and the reopen of NUT are
+// a root port power cycle here, the UPS re-enumerates and the Q* driver is attached again
+void USBHostUPS::resetQxDevice(uint32_t now) {
+    log("WARN", "[Q*] Replies from the UPS are out of step with commands, power-cycling the USB port (%u/%u)",
+        (unsigned)_qx_desync.resets(), (unsigned)QxDesyncPolicy::RESET_TRIES);
+    powerCyclePort(now);
 }
 
 bool USBHostUPS::servicePortCycleWait(uint32_t now) {
@@ -2008,11 +2046,11 @@ int USBHostUPS::QxUsbPort::readInterrupt(uint8_t* buf, size_t buflen, uint32_t t
     return QX_USB_ERR_IO;
 }
 
-void USBHostUPS::QxUsbPort::discardInput() {
-    if (!_h._hid_dev_handle) return;
+size_t USBHostUPS::QxUsbPort::discardInput() {
+    if (!_h._hid_dev_handle) return 0;
     QxQueueSource src{_h._event_queue};
     uint32_t foreign = 0;
-    discardInputChunks<HidEventTraits>(src, _h._event_backlog, _h._hid_dev_handle, foreign);
+    return discardInputChunks<HidEventTraits>(src, _h._event_backlog, _h._hid_dev_handle, foreign);
 }
 
 void USBHostUPS::answerQxRequest(CommandResult cmd, NutTable::SetStatus set, uint32_t gen) {

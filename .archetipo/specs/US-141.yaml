@@ -1,0 +1,55 @@
+schema: archetipo/spec/v2
+code: US-141
+title: 'Trasporto USB cypress copiato da nutdrv_qx (#150, #12)'
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: HIGH
+points: 3
+status: DONE
+body: |
+  #### US-141: Trasporto USB cypress copiato da nutdrv_qx (#150, #12)
+
+  **Epic:** EP-007 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente di un UPS Q* con il bridge USB-seriale Cypress (0665:5161, come il Legrand KEOR SP 600 VA della #150 e l'IPPON della #12),
+  voglio che la scheda parli con il mio UPS come fa `nutdrv_qx`, mandando i comandi con SET_REPORT e leggendo le risposte dall'endpoint interrupt IN,
+  in modo che il mio UPS smetta di essere "not supported yet" e i dati arrivino a Home Assistant.
+
+  **Dimostrazione**
+  - **Test nativi** con primitive finte. Per ogni comando si controllano: i blocchi SET_REPORT da 8 byte (tipo Output, ID 0, l'ultimo completato con zeri), le letture interrupt da 8 byte fino al CR, la risposta ricostruita, gli errori e il limite di attesa.
+  - **Sulla scheda:** un UPS che corrisponde a una riga `cypress` del registro usa il nuovo trasporto. Il System Log non mostra più "not supported yet". L'export diagnostico mostra `qx.transport: cypress` e gli scambi Q*. Con la build di test, il KEOR del reporter della #150 arriva al riconoscimento del protocollo (Q1 atteso, come nel log `nutdrv_qx` della #12).
+
+  **Criteri di Accettazione**
+  - [ ] `cypress_command()` (`nut_repo/drivers/nutdrv_qx.c:764`) copiato fedelmente: il comando va in un buffer azzerato e si invia a blocchi da 8 byte con SET_REPORT (classe, interfaccia, `0x09`, wValue `0x200`); la risposta si legge a blocchi interrupt IN da 8 byte con 1000 ms di attesa ciascuno (3000 ms con il quirk 0665:5161), finché arriva il CR o il buffer è pieno; qualsiasi risultato `<= 0` fa fallire il comando, come in NUT.
+  - [ ] Le righe Q* `cypress` del registro (`lib/USBHostUPS/src/DriverRegistry.cpp`) usano questo trasporto. Le righe degli altri trasporti non ancora copiati restano "not supported yet".
+  - [ ] Il trasporto chiede la pipe interrupt IN all'host. I blocchi arrivati fuori da un comando, per esempio la coda di una risposta scaduta, non finiscono nella risposta del comando successivo.
+  - [ ] Il limite di attesa del trasporto rispetta il criterio di US-136 (passo di poll ≤ 12 s) e compare nella tabella dei budget di `lib/USBHostUPS/src/QxUsbTransport.h`.
+  - [ ] Gli scambi compaiono nella sezione Q* dell'export diagnostico, come per gli altri trasporti.
+  - [ ] Test nativi del trasporto con primitive finte: comando di un solo blocco e di più blocchi, risposta su più blocchi, CR nel primo blocco, buffer pieno senza CR, errore di SET_REPORT, timeout di lettura, budget esaurito.
+  - [ ] *(Riallineamento del 2026-11-17, NUT master 1c4ab78.)* Il quirk 0665:5161 di `cypress_command()` (NUT PR #3563 e #3720) è copiato: acceso per VID/PID 0665:5161 come default di `upsdrv_initups()`; prima di ogni comando i report vecchi si svuotano (lettura da 25 ms, 500 ms di silenzio dopo una risposta non letta o dati vecchi); dopo 32 report o 3 s di endpoint occupato il comando non parte e il trasporto restituisce `QX_USB_ERR_DESYNC`; ogni blocco della risposta aspetta 3000 ms; i dati mandati dall'UPS senza richiesta vanno una volta nel System Log.
+  - [ ] Su `QX_USB_ERR_DESYNC` l'host spegne e riaccende la porta USB (il reset con riconnessione di NUT), fino a 3 volte di fila; alla quarta riavvia la scheda (il `fatalx` di NUT). Un comando riuscito azzera il conteggio.
+  - [ ] Test nativi del quirk: endpoint libero, risposta in ritardo svuotata e non presa per il comando dopo, dati non richiesti scritti nel log una volta sola, report vuoto, endpoint occupato (32 report e 3 s), molti blocchi già in coda, budget; test della politica DESYNC.
+  - [ ] Suite nativa verde e tre build ok.
+  - [ ] Zip di test per il reporter della #150, annunciato nella issue.
+
+  **Assunzioni**
+  - **Prova sul campo solo dai reporter.** L'Eaton 3S della scheda di test è HID e non usa questo percorso. `readInterrupt()` della scheda non è mai stato usato da un trasporto reale: krauler, fabula e hunnox usano solo GET_DESCRIPTOR. La storia si chiude con suite e build verdi; l'esito sul KEOR arriva dalla build di test e, se servono correzioni, si fanno qui o in una storia nuova.
+  - **Differenze inevitabili da NUT.** L'attesa di un control transfer è di 1500 ms (quella di `hid_host`) invece dei 5000 ms di NUT. Il wIndex è il numero dell'interfaccia agganciata invece di 0 fisso (questi dispositivi hanno una sola interfaccia).
+  - **Il file diagnostico della #150 è vuoto** (driver None, nessuno scambio): ci si basa sul log `nutdrv_qx -DDDD` della #12 (stesso VID/PID, `Q1 0.08`, dati completi).
+  - **Differenze dal quirk di NUT.** Nessuna opzione `cypress_drain_quirk` (segue il VID/PID). I blocchi già in coda nell'host prima dello svuotamento contano come report scartati ma non per il limite dei 32 report e dei 3 s: il bridge ne tiene al massimo 8, la coda dell'host molti di più. Il reset USB è un ciclo di alimentazione della porta.
+  - **Fuori scope:** gli altri trasporti non ancora copiati (sgs, phoenix, ippon, ecc.).
+  - Issue aperte fino alla release: "Refs #150", "Refs #12".
+history:
+  - status: TODO
+    at: "2026-11-17T16:23:30Z"
+  - status: PLANNED
+    at: "2026-11-17T16:28:21Z"
+  - status: IN PROGRESS
+    at: "2026-11-17T16:29:58Z"
+  - status: REVIEW
+    at: "2026-11-17T17:08:08Z"
+  - status: DONE
+    at: "2026-11-18T17:02:14Z"
