@@ -175,7 +175,7 @@ L'ambiente PlatformIO `arduino-nano-esp32` è dedicato all'Arduino Nano ESP32 (E
 
 Compila con `pio run -e arduino-nano-esp32`. Durante l'esecuzione non sono disponibili né la seriale USB-C né Arduino DFU; usa la Web UI/System Logs, l'OTA via Wi-Fi oppure la UART hardware per la diagnostica. Per la prima installazione o il recupero, collega **B1 a GND** durante il reset ed esegui il flash dell'immagine completa con il Web Installer o `esptool` a `0x0`.
 
-L'UPS richiede VBUS dall'host oltre a D+, D- e GND. Usa un adattatore o hub OTG alimentato la cui alimentazione sia sufficiente sia per il Nano sia per l'UPS; non supporre che ogni adattatore fornisca corrente sufficiente. La configurazione OTG alimentata esatta sarà documentata dopo la validazione finale su hardware.
+L'UPS richiede VBUS dall'host oltre a D+, D- e GND. **Provato su hardware:** un adattatore USB-C OTG con porta host USB-A e ingresso di alimentazione USB-C, alimentato da un adattatore Apple USB-A da 5 W, ha enumerato e letto i dati dagli UPS CyberPower CP1500PFCLCDa e CP685AVRG. Usa un'alimentazione adatta sia al Nano sia all'UPS; questo risultato non garantisce la corrente disponibile con ogni combinazione di adattatore e UPS.
 
 ### ESP32-P4 (Ethernet)
 

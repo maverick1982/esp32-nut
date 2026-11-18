@@ -175,7 +175,7 @@ The `arduino-nano-esp32` PlatformIO environment targets the Arduino Nano ESP32 (
 
 Build it with `pio run -e arduino-nano-esp32`. The USB-C serial port and Arduino DFU are unavailable while this firmware runs; use the Web UI/System Logs, Wi-Fi OTA, or the hardware UART pins for diagnostics. For a first install or recovery, enter ROM download mode by connecting **B1 to GND** during reset, then flash the complete image with the Web Installer or `esptool` at `0x0`.
 
-The UPS needs host VBUS as well as D+, D- and GND. Use a powered OTG adapter or hub whose supply can power both the Nano and the UPS; do not assume that an adapter provides enough current for every UPS. The exact powered-OTG setup will be documented after final hardware validation.
+The UPS needs host VBUS as well as D+, D- and GND. **Hardware tested:** a USB-C OTG adapter with a USB-A host port and USB-C power input, powered by an Apple 5 W USB-A power adapter, enumerated and reported data from CyberPower CP1500PFCLCDa and CP685AVRG UPSes. Use a power supply suitable for both the Nano and the UPS; this result does not guarantee the current capacity of every adapter or UPS combination.
 
 ### ESP32-P4 (Ethernet)
 

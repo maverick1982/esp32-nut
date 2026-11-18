@@ -49,7 +49,7 @@ BOARDS = {
         "zip_suffix": "-arduino-nano-esp32",
         "label": "Arduino Nano ESP32",
         "button": "the \"Arduino Nano ESP32\" button",
-        "tested": "pending final powered-OTG validation",
+        "tested": "tested with CyberPower CP1500PFCLCDa and CP685AVRG via powered USB-C OTG",
     },
     "esp32-p4-eth": {
         "chip_family": "ESP32-P4",
