@@ -62,13 +62,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
       - name: Verify board manifests
         run: |
           python scripts/release_package.py manifests --version v0.0.0 --out manifests
           python scripts/check_release_manifests.py --out manifests --version v0.0.0
 
+  # The native environment uses the MinGW toolchain (platform_packages), as on
+  # the development PCs: the board profile tests run on Windows
   board-profile-tests:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
