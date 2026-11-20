@@ -13,7 +13,9 @@
  * - The next ones wait 1, 5 and 15 minutes. A new enumeration of the UPS in the
  *   meantime clears the request and cancels the wait.
  * - After MAX_RESTARTS the board enters degraded mode: no more restarts, data stale,
- *   a banner in the web UI. Only a new enumeration (or a manual reboot) gets it out.
+ *   a banner in the web UI. Only a new enumeration gets it out: the counter survives a
+ *   restart from the Web UI (US-142), so after one the board enters it again as soon as
+ *   the next restart is requested (issue #78).
  * - Fresh data clear the counter, since the restart worked: PROVEN_RESET_MS (30 s) when
  *   the control pipe is proven too (a full poll answered by the UPS), HEALTHY_RESET_MS
  *   (2 min) otherwise, e.g. on a device that only sends INPUT reports.

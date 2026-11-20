@@ -397,9 +397,12 @@ void loop() {
                            (unsigned)restart_policy.consecutive() + 1,
                            (unsigned)(restart_policy.msUntilRestart(now) / 1000), usb_ups.getRestartReason());
         } else if (decision == RestartPolicy::Decision::DEGRADED) {
-            AppLogger::log("ERROR", "[MAIN] Degraded mode: %u restarts in a row, no more restarts (%s). "
-                                    "Replug the UPS or reboot the board.",
-                           (unsigned)restart_policy.consecutive(), usb_ups.getRestartReason());
+            // The counter survives a restart from the Web UI (US-142): only a UPS that comes
+            // back clears it, so the cable is the remedy, not a reboot (issue #78)
+            AppLogger::log("ERROR", "[MAIN] Degraded mode: %u restarts in a row, no more restarts (%s; "
+                                    "the first: %s). Replug the UPS USB cable.",
+                           (unsigned)restart_policy.consecutive(), usb_ups.getRestartReason(),
+                           CrashDiag::firstRestartReason()[0] ? CrashDiag::firstRestartReason() : "unknown");
         } else if (decision == RestartPolicy::Decision::NONE) {
             AppLogger::log("INFO", "[MAIN] Restart no longer needed");
         }

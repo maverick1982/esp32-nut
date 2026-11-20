@@ -19,6 +19,12 @@ static RTC_NOINIT_ATTR char s_restart_reason[64];
 #define RESTART_COUNT_MAGIC 0x4E555443u // "NUTC"
 static RTC_NOINIT_ATTR uint32_t s_restart_count_magic;
 static RTC_NOINIT_ATTR uint8_t s_restart_count;
+// Cause of the first controlled restart of the series (issue #78): the later ones overwrite
+// s_restart_reason, and in degraded mode the banner showed only the last ("UPS not
+// enumerated after the automatic restart"). Valid only with its magic and a counter above 0.
+#define FIRST_RESTART_MAGIC 0x4E555446u // "NUTF"
+static RTC_NOINIT_ATTR uint32_t s_first_restart_magic;
+static RTC_NOINIT_ATTR char s_first_restart_reason[64];
 // Tasks that did not reset the task watchdog, written by the TWDT ISR before the panic
 // and shown once after the TASK_WDT reset (US-110)
 static RTC_NOINIT_ATTR uint32_t s_twdt_magic;
@@ -140,6 +146,11 @@ void begin() {
         s_restart_count_magic = RESTART_COUNT_MAGIC;
         s_restart_count = 0;
     }
+    if (s_restart_count == 0) {
+        s_first_restart_magic = 0;
+    } else if (s_first_restart_magic == FIRST_RESTART_MAGIC) {
+        s_first_restart_reason[sizeof(s_first_restart_reason) - 1] = '\0';
+    }
 
     readCoreDumpSummary();
 }
@@ -157,6 +168,9 @@ void logBootInfo() {
         if (s_restart_count > 0 && !isManualRestart()) {
             AppLogger::log("WARN", "[DIAG] Last controlled restart: %s (%u in a row)",
                            s_last_restart_cause.c_str(), (unsigned)s_restart_count);
+            if (s_restart_count > 1 && firstRestartReason()[0]) {
+                AppLogger::log("WARN", "[DIAG] First controlled restart of the series: %s", firstRestartReason());
+            }
         } else {
             // Restart that is not a USB recovery (e.g. manual AP timeout, US-064)
             AppLogger::log("INFO", "[DIAG] Last controlled restart: %s", s_last_restart_cause.c_str());
@@ -183,7 +197,16 @@ void recordRestartReason(const char* reason) {
 
 void recordControlledRestart(const char* reason) {
     recordRestartReason(reason);
+    if (s_restart_count == 0) {
+        strncpy(s_first_restart_reason, reason ? reason : "", sizeof(s_first_restart_reason) - 1);
+        s_first_restart_reason[sizeof(s_first_restart_reason) - 1] = '\0';
+        s_first_restart_magic = FIRST_RESTART_MAGIC;
+    }
     if (s_restart_count < 255) s_restart_count++;
+}
+
+const char* firstRestartReason() {
+    return (s_restart_count > 0 && s_first_restart_magic == FIRST_RESTART_MAGIC) ? s_first_restart_reason : "";
 }
 
 void recordManualRestart() {
@@ -196,6 +219,7 @@ uint8_t consecutiveRestarts() {
 
 void clearConsecutiveRestarts() {
     s_restart_count = 0;
+    s_first_restart_magic = 0;
 }
 
 void setDegraded(bool degraded, bool upsNotEnumerated) {
@@ -215,6 +239,7 @@ void fillJson(JsonObject obj) {
         if (isManualRestart()) obj["last_restart_manual"] = true;
     }
     obj["consecutive_restarts"] = s_restart_count;
+    if (firstRestartReason()[0]) obj["first_restart_cause"] = firstRestartReason(); // issue #78
     // Fragmentation shows up in multi-day soak tests (review S6)
     obj["heap_free"] = (uint32_t)esp_get_free_heap_size();
     obj["heap_min_free"] = (uint32_t)esp_get_minimum_free_heap_size();

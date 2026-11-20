@@ -22,6 +22,7 @@
 #include "DiagSweep.h"
 #include "EnumWatchdog.h"
 #include "PortCyclePolicy.h"
+#include "PortPowerOnRetry.h"
 #include "QxDesyncPolicy.h"
 #include "DriverRegistry.h"
 #include "IQxUsbPrimitives.h"
@@ -346,7 +347,13 @@ private:
     void retryInterfaceStart(uint32_t now);
     void requestRestart(const char* why);
     void serviceEnumWatchdog(uint32_t now);
+    // Devices whose enumeration completed (issue #78): not usb_host_lib_info(), which counts
+    // a device from its connection on and keeps a cancelled enumeration until a detach
+    int configuredDeviceCount() const;
     void cycleRootPort();
+    // One power on attempt of the root port cycle; then the slow retries of the poll loop
+    void tryRootPortPowerOn(uint32_t now);
+    void servicePortPowerOn(uint32_t now);
     // LinkMonitor asked for a restart with a control transfer stuck in the stack (US-122)
     void recoverStuckTransfer(uint32_t now);
     // After a port cycle: true when the poll must not go on (US-122)
@@ -449,6 +456,8 @@ private:
 
     // Stuck control transfer recovered with a USB port power cycle (US-122): poll task only
     PortCyclePolicy _port_cycles;
+    // Power on of the root port after any cycle, retried until accepted (issue #78): poll task only
+    PortPowerOnRetry _port_power;
     // Q* replies out of step with the commands (US-141): poll task only. The reset runs at
     // the next service(), after the driver's step returned
     QxDesyncPolicy _qx_desync;

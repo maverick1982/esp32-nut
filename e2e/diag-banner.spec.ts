@@ -38,6 +38,33 @@ test.describe('Degraded mode banner', () => {
     await expect(banner).toContainText(REPLUG);
     await expect(banner).not.toContainText(GENERIC);
     await expect(banner).toContainText('Last automatic restart: UPS not enumerated after the automatic restart (4 in a row)');
+    await expect(banner).not.toContainText('First automatic restart');
+  });
+
+  // Issue #78: the later restarts overwrite the cause, the board sends the first one apart
+  test('degraded: shows the cause of the first restart of the series', async ({ page }) => {
+    await openWithDiagnostics(page, {
+      degraded: true,
+      ups_not_enumerated: true,
+      consecutive_restarts: 4,
+      last_restart_cause: 'UPS not enumerated after the automatic restart',
+      first_restart_cause: 'UPS not back after the USB port power cycle',
+    });
+
+    const banner = page.locator('#diag-banner');
+    await expect(banner).toContainText('First automatic restart of the series: UPS not back after the USB port power cycle');
+  });
+
+  test('a single restart: no first restart line', async ({ page }) => {
+    await openWithDiagnostics(page, {
+      consecutive_restarts: 1,
+      last_restart_cause: 'UPS not back after the USB port power cycle',
+      first_restart_cause: 'UPS not back after the USB port power cycle',
+    });
+
+    const banner = page.locator('#diag-banner');
+    await expect(banner).toContainText('Last automatic restart: UPS not back after the USB port power cycle');
+    await expect(banner).not.toContainText('First automatic restart');
   });
 
   test('degraded for another reason keeps the generic text', async ({ page }) => {
@@ -50,7 +77,9 @@ test.describe('Degraded mode banner', () => {
     const banner = page.locator('#diag-banner');
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(GENERIC);
-    await expect(banner).toContainText('Replug the UPS USB cable or reboot the board.');
+    // Issue #78: a board restart does not leave degraded mode, only the cable is suggested
+    await expect(banner).toContainText('Replug the UPS USB cable.');
+    await expect(banner).not.toContainText('reboot the board');
     await expect(banner).not.toContainText(NOT_ENUMERATED);
   });
 
@@ -85,6 +114,19 @@ test.describe('Manual restart in the banner (US-142)', () => {
     const banner = page.locator('#diag-banner');
     await expect(banner).toBeHidden();
     await expect(banner).not.toContainText('Last automatic restart');
+  });
+
+  test('manual restart with a series under way: no first restart line', async ({ page }) => {
+    await openWithDiagnostics(page, {
+      reset_reason: 'SOFTWARE',
+      consecutive_restarts: 2,
+      last_restart_cause: 'Manual restart from the Web UI',
+      last_restart_manual: true,
+      first_restart_cause: 'UPS not back after the USB port power cycle',
+    });
+
+    await expect(page.locator('#lbl-wifi')).toHaveText('Wi-Fi: HomeNetwork');
+    await expect(page.locator('#diag-banner')).toBeHidden();
   });
 
   test('USB recovery restart without the flag: still shown as before', async ({ page }) => {

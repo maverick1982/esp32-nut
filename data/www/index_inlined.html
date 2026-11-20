@@ -7819,13 +7819,21 @@ document.addEventListener('DOMContentLoaded', () => {
             // US-121: port power-cycled and board restarted, the UPS never enumerated
             addLine('The UPS did not come back after the automatic restart: the board restarted ' + diag.consecutive_restarts + ' times in a row and power-cycled its USB port, and the UPS never enumerated. Automatic restarts are suspended and NUT clients get ERR DATA-STALE. Unplug and replug the UPS USB cable.');
         } else if (diag.degraded) {
-            addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable or reboot the board.');
+            // Issue #78: a board restart does not leave degraded mode (the counter survives it,
+            // US-142), only a UPS that comes back does
+            addLine('Degraded mode: the board restarted ' + diag.consecutive_restarts + ' times in a row without recovering the UPS link, so automatic restarts are suspended and NUT clients get ERR DATA-STALE. Replug the UPS USB cable.');
         }
         // US-142: a restart asked from the Web UI is not automatic; it is shown in the
         // title of the Uptime row
         if (diag.last_restart_cause && diag.last_restart_manual !== true) {
             addLine('Last automatic restart: ' + diag.last_restart_cause +
                 (diag.consecutive_restarts > 1 ? ' (' + diag.consecutive_restarts + ' in a row)' : ''));
+        }
+        // Issue #78: the later restarts overwrite the cause, this one started the series.
+        // After a manual restart only in degraded mode, like the line above (US-142)
+        if (diag.first_restart_cause && diag.consecutive_restarts > 1 &&
+            (diag.degraded || diag.last_restart_manual !== true)) {
+            addLine('First automatic restart of the series: ' + diag.first_restart_cause);
         }
         if (diag.last_crash) {
             addLine('Last crash (reset: ' + diag.reset_reason + ') in task "' + diag.last_crash.task + '", PC ' + diag.last_crash.pc + '. Backtrace: ', diag.last_crash.backtrace);

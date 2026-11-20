@@ -34,6 +34,16 @@ public:
     // with frozen values until it is unplugged or the board restarts (issue #138)
     static const uint32_t BX_INPUT_SILENCE_MS = 15000;
     uint32_t inputSilenceFaultMs() const override { return _bx_frozen_inputs ? BX_INPUT_SILENCE_MS : 0; }
+    // Smart-UPS (issues #78, #120): now and then a GET_REPORT is left unanswered, the control
+    // transfer stays stuck and only a USB port power cycle frees it (US-122); now and then a
+    // cycle leaves the UPS off the bus until the cable is replugged. Same relaxed poll
+    // as the BX, so fewer requests and fewer chances: the status still comes at once with the
+    // INPUT reports. Not without the interrupt pipe (PID 0x0003, QUIRK_NO_INTERRUPT_PIPE): there
+    // the quick poll is the only source of the status.
+    static bool isSmartUps(const String& model) { return model.startsWith("Smart-UPS"); }
+    // Back-UPS BX, or a Smart-UPS with its interrupt pipe: quick poll every BX_QUICK_POLL_MS,
+    // static reports once. Public for the tests.
+    bool relaxedPoll() const { return _relaxed_poll; }
     // Public: the host asks the same length for the SET VAR read-modify-write and read back
     uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
         return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
@@ -55,14 +65,15 @@ public:
 
 protected:
     void onLoop(IHidTransport* host, UPSData& data) override;
-    uint32_t quickPollMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }
-    uint32_t maxReportAgeMs() const override { return _back_ups_bx ? BX_QUICK_POLL_MS : GenericDriver::maxReportAgeMs(); }
+    uint32_t quickPollMs() const override { return _relaxed_poll ? BX_QUICK_POLL_MS : GenericDriver::quickPollMs(); }
+    uint32_t maxReportAgeMs() const override { return _relaxed_poll ? BX_QUICK_POLL_MS : GenericDriver::maxReportAgeMs(); }
     // Nominal values, limits, dates: half of the full poll of a BX750MI (issue #60)
-    bool pollStaticReportsOnce() const override { return _back_ups_bx; }
+    bool pollStaticReportsOnce() const override { return _relaxed_poll; }
 
 private:
     bool _back_ups_bx;
     bool _bx_frozen_inputs; // Back-UPS BX but not BXR (issue #138)
+    bool _relaxed_poll;     // Back-UPS BX, or Smart-UPS with the interrupt pipe (issue #78)
 };
 
 #endif // APC_DRIVER_H

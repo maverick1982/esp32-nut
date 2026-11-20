@@ -321,6 +321,7 @@ void USBHostUPS::service() {
         now = millis(); // the read can block up to its 5 s timeout
     }
 
+    servicePortPowerOn(now);
     serviceEnumWatchdog(now);
 
     // The export read stops when the recovery takes over the link (US-119, ADR 0008)
@@ -1122,9 +1123,9 @@ void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
     if (!_enum_wd.armed()) return;
     bool enumerated = _enum_seen;
     if (!enumerated) {
-        // Also a device the HID driver does not report, or an event we missed
-        usb_host_lib_info_t info;
-        enumerated = usb_host_lib_info(&info) == ESP_OK && info.num_devices > 0;
+        // Also a device the HID driver does not report, or an event we missed. Only once its
+        // enumeration completed: a cancelled one is the case this watchdog is for (issue #78)
+        enumerated = configuredDeviceCount() > 0;
     }
 #if defined(NUT_TEST_ENUM_WATCHDOG) && NUT_TEST_ENUM_WATCHDOG
     if (_auto_restart_count == 0) enumerated = false; // test build: the UPS "never" enumerates
@@ -1150,22 +1151,65 @@ void USBHostUPS::serviceEnumWatchdog(uint32_t now) {
     }
 }
 
+// ESP-IDF counts a device object from its connection (usbh_devs_add() in hub.c), and a
+// cancelled enumeration leaves it allocated (usbh_dev_close() frees only a device that is gone)
+// until a detach: usb_host_lib_info().num_devices was above 0 right when the UPS failed to
+// enumerate, and the watchdog disarmed itself in the very case it is for (issue #78). The
+// address list holds only configured devices with an address, not under enumeration.
+int USBHostUPS::configuredDeviceCount() const {
+    uint8_t addrs[4];
+    int num = 0;
+    if (usb_host_device_addr_list_fill(sizeof(addrs), addrs, &num) != ESP_OK) return 0;
+    return num;
+}
+
 // The root port of a cancelled enumeration stays disabled until a detach (hub.c). Powering
 // it off frees the device node, powering it on lets an attached device connect again. The
 // boards do not switch VBUS with it: the UPS stays powered, like across esp_restart().
 // With a device attached (US-122) the USBH gives the stuck control URB back before DEV_GONE.
-// Poll task, _op_mutex held: the pause blocks no request of ours.
+// Poll task, _op_mutex held: the pause blocks no request of ours. The power on is refused
+// until the HCD port is out of RECOVERY (the device freed): retried every 50 ms for 3 s here,
+// then every second from service() (PortPowerOnRetry, issue #78).
 void USBHostUPS::cycleRootPort() {
     esp_err_t err = usb_host_lib_set_root_port_power(false);
     if (err != ESP_OK) {
         log("WARN", "[USB] USB port power off failed: %s", esp_err_to_name(err));
         return;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
-    err = usb_host_lib_set_root_port_power(true);
-    if (err != ESP_OK) {
-        log("WARN", "[USB] USB port power on failed: %s", esp_err_to_name(err));
+    uint32_t now = millis();
+    _port_power.start(now);
+    while (_port_power.inFastWindow(now)) {
+        uint32_t wait = _port_power.msUntilDue(now);
+        if (wait) vTaskDelay(pdMS_TO_TICKS(wait));
+        now = millis();
+        tryRootPortPowerOn(now);
     }
+}
+
+void USBHostUPS::tryRootPortPowerOn(uint32_t now) {
+    if (!_port_power.due(now)) return;
+    esp_err_t err = usb_host_lib_set_root_port_power(true);
+    switch (_port_power.onResult(err == ESP_OK, now)) {
+    case PortPowerOnRetry::Outcome::DONE:
+        // A retried power on is the evidence that the 500 ms were not enough
+        if (_port_power.attempts() > 1) {
+            log("INFO", "[USB] USB port powered on after %u ms (%u attempts)",
+                (unsigned)(now - _port_power.offSince()), (unsigned)_port_power.attempts());
+        }
+        break;
+    case PortPowerOnRetry::Outcome::STILL_OFF:
+        log("WARN", "[USB] USB port power on refused for %u ms (%s): retrying every %u s",
+            (unsigned)(now - _port_power.offSince()), esp_err_to_name(err),
+            (unsigned)(PortPowerOnRetry::SLOW_RETRY_MS / 1000));
+        break;
+    default:
+        break;
+    }
+}
+
+// The slow retries after the fast window of cycleRootPort()
+void USBHostUPS::servicePortPowerOn(uint32_t now) {
+    if (_port_power.pending()) tryRootPortPowerOn(now);
 }
 
 // A timed-out control URB stays in flight in the ESP-IDF stack (issue #120): switching the

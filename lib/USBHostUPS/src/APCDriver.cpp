@@ -14,6 +14,7 @@
 
 #include "APCDriver.h"
 #include "IHidTransport.h"
+#include "Quirks.h"
 #include <string.h>
 
 /**
@@ -24,8 +25,8 @@
  * - Reference: nut_repo/drivers/apc-hid.c
  * - Every variable, the status and the instant commands come from apcHid2Nut() (US-076,
  *   ADR 0011): the genericHid2Nut() rows of the same keys are superseded below, and the driver
- *   keeps only hooks: apc_format_model() (splitProduct, issue #76) and the Back-UPS BX poll
- *   and request length (issue #60).
+ *   keeps only hooks: apc_format_model() (splitProduct, issue #76), the Back-UPS BX poll
+ *   and request length (issue #60), and the same relaxed poll on the Smart-UPS (issue #78).
  * - apc_fix_report_desc is not needed: it widens LogMin/LogMax of UPS.Input.Voltage on the
  *   Back-UPS XS 1400U, and extractUsage() never clips a value to the Logical Maximum.
  * - disable_interrupt_pipe() of PID 0x0003/0x0004 is QUIRK_NO_INTERRUPT_PIPE in Quirks.h
@@ -34,12 +35,13 @@
  *   firmwares, here only requestLength() of the BX).
  */
 
-APCDriver::APCDriver() : _back_ups_bx(false), _bx_frozen_inputs(false) {}
+APCDriver::APCDriver() : _back_ups_bx(false), _bx_frozen_inputs(false), _relaxed_poll(false) {}
 
 void APCDriver::setup() {
     GenericDriver::setup();
     _back_ups_bx = false;
     _bx_frozen_inputs = false;
+    _relaxed_poll = false;
 }
 
 bool APCDriver::splitProduct(const String& product, String& model, String& firmware, String& aux) {
@@ -75,6 +77,8 @@ void APCDriver::onLoop(IHidTransport* host, UPSData& data) {
     const String model = data.get("ups.model");
     _back_ups_bx = isBackUpsBX(model);
     _bx_frozen_inputs = _back_ups_bx && !isBackUpsBXR(model);
+    const bool interrupt_pipe = !(host->getQuirks() & QUIRK_NO_INTERRUPT_PIPE);
+    _relaxed_poll = _back_ups_bx || (isSmartUps(model) && interrupt_pipe);
 }
 
 // The genericHid2Nut() rows (US-079; standard mappings of GenericDriver before) whose keys come from apcHid2Nut(),

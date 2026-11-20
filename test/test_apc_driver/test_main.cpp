@@ -2,6 +2,7 @@
 #include "APCDriver.h"
 #include "IHidTransport.h"
 #include "UPSData.h"
+#include "Quirks.h"
 
 class MockAPCHost : public IHidTransport {
 public:
@@ -17,7 +18,8 @@ public:
     const HIDParser* getHIDParser() const override { return &_hid_parser; }
     const std::vector<HIDUsageDef>& getUsages() const override { return _usages; }
     String getActiveBeeperPath() const override { return "UPS.PowerSummary.AudibleAlarmControl"; }
-    uint32_t getQuirks() const override { return 0; }
+    uint32_t _quirks = 0;
+    uint32_t getQuirks() const override { return _quirks; }
     bool isPollingPaused() const override { return false; }
     bool requestReport(uint8_t report_id, uint8_t report_type, uint16_t) override {
         _requestedReports.push_back({report_id, report_type});
@@ -38,6 +40,7 @@ void setUp(void) {
     mockHost._usages.clear();
     mockHost._requestedStrings.clear();
     mockHost._requestedReports.clear();
+    mockHost._quirks = 0;
     mockHost._iManufacturer = 0;
     mockHost._iProduct = 0;
     mockHost._iSerialNumber = 0;
@@ -528,6 +531,55 @@ void test_apc_bx_input_silence_fault(void) {
     TEST_ASSERT_EQUAL_UINT32(0, driver.inputSilenceFaultMs());
 }
 
+// Issue #78: the Smart-UPS gets the relaxed poll of the BX (quick poll 10 s, static reports
+// once), but not without the interrupt pipe, where the quick poll is the only status source
+static bool relaxedPollFor(const char* model, uint32_t quirks = 0) {
+    driver.setup();
+    mockHost._quirks = quirks;
+    ups_data = UPSData();
+    ups_data.set("ups.model", model);
+    driver.loop(&mockHost, ups_data, 1000);
+    return driver.relaxedPoll();
+}
+
+void test_apc_relaxed_poll(void) {
+    TEST_ASSERT_FALSE(driver.relaxedPoll()); // model not read yet
+    TEST_ASSERT_TRUE(relaxedPollFor("Back-UPS BX750MI"));
+    TEST_ASSERT_TRUE(relaxedPollFor("Back-UPS BXR1200MI"));
+    TEST_ASSERT_TRUE(relaxedPollFor("Smart-UPS 750"));
+    TEST_ASSERT_TRUE(relaxedPollFor("Smart-UPS 1500"));
+    TEST_ASSERT_FALSE(relaxedPollFor("Smart-UPS 750", QUIRK_NO_INTERRUPT_PIPE));
+    TEST_ASSERT_FALSE(relaxedPollFor("Back-UPS ES 700G"));
+    TEST_ASSERT_FALSE(relaxedPollFor("Back-UPS XS 1500M"));
+    // The Smart-UPS keeps the rest of the APC handling: no frozen-values guard
+    relaxedPollFor("Smart-UPS 750");
+    TEST_ASSERT_EQUAL_UINT32(0, driver.inputSilenceFaultMs());
+
+    driver.setup();
+    TEST_ASSERT_FALSE(driver.relaxedPoll());
+}
+
+// Issue #78: the relaxed poll asks a Smart-UPS for its status reports every 10 s, not 2 s
+void test_apc_smart_ups_quick_poll_period(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.RemainingCapacity", 0x00850066, 0x0C, 3, 8));
+    ups_data.set("ups.model", "Smart-UPS 750");
+    uint32_t t = 1000;
+    // First full poll done: one request per loop() call, STEP_SPACING_MS apart
+    for (int i = 0; i < 200 && !driver.initialPollDone(); i++) {
+        driver.loop(&mockHost, ups_data, t);
+        t += 100;
+    }
+    TEST_ASSERT_TRUE(driver.initialPollDone());
+    const uint32_t done_at = t;
+    mockHost._requestedReports.clear();
+    // 8 s later: no quick poll yet (it would have run every 2 s with the default)
+    for (; t < done_at + 8000; t += 100) driver.loop(&mockHost, ups_data, t);
+    TEST_ASSERT_EQUAL(0, (int)mockHost._requestedReports.size());
+    // Past 10 s the status report is requested again
+    for (; t < done_at + 11000; t += 100) driver.loop(&mockHost, ups_data, t);
+    TEST_ASSERT_TRUE(mockHost._requestedReports.size() > 0);
+}
+
 // Standard NUT names apc-hid does not read stay as extensions (ADR 0011 rule 2), the
 // non-standard battery.capacity.full goes
 void test_apc_extensions_kept(void) {
@@ -572,6 +624,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_general_collection_timers);
     RUN_TEST(test_apc_battery_dates);
     RUN_TEST(test_apc_bx_input_silence_fault);
+    RUN_TEST(test_apc_relaxed_poll);
+    RUN_TEST(test_apc_smart_ups_quick_poll_period);
     RUN_TEST(test_apc_extensions_kept);
     RUN_TEST(test_apc_superseded_status_paths);
     return UNITY_END();
@@ -597,6 +651,8 @@ void setup() {
     RUN_TEST(test_apc_general_collection_timers);
     RUN_TEST(test_apc_battery_dates);
     RUN_TEST(test_apc_bx_input_silence_fault);
+    RUN_TEST(test_apc_relaxed_poll);
+    RUN_TEST(test_apc_smart_ups_quick_poll_period);
     RUN_TEST(test_apc_extensions_kept);
     RUN_TEST(test_apc_superseded_status_paths);
     UNITY_END();

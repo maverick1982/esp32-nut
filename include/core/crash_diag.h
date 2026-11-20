@@ -36,6 +36,10 @@ namespace CrashDiag {
     // Controlled restarts in a row since the data was last healthy (review A7)
     uint8_t consecutiveRestarts();
     void clearConsecutiveRestarts();
+    // Cause of the first controlled restart of the current series, "" when the counter is 0
+    // (issue #78): the later restarts overwrite the last cause, so in degraded mode this is
+    // the only record of what started it. Logged at boot and sent as first_restart_cause.
+    const char* firstRestartReason();
     // Degraded mode: restarts suspended after too many in a row (shown in the web UI).
     // upsNotEnumerated: the UPS never enumerated after the restarts (US-121), so the web
     // UI asks to replug the USB cable
