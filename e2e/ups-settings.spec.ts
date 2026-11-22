@@ -89,6 +89,9 @@ async function openSettingsTab(page: Page) {
   await page.goto('http://esp32.local/');
   await page.locator('button.tab[data-target="settings"]').click();
   await expect(page.locator('#content-settings')).toHaveClass(/active/);
+  // The GET of the opening is counted before the tests read mock.getHits:
+  // the class switches at the click, the request may start a moment later.
+  await expect.poll(() => mock.getHits).toBeGreaterThan(0);
 }
 
 function settingRow(page: Page, name: string) {

@@ -5534,6 +5534,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const contents = document.querySelectorAll('.tab-content');
     const pageTitle = document.querySelector('.page-title');
 
+    // US-147: the address names the open tab (#nut, #board, ...). OTA is the
+    // separate /update page, not a tab of this one. No '#', or a name that is
+    // not a tab, means UPS Telemetry, the default tab (US-049). The name is
+    // compared with the data-target of the buttons, never put in a selector.
+    const DEFAULT_TAB = 'ups';
+    function findTab(target) {
+        return Array.from(tabs).find(t => t.getAttribute('data-target') === target) || null;
+    }
+    function tabFromHash() {
+        const name = window.location.hash.slice(1);
+        if (name && name !== 'ota' && findTab(name) && document.getElementById(`content-${name}`)) {
+            return name;
+        }
+        return DEFAULT_TAB;
+    }
+    // US-147: true while a back/forward click runs, so it adds no history entry
+    let restoringFromHistory = false;
+
+    // US-147: open the tab of the address before anything reads the active tab.
+    // Only the classes move, with no click: the start-up checks of each tab
+    // (activeTab below, document.querySelector('.tab.active') further down) then
+    // load that tab, and the telemetry poll starts only on its own tabs. The
+    // history is left alone: without '#' the address stays '/'.
+    const initialTab = tabFromHash();
+    if (initialTab !== DEFAULT_TAB) {
+        tabs.forEach(t => t.classList.remove('active'));
+        contents.forEach(c => c.classList.remove('active'));
+        findTab(initialTab).classList.add('active');
+        document.getElementById(`content-${initialTab}`).classList.add('active');
+    }
+
     // Imposta il titolo iniziale
     const activeTab = document.querySelector('.tab.active');
     if (activeTab && pageTitle) {
@@ -5558,7 +5589,28 @@ document.addEventListener('DOMContentLoaded', () => {
             if (pageTitle) {
                 pageTitle.textContent = tab.textContent.trim();
             }
+
+            // US-147: one history entry per tab change. Comparing with the tab
+            // of the address skips clicks on the tab already open, including
+            // UPS Telemetry on '/' with no '#'. Back/forward clicks write nothing.
+            if (!restoringFromHistory && tabFromHash() !== target) {
+                history.pushState({ tab: target }, '', '#' + target);
+            }
         });
+    });
+
+    // US-147: back/forward (and a '#' typed in the address bar) open the tab of
+    // the entry through the same click, so the title, the loads and the
+    // telemetry poll follow as after a click, without writing to the history.
+    window.addEventListener('popstate', () => {
+        const tab = findTab(tabFromHash());
+        if (!tab || tab.classList.contains('active')) return;
+        restoringFromHistory = true;
+        try {
+            tab.click();
+        } finally {
+            restoringFromHistory = false;
+        }
     });
 
     const ssidInput = document.getElementById('ssid');

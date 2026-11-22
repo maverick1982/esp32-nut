@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-147
+title: Tasti indietro e avanti del browser tra le tab della Web UI
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: LOW
+points: 2
+status: DONE
+body: |
+  #### US-147: Tasti indietro e avanti del browser tra le tab della Web UI
+
+  **Epic:** EP-002 | **Priorità:** LOW | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che configura la scheda dalla Web UI,
+  voglio che i tasti indietro e avanti del browser mi riportino alle tab che ho aperto, e che l'indirizzo della pagina indichi la tab,
+  in modo da muovermi tra le pagine come su un sito normale, restare sulla stessa tab quando ricarico e salvare o condividere il link diretto a una tab.
+
+  **Dimostrazione**
+  Dalla telemetria l'utente apre NUT Server e poi Board Settings: l'indirizzo diventa `/#nut`, poi `/#board`. Con indietro torna a NUT Server, con un altro indietro alla telemetria, con avanti di nuovo a NUT Server, e ogni tab mostra i suoi dati come dopo un click. Su `/#board` preme F5 e resta su Board Settings. Dalla telemetria clicca un chip "NUT clients", arriva su NUT Server e con indietro torna alla telemetria. Aprendo `/#logs` in una nuova scheda del browser arriva direttamente su System Logs.
+
+  **Criteri di Accettazione**
+  - [ ] Ogni click su una tab mette nell'indirizzo il nome della tab (`#ups`, `#commands`, `#settings`, `#network`, `#nut`, `#board`, `#weblogin`, `#logs`) e aggiunge una voce alla cronologia del browser. Ricliccare la tab già aperta non aggiunge voci.
+  - [ ] Indietro e avanti aprono la tab della voce di cronologia con lo stesso effetto di un click (titolo, dati caricati, polling avviato o fermato) e senza aggiungere voci nuove.
+  - [ ] Anche i cambi di tab dai link interni ("Open NUT Server" da UPS Settings, chip e segni della telemetria) entrano nella cronologia: con indietro si torna alla tab di partenza.
+  - [ ] Al caricamento della pagina, o con F5, si apre la tab indicata nell'indirizzo. Senza `#`, o con un nome che non corrisponde a una tab, si apre UPS Telemetry come oggi e non compaiono errori in console.
+  - [ ] La tab OTA resta la pagina separata `/update`. Con indietro dalla pagina OTA si torna alla tab da cui la si era aperta.
+  - [ ] Il firmware non cambia: l'indirizzo con `#` funziona senza route nuove sul server e le pagine incorporate sono rigenerate.
+  - [ ] Un test e2e Playwright copre click, indietro, avanti, ricarica su una tab, indirizzo con un nome sconosciuto e il ritorno indietro dopo "Open NUT Server".
+  - [ ] Fuori perimetro: se la sessione è scaduta, il passaggio dal login non conserva la tab, che resta un miglioramento separato. Tornando indietro su NUT Server, la riga evidenziata da un link interno non lampeggia di nuovo.
+history:
+  - status: TODO
+    at: "2026-11-22T15:49:33Z"
+  - status: PLANNED
+    at: "2026-11-22T15:52:39Z"
+  - status: IN PROGRESS
+    at: "2026-11-22T15:54:25Z"
+  - status: REVIEW
+    at: "2026-11-22T16:32:01Z"
+  - status: DONE
+    at: "2026-11-22T16:44:31Z"

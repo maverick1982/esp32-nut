@@ -8,6 +8,8 @@ import { serveIndex, serveLogin } from './support/webui';
 // (support/webui.ts) and mocks the auth API with page.route.
 
 const HOME = 'http://esp32.local/';
+// US-147: the open tab is in the address. Still on the page, not sent to /login.
+const WEBLOGIN_TAB = `${HOME}#weblogin`;
 
 const USER = 'admin';
 const CURRENT_PASSWORD = 'correct-horse';
@@ -155,7 +157,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     await expect(page.locator('#cred-username')).toHaveValue(NEW_USER);
     await expect(page.locator('#session-username')).toHaveText(NEW_USER);
     await expect(page.locator('#btn-cred')).toBeEnabled();
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
   });
 
   test('STA change: missing current password is blocked client-side', async ({ page }) => {
@@ -199,7 +201,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     await expect(page.locator('#cur-password')).toHaveClass(/invalid/);
     await expect(page.locator('#btn-cred')).toBeEnabled();
     // Not a logout: the 401 does not go through the session-expired redirect
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
     await expect(page.locator('#session-username')).toHaveText(USER);
     expect(mock.credentialPosts).toEqual([{
       contentType: 'application/json',
@@ -251,7 +253,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     ]);
     expect(shown.every(st => st.disabled)).toBe(true);
     expect(mock.credentialPosts).toHaveLength(1);
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
   });
 
   test('AP reset: no current password, banner, body without current_password, all sessions closed', async ({ page }) => {
@@ -280,7 +282,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     await expect(page.locator('#cred-password')).toHaveValue('');
     await expect(page.locator('#cred-password2')).toHaveValue('');
     await expect(page.locator('#cred-username')).toHaveValue(NEW_USER);
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
   });
 
   test('AP reset: sessions_closed false asks to try the reset again (no "Log out of all devices" in AP)', async ({ page }) => {
@@ -297,7 +299,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     await expect(page.locator('#btn-logout-all')).toBeHidden();
     expect(mock.credentialPosts).toHaveLength(1);
     await expect(page.locator('#btn-cred')).toHaveText('Reset credentials');
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
   });
 
   test('AP first boot without credentials: "Create credentials", then "Credentials created."', async ({ page }) => {
@@ -321,7 +323,7 @@ test.describe('Web Login credentials form (US-063)', () => {
     await expect(page.locator('#cred-username')).toHaveValue(NEW_USER);
     // Now they exist: the next submit is a reset
     await expect(page.locator('#btn-cred')).toHaveText('Reset credentials');
-    await expect(page).toHaveURL(HOME);
+    await expect(page).toHaveURL(WEBLOGIN_TAB);
   });
 
   test('session gone: 401 unauthorized from the credentials POST goes to /login?expired=1', async ({ page }) => {

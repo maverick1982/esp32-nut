@@ -1,0 +1,166 @@
+schema: archetipo/plan/v2
+spec_code: US-147
+body: |
+  ## Soluzione Tecnica
+
+  Tutta la navigazione tra le tab passa già da un punto solo: il listener di click in `data/www/bundle.js:245-262`, che toglie e mette la classe `active` e aggiorna `.page-title`. Anche i link interni lo usano (`tab.click()` a `bundle.js:1293`, `2073`, `2823`, `3597`, `3854`), e i caricamenti per tab sono altri listener di click sullo stesso bottone (`820`, `1303`, `2993`, `4250`, `4336`, `4619`). Basta quindi agganciare la cronologia del browser a quel punto, con un indirizzo `#<data-target>`, senza toccare le singole tab né il firmware.
+
+  - **Nome della tab dall'indirizzo**: una funzione `tabFromHash()` legge `location.hash`, toglie il `#` e restituisce il `data-target` se esiste un `.tab[data-target=...]` diverso da `ota` con il suo `#content-<target>`. Altrimenti restituisce `ups`, la tab predefinita (US-049). Senza `#` il risultato è `ups`.
+  - **All'avvio**: subito dopo `const contents = ...` (`bundle.js:236`) e prima di `const activeTab = ...` (`bundle.js:241`), se `tabFromHash()` non è `ups`, la classe `active` passa dal bottone e dalla sezione di default a quelli della tab dell'indirizzo. Si spostano solo le classi, senza `click()`: tutti i controlli di avvio che oggi leggono la tab attiva (`activeTab` a `3008`, `document.querySelector('.tab.active')` a `821`, `1306`, `4256`, `4341`, `4622`) caricano così la tab giusta, e il polling della telemetria parte solo se la tab è `ups` o `commands`, come dopo un click. All'avvio la cronologia non si tocca: senza `#` l'indirizzo resta `/`.
+  - **Al click**: nel listener centrale, dopo aver attivato la tab, se il click non arriva dalla cronologia (`restoringFromHistory` falso) e `tabFromHash() !== target`, si chiama `history.pushState({ tab: target }, '', '#' + target)`. Il confronto con `tabFromHash()` copre il caso "ricliccare la tab aperta" (anche la telemetria su `/` senza `#`) senza aggiungere voci. La tab `ota` resta com'è: `window.location.href = '/update'` prima di ogni altra cosa, quindi è una navigazione vera con la sua voce.
+  - **Indietro e avanti**: un listener `window.addEventListener('popstate', ...)` calcola `tabFromHash()`, trova il bottone e, se non è già attivo, imposta `restoringFromHistory = true`, chiama `tab.click()` e rimette il flag a `false` in un `finally`. Il click esegue tutti i listener (titolo, caricamenti, polling) senza scrivere nella cronologia. Lo stesso listener copre un `#` scritto a mano nella barra degli indirizzi. Non serve `hashchange`: con `pushState` e i cambi a mano scatta già `popstate`.
+  - **Ritorno dalla pagina OTA**: indietro da `/update` torna a `/#<tab>`. Se il browser ricarica la pagina, la tab si apre dall'indirizzo; se la ripristina dalla bfcache, la pagina è già sulla tab giusta. Il link "Back to Home" di `update.html` resta su `/`.
+  - **Firmware invariato**: la parte dopo `#` non arriva al server, quindi `web_config_server.cpp` non cambia. Dopo le modifiche a `data/www` si rigenerano le pagine incorporate con `python scripts/embed_web.py`. Crescita attesa di poche centinaia di byte, da controllare nella build S3 (#93).
+  - **Fuori perimetro**: conservare la tab attraverso il redirect al login a sessione scaduta; ripetere l'evidenziazione della riga NUT Server tornando indietro; manuale utente.
+
+  ---
+
+  ## Strategia di Test
+
+  La modifica è solo nella pagina, quindi la copertura è e2e con Playwright e i test nativi non cambiano. Le API si simulano con `serveIndex` e `page.route`, come in `default-tab.spec.js` e `telemetry-overrides.spec.ts`; la pagina OTA con `serveUpdatePage`.
+
+  - **Nuovo spec** `e2e/tab-history.spec.ts` con gli scenari della tabella.
+  - **Regressione**: `default-tab.spec.js` (telemetria predefinita e polling), `telemetry-overrides.spec.ts`, `ups-settings.spec.ts` e `nut-overrides.spec.ts` (link interni verso NUT Server), `ota-update.spec.ts` e la suite e2e completa passano senza modifiche.
+  - **Build** `esp32-s3-standard` dopo `scripts/embed_web.py`, con la dimensione della flash confrontata con quella di prima.
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`)
+  **Video demo:** sì, l'incremento è visibile (indirizzo che cambia, indietro e avanti tra le tab, F5). Lo registra `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Click, indietro e avanti | L'utente apre `/`, clicca NUT Server e poi Board Settings: l'indirizzo diventa `#nut`, poi `#board`. `goBack` torna a NUT Server (bottone e sezione attivi, titolo "NUT Server"), un altro `goBack` alla telemetria con l'indirizzo senza `#`, `goForward` di nuovo a NUT Server. |
+  | Caricamenti come dopo un click | Tornando con `goBack` sulla telemetria riparte la richiesta a `/api/ups-vars`; andando su Board Settings con `goForward` parte `/api/board`. |
+  | Riclick sulla tab aperta | Su NUT Server l'utente riclicca NUT Server: `history.length` non cambia. Su `/` riclicca la telemetria: `history.length` non cambia. |
+  | Ricarica e link diretto | `page.goto('http://esp32.local/#board')` apre Board Settings e chiama `/api/board`; `page.reload()` resta su Board Settings. `#logs` in una pagina nuova apre System Logs. |
+  | Nome sconosciuto | `#pippo` e `#ota` aprono la telemetria, il polling parte e la console non ha errori. |
+  | Link interno | Dalla telemetria con una variabile personalizzata l'utente clicca il chip "NUT clients": si apre NUT Server con `#nut`; `goBack` torna alla telemetria. |
+  | Ritorno dalla pagina OTA | Su `#nut` l'utente clicca OTA, arriva su `/update`; `goBack` torna a `/#nut` con NUT Server attivo. |
+tasks:
+  - id: TASK-01
+    title: Tab aperta dall'indirizzo al caricamento della pagina
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** al caricamento, o con F5, la pagina apre la tab indicata da `#<data-target>`; senza `#` o con un nome sconosciuto apre UPS Telemetry come oggi.
+
+      **Leggere:** `data/www/bundle.js:233-262` (logica delle tab), i controlli di avvio che leggono la tab attiva a `bundle.js:821`, `1306`, `3008`, `4256`, `4341`, `4622`; `data/www/index.html:28-96` (bottoni con `data-target`).
+
+      **Modifiche:**
+      1. Dopo `const contents = document.querySelectorAll('.tab-content');` (`bundle.js:236`) aggiungere `function tabFromHash()`: prende `location.hash` senza `#`; se non è vuoto, non è `ota`, esiste `.tab[data-target="<nome>"]` ed esiste `#content-<nome>`, lo restituisce; altrimenti `'ups'`. Usare `CSS.escape` o confrontare con i `data-target` dei bottoni, così un `#` con caratteri strani non rompe `querySelector`.
+      2. Subito dopo, prima di `const activeTab = ...` (`bundle.js:241`): `const initialTab = tabFromHash();` e, se diverso da `'ups'`, togliere `active` da tutti i `tabs` e `contents` e metterlo sul bottone `.tab[data-target=initialTab]` e su `#content-<initialTab>`. Niente `click()` e niente `history.*`.
+      3. Commento `// US-147: ...` che spiega perché si spostano le classi prima di `activeTab` (i controlli di avvio delle tab le leggono).
+
+      **Verifica:** `npx playwright test e2e/default-tab.spec.js` passa; aprendo a mano `data/www/index.html` servito da `serveIndex` con `#board` si vede Board Settings.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — `tabFromHash()` e attivazione iniziale della tab dell'indirizzo
+
+      ## Criteri di Completamento
+      - [ ] Con `#board`, `#nut`, `#logs` la pagina si apre su quella tab, con titolo e dati caricati come dopo un click
+      - [ ] Senza `#`, con `#ota` o con un nome sconosciuto si apre UPS Telemetry e parte il polling
+      - [ ] Con una tab diversa da telemetria e comandi il polling di `/api/ups-vars` non parte
+      - [ ] Al caricamento la cronologia non cambia
+      - [ ] `default-tab.spec.js` passa invariato
+    ref: TASK-01
+  - id: TASK-02
+    title: pushState al cambio di tab e popstate per indietro e avanti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ogni cambio di tab entra nella cronologia del browser e indietro/avanti riaprono la tab giusta con lo stesso effetto di un click.
+
+      **Leggere:** `data/www/bundle.js:245-262` (listener centrale), i link interni che chiamano `tab.click()` a `bundle.js:1293`, `2073`, `2823`, `3597`, `3854`.
+
+      **Modifiche:**
+      1. Vicino a `tabFromHash()` dichiarare `let restoringFromHistory = false;`.
+      2. Nel listener centrale, dopo l'aggiornamento di `pageTitle` (quindi dopo il ramo `ota`, che resta il primo e invariato): `if (!restoringFromHistory && tabFromHash() !== target) history.pushState({ tab: target }, '', '#' + target);`.
+      3. Dopo il `tabs.forEach` del listener centrale: `window.addEventListener('popstate', () => { const target = tabFromHash(); const tab = document.querySelector(...data-target=target...); if (!tab || tab.classList.contains('active')) return; restoringFromHistory = true; try { tab.click(); } finally { restoringFromHistory = false; } });`.
+      4. Commenti `// US-147: ...` su push (perché il confronto con `tabFromHash()` evita voci doppie, anche su `/` senza `#`) e su popstate (il click riusa titolo, caricamenti e polling senza scrivere nella cronologia).
+      5. I link interni non cambiano: passano già dal click.
+
+      **Verifica:** a mano nel browser con `serveIndex` o con lo spec di TASK-03: click su NUT Server e Board Settings, poi indietro e avanti.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/bundle.js — `restoringFromHistory`, `pushState` nel listener centrale, listener `popstate`
+
+      ## Criteri di Completamento
+      - [ ] Ogni click su una tab diversa da quella aperta aggiunge una voce `#<data-target>`; ricliccare la tab aperta non aggiunge voci, anche la telemetria su `/`
+      - [ ] Indietro e avanti aprono la tab della voce con titolo, caricamenti e polling come dopo un click, senza aggiungere voci
+      - [ ] I link interni verso NUT Server entrano nella cronologia senza modifiche al loro codice
+      - [ ] La tab OTA porta ancora a `/update` e indietro torna alla tab di partenza
+    ref: TASK-02
+  - id: TASK-03
+    title: Spec e2e tab-history.spec.ts
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright tutti gli scenari della tabella "Test E2E" del piano.
+
+      **Leggere:** `e2e/default-tab.spec.js` (polling e tab predefinita), `e2e/support/webui.ts` (`serveIndex`, `serveUpdatePage`), `e2e/telemetry-overrides.spec.ts` (mock di `/api/ups-vars` con `_overrides` e clic sul chip), `e2e/board-settings.spec.ts` (mock di `/api/board`), `playwright.config.ts`.
+
+      **Modifiche:** nuovo `e2e/tab-history.spec.ts` con `serveIndex` in `beforeEach` e mock minimi di `/api/ups-vars`, `/api/system-status` e `/api/board`. Test:
+      1. click NUT Server e Board Settings → URL `#nut` poi `#board`; `goBack` → NUT Server attivo e titolo "NUT Server"; `goBack` → telemetria, URL senza `#`; `goForward` → NUT Server;
+      2. `goBack` sulla telemetria fa ripartire `/api/ups-vars`; `goForward` su Board Settings chiama `/api/board`;
+      3. riclick sulla tab aperta (NUT Server, e telemetria su `/`) → `history.length` invariato (`page.evaluate`);
+      4. `goto('http://esp32.local/#board')` → Board Settings e `/api/board` chiamata; `reload()` → resta su Board Settings; `#logs` → System Logs;
+      5. `#pippo` e `#ota` → telemetria attiva, polling partito, nessun `pageerror` né `console.error`;
+      6. chip "NUT clients" in telemetria → NUT Server con `#nut`; `goBack` → telemetria;
+      7. su `#nut` clic su OTA (`serveUpdatePage` registrato) → URL `/update`; `goBack` → `/#nut` con NUT Server attivo.
+
+      **Verifica:** `npx playwright test e2e/tab-history.spec.ts`.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - e2e/tab-history.spec.ts — nuovo spec
+
+      ## Criteri di Completamento
+      - [ ] I 7 scenari sono presenti e passano
+      - [ ] Lo spec non dipende dall'ordine di esecuzione e non lascia richieste verso host reali (catch-all di `serveIndex`)
+    ref: TASK-03
+  - id: TASK-04
+    title: Pagine incorporate rigenerate, build e regressione e2e
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare la modifica nel firmware e verificare che nulla si rompa.
+
+      **Leggere:** `scripts/embed_web.py`, `scripts/inline_web.py`.
+
+      **Modifiche e passi:**
+      1. Annotare la dimensione della flash della build `esp32-s3-standard` attuale (`~/.platformio/penv/Scripts/pio.exe run -e esp32-s3-standard`, riga "Flash: ...").
+      2. `python scripts/embed_web.py` per rigenerare `data/www/index_inlined.html` e `include/network/web_assets.h`.
+      3. Nuova build `esp32-s3-standard` e confronto della dimensione (attesa: poche centinaia di byte in più).
+      4. Suite e2e completa: `npx playwright test`. In particolare `default-tab.spec.js`, `telemetry-overrides.spec.ts`, `ups-settings.spec.ts`, `nut-overrides.spec.ts`, `ota-update.spec.ts` passano senza modifiche.
+      5. Nessun file del firmware in `src/` o `lib/` cambia.
+
+      **Verifica:** build ok, suite e2e verde, `git status` mostra solo `data/www/*`, `include/network/web_assets.h`, `e2e/tab-history.spec.ts` e i file di archetipo.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index_inlined.html — rigenerato
+      - include/network/web_assets.h — rigenerato
+
+      ## Criteri di Completamento
+      - [ ] Le pagine incorporate contengono la nuova logica delle tab
+      - [ ] La build `esp32-s3-standard` compila; la crescita della flash è annotata
+      - [ ] La suite e2e completa passa
+      - [ ] Nessun sorgente del firmware è cambiato
+    ref: TASK-04
