@@ -5809,7 +5809,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (row) row.classList.add('saved');
         }
         if (cvState.highlight) {
-            const row = list.querySelector(`.cv-row[data-key="${CSS.escape(cvState.highlight)}"]`);
+            // Ignoring the case, as upsd: UPS Settings asks for the canonical name
+            // (battery.charge.low) of a record that may be saved as Battery.Charge.Low
+            const wanted = cvState.highlight.toLowerCase();
+            const row = [...list.querySelectorAll('.cv-row')].find(r => (r.dataset.key || '').toLowerCase() === wanted);
             cvState.highlight = null;
             if (row) {
                 row.scrollIntoView({ block: 'center', behavior: 'smooth' });
