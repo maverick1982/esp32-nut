@@ -1,0 +1,50 @@
+schema: archetipo/spec/v2
+code: US-145
+title: Server NTP annunciato dal DHCP (option 42), con ritorno al server configurato
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 5
+status: IN PROGRESS
+body: |-
+  #### US-145: Server NTP annunciato dal DHCP (option 42), con ritorno al server configurato
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che ha in rete un server NTP locale annunciato dal router,
+  voglio che la scheda possa usare il server NTP ricevuto dal DHCP,
+  in modo da avere l'ora anche su una LAN senza Internet, senza scrivere a mano l'indirizzo del server su ogni scheda (#135).
+
+  **Dimostrazione**
+  L'utente apre Board Settings e nella sezione "Time" accende **Use NTP server from DHCP**, poi salva senza riavviare. Con un DHCP che annuncia l'option 42 (per esempio `192.168.1.1`), lo stato diventa "Synchronized" e la pagina mostra `192.168.1.1 (from DHCP)`. Il System Log scrive `[TIME] Synchronized with 192.168.1.1 (from DHCP): …`. Se quel server smette di rispondere, dopo il tempo di NoAnswer il System Log scrive una riga WARN con il passaggio a `pool.ntp.org`, e la pagina mostra `pool.ntp.org (configured)`. Con un DHCP senza option 42, o con l'IP statico, la pagina dice che il DHCP non ha fornito un server e usa subito quello configurato. Con l'opzione spenta tutto resta come oggi.
+
+  **Contesto**
+  Il client NTP è in `src/network/ntp_clock.cpp` (US-117). Oggi `apply()` chiama `esp_sntp_servermode_dhcp(false)` e poi `esp_sntp_setservername(0, …)`, e `TimeLogPolicy` segnala NoAnswer dopo `NO_ANSWER_MS`. La sola chiamata `esp_sntp_servermode_dhcp(true)` proposta nella issue non basta. lwIP scrive il server del DHCP all'indice 0: sovrascrive quello dell'utente e cancella gli altri. In più c'è una corsa con `apply()` e con i rinnovi del lease. Il core precompilato ha già `CONFIG_LWIP_DHCP_GET_NTP_SRV=y`, quindi sdkconfig non va toccato. Il piano decide come leggere il server del lease senza perdere quello configurato.
+
+  **Criteri di Accettazione**
+  - [ ] La sezione "Time" di Board Settings ha l'interruttore **Use NTP server from DHCP**, spento di default e utilizzabile solo con NTP acceso. Il campo server resta obbligatorio con NTP acceso, perché fa da ripiego.
+  - [ ] L'opzione è salvata in NVS, resta dopo un aggiornamento OTA e si applica senza riavvio. Le impostazioni salvate prima di questa versione si leggono con l'opzione spenta. L'API accetta il nuovo campo booleano e rifiuta con un messaggio chiaro un valore non booleano. Le rotte restano registrate con `guarded()` (ADR 0009).
+  - [ ] Con l'opzione accesa e un lease che porta l'option 42, la scheda si sincronizza con il server del DHCP. Il server configurato resta nelle impostazioni, non viene sovrascritto e resta disponibile come ripiego.
+  - [ ] Se il server del DHCP non risponde entro il tempo di NoAnswer di `TimeLogPolicy`, la scheda passa al server configurato e il System Log scrive una sola riga WARN con i due server. Il server del DHCP si riprova solo a una nuova connessione di rete, quando il lease porta un server diverso o quando si salvano le impostazioni. Non si riprova mai a tempo.
+  - [ ] Senza server dal DHCP (lease senza option 42, IP statico, modalità AP) si usa subito il server configurato, senza aspettare NoAnswer. La pagina e l'API lo indicano.
+  - [ ] Un rinnovo del lease con lo stesso server non riavvia SNTP e non scrive righe nel System Log. Con l'opzione spenta il server annunciato dal DHCP viene ignorato, anche ai rinnovi del lease, e il comportamento è identico a quello di US-117.
+  - [ ] La pagina "Time" e `GET` delle impostazioni dell'ora mostrano il server realmente in uso e la sua origine (`from DHCP` o `configured`). Le righe `[TIME]` del System Log (sincronizzazione, NoAnswer, passaggio al ripiego) nominano il server realmente usato.
+  - [ ] Funziona con Wi-Fi ed Ethernet senza `#if` per scheda (ADR 0010). Il task USB e il server NUT non aspettano mai NTP o il DHCP.
+  - [ ] Test nativi per la scelta del server: DHCP presente, assente, NoAnswer con ripiego, rinnovo con lo stesso server o con uno diverso, salvataggio delle impostazioni, opzione spenta. Test e2e per l'interruttore e per la riga del server in uso. Le build di tutte le schede sono ok, e il flash del 4 MB (#93) è misurato e riportato nella PR.
+  - [ ] Fuori ambito: più server NTP contemporanei (dal lease si usa il primo), NTP da DHCPv6, NTS, server NTP sulla scheda.
+
+  **Assunzioni**
+  - Non è noto se il router di prova annunci l'option 42. Il piano indica come verificarlo e, se non lo fa, come provarlo con un DHCP di prova (per esempio dnsmasq su un PC della LAN).
+  - Prova sul campo su una scheda reale solo dopo un sì esplicito.
+  - I testi della UI restano in inglese come il resto.
+  - Nelle PR si scrive "Refs #135", non "Closes": la issue resta aperta fino alla release.
+history:
+  - status: TODO
+    at: "2026-11-22T10:56:50Z"
+  - status: PLANNED
+    at: "2026-11-22T11:02:41Z"
+  - status: IN PROGRESS
+    at: "2026-11-22T11:06:50Z"

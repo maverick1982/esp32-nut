@@ -985,6 +985,8 @@
                                         </dd>
                                     </div>
                                     <div class="link-kv wide lead"><dt>Board time</dt><dd id="time-now" class="na">—</dd></div>
+                                    <!-- US-145: server in use, from "status.server/origin/dhcp" -->
+                                    <div class="link-kv wide"><dt>Server</dt><dd id="time-source" class="na">—</dd></div>
                                 </dl>
                             </div>
 
@@ -1000,6 +1002,22 @@
                                             <span class="slider"></span>
                                         </label>
                                         <span class="led-state" id="time-ntp-state">Off</span>
+                                    </div>
+                                </div>
+
+                                <!-- US-145: NTP server of DHCP option 42, the server below as the fallback -->
+                                <div class="board-row">
+                                    <div class="board-label">
+                                        <span class="board-name">Use the NTP server from DHCP</span>
+                                        <span class="board-hint">Option 42 of the router. The server below is used when
+                                            DHCP gives none or it does not answer.</span>
+                                    </div>
+                                    <div class="board-control led-toggle">
+                                        <label class="switch">
+                                            <input type="checkbox" id="time-dhcp" aria-label="NTP server from DHCP">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="led-state" id="time-dhcp-state">Off</span>
                                     </div>
                                 </div>
 

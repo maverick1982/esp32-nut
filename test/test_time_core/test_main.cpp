@@ -5,8 +5,10 @@
 #include "WallClock.h"
 #include "TimeStatus.h"
 #include "BoardTime.h"
+#include "NtpSource.h"
 
-// Network time core (US-117): time zones, settings, time from the uptime, System Log lines
+// Network time core (US-117): time zones, settings, time from the uptime, System Log lines;
+// NTP server from DHCP (US-145)
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -57,6 +59,7 @@ void test_time_defaults(void) {
     TEST_ASSERT_TRUE(d.ntp);
     TEST_ASSERT_EQUAL_STRING("pool.ntp.org", d.server.c_str());
     TEST_ASSERT_EQUAL_STRING("UTC", d.zone.c_str());
+    TEST_ASSERT_FALSE(d.dhcp);  // US-145: off by default
 }
 
 void test_valid_ntp_server(void) {
@@ -77,21 +80,155 @@ void test_valid_ntp_server(void) {
 }
 
 void test_sanitize_stored_values(void) {
-    TimeSettings s = { true, String("pool.ntp.org"), String("Mars/Olympus") };
+    TimeSettings s = { true, String("pool.ntp.org"), String("Mars/Olympus"), true };
     TimeSettings out = sanitize(s);
     TEST_ASSERT_EQUAL_STRING("UTC", out.zone.c_str());
     TEST_ASSERT_TRUE(out.ntp);
+    TEST_ASSERT_TRUE(out.dhcp);
 
-    s = { true, String("bad host!"), String("Europe/Rome") };
+    s = { true, String("bad host!"), String("Europe/Rome"), false };
     out = sanitize(s);
     TEST_ASSERT_EQUAL_STRING("", out.server.c_str());
     TEST_ASSERT_FALSE(out.ntp);  // NTP without a server would only fail
     TEST_ASSERT_EQUAL_STRING("Europe/Rome", out.zone.c_str());
 
-    s = { false, String(""), String("Europe/Rome") };
+    s = { false, String(""), String("Europe/Rome"), true };
     out = sanitize(s);
     TEST_ASSERT_FALSE(out.ntp);
+    TEST_ASSERT_TRUE(out.dhcp);  // kept, no effect without NTP
     TEST_ASSERT_EQUAL_STRING("Europe/Rome", out.zone.c_str());
+}
+
+// --- NTP server from DHCP (US-145) ---
+
+static const uint32_t DHCP_A = 0x0101A8C0;  // 192.168.1.1
+static const uint32_t DHCP_B = 0x0201A8C0;  // 192.168.1.2
+
+void test_format_ipv4(void) {
+    char out[IPV4_TEXT_MAX];
+    formatIpv4(DHCP_A, out);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", out);
+    formatIpv4(0, out);
+    TEST_ASSERT_EQUAL_STRING("0.0.0.0", out);
+    formatIpv4(0xFFFFFFFF, out);
+    TEST_ASSERT_EQUAL_STRING("255.255.255.255", out);
+}
+
+void test_ntp_source_names(void) {
+    TEST_ASSERT_EQUAL_STRING("configured", ntpOriginName(NtpOrigin::Configured));
+    TEST_ASSERT_EQUAL_STRING("dhcp", ntpOriginName(NtpOrigin::Dhcp));
+    TEST_ASSERT_EQUAL_STRING("off", dhcpNtpStateName(DhcpNtpState::Off));
+    TEST_ASSERT_EQUAL_STRING("none", dhcpNtpStateName(DhcpNtpState::None));
+    TEST_ASSERT_EQUAL_STRING("used", dhcpNtpStateName(DhcpNtpState::Used));
+    TEST_ASSERT_EQUAL_STRING("no_answer", dhcpNtpStateName(DhcpNtpState::NoAnswer));
+}
+
+void test_ntp_source_option_off_ignores_dhcp(void) {
+    NtpSourcePolicy p;
+    p.reset(false);
+    TEST_ASSERT_FALSE(p.onDhcpServer(DHCP_A));
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Configured);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Off);
+    TEST_ASSERT_EQUAL_HEX32(DHCP_A, p.dhcpServer());
+    TEST_ASSERT_FALSE(p.onNoAnswer());
+}
+
+void test_ntp_source_uses_the_lease_server(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    TEST_ASSERT_TRUE(p.onDhcpServer(DHCP_A));
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Dhcp);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Used);
+    TEST_ASSERT_EQUAL_HEX32(DHCP_A, p.dhcpServer());
+}
+
+void test_ntp_source_no_server_from_dhcp(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    TEST_ASSERT_FALSE(p.onDhcpServer(0));
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Configured);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::None);
+}
+
+void test_ntp_source_no_answer_falls_back_once(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    p.onDhcpServer(DHCP_A);
+    TEST_ASSERT_TRUE(p.onNoAnswer());
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Configured);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::NoAnswer);
+    TEST_ASSERT_EQUAL_HEX32(DHCP_A, p.dhcpServer());
+    TEST_ASSERT_FALSE(p.onNoAnswer());  // the configured server: no switch
+}
+
+void test_ntp_source_no_answer_with_configured_server(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    TEST_ASSERT_FALSE(p.onNoAnswer());
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::None);
+}
+
+void test_ntp_source_renewal_same_server(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    p.onDhcpServer(DHCP_A);
+    TEST_ASSERT_FALSE(p.onDhcpServer(DHCP_A));  // renewal while in use
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Used);
+    p.onNoAnswer();
+    TEST_ASSERT_FALSE(p.onDhcpServer(DHCP_A));  // renewal after the fallback: not tried again
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::NoAnswer);
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Configured);
+}
+
+void test_ntp_source_renewal_new_server_retries(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    p.onDhcpServer(DHCP_A);
+    p.onNoAnswer();
+    TEST_ASSERT_TRUE(p.onDhcpServer(DHCP_B));
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Dhcp);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Used);
+    TEST_ASSERT_EQUAL_HEX32(DHCP_B, p.dhcpServer());
+    // From one DHCP server to another while in use
+    TEST_ASSERT_TRUE(p.onDhcpServer(DHCP_A));
+    TEST_ASSERT_EQUAL_HEX32(DHCP_A, p.dhcpServer());
+    // The lease loses option 42: back to the configured server
+    TEST_ASSERT_TRUE(p.onDhcpServer(0));
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::None);
+}
+
+void test_ntp_source_link_down_retries(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    p.onDhcpServer(DHCP_A);
+    p.onNoAnswer();
+    p.onLinkDown();
+    TEST_ASSERT_EQUAL_HEX32(0, p.dhcpServer());
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::None);
+    TEST_ASSERT_TRUE(p.onDhcpServer(DHCP_A));  // new connection, same server: tried again
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Used);
+}
+
+void test_ntp_source_reset_retries(void) {
+    NtpSourcePolicy p;
+    p.reset(true);
+    p.onDhcpServer(DHCP_A);
+    p.onNoAnswer();
+    p.reset(true);  // settings saved
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Dhcp);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Used);
+}
+
+void test_ntp_source_option_on_with_known_lease(void) {
+    NtpSourcePolicy p;
+    p.reset(false);
+    p.onDhcpServer(DHCP_A);
+    p.reset(true);  // turned on with the board running: the lease is already known
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Dhcp);
+    TEST_ASSERT_EQUAL_HEX32(DHCP_A, p.dhcpServer());
+    p.reset(false);  // and off again
+    TEST_ASSERT_TRUE(p.origin() == NtpOrigin::Configured);
+    TEST_ASSERT_TRUE(p.state() == DhcpNtpState::Off);
 }
 
 // --- Wall clock ---
@@ -276,6 +413,18 @@ int main(int argc, char** argv) {
     RUN_TEST(test_time_defaults);
     RUN_TEST(test_valid_ntp_server);
     RUN_TEST(test_sanitize_stored_values);
+    RUN_TEST(test_format_ipv4);
+    RUN_TEST(test_ntp_source_names);
+    RUN_TEST(test_ntp_source_option_off_ignores_dhcp);
+    RUN_TEST(test_ntp_source_uses_the_lease_server);
+    RUN_TEST(test_ntp_source_no_server_from_dhcp);
+    RUN_TEST(test_ntp_source_no_answer_falls_back_once);
+    RUN_TEST(test_ntp_source_no_answer_with_configured_server);
+    RUN_TEST(test_ntp_source_renewal_same_server);
+    RUN_TEST(test_ntp_source_renewal_new_server_retries);
+    RUN_TEST(test_ntp_source_link_down_retries);
+    RUN_TEST(test_ntp_source_reset_retries);
+    RUN_TEST(test_ntp_source_option_on_with_known_lease);
     RUN_TEST(test_clock_invalid_until_synchronized);
     RUN_TEST(test_clock_time_after_and_before_the_reference);
     RUN_TEST(test_clock_across_the_millis_wrap);

@@ -15,6 +15,7 @@
 #include "SyslogStatus.h"
 #include "TimeSettings.h"
 #include "TimeStatus.h"
+#include "NtpSource.h"
 #include "DiagReadStatus.h"
 
 // State of the network time for GET /api/time (US-117), already formatted by the handler
@@ -27,6 +28,12 @@ struct TimeStatusView {
     String abbr;   // "CET"
     String utc;    // "2026-11-05T08:12:03Z"
     uint32_t since_sync_s;
+    // US-145: server in use and where it comes from, state of the DHCP option, DHCP
+    // server ("" without)
+    String server;
+    NtpOrigin origin;
+    DhcpNtpState dhcp;
+    String dhcp_server;
 };
 
 // The bound Q* driver for GET /api/board (US-138): detected is the claimed protocol
@@ -231,12 +238,14 @@ public:
     // {"state":"idle|reading|done|interrupted","total","done","read","empty","failed"}
     static String diagReadJson(const DiagReadStatus& status);
 
-    // GET /api/time (US-117): {"time":{ntp,server,zone},"status":{state[,local,abbr,utc,
-    // since_sync_s]},"options":{"zones":[...]}}
+    // GET /api/time (US-117): {"time":{ntp,server,zone,dhcp},"status":{state[,local,abbr,
+    // utc,since_sync_s][,server,origin,dhcp[,dhcp_server]]},"options":{"zones":[...]}}.
+    // server, origin ("configured"|"dhcp"), dhcp ("off"|"none"|"used"|"no_answer") and
+    // dhcp_server (only with one) when the state is not "disabled" (US-145)
     static String timeJson(const TimeSettings& time, const TimeStatusView& status);
     // POST /api/time: {"time":{...}} with any of the fields above; the others keep their
     // value. 0 with next filled, otherwise 400 {"error"}: "Invalid request", "Invalid
-    // server", "Invalid time zone", "Server required to enable NTP"
+    // server", "Invalid time zone", "Server required to enable NTP", "Invalid DHCP option"
     static int checkTimeBody(JsonVariantConst body, const TimeSettings& current, TimeSettings& next,
                              String& response);
 };

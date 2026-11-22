@@ -4,7 +4,7 @@
 #include "TimeSettings.h"
 
 /**
- * Network time settings (US-117), kept in the NVS namespace "time", apart from
+ * Network time settings (US-117, "dhcp" since US-145), kept in the NVS namespace "time", apart from
  * config_json like the remote logging settings: they survive an OTA update. load() gives
  * the defaults for missing keys and sanitizes the stored values.
  */
