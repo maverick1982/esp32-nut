@@ -246,5 +246,26 @@ test.describe('NUT Server custom variables', () => {
     await expect(page.locator('#content-nut')).toHaveClass(/active/);
     await expect(row(page, 'battery.charge.low')).toBeVisible();
     await expect(row(page, 'battery.charge.low').locator('.cv-tag')).toHaveText('Overrides UPS');
+    await expect(row(page, 'battery.charge.low')).toHaveClass(/(^|\s)pulse(\s|$)/);
+  });
+
+  test('UPS Settings link finds a record saved with another case', async ({ page }) => {
+    // upsd ignores the case: the override applies, UPS Settings shows the canonical name
+    const mock = newMock([{ key: 'Battery.Charge.Low', value: '30', description: '' }]);
+    await mockOverrides(page, mock);
+    await page.route('**/api/ups/variables', route => route.fulfill({
+      json: {
+        connected: true,
+        variables: [
+          { name: 'battery.charge.low', description: 'Remaining battery level when UPS switches to LB (percent)', value: '20', max_length: 10, enum: [], driver_side: false, confirm: false, override: '30' },
+        ],
+      },
+    }));
+    await page.goto('http://esp32.local/');
+    await page.click('.tab[data-target="settings"]');
+
+    await page.locator('.set-row[data-var="battery.charge.low"] .cv-link').click();
+    await expect(page.locator('#content-nut')).toHaveClass(/active/);
+    await expect(row(page, 'Battery.Charge.Low')).toHaveClass(/(^|\s)pulse(\s|$)/);
   });
 });
