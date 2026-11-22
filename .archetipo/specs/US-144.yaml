@@ -1,0 +1,53 @@
+schema: archetipo/spec/v2
+code: US-144
+title: Variabili NUT personalizzate nella pagina UPS Telemetry, accanto ai valori dell'UPS
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-144: Variabili NUT personalizzate nella pagina UPS Telemetry, accanto ai valori dell'UPS
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente che ha impostato variabili personalizzate nella scheda NUT Server,
+  voglio vederle nella pagina UPS Telemetry accanto ai valori dell'UPS,
+  in modo da sapere cosa vede Home Assistant senza perdere di vista i valori reali (#143).
+
+  **Dimostrazione**
+  In NUT Server l'utente aggiunge `battery.date = 2025/03/01` ("Batteria sostituita") e sovrascrive `battery.runtime.low = 300`. In UPS Telemetry la riga `battery.runtime.low` mostra ancora `120` con il chip ambra "NUT clients 300"; `battery.date` compare tra le `battery.*` con il chip ciano "Added" e la nota sotto la descrizione; l'intestazione mostra "1 overridden · 1 added for NUT clients". Un clic sul chip apre NUT Server e la riga pulsa. Eliminate le variabili, la pagina torna com'è oggi.
+
+  **Criteri di Accettazione**
+  - [ ] Riga sovrascritta: il valore dell'UPS resta al suo posto, non barrato. Accanto c'è il chip ambra "NUT clients" con il valore personalizzato, e la riga ha la barra ambra a sinistra (mockup `docs/mockups/issue-143/`).
+  - [ ] Variabile che l'UPS non riporta: compare in ordine alfabetico tra le altre, con il valore personalizzato, il chip ciano "Added" e la barra ciano.
+  - [ ] Sotto la descrizione NUT compare la descrizione scritta in NUT Server, se c'è. Per una variabile aggiunta senza descrizione NUT resta `--`, e la nota sotto è quella dell'utente.
+  - [ ] Un override di `ups.mfr`, `ups.model` o `ups.serial` compare anche sulla riga `device.*` corrispondente, salvo un override proprio dell'alias, come per i client NUT (US-115). Le chiavi si confrontano ignorando le maiuscole, come fa upsd.
+  - [ ] Le card Status, Battery Charge, UPS Load e Real Power mostrano sempre il valore dell'UPS. Se la loro variabile ha un valore personalizzato, compare il segno "NUT <valore>" nell'angolo, anche quando l'UPS non la riporta e la card mostra `--`.
+  - [ ] Nell'intestazione del pannello compare il riepilogo "N overridden · M added for NUT clients", che è nascosto senza variabili personalizzate.
+  - [ ] Chip, segno sulla card e riepilogo aprono la scheda NUT Server. Chip e segno fanno anche pulsare la riga di quella variabile, come il link "Open NUT Server" di UPS Settings.
+  - [ ] Una modifica salvata in NUT Server, anche da un altro browser, compare in telemetria al poll successivo, senza ricaricare la pagina.
+  - [ ] Con UPS scollegato la pagina resta come oggi: niente righe aggiunte, riepilogo o segni. Con dati stale le variabili personalizzate si vedono come con dati freschi.
+  - [ ] Il testo introduttivo del pannello "Custom variables" in NUT Server dice che la telemetria mostra questi valori accanto a quelli reali, mentre la logica della scheda usa i valori reali.
+  - [ ] La pagina UPS Commands, che usa lo stesso poll, non cambia.
+  - [ ] Test nativi sul JSON di `/api/ups-vars` (sovrascritta, aggiunta, alias `device.*`, maiuscole, UPS scollegato) ed e2e per chip, riepilogo, segno sulla card e apertura di NUT Server. Le tre build passano.
+
+  **Assunzioni**
+  - Decisioni prese con l'utente il 2026-11-22, sul mockup `docs/mockups/issue-143/`: si tengono sia il riepilogo nell'intestazione sia il segno sulle card.
+  - `/api/ups-vars` continua a riportare i valori reali. Le variabili personalizzate arrivano in un campo separato con chiave che inizia per `_`, che la tabella di oggi ignora. Il formato si decide in pianificazione.
+  - La logica della scheda (LB, spegnimento automatico, `ups.status`) non cambia.
+  - Fuori scope: modificare le variabili dalla pagina telemetria.
+history:
+  - status: TODO
+    at: "2026-11-22T09:36:35Z"
+  - status: PLANNED
+    at: "2026-11-22T09:43:15Z"
+  - status: IN PROGRESS
+    at: "2026-11-22T09:47:35Z"
+  - status: REVIEW
+    at: "2026-11-22T10:03:43Z"
+  - status: DONE
+    at: "2026-11-22T10:22:40Z"

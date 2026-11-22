@@ -1,0 +1,211 @@
+schema: archetipo/plan/v2
+spec_code: US-144
+body: "## Soluzione Tecnica\n\nIl firmware conosce già tutto: la lista delle variabili personalizzate (`nut_overrides` in `main.cpp`, puntata da `WebConfigServer::nut_overrides`), la ricerca senza maiuscole (`NutOverrides::find`) e gli alias `device.*` (`NUTServer::deviceAliasOf`). Il calcolo di \"cosa vede il client NUT per questa riga\" si fa quindi in firmware, in `WebApiJson::generateUpsVars`, e la pagina si limita a disegnarlo. Così le regole di US-115 (maiuscole, alias, override proprio dell'alias che vince) non vengono duplicate in JavaScript.\n\n- **API** `GET /api/ups-vars`: i valori reali restano identici. Se ci sono variabili personalizzate e l'UPS è connesso, si aggiunge `_overrides`, un oggetto indicizzato per chiave di riga: `{\"<riga>\": {\"key\": \"<chiave salvata>\", \"value\": \"...\", \"description\": \"...\", \"added\": false}}`. La chiave inizia per `_`, quindi la tabella di oggi la ignora già (filtro `!k.startsWith('_')`).\n  - Per ogni chiave di `UPSData` (escluse le `ups.status.*` interne): `NutOverrides::find(overrides, chiave)`. Se non c'è e la chiave è un alias (`device.mfr`, `device.model`, `device.serial`), si cerca l'override della sorgente (`ups.mfr`, `ups.model`, `ups.serial`). Se si trova, `_overrides[chiave UPS] = {..., added: false}`. L'override proprio dell'alias vince perché si cerca per primo, come in `NUTServer::resolveVar`.\n  - Per ogni override la cui chiave in minuscolo non è in `UPSData`: `_overrides[o.key] = {..., added: true}`, con la chiave come l'ha salvata l'utente (è il nome che stampa `LIST VAR`).\n  - Una riga alias compare solo se `UPSData` ha già quella chiave: la telemetria non inventa righe `device.*` che oggi non mostra.\n  - Con UPS scollegato si esce prima, come oggi: niente `_overrides`. Con dati stale `_overrides` c'è. Senza override il campo manca, quindi l'output resta identico byte per byte (i test esistenti con confronto esatto non cambiano).\n  - `generateUpsVars(IUpsSource*, const std::vector<NutOverride>* overrides = nullptr)`: il parametro di default lascia invariate le chiamate esistenti. `handleUpsVars()` passa `nut_overrides`. La lista si modifica solo da `handleSetNutOverrides`, nello stesso task del web server, quindi non serve un lock.\n- **Pagina** (`data/www/bundle.js`, `index.html`, `bundle.css`), come nel mockup `docs/mockups/issue-143/`:\n  - **Tabella**: alle chiavi di oggi si aggiungono quelle di `_overrides` con `added: true`, poi un unico `.sort()`. La riga sovrascritta tiene `.ups-val` con il valore dell'UPS e aggiunge il chip `button.tm-nut.ovr` (icona a livelli, \"NUT clients\" + valore). La riga aggiunta mostra il valore personalizzato in `.ups-val` più il chip `button.tm-nut.add` (\"Added\"). Classe della riga `tm-ovr` o `tm-add`. Descrizione: `NUT_DESCRIPTIONS[key]` (o `[key.toLowerCase()]`) oppure `--`, più `span.tm-why` con la descrizione dell'utente se non è vuota.\n  - **Sicurezza**: i valori e le descrizioni personalizzati sono testo libero (ASCII stampabile, anche `<`). Righe e celle si costruiscono con `createElement`/`textContent`, senza più `innerHTML` con `${value}` come fa oggi la creazione della riga.\n  - **Aggiornamento**: oggi la riga si crea una volta e poi cambia solo il testo di `.ups-val`. Ogni riga avrà una firma (`tr.dataset.sig` con valore, chiave, valore e descrizione dell'override, `added`). Se la firma cambia si ricostruiscono le celle, altrimenti non si tocca nulla. Restano gli id `row-<chiave con i punti sostituiti da ->` e l'ordine imposto nel DOM.\n  - **Card**: `renderMetrics` non cambia (valori reali). Un nuovo `renderCardMarkers(overrides)` mostra `button.tm-nut.tm-card-mark` (`ovr` o `add`, testo \"NUT\" + valore + unità) sulle card Battery Charge (`battery.charge`, %), UPS Load (`ups.load`, %) e Real Power (`ups.realpower`, W). La card Status non ha segno perché `ups.status` è protetta.\n  - **Riepilogo**: `button#tm-summary` nell'intestazione del pannello, accanto a Live. Conta le chiavi salvate distinte (`entry.key`): \"aggiunta\" se ha una voce con `added: true`, altrimenti \"sovrascritta\". Testo `N overridden · M added for NUT clients`, omettendo la parte a zero. È nascosto senza variabili.\n  - **Navigazione**: il chip e il segno impostano `cvState.highlight = entry.key` e cliccano la scheda `nut`, come il link \"Open NUT Server\" di UPS Settings. Il riepilogo apre la scheda senza evidenziare nulla. In `cvRender` la riga evidenziata prende `pulse-add` se `ups_value === null`, altrimenti `pulse` (ambra, già esistente).\n  - **Testo NUT Server**: il testo introduttivo di `#nut-overrides` sostituisce \"The dashboard and the board keep using the real UPS values.\" con \"The UPS Telemetry page shows them next to the real UPS values; the board logic keeps using the real ones.\"\n  - **CSS**: le classi di `docs/mockups/issue-143/telemetry.css` passano in una sezione US-144 di `bundle.css`. `.cv-row.pulse-ovr` non serve perché c'è già `.cv-row.pulse`.\n  - **Asset**: dopo le modifiche a `data/www` si rigenerano gli asset con `python scripts/embed_web.py`.\n- **Invariati**: logica della scheda (LB, spegnimento automatico, `ups.status`), server NUT, `GET /api/nut/overrides`, pagina UPS Commands (stesso poll, nessun id toccato).\n- **Documentazione**: il manuale utente resta fuori. Le note di rilascio si scrivono prima della release e citano #143.\n\n**Fuori ambito:** modificare le variabili dalla pagina telemetria; mostrare in telemetria le righe alias `device.*` che `UPSData` non ha.\n\n---\n\n## Strategia di Test\n\nLa costruzione di `_overrides` è logica pura e si testa in nativo con il mock host di `test_web_api`. La resa nella pagina si copre con Playwright, simulando `/api/ups-vars` e `/api/nut/overrides` con `page.route` come in `ups-parameters.spec.ts` e `nut-overrides.spec.ts`.\n\n- **Nativi `test_web_api`**: variabile sovrascritta (valore reale invariato, voce con `added: false` e chiave salvata), variabile aggiunta (`added: true`, indicizzata con la chiave salvata), chiave con maiuscole diverse da quella dell'UPS, alias `device.model` da un override di `ups.model` solo se `UPSData` ha `device.model`, override proprio di `device.model` che vince su quello di `ups.model`, UPS scollegato senza `_overrides`, dati stale con `_overrides`, lista vuota o `nullptr` con output identico a oggi.\n- **Regressione**: `ups-parameters.spec.ts`, `ups-commands.spec.ts` e `nut-overrides.spec.ts` passano senza modifiche.\n- **Build** degli env `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1`, suite nativa completa (`pio test -e native`), suite e2e completa.\n- **Prova sull'Eaton 3S**, solo dopo un sì esplicito dell'utente: `battery.date` aggiunta e un override di un valore reale, controllo in telemetria e con `upsc`.\n\n### Test E2E — Simulazione Utente\n\n**Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`, API simulate con `page.route`)\n**Video demo:** sì, l'incremento è visibile (chip in tabella, riepilogo, segno sulle card, passaggio a NUT Server). Lo registra `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Sovrascritta e aggiunta | L'utente apre UPS Telemetry con `battery.runtime.low` 120 sovrascritta a 300 (\"Shut the NAS down earlier\") e `battery.date` aggiunta. La riga `battery.runtime.low` mostra `120` e il chip \"NUT clients 300\", con la nota sotto la descrizione. `battery.date` sta tra `battery.charge.low` e `battery.runtime` con il chip \"Added\". Il riepilogo dice `1 overridden · 1 added for NUT clients`. | | Nessuna variabile | Senza `_overrides`: nessun chip, nessuna riga colorata, riepilogo nascosto, nessun segno sulle card. |\n| Segno sulla card | Con `ups.realpower` aggiunta (95) e senza `ups.realpower` dall'UPS, la card Real Power mostra `--` e il segno \"NUT 95 W\". Con `battery.charge` sovrascritta la card mostra il valore reale e il segno. |\n| Dal chip a NUT Server | L'utente clicca il chip di `battery.runtime.low`: si apre NUT Server, la riga di quella variabile ha la classe `pulse`. Dal chip \"Added\" la riga prende `pulse-add`. Dal riepilogo si apre NUT Server senza riga evidenziata. |\n| Alias device.* | Con `device.model` nei dati e `_overrides['device.model']` con chiave `ups.model`, la riga `device.model` ha il chip e il clic evidenzia la riga `ups.model` in NUT Server. |\n| Modifica al poll successivo | Il mock cambia `_overrides` fra due poll (valore nuovo, poi variabile tolta): la tabella si aggiorna senza ricaricare, la riga aggiunta sparisce e il chip scompare. |\n| UPS scollegato | Con `_disconnected` la pagina non mostra righe aggiunte, riepilogo o segni. |\n| Testo con caratteri HTML | Un valore personalizzato `<b>x</b>` compare come testo letterale, senza elementi `b` nella cella. |\n| 375 px | Telemetria con chip e segni senza scroll orizzontale, il chip va a capo sotto il valore. |\n\n---\n\n> \U0001F3A8 Il mockup di questa spec è in `docs/mockups/issue-143/`\n\n_Piano generato con ARchetipo Planning — 2026-11-22_\n"
+tasks:
+  - id: TASK-01
+    title: 'API: _overrides in GET /api/ups-vars'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `generateUpsVars` riporta, accanto ai valori reali, cosa vedono i client NUT per ogni riga con una variabile personalizzata.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.h` (dichiarazione ~44), `lib/WebApi/src/WebApiJson.cpp` (`generateUpsVars` ~6, `nutOverridesJson` ~742 come esempio di uso di `deviceAliasOf`), `lib/NUTServer/src/NutOverrides.h` (`find`), `lib/NUTServer/src/NUTServer.cpp` (`resolveVar` ~195, `LIST VAR` ~660), `src/network/web_config_server.cpp` (`handleUpsVars` ~842), `include/network/web_config_server.h` (`nut_overrides` ~93).
+
+      **Modifiche:**
+      1. Firma `static String generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides = nullptr);`, con un commento nel .h che descrive `_overrides` (formato, `added`, alias, assente con UPS scollegato o lista vuota) e cita US-144.
+      2. Nel ramo connesso, dopo il ciclo dei valori e con lo stesso `data` ancora bloccato, se `overrides && !overrides->empty()`:
+         - `JsonObject ovr = doc["_overrides"].to<JsonObject>();`
+         - per ogni `param` di `data->getAll()` che non è una `ups.status.*` interna: `o = NutOverrides::find(overrides, param.key.c_str())`; se `!o`, `alias = NUTServer::deviceAliasOf(param.key)` (chiave già in minuscolo) e, se c'è, `o = NutOverrides::find(overrides, alias)`; se `o`, scrivere `ovr[param.key]` con `key = o->key`, `value`, `description`, `added = false`;
+         - per ogni `o` della lista: `keyLower = o.key` in minuscolo; se `data->hasKey(keyLower)` saltare; altrimenti `ovr[o.key]` con `added = true`.
+      3. Il ramo scollegato non cambia (niente `_overrides`).
+      4. `handleUpsVars()` chiama `WebApiJson::generateUpsVars(ups_source, nut_overrides)`.
+
+      **Verifica:** build `esp32-s3-standard`; i test esistenti di `test_web_api` passano invariati.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — nuova firma con parametro di default e commento
+      - lib/WebApi/src/WebApiJson.cpp — costruzione di `_overrides`
+      - src/network/web_config_server.cpp — `handleUpsVars` passa `nut_overrides`
+
+      ## Criteri di Completamento
+      - [ ] Con override e UPS connesso la risposta contiene `_overrides` nel formato del piano; i valori reali non cambiano
+      - [ ] L'override proprio di un alias `device.*` vince su quello della sorgente `ups.*`
+      - [ ] Senza override, o con UPS scollegato, l'output è identico a prima
+      - [ ] La build S3 compila e `test_web_api` passa
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi di _overrides
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare con test nativi le regole di `_overrides`.
+
+      **Leggere:** `test/test_web_api/test_main.cpp` (mock host e `setUp` ~60-143, test di `generateUpsVars` ~146-215, test di `nutOverridesJson` ~1880).
+
+      **Modifiche:** nuovi test sotto un commento `// --- US-144: custom NUT variables in GET /api/ups-vars ---`, registrati in `main` con `RUN_TEST`:
+      1. sovrascritta: `battery.runtime.low` 120 nei dati, override 300 con descrizione → `doc["battery.runtime.low"]` resta 120, `_overrides["battery.runtime.low"]` ha `key`, `value` "300", `description`, `added` false;
+      2. aggiunta: override `battery.date` assente dai dati → `_overrides["battery.date"].added` true e nessuna chiave `battery.date` fuori da `_overrides`;
+      3. maiuscole: override `Battery.Runtime.Low` → indicizzato `battery.runtime.low` (chiave UPS), `key` "Battery.Runtime.Low", `added` false;
+      4. alias: dati con `ups.model` e `device.model`, override di `ups.model` → voci per entrambe le righe con `key` "ups.model"; senza `device.model` nei dati → nessuna voce `device.model`;
+      5. alias con override proprio: override di `ups.model` e di `device.model` → la riga `device.model` porta quello di `device.model`;
+      6. scollegato con override → nessun `_overrides` (confronto esatto con la stringa di oggi);
+      7. stale con override → `_overrides` presente;
+      8. lista vuota e `nullptr` → output identico a `generateUpsVars(&mockHost)`.
+
+      **Verifica:** `pio test -e native -f test_web_api` (PATH con `toolchain-gccmingw32/bin`). Provare a rompere una regola in TASK-01 (per esempio l'ordine di ricerca dell'alias) e verificare che un test fallisca.
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — 8 test nuovi
+
+      ## Criteri di Completamento
+      - [ ] Gli 8 casi sono coperti e registrati
+      - [ ] `test_web_api` verde
+      - [ ] Un'alterazione voluta della logica fa fallire almeno un test
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Markup e stili: riepilogo, segni sulle card, testo NUT Server'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** portare in `data/www` il markup e le classi del mockup `docs/mockups/issue-143/`.
+
+      **Leggere:** `docs/mockups/issue-143/index.html` (intestazione del pannello e card), `docs/mockups/issue-143/telemetry.css`, `data/www/index.html` (`#content-ups` ~1193, testo di `#nut-overrides` ~589), `data/www/bundle.css` (sezione US-115 ~2900, `.cv-row.pulse` ~3052).
+
+      **Modifiche:**
+      1. `index.html`, intestazione di `#content-ups`: avvolgere `.polling-indicator` in `<div class="tm-head-meta">` e aggiungere prima `<button type="button" class="tm-summary" id="tm-summary" hidden title="...">` con l'icona a livelli e `<span id="tm-summary-text"></span>`, come nel mockup. Non toccare il secondo `.polling-indicator` (~1260).
+      2. Nelle card Battery Charge, UPS Load e Real Power: `<button type="button" class="tm-nut tm-card-mark" id="card-mark-charge|card-mark-load|card-mark-realpower" hidden><span class="k">NUT</span><span class="v"></span></button>`. Nessun segno sulla card Status.
+      3. Testo di `#nut-overrides`: sostituire "The dashboard and the board keep using the real UPS values." con "The UPS Telemetry page shows them next to the real UPS values; the board logic keeps using the real ones."
+      4. `bundle.css`: nuova sezione `US-144: custom NUT variables on the UPS Telemetry page (from docs/mockups/issue-143/telemetry.css)` con tutte le classi del mockup (`.tm-head-meta`, `.tm-summary`, righe `tm-ovr`/`tm-add`, `.tm-val`, `.tm-nut` con `[hidden]`, `.ovr`, `.add`, `.k`, `.v`, `.tm-why`, `.metric-card { position: relative }`, `.tm-card-mark`, `.cv-row.pulse-add` + `@keyframes tm-pulse-add`, media query 1000/768 px). Escludere `.cv-row.pulse-ovr`.
+
+      **Verifica:** aprire la pagina servita dagli e2e: nulla cambia senza dati (bottone e segni nascosti).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — riepilogo, segni sulle card, testo NUT Server
+      - data/www/bundle.css — sezione US-144
+
+      ## Criteri di Completamento
+      - [ ] Markup con gli id `tm-summary`, `tm-summary-text`, `card-mark-charge`, `card-mark-load`, `card-mark-realpower`, tutti nascosti di default
+      - [ ] Testo di NUT Server aggiornato
+      - [ ] Stili del mockup in `bundle.css`, con `.tm-nut[hidden] { display: none; }`
+      - [ ] `ups-parameters.spec.ts` passa invariato
+    ref: TASK-03
+  - id: TASK-04
+    title: 'bundle.js: tabella con chip, riepilogo, segni e passaggio a NUT Server'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** disegnare `_overrides` nella telemetria come nel mockup.
+
+      **Leggere:** `data/www/bundle.js` (`cvState` ~498, `cvRender` ~646, link "Open NUT Server" ~2606, `renderMetrics` ~1994, `fetchUpsVars` ~2064 e aggiornamento della tabella ~2119), `docs/mockups/issue-143/app.js` (`chip`, `renderTable`, `renderSummary`).
+
+      **Modifiche:**
+      1. In `fetchUpsVars`: `const overrides = (!data._disconnected && data._overrides && typeof data._overrides === 'object') ? data._overrides : {};`.
+      2. Chiavi della tabella: quelle di oggi più le chiavi di `overrides` con `added === true` che non sono in `data`, poi `.sort()`.
+      3. Funzione `fillUpsRow(tr, key, value, ovr)` che ricostruisce le 3 celle solo con `createElement`/`textContent`:
+         - cella 1: la chiave;
+         - cella 2: `div.tm-val` con `span.ups-val` (valore dell'UPS, oppure `ovr.value` per le aggiunte) e, se `ovr`, il chip `button.tm-nut.ovr` (icona a livelli, `span.k` "NUT clients", `span.v` valore) oppure `button.tm-nut.add` (icona +, `span.k` "Added"), con `title` e `data-key = ovr.key`;
+         - cella 3: `NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--'` più `span.tm-why` se `ovr.description` non è vuota;
+         - `tr.className`: `tm-ovr`, `tm-add` o vuota.
+         Sostituisce la creazione con `innerHTML` di oggi.
+      4. Aggiornamento: `sig = JSON.stringify([String(value), ovr ? [ovr.key, ovr.value, ovr.description, !!ovr.added] : null])`; si chiama `fillUpsRow` solo se `tr.dataset.sig !== sig`. Restano id delle righe, ordine nel DOM e rimozione delle righe in più.
+      5. `openNutServerFor(key)`: `cvState.highlight = key` (se c'è) e click su `.tab[data-target="nut"]`. Lo usano i chip (con `ovr.key`), i segni delle card e `#tm-summary` (senza chiave).
+      6. `renderOverrideSummary(overrides)`: chiavi salvate distinte, aggiunta se una voce ha `added`, testo `N overridden · M added for NUT clients` con `b.o`/`b.a` come nel mockup, omettendo la parte a zero; `hidden` senza voci.
+      7. `renderCardMarkers(overrides)`: `battery.charge` → `card-mark-charge` (%), `ups.load` → `card-mark-load` (%), `ups.realpower` → `card-mark-realpower` (W); classe `ovr`/`add`, `.v` = `valore + ' ' + unità` (`95 W`, `100 %`), `title` esplicativo, `hidden` senza voce.
+      8. `cvRender`: la riga evidenziata prende `pulse-add` se la voce in `cvState.list` ha `ups_value === null`, altrimenti `pulse`.
+      9. `python scripts/embed_web.py`.
+
+      **Verifica:** `npx playwright test e2e/ups-parameters.spec.ts e2e/ups-commands.spec.ts e2e/nut-overrides.spec.ts` verdi senza modifiche ai test.
+
+      **Blocchi:** TASK-03 (id e classi).
+
+      ## File Coinvolti
+      - data/www/bundle.js — tabella, riepilogo, segni, navigazione, pulse in cvRender
+      - asset generati da scripts/embed_web.py — rigenerati
+
+      ## Criteri di Completamento
+      - [ ] Nessun `innerHTML` con dati dell'API o dell'utente nella costruzione delle righe
+      - [ ] Righe sovrascritte e aggiunte, riepilogo e segni come nel mockup
+      - [ ] Il clic su chip, segno e riepilogo apre NUT Server, con la riga che pulsa per chip e segno
+      - [ ] Con `_disconnected` o senza `_overrides` la pagina è come oggi
+      - [ ] I tre spec e2e esistenti passano invariati e gli asset sono rigenerati
+    ref: TASK-04
+  - id: TASK-05
+    title: 'E2E: telemetria con variabili personalizzate'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Playwright gli scenari della tabella E2E del piano.
+
+      **Leggere:** `e2e/ups-parameters.spec.ts` (mock di `/api/ups-vars` e `/api/config`), `e2e/nut-overrides.spec.ts` (mock di `/api/nut/overrides`, helper `answer`), `e2e/support/webui.ts`, `e2e/responsive.spec.ts` (controllo dello scroll orizzontale).
+
+      **Modifiche:** nuovo `e2e/telemetry-overrides.spec.ts` con commento iniziale che cita US-144 e #143, `serveIndex` in `beforeEach`, `/api/ups-vars` mutabile fra i poll e `/api/nut/overrides` simulato. Test:
+      1. sovrascritta + aggiunta: valori, chip, `.tm-why`, ordine delle righe (`battery.date` fra `battery.charge.low` e `battery.runtime`), testo del riepilogo;
+      2. nessuna variabile: nessun `.tm-nut` visibile, `#tm-summary` nascosto, nessuna riga `tm-ovr`/`tm-add`;
+      3. segni sulle card: `ups.realpower` aggiunta con card `--` e segno "NUT 95 W"; `battery.charge` sovrascritta con card reale e segno;
+      4. dal chip a NUT Server: scheda attiva `nut`, riga `.cv-row[data-key=...]` con `pulse` (sovrascritta) o `pulse-add` (aggiunta); dal riepilogo nessuna riga con pulse;
+      5. alias: riga `device.model` con chip e clic che evidenzia `ups.model`;
+      6. modifica fra due poll: valore del chip aggiornato, poi variabile tolta e riga sparita, senza `page.reload`;
+      7. `_disconnected`: niente chip, riepilogo o segni;
+      8. valore `<b>x</b>`: testo letterale, `locator('#row-... b')` con count 0;
+      9. 375 px: `scrollWidth <= clientWidth` sul documento.
+
+      **Verifica:** `npx playwright test e2e/telemetry-overrides.spec.ts` verde.
+
+      **Blocchi:** TASK-04.
+
+      ## File Coinvolti
+      - e2e/telemetry-overrides.spec.ts — nuovo
+
+      ## Criteri di Completamento
+      - [ ] I 9 scenari sono coperti
+      - [ ] Lo spec è verde e non usa attese fisse oltre al poll di 2 s (usare `expect` con timeout)
+    ref: TASK-05
+  - id: TASK-06
+    title: Verifica completa e prova sull'Eaton 3S
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** chiudere la spec con tutte le suite e, con il consenso dell'utente, la prova sulla scheda.
+
+      **Passi:**
+      1. `pio test -e native` completo. Su Windows, rilanciare da sole le suite ERRORED transitorie.
+      2. Build di `esp32-s3-standard`, `esp32-p4-eth` ed `esp32-p4-eth-v1` (da PowerShell).
+      3. `npx playwright test`, suite e2e completa.
+      4. Salvare gli esiti in `docs/test-results/US-144/`.
+      5. **Solo dopo un sì esplicito dell'utente**, sulla scheda di test con l'Eaton 3S:
+         - flash della build S3 via OTA;
+         - in NUT Server aggiungere `battery.date` con descrizione e sovrascrivere un valore reale (per esempio `battery.runtime.low`);
+         - in UPS Telemetry: chip, nota, riepilogo e segni come da spec; `upsc` mostra gli stessi valori dei chip;
+         - eliminare le variabili e verificare che la pagina torni com'era.
+
+      **Blocchi:** la prova sul campo richiede il consenso esplicito dell'utente.
+
+      ## File Coinvolti
+      - docs/test-results/US-144/ — esiti di suite native, build, e2e e prova sul campo
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa, build dei tre env e suite e2e verdi
+      - [ ] Esiti salvati in docs/test-results/US-144/
+      - [ ] Prova sul campo fatta con il consenso dell'utente, oppure segnata come in attesa del consenso
+    ref: TASK-06

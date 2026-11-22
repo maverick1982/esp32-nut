@@ -3,7 +3,7 @@
 #include "NetHostname.h"
 #include <string.h>
 
-String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
+String WebApiJson::generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides) {
     if (!usb_ups) {
         return "{\"error\": \"UPS non inizializzato\"}";
     }
@@ -54,6 +54,36 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups) {
             else doc[param.key] = param.value.toInt();
         } else {
             doc[param.key] = param.value;
+        }
+    }
+
+    // US-144: what NUT clients see for the rows with a custom variable of the NUT Server
+    // tab, with the rules of NUTServer::resolveVar and LIST VAR. The real values above
+    // do not change
+    if (overrides && !overrides->empty()) {
+        JsonObject ovr = doc["_overrides"].to<JsonObject>();
+        auto put = [&ovr](const String& row, const NutOverride& o, bool added) {
+            JsonObject e = ovr[row].to<JsonObject>();
+            e["key"] = o.key;
+            e["value"] = o.value;
+            e["description"] = o.description;
+            e["added"] = added;
+        };
+        for (const auto& param : data->getAll()) {
+            if (param.key.startsWith("ups.status.")) continue;
+            // The alias's own override first, then the one of its ups.* source
+            const NutOverride* o = NutOverrides::find(overrides, param.key.c_str());
+            if (!o) {
+                const char* alias = NUTServer::deviceAliasOf(param.key);
+                if (alias) o = NutOverrides::find(overrides, alias);
+            }
+            if (o) put(param.key, *o, false);
+        }
+        // The variables the UPS does not report, under the name they were saved with
+        for (const auto& o : *overrides) {
+            String key_lower = o.key;
+            key_lower.toLowerCase();
+            if (!data->hasKey(key_lower)) put(o.key, o, true);
         }
     }
 

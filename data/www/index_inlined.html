@@ -3431,6 +3431,154 @@ body.auth-page {
 }
 .update-banner[hidden] { display: none; }
 .update-banner:hover { box-shadow: 0 0 15px var(--accent-glow); }
+
+/* ==========================================================================
+   US-144: custom NUT variables on the UPS Telemetry page
+   (from docs/mockups/issue-143/telemetry.css). Amber = overrides the UPS value,
+   cyan = added by the user, as the US-115 badges.
+   ========================================================================== */
+
+/* Panel header: summary of the custom variables, then Live */
+.tm-head-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.tm-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.tm-summary[hidden] { display: none; }
+.tm-summary svg { width: 12px; height: 12px; color: var(--warning); }
+.tm-summary b { font-weight: 400; }
+.tm-summary .o { color: var(--warning); }
+.tm-summary .a { color: var(--accent); }
+.tm-summary:hover,
+.tm-summary:focus-visible {
+    border-color: rgba(255, 184, 0, 0.45);
+    color: var(--text-primary);
+    outline: none;
+}
+
+/* Table rows: 2px bar on the left, as .set-row.is-overridden of UPS Settings */
+.data-table tbody tr.tm-ovr { background: rgba(255, 184, 0, 0.025); }
+.data-table tbody tr.tm-add { background: rgba(0, 240, 255, 0.02); }
+.data-table tbody tr.tm-ovr:hover { background: rgba(255, 184, 0, 0.05); }
+.data-table tbody tr.tm-ovr td:first-child { box-shadow: inset 2px 0 0 rgba(255, 184, 0, 0.6); }
+.data-table tbody tr.tm-add td:first-child { box-shadow: inset 2px 0 0 rgba(0, 240, 255, 0.5); }
+
+/* Value cell: the UPS value (unchanged) and what NUT clients see */
+.tm-val {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.7rem;
+}
+
+/* The chip: a button that opens NUT Server on that variable */
+.tm-nut {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    padding: 0.12rem 0.5rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: left;
+}
+.tm-nut[hidden] { display: none; }
+.tm-nut svg { width: 11px; height: 11px; flex-shrink: 0; }
+.tm-nut .k {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.85;
+    white-space: nowrap;
+}
+.tm-nut .v { color: var(--text-primary); overflow-wrap: anywhere; }
+.tm-nut.ovr {
+    border-color: rgba(255, 184, 0, 0.45);
+    background: rgba(255, 184, 0, 0.06);
+    color: var(--warning);
+}
+.tm-nut.ovr:hover,
+.tm-nut.ovr:focus-visible {
+    border-color: var(--warning);
+    background: rgba(255, 184, 0, 0.12);
+    box-shadow: 0 0 10px rgba(255, 184, 0, 0.18);
+    outline: none;
+}
+.tm-nut.add {
+    border-color: rgba(0, 240, 255, 0.35);
+    color: var(--accent);
+}
+.tm-nut.add:hover,
+.tm-nut.add:focus-visible {
+    border-color: var(--accent);
+    background: rgba(0, 240, 255, 0.08);
+    box-shadow: 0 0 10px var(--accent-glow);
+    outline: none;
+}
+
+/* Description cell: the note written in NUT Server, under the NUT description */
+.tm-why {
+    display: block;
+    margin-top: 0.25rem;
+    color: rgba(255, 184, 0, 0.75);
+    font-size: 0.75rem;
+}
+.tm-add .tm-why { color: rgba(0, 240, 255, 0.7); }
+.tm-why::before { content: '\201C'; }
+.tm-why::after { content: '\201D'; }
+
+/* Metric cards: the card keeps the UPS value, the marker says what NUT clients see */
+.metric-card { position: relative; }
+.tm-card-mark {
+    position: absolute;
+    top: 0.9rem;
+    right: 0.9rem;
+    padding: 0.08rem 0.4rem;
+    font-size: 0.66rem;
+}
+.tm-card-mark.ovr .v { color: var(--warning); }
+.tm-card-mark.add .v { color: var(--accent); }
+
+/* NUT Server: row of an added variable reached from the telemetry (.pulse is amber) */
+.cv-row.pulse-add { animation: tm-pulse-add 1.6s ease-out; }
+@keyframes tm-pulse-add {
+    0%, 30% { background: rgba(0, 240, 255, 0.12); }
+    100% { background: transparent; }
+}
+
+@media (max-width: 1000px) {
+    .tm-val { gap: 0.4rem; }
+    .tm-why { font-size: 0.95em; }
+    /* Stacked rows: the bar runs along the whole row */
+    .data-table tbody tr.tm-ovr td { box-shadow: inset 2px 0 0 rgba(255, 184, 0, 0.6); }
+    .data-table tbody tr.tm-add td { box-shadow: inset 2px 0 0 rgba(0, 240, 255, 0.5); }
+}
+@media (max-width: 768px) {
+    .tm-head-meta { justify-content: flex-start; }
+    .tm-card-mark { top: 0.7rem; right: 0.7rem; }
+}
 </style>
 </head>
 
@@ -4010,8 +4158,8 @@ body.auth-page {
 
                     <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
                         of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
-                        <code>override.*</code> in <code>ups.conf</code>. The dashboard and the board keep using the
-                        real UPS values.</p>
+                        <code>override.*</code> in <code>ups.conf</code>. The UPS Telemetry page shows them next to the
+                        real UPS values; the board logic keeps using the real ones.</p>
 
                     <!-- GET /api/nut/overrides failed -->
                     <div class="auth-alert" id="cv-load-error" role="alert" hidden>
@@ -4615,8 +4763,20 @@ body.auth-page {
                 <div class="panel ups-panel">
                     <div class="panel-header">
                         <h2>Real-Time Data Feed</h2>
-                        <div class="polling-indicator">
-                            <span class="pulse-dot"></span> Live
+                        <div class="tm-head-meta">
+                            <!-- US-144: custom variables of the NUT Server tab, hidden without any -->
+                            <button type="button" class="tm-summary" id="tm-summary" hidden
+                                title="Custom variables of the NUT Server tab: NUT clients see these values">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                                    <polyline points="2 17 12 22 22 17" />
+                                    <polyline points="2 12 12 17 22 12" />
+                                </svg>
+                                <span id="tm-summary-text"></span>
+                            </button>
+                            <div class="polling-indicator">
+                                <span class="pulse-dot"></span> Live
+                            </div>
                         </div>
                     </div>
 
@@ -4643,6 +4803,8 @@ body.auth-page {
                             <div class="progress-bar-container">
                                 <div class="progress-bar" id="bar-charge" style="width: 0%"></div>
                             </div>
+                            <!-- US-144: what NUT clients see when the variable has a custom value -->
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-charge" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">UPS Load</div>
@@ -4650,11 +4812,13 @@ body.auth-page {
                             <div class="progress-bar-container">
                                 <div class="progress-bar load" id="bar-load" style="width: 0%"></div>
                             </div>
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-load" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">Real Power</div>
                             <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
                             </div>
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-realpower" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                     </div>
 
@@ -5649,7 +5813,9 @@ document.addEventListener('DOMContentLoaded', () => {
             cvState.highlight = null;
             if (row) {
                 row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                row.classList.add('pulse');
+                // US-144: cyan for a variable the UPS does not report, amber for an override
+                const entry = cvState.list.find(e => e.key === row.dataset.key);
+                row.classList.add(entry && entry.ups_value === null ? 'pulse-add' : 'pulse');
             }
         }
         cvRefreshForm();
@@ -7035,6 +7201,105 @@ document.addEventListener('DOMContentLoaded', () => {
         box.hidden = false;
     }
 
+    // US-144: custom variables of the NUT Server tab on the telemetry page. _overrides of
+    // /api/ups-vars says, per row, what NUT clients see: {key (as saved), value, description,
+    // added}. Built with textContent only: values and descriptions are free text.
+    const TM_ICON_LAYERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+    const TM_ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    // The cards that can carry a marker (ups.status cannot be overridden)
+    const TM_CARD_MARKS = [
+        { key: 'battery.charge', id: 'card-mark-charge', unit: '%' },
+        { key: 'ups.load', id: 'card-mark-load', unit: '%' },
+        { key: 'ups.realpower', id: 'card-mark-realpower', unit: 'W' }
+    ];
+
+    // Same path as "Open NUT Server" of UPS Settings: cvRender scrolls to the row and pulses it
+    function openNutServerFor(key) {
+        cvState.highlight = key || null;
+        const tab = document.querySelector('.tab[data-target="nut"]');
+        if (tab) tab.click();
+    }
+
+    function tmTextEl(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function tmChip(key, ovr) {
+        const added = ovr.added === true;
+        const b = tmTextEl('button', 'tm-nut ' + (added ? 'add' : 'ovr'));
+        b.type = 'button';
+        b.dataset.key = ovr.key;
+        b.title = added
+            ? `The UPS does not report ${key}: NUT clients get it from the NUT Server tab`
+            : `NUT clients see ${ovr.value} in place of the UPS value (NUT Server tab)`;
+        b.innerHTML = added ? TM_ICON_PLUS : TM_ICON_LAYERS;
+        b.appendChild(tmTextEl('span', 'k', added ? 'Added' : 'NUT clients'));
+        if (!added) b.appendChild(tmTextEl('span', 'v', String(ovr.value)));
+        b.addEventListener('click', () => openNutServerFor(ovr.key));
+        return b;
+    }
+
+    function fillUpsRow(tr, key, value, ovr) {
+        tr.className = ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '';
+        const tdKey = tmTextEl('td', '', key);
+        const tdVal = document.createElement('td');
+        const val = tmTextEl('div', 'tm-val');
+        val.appendChild(tmTextEl('span', 'ups-val', String(value)));
+        if (ovr) val.appendChild(tmChip(key, ovr));
+        tdVal.appendChild(val);
+        const tdDesc = tmTextEl('td', '', NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--');
+        if (ovr && ovr.description) tdDesc.appendChild(tmTextEl('span', 'tm-why', String(ovr.description)));
+        tr.replaceChildren(tdKey, tdVal, tdDesc);
+    }
+
+    // "N overridden · M added for NUT clients": one count per saved variable (an override of
+    // ups.model can also mark the device.model row)
+    function renderOverrideSummary(overrides) {
+        const btn = document.getElementById('tm-summary');
+        const text = document.getElementById('tm-summary-text');
+        if (!btn || !text) return;
+        const kinds = new Map();
+        for (const e of Object.values(overrides)) {
+            if (!e || typeof e.key !== 'string') continue;
+            kinds.set(e.key, kinds.get(e.key) === true || e.added === true);
+        }
+        const added = [...kinds.values()].filter(Boolean).length;
+        const overridden = kinds.size - added;
+        text.replaceChildren();
+        if (overridden) text.appendChild(tmTextEl('b', 'o', `${overridden} overridden`));
+        if (overridden && added) text.appendChild(document.createTextNode(' · '));
+        if (added) text.appendChild(tmTextEl('b', 'a', `${added} added`));
+        text.appendChild(document.createTextNode(' for NUT clients'));
+        btn.hidden = kinds.size === 0;
+    }
+
+    function renderCardMarkers(overrides) {
+        for (const m of TM_CARD_MARKS) {
+            const el = document.getElementById(m.id);
+            if (!el) continue;
+            const ovr = overrides[m.key];
+            el.hidden = !ovr;
+            if (!ovr) continue;
+            const added = ovr.added === true;
+            el.className = 'tm-nut tm-card-mark ' + (added ? 'add' : 'ovr');
+            el.dataset.key = ovr.key;
+            el.querySelector('.v').textContent = `${ovr.value} ${m.unit}`;
+            el.title = added
+                ? `The UPS does not report ${m.key}: NUT clients see ${ovr.value} ${m.unit} (custom variable)`
+                : `NUT clients see ${ovr.value} ${m.unit} in place of the UPS value (custom variable)`;
+        }
+    }
+
+    TM_CARD_MARKS.forEach(m => {
+        const el = document.getElementById(m.id);
+        if (el) el.addEventListener('click', () => openNutServerFor(el.dataset.key));
+    });
+    const tmSummary = document.getElementById('tm-summary');
+    if (tmSummary) tmSummary.addEventListener('click', () => openNutServerFor(null));
+
     // Tabs that show data from /api/ups-vars: one shared poll serves both
     const UPS_POLL_TABS = ['ups', 'commands'];
     const isUpsPollTabActive = () => UPS_POLL_TABS.some(t => {
@@ -7100,34 +7365,39 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             lastCatalogKey = catalogKey;
 
+            // US-144: custom variables of the NUT Server tab, never with the UPS disconnected
+            const overrides = (!data._disconnected && data._overrides && typeof data._overrides === 'object')
+                ? data._overrides : {};
+            renderOverrideSummary(overrides);
+            renderCardMarkers(overrides);
+
             // Update table
             if (upsTableBody) {
-                const sortedKeys = Object.keys(data)
-                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
-                    .sort();
+                const upsKeys = Object.keys(data)
+                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'));
+                // Variables the UPS does not report, added in NUT Server
+                const addedKeys = Object.keys(overrides)
+                    .filter(k => overrides[k] && overrides[k].added === true && !(k in data));
+                const sortedKeys = upsKeys.concat(addedKeys).sort();
                 let currentIndex = 0;
-                
+
                 for (const key of sortedKeys) {
-                    const value = data[key];
+                    const ovr = overrides[key] || null;
+                    const value = (key in data) ? data[key] : ovr.value;
                     const rowId = `row-${key.replace(/\./g, '-')}`;
                     let tr = document.getElementById(rowId);
-                    
                     if (!tr) {
-                        const desc = NUT_DESCRIPTIONS[key] || '--';
                         tr = document.createElement('tr');
                         tr.id = rowId;
-                        tr.innerHTML = `
-                            <td>${key}</td>
-                            <td class="ups-val">${value}</td>
-                            <td>${desc}</td>
-                        `;
-                    } else {
-                        const valCell = tr.querySelector('.ups-val');
-                        if (valCell && valCell.textContent !== String(value)) {
-                            valCell.textContent = value;
-                        }
                     }
-                    
+                    // Cells rebuilt only when the value or the custom variable changes
+                    const sig = JSON.stringify([String(value),
+                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null]);
+                    if (tr.dataset.sig !== sig) {
+                        fillUpsRow(tr, key, value, ovr);
+                        tr.dataset.sig = sig;
+                    }
+
                     // Enforce DOM order
                     if (upsTableBody.children[currentIndex] !== tr) {
                         upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null);

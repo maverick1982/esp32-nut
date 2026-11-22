@@ -664,7 +664,9 @@ document.addEventListener('DOMContentLoaded', () => {
             cvState.highlight = null;
             if (row) {
                 row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                row.classList.add('pulse');
+                // US-144: cyan for a variable the UPS does not report, amber for an override
+                const entry = cvState.list.find(e => e.key === row.dataset.key);
+                row.classList.add(entry && entry.ups_value === null ? 'pulse-add' : 'pulse');
             }
         }
         cvRefreshForm();
@@ -2050,6 +2052,105 @@ document.addEventListener('DOMContentLoaded', () => {
         box.hidden = false;
     }
 
+    // US-144: custom variables of the NUT Server tab on the telemetry page. _overrides of
+    // /api/ups-vars says, per row, what NUT clients see: {key (as saved), value, description,
+    // added}. Built with textContent only: values and descriptions are free text.
+    const TM_ICON_LAYERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+    const TM_ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    // The cards that can carry a marker (ups.status cannot be overridden)
+    const TM_CARD_MARKS = [
+        { key: 'battery.charge', id: 'card-mark-charge', unit: '%' },
+        { key: 'ups.load', id: 'card-mark-load', unit: '%' },
+        { key: 'ups.realpower', id: 'card-mark-realpower', unit: 'W' }
+    ];
+
+    // Same path as "Open NUT Server" of UPS Settings: cvRender scrolls to the row and pulses it
+    function openNutServerFor(key) {
+        cvState.highlight = key || null;
+        const tab = document.querySelector('.tab[data-target="nut"]');
+        if (tab) tab.click();
+    }
+
+    function tmTextEl(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function tmChip(key, ovr) {
+        const added = ovr.added === true;
+        const b = tmTextEl('button', 'tm-nut ' + (added ? 'add' : 'ovr'));
+        b.type = 'button';
+        b.dataset.key = ovr.key;
+        b.title = added
+            ? `The UPS does not report ${key}: NUT clients get it from the NUT Server tab`
+            : `NUT clients see ${ovr.value} in place of the UPS value (NUT Server tab)`;
+        b.innerHTML = added ? TM_ICON_PLUS : TM_ICON_LAYERS;
+        b.appendChild(tmTextEl('span', 'k', added ? 'Added' : 'NUT clients'));
+        if (!added) b.appendChild(tmTextEl('span', 'v', String(ovr.value)));
+        b.addEventListener('click', () => openNutServerFor(ovr.key));
+        return b;
+    }
+
+    function fillUpsRow(tr, key, value, ovr) {
+        tr.className = ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '';
+        const tdKey = tmTextEl('td', '', key);
+        const tdVal = document.createElement('td');
+        const val = tmTextEl('div', 'tm-val');
+        val.appendChild(tmTextEl('span', 'ups-val', String(value)));
+        if (ovr) val.appendChild(tmChip(key, ovr));
+        tdVal.appendChild(val);
+        const tdDesc = tmTextEl('td', '', NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--');
+        if (ovr && ovr.description) tdDesc.appendChild(tmTextEl('span', 'tm-why', String(ovr.description)));
+        tr.replaceChildren(tdKey, tdVal, tdDesc);
+    }
+
+    // "N overridden · M added for NUT clients": one count per saved variable (an override of
+    // ups.model can also mark the device.model row)
+    function renderOverrideSummary(overrides) {
+        const btn = document.getElementById('tm-summary');
+        const text = document.getElementById('tm-summary-text');
+        if (!btn || !text) return;
+        const kinds = new Map();
+        for (const e of Object.values(overrides)) {
+            if (!e || typeof e.key !== 'string') continue;
+            kinds.set(e.key, kinds.get(e.key) === true || e.added === true);
+        }
+        const added = [...kinds.values()].filter(Boolean).length;
+        const overridden = kinds.size - added;
+        text.replaceChildren();
+        if (overridden) text.appendChild(tmTextEl('b', 'o', `${overridden} overridden`));
+        if (overridden && added) text.appendChild(document.createTextNode(' · '));
+        if (added) text.appendChild(tmTextEl('b', 'a', `${added} added`));
+        text.appendChild(document.createTextNode(' for NUT clients'));
+        btn.hidden = kinds.size === 0;
+    }
+
+    function renderCardMarkers(overrides) {
+        for (const m of TM_CARD_MARKS) {
+            const el = document.getElementById(m.id);
+            if (!el) continue;
+            const ovr = overrides[m.key];
+            el.hidden = !ovr;
+            if (!ovr) continue;
+            const added = ovr.added === true;
+            el.className = 'tm-nut tm-card-mark ' + (added ? 'add' : 'ovr');
+            el.dataset.key = ovr.key;
+            el.querySelector('.v').textContent = `${ovr.value} ${m.unit}`;
+            el.title = added
+                ? `The UPS does not report ${m.key}: NUT clients see ${ovr.value} ${m.unit} (custom variable)`
+                : `NUT clients see ${ovr.value} ${m.unit} in place of the UPS value (custom variable)`;
+        }
+    }
+
+    TM_CARD_MARKS.forEach(m => {
+        const el = document.getElementById(m.id);
+        if (el) el.addEventListener('click', () => openNutServerFor(el.dataset.key));
+    });
+    const tmSummary = document.getElementById('tm-summary');
+    if (tmSummary) tmSummary.addEventListener('click', () => openNutServerFor(null));
+
     // Tabs that show data from /api/ups-vars: one shared poll serves both
     const UPS_POLL_TABS = ['ups', 'commands'];
     const isUpsPollTabActive = () => UPS_POLL_TABS.some(t => {
@@ -2115,34 +2216,39 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             lastCatalogKey = catalogKey;
 
+            // US-144: custom variables of the NUT Server tab, never with the UPS disconnected
+            const overrides = (!data._disconnected && data._overrides && typeof data._overrides === 'object')
+                ? data._overrides : {};
+            renderOverrideSummary(overrides);
+            renderCardMarkers(overrides);
+
             // Update table
             if (upsTableBody) {
-                const sortedKeys = Object.keys(data)
-                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'))
-                    .sort();
+                const upsKeys = Object.keys(data)
+                    .filter(k => (!data._disconnected || k !== 'ups.status') && !k.startsWith('_'));
+                // Variables the UPS does not report, added in NUT Server
+                const addedKeys = Object.keys(overrides)
+                    .filter(k => overrides[k] && overrides[k].added === true && !(k in data));
+                const sortedKeys = upsKeys.concat(addedKeys).sort();
                 let currentIndex = 0;
-                
+
                 for (const key of sortedKeys) {
-                    const value = data[key];
+                    const ovr = overrides[key] || null;
+                    const value = (key in data) ? data[key] : ovr.value;
                     const rowId = `row-${key.replace(/\./g, '-')}`;
                     let tr = document.getElementById(rowId);
-                    
                     if (!tr) {
-                        const desc = NUT_DESCRIPTIONS[key] || '--';
                         tr = document.createElement('tr');
                         tr.id = rowId;
-                        tr.innerHTML = `
-                            <td>${key}</td>
-                            <td class="ups-val">${value}</td>
-                            <td>${desc}</td>
-                        `;
-                    } else {
-                        const valCell = tr.querySelector('.ups-val');
-                        if (valCell && valCell.textContent !== String(value)) {
-                            valCell.textContent = value;
-                        }
                     }
-                    
+                    // Cells rebuilt only when the value or the custom variable changes
+                    const sig = JSON.stringify([String(value),
+                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null]);
+                    if (tr.dataset.sig !== sig) {
+                        fillUpsRow(tr, key, value, ovr);
+                        tr.dataset.sig = sig;
+                    }
+
                     // Enforce DOM order
                     if (upsTableBody.children[currentIndex] !== tr) {
                         upsTableBody.insertBefore(tr, upsTableBody.children[currentIndex] || null);

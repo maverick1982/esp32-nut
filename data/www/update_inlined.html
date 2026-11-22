@@ -3427,6 +3427,154 @@ body.auth-page {
 .update-banner[hidden] { display: none; }
 .update-banner:hover { box-shadow: 0 0 15px var(--accent-glow); }
 
+/* ==========================================================================
+   US-144: custom NUT variables on the UPS Telemetry page
+   (from docs/mockups/issue-143/telemetry.css). Amber = overrides the UPS value,
+   cyan = added by the user, as the US-115 badges.
+   ========================================================================== */
+
+/* Panel header: summary of the custom variables, then Live */
+.tm-head-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.tm-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.tm-summary[hidden] { display: none; }
+.tm-summary svg { width: 12px; height: 12px; color: var(--warning); }
+.tm-summary b { font-weight: 400; }
+.tm-summary .o { color: var(--warning); }
+.tm-summary .a { color: var(--accent); }
+.tm-summary:hover,
+.tm-summary:focus-visible {
+    border-color: rgba(255, 184, 0, 0.45);
+    color: var(--text-primary);
+    outline: none;
+}
+
+/* Table rows: 2px bar on the left, as .set-row.is-overridden of UPS Settings */
+.data-table tbody tr.tm-ovr { background: rgba(255, 184, 0, 0.025); }
+.data-table tbody tr.tm-add { background: rgba(0, 240, 255, 0.02); }
+.data-table tbody tr.tm-ovr:hover { background: rgba(255, 184, 0, 0.05); }
+.data-table tbody tr.tm-ovr td:first-child { box-shadow: inset 2px 0 0 rgba(255, 184, 0, 0.6); }
+.data-table tbody tr.tm-add td:first-child { box-shadow: inset 2px 0 0 rgba(0, 240, 255, 0.5); }
+
+/* Value cell: the UPS value (unchanged) and what NUT clients see */
+.tm-val {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.7rem;
+}
+
+/* The chip: a button that opens NUT Server on that variable */
+.tm-nut {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    padding: 0.12rem 0.5rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: left;
+}
+.tm-nut[hidden] { display: none; }
+.tm-nut svg { width: 11px; height: 11px; flex-shrink: 0; }
+.tm-nut .k {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.85;
+    white-space: nowrap;
+}
+.tm-nut .v { color: var(--text-primary); overflow-wrap: anywhere; }
+.tm-nut.ovr {
+    border-color: rgba(255, 184, 0, 0.45);
+    background: rgba(255, 184, 0, 0.06);
+    color: var(--warning);
+}
+.tm-nut.ovr:hover,
+.tm-nut.ovr:focus-visible {
+    border-color: var(--warning);
+    background: rgba(255, 184, 0, 0.12);
+    box-shadow: 0 0 10px rgba(255, 184, 0, 0.18);
+    outline: none;
+}
+.tm-nut.add {
+    border-color: rgba(0, 240, 255, 0.35);
+    color: var(--accent);
+}
+.tm-nut.add:hover,
+.tm-nut.add:focus-visible {
+    border-color: var(--accent);
+    background: rgba(0, 240, 255, 0.08);
+    box-shadow: 0 0 10px var(--accent-glow);
+    outline: none;
+}
+
+/* Description cell: the note written in NUT Server, under the NUT description */
+.tm-why {
+    display: block;
+    margin-top: 0.25rem;
+    color: rgba(255, 184, 0, 0.75);
+    font-size: 0.75rem;
+}
+.tm-add .tm-why { color: rgba(0, 240, 255, 0.7); }
+.tm-why::before { content: '\201C'; }
+.tm-why::after { content: '\201D'; }
+
+/* Metric cards: the card keeps the UPS value, the marker says what NUT clients see */
+.metric-card { position: relative; }
+.tm-card-mark {
+    position: absolute;
+    top: 0.9rem;
+    right: 0.9rem;
+    padding: 0.08rem 0.4rem;
+    font-size: 0.66rem;
+}
+.tm-card-mark.ovr .v { color: var(--warning); }
+.tm-card-mark.add .v { color: var(--accent); }
+
+/* NUT Server: row of an added variable reached from the telemetry (.pulse is amber) */
+.cv-row.pulse-add { animation: tm-pulse-add 1.6s ease-out; }
+@keyframes tm-pulse-add {
+    0%, 30% { background: rgba(0, 240, 255, 0.12); }
+    100% { background: transparent; }
+}
+
+@media (max-width: 1000px) {
+    .tm-val { gap: 0.4rem; }
+    .tm-why { font-size: 0.95em; }
+    /* Stacked rows: the bar runs along the whole row */
+    .data-table tbody tr.tm-ovr td { box-shadow: inset 2px 0 0 rgba(255, 184, 0, 0.6); }
+    .data-table tbody tr.tm-add td { box-shadow: inset 2px 0 0 rgba(0, 240, 255, 0.5); }
+}
+@media (max-width: 768px) {
+    .tm-head-meta { justify-content: flex-start; }
+    .tm-card-mark { top: 0.7rem; right: 0.7rem; }
+}
+
 /* OTA Update Styles */
 .ota-container {
     max-width: 500px;
