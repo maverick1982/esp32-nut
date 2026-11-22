@@ -2322,7 +2322,7 @@ static int checkTime(const char* json, const TimeSettings& cur, TimeSettings& ne
 }
 
 void test_time_json_with_time(void) {
-    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome") };
+    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome"), false };
     TimeStatusView v = { TimeState::Synchronized, true, String("2026-11-05 09:12:03"), String("CET"),
                          String("2026-11-05T08:12:03Z"), 42 };
     JsonDocument doc;
@@ -2348,7 +2348,7 @@ void test_time_json_without_time(void) {
     TEST_ASSERT_TRUE(doc["status"]["utc"].isNull());
     TEST_ASSERT_TRUE(doc["status"]["since_sync_s"].isNull());
 
-    TimeSettings off = { false, String(""), String("UTC") };
+    TimeSettings off = { false, String(""), String("UTC"), false };
     v.state = TimeState::Disabled;
     deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
     TEST_ASSERT_FALSE(doc["time"]["ntp"].as<bool>());
@@ -2386,7 +2386,7 @@ void test_time_body_full_update(void) {
 }
 
 void test_time_body_partial_keeps_the_rest(void) {
-    TimeSettings cur = { true, String("ntp.lan"), String("Europe/Rome") }, next;
+    TimeSettings cur = { true, String("ntp.lan"), String("Europe/Rome"), false }, next;
     String out;
     TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"America/New_York\"}}", cur, next, out));
     TEST_ASSERT_TRUE(next.ntp);
@@ -2430,7 +2430,7 @@ void test_time_body_server_required_only_with_ntp(void) {
     String out;
     TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"server\":\"  \"}}", cur, next, out));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
-    TimeSettings off = { false, String(""), String("UTC") };
+    TimeSettings off = { false, String(""), String("UTC"), false };
     TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"ntp\":true}}", off, next, out));
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
     // NTP off with an empty server is accepted
@@ -2439,6 +2439,92 @@ void test_time_body_server_required_only_with_ntp(void) {
     TEST_ASSERT_EQUAL_STRING("", next.server.c_str());
     TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"Europe/Rome\"}}", off, next, out));
     TEST_ASSERT_EQUAL_STRING("Europe/Rome", next.zone.c_str());
+}
+
+// --- NTP server from DHCP (US-145) ---
+
+static TimeStatusView dhcpView(TimeState state, const char* server, NtpOrigin origin, DhcpNtpState dhcp,
+                               const char* dhcp_server) {
+    TimeStatusView v = { state, false, String(), String(), String(), 0,
+                         String(server), origin, dhcp, String(dhcp_server) };
+    return v;
+}
+
+void test_time_json_dhcp_in_use(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("Europe/Rome"), true };
+    TimeStatusView v =
+        dhcpView(TimeState::Synchronized, "192.168.1.1", NtpOrigin::Dhcp, DhcpNtpState::Used, "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["time"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("dhcp", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("used", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_dhcp_no_answer(void) {
+    TimeSettings s = { true, String("pool.ntp.org"), String("UTC"), true };
+    TimeStatusView v = dhcpView(TimeState::Waiting, "pool.ntp.org", NtpOrigin::Configured, DhcpNtpState::NoAnswer,
+                                "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("configured", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("no_answer", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_dhcp_none_has_no_dhcp_server(void) {
+    TimeSettings s = { true, String("ntp.lan"), String("UTC"), true };
+    TimeStatusView v = dhcpView(TimeState::Waiting, "ntp.lan", NtpOrigin::Configured, DhcpNtpState::None, "");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_EQUAL_STRING("ntp.lan", doc["status"]["server"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("none", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp_server"].isNull());
+    // Option off: the lease server is still reported
+    s.dhcp = false;
+    v = dhcpView(TimeState::Synchronized, "ntp.lan", NtpOrigin::Configured, DhcpNtpState::Off, "192.168.1.1");
+    deserializeJson(doc, WebApiJson::timeJson(s, v).c_str());
+    TEST_ASSERT_FALSE(doc["time"]["dhcp"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("off", doc["status"]["dhcp"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("configured", doc["status"]["origin"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", doc["status"]["dhcp_server"].as<const char*>());
+}
+
+void test_time_json_disabled_has_no_server_fields(void) {
+    TimeSettings off = { false, String("pool.ntp.org"), String("UTC"), true };
+    TimeStatusView v =
+        dhcpView(TimeState::Disabled, "pool.ntp.org", NtpOrigin::Configured, DhcpNtpState::Used, "192.168.1.1");
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::timeJson(off, v).c_str());
+    TEST_ASSERT_TRUE(doc["time"]["dhcp"].as<bool>());  // the saved value
+    TEST_ASSERT_TRUE(doc["status"]["server"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["origin"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp"].isNull());
+    TEST_ASSERT_TRUE(doc["status"]["dhcp_server"].isNull());
+}
+
+void test_time_body_dhcp(void) {
+    TimeSettings cur = timeDefaults(), next;
+    String out;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"dhcp\":true}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.dhcp);
+    TEST_ASSERT_EQUAL_STRING("pool.ntp.org", next.server.c_str());
+    cur.dhcp = true;
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"zone\":\"Europe/Rome\"}}", cur, next, out));
+    TEST_ASSERT_TRUE(next.dhcp);  // missing: the current value
+    TEST_ASSERT_EQUAL(0, checkTime("{\"time\":{\"dhcp\":false}}", cur, next, out));
+    TEST_ASSERT_FALSE(next.dhcp);
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":\"yes\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid DHCP option\"}", out.c_str());
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":1}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid DHCP option\"}", out.c_str());
+    // The server stays required as the fallback
+    TEST_ASSERT_EQUAL(400, checkTime("{\"time\":{\"dhcp\":true,\"server\":\"\"}}", cur, next, out));
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Server required to enable NTP\"}", out.c_str());
 }
 
 // --- Online firmware update ---
@@ -2697,6 +2783,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_time_body_partial_keeps_the_rest);
     RUN_TEST(test_time_body_error_messages);
     RUN_TEST(test_time_body_server_required_only_with_ntp);
+    RUN_TEST(test_time_json_dhcp_in_use);
+    RUN_TEST(test_time_json_dhcp_no_answer);
+    RUN_TEST(test_time_json_dhcp_none_has_no_dhcp_server);
+    RUN_TEST(test_time_json_disabled_has_no_server_fields);
+    RUN_TEST(test_time_body_dhcp);
     RUN_TEST(test_diag_read_json_states);
     RUN_TEST(test_update_status_json);
     RUN_TEST(test_update_status_json_never_checked);

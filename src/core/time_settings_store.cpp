@@ -6,6 +6,7 @@ static const char* kNamespace = "time";
 static const char* kKeyNtp = "ntp";
 static const char* kKeyServer = "server";
 static const char* kKeyZone = "zone";
+static const char* kKeyDhcp = "dhcp";  // US-145: missing (saved before) = off
 
 TimeSettings TimeSettingsStore::load() {
     TimeSettings s = timeDefaults();
@@ -15,6 +16,7 @@ TimeSettings TimeSettingsStore::load() {
     s.ntp = prefs.getBool(kKeyNtp, s.ntp);
     s.server = prefs.getString(kKeyServer, s.server);
     s.zone = prefs.getString(kKeyZone, s.zone);
+    s.dhcp = prefs.getBool(kKeyDhcp, s.dhcp);
     prefs.end();
     return sanitize(s);
 }
@@ -26,7 +28,7 @@ bool TimeSettingsStore::save(const TimeSettings& s) {
     prefs.putString(kKeyServer, s.server);
     prefs.putString(kKeyZone, s.zone);
     bool ok = prefs.getString(kKeyServer, "") == s.server && prefs.getString(kKeyZone, "") == s.zone &&
-              prefs.putBool(kKeyNtp, s.ntp) > 0;
+              prefs.putBool(kKeyNtp, s.ntp) > 0 && prefs.putBool(kKeyDhcp, s.dhcp) > 0;
     prefs.end();
     return ok;
 }

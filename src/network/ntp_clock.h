@@ -6,6 +6,7 @@
 #include <mutex>
 #include <sys/time.h>
 #include <time.h>
+#include "NtpSource.h"
 #include "TimeSettings.h"
 #include "TimeStatus.h"
 #include "WallClock.h"
@@ -25,8 +26,13 @@ class AppNetworkManager;
  * poll() turns into the System Log lines (TimeLogPolicy). Same code for Wi-Fi and
  * Ethernet, on every board (ADR 0010).
  *
- * DHCP option 42 stays off: lwIP writes the servers it gets from DHCP from index 0 and
- * would replace the server chosen by the user.
+ * NTP server from DHCP option 42 (US-145, issue #135): esp_sntp_servermode_dhcp() stays
+ * off, because lwIP would write the DHCP server at index 0, over the server of the user, at
+ * every lease renewal. DhcpNtpCapture keeps the server of the last lease instead (wrap of
+ * dhcp_set_ntp_servers), also with the option off, and NtpSourcePolicy chooses: the DHCP
+ * server with the option on, the configured one without it, without a DHCP server, or after
+ * a NoAnswer of the DHCP one. The DHCP server is tried again only on a new connection, a
+ * lease with a different server or new settings, never on a timer.
  */
 class NtpClock {
 public:
@@ -36,6 +42,11 @@ public:
         bool has_time;
         int64_t epoch_ms;       // now, when has_time
         uint32_t since_sync_s;  // since the last synchronization, when has_time
+        // US-145: server in use (DHCP or settings.server), option state, DHCP server
+        // (ip4_addr_t order, formatIpv4), 0 without
+        NtpOrigin origin;
+        DhcpNtpState dhcp;
+        uint32_t dhcp_addr;
     };
 
     void begin(const AppNetworkManager* network);
@@ -62,6 +73,10 @@ private:
 
     bool networkUp() const;
     void apply(const TimeSettings& s, const String& who, uint32_t now);
+    // (Re)starts SNTP with the server chosen by _source
+    void startSntp(uint32_t now);
+    // SNTP runs with the server _source chooses now
+    bool runningChosenServer() const;
     void publishState();
 
     const AppNetworkManager* _network = nullptr;
@@ -72,14 +87,20 @@ private:
     String _pending_who;
     bool _has_pending = false;
     WallClock _clock;
-    Status _status = { TimeState::Disabled, timeDefaults(), false, 0, 0 };
+    Status _status = { TimeState::Disabled, timeDefaults(), false, 0, 0, NtpOrigin::Configured, DhcpNtpState::Off, 0 };
     std::atomic<bool> _synced{false};
 
     // loopTask only
     TimeSettings _active = timeDefaults();
     TimeLogPolicy _policy;
     bool _sntp_running = false;
-    // lwIP keeps the pointer given to esp_sntp_setservername(): the name must stay here
+    NtpSourcePolicy _source;
+    bool _was_up = false;
+    // Server SNTP was started with (startSntp)
+    NtpOrigin _running_origin = NtpOrigin::Configured;
+    uint32_t _running_dhcp = 0;
+    // Server in use (DHCP or configured). lwIP keeps the pointer given to
+    // esp_sntp_setservername(): the name must stay here and changes only with SNTP stopped
     char _server[NTP_SERVER_MAX + 1] = {0};
 };
 

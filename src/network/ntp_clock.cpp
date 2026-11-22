@@ -1,5 +1,6 @@
 #include "network/ntp_clock.h"
 #include "network/network_manager.h"
+#include "network/dhcp_ntp_capture.h"
 #include "core/app_logger.h"
 #include <esp_sntp.h>
 #include <stdlib.h>
@@ -44,12 +45,15 @@ void NtpClock::apply(const TimeSettings& s, const String& who, uint32_t now) {
     setenv("TZ", zone ? zone->posix : "UTC0", 1);
     tzset();
 
+    // New settings try a failed DHCP server again (US-145)
+    _source.reset(s.dhcp);
     if (s.ntp) {
+        // SNTP is stopped: the configured server until startSntp() chooses
         strncpy(_server, s.server.c_str(), sizeof(_server) - 1);
         _server[sizeof(_server) - 1] = '\0';
         esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+        // Always off: lwIP would write the DHCP server over the one of the user (US-145)
         esp_sntp_servermode_dhcp(false);
-        esp_sntp_setservername(0, _server);
         sntp_set_time_sync_notification_cb(&NtpClock::onSync);
         // A new server or time zone keeps the time already known; SNTP starts in poll()
         // once the network is up
@@ -64,8 +68,8 @@ void NtpClock::apply(const TimeSettings& s, const String& who, uint32_t now) {
 
     if (who.length() > 0) {
         if (s.ntp) {
-            AppLogger::log("INFO", "[TIME] Settings changed by '%s': NTP on, %s, %s", who.c_str(), s.server.c_str(),
-                           s.zone.c_str());
+            AppLogger::log("INFO", "[TIME] Settings changed by '%s': NTP on, %s, %s%s", who.c_str(), s.server.c_str(),
+                           s.zone.c_str(), s.dhcp ? ", server from DHCP" : "");
         } else {
             AppLogger::log("INFO", "[TIME] Settings changed by '%s': NTP off, %s", who.c_str(), s.zone.c_str());
         }
@@ -88,9 +92,26 @@ void NtpClock::poll(uint32_t now) {
     if (changed) apply(next, who, now);
 
     bool up = networkUp();
+    // US-145: the lease is gone with the network; a new connection tries the DHCP server
+    // again. lwIP writes the capture before the address of a new lease, so before up
+    if (_was_up && !up) {
+        _source.onLinkDown();
+        DhcpNtpCapture::clear();
+    }
+    _was_up = up;
+    _source.onDhcpServer(DhcpNtpCapture::server());
+
     if (_active.ntp && up && !_sntp_running) {
-        esp_sntp_init();
-        _sntp_running = true;
+        startSntp(now);
+    } else if (_active.ntp && up && _sntp_running && !runningChosenServer()) {
+        // A lease with another server, or without one. Checked with the network up only:
+        // a reconnection to the same server restarts nothing
+        if (_source.origin() == NtpOrigin::Dhcp) {
+            char ip[IPV4_TEXT_MAX];
+            formatIpv4(_source.dhcpServer(), ip);
+            AppLogger::log("INFO", "[TIME] NTP server from DHCP: %s", ip);
+        }
+        startSntp(now);
     }
 
     if (_synced.exchange(false) && _policy.onSynced() == TimeLogPolicy::Line::Synchronized) {
@@ -100,19 +121,59 @@ void NtpClock::poll(uint32_t now) {
             localTm(ms, t);
             char when[40];
             strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S %Z", &t);
-            AppLogger::log("INFO", "[TIME] Synchronized with %s: %s", _active.server.c_str(), when);
+            // " (from DHCP)" only for the DHCP server: with the option off the line of US-117
+            AppLogger::log("INFO", "[TIME] Synchronized with %s%s: %s", _server,
+                           _source.origin() == NtpOrigin::Dhcp ? " (from DHCP)" : "", when);
         }
     }
     if (_active.ntp && _policy.tick(now, up) == TimeLogPolicy::Line::NoAnswer) {
-        AppLogger::log("WARN", "[TIME] No answer from %s for %u s, retrying", _active.server.c_str(),
-                       (unsigned)(TimeLogPolicy::NO_ANSWER_MS / 1000));
+        if (_source.onNoAnswer()) {
+            // One line, then the configured server (US-145)
+            AppLogger::log("WARN", "[TIME] No answer from %s (from DHCP) for %u s, using %s", _server,
+                           (unsigned)(TimeLogPolicy::NO_ANSWER_MS / 1000), _active.server.c_str());
+            startSntp(now);
+        } else {
+            AppLogger::log("WARN", "[TIME] No answer from %s for %u s, retrying", _server,
+                           (unsigned)(TimeLogPolicy::NO_ANSWER_MS / 1000));
+        }
     }
     publishState();
+}
+
+void NtpClock::startSntp(uint32_t now) {
+    if (_sntp_running) {
+        esp_sntp_stop();
+        _sntp_running = false;
+    }
+    if (_source.origin() == NtpOrigin::Dhcp) {
+        formatIpv4(_source.dhcpServer(), _server);
+    } else {
+        strncpy(_server, _active.server.c_str(), sizeof(_server) - 1);
+        _server[sizeof(_server) - 1] = '\0';
+    }
+    esp_sntp_setservername(0, _server);
+    esp_sntp_init();
+    _sntp_running = true;
+    _running_origin = _source.origin();
+    _running_dhcp = _source.dhcpServer();
+    // NoAnswer counts again for the new server, and its first answer writes a line
+    _policy.restart(now);
+    if (_source.state() == DhcpNtpState::None) {
+        AppLogger::log("INFO", "[TIME] DHCP gave no NTP server, using %s", _server);
+    }
+}
+
+bool NtpClock::runningChosenServer() const {
+    if (_source.origin() != _running_origin) return false;
+    return _running_origin != NtpOrigin::Dhcp || _source.dhcpServer() == _running_dhcp;
 }
 
 void NtpClock::publishState() {
     std::lock_guard<std::mutex> lock(_mutex);
     _status.settings = _active;
+    _status.origin = _source.origin();
+    _status.dhcp = _source.state();
+    _status.dhcp_addr = _source.dhcpServer();
     if (!_active.ntp) {
         _status.state = TimeState::Disabled;
     } else if (_clock.valid()) {

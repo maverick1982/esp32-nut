@@ -1,0 +1,520 @@
+schema: archetipo/plan/v2
+spec_code: US-145
+body: |
+  ---
+  type: plan
+  title: "US-145: Server NTP annunciato dal DHCP (option 42), con ritorno al server configurato — Piano di implementazione"
+  description: "Piano di implementazione per US-145"
+  tags: [plan, implementation, US-145]
+  ---
+  # US-145: Server NTP annunciato dal DHCP (option 42), con ritorno al server configurato — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-11-22
+
+  ---
+
+  ## Storia
+
+  **Epic:** EP-002 — Connettività di Rete e Configurazione
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utente che ha in rete un server NTP locale annunciato dal router,
+  voglio che la scheda possa usare il server NTP ricevuto dal DHCP,
+  in modo da avere l'ora anche su una LAN senza Internet, senza scrivere a mano l'indirizzo del server su ogni scheda (#135).
+
+  **Criteri di Accettazione**
+  Vedi la storia US-145 nel backlog (interruttore, salvataggio, lease con option 42, NoAnswer e ripiego, nessun server dal DHCP, rinnovi del lease, server in uso in pagina/API/log, Wi-Fi ed Ethernet senza `#if`, test e build, fuori ambito).
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il server del lease viene catturato con un wrap del linker su `dhcp_set_ntp_servers`, la funzione con cui il DHCP di lwIP passa l'option 42 all'SNTP. Così lwIP non tocca mai i server dell'SNTP, e la scelta tra server del DHCP e server configurato passa tutta per una politica pura con test nativi. `NtpClock` resta l'unico codice che chiama `esp_sntp_*`.
+
+  - **Fattibilità verificata (2026-11-22).** In `liblwip.a` precompilata di esp32s3, esp32p4 ed esp32p4_es il simbolo `dhcp_set_ntp_servers` è definito in `sntp.c.obj` e solo referenziato (`U`) da `dhcp.c.obj`: `-Wl,--wrap=dhcp_set_ntp_servers` intercetta la chiamata. Il progetto usa già lo stesso meccanismo per `esp_core_dump_write` (ADR 0008). I sdkconfig del core hanno `CONFIG_LWIP_DHCP_GET_NTP_SRV 1`, `CONFIG_LWIP_DHCP_MAX_NTP_SERVERS 1` (dal lease arriva un solo server) e `CONFIG_LWIP_SNTP_MAX_SERVERS 3`. sdkconfig non si tocca.
+  - **Perché non `esp_sntp_servermode_dhcp(true)`.** lwIP scriverebbe il server del DHCP all'indice 0, cancellerebbe gli altri e lo farebbe a ogni rinnovo, in corsa con `apply()`. Inoltre lwIP non conserva l'option 42: un lease ricevuto prima dell'attivazione dell'opzione andrebbe perso fino al rinnovo successivo. Il wrap invece cattura sempre l'ultimo server, anche con l'opzione spenta, quindi accenderla a scheda avviata funziona subito. `esp_sntp_servermode_dhcp(false)` resta in `apply()` come difesa.
+  - **Cattura (`src/network/dhcp_ntp_capture.{h,cpp}`).** `__wrap_dhcp_set_ntp_servers(u8_t num, const ip4_addr_t* servers)` gira nel task tcpip: salva `servers[0].addr` (0 se `num == 0` o `servers == nullptr`) in un `std::atomic<uint32_t>` statico e non chiama `__real_` (con servermode spento sarebbe un no-op). Nessun log in quel task. `DhcpNtpCapture::server()` legge il valore, `DhcpNtpCapture::clear()` lo azzera. lwIP chiama la funzione solo per un ACK che contiene l'option 42, prima di assegnare l'IP: quando `networkUp()` diventa vero, il lease è già noto. Un lease senza option 42 non la chiama: per questo `NtpClock` azzera la cattura alla caduta della rete. È un solo valore per tutta la scheda: funziona con Wi-Fi ed Ethernet senza `#if` (ADR 0010); in modalità AP la scheda fa da server DHCP e la cattura resta 0.
+  - **Politica pura (`lib/TimeCore/src/NtpSource.h`).** `NtpSourcePolicy` con `reset(bool use_dhcp)` (avvio o nuove impostazioni: dimentica il server fallito, tiene il lease), `onLinkDown()` (lease perso: azzera server e fallito), `onDhcpServer(uint32_t addr)` (server del lease corrente, 0 = nessuno; restituisce true se cambia il server in uso), `onNoAnswer()` (true se passa dal server del DHCP a quello configurato; registra il server fallito), `origin()` (`NtpOrigin::Dhcp` solo se l'opzione è accesa, il server è diverso da 0 e non è quello fallito, altrimenti `Configured`), `state()` (`DhcpNtpState`: `Off`, `None`, `Used`, `NoAnswer`) e `dhcpServer()`. Un server del lease diverso da quello fallito azzera il fallito, quindi si riprova. Lo stesso server non cambia nulla. Nessun ritentativo a tempo. Nello stesso file: `formatIpv4()` (ordine di `ip4_addr_t.addr`: primo ottetto nel byte basso) e i nomi per l'API `ntpOriginName()` (`configured` / `dhcp`) e `dhcpNtpStateName()` (`off` / `none` / `used` / `no_answer`).
+  - **Impostazioni.** `TimeSettings` ottiene `bool dhcp`, spento in `timeDefaults()`. Va nella chiave NVS `dhcp` del namespace `time` (`TimeSettingsStore`): una chiave mancante (impostazioni salvate prima) vale false. `sanitize()` non lo tocca. Con NTP spento il valore resta salvato ma non ha effetto.
+  - **`NtpClock`.** `apply()` chiama `_source.reset(s.dhcp)`, non imposta più il server (lo fa l'avvio dell'SNTP) e, se l'opzione è accesa, aggiunge `, server from DHCP` alla riga "Settings changed". `poll()` segue la caduta della rete (`_was_up && !up` → `_source.onLinkDown()` e `DhcpNtpCapture::clear()`) e passa a ogni giro `DhcpNtpCapture::server()` a `_source.onDhcpServer()`. All'avvio dell'SNTP e a ogni cambio del server in uso (con l'SNTP già avviato), `startSntp(now)` ferma l'SNTP se gira, copia in `_server` il server in uso (IP del DHCP formattato o server configurato), chiama `esp_sntp_setservername(0, _server)` e `esp_sntp_init()`, poi `_policy.restart(now)`. lwIP tiene il puntatore: si cambia `_server` solo con l'SNTP fermo.
+  - **Righe del System Log.**
+    - `[TIME] Synchronized with <server> (from DHCP): …`, con il suffisso solo per il server del DHCP. Con l'opzione spenta la riga è identica a US-117.
+    - Su NoAnswer con il server del DHCP: una sola riga WARN `[TIME] No answer from <dhcp> (from DHCP) for 60 s, using <configurato>`, poi `startSntp()` con il server configurato. Su NoAnswer con il server configurato resta la riga attuale `No answer from <server> for 60 s, retrying`.
+    - All'avvio dell'SNTP con l'opzione accesa e nessun server dal DHCP: una riga INFO `[TIME] DHCP gave no NTP server, using <configurato>`.
+    - Al cambio di server del lease: una riga INFO `[TIME] NTP server from DHCP: <ip>`.
+    - Un rinnovo con lo stesso server non scrive nulla.
+  - **Stato e API.** `NtpClock::Status` ottiene `origin`, `dhcp` (`DhcpNtpState`) e `dhcp_addr`. `TimeStatusView` ottiene `server` (in uso), `origin`, `dhcp`, `dhcp_server` (stringa vuota senza server). `handleGetTime()` formatta l'IP. Con stato diverso da `disabled`, `GET /api/time` aggiunge in `status`: `server`, `origin`, `dhcp`, più `dhcp_server` quando c'è. In `time` aggiunge `dhcp` (bool). `POST /api/time` accetta `time.dhcp` booleano. Un valore non booleano dà 400 `Invalid DHCP option`.
+  - **Web UI (Board Settings → Time).** Sotto l'interruttore NTP c'è una nuova riga con l'interruttore `time-dhcp` **Use the NTP server from DHCP**, disabilitato quando `time-ntp` è spento. Hint: `Option 42 of the router. The server below is used when DHCP gives none or it does not answer.` Nel riquadro di stato c'è una riga `Server` (`time-source`) con `192.168.1.1 (from DHCP)` o `pool.ntp.org (configured)`, più una nota con `dhcp`: `none` → `DHCP gave no server`, `no_answer` → `DHCP server <ip> did not answer`. Con NTP spento mostra `—`. Il POST invia anche `dhcp`. È un campo in più in un form esistente, quindi niente mockup. `index_inlined.html` si rigenera con la build (`scripts/inline_web.py`) e va committato.
+  - **Sicurezza.** Il server del DHCP non è autenticato, come quello configurato: l'ora serve solo da mostrare e per i log (ADR 0009), quindi un server falso non apre nulla. La riga di ADR 0009 su SNTP cita anche l'option 42.
+  - **Router di prova.** Non si sa se il router dell'utente annunci l'option 42. La scheda stessa fa da sonda: con la build nuova, la pagina Time mostra `dhcp: none` oppure l'IP ricevuto. Se il router non la annuncia, la prova sul campo va fatta attivando l'option 42 nel router (se lo consente) o con dnsmasq su una rete di prova separata. Comunque solo dopo un sì esplicito.
+
+  ---
+
+  ## Strategia di test
+
+  La logica di scelta sta tutta in codice puro con test nativi (Unity, `pio test -e native`). Il wrap e `NtpClock` si verificano con la build di tutte le schede e con la prova sul campo.
+
+  - **`test_time_core`:**
+    - default di `TimeSettings.dhcp` e `sanitize()` che lo lascia invariato;
+    - `formatIpv4`;
+    - `NtpSourcePolicy`: opzione spenta, lease con server, lease senza server, NoAnswer con ripiego, NoAnswer con server configurato (nessun cambio), rinnovo con lo stesso server, rinnovo con un server diverso, caduta della rete, `reset()` dopo un fallimento, accensione dell'opzione con un lease già noto;
+    - nomi di `ntpOriginName` e `dhcpNtpStateName`.
+  - **`test_web_api`:**
+    - `timeJson` con `time.dhcp` e con i campi `server`, `origin`, `dhcp` e `dhcp_server` in `status`, assenti con stato `disabled`;
+    - `checkTimeBody` con `dhcp` true/false, assente (resta il valore corrente) e non booleano (400 `Invalid DHCP option`).
+  - **Regressione:** tutta la suite nativa resta verde e `e2e/time-settings.spec.ts` passa senza cambiare i test esistenti.
+  - **Build:** `esp32-s3-standard`, `arduino-nano-esp32`, `esp32-p4-eth`, `esp32-p4-eth-v1` compilano e linkano con il wrap. Dimensione dell'immagine esp32-s3-standard prima e dopo, riportata nella PR (#93).
+  - **Prova sul campo**, solo dopo un sì esplicito: la scheda di test con la build della storia, l'opzione accesa e il System Log letto.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** Playwright (`e2e/`, API simulate con `page.route`, `serveIndex` di `e2e/support/webui.ts`)
+  **Video demo:** previsto (registrato poi da `archetipo-review`, non durante l'implementazione)
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Accende l'opzione e salva | Apre Board Settings → Time con NTP acceso, accende **Use the NTP server from DHCP**, salva: il POST contiene `dhcp: true`, il messaggio di conferma compare, la riga Server mostra `192.168.1.1 (from DHCP)` dopo il GET successivo |
+  | Ripiego dopo NoAnswer | GET con `dhcp: no_answer`, `origin: configured`, `dhcp_server: 192.168.1.1`: la riga Server mostra `pool.ntp.org (configured)` e la nota `DHCP server 192.168.1.1 did not answer` |
+  | DHCP senza server | GET con `dhcp: none`: la riga mostra il server configurato e `DHCP gave no server` |
+  | NTP spento | Spegnendo NTP l'interruttore DHCP si disabilita e la riga Server mostra `—`; il POST conserva il valore di `dhcp` |
+  | Errore del server | Un 400 `Invalid DHCP option` viene mostrato così com'è |
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-11-22_
+tasks:
+  - id: TASK-01
+    title: Opzione dhcp in TimeSettings e nel namespace NVS time
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** aggiungere l'impostazione "server NTP dal DHCP", spenta di default e conservata in NVS.
+
+      **Da leggere:** `lib/TimeCore/src/TimeSettings.h`, `src/core/time_settings_store.h`, `src/core/time_settings_store.cpp`.
+
+      **Passi:**
+      1. In `TimeSettings` aggiungi `bool dhcp;` dopo `zone`, con il commento: server NTP dell'option 42 del DHCP, prima di `server` che resta il ripiego (US-145).
+      2. In `timeDefaults()` imposta `dhcp = false` (aggiorna l'inizializzatore aggregato).
+      3. `sanitize()` non cambia `dhcp`; aggiorna solo il commento se serve.
+      4. In `time_settings_store.cpp` aggiungi `kKeyDhcp = "dhcp"`: `load()` legge `prefs.getBool(kKeyDhcp, s.dhcp)`; `save()` scrive `putBool(kKeyDhcp, s.dhcp)` e include il risultato (> 0) in `ok`.
+      5. Cerca tutti gli inizializzatori aggregati di `TimeSettings` (`grep -rn "TimeSettings s = {" src lib test`) e aggiungi il quarto campo.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/TimeCore/src/TimeSettings.h — campo `dhcp`, default false
+      - src/core/time_settings_store.cpp — chiave NVS `dhcp` in load/save
+      - src/core/time_settings_store.h — commento del namespace
+
+      ## Verifica
+      `pio test -e native -f test_time_core` compila e passa.
+
+      ## Criteri di Completamento
+      - [ ] `timeDefaults().dhcp` è false
+      - [ ] `TimeSettingsStore::load()` restituisce false se la chiave `dhcp` manca
+      - [ ] `save()` restituisce false se la scrittura di `dhcp` fallisce
+      - [ ] Tutti gli inizializzatori aggregati di `TimeSettings` hanno il nuovo campo
+    ref: TASK-01
+  - id: TASK-02
+    title: Politica pura NtpSourcePolicy e formatIpv4 in TimeCore
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** scrivere la scelta del server (DHCP o configurato) come codice puro, testabile in nativo.
+
+      **Da leggere:** `lib/TimeCore/src/TimeStatus.h` (stile di `TimeLogPolicy`), sezione Soluzione tecnica del piano.
+
+      **Passi:** crea `lib/TimeCore/src/NtpSource.h` (header-only, solo `<stdint.h>`, `<stdio.h>`) con:
+      1. `enum class NtpOrigin : uint8_t { Configured, Dhcp };` e `ntpOriginName()` → `"configured"` / `"dhcp"`.
+      2. `enum class DhcpNtpState : uint8_t { Off, None, Used, NoAnswer };` e `dhcpNtpStateName()` → `"off"`, `"none"`, `"used"`, `"no_answer"`.
+      3. `inline void formatIpv4(uint32_t lwip_addr, char out[16])`: ordine di `ip4_addr_t.addr` di lwIP, primo ottetto nel byte basso (`addr & 0xFF`), formato `a.b.c.d`.
+      4. `class NtpSourcePolicy` con campi privati `bool _use = false; uint32_t _dhcp = 0; uint32_t _failed = 0;` e:
+         - `void reset(bool use_dhcp)` → `_use = use_dhcp; _failed = 0;` (tiene `_dhcp`)
+         - `void onLinkDown()` → `_dhcp = 0; _failed = 0;`
+         - `bool onDhcpServer(uint32_t addr)`: se `addr == _dhcp` restituisce false; altrimenti salva origine e server in uso prima, imposta `_dhcp = addr`, azzera `_failed` se `addr != _failed`, restituisce true se l'origine o il server in uso sono cambiati
+         - `bool onNoAnswer()`: se `origin() != Dhcp` restituisce false; altrimenti `_failed = _dhcp` e true
+         - `NtpOrigin origin() const`: `Dhcp` se `_use && _dhcp != 0 && _dhcp != _failed`, altrimenti `Configured`
+         - `DhcpNtpState state() const`: `!_use` → Off; `_dhcp == 0` → None; `_dhcp == _failed` → NoAnswer; altrimenti Used
+         - `uint32_t dhcpServer() const`
+      5. Commento della classe: niente ritentativi a tempo; il server del DHCP si riprova a una nuova connessione (`onLinkDown`), con un lease che porta un server diverso o con nuove impostazioni (`reset`).
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/TimeCore/src/NtpSource.h — nuovo, header-only
+
+      ## Verifica
+      `pio test -e native -f test_time_core` compila (il file è incluso dai test di TASK-03).
+
+      ## Criteri di Completamento
+      - [ ] Il file non dipende da Arduino né da lwIP
+      - [ ] `onDhcpServer` con lo stesso server restituisce false
+      - [ ] Con l'opzione spenta `origin()` è sempre `Configured` e `state()` è `Off`
+    ref: TASK-02
+  - id: TASK-03
+    title: Test nativi di TimeSettings.dhcp e NtpSourcePolicy
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire con Unity la politica di scelta del server e il nuovo default.
+
+      **Da leggere:** `test/test_time_core/test_main.cpp` (stile e `RUN_TEST`), `lib/TimeCore/src/NtpSource.h`.
+
+      **Passi:** in `test/test_time_core/test_main.cpp` aggiungi `#include "NtpSource.h"` e i test, registrandoli in `main`:
+      1. `test_time_defaults`: aggiungi l'asserzione `dhcp == false`; `test_sanitize_stored_values`: `dhcp` true resta true.
+      2. `test_format_ipv4`: `0x0101A8C0` → `"192.168.1.1"`, `0` → `"0.0.0.0"`, `0xFFFFFFFF` → `"255.255.255.255"`.
+      3. `test_ntp_source_names`: tutti i valori di `ntpOriginName` e `dhcpNtpStateName`.
+      4. `test_ntp_source_option_off_ignores_dhcp`: `reset(false)`, `onDhcpServer(X)` → origine Configured, stato Off.
+      5. `test_ntp_source_uses_the_lease_server`: `reset(true)`, `onDhcpServer(X)` true → Dhcp, Used, `dhcpServer() == X`.
+      6. `test_ntp_source_no_server_from_dhcp`: `reset(true)`, nessun server → Configured, None.
+      7. `test_ntp_source_no_answer_falls_back_once`: Used → `onNoAnswer()` true → Configured, NoAnswer; secondo `onNoAnswer()` false.
+      8. `test_ntp_source_no_answer_with_configured_server`: stato None → `onNoAnswer()` false.
+      9. `test_ntp_source_renewal_same_server`: dopo il ripiego `onDhcpServer(X)` false e resta NoAnswer; da Used, stesso X → false.
+      10. `test_ntp_source_renewal_new_server_retries`: dopo il ripiego `onDhcpServer(Y)` true → Dhcp, Used.
+      11. `test_ntp_source_link_down_retries`: dopo il ripiego `onLinkDown()`, poi `onDhcpServer(X)` true → Used.
+      12. `test_ntp_source_reset_retries`: dopo il ripiego `reset(true)` → Used con lo stesso X.
+      13. `test_ntp_source_option_on_with_known_lease`: `reset(false)`, `onDhcpServer(X)`, poi `reset(true)` → Dhcp.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_time_core/test_main.cpp — nuovi test e asserzioni
+
+      ## Verifica
+      `pio test -e native -f test_time_core`
+
+      ## Criteri di Completamento
+      - [ ] Tutti i test nuovi ed esistenti di test_time_core passano
+      - [ ] Ogni metodo pubblico di `NtpSourcePolicy` è coperto da almeno un test
+    ref: TASK-03
+  - id: TASK-04
+    title: Cattura dell'option 42 con il wrap di dhcp_set_ntp_servers
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** catturare il server NTP del lease DHCP senza che lwIP tocchi i server dell'SNTP.
+
+      **Da leggere:** `platformio.ini` (sezioni `[esp32s3_common]` e `[p4_eth]`, flag `-Wl,--wrap=esp_core_dump_write` e il suo commento), il wrap esistente di `esp_core_dump_write` (`grep -rn "__wrap_esp_core_dump_write" src`) come modello.
+
+      **Passi:**
+      1. Crea `src/network/dhcp_ntp_capture.h` con `namespace DhcpNtpCapture { uint32_t server(); void clear(); }` e un commento: server dell'option 42 dell'ultimo lease (ordine di `ip4_addr_t.addr`), 0 senza; scritto dal task tcpip, letto da `NtpClock::poll()`; US-145.
+      2. Crea `src/network/dhcp_ntp_capture.cpp`: `static std::atomic<uint32_t> s_server{0};` e `extern "C" void __wrap_dhcp_set_ntp_servers(u8_t num, const ip4_addr_t* servers)`, che salva `servers[0].addr` se `num > 0 && servers`, altrimenti 0. Non chiama `__real_dhcp_set_ntp_servers`, non scrive log e non alloca. Includi `lwip/ip4_addr.h`. Commento: lwIP la chiama solo per un ACK con l'option 42, prima di assegnare l'IP; non chiamare la funzione reale tiene i server dell'SNTP sotto il controllo di `NtpClock`; il simbolo è definito in `sntp.c.obj` e referenziato da `dhcp.c.obj` di liblwip.a (esp32s3, esp32p4, esp32p4_es), quindi il wrap funziona.
+      3. In `platformio.ini` aggiungi `-Wl,--wrap=dhcp_set_ntp_servers` sotto il wrap esistente, sia in `[esp32s3_common]` sia in `[p4_eth]`, con una riga di commento (US-145, issue #135).
+      4. L'env `native` non compila `src/network`: nessuna modifica lì.
+
+      **Bloccanti:** se il link fallisce per un `__wrap_` non definito, controlla che il file sia incluso da `build_src_filter` (`+<*>`).
+
+      ## File Coinvolti
+      - src/network/dhcp_ntp_capture.h — nuovo
+      - src/network/dhcp_ntp_capture.cpp — nuovo, funzione `__wrap_`
+      - platformio.ini — flag del wrap in `[esp32s3_common]` e `[p4_eth]`
+
+      ## Verifica
+      `pio run -e esp32-s3-standard` e `pio run -e esp32-p4-eth-v1` linkano senza errori.
+
+      ## Criteri di Completamento
+      - [ ] Le due build linkano con il wrap
+      - [ ] `DhcpNtpCapture::server()` e `clear()` sono atomici e non bloccano
+      - [ ] sdkconfig e sorgenti di lwIP non sono toccati
+    ref: TASK-04
+  - id: TASK-05
+    title: 'NtpClock: scelta del server, ripiego dopo NoAnswer, righe del System Log e stato'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Descrizione
+      **Obiettivo:** usare il server del DHCP quando l'opzione è accesa, con ripiego sul server configurato. Log e stato nominano il server in uso.
+
+      **Da leggere:** `src/network/ntp_clock.h`, `src/network/ntp_clock.cpp`, `lib/TimeCore/src/NtpSource.h`, `src/network/dhcp_ntp_capture.h`, la sezione Soluzione tecnica del piano (righe del System Log).
+
+      **Passi:**
+      1. In `ntp_clock.h`:
+         - aggiungi `#include "NtpSource.h"`;
+         - aggiungi i membri `NtpSourcePolicy _source;` e `bool _was_up = false;` (solo loopTask);
+         - aggiungi il metodo privato `void startSntp(uint32_t now);`;
+         - in `Status` aggiungi `NtpOrigin origin; DhcpNtpState dhcp; uint32_t dhcp_addr;`, inizializzati a `Configured, Off, 0`;
+         - sostituisci il paragrafo "DHCP option 42 stays off" con la descrizione di US-145 (cattura via wrap, ripiego, nessun ritentativo a tempo);
+         - `_server` contiene il server in uso.
+      2. `apply()`:
+         - ferma l'SNTP come oggi;
+         - con NTP acceso lascia `esp_sntp_setoperatingmode`, `esp_sntp_servermode_dhcp(false)` e la callback, ma togli `strncpy` e `setservername` (li fa `startSntp`);
+         - chiama `_source.reset(s.dhcp)` in entrambi i rami;
+         - nella riga "Settings changed" con NTP acceso aggiungi `, server from DHCP` quando `s.dhcp`.
+      3. `startSntp(now)`:
+         - se `_sntp_running`, chiama `esp_sntp_stop()`;
+         - se `_source.origin() == NtpOrigin::Dhcp` copia in `_server` l'IP con `formatIpv4(_source.dhcpServer(), …)`, altrimenti `_active.server`;
+         - chiama `esp_sntp_setservername(0, _server)`, poi `esp_sntp_init()`;
+         - `_sntp_running = true; _policy.restart(now);`;
+         - se l'opzione è accesa e `_source.state() == DhcpNtpState::None`, scrive INFO `[TIME] DHCP gave no NTP server, using %s`.
+      4. `poll()`, dopo l'applicazione delle impostazioni:
+         - `bool up = networkUp();` e `if (_was_up && !up) { _source.onLinkDown(); DhcpNtpCapture::clear(); } _was_up = up;`;
+         - `bool changed = _source.onDhcpServer(DhcpNtpCapture::server());`;
+         - se `_active.ntp && up && !_sntp_running` chiama `startSntp(now)`;
+         - altrimenti, se `_active.ntp && _sntp_running && changed`: se l'origine è Dhcp scrive INFO `[TIME] NTP server from DHCP: <ip>`, poi chiama `startSntp(now)`.
+      5. Riga Synchronized: `"[TIME] Synchronized with %s%s: %s"` con `_server` e il suffisso ` (from DHCP)` solo se l'origine è Dhcp. Con l'opzione spenta il testo resta identico a oggi.
+      6. NoAnswer: quando `_policy.tick()` restituisce `NoAnswer`:
+         - se l'origine è Dhcp, salva l'IP fallito, chiama `_source.onNoAnswer()`, scrive WARN `[TIME] No answer from <ip> (from DHCP) for 60 s, using <configurato>` e chiama `startSntp(now)`;
+         - altrimenti resta la riga attuale, con `_server` al posto di `_active.server`.
+      7. `publishState()`: riempi `_status.origin`, `_status.dhcp` e `_status.dhcp_addr` da `_source`.
+      8. In `docs/adr/0009-web-ui-authentication.md`, nella riga "No wall clock", aggiungi che il server può venire anche dall'option 42 del DHCP (US-145). Resta comunque solo per mostrare l'ora e per i log.
+
+      **Bloccanti:** nessuno. Non chiamare `AppLogger` dalla callback `onSync` né dal wrap.
+
+      ## File Coinvolti
+      - src/network/ntp_clock.h — membri, Status, commento della classe
+      - src/network/ntp_clock.cpp — apply, startSntp, poll, righe del log, publishState
+      - docs/adr/0009-web-ui-authentication.md — una frase sull'option 42
+
+      ## Verifica
+      `pio run -e esp32-s3-standard` compila; `pio test -e native` resta verde.
+
+      ## Criteri di Completamento
+      - [ ] Con l'opzione spenta, i server, le righe e il comportamento sono uguali a US-117
+      - [ ] `_server` cambia solo con l'SNTP fermo
+      - [ ] Un rinnovo con lo stesso server non riavvia l'SNTP e non scrive righe
+      - [ ] NoAnswer sul server del DHCP produce una sola riga WARN con i due server e passa al server configurato
+      - [ ] La caduta della rete azzera la cattura e il server fallito
+    ref: TASK-05
+  - id: TASK-06
+    title: 'API /api/time: campo dhcp e server in uso nello stato'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** esporre l'opzione e il server in uso in `GET /api/time` e accettare `dhcp` in `POST /api/time`.
+
+      **Da leggere:** `lib/WebApi/src/WebApiJson.h` (struct `TimeStatusView`, commenti di `timeJson` e `checkTimeBody`), `lib/WebApi/src/WebApiJson.cpp` (`timeJson`, `checkTimeBody`), `src/network/web_config_server.cpp` (`handleGetTime`).
+
+      **Passi:**
+      1. In `WebApiJson.h`:
+         - includi `NtpSource.h`;
+         - aggiungi a `TimeStatusView` `String server; NtpOrigin origin; DhcpNtpState dhcp; String dhcp_server;` (`dhcp_server` vuoto senza server);
+         - aggiorna i commenti: `time` ha anche `dhcp`; `status` ha `server`, `origin`, `dhcp` e `dhcp_server` quando lo stato non è `disabled`; nuovo errore `Invalid DHCP option`.
+      2. `timeJson`: `t["dhcp"] = time.dhcp;`. Se `status.state != TimeState::Disabled` scrivi `st["server"]`, `st["origin"] = ntpOriginName(...)`, `st["dhcp"] = dhcpNtpStateName(...)` e `st["dhcp_server"]`, quest'ultimo solo se non è vuoto.
+      3. `checkTimeBody`: se `obj["dhcp"]` è presente e non è bool → `sendError(response, 400, "Invalid DHCP option")`, altrimenti `next.dhcp = v.as<bool>()`. Se manca, resta il valore corrente.
+      4. `handleGetTime()`:
+         - copia `s.origin` e `s.dhcp` nella view;
+         - se `s.dhcp_addr != 0`, formatta `dhcp_server` con `formatIpv4`;
+         - `server` = `dhcp_server` se l'origine è Dhcp, altrimenti `s.settings.server`;
+         - aggiorna l'inizializzatore aggregato della view.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.h — TimeStatusView, commenti
+      - lib/WebApi/src/WebApiJson.cpp — timeJson, checkTimeBody
+      - src/network/web_config_server.cpp — handleGetTime
+
+      ## Verifica
+      `pio test -e native -f test_web_api` compila; `pio run -e esp32-s3-standard` compila.
+
+      ## Criteri di Completamento
+      - [ ] `GET /api/time` riporta `time.dhcp` e, con NTP acceso, `status.server`, `status.origin` e `status.dhcp`
+      - [ ] `POST /api/time` con `dhcp` non booleano risponde 400 `Invalid DHCP option`
+      - [ ] Le rotte restano registrate con `guarded()`
+    ref: TASK-06
+  - id: TASK-07
+    title: Test nativi dell'API dell'ora con l'opzione DHCP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il nuovo JSON e la validazione di `dhcp`.
+
+      **Da leggere:** `test/test_web_api/test_main.cpp`, sezione `// --- Network time (US-117) ---` (circa riga 2316).
+
+      **Passi:**
+      1. Aggiorna gli inizializzatori di `TimeSettings` e `TimeStatusView` dei test esistenti con i campi nuovi.
+      2. `test_time_json_dhcp_in_use`: `time.dhcp` true, `status` con server `192.168.1.1`, origin `dhcp`, dhcp `used` e `dhcp_server`.
+      3. `test_time_json_dhcp_no_answer`: origin `configured`, dhcp `no_answer`, `dhcp_server` presente, server = quello configurato.
+      4. `test_time_json_dhcp_none_has_no_dhcp_server`: dhcp `none`, la chiave `dhcp_server` manca.
+      5. `test_time_json_disabled_has_no_server_fields`: con stato disabled mancano `server`, `origin`, `dhcp` e `dhcp_server`.
+      6. `test_time_body_dhcp`: `dhcp` true, false e assente (resta il valore corrente), poi `"yes"` e `1` → 400 `Invalid DHCP option`.
+      7. Registra i test in `main`.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - test/test_web_api/test_main.cpp — nuovi test, inizializzatori aggiornati
+
+      ## Verifica
+      `pio test -e native -f test_web_api`
+
+      ## Criteri di Completamento
+      - [ ] I test nuovi ed esistenti di test_web_api passano
+      - [ ] Il caso non booleano è coperto
+    ref: TASK-07
+  - id: TASK-08
+    title: 'Web UI: interruttore DHCP e riga del server in uso nella sezione Time'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Descrizione
+      **Obiettivo:** permettere all'utente di accendere l'opzione e vedere quale server viene usato.
+
+      **Da leggere:**
+      - `data/www/index.html`, sezione `time-section`, circa righe 960-1040;
+      - `data/www/bundle.js`, blocco `US-117: Time section`, circa righe 4242-4470.
+
+      **Passi:**
+      1. In `index.html`, nel riquadro `time-status`, dopo `Board time`, aggiungi:
+         `<div class="link-kv wide"><dt>Server</dt><dd id="time-source" class="na">—</dd></div>`.
+      2. In `index.html`, dopo la `board-row` dell'interruttore NTP, aggiungi una `board-row` uguale per stile:
+         - nome `Use the NTP server from DHCP`;
+         - hint `Option 42 of the router. The server below is used when DHCP gives none or it does not answer.`;
+         - checkbox `time-dhcp` con `aria-label="NTP server from DHCP"` e stato `time-dhcp-state`.
+      3. In `bundle.js`:
+         - `setDhcpSwitch(on, enabled)` imposta `checked`, `disabled` e il testo On/Off;
+         - `renderForm()` usa `s.dhcp === true`;
+         - il cambio di `time-ntp` abilita o disabilita `time-dhcp` (senza cambiarne il valore) e marca il form come modificato come gli altri campi;
+         - `saveTime()` aggiunge `dhcp: T('time-dhcp').checked` a `v`;
+         - `TIME_ERROR_FIELD` gestisce `Invalid DHCP option` (nessun campo, `null`).
+      4. In `renderStatus()`:
+         - con `st.server` stringa non vuota scrivi `<server> (from DHCP)` se `st.origin === 'dhcp'`, altrimenti `<server> (configured)`;
+         - aggiungi una nota piccola: `dhcp === 'none'` → `DHCP gave no server`, `dhcp === 'no_answer'` → `DHCP server <dhcp_server> did not answer`;
+         - senza `st.server` scrivi `—` con classe `na`;
+         - usa `textContent`, mai `innerHTML`, per i valori del server.
+      5. Lancia una build (`pio run -e esp32-s3-standard`) per rigenerare `data/www/index_inlined.html` con `scripts/inline_web.py`, poi includi il file nel commit.
+
+      **Bloccanti:** nessuno. Non serve un mockup: è un campo in più in un form esistente.
+
+      ## File Coinvolti
+      - data/www/index.html — riga Server e interruttore DHCP
+      - data/www/bundle.js — form, stato, POST
+      - data/www/index_inlined.html — rigenerato dalla build
+
+      ## Verifica
+      `npx playwright test e2e/time-settings.spec.ts` (i test esistenti restano verdi).
+
+      ## Criteri di Completamento
+      - [ ] Con NTP spento l'interruttore DHCP è disabilitato ma conserva il valore
+      - [ ] Il POST contiene `dhcp`
+      - [ ] La riga Server mostra server e origine, oppure `—` con NTP spento
+      - [ ] Nessuno scroll orizzontale alla larghezza del telefono
+    ref: TASK-08
+  - id: TASK-09
+    title: Test e2e della sezione Time con l'opzione DHCP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** simulare i flussi utente del piano (tabella E2E) con le API simulate.
+
+      **Da leggere:** `e2e/time-settings.spec.ts` (Mock, `newMock`, route di `/api/time`), `e2e/support/webui.ts`.
+
+      **Passi:**
+      1. Estendi le interfacce `TimeSettings` (`dhcp: boolean`) e `Status` (`server?`, `origin?`, `dhcp?`, `dhcp_server?`) e `newMock()` (`dhcp: false`).
+      2. Il mock del POST salva anche `dhcp` in `mock.time`.
+      3. Aggiungi i test:
+         - accensione e salvataggio con `dhcp: true` nel POST, e riga `192.168.1.1 (from DHCP)` dopo il GET;
+         - ripiego con la nota `DHCP server 192.168.1.1 did not answer` e `pool.ntp.org (configured)`;
+         - `dhcp: none` con `DHCP gave no server`;
+         - NTP spento: interruttore DHCP disabilitato, riga `—`, il POST conserva `dhcp`;
+         - un 400 `Invalid DHCP option` mostrato così com'è.
+      4. Il test esistente "the section causes no horizontal scroll" deve restare verde con la riga nuova.
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - e2e/time-settings.spec.ts — mock esteso, nuovi test
+
+      ## Verifica
+      `npx playwright test e2e/time-settings.spec.ts`
+
+      ## Criteri di Completamento
+      - [ ] I cinque scenari del piano sono coperti e passano
+      - [ ] I test esistenti del file passano senza modifiche alla loro logica
+    ref: TASK-09
+  - id: TASK-10
+    title: 'Verifica completa: test nativi, e2e, build di tutte le schede e dimensione per il 4 MB'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+      - TASK-07
+      - TASK-09
+    body: |-
+      ## Descrizione
+      **Obiettivo:** confermare che nulla si è rotto e misurare l'impatto sul flash.
+
+      **Da leggere:** nessun file nuovo.
+
+      **Passi:**
+      1. Prima delle modifiche (o da `main`, con `git stash`) annota la riga `Flash:` di `pio run -e esp32-s3-standard`.
+      2. Lancia tutta la suite nativa con `pio test -e native` e `pio test -e native-arduino-nano-esp32`.
+      3. Lancia tutti gli e2e con `npx playwright test`.
+      4. Compila le build `pio run -e esp32-s3-standard -e arduino-nano-esp32 -e esp32-p4-eth -e esp32-p4-eth-v1`.
+      5. Annota la nuova riga `Flash:` di esp32-s3-standard e la differenza in byte, per la PR (#93).
+
+      **Bloccanti:** nessuno.
+
+      ## File Coinvolti
+      - nessuno (solo verifica)
+
+      ## Verifica
+      I comandi dei passi 2-4 escono con codice 0.
+
+      ## Criteri di Completamento
+      - [ ] Suite nativa verde
+      - [ ] e2e verdi
+      - [ ] Quattro build ok
+      - [ ] Dimensione prima/dopo annotata per la PR
+    ref: TASK-10
+  - id: TASK-11
+    title: Prova sul campo con il DHCP reale (solo dopo un sì esplicito)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare sulla scheda di test che il server del DHCP venga catturato e usato, e che il ripiego funzioni.
+
+      **Da leggere:** memoria del progetto sulla scheda di test e le credenziali OTA (mai stampate).
+
+      **Passi:**
+      1. Chiedi all'utente un sì esplicito prima di installare la build sulla scheda. Senza sì il task resta TODO e lo si segnala nella review.
+      2. Installa la build con l'OTA, apri Board Settings → Time e accendi **Use the NTP server from DHCP**.
+      3. Leggi `GET /api/time`:
+         - con `status.dhcp` `used`, verifica la riga `Synchronized with <ip> (from DHCP)` nel System Log;
+         - con `none`, il router non annuncia l'option 42: la scheda usa il server configurato e scrive `DHCP gave no NTP server`. Riporta il risultato all'utente e proponi di attivare l'option 42 nel router o di provare con dnsmasq su una rete separata.
+      4. Se c'è un server del DHCP, prova il ripiego solo se l'utente lo consente, per esempio con un server dell'option 42 che non risponde: la riga WARN passa al server configurato.
+      5. Spegni l'opzione e verifica che le righe tornino quelle di US-117.
+      6. Salva le note in `docs/test-results/US-145/`.
+
+      **Bloccanti:** consenso esplicito dell'utente; router con l'option 42 (non noto).
+
+      ## File Coinvolti
+      - docs/test-results/US-145/ — note della prova
+
+      ## Verifica
+      Righe del System Log e risposta di `GET /api/time` salvate nelle note.
+
+      ## Criteri di Completamento
+      - [ ] Prova fatta dopo il sì dell'utente, oppure rinviata e segnalata
+      - [ ] Esito (used/none, ripiego) annotato in docs/test-results/US-145/
+    ref: TASK-11

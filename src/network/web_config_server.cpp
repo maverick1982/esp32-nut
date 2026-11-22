@@ -652,7 +652,15 @@ void WebConfigServer::handleGetTime() {
         return;
     }
     NtpClock::Status s = ntp_clock->status();
-    TimeStatusView view = { s.state, s.has_time, String(), String(), String(), s.since_sync_s };
+    TimeStatusView view = { s.state,  s.has_time, String(), String(), String(), s.since_sync_s,
+                            String(), s.origin,   s.dhcp,   String() };
+    // US-145: the server in use, the DHCP one or the one of the settings
+    if (s.dhcp_addr != 0) {
+        char ip[IPV4_TEXT_MAX];
+        formatIpv4(s.dhcp_addr, ip);
+        view.dhcp_server = ip;
+    }
+    view.server = s.origin == NtpOrigin::Dhcp ? view.dhcp_server : s.settings.server;
     if (s.has_time) {
         struct tm t;
         char buf[32];

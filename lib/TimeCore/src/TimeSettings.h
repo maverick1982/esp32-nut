@@ -15,13 +15,15 @@ struct TimeSettings {
     bool ntp;
     String server;  // IPv4 address or host name
     String zone;    // IANA name of TimeZones.h
+    // NTP server of DHCP option 42 first, server above as the fallback (US-145)
+    bool dhcp;
 };
 
 static const size_t NTP_SERVER_MAX = 63;
 static const char* const NTP_DEFAULT_SERVER = "pool.ntp.org";
 
 inline TimeSettings timeDefaults() {
-    TimeSettings s = { true, String(NTP_DEFAULT_SERVER), String(TIME_ZONE_DEFAULT) };
+    TimeSettings s = { true, String(NTP_DEFAULT_SERVER), String(TIME_ZONE_DEFAULT), false };
     return s;
 }
 
@@ -38,7 +40,8 @@ inline bool validNtpServer(const String& host) {
 }
 
 // Values a corrupted NVS entry could hold: an unknown zone goes back to UTC, an invalid
-// server is dropped, and NTP without a server would only fail, so it is turned off
+// server is dropped, and NTP without a server would only fail, so it is turned off. dhcp
+// keeps its value: without NTP it has no effect
 inline TimeSettings sanitize(TimeSettings s) {
     if (!findTimeZone(s.zone.c_str())) s.zone = TIME_ZONE_DEFAULT;
     if (s.server.length() > 0 && !validNtpServer(s.server)) s.server = "";

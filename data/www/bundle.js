@@ -4261,7 +4261,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const TIME_ERROR_FIELD = {
             'Invalid server': 'f-time-server',
             'Server required to enable NTP': 'f-time-server',
-            'Invalid time zone': 'f-time-zone'
+            'Invalid time zone': 'f-time-zone',
+            'Invalid DHCP option': null
         };
         const TIME_SPINNER = '<span class="cmd-spinner"></span>';
         const btnSave = T('btn-save-time');
@@ -4301,6 +4302,14 @@ document.addEventListener('DOMContentLoaded', () => {
             T('time-ntp').checked = on;
             T('time-ntp-state').textContent = on ? 'On' : 'Off';
             T('time-ntp-state').classList.toggle('on', on);
+            // US-145: the DHCP option needs NTP; it keeps its value while disabled
+            T('time-dhcp').disabled = !on;
+        }
+
+        function setDhcpSwitch(on) {
+            T('time-dhcp').checked = on;
+            T('time-dhcp-state').textContent = on ? 'On' : 'Off';
+            T('time-dhcp-state').classList.toggle('on', on);
         }
 
         function hideError() {
@@ -4324,6 +4333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         function renderForm() {
             const s = time.time || {};
             setSwitch(s.ntp === true);
+            setDhcpSwitch(s.dhcp === true);
             T('time-server').value = typeof s.server === 'string' ? s.server : '';
             if (typeof s.zone === 'string') T('time-zone').value = s.zone;
             hideError();
@@ -4337,6 +4347,7 @@ document.addEventListener('DOMContentLoaded', () => {
             badge.className = 'link-badge ' + look.badge;
             badge.querySelector('.status-indicator').className = 'status-indicator ' + look.dot;
             badge.querySelector('.badge-text').textContent = look.text;
+            renderSource(st);
 
             // "2026-11-05 09:12:03 CET", only with a valid time
             const now = T('time-now');
@@ -4353,6 +4364,39 @@ document.addEventListener('DOMContentLoaded', () => {
             main.textContent = typeof st.abbr === 'string' && st.abbr !== '' ? `${st.local} ${st.abbr}` : st.local;
             now.appendChild(main);
             now.title = typeof st.utc === 'string' ? `UTC ${st.utc}` : '';
+        }
+
+        // US-145: "192.168.1.1 (from DHCP)" or "pool.ntp.org (configured)", with a note on
+        // the DHCP server; "—" with NTP off (no "server" in the status)
+        function renderSource(st) {
+            const el = T('time-source');
+            el.textContent = '';
+            const server = typeof st.server === 'string' ? st.server : '';
+            if (timeStateOf(st) === 'disabled' || server === '') {
+                el.className = 'na';
+                el.textContent = '—';
+                return;
+            }
+            el.className = '';
+            const main = document.createElement('span');
+            main.className = 'main';
+            main.textContent = `${server} ${st.origin === 'dhcp' ? '(from DHCP)' : '(configured)'}`;
+            el.appendChild(main);
+            const dhcpServer = typeof st.dhcp_server === 'string' ? st.dhcp_server : '';
+            let note = '';
+            if (st.dhcp === 'none') note = 'DHCP gave no server';
+            else if (st.dhcp === 'no_answer') note = `DHCP server ${dhcpServer} did not answer`;
+            else if (st.dhcp === 'off' && dhcpServer !== '') note = `DHCP offers ${dhcpServer}`;
+            if (note) {
+                const sub = document.createElement('span');
+                sub.className = 'sub';
+                sub.textContent = note;
+                el.append(' ', sub);
+            }
+        }
+
+        function timeStateOf(st) {
+            return TIME_LOOK[st.state] ? st.state : 'disabled';
         }
 
         // statusOnly: the 10 s refresh (the form follows the same rule as any load: filled
@@ -4410,7 +4454,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearResult();
             const server = T('time-server').value.trim();
             T('time-server').value = server;
-            const v = { ntp: T('time-ntp').checked, server, zone: T('time-zone').value };
+            const v = { ntp: T('time-ntp').checked, server, zone: T('time-zone').value, dhcp: T('time-dhcp').checked };
             const err = validate(v);
             if (err) {
                 showError(err[0], err[1]);
@@ -4464,6 +4508,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         T('time-ntp').addEventListener('change', (e) => { setSwitch(e.target.checked); edited(); });
+        T('time-dhcp').addEventListener('change', (e) => { setDhcpSwitch(e.target.checked); edited(); });
         T('time-server').addEventListener('input', edited);
         T('time-zone').addEventListener('change', edited);
         T('time-form').addEventListener('submit', saveTime);

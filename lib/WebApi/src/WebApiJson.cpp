@@ -963,6 +963,7 @@ String WebApiJson::timeJson(const TimeSettings& time, const TimeStatusView& stat
     t["ntp"] = time.ntp;
     t["server"] = time.server.c_str();
     t["zone"] = time.zone.c_str();
+    t["dhcp"] = time.dhcp;
 
     JsonObject st = doc["status"].to<JsonObject>();
     st["state"] = timeStateName(status.state);
@@ -971,6 +972,12 @@ String WebApiJson::timeJson(const TimeSettings& time, const TimeStatusView& stat
         st["abbr"] = status.abbr.c_str();
         st["utc"] = status.utc.c_str();
         st["since_sync_s"] = status.since_sync_s;
+    }
+    if (status.state != TimeState::Disabled) {
+        st["server"] = status.server.c_str();
+        st["origin"] = ntpOriginName(status.origin);
+        st["dhcp"] = dhcpNtpStateName(status.dhcp);
+        if (status.dhcp_server.length() > 0) st["dhcp_server"] = status.dhcp_server.c_str();
     }
 
     JsonArray zones = doc["options"]["zones"].to<JsonArray>();
@@ -1008,6 +1015,11 @@ int WebApiJson::checkTimeBody(JsonVariantConst body, const TimeSettings& current
             return sendError(response, 400, "Invalid time zone");
         }
         next.zone = v.as<const char*>();
+    }
+    v = obj["dhcp"];
+    if (!v.isUnbound()) {
+        if (!v.is<bool>()) return sendError(response, 400, "Invalid DHCP option");
+        next.dhcp = v.as<bool>();
     }
     if (next.ntp && next.server.length() == 0) return sendError(response, 400, "Server required to enable NTP");
     return 0;

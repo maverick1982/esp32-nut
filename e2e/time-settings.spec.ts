@@ -10,6 +10,8 @@ interface TimeSettings {
   ntp: boolean;
   server: string;
   zone: string;
+  /** US-145 */
+  dhcp?: boolean;
 }
 
 interface Status {
@@ -18,6 +20,11 @@ interface Status {
   abbr?: string;
   utc?: string;
   since_sync_s?: number;
+  /** US-145 */
+  server?: string;
+  origin?: 'configured' | 'dhcp';
+  dhcp?: 'off' | 'none' | 'used' | 'no_answer';
+  dhcp_server?: string;
 }
 
 interface Mock {
@@ -37,7 +44,7 @@ const ZONES = ['UTC', 'Europe/London', 'Europe/Rome', 'America/New_York', 'Asia/
 
 function newMock(): Mock {
   return {
-    time: { ntp: true, server: 'pool.ntp.org', zone: 'UTC' },
+    time: { ntp: true, server: 'pool.ntp.org', zone: 'UTC', dhcp: false },
     status: { state: 'waiting' },
     zones: [...ZONES],
     posts: [],
@@ -115,7 +122,7 @@ test.describe('Time section (US-117)', () => {
     await page.locator('#btn-save-time').click();
     await expect(page.locator('#time-result')).toContainText('Saved');
     expect(mock.posts).toHaveLength(1);
-    expect(mock.posts[0]).toEqual({ time: { ntp: true, server: 'pool.ntp.org', zone: 'Europe/Rome' } });
+    expect(mock.posts[0]).toEqual({ time: { ntp: true, server: 'pool.ntp.org', zone: 'Europe/Rome', dhcp: false } });
     // Applied live: no restart countdown
     await expect(page.locator('#board-success')).toBeHidden();
     await expect(page.locator('#time-zone')).toHaveValue('Europe/Rome');
@@ -177,13 +184,13 @@ test.describe('Time section (US-117)', () => {
 
   test('with NTP off the server is not required', async ({ page }) => {
     await openBoard(page);
-    await page.locator('#time-form label.switch').click();
+    await page.locator('#time-form label.switch:has(#time-ntp)').click();
     await expect(page.locator('#time-ntp')).not.toBeChecked();
     await expect(page.locator('#time-ntp-state')).toHaveText('Off');
     await page.locator('#time-server').fill('');
     await page.locator('#btn-save-time').click();
     await expect(page.locator('#time-result')).toContainText('NTP off');
-    expect(mock.posts).toEqual([{ time: { ntp: false, server: '', zone: 'UTC' } }]);
+    expect(mock.posts).toEqual([{ time: { ntp: false, server: '', zone: 'UTC', dhcp: false } }]);
   });
 
   test('the Syslog hint links to the Time section', async ({ page }) => {
@@ -194,6 +201,82 @@ test.describe('Time section (US-117)', () => {
     await expect(page.locator('#syslog-section')).not.toContainText('The board has no clock');
     await link.click();
     await expect(page.locator('#content-board')).toHaveClass(/active/);
+  });
+});
+
+test.describe('Time section: NTP server from DHCP (US-145)', () => {
+  let mock: Mock;
+
+  test.beforeEach(async ({ page }) => {
+    mock = newMock();
+    await serveIndex(page);
+    await routeCommon(page);
+    await routeTime(page, mock);
+  });
+
+  test('turning the option on saves it and shows the DHCP server in use', async ({ page }) => {
+    mock.status = { state: 'waiting', server: 'pool.ntp.org', origin: 'configured', dhcp: 'off', dhcp_server: '192.168.1.1' };
+    await openBoard(page);
+    await expect(page.locator('#time-dhcp')).not.toBeChecked();
+    await expect(page.locator('#time-dhcp')).toBeEnabled();
+    await expect(page.locator('#time-source')).toHaveText('pool.ntp.org (configured) DHCP offers 192.168.1.1');
+
+    await page.locator('#time-form label.switch:has(#time-dhcp)').click();
+    await expect(page.locator('#time-dhcp')).toBeChecked();
+    await expect(page.locator('#time-dhcp-state')).toHaveText('On');
+    // The firmware applies it in the next loop: the next GET has the DHCP server
+    mock.status = { state: 'synchronized', local: '2026-11-22 10:00:00', abbr: 'CET', utc: '2026-11-22T09:00:00Z',
+      since_sync_s: 1, server: '192.168.1.1', origin: 'dhcp', dhcp: 'used', dhcp_server: '192.168.1.1' };
+    await page.locator('#btn-save-time').click();
+    await expect(page.locator('#time-result')).toContainText('Saved');
+    expect(mock.posts).toEqual([{ time: { ntp: true, server: 'pool.ntp.org', zone: 'UTC', dhcp: true } }]);
+    await expect(page.locator('#time-source')).toHaveText('192.168.1.1 (from DHCP)');
+    await expect(page.locator('#time-dhcp')).toBeChecked();
+  });
+
+  test('after a NoAnswer of the DHCP server the configured one is shown with a note', async ({ page }) => {
+    mock.time = { ntp: true, server: 'pool.ntp.org', zone: 'UTC', dhcp: true };
+    mock.status = { state: 'waiting', server: 'pool.ntp.org', origin: 'configured', dhcp: 'no_answer', dhcp_server: '192.168.1.1' };
+    await openBoard(page);
+    await expect(page.locator('#time-dhcp')).toBeChecked();
+    await expect(page.locator('#time-source .main')).toHaveText('pool.ntp.org (configured)');
+    await expect(page.locator('#time-source .sub')).toHaveText('DHCP server 192.168.1.1 did not answer');
+  });
+
+  test('without a server from DHCP the configured one is used', async ({ page }) => {
+    mock.time = { ntp: true, server: 'ntp.lan', zone: 'UTC', dhcp: true };
+    mock.status = { state: 'waiting', server: 'ntp.lan', origin: 'configured', dhcp: 'none' };
+    await openBoard(page);
+    await expect(page.locator('#time-source .main')).toHaveText('ntp.lan (configured)');
+    await expect(page.locator('#time-source .sub')).toHaveText('DHCP gave no server');
+  });
+
+  test('with NTP off the option is disabled, keeps its value and the server is not shown', async ({ page }) => {
+    mock.time = { ntp: true, server: 'pool.ntp.org', zone: 'UTC', dhcp: true };
+    mock.status = { state: 'synchronized', local: '2026-11-22 10:00:00', abbr: 'UTC', utc: '2026-11-22T10:00:00Z',
+      since_sync_s: 1, server: '192.168.1.1', origin: 'dhcp', dhcp: 'used', dhcp_server: '192.168.1.1' };
+    await openBoard(page);
+    await expect(page.locator('#time-source')).toHaveText('192.168.1.1 (from DHCP)');
+
+    await page.locator('#time-form label.switch:has(#time-ntp)').click();
+    await expect(page.locator('#time-dhcp')).toBeDisabled();
+    await expect(page.locator('#time-dhcp')).toBeChecked();
+    mock.status = { state: 'disabled' };
+    await page.locator('#btn-save-time').click();
+    await expect(page.locator('#time-result')).toContainText('NTP off');
+    expect(mock.posts).toEqual([{ time: { ntp: false, server: 'pool.ntp.org', zone: 'UTC', dhcp: true } }]);
+    await expect(page.locator('#time-source')).toHaveText('—');
+    await expect(page.locator('#time-source')).toHaveClass(/na/);
+  });
+
+  test('a 400 Invalid DHCP option is shown as it is', async ({ page }) => {
+    mock.postStatus = 400;
+    mock.postError = 'Invalid DHCP option';
+    await openBoard(page);
+    await page.locator('#time-form label.switch:has(#time-dhcp)').click();
+    await page.locator('#btn-save-time').click();
+    await expect(page.locator('#time-error-text')).toHaveText('Invalid DHCP option');
+    expect(mock.posts).toHaveLength(1);
   });
 });
 
@@ -216,7 +299,9 @@ test.describe('Time section (US-117): phone', () => {
     await routeCommon(page);
     const mock = newMock();
     mock.time = { ntp: true, server: 'a-very-long-ntp-server-name.example.lan', zone: 'America/New_York' };
-    mock.status = { state: 'synchronized', local: '2026-11-05 03:12:03', abbr: 'EST', utc: '2026-11-05T08:12:03Z', since_sync_s: 5 };
+    mock.status = { state: 'synchronized', local: '2026-11-05 03:12:03', abbr: 'EST', utc: '2026-11-05T08:12:03Z', since_sync_s: 5,
+      // US-145: the longest Server row
+      server: 'a-very-long-ntp-server-name.example.lan', origin: 'configured', dhcp: 'no_answer', dhcp_server: '192.168.100.200' };
     await routeTime(page, mock);
     await page.goto('http://esp32.local/');
     await page.locator('[data-target="board"]').dispatchEvent('click');
