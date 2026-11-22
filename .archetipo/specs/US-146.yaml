@@ -1,0 +1,71 @@
+schema: archetipo/spec/v2
+code: US-146
+title: Stima di ups.realpower dalla potenza nominale impostata come variabile personalizzata
+epic:
+  code: EP-003
+  title: Server NUT
+priority: MEDIUM
+points: 3
+status: DONE
+body: |
+  #### US-146: Stima di ups.realpower dalla potenza nominale impostata come variabile personalizzata
+
+  **Epic:** EP-003 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente con un UPS che via USB non riporta né la potenza reale né quella nominale,
+  voglio impostare a mano la potenza nominale di targa come variabile personalizzata nella scheda NUT Server,
+  in modo che la scheda stimi `ups.realpower` dal carico e io veda i watt nella card Real Power e in Home Assistant (#128).
+
+  **Dimostrazione**
+  Con il replay dell'APC Smart-UPS 1500 di #120 (`ups.load` 10.4, nessuna potenza nominale) la card Real Power mostra `--` e `upsc` non ha `ups.realpower`. L'utente aggiunge in NUT Server `ups.realpower.nominal = 980` e salva: senza riavvio la card mostra `102 W` e `upsc` dà `ups.realpower: 102`. Tolta la variabile, la card torna a `--` e `ups.realpower` sparisce.
+
+  **Criteri di Accettazione**
+  - [ ] Con la variabile personalizzata `ups.realpower.nominal` (W) la scheda stima `ups.realpower` = load × nominale, e la tiene aggiornata a ogni nuovo valore di `ups.load`.
+  - [ ] Senza `ups.realpower.nominal` (né dell'UPS né personalizzata), la variabile personalizzata `ups.power.nominal` (VA) dà la stima di oggi: load × VA × 0,6.
+  - [ ] Una variabile personalizzata vince sul valore riportato dall'UPS per la stessa chiave, coerente con quello che vedono i client NUT. L'ordine resta quello di oggi: prima la potenza reale nominale, poi quella apparente.
+  - [ ] Il load decimale non viene più troncato: 10,4 % × 980 W = 102 W, non 98. Vale anche per la stima che usa le nominali riportate dall'UPS.
+  - [ ] Un UPS che misura o calcola già `ups.realpower` (ActivePower, `eaton_compute_realpower_info`) non cambia: la variabile personalizzata non produce nessuna stima.
+  - [ ] Un valore non numerico, zero o negativo viene ignorato: niente stima da quella variabile e nessun errore in Web UI. Il valore resta comunque visibile ai client NUT come oggi.
+  - [ ] Salvare, modificare o togliere la variabile ha effetto senza riavvio, al poll successivo. Il valore vale anche dopo un riavvio, una riconnessione USB e un ciclo della porta. Togliendola, `ups.realpower` sparisce, oppure torna alla stima dalle nominali dell'UPS se ci sono.
+  - [ ] Anche gli UPS Q* hanno la stima quando riportano `ups.load`.
+  - [ ] La card Real Power e `/api/ups-vars` mostrano la stima come valore dell'UPS. Il segno "NUT <valore>" di US-144 compare solo se l'utente sovrascrive `ups.realpower` stessa.
+  - [ ] Il testo introduttivo del pannello "Custom variables" in NUT Server dice che `ups.realpower.nominal` e `ups.power.nominal` servono anche alla stima della potenza reale. È l'unica eccezione alla regola "la logica della scheda usa i valori reali".
+  - [ ] Test nativi sulla stima (variabile personalizzata, precedenze, valori non validi, rimozione, load decimale, UPS che misura la potenza, Q*) ed e2e sulla card Real Power dopo il salvataggio in NUT Server. Le tre build passano.
+
+  **Assunzioni**
+  - Decisioni prese con l'utente il 2026-11-22: si usa la potenza impostata a mano come variabile personalizzata, il valore dell'utente vince su quello dell'UPS, si includono `ups.power.nominal` e gli UPS Q*.
+  - Limite noto, da scrivere nel README e nelle note di rilascio: la stima è giusta solo se l'UPS esprime il load in percentuale dei watt, com'è sullo Smart-UPS 1500 di #120 (240,4 V × 0,48 A = 115 VA contro 102 W, PF ≈ 0,88). Se lo esprime in percentuale dei VA, la stima viene troppo alta.
+  - La chiave `ups.realpower.nominal` non entra nei dati della scheda: ai client NUT e in telemetria arriva come oggi tramite la variabile personalizzata (US-115, US-144). Nei dati entra solo la stima `ups.realpower`, come la stima di oggi (US-075).
+  - Il fattore 0,6 per i VA resta invariato. NUT in `eaton_compute_realpower_fun` usa 0,80 o `output.powerfactor`, ma cambiarlo è fuori scope.
+  - Fuori scope: calcolare `ups.power` da `output.voltage` × `output.current`.
+  - Come agganciare il valore (setter in USBHostUPS applicato nel task di poll, sullo schema di `setQxSettings()`) si decide in pianificazione.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **lib/WebApi/src/WebApiJson.cpp:6** — GET /api/ups-vars deve dire se ups.realpower è una stima della scheda e da dove viene: per esempio `_realpower_estimate: {"source": "custom"|"ups", "nominal": 980, "unit": "W"|"VA"}` (con VA la formula usa × 0.6). Il campo c'è solo quando `UPSData::realPowerEstimated()` è vero: assente se la potenza è misurata dall'UPS (ActivePower) o calcolata dal driver (eaton_compute_realpower_info), assente con UPS scollegato. Vale anche per la stima dalle nominali dell'UPS di US-075, non solo per le variabili personalizzate. UPSData deve quindi ricordare quale fonte ha usato l'ultima stima. I valori reali e `_overrides` (US-144) non cambiano.
+  - **data/www/index.html:1269** — Card Real Power come nel mockup docs/mockups/US-146/ (index.html, estimate.css), stati B, C e D: badge "≈ Estimated" accanto all'etichetta (bordo grigio tratteggiato, né ambra né ciano), con tooltip sull'origine al passaggio, al focus o al tocco, ancorato alla card in modo che non esca nemmeno a 375 px. Sotto il valore la formula sempre visibile (`10.4 % × 980 W · ups.realpower.nominal`, oppure `10 % × 1500 VA × 0.6 · UPS ups.power.nominal`). Se la nominale è una variabile personalizzata, il nome è un link ciano che apre NUT Server su quella riga (come i chip di US-144); se viene dall'UPS è testo grigio senza link. Nessun segno nello stato A (misurata o calcolata dal driver). Convive con il segno "NUT <valore>" di US-144 in alto a destra senza sovrapporsi (stato D). Gli stili di estimate.css passano in una sezione US-146 di data/www/bundle.css; poi `python scripts/embed_web.py`.
+  - **data/www/bundle.js:2067** — Il rendering di card e tabella legge `_realpower_estimate`: mostra o nasconde badge, tooltip e formula della card a ogni poll, e mette lo stesso badge nella colonna Value della riga ups.realpower, con la formula sotto la descrizione (stato E del mockup). Testi costruiti con createElement/textContent come in US-144. Il segno della card di US-144 (`card-mark-realpower`) resta legato solo all'override di ups.realpower.
+  - Test: nativi in test_web_api per `_realpower_estimate` (fonte custom W, custom VA, UPS W, UPS VA; assente con potenza misurata, con riga eaton_compute_realpower_info, senza stima e con UPS scollegato) e per la fonte ricordata da UPSData. E2E: badge, tooltip e formula per gli stati B, C e D del mockup, nessun segno nello stato A, il link della formula che apre NUT Server sulla riga, badge nella tabella, sparizione al poll successivo quando la stima se ne va, 375 px senza scroll orizzontale. Aggiornare il criterio di accettazione sulla card Real Power: la stima resta un valore dell'UPS e in più porta il segno "Estimated".
+history:
+  - status: TODO
+    at: "2026-11-22T13:25:28Z"
+  - status: PLANNED
+    at: "2026-11-22T13:31:54Z"
+  - status: IN PROGRESS
+    at: "2026-11-22T13:39:59Z"
+  - status: REVIEW
+    at: "2026-11-22T13:55:36Z"
+  - status: TODO
+    at: "2026-11-22T14:25:25Z"
+  - status: PLANNED
+    at: "2026-11-22T14:28:45Z"
+  - status: IN PROGRESS
+    at: "2026-11-22T14:31:01Z"
+  - status: REVIEW
+    at: "2026-11-22T14:51:14Z"
+  - status: DONE
+    at: "2026-11-22T15:00:21Z"

@@ -2,6 +2,7 @@
 #define UPS_DATA_H
 
 #include <Arduino.h>
+#include <cmath>
 #include <vector>
 
 struct UPSParameter {
@@ -9,11 +10,25 @@ struct UPSParameter {
     String value;
 };
 
+// Where the ups.realpower estimate comes from (US-146): the custom variables of the NUT
+// Server tab or the nominal powers of the UPS, in W or in VA (x 0.6)
+enum class RealPowerSource : uint8_t { NONE, CUSTOM_W, UPS_W, CUSTOM_VA, UPS_VA };
+
 struct UPSData {
 private:
     std::vector<UPSParameter> _parameters;
     bool _realPowerMeasured = false;
+    bool _realPowerEstimated = false; // ups.realpower written by updateRealPower() (US-146)
+    float _customRealNominal = 0.0f;     // custom ups.realpower.nominal, W (US-146)
+    float _customApparentNominal = 0.0f; // custom ups.power.nominal, VA (US-146)
+    RealPowerSource _realPowerSource = RealPowerSource::NONE; // of the last estimate (US-146)
+    float _realPowerSourceNominal = 0.0f;
     uint32_t _writes = 0;
+
+    void setRealPowerSource(RealPowerSource source, float nominal) {
+        _realPowerSource = source;
+        _realPowerSourceNominal = nominal;
+    }
 
 public:
     UPSData() {
@@ -248,25 +263,75 @@ public:
         }
     }
 
-    // The device measures ups.realpower (ActivePower): updateRealPower() never estimates
-    // it, so the estimate does not overwrite the measure between two reports
-    void markRealPowerMeasured() { _realPowerMeasured = true; }
+    // The device measures or computes ups.realpower (ActivePower, eaton_compute_realpower_info):
+    // updateRealPower() never estimates it, so the estimate does not overwrite the value of the
+    // device. An estimate already written is removed: from now on the key belongs to the device
+    void markRealPowerMeasured() {
+        if (_realPowerEstimated && find("ups.realpower")) remove("ups.realpower");
+        _realPowerEstimated = false;
+        _realPowerMeasured = true;
+        setRealPowerSource(RealPowerSource::NONE, 0.0f);
+    }
     bool realPowerMeasured() const { return _realPowerMeasured; }
 
-    // ups.realpower from the load and the nominal power, only for devices that do not
-    // measure it (not an upstream value)
+    // ups.realpower currently holds the estimate of updateRealPower()
+    bool realPowerEstimated() const { return _realPowerEstimated; }
+
+    // Source and nominal power of the last estimate, NONE and 0 without one (US-146 rework:
+    // GET /api/ups-vars tells the page where the estimate comes from)
+    RealPowerSource realPowerSource() const { return _realPowerSource; }
+    float realPowerSourceNominal() const { return _realPowerSourceNominal; }
+
+    // Nominal powers the user set as custom variables of the NUT Server tab (US-146, #128):
+    // ups.realpower.nominal in W, ups.power.nominal in VA. Kept out of the keys: NUT clients
+    // and the telemetry see them through the custom variable. Not finite or <= 0 means none.
+    // True when one of them changed; the caller runs updateRealPower()
+    bool setCustomPowerNominals(float real_w, float apparent_va) {
+        if (!std::isfinite(real_w) || real_w <= 0.0f) real_w = 0.0f;
+        if (!std::isfinite(apparent_va) || apparent_va <= 0.0f) apparent_va = 0.0f;
+        bool changed = real_w != _customRealNominal || apparent_va != _customApparentNominal;
+        _customRealNominal = real_w;
+        _customApparentNominal = apparent_va;
+        return changed;
+    }
+
+    // ups.realpower from the load and a nominal power, only for devices that neither measure
+    // nor compute it (not an upstream value; US-075, US-146). Sources in order: the custom
+    // ups.realpower.nominal, the one of the UPS, then the custom ups.power.nominal x 0.6 and
+    // the one of the UPS x 0.6. The decimal load is kept and the result rounded to the watt
+    // (10.4 % of 980 W = 102 W). Without a source an estimate already written is removed;
+    // nothing is written while the value does not change (ADR 0007)
     void updateRealPower() {
         if (_realPowerMeasured) return;
-        if (!hasKey("ups.load")) return;
-        uint8_t loadPct = (uint8_t)getFloat("ups.load");
-        
-        if (hasKey("ups.realpower.nominal") && getFloat("ups.realpower.nominal") > 0) {
-            uint16_t nominal = (uint16_t)getFloat("ups.realpower.nominal");
-            set("ups.realpower", String((uint16_t)(((uint32_t)nominal * loadPct) / 100)));
-        } else if (hasKey("ups.power.nominal") && getFloat("ups.power.nominal") > 0) {
-            uint16_t apparent = (uint16_t)getFloat("ups.power.nominal");
-            set("ups.realpower", String((uint16_t)(((uint32_t)apparent * 60 * loadPct) / 10000)));
+        double watts = -1.0;
+        const String* load_text = find("ups.load");
+        double load = load_text ? (double)load_text->toFloat() : -1.0;
+        if (load >= 0.0) {
+            double ups_real = getFloat("ups.realpower.nominal");
+            double ups_apparent = getFloat("ups.power.nominal");
+            if (_customRealNominal > 0.0f) {
+                watts = load * _customRealNominal / 100.0;
+                setRealPowerSource(RealPowerSource::CUSTOM_W, _customRealNominal);
+            } else if (ups_real > 0.0) {
+                watts = load * ups_real / 100.0;
+                setRealPowerSource(RealPowerSource::UPS_W, (float)ups_real);
+            } else if (_customApparentNominal > 0.0f) {
+                watts = load * _customApparentNominal * 0.6 / 100.0;
+                setRealPowerSource(RealPowerSource::CUSTOM_VA, _customApparentNominal);
+            } else if (ups_apparent > 0.0) {
+                watts = load * ups_apparent * 0.6 / 100.0;
+                setRealPowerSource(RealPowerSource::UPS_VA, (float)ups_apparent);
+            }
         }
+        if (watts < 0.0) {
+            if (_realPowerEstimated && find("ups.realpower")) remove("ups.realpower");
+            _realPowerEstimated = false;
+            setRealPowerSource(RealPowerSource::NONE, 0.0f);
+            return;
+        }
+        String value((long)std::lround(watts));
+        if (!valueEquals("ups.realpower", value)) set("ups.realpower", value);
+        _realPowerEstimated = true;
     }
 };
 

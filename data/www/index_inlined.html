@@ -3579,6 +3579,131 @@ body.auth-page {
     .tm-head-meta { justify-content: flex-start; }
     .tm-card-mark { top: 0.7rem; right: 0.7rem; }
 }
+
+/* ==========================================================================
+   US-146: estimated ups.realpower (from docs/mockups/US-146/estimate.css).
+   The board computed the value from the load and a nominal power: a dashed grey
+   outline, neither the amber of the overrides nor the cyan of the added variables.
+   ========================================================================== */
+.metric-card .metric-label.tm-label-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    /* room for the NUT marker of US-144, top right */
+    padding-right: 4.6rem;
+}
+.metric-card .metric-label.tm-label-row.no-mark { padding-right: 0; }
+.tm-est[hidden], .tm-est-src[hidden] { display: none; }
+
+.tm-est {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.05rem 0.38rem;
+    border: 1px dashed rgba(138, 155, 179, 0.6);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    line-height: 1.45;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: help;
+    transition: var(--transition);
+}
+.tm-est .approx { font-size: 0.8rem; line-height: 1; letter-spacing: 0; }
+.tm-est:hover,
+.tm-est:focus-visible {
+    border-color: var(--text-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+/* The source, on hover / focus / tap */
+.tm-est .tip {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 5;
+    width: max-content;
+    max-width: 260px;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: rgba(6, 9, 14, 0.97);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: normal;
+    line-height: 1.5;
+    text-align: left;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+/* On a card the tooltip spans the label (the card width) right under it, so it never leaves
+   the card (375 px too) and never covers the badge when the badge wraps under "Real Power" */
+.metric-card .metric-label.tm-label-row { position: relative; }
+.metric-card .tm-est { position: static; }
+.metric-card .tm-est .tip {
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    width: auto;
+    max-width: none;
+}
+.tm-est .tip b { color: var(--text-primary); font-weight: 400; }
+.tm-est .tip .src { display: block; margin-top: 0.3rem; color: var(--text-secondary); }
+.tm-est .tip .src.custom em { color: var(--accent); font-style: normal; }
+.tm-est .tip .warn { display: block; margin-top: 0.3rem; color: rgba(255, 184, 0, 0.8); }
+.tm-est:hover .tip,
+.tm-est:focus-visible .tip,
+.tm-est.open .tip {
+    opacity: 1;
+    transform: none;
+}
+
+/* The formula under the value, where the other cards have their bar: visible on touch too */
+.tm-est-src {
+    margin-top: -0.2rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+.tm-est-src .op, .tm-est-why .op { opacity: 0.6; padding: 0 0.15rem; }
+/* The custom variable is a link to NUT Server, in the cyan of the added variables */
+.tm-est-src a, .tm-est-why a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(0, 240, 255, 0.5);
+}
+.tm-est-src a:hover, .tm-est-why a:hover { border-bottom-style: solid; }
+.tm-est-src .ups, .tm-est-why .ups { color: var(--text-secondary); opacity: 0.8; }
+
+/* ups.realpower row of the table */
+.data-table tbody tr.tm-estd .ups-val { color: var(--text-primary); }
+.tm-est.in-table { font-size: 0.6rem; }
+.tm-est-why {
+    display: block;
+    margin-top: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+    .metric-card .metric-label.tm-label-row { padding-right: 4.2rem; }
+    .metric-card .metric-label.tm-label-row.no-mark { padding-right: 0; }
+}
 </style>
 </head>
 
@@ -4159,7 +4284,9 @@ body.auth-page {
                     <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
                         of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
                         <code>override.*</code> in <code>ups.conf</code>. The UPS Telemetry page shows them next to the
-                        real UPS values; the board logic keeps using the real ones.</p>
+                        real UPS values; the board logic keeps using the real ones. Exception:
+                        <code>ups.realpower.nominal</code> (W) and <code>ups.power.nominal</code> (VA) also give the
+                        board an estimate of <code>ups.realpower</code> from the load, when the UPS does not measure it.</p>
 
                     <!-- GET /api/nut/overrides failed -->
                     <div class="auth-alert" id="cv-load-error" role="alert" hidden>
@@ -4833,9 +4960,13 @@ body.auth-page {
                             <button type="button" class="tm-nut tm-card-mark" id="card-mark-load" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Real Power</div>
+                            <!-- US-146: "Estimated" when the board computed ups.realpower, with the formula -->
+                            <div class="metric-label tm-label-row no-mark" id="realpower-label">Real Power
+                                <button type="button" class="tm-est" id="card-est-realpower" hidden aria-describedby="card-est-tip"><span class="approx">&asymp;</span>Estimated<span class="tip" role="tooltip" id="card-est-tip"></span></button>
+                            </div>
                             <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
                             </div>
+                            <div class="tm-est-src" id="card-est-src" hidden></div>
                             <button type="button" class="tm-nut tm-card-mark" id="card-mark-realpower" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                     </div>
@@ -7263,15 +7394,109 @@ document.addEventListener('DOMContentLoaded', () => {
         return b;
     }
 
-    function fillUpsRow(tr, key, value, ovr) {
-        tr.className = ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '';
+    // US-146: ups.realpower estimated by the board. _realpower_estimate of /api/ups-vars is
+    // {source: custom|ups, key, nominal, unit: W|VA, factor: 1|0.6}; absent when the UPS
+    // measures the power or the driver computes it. Built with textContent only.
+    function tmEstNumber(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? String(+n.toPrecision(6)) : String(v);
+    }
+
+    // "10.4 % × 980 W · ups.realpower.nominal": the custom variable is a link to NUT Server
+    function tmEstFormula(est, load) {
+        const f = document.createDocumentFragment();
+        f.appendChild(document.createTextNode(`${load} %`));
+        f.appendChild(tmTextEl('span', 'op', '×'));
+        f.appendChild(document.createTextNode(`${tmEstNumber(est.nominal)} ${est.unit}`));
+        if (Number(est.factor) !== 1) {
+            f.appendChild(tmTextEl('span', 'op', '×'));
+            f.appendChild(document.createTextNode(tmEstNumber(est.factor)));
+        }
+        f.appendChild(document.createTextNode(' · '));
+        if (est.source === 'custom') {
+            const a = tmTextEl('a', '', String(est.key));
+            a.href = '#';
+            a.title = 'Open NUT Server on this variable';
+            a.addEventListener('click', e => { e.preventDefault(); openNutServerFor(String(est.key)); });
+            f.appendChild(a);
+        } else {
+            f.appendChild(tmTextEl('span', 'ups', `UPS ${est.key}`));
+        }
+        return f;
+    }
+
+    // Text of the tooltip: what was computed and where the nominal power comes from
+    function tmEstTip(tip, est, load, inTable) {
+        const factor = Number(est.factor) !== 1 ? ` × ${tmEstNumber(est.factor)}` : '';
+        tip.replaceChildren(tmTextEl('b', '', 'Estimated by the board'));
+        tip.appendChild(document.createTextNode((inTable ? ': ' : ': the UPS does not report ups.realpower. ') +
+            `${load} % load × ${tmEstNumber(est.nominal)} ${est.unit}${factor}.`));
+        if (est.source === 'custom') {
+            const src = tmTextEl('span', 'src custom', 'From the custom variable ');
+            src.appendChild(tmTextEl('em', '', String(est.key)));
+            src.appendChild(document.createTextNode(inTable ? '.' : ' (NUT Server tab).'));
+            tip.appendChild(src);
+        } else {
+            tip.appendChild(tmTextEl('span', 'src', `From ${est.key} of the UPS.` +
+                (est.unit === 'VA' && !inTable ? ' Set ups.realpower.nominal in NUT Server for a better estimate.' : '')));
+        }
+        if (est.unit === 'W' && !inTable) {
+            tip.appendChild(tmTextEl('span', 'warn', 'Right only if the UPS reports the load as a percentage of the watts.'));
+        }
+    }
+
+    function tmEstBadge(est, load) {
+        const b = tmTextEl('button', 'tm-est in-table');
+        b.type = 'button';
+        b.appendChild(tmTextEl('span', 'approx', '≈'));
+        b.appendChild(document.createTextNode('Estimated'));
+        const tip = tmTextEl('span', 'tip');
+        tip.setAttribute('role', 'tooltip');
+        tmEstTip(tip, est, load, true);
+        b.appendChild(tip);
+        b.addEventListener('click', () => b.classList.toggle('open'));
+        return b;
+    }
+
+    function renderRealPowerEstimate(est, data) {
+        const badge = document.getElementById('card-est-realpower');
+        const src = document.getElementById('card-est-src');
+        const label = document.getElementById('realpower-label');
+        const mark = document.getElementById('card-mark-realpower');
+        // Room on the right of the label only for the NUT marker of US-144
+        if (label) label.classList.toggle('no-mark', !mark || mark.hidden);
+        if (!badge || !src) return;
+        badge.hidden = !est;
+        src.hidden = !est;
+        if (!est) {
+            badge.classList.remove('open');
+            src.replaceChildren();
+            return;
+        }
+        const load = String(data['ups.load'] ?? '--');
+        tmEstTip(badge.querySelector('.tip'), est, load, false);
+        src.replaceChildren(tmEstFormula(est, load));
+    }
+
+    const cardEstBadge = document.getElementById('card-est-realpower');
+    if (cardEstBadge) cardEstBadge.addEventListener('click', () => cardEstBadge.classList.toggle('open'));
+
+    function fillUpsRow(tr, key, value, ovr, est, load) {
+        tr.className = [ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '', est ? 'tm-estd' : '']
+            .filter(Boolean).join(' ');
         const tdKey = tmTextEl('td', '', key);
         const tdVal = document.createElement('td');
         const val = tmTextEl('div', 'tm-val');
         val.appendChild(tmTextEl('span', 'ups-val', String(value)));
+        if (est) val.appendChild(tmEstBadge(est, load));
         if (ovr) val.appendChild(tmChip(key, ovr));
         tdVal.appendChild(val);
         const tdDesc = tmTextEl('td', '', NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--');
+        if (est) {
+            const why = tmTextEl('span', 'tm-est-why', '≈ ');
+            why.appendChild(tmEstFormula(est, load));
+            tdDesc.appendChild(why);
+        }
         if (ovr && ovr.description) tdDesc.appendChild(tmTextEl('span', 'tm-why', String(ovr.description)));
         tr.replaceChildren(tdKey, tdVal, tdDesc);
     }
@@ -7392,6 +7617,12 @@ document.addEventListener('DOMContentLoaded', () => {
             renderOverrideSummary(overrides);
             renderCardMarkers(overrides);
 
+            // US-146: ups.realpower estimated by the board, never with the UPS disconnected
+            const est = (!data._disconnected && data._realpower_estimate && typeof data._realpower_estimate === 'object')
+                ? data._realpower_estimate : null;
+            const estLoad = String(data['ups.load'] ?? '--');
+            renderRealPowerEstimate(est, data);
+
             // Update table
             if (upsTableBody) {
                 const upsKeys = Object.keys(data)
@@ -7411,11 +7642,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         tr = document.createElement('tr');
                         tr.id = rowId;
                     }
-                    // Cells rebuilt only when the value or the custom variable changes
+                    const rowEst = key === 'ups.realpower' ? est : null;
+                    // Cells rebuilt only when the value, the custom variable or the estimate changes
                     const sig = JSON.stringify([String(value),
-                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null]);
+                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null,
+                        rowEst ? [rowEst.source, rowEst.key, rowEst.nominal, rowEst.unit, rowEst.factor, estLoad] : null]);
                     if (tr.dataset.sig !== sig) {
-                        fillUpsRow(tr, key, value, ovr);
+                        fillUpsRow(tr, key, value, ovr, rowEst, estLoad);
                         tr.dataset.sig = sig;
                     }
 

@@ -397,6 +397,12 @@ void WebConfigServer::handleSetNutOverrides() {
         return;
     }
     *nut_overrides = next;
+    if (usb_ups) {
+        // US-146: the ups.realpower estimate follows them at the next poll, no restart
+        float real_w = 0.0f, apparent_va = 0.0f;
+        NutOverrides::powerNominals(*nut_overrides, real_w, apparent_va);
+        usb_ups->setCustomPowerNominals(real_w, apparent_va);
+    }
     AppLogger::log("INFO", "[NUT] Custom variables saved (%u) by '%s'", (unsigned)next.size(), webUiUser().c_str());
     server.send(200, "application/json", WebApiJson::nutOverridesJson(*nut_overrides, ups_source));
 }

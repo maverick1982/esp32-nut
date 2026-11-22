@@ -197,6 +197,11 @@ private:
     // ups.alarm and input.transfer.reason from the internal keys and the vendor ups.alarm
     // rows, for every driver (US-107)
     void publishAlarms(UPSData& ups_data);
+    // A table row owns ups.realpower (ActivePower read, eaton_compute_realpower_info): the
+    // estimate the host runs for the custom nominal powers must not overwrite it (US-146)
+    void markOwnedRealPower(UPSData& data) const {
+        if (_nut_has_realpower && !data.realPowerMeasured()) data.markRealPowerMeasured();
+    }
 
     std::vector<NutTable::Bound> _nut_rows;
     size_t _own_rows;                     // _nut_rows from hid2nut(); the generic tail follows

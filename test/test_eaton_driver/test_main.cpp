@@ -614,6 +614,22 @@ void test_eaton_realpower_follows_load(void) {
     TEST_ASSERT_EQUAL_STRING("400", ups_data.get("ups.realpower").c_str());
 }
 
+// US-146: eaton_compute_realpower_info owns ups.realpower, the estimate of the host for the
+// custom nominal powers never replaces it
+void test_eaton_computed_realpower_ignores_custom_nominal(void) {
+    mockHost._usages.push_back(nutField("UPS.PowerSummary.PercentLoad", 0x00840035, 0x01, 3));
+    mockHost._usages.push_back(nutField("UPS.Flow.ConfigApparentPower", 0x00840043, 0x03, 3, 16, { 0, 5 }));
+    uint8_t apparent[] = { 0x03, 0xE8, 0x03 }; // 1000 VA
+    decodeAll(0x03, 3, apparent, sizeof(apparent));
+    feed(0x01, 3, 40);
+    TEST_ASSERT_TRUE(ups_data.realPowerMeasured());
+    ups_data.setCustomPowerNominals(500, 0);
+    ups_data.updateRealPower();
+    TEST_ASSERT_EQUAL_STRING("320", ups_data.get("ups.realpower").c_str());
+    feed(0x01, 3, 50);
+    TEST_ASSERT_EQUAL_STRING("400", ups_data.get("ups.realpower").c_str());
+}
+
 // US-119: the on-demand read of the export never asks the reports that freeze Eaton
 // devices, and keeps the poll's spacing
 void test_eaton_diag_read_follows_poll_exclusions(void) {
@@ -658,6 +674,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
     RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
     RUN_TEST(test_eaton_realpower_follows_load);
+    RUN_TEST(test_eaton_computed_realpower_ignores_custom_nominal);
     RUN_TEST(test_eaton_diag_read_follows_poll_exclusions);
     return UNITY_END();
 }
@@ -693,6 +710,7 @@ void setup() {
     RUN_TEST(test_eaton_ups_type_and_beeper_from_table);
     RUN_TEST(test_eaton_beeper_status_kept_after_host_write);
     RUN_TEST(test_eaton_realpower_follows_load);
+    RUN_TEST(test_eaton_computed_realpower_ignores_custom_nominal);
     RUN_TEST(test_eaton_diag_read_follows_poll_exclusions);
     UNITY_END();
 }

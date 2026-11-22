@@ -2096,15 +2096,109 @@ document.addEventListener('DOMContentLoaded', () => {
         return b;
     }
 
-    function fillUpsRow(tr, key, value, ovr) {
-        tr.className = ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '';
+    // US-146: ups.realpower estimated by the board. _realpower_estimate of /api/ups-vars is
+    // {source: custom|ups, key, nominal, unit: W|VA, factor: 1|0.6}; absent when the UPS
+    // measures the power or the driver computes it. Built with textContent only.
+    function tmEstNumber(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? String(+n.toPrecision(6)) : String(v);
+    }
+
+    // "10.4 % × 980 W · ups.realpower.nominal": the custom variable is a link to NUT Server
+    function tmEstFormula(est, load) {
+        const f = document.createDocumentFragment();
+        f.appendChild(document.createTextNode(`${load} %`));
+        f.appendChild(tmTextEl('span', 'op', '×'));
+        f.appendChild(document.createTextNode(`${tmEstNumber(est.nominal)} ${est.unit}`));
+        if (Number(est.factor) !== 1) {
+            f.appendChild(tmTextEl('span', 'op', '×'));
+            f.appendChild(document.createTextNode(tmEstNumber(est.factor)));
+        }
+        f.appendChild(document.createTextNode(' · '));
+        if (est.source === 'custom') {
+            const a = tmTextEl('a', '', String(est.key));
+            a.href = '#';
+            a.title = 'Open NUT Server on this variable';
+            a.addEventListener('click', e => { e.preventDefault(); openNutServerFor(String(est.key)); });
+            f.appendChild(a);
+        } else {
+            f.appendChild(tmTextEl('span', 'ups', `UPS ${est.key}`));
+        }
+        return f;
+    }
+
+    // Text of the tooltip: what was computed and where the nominal power comes from
+    function tmEstTip(tip, est, load, inTable) {
+        const factor = Number(est.factor) !== 1 ? ` × ${tmEstNumber(est.factor)}` : '';
+        tip.replaceChildren(tmTextEl('b', '', 'Estimated by the board'));
+        tip.appendChild(document.createTextNode((inTable ? ': ' : ': the UPS does not report ups.realpower. ') +
+            `${load} % load × ${tmEstNumber(est.nominal)} ${est.unit}${factor}.`));
+        if (est.source === 'custom') {
+            const src = tmTextEl('span', 'src custom', 'From the custom variable ');
+            src.appendChild(tmTextEl('em', '', String(est.key)));
+            src.appendChild(document.createTextNode(inTable ? '.' : ' (NUT Server tab).'));
+            tip.appendChild(src);
+        } else {
+            tip.appendChild(tmTextEl('span', 'src', `From ${est.key} of the UPS.` +
+                (est.unit === 'VA' && !inTable ? ' Set ups.realpower.nominal in NUT Server for a better estimate.' : '')));
+        }
+        if (est.unit === 'W' && !inTable) {
+            tip.appendChild(tmTextEl('span', 'warn', 'Right only if the UPS reports the load as a percentage of the watts.'));
+        }
+    }
+
+    function tmEstBadge(est, load) {
+        const b = tmTextEl('button', 'tm-est in-table');
+        b.type = 'button';
+        b.appendChild(tmTextEl('span', 'approx', '≈'));
+        b.appendChild(document.createTextNode('Estimated'));
+        const tip = tmTextEl('span', 'tip');
+        tip.setAttribute('role', 'tooltip');
+        tmEstTip(tip, est, load, true);
+        b.appendChild(tip);
+        b.addEventListener('click', () => b.classList.toggle('open'));
+        return b;
+    }
+
+    function renderRealPowerEstimate(est, data) {
+        const badge = document.getElementById('card-est-realpower');
+        const src = document.getElementById('card-est-src');
+        const label = document.getElementById('realpower-label');
+        const mark = document.getElementById('card-mark-realpower');
+        // Room on the right of the label only for the NUT marker of US-144
+        if (label) label.classList.toggle('no-mark', !mark || mark.hidden);
+        if (!badge || !src) return;
+        badge.hidden = !est;
+        src.hidden = !est;
+        if (!est) {
+            badge.classList.remove('open');
+            src.replaceChildren();
+            return;
+        }
+        const load = String(data['ups.load'] ?? '--');
+        tmEstTip(badge.querySelector('.tip'), est, load, false);
+        src.replaceChildren(tmEstFormula(est, load));
+    }
+
+    const cardEstBadge = document.getElementById('card-est-realpower');
+    if (cardEstBadge) cardEstBadge.addEventListener('click', () => cardEstBadge.classList.toggle('open'));
+
+    function fillUpsRow(tr, key, value, ovr, est, load) {
+        tr.className = [ovr ? (ovr.added === true ? 'tm-add' : 'tm-ovr') : '', est ? 'tm-estd' : '']
+            .filter(Boolean).join(' ');
         const tdKey = tmTextEl('td', '', key);
         const tdVal = document.createElement('td');
         const val = tmTextEl('div', 'tm-val');
         val.appendChild(tmTextEl('span', 'ups-val', String(value)));
+        if (est) val.appendChild(tmEstBadge(est, load));
         if (ovr) val.appendChild(tmChip(key, ovr));
         tdVal.appendChild(val);
         const tdDesc = tmTextEl('td', '', NUT_DESCRIPTIONS[key] || NUT_DESCRIPTIONS[key.toLowerCase()] || '--');
+        if (est) {
+            const why = tmTextEl('span', 'tm-est-why', '≈ ');
+            why.appendChild(tmEstFormula(est, load));
+            tdDesc.appendChild(why);
+        }
         if (ovr && ovr.description) tdDesc.appendChild(tmTextEl('span', 'tm-why', String(ovr.description)));
         tr.replaceChildren(tdKey, tdVal, tdDesc);
     }
@@ -2225,6 +2319,12 @@ document.addEventListener('DOMContentLoaded', () => {
             renderOverrideSummary(overrides);
             renderCardMarkers(overrides);
 
+            // US-146: ups.realpower estimated by the board, never with the UPS disconnected
+            const est = (!data._disconnected && data._realpower_estimate && typeof data._realpower_estimate === 'object')
+                ? data._realpower_estimate : null;
+            const estLoad = String(data['ups.load'] ?? '--');
+            renderRealPowerEstimate(est, data);
+
             // Update table
             if (upsTableBody) {
                 const upsKeys = Object.keys(data)
@@ -2244,11 +2344,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         tr = document.createElement('tr');
                         tr.id = rowId;
                     }
-                    // Cells rebuilt only when the value or the custom variable changes
+                    const rowEst = key === 'ups.realpower' ? est : null;
+                    // Cells rebuilt only when the value, the custom variable or the estimate changes
                     const sig = JSON.stringify([String(value),
-                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null]);
+                        ovr ? [ovr.key, ovr.value, ovr.description, ovr.added === true] : null,
+                        rowEst ? [rowEst.source, rowEst.key, rowEst.nominal, rowEst.unit, rowEst.factor, estLoad] : null]);
                     if (tr.dataset.sig !== sig) {
-                        fillUpsRow(tr, key, value, ovr);
+                        fillUpsRow(tr, key, value, ovr, rowEst, estLoad);
                         tr.dataset.sig = sig;
                     }
 

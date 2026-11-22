@@ -116,6 +116,10 @@ public:
     // "" for the automatic detection. Applied by the poll task to the bound Q* driver (the
     // detection starts again, no restart of the board) and to every later Q* attach
     void setQxSettings(const char* protocol, bool novendor);
+    // Nominal powers of the custom variables of the NUT Server tab for the ups.realpower
+    // estimate (US-146, #128), any task: W and VA, 0 for none. Applied by the poll task at
+    // the next poll and to every new UPSData (USB reconnection, port power cycle)
+    void setCustomPowerNominals(float real_w, float apparent_va);
     // True while a Q* driver is bound (Board Settings shows its section); detected is the
     // claimed protocol ("Megatec 0.10"), empty before a claim
     bool qxDriverInfo(String& detected) const;
@@ -393,6 +397,13 @@ private:
     // Poll task: a new generation of the settings reaches the Q* driver, with no lock held
     // during QxDriver::configure() (ADR 0008)
     void applyQxSettings();
+    // Custom nominal powers (US-146), under _mutex: setCustomPowerNominals() bumps the
+    // generation, the poll task hands them to _ups_data (applyPowerNominals())
+    float _custom_real_w = 0.0f;
+    float _custom_apparent_va = 0.0f;
+    uint32_t _power_nominals_gen = 0;
+    uint32_t _power_nominals_applied = 0;
+    void applyPowerNominals();
     // Interface being closed by the loopTask: its synchronous DISCONNECTED is not queued
     volatile hid_host_device_handle_t _self_close_handle;
     volatile uint32_t _dropped_events;

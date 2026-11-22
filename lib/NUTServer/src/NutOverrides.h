@@ -6,14 +6,18 @@
 #include <string>
 #include <vector>
 #include <string.h>
+#include <stdlib.h>
+#include <cmath>
 
 /**
  * Custom variables of the NUT Server page (US-115), with the semantics of override.<var>
  * in ups.conf (nut_repo/drivers/main.c storeval): the user value replaces the one of the
  * UPS, or adds the variable when the UPS does not report it, and the variable becomes
  * immutable (no RW flag). They apply to the NUT server only: the dashboard and the board
- * logic keep the real values. Upstream checks nothing on the name; here the key must look
- * like a NUT variable and the keys the server builds itself are refused.
+ * logic keep the real values, except ups.realpower.nominal and ups.power.nominal, which also
+ * feed the ups.realpower estimate (powerNominals(), US-146). Upstream checks nothing on the
+ * name; here the key must look like a NUT variable and the keys the server builds itself are
+ * refused.
  */
 struct NutOverride {
     String key;
@@ -169,6 +173,34 @@ inline const NutOverride* find(const std::vector<NutOverride>& list, const char*
 
 inline const NutOverride* find(const std::vector<NutOverride>* list, const char* key) {
     return list ? find(*list, key) : nullptr;
+}
+
+// A finite number > 0 and nothing else, spaces at the ends allowed ("980", " 1.5 ", "1e3");
+// false for "", "0", "-5", "980W", "nan", "inf" (US-146)
+inline bool parsePositiveNumber(const String& text, float& out) {
+    String t = text;
+    t.trim();
+    if (t.length() == 0) return false;
+    const char* s = t.c_str();
+    char* end = nullptr;
+    double v = strtod(s, &end);
+    if (end == s || *end != '\0') return false;
+    if (!std::isfinite(v) || v <= 0.0) return false;
+    out = (float)v;
+    return true;
+}
+
+// The nominal powers of the custom variables for the ups.realpower estimate (US-146, #128):
+// ups.realpower.nominal in W and ups.power.nominal in VA, 0 when missing or not a number > 0.
+// The only exception to "the board logic keeps the real values"
+inline void powerNominals(const std::vector<NutOverride>& list, float& real_w, float& apparent_va) {
+    real_w = 0.0f;
+    apparent_va = 0.0f;
+    float v = 0.0f;
+    const NutOverride* o = find(list, "ups.realpower.nominal");
+    if (o && parsePositiveNumber(o->value, v)) real_w = v;
+    o = find(list, "ups.power.nominal");
+    if (o && parsePositiveNumber(o->value, v)) apparent_va = v;
 }
 
 // Saved form: [{"k": key, "v": value, "d": description}] in the order of the list

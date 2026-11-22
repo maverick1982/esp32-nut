@@ -53,7 +53,11 @@ public:
     // added}}, cioè cosa vedono i client NUT per quella riga. key è la chiave salvata;
     // added è true per le variabili che l'UPS non riporta (riga = chiave salvata).
     // Un override di ups.mfr/model/serial vale anche per la riga device.* che UPSData ha
-    // già, salvo un override proprio dell'alias. Assente con UPS scollegato o senza override
+    // già, salvo un override proprio dell'alias. Assente con UPS scollegato o senza override.
+    // US-146: quando ups.realpower è una stima della scheda aggiunge "_realpower_estimate":
+    // {source: "custom"|"ups", key: "ups.realpower.nominal"|"ups.power.nominal", nominal,
+    // unit: "W"|"VA", factor: 1|0.6}. Assente con potenza misurata o calcolata dal driver,
+    // senza stima o con UPS scollegato
     static String generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides = nullptr);
     // Catalogo dei comandi supportati dall'UPS (US-059, US-062):
     // {"connected", "commands": [{name, description, destructive}]}

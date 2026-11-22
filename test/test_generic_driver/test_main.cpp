@@ -472,6 +472,37 @@ void test_engine_load_updates_realpower(void) {
     TEST_ASSERT_EQUAL_STRING("300", ups_data.get("ups.realpower").c_str());
 }
 
+// US-146: a UPS without nominal powers gets the estimate from the custom ups.realpower.nominal
+// (PercentLoad is an integer here: 10 % of 980 W)
+void test_engine_custom_nominal_gives_realpower(void) {
+    addEngineUsages();
+    ups_data.setCustomPowerNominals(980, 0);
+    feed(tableDriver, { 7, 10, 60 });
+    TEST_ASSERT_EQUAL_STRING("98", ups_data.get("ups.realpower").c_str());
+    feed(tableDriver, { 7, 20, 60 });
+    TEST_ASSERT_EQUAL_STRING("196", ups_data.get("ups.realpower").c_str());
+    // Removed, as the host does when the custom variable goes
+    ups_data.setCustomPowerNominals(0, 0);
+    ups_data.updateRealPower();
+    TEST_ASSERT_FALSE(ups_data.hasKey("ups.realpower"));
+}
+
+// US-146: a device that measures ups.realpower (ActivePower read) keeps its value when the
+// host runs the estimate for the custom nominal powers
+void test_engine_measured_realpower_ignores_custom_nominal(void) {
+    addUsage("UPS.PowerSummary.PercentLoad", 7, 3, 0, 8);
+    addUsage("UPS.Output.ActivePower", 8, 3, 0, 16);
+    tableDriver.setup();
+    tableDriver.loop(&mockHost, ups_data, 1000);
+    feed(tableDriver, { 7, 50 });
+    feed(tableDriver, { 8, 0x41, 0x01 }); // 321 W
+    TEST_ASSERT_TRUE(ups_data.realPowerMeasured());
+    TEST_ASSERT_EQUAL_STRING("321", ups_data.get("ups.realpower").c_str());
+    ups_data.setCustomPowerNominals(1000, 0);
+    ups_data.updateRealPower();
+    TEST_ASSERT_EQUAL_STRING("321", ups_data.get("ups.realpower").c_str());
+}
+
 // US-123: a driver that does not request the INPUT reports without a FEATURE twin, as
 // CyberPowerDriver (pollInputReports() false)
 struct NoInputPollDriver : GenericDriver {
@@ -541,6 +572,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_engine_bool_row_sets_internal_key);
     RUN_TEST(test_engine_clear_removes_key);
     RUN_TEST(test_engine_load_updates_realpower);
+    RUN_TEST(test_engine_custom_nominal_gives_realpower);
+    RUN_TEST(test_engine_measured_realpower_ignores_custom_nominal);
     RUN_TEST(test_need_replacement_gives_alarm);
     RUN_TEST(test_communication_lost_is_commfault);
     RUN_TEST(test_beeper_status_one_bit);
