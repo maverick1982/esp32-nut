@@ -6,7 +6,7 @@ epic:
   title: Connettività di Rete e Configurazione
 priority: MEDIUM
 points: 5
-status: IN PROGRESS
+status: REVIEW
 body: |-
   #### US-145: Server NTP annunciato dal DHCP (option 42), con ritorno al server configurato
 
@@ -48,3 +48,5 @@ history:
     at: "2026-11-22T11:02:41Z"
   - status: IN PROGRESS
     at: "2026-11-22T11:06:50Z"
+  - status: REVIEW
+    at: "2026-11-22T11:38:07Z"
