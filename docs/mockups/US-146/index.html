@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Estimated Real Power (US-146 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Copy of data/www/bundle.css after US-144 (tokens, fonts, .metric-card, .data-table, .tm-nut) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New for US-146: the "Estimated" mark and the formula under the value -->
+    <link rel="stylesheet" href="estimate.css">
+    <style>
+        /* Mockup-only chrome: the board of states. Not part of the product. */
+        body.mock-board { height: auto; overflow: auto; padding: 0 16px 3rem; }
+        body.mock-embed { padding: 1rem 16px; }
+        .board-head {
+            max-width: 1180px; margin: 0 auto; padding: 1.6rem 0 1rem;
+            border-bottom: 1px dashed rgba(255, 184, 0, 0.45);
+        }
+        .board-head h1 { font-family: var(--font-heading); font-size: 1.1rem; letter-spacing: 2px; color: var(--accent); }
+        .board-head p { margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.6; max-width: 900px; }
+        .board-head code, .board-state code { color: var(--accent); font-family: var(--font-mono); }
+        .board { max-width: 1180px; margin: 0 auto; }
+        .board-state { padding: 1.6rem 0 0.4rem; }
+        .board-state h3 {
+            font-family: var(--font-mono); font-size: 0.75rem; font-weight: 400;
+            color: var(--warning); text-transform: uppercase; letter-spacing: 1px;
+        }
+        .board-state .note { margin: 0.35rem 0 1rem; color: var(--text-secondary); font-size: 0.8rem; line-height: 1.55; }
+        .board-state .metrics-grid { margin-bottom: 0; }
+        .board-state .details-table-container { margin-top: 0.4rem; }
+        .phone-row { display: flex; flex-wrap: wrap; gap: 2rem; align-items: flex-start; }
+        .phone-row figure { display: flex; flex-direction: column; gap: 0.5rem; }
+        .phone-row figcaption { font-family: var(--font-mono); font-size: 0.7rem; color: var(--warning); text-transform: uppercase; letter-spacing: 1px; }
+        .phone-row iframe {
+            width: 375px; max-width: calc(100vw - 32px); height: 760px;
+            border: 1px solid var(--bg-panel-border); border-radius: 18px; background: var(--bg-base);
+            box-shadow: 0 0 0 6px rgba(8, 12, 18, 0.9), 0 0 0 7px rgba(45, 60, 90, 0.6);
+        }
+        .mock-only { color: var(--warning); }
+        body.mock-embed .board-head, body.mock-embed .board-state:not(.in-embed) { display: none; }
+        body.mock-embed .board-state h3, body.mock-embed .board-state .note { display: none; }
+    </style>
+</head>
+
+<body class="mock-board">
+
+    <header class="board-head">
+        <h1>US-146 &middot; ESTIMATED REAL POWER</h1>
+        <p>Sketch of the mark that says <b>the board computed ups.realpower</b> from the load and a nominal power,
+            instead of reading it from the UPS. Two parts: the <b>&asymp; Estimated</b> badge next to the card label
+            (hover, focus or tap: where the number comes from) and the <b>formula under the value</b>, always visible,
+            in the place where the other cards have their bar. The NUT marker of US-144 stays top right.
+            Dashed grey because amber (overrides the UPS) and cyan (added) are already taken. Hover a badge to see its tooltip.</p>
+    </header>
+
+    <main class="board">
+
+        <!-- ============================================================ A. measured -->
+        <section class="board-state">
+            <h3>A &middot; Measured by the UPS (or computed by the NUT driver)</h3>
+            <p class="note">ActivePower read, or <code>eaton_compute_realpower_info</code>: same value as NUT, no mark. As today.</p>
+            <div class="metrics-grid">
+                <div class="metric-card highlight">
+                    <div class="metric-label">UPS Status</div>
+                    <div class="metric-value status-online">OL</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Battery Charge</div>
+                    <div class="metric-value"><span>100</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar" style="width: 100%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">UPS Load</div>
+                    <div class="metric-value"><span>32</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar load" style="width: 32%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Real Power</div>
+                    <div class="metric-value"><span>320</span><span class="unit">W</span></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ B. custom W -->
+        <section class="board-state">
+            <h3>B &middot; Estimated from the custom ups.realpower.nominal</h3>
+            <p class="note">Smart-UPS 1500 of #128: load 10.4 %, 980 W set in NUT Server. Tooltip shown open
+                <span class="mock-only">(mockup only)</span>. The variable in the formula opens NUT Server on its row, like the
+                chips of US-144.</p>
+            <div class="metrics-grid">
+                <div class="metric-card highlight">
+                    <div class="metric-label">UPS Status</div>
+                    <div class="metric-value status-online">OL</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Battery Charge</div>
+                    <div class="metric-value"><span>100</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar" style="width: 100%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">UPS Load</div>
+                    <div class="metric-value"><span>10.4</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar load" style="width: 10.4%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label tm-label-row no-mark">Real Power
+                        <button type="button" class="tm-est open" aria-describedby="tip-b">
+                            <span class="approx">&asymp;</span>Estimated
+                            <span class="tip" role="tooltip" id="tip-b"><b>Estimated by the board</b>: the UPS does not
+                                report ups.realpower. 10.4 % load &times; 980 W.
+                                <span class="src custom">From the custom variable <em>ups.realpower.nominal</em> (NUT Server tab).</span>
+                                <span class="warn">Right only if the UPS reports the load as a percentage of the watts.</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="metric-value"><span>102</span><span class="unit">W</span></div>
+                    <div class="tm-est-src">10.4 %<span class="op">&times;</span>980 W &middot; <a href="#" title="Open NUT Server on this variable">ups.realpower.nominal</a></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ C. UPS VA -->
+        <section class="board-state">
+            <h3>C &middot; Estimated from the nominal power of the UPS</h3>
+            <p class="note">The UPS reports only <code>ups.power.nominal</code> (1500 VA): the estimate of US-075, silent until now.
+                The source is the UPS, so nothing to open: grey text, no link.</p>
+            <div class="metrics-grid">
+                <div class="metric-card highlight">
+                    <div class="metric-label">UPS Status</div>
+                    <div class="metric-value status-online">OL</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Battery Charge</div>
+                    <div class="metric-value"><span>97</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar" style="width: 97%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">UPS Load</div>
+                    <div class="metric-value"><span>10</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar load" style="width: 10%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label tm-label-row no-mark">Real Power
+                        <button type="button" class="tm-est" aria-describedby="tip-c">
+                            <span class="approx">&asymp;</span>Estimated
+                            <span class="tip" role="tooltip" id="tip-c"><b>Estimated by the board</b>: the UPS does not
+                                report ups.realpower. 10 % load &times; 1500 VA &times; 0.6.
+                                <span class="src">From ups.power.nominal of the UPS. Set ups.realpower.nominal in NUT Server
+                                    for a better estimate.</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="metric-value"><span>90</span><span class="unit">W</span></div>
+                    <div class="tm-est-src">10 %<span class="op">&times;</span>1500 VA<span class="op">&times;</span>0.6 &middot; <span class="ups">UPS ups.power.nominal</span></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ D. estimate + NUT override -->
+        <section class="board-state in-embed">
+            <h3>D &middot; Estimated, and ups.realpower overridden for NUT clients</h3>
+            <p class="note">The card keeps the board's value (102 W, estimated); the amber marker of US-144 says NUT
+                clients see 150 W. The badge sits on the label, the marker top right: they never overlap.</p>
+            <div class="metrics-grid">
+                <div class="metric-card highlight">
+                    <div class="metric-label">UPS Status</div>
+                    <div class="metric-value status-online">OL</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Battery Charge</div>
+                    <div class="metric-value"><span>100</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar" style="width: 100%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">UPS Load</div>
+                    <div class="metric-value"><span>10.4</span><span class="unit">%</span></div>
+                    <div class="progress-bar-container"><div class="progress-bar load" style="width: 10.4%"></div></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label tm-label-row">Real Power
+                        <button type="button" class="tm-est" aria-describedby="tip-d">
+                            <span class="approx">&asymp;</span>Estimated
+                            <span class="tip" role="tooltip" id="tip-d"><b>Estimated by the board</b>: the UPS does not
+                                report ups.realpower. 10.4 % load &times; 980 W.
+                                <span class="src custom">From the custom variable <em>ups.realpower.nominal</em> (NUT Server tab).</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="metric-value"><span>102</span><span class="unit">W</span></div>
+                    <div class="tm-est-src">10.4 %<span class="op">&times;</span>980 W &middot; <a href="#">ups.realpower.nominal</a></div>
+                    <button type="button" class="tm-nut ovr tm-card-mark"
+                        title="NUT clients see 150 W (custom variable ups.realpower)">
+                        <span class="k">NUT</span><span class="v">150 W</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ E. table -->
+        <section class="board-state in-embed">
+            <h3>E &middot; Real-Time Data Feed table</h3>
+            <p class="note">Same badge in the Value column of <code>ups.realpower</code>, the formula under the description.
+                <code>ups.realpower.nominal</code> keeps its "Added" chip of US-144.</p>
+            <div class="details-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Parameter</th><th>Value</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>ups.load</td>
+                            <td><span class="ups-val">10.4</span></td>
+                            <td>Load on UPS (percent)</td>
+                        </tr>
+                        <tr>
+                            <td>ups.model</td>
+                            <td><span class="ups-val">Smart-UPS 1500</span></td>
+                            <td>UPS model</td>
+                        </tr>
+                        <tr class="tm-estd">
+                            <td>ups.realpower</td>
+                            <td>
+                                <div class="tm-val">
+                                    <span class="ups-val">102</span>
+                                    <button type="button" class="tm-est in-table" aria-describedby="tip-e">
+                                        <span class="approx">&asymp;</span>Estimated
+                                        <span class="tip" role="tooltip" id="tip-e"><b>Estimated by the board</b>:
+                                            10.4 % load &times; 980 W.
+                                            <span class="src custom">From the custom variable <em>ups.realpower.nominal</em>.</span>
+                                        </span>
+                                    </button>
+                                </div>
+                            </td>
+                            <td>Current value of real power (Watts)
+                                <span class="tm-est-why">&asymp; 10.4 % &times; 980 W &middot; <a href="#">ups.realpower.nominal</a></span>
+                            </td>
+                        </tr>
+                        <tr class="tm-add">
+                            <td>ups.realpower.nominal</td>
+                            <td>
+                                <div class="tm-val">
+                                    <span class="ups-val">980</span>
+                                    <button type="button" class="tm-nut add" title="Added for NUT clients (custom variable)">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                                        </svg>
+                                        <span class="k">Added</span>
+                                    </button>
+                                </div>
+                            </td>
+                            <td>UPS real power rating (W)<span class="tm-why">SUA1500I label</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ============================================================ F. phone -->
+        <section class="board-state">
+            <h3>F &middot; 375 px</h3>
+            <p class="note">States D and E in a phone frame: badge and NUT marker on the same card, table rows stacked.</p>
+            <div class="phone-row">
+                <figure>
+                    <figcaption>375 &times; 760 &middot; states D + E</figcaption>
+                    <iframe title="Estimated Real Power at 375px" src="index.html?embed=1"></iframe>
+                </figure>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Mockup-only: ?embed=1 shows states D and E alone (phone frame); a tap toggles the tooltip
+        if (new URLSearchParams(location.search).get('embed')) {
+            document.body.classList.add('mock-embed');
+            document.querySelectorAll('.tm-est.open').forEach(b => b.classList.remove('open'));
+        }
+        document.querySelectorAll('.tm-est').forEach(b => b.addEventListener('click', () => b.classList.toggle('open')));
+        document.querySelectorAll('a[href="#"]').forEach(a => a.addEventListener('click', e => e.preventDefault()));
+    </script>
+</body>
+
+</html>

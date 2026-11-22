@@ -57,6 +57,19 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOve
         }
     }
 
+    // US-146: ups.realpower estimated by the board (not measured by the UPS nor computed by the
+    // driver) and where the estimate comes from: the page marks it "Estimated" with the formula
+    RealPowerSource src = data->realPowerSource();
+    if (data->realPowerEstimated() && src != RealPowerSource::NONE && data->find("ups.realpower")) {
+        bool watts = src == RealPowerSource::CUSTOM_W || src == RealPowerSource::UPS_W;
+        JsonObject est = doc["_realpower_estimate"].to<JsonObject>();
+        est["source"] = (src == RealPowerSource::CUSTOM_W || src == RealPowerSource::CUSTOM_VA) ? "custom" : "ups";
+        est["key"] = watts ? "ups.realpower.nominal" : "ups.power.nominal";
+        est["nominal"] = data->realPowerSourceNominal();
+        est["unit"] = watts ? "W" : "VA";
+        est["factor"] = watts ? 1.0 : 0.6;
+    }
+
     // US-144: what NUT clients see for the rows with a custom variable of the NUT Server
     // tab, with the rules of NUTServer::resolveVar and LIST VAR. The real values above
     // do not change

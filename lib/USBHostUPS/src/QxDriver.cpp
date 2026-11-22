@@ -259,16 +259,23 @@ const char* QxDriver::claimedProtocol() const {
 void QxDriver::publish(UPSData& data) {
     if (_shadow.writes() == _publishedWrites) return;
     HostLock lock(_host);
+    // A protocol that reports ups.realpower owns it: no estimate (US-146)
+    if (_shadow.find("ups.realpower") && !data.realPowerMeasured()) data.markRealPowerMeasured();
     for (const auto& p : _shadow.getAll()) {
         if (!data.valueEquals(p.key.c_str(), p.value)) data.set(p.key, p.value);
     }
-    // Keys the shadow no longer has (delinfo() of the engine)
+    // Keys the shadow no longer has (delinfo() of the engine). The ups.realpower estimate
+    // lives only in the host data, never in the shadow (US-146)
     std::vector<String> gone;
     for (const auto& p : data.getAll()) {
-        if (!_shadow.find(p.key.c_str())) gone.push_back(p.key);
+        if (_shadow.find(p.key.c_str())) continue;
+        if (data.realPowerEstimated() && p.key == "ups.realpower") continue;
+        gone.push_back(p.key);
     }
     for (const auto& k : gone) data.remove(k);
     _publishedWrites = _shadow.writes();
+    // From ups.load and the nominal powers, as the HID drivers do; removed when the load goes
+    data.updateRealPower();
 }
 
 CommandResult QxDriver::runCommand(UPSData& data, const char* name, const char* param) {

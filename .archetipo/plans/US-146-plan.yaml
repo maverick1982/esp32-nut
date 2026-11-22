@@ -1,0 +1,601 @@
+schema: archetipo/plan/v2
+spec_code: US-146
+body: |
+  ## Soluzione Tecnica
+
+  La stima resta dov'è oggi, in `UPSData::updateRealPower()` (US-075), che diventa l'unico punto che decide se e come stimare `ups.realpower`. Le nominali impostate a mano entrano in `UPSData` come due campi privati, non come chiavi: i client NUT e la telemetria continuano a vedere `ups.realpower.nominal` tramite la variabile personalizzata (US-115, US-144). Il web server non tocca `UPSData`: passa i due numeri a `USBHostUPS`, che li applica nel task di poll come fa `setQxSettings()` (US-138).
+
+  - **Stima (`lib/USBHostUPS/src/UPSData.h`)**
+    - Campi nuovi: `_customRealNominal` e `_customApparentNominal` (float, 0 = assente) e `_realPowerEstimated` (true quando `ups.realpower` l'ha scritta la stima). Metodi: `bool setCustomPowerNominals(float w, float va)` (valori non finiti o ≤ 0 diventano 0, ritorna true se qualcosa cambia) e `bool realPowerEstimated() const`.
+    - Ordine delle fonti: W personalizzata, poi W dell'UPS (`ups.realpower.nominal` > 0), poi VA personalizzata × 0,6, poi VA dell'UPS × 0,6. Una variabile personalizzata non valida conta come assente: per quella chiave vale il valore dell'UPS.
+    - Calcolo in double con il load decimale e arrotondamento al watt: `lround(load × W / 100)` e `lround(load × VA × 0,6 / 100)`. Così 10,4 × 980 = 101,92 dà `102`. Se il load manca o è negativo non c'è nessuna fonte.
+    - Senza fonte: se `_realPowerEstimated` è vero e la chiave c'è, `remove("ups.realpower")`, poi il flag torna false. Con una fonte: `set` solo se il testo cambia (`valueEquals`, ADR 0007) e il flag diventa true.
+    - `markRealPowerMeasured()` toglie la stima già scritta (se il flag è vero) prima di marcare: da quel momento la chiave appartiene al dispositivo.
+  - **Variabili personalizzate (`lib/NUTServer/src/NutOverrides.h`)**: `bool parsePositiveNumber(const String& text, float& out)` accetta spazi ai lati; il resto deve essere un numero intero per `strtod`, finito e > 0. `void powerNominals(const std::vector<NutOverride>& list, float& real_w, float& apparent_va)` cerca con `find()`, senza distinguere maiuscole e minuscole, `ups.realpower.nominal` e `ups.power.nominal`; un valore non valido dà 0. La validazione del salvataggio non cambia, quindi la Web UI non mostra nessun errore e i client NUT vedono il valore com'è.
+  - **Host (`lib/USBHostUPS/src/USBHostUPS.h/.cpp`)**: `void setCustomPowerNominals(float real_w, float apparent_va)` si chiama da qualunque task, sotto `_mutex`, e incrementa `_power_nominals_gen`. `applyPowerNominals()` gira nel task di poll subito dopo `applyQxSettings()`: sotto `_mutex` passa i valori a `_ups_data.setCustomPowerNominals()`, chiama `_ups_data.updateRealPower()` e scrive un log INFO quando cambiano. `releaseBoundState()` ripassa i valori al nuovo `UPSData()` (riconnessione USB, ciclo della porta). Al boot `src/core/main.cpp` chiama il setter dopo `nut_override_store.load()`, prima di `usb_ups.begin()`. `handleSetNutOverrides()` lo chiama dopo il salvataggio, così l'effetto arriva al poll successivo, senza riavvio.
+  - **Driver HID (`GenericDriver`)**: oggi la stima parte solo se `!_nut_has_realpower`, ma il percorso nuovo dell'host chiama `updateRealPower()` per conto suo. Quando `_nut_has_realpower` è vero (riga ActivePower letta o `eaton_compute_realpower_info`), il driver chiama `markRealPowerMeasured()` dopo `bindNutTable()`, sia in `loop()` sia in `postDecode()`. ActivePower resta marcata come oggi (`readsActivePower`). Il resto di `publishRow()` non cambia: continua a chiamare `updateRealPower()` quando cambiano il load o le nominali.
+  - **Driver Q* (`QxDriver::publish`)**: oggi toglie dai dati dell'host ogni chiave che lo shadow non ha, e quindi cancellerebbe la stima. Regola nuova:
+    - se lo shadow ha `ups.realpower`, `markRealPowerMeasured()` prima della copia;
+    - nel giro delle chiavi sparite si salta `ups.realpower` quando `data.realPowerEstimated()`;
+    - a fine publish `data.updateRealPower()`, che ricalcola a ogni `ups.load` e toglie la stima se il load sparisce o se il protocollo riparte.
+  - **API e pagina**: `/api/ups-vars` e la card Real Power leggono `ups.realpower` da `UPSData`, quindi la stima ci arriva come valore dell'UPS senza codice nuovo. Il segno "NUT" della card resta legato alla sola chiave `ups.realpower` (US-144). Cambia solo il testo introduttivo del pannello "Custom variables" in `data/www/index.html`, poi si rigenerano gli asset con `python scripts/embed_web.py`.
+  - **README**: una frase accanto alla voce Custom variables (~riga 308) con l'uso per la stima e il limite noto (load in % dei W e non dei VA). Le note di rilascio si scrivono prima della release e citano #128.
+  - **Invariati**: fattore 0,6, `eaton_compute_realpower_fun`, logica della scheda, server NUT (la stima è una chiave come le altre) e validazione del salvataggio delle variabili.
+
+  **Decisioni prese in pianificazione**
+  - Un valore personalizzato non valido conta come assente, quindi vale quello dell'UPS per la stessa chiave.
+  - La stima arrotonda al watt invece di troncare, anche quando usa le nominali dell'UPS.
+  - Nessun limite superiore oltre a "finito".
+  - Applicazione nel task di poll con generazione, sullo schema di `setQxSettings()`, così nessun altro task scrive `UPSData`.
+
+  **Golden del replay**: hanno tutti load intero e prodotti esatti, oppure potenza misurata o calcolata dal driver (CyberPower CP1600 153 W, Eaton 3S 21 W da `eaton_compute_realpower_info`, Legrand 120 W). Non devono cambiare; se uno cambia, la differenza si spiega nel commit prima di aggiornarlo.
+
+  **Fuori ambito**: il fattore 0,6, `ups.power` da `output.voltage` × `output.current`, il manuale utente.
+
+  ---
+
+  ## Strategia di Test
+
+  Tutta la logica (fonti, precedenze, arrotondamento, rimozione, UPS che misurano, Q*) sta in header e driver già compilati in nativo, quindi i test nativi la coprono senza hardware. L'unica parte non nativa è il setter di `USBHostUPS`, che fa solo da passacarte; lo coprono le build e la prova sul campo, se l'utente la autorizza. La pagina si copre con Playwright e API simulate.
+
+  - **Nativi, suite nuova `test_realpower_estimate`** (solo `UPSData.h`): W personalizzata; VA personalizzata × 0,6; W personalizzata contro W dell'UPS (vince la personalizzata); W dell'UPS contro VA personalizzata (vince la W); VA personalizzata contro VA dell'UPS; load decimale (10.4 × 980 = `102`, anche con la sola W dell'UPS); valore 0 o negativo ignorato; rimozione della personalizzata (la chiave sparisce, oppure torna la stima dalle nominali dell'UPS); load che sparisce; UPS che misura (nessuna stima, e `markRealPowerMeasured()` toglie una stima già scritta); nessuna scrittura se il valore non cambia (`writes()`).
+  - **Nativi `test_nut_overrides`**: `parsePositiveNumber` ("980", " 980 ", "1.5", "0", "-5", "abc", "980W", "", "1e3", "nan", "inf") e `powerNominals` (maiuscole diverse, una sola delle due, valore non valido = 0).
+  - **Nativi `test_generic_driver`**: con la nominale personalizzata e `ups.load` 10.4 da report la stima vale `102`; un dispositivo con ActivePower letta e uno con la riga `eaton_compute_realpower_info` non cambiano valore quando arrivano le nominali personalizzate.
+  - **Nativi `test_qx_driver`**: con `ups.load` dal protocollo e la W personalizzata compare `ups.realpower`; resta dopo un publish successivo; segue il load nuovo; sparisce quando il load sparisce; uno shadow con `ups.realpower` vince sulla stima.
+  - **Regressione**: `test_record_replay` con i golden invariati, `test_web_api` e `test_nut_overrides` esistenti invariati, suite nativa completa (in 4 gruppi paralleli, come da abitudine del progetto).
+  - **Build**: `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`.
+  - **Prova sull'Eaton 3S**, solo dopo un sì esplicito dell'utente: con `ups.realpower.nominal` = 500 impostata in NUT Server, `ups.realpower` (calcolata dall'Eaton) non cambia; tolta la variabile, idem. È il caso "UPS che calcola già la potenza".
+
+  ### Test E2E — Simulazione Utente
+
+  **Framework:** Playwright (`playwright.config.ts`, `e2e/support/webui.ts`, API simulate con `page.route` come in `e2e/telemetry-overrides.spec.ts` e `e2e/nut-overrides.spec.ts`)
+  **Video demo:** sì, l'incremento si vede (card Real Power da `--` a `102 W` dopo il salvataggio). Lo registra `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Nominale aggiunta | L'utente apre UPS Telemetry con `ups.load` 10.4 e senza `ups.realpower`: la card Real Power mostra `--`. Va in NUT Server, aggiunge `ups.realpower.nominal` = `980`, salva e torna in telemetria. Il mock, dopo il POST, risponde con `ups.realpower` 102 e `_overrides['ups.realpower.nominal']` aggiunta. La card mostra `102` W, il segno "NUT" della card Real Power resta nascosto e in tabella `ups.realpower.nominal` ha il chip "Added". |
+  | Nominale tolta | L'utente toglie la variabile e salva: al poll successivo la card torna a `--` e la riga `ups.realpower` sparisce dalla tabella. |
+  | Override di ups.realpower | Con la stima a 102 e un override di `ups.realpower` a 150, la card mostra `102` e il segno "NUT 150 W". |
+  | Testo del pannello | In NUT Server il testo introduttivo di "Custom variables" cita `ups.realpower.nominal` e `ups.power.nominal` per la stima della potenza reale. |
+
+  _Piano generato con ARchetipo Planning — 2026-11-22_
+
+  ---
+
+  ## Rework (review del 2026-11-22)
+
+  La review ha chiesto un segno che dica quando `ups.realpower` è stimata dalla scheda e da dove viene la stima, come nel mockup `docs/mockups/US-146/` (stati A-F). Vale per le due fonti: le variabili personalizzate (US-146) e le nominali dell'UPS (US-075). Il valore resta un valore dell'UPS e il segno "NUT" di US-144 non cambia; il criterio sulla card Real Power diventa: "la card mostra la stima come valore dell'UPS, con il segno Estimated, la sua origine e la formula".
+
+  - **Fonte ricordata (`UPSData.h`)**: `enum class RealPowerSource : uint8_t { NONE, CUSTOM_W, UPS_W, CUSTOM_VA, UPS_VA }`, più la nominale usata. `updateRealPower()` li imposta nel ramo scelto; `NONE` (e nominale 0) quando non c'è fonte, quando toglie la stima e in `markRealPowerMeasured()`. Accessori `realPowerSource()` e `realPowerSourceNominal()`.
+  - **API (`WebApiJson::generateUpsVars`)**: nel ramo connesso, dopo il ciclo dei valori e prima di `_overrides`, se `data->realPowerEstimated()`, la fonte non è `NONE` e `ups.realpower` c'è: `_realpower_estimate = {"source": "custom"|"ups", "key": "ups.realpower.nominal"|"ups.power.nominal", "nominal": <numero>, "unit": "W"|"VA", "factor": 1|0.6}`. Assente con potenza misurata o calcolata dal driver, senza stima, con UPS scollegato (si esce prima). I valori reali e `_overrides` non cambiano; senza stima l'output resta identico byte per byte.
+  - **Pagina**: markup e stili del mockup (`estimate.css` in una sezione US-146 di `bundle.css`, senza la parte di contorno del mockup). In `bundle.js` una `renderRealPowerEstimate(est, data)` mostra o nasconde badge, tooltip e formula della card a ogni poll; la riga `ups.realpower` della tabella prende lo stesso badge e la formula sotto la descrizione, e la sua firma (`tr.dataset.sig`) include la stima. Testi solo con `createElement`/`textContent`. Il link della formula chiama `openNutServerFor(est.key)` (ricerca già senza maiuscole, 0800de3). Il tooltip si apre con hover, focus e tocco (classe `open`), ancorato alla card.
+  - **Testi del tooltip**: "Estimated by the board: the UPS does not report ups.realpower. {load} % load × {nominal} {unit}[ × 0.6]." Poi la fonte: "From the custom variable ups.realpower.nominal (NUT Server tab)." oppure "From ups.power.nominal of the UPS." Con unità W: "Right only if the UPS reports the load as a percentage of the watts." Con unità VA: "Set ups.realpower.nominal in NUT Server for a better estimate."
+
+  ### Test del rework
+
+  - Nativi `test_realpower_estimate`: fonte e nominale per ognuno dei 4 rami, `NONE` dopo la rimozione e dopo `markRealPowerMeasured()`.
+  - Nativi `test_web_api`: `_realpower_estimate` per custom W, custom VA, UPS W, UPS VA; assente con potenza misurata, senza stima, con UPS scollegato; output invariato senza stima.
+  - E2E `e2e/realpower-estimate.spec.ts` (esteso): stati A, B, C, D ed E del mockup, link della formula che apre NUT Server sulla riga, sparizione al poll successivo, 375 px senza scroll orizzontale.
+  - Suite nativa ed e2e complete, tre build.
+
+  _Rework pianificato con ARchetipo Planning — 2026-11-22_
+tasks:
+  - id: TASK-01
+    title: 'UPSData: stima con nominali personalizzate, load decimale e rimozione'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** `UPSData::updateRealPower()` diventa l'unica regola della stima: nominali personalizzate, ordine delle fonti, load decimale arrotondato e rimozione della stima quando non c'è più una fonte.
+
+      **Leggere:** `lib/USBHostUPS/src/UPSData.h` (campi ~14-16, `markRealPowerMeasured` ~251, `updateRealPower` ~256-270), `lib/USBHostUPS/src/GenericDriver.cpp` (`publishRow` ~904-933, solo per capire chi la chiama), il piano (sezione Stima).
+
+      **Modifiche:**
+      1. Campi privati: `float _customRealNominal = 0.0f; float _customApparentNominal = 0.0f; bool _realPowerEstimated = false;`.
+      2. `bool setCustomPowerNominals(float real_w, float apparent_va)`: un valore non finito (`isfinite`) o ≤ 0 diventa 0; ritorna true se almeno uno dei due cambia. Non chiama `updateRealPower()`: lo fa chi chiama.
+      3. `bool realPowerEstimated() const { return _realPowerEstimated; }`.
+      4. `markRealPowerMeasured()`: se `_realPowerEstimated` e `find("ups.realpower")`, `remove("ups.realpower")`; poi `_realPowerEstimated = false; _realPowerMeasured = true;`.
+      5. `updateRealPower()`:
+         - `if (_realPowerMeasured) return;`
+         - `double watts = -1;` Se `ups.load` c'è e `load = toFloat() >= 0`: se `_customRealNominal > 0` allora `watts = load * _customRealNominal / 100.0`; altrimenti, se la W dell'UPS è > 0, con la W dell'UPS; altrimenti, se `_customApparentNominal > 0`, `watts = load * _customApparentNominal * 0.6 / 100.0`; altrimenti, se la VA dell'UPS è > 0, con la VA dell'UPS × 0,6.
+         - `watts < 0` (nessuna fonte): se `_realPowerEstimated && find("ups.realpower")`, `remove`; poi `_realPowerEstimated = false`; return.
+         - Altrimenti `String v(lround(watts));` (via `(long)`), `if (!valueEquals("ups.realpower", v)) set("ups.realpower", v); _realPowerEstimated = true;`.
+      6. Commento sopra `updateRealPower()` con l'ordine delle fonti, il riferimento a US-146 (#128) e la nota che la stima non è un valore upstream.
+
+      **Verifica:** build `esp32-s3-standard`; `pio test -e native -f test_generic_driver -f test_record_replay` (PATH con `toolchain-gccmingw32/bin`) passa con i golden invariati.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — campi, setter, flag della stima, nuova `updateRealPower()`, `markRealPowerMeasured()` che toglie la stima
+
+      ## Criteri di Completamento
+      - [ ] Ordine delle fonti: W personalizzata, W dell'UPS, VA personalizzata × 0,6, VA dell'UPS × 0,6
+      - [ ] Load decimale arrotondato al watt (10.4 × 980 = 102)
+      - [ ] Senza fonte, una stima già scritta viene tolta; un `ups.realpower` non scritto dalla stima non viene mai tolto
+      - [ ] Nessuna scrittura quando il valore non cambia
+      - [ ] `test_generic_driver` e `test_record_replay` verdi senza modificare i golden
+    ref: TASK-01
+  - id: TASK-02
+    title: Test nativi della stima in UPSData
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** fissare con una suite nativa dedicata tutte le regole della stima.
+
+      **Leggere:** `lib/USBHostUPS/src/UPSData.h` (dopo TASK-01), `test/test_nut_overrides/test_main.cpp` (struttura minima di una suite Unity: include, `setUp`/`tearDown`, `main` con `RUN_TEST`), `platformio.ini` (env `native`: le cartelle `test/test_*` vengono trovate da sole).
+
+      **Modifiche:** nuova cartella `test/test_realpower_estimate/` con `test_main.cpp` che include solo `<unity.h>` e `UPSData.h`. Test:
+      1. W personalizzata 980, `ups.load` "10.4" → `ups.realpower` "102";
+      2. solo la W dell'UPS 980 e load "10.4" → "102" (prima era 98);
+      3. VA personalizzata 1500, load "10" → "90";
+      4. W personalizzata 1000 e W dell'UPS 500, load "50" → "500" (vince la personalizzata);
+      5. W dell'UPS 500 e VA personalizzata 1500, load "50" → "250" (vince la W);
+      6. VA personalizzata 1000 e VA dell'UPS 2000, load "50" → "300";
+      7. `setCustomPowerNominals(0, -5)` e `NAN` → nessuna stima, `realPowerEstimated()` false;
+      8. rimozione: con la sola personalizzata → stima, poi `setCustomPowerNominals(0,0)` + `updateRealPower()` → chiave sparita;
+      9. rimozione con fallback: personalizzata 1000 e W dell'UPS 500, load 50 → "500"; tolta la personalizzata → "250";
+      10. `ups.load` rimosso → la stima sparisce;
+      11. `markRealPowerMeasured()` dopo una stima → chiave tolta e nessuna stima nuova; un `ups.realpower` scritto con `set()` da un dispositivo non viene mai tolto da `updateRealPower()`;
+      12. due `updateRealPower()` con gli stessi dati → `writes()` aumenta una volta sola;
+      13. `setCustomPowerNominals` ritorna true solo quando cambia qualcosa.
+
+      **Verifica:** `pio test -e native -f test_realpower_estimate`. Invertire per prova l'ordine W/VA in TASK-01 e verificare che almeno un test fallisca, poi ripristinare.
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - test/test_realpower_estimate/test_main.cpp — suite nuova, 13 casi
+
+      ## Criteri di Completamento
+      - [ ] I 13 casi sono presenti e registrati con `RUN_TEST`
+      - [ ] `test_realpower_estimate` verde
+      - [ ] Un'alterazione voluta dell'ordine delle fonti fa fallire almeno un test
+    ref: TASK-02
+  - id: TASK-03
+    title: 'NutOverrides: lettura numerica delle nominali personalizzate'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** ricavare dalla lista delle variabili personalizzate le due nominali valide, con le stesse regole per il boot e per il salvataggio.
+
+      **Leggere:** `lib/NUTServer/src/NutOverrides.h` (`find` ~163, stile delle funzioni inline), `test/mocks` (la `String` nativa, per `c_str()`, `trim()`).
+
+      **Modifiche:**
+      1. `inline bool parsePositiveNumber(const String& text, float& out)`: copia, `trim()`; vuota → false; `strtod(c_str, &end)`; false se `end` non arriva alla fine, se il risultato non è finito o se è ≤ 0; altrimenti `out = (float)v` e true. Aggiungere `#include <stdlib.h>` e `<math.h>` se mancano.
+      2. `inline void powerNominals(const std::vector<NutOverride>& list, float& real_w, float& apparent_va)`: entrambi a 0; per `ups.realpower.nominal` e `ups.power.nominal`, se `find(list, key)` trova una voce e `parsePositiveNumber` va, si assegna il valore.
+      3. Commento: servono alla stima di `ups.realpower` (US-146, #128), unica eccezione alla regola "la logica della scheda usa i valori reali". Aggiornare di conseguenza la frase del commento iniziale del file ("They apply to the NUT server only").
+
+      **Verifica:** `pio test -e native -f test_nut_overrides` verde con i test esistenti.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/NUTServer/src/NutOverrides.h — `parsePositiveNumber`, `powerNominals`, commento iniziale
+
+      ## Criteri di Completamento
+      - [ ] Un valore non numerico, vuoto, zero, negativo o non finito dà 0
+      - [ ] La ricerca della chiave ignora le maiuscole
+      - [ ] La validazione di salvataggio (`checkEntry`, `checkList`) non cambia
+      - [ ] `test_nut_overrides` verde
+    ref: TASK-03
+  - id: TASK-04
+    title: Test nativi della lettura delle nominali
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire `parsePositiveNumber` e `powerNominals`.
+
+      **Leggere:** `test/test_nut_overrides/test_main.cpp`.
+
+      **Modifiche:** sotto `// --- US-146: nominal powers for the ups.realpower estimate ---`, registrati in `main`:
+      1. `parsePositiveNumber`: "980" → 980; " 980 " → 980; "1.5" → 1.5; "1e3" → 1000; false per "0", "-5", "abc", "980W", "", "   ", "nan", "inf";
+      2. `powerNominals` con `UPS.RealPower.Nominal` = "980" e `ups.power.nominal` = "1500" → 980 e 1500;
+      3. con la sola `ups.power.nominal` → W 0, VA valorizzata;
+      4. con `ups.realpower.nominal` = "abc" → 0;
+      5. lista vuota → 0 e 0.
+
+      **Verifica:** `pio test -e native -f test_nut_overrides`.
+
+      **Blocchi:** TASK-03.
+
+      ## File Coinvolti
+      - test/test_nut_overrides/test_main.cpp — 5 test nuovi
+
+      ## Criteri di Completamento
+      - [ ] I 5 casi sono presenti e registrati
+      - [ ] `test_nut_overrides` verde
+    ref: TASK-04
+  - id: TASK-05
+    title: 'Driver: UPS che calcolano la potenza marcati, stima anche sui Q*'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Descrizione
+      **Obiettivo:** la stima chiamata dall'host non tocca mai un `ups.realpower` del driver, e i Q* hanno la stima senza che `publish()` la cancelli.
+
+      **Leggere:** `lib/USBHostUPS/src/GenericDriver.cpp` (`loop` ~562-588, `bindNutTable` ~765-776, `postDecode` ~847-888, `publishRow` ~904-933), `lib/USBHostUPS/src/QxDriver.cpp` (`publish` ~259-272, commento sul reset ~206), `lib/USBHostUPS/src/QxDriver.h` (`_shadow`).
+
+      **Modifiche:**
+      1. `GenericDriver`: un piccolo metodo privato (o codice inline) che, se `_nut_has_realpower && !data.realPowerMeasured()`, chiama `data.markRealPowerMeasured()`. Va chiamato dopo `bindNutTable(host)` in `loop()` (blocco `!_lists_built`) e in `postDecode()`. Commento: `eaton_compute_realpower_info` o ActivePower letta posseggono la chiave e la stima dell'host (US-146) non deve sovrascriverla. Dichiarazione in `GenericDriver.h` se serve.
+      2. `QxDriver::publish(UPSData& data)`, sotto il lock esistente:
+         - prima della copia: `if (_shadow.find("ups.realpower") && !data.realPowerMeasured()) data.markRealPowerMeasured();`;
+         - nel giro delle chiavi sparite: saltare `ups.realpower` quando `data.realPowerEstimated()`;
+         - a fine funzione, dopo `_publishedWrites = ...`: `data.updateRealPower();`.
+         Commento con US-146: la stima vive solo nei dati dell'host, non nello shadow.
+      3. Nessun'altra modifica a `publishRow()`.
+
+      **Verifica:** `pio test -e native -f test_generic_driver -f test_qx_driver -f test_record_replay -f test_eaton_driver -f test_apc_driver -f test_cyberpower_driver` verde, golden invariati.
+
+      **Blocchi:** TASK-01.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/GenericDriver.cpp — mark della potenza posseduta dal driver dopo il bind
+      - lib/USBHostUPS/src/GenericDriver.h — eventuale dichiarazione del metodo
+      - lib/USBHostUPS/src/QxDriver.cpp — `publish()` tiene la stima e la ricalcola
+
+      ## Criteri di Completamento
+      - [ ] Con `_nut_has_realpower` i dati risultano `realPowerMeasured()` prima che l'host possa stimare
+      - [ ] `QxDriver::publish` non cancella la stima e la ricalcola a ogni publish
+      - [ ] Uno shadow Q* con `ups.realpower` vince sulla stima
+      - [ ] Le suite native dei driver e del replay sono verdi senza modifiche ai golden
+    ref: TASK-05
+  - id: TASK-06
+    title: Test nativi dei driver HID e Q*
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** verificare la stima nei due percorsi reali dei driver.
+
+      **Leggere:** `test/test_generic_driver/test_main.cpp` (`test_engine_load_updates_realpower` ~467 e il suo harness), `test/test_eaton_driver/test_main.cpp` (un dispositivo con la riga `UPS.Flow.[4].ConfigApparentPower`), `test/test_qx_driver/test_main.cpp` (harness ~30-110, `test_full_cycle_attach_detect_first_walk_values` ~144, `test_setup_after_a_recovery_probes_again_and_keeps_the_values` ~306).
+
+      **Modifiche:**
+      1. `test_generic_driver`: con un dispositivo senza nominali e senza ActivePower, `ups_data.setCustomPowerNominals(980, 0)` e un report con `ups.load` 10.4 (se l'harness ha solo load interi, usare 10 → "98" e commentarlo) → `ups.realpower` atteso; con ActivePower letta, le nominali personalizzate + `updateRealPower()` non cambiano il valore misurato.
+      2. `test_eaton_driver` (o `test_generic_driver` se lì c'è già un dispositivo con la riga eaton): dopo il primo report, `setCustomPowerNominals(500, 0)` + `updateRealPower()` → `ups.realpower` resta quello di `eaton_compute_realpower_info` e `realPowerMeasured()` è true.
+      3. `test_qx_driver`: con lo stesso giro del test full cycle, `r.data.setCustomPowerNominals(1000, 0)` prima della prima walk → dopo la walk `ups.realpower` = load × 10; un publish successivo con un altro load → valore nuovo; un reset del protocollo che svuota lo shadow → `ups.realpower` sparisce; uno shadow con `ups.realpower` (se l'engine di test permette di scriverlo, altrimenti un test diretto di `publish` con lo shadow popolato) → vince il valore dello shadow.
+
+      **Verifica:** `pio test -e native -f test_generic_driver -f test_eaton_driver -f test_qx_driver`.
+
+      **Blocchi:** TASK-05.
+
+      ## File Coinvolti
+      - test/test_generic_driver/test_main.cpp — stima con nominale personalizzata, dispositivo che misura
+      - test/test_eaton_driver/test_main.cpp — riga `eaton_compute_realpower_info` intoccata
+      - test/test_qx_driver/test_main.cpp — stima Q*, aggiornamento, rimozione, shadow che vince
+
+      ## Criteri di Completamento
+      - [ ] Ogni caso del punto 1-3 ha un test registrato
+      - [ ] Le tre suite sono verdi
+      - [ ] Togliendo per prova la riga `data.updateRealPower()` da `QxDriver::publish` il test Q* fallisce
+    ref: TASK-06
+  - id: TASK-07
+    title: 'USBHostUPS: setter delle nominali e collegamento a boot e salvataggio'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Descrizione
+      **Obiettivo:** le nominali salvate in NUT Server arrivano a `UPSData` nel task di poll, al boot e a ogni salvataggio, e sopravvivono a riconnessioni e cicli della porta.
+
+      **Leggere:** `lib/USBHostUPS/src/USBHostUPS.h` (`setQxSettings` ~115-118, campi ~387-395), `lib/USBHostUPS/src/USBHostUPS.cpp` (chiamata `applyQxSettings()` ~405, `releaseBoundState` ~789-800, `setQxSettings`/`applyQxSettings` ~971-1007), `src/core/main.cpp` (~240-244 load delle variabili, ~312 `setQxSettings`), `src/network/web_config_server.cpp` (`handleSetNutOverrides` ~381-402), `include/network/web_config_server.h` (`usb_ups` ~167).
+
+      **Modifiche:**
+      1. `USBHostUPS.h`: `void setCustomPowerNominals(float real_w, float apparent_va);` con commento (qualunque task; applicate dal task di poll al poll successivo e a ogni nuovo `UPSData`; US-146). Campi sotto `_mutex`: `float _custom_real_w = 0, _custom_apparent_va = 0; uint32_t _power_nominals_gen = 0, _power_nominals_applied = 0;` e `void applyPowerNominals();`.
+      2. `USBHostUPS.cpp`:
+         - `setCustomPowerNominals`: lock, assegna, `_power_nominals_gen++`.
+         - `applyPowerNominals()`: lock; se `applied == gen` return; `bool changed = _ups_data.setCustomPowerNominals(_custom_real_w, _custom_apparent_va); _ups_data.updateRealPower(); _power_nominals_applied = _power_nominals_gen;` e, se `changed`, `log("INFO", "[USB] Nominal power for the ups.realpower estimate: %.0f W, %.0f VA (custom variables)", ...)`.
+         - Chiamata subito dopo `applyQxSettings();` (~405).
+         - `releaseBoundState()`: dopo `_ups_data = UPSData();` → `_ups_data.setCustomPowerNominals(_custom_real_w, _custom_apparent_va);`.
+      3. `main.cpp`: subito prima di `usb_ups.setQxSettings(...)` (~312), `float w, va; NutOverrides::powerNominals(nut_overrides, w, va); usb_ups.setCustomPowerNominals(w, va); // US-146`. Include di `NutOverrides.h` se non arriva già.
+      4. `web_config_server.cpp`, in `handleSetNutOverrides()` dopo `*nut_overrides = next;`: `if (usb_ups) { float w, va; NutOverrides::powerNominals(*nut_overrides, w, va); usb_ups->setCustomPowerNominals(w, va); }`.
+
+      **Verifica:** build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; `test_web_api` verde.
+
+      **Blocchi:** TASK-01, TASK-03, TASK-05.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/USBHostUPS.h — setter, campi, `applyPowerNominals()`
+      - lib/USBHostUPS/src/USBHostUPS.cpp — setter, applicazione nel poll, `releaseBoundState()`
+      - src/core/main.cpp — nominali al boot
+      - src/network/web_config_server.cpp — nominali dopo il salvataggio
+
+      ## Criteri di Completamento
+      - [ ] Nessun task diverso dal poll scrive `UPSData` per questa funzione
+      - [ ] Le nominali valgono dopo un riavvio (boot), una riconnessione USB e un ciclo della porta (`releaseBoundState`)
+      - [ ] Salvare, cambiare o togliere la variabile ha effetto al poll successivo, senza riavvio
+      - [ ] Le tre build compilano
+    ref: TASK-07
+  - id: TASK-08
+    title: Testo del pannello Custom variables e README
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Obiettivo:** dire all'utente che due variabili personalizzate servono anche alla stima della potenza reale, e documentarne il limite.
+
+      **Leggere:** `data/www/index.html` (~590-593, testo `cv-lead`), `README.md` (~27 e ~308), `scripts/embed_web.py`.
+
+      **Modifiche:**
+      1. `index.html`, dopo "...the board logic keeps using the real ones." aggiungere: "Exception: <code>ups.realpower.nominal</code> (W) and <code>ups.power.nominal</code> (VA) also give the board an estimate of <code>ups.realpower</code> from the load, when the UPS does not measure it."
+      2. `python scripts/embed_web.py` per rigenerare `index_inlined.html` (e gli altri asset generati).
+      3. `README.md`, voce Custom variables (~308): una frase sulla stima (W, altrimenti VA × 0,6, solo se l'UPS non misura la potenza) e sul limite: è giusta solo se l'UPS esprime il load in % dei watt; se lo esprime in % dei VA viene troppo alta. Nella riga ~27, "Only NUT clients see them" diventa coerente con l'eccezione (es. "... the dashboard keeps the real UPS values, except for the ups.realpower estimate").
+
+      **Verifica:** `npx playwright test e2e/nut-overrides.spec.ts e2e/telemetry-overrides.spec.ts` verdi; `git diff data/www` mostra solo il testo nuovo e gli asset rigenerati.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — testo introduttivo di Custom variables
+      - data/www/index_inlined.html — rigenerato da `scripts/embed_web.py`
+      - README.md — stima e limite noto
+
+      ## Criteri di Completamento
+      - [ ] Il testo del pannello cita `ups.realpower.nominal` e `ups.power.nominal` come eccezione
+      - [ ] Asset rigenerati
+      - [ ] README con la stima e il limite load % W / % VA
+      - [ ] Gli e2e esistenti di NUT Server e telemetria passano
+    ref: TASK-08
+  - id: TASK-09
+    title: E2E della card Real Power e verifica finale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Descrizione
+      **Obiettivo:** coprire il flusso utente dal salvataggio in NUT Server alla card Real Power e chiudere la verifica completa.
+
+      **Leggere:** `e2e/telemetry-overrides.spec.ts` (mock di `/api/ups-vars` con stato, `serveIndex`), `e2e/nut-overrides.spec.ts` (aggiunta di una riga, salvataggio, mock di GET/POST `/api/nut/overrides`), `e2e/support/webui.ts`, il piano (tabella E2E).
+
+      **Modifiche:** nuovo `e2e/realpower-estimate.spec.ts` (US-146, #128) con mock con stato: il POST di `/api/nut/overrides` aggiorna la lista e decide cosa risponde `/api/ups-vars` (con `ups.realpower.nominal` = 980 → `ups.realpower` 102 e `_overrides['ups.realpower.nominal']` con `added: true`; senza → nessun `ups.realpower`). Scenari:
+      1. Nominale aggiunta: card `#ups-realpower` `--`, aggiunta e salvataggio in NUT Server, ritorno in telemetria → `102`, `#card-mark-realpower` nascosto, riga `ups.realpower.nominal` con chip "Added";
+      2. Nominale tolta: card di nuovo `--`, riga `ups.realpower` assente;
+      3. Override di `ups.realpower` a 150 con stima 102 → card `102` e segno "NUT 150 W";
+      4. Testo del pannello: `.cv-lead` contiene `ups.realpower.nominal` e `ups.power.nominal`.
+
+      **Verifica finale:**
+      - suite nativa completa (`pio test -e native`, anche in 4 gruppi paralleli), con `test_record_replay` e golden invariati;
+      - suite e2e completa (`npx playwright test`);
+      - build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`;
+      - log salvati in `docs/test-results/US-146/`.
+      - Prova sull'Eaton 3S solo dopo un sì esplicito dell'utente (vedi Strategia di Test).
+
+      **Blocchi:** TASK-02, TASK-04, TASK-06, TASK-07, TASK-08.
+
+      ## File Coinvolti
+      - e2e/realpower-estimate.spec.ts — 4 scenari nuovi
+      - docs/test-results/US-146/ — log di nativi, e2e e build
+
+      ## Criteri di Completamento
+      - [ ] I 4 scenari e2e passano
+      - [ ] Suite nativa ed e2e complete verdi, golden del replay invariati
+      - [ ] Le tre build passano
+      - [ ] Log in `docs/test-results/US-146/`
+    ref: TASK-09
+  - id: TASK-10
+    title: UPSData ricorda la fonte della stima
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Feedback della review** (`lib/WebApi/src/WebApiJson.cpp:6`): l'API deve dire da dove viene la stima, quindi `UPSData` deve ricordare quale fonte ha usato l'ultima `updateRealPower()`.
+
+      **Obiettivo:** fonte e nominale dell'ultima stima disponibili da `UPSData`.
+
+      **Leggere:** `lib/USBHostUPS/src/UPSData.h` (campi privati ~14-20, `markRealPowerMeasured`, `updateRealPower`).
+
+      **Modifiche:**
+      1. Prima di `struct UPSData`: `enum class RealPowerSource : uint8_t { NONE, CUSTOM_W, UPS_W, CUSTOM_VA, UPS_VA };`.
+      2. Campi privati `RealPowerSource _realPowerSource = RealPowerSource::NONE; float _realPowerSourceNominal = 0.0f;`.
+      3. `updateRealPower()`: in ogni ramo imposta fonte e nominale (`_customRealNominal`, la W dell'UPS, `_customApparentNominal`, la VA dell'UPS). Nel ramo senza fonte e con `_realPowerMeasured`: `NONE` e 0. Attenzione: il `return` iniziale per `_realPowerMeasured` deve lasciare `NONE` (lo garantisce `markRealPowerMeasured()`).
+      4. `markRealPowerMeasured()`: anche `NONE` e 0.
+      5. Accessori `RealPowerSource realPowerSource() const` e `float realPowerSourceNominal() const`, con commento (US-146, rework).
+
+      **Verifica:** `pio test -e native -f test_realpower_estimate -f test_generic_driver -f test_qx_driver` verde (PATH con `toolchain-gccmingw32/bin`).
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - lib/USBHostUPS/src/UPSData.h — enum, campi, accessori, impostazione in `updateRealPower()` e `markRealPowerMeasured()`
+
+      ## Criteri di Completamento
+      - [ ] Ognuno dei 4 rami imposta la sua fonte e la nominale usata
+      - [ ] `NONE` e 0 senza stima, dopo la rimozione e dopo `markRealPowerMeasured()`
+      - [ ] Le suite native toccate sono verdi
+    ref: TASK-10
+  - id: TASK-11
+    title: _realpower_estimate in GET /api/ups-vars
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Descrizione
+      **Feedback della review** (`lib/WebApi/src/WebApiJson.cpp:6`): `/api/ups-vars` dice se `ups.realpower` è una stima della scheda e da dove viene.
+
+      **Obiettivo:** campo `_realpower_estimate` nella risposta, solo quando c'è una stima.
+
+      **Leggere:** `lib/WebApi/src/WebApiJson.cpp` (`generateUpsVars` ~6-95: ramo scollegato, ciclo dei valori, blocco `_overrides`), `lib/WebApi/src/WebApiJson.h` (commento della dichiarazione), `lib/USBHostUPS/src/UPSData.h` dopo TASK-10.
+
+      **Modifiche:**
+      1. Nel ramo connesso, dopo il ciclo dei valori e prima del blocco `_overrides`, con lo stesso `data` bloccato: se `data->realPowerEstimated() && data->realPowerSource() != RealPowerSource::NONE && data->find("ups.realpower")`:
+         - `JsonObject est = doc["_realpower_estimate"].to<JsonObject>();`
+         - `source`: `"custom"` per CUSTOM_W e CUSTOM_VA, `"ups"` per UPS_W e UPS_VA;
+         - `key`: `"ups.realpower.nominal"` per le W, `"ups.power.nominal"` per le VA;
+         - `nominal`: `data->realPowerSourceNominal()` come numero (980 senza decimali; 1.5 resta 1.5);
+         - `unit`: `"W"` o `"VA"`; `factor`: 1 per le W, 0.6 per le VA.
+      2. Commento nel codice e nella dichiarazione del .h che descrive il campo e cita US-146 (rework).
+      3. Il ramo scollegato non cambia.
+
+      **Verifica:** build `esp32-s3-standard`; `pio test -e native -f test_web_api` con i test esistenti invariati.
+
+      **Blocchi:** TASK-10.
+
+      ## File Coinvolti
+      - lib/WebApi/src/WebApiJson.cpp — costruzione di `_realpower_estimate`
+      - lib/WebApi/src/WebApiJson.h — commento della risposta
+
+      ## Criteri di Completamento
+      - [ ] Il campo c'è solo con una stima della scheda, con `source`, `key`, `nominal`, `unit`, `factor`
+      - [ ] Assente con potenza misurata o calcolata dal driver, senza stima, con UPS scollegato
+      - [ ] Senza stima l'output è identico a prima; `test_web_api` verde
+    ref: TASK-11
+  - id: TASK-12
+    title: Test nativi della fonte della stima e di _realpower_estimate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Descrizione
+      **Feedback della review** (test): coprire la fonte ricordata e il campo dell'API.
+
+      **Leggere:** `test/test_realpower_estimate/test_main.cpp`, `test/test_web_api/test_main.cpp` (mock host ~20-140: `mockHost.data` è un `UPSData` vero; test US-144 da ~1917, registrazione ~2637).
+
+      **Modifiche:**
+      1. `test_realpower_estimate`: un test per ramo (CUSTOM_W 980, UPS_W, CUSTOM_VA, UPS_VA) che controlla `realPowerSource()` e `realPowerSourceNominal()`; `NONE` dopo la rimozione della nominale e dopo `markRealPowerMeasured()`.
+      2. `test_web_api`, sotto `// --- US-146: _realpower_estimate in GET /api/ups-vars ---`:
+         - custom W: `mockHost.data` con `ups.load` 10.4, `setCustomPowerNominals(980, 0)`, `updateRealPower()` → `ups.realpower` 102 e `_realpower_estimate` = `{source: custom, key: ups.realpower.nominal, nominal: 980, unit: W, factor: 1}`;
+         - custom VA → `key: ups.power.nominal`, `unit: VA`, `factor: 0.6`;
+         - UPS W (`ups.realpower.nominal` nei dati) → `source: ups`;
+         - UPS VA → `source: ups`, `unit: VA`;
+         - misurata (`markRealPowerMeasured()` e `ups.realpower` impostata) → nessun campo;
+         - nessuna stima → output identico a quello senza nominali;
+         - UPS scollegato con stima → nessun campo.
+
+      **Verifica:** `pio test -e native -f test_realpower_estimate -f test_web_api`.
+
+      **Blocchi:** TASK-11.
+
+      ## File Coinvolti
+      - test/test_realpower_estimate/test_main.cpp — test della fonte
+      - test/test_web_api/test_main.cpp — 7 test di `_realpower_estimate`
+
+      ## Criteri di Completamento
+      - [ ] Tutti i casi elencati sono coperti e registrati
+      - [ ] Le due suite sono verdi
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Card Real Power: markup e stili del segno Estimated'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Descrizione
+      **Feedback della review** (`data/www/index.html:1269`): card Real Power come nel mockup `docs/mockups/US-146/`, stati B, C e D.
+
+      **Obiettivo:** il markup e gli stili del badge, del tooltip e della formula, nascosti di default.
+
+      **Leggere:** `docs/mockups/US-146/index.html` (card degli stati B-D, tabella dello stato E), `docs/mockups/US-146/estimate.css`, `data/www/index.html` (~1268-1273, card Real Power), `data/www/bundle.css` (sezione US-144 da ~3424).
+
+      **Modifiche:**
+      1. `index.html`, card Real Power:
+         - `<div class="metric-label tm-label-row no-mark" id="realpower-label">Real Power <button type="button" class="tm-est" id="card-est-realpower" hidden aria-describedby="card-est-tip"><span class="approx">&asymp;</span>Estimated<span class="tip" role="tooltip" id="card-est-tip"></span></button></div>`;
+         - dopo `.metric-value`: `<div class="tm-est-src" id="card-est-src" hidden></div>`;
+         - `card-mark-realpower` resta dov'è.
+      2. `bundle.css`: nuova sezione `US-146: estimated ups.realpower (from docs/mockups/US-146/estimate.css)` in fondo, con tutte le regole di `estimate.css` (`.tm-label-row`, `.no-mark`, `.tm-est`, `.approx`, `.tip` con l'ancoraggio alla card, `.src`, `.warn`, `.open`, `.tm-est-src`, `.op`, link, `.ups`, `.tm-est.in-table`, `.tm-est-why`, media query 768 px) più `.tm-est[hidden], .tm-est-src[hidden] { display: none; }`. Niente regole del contorno del mockup (`.board*`, `.phone-row`, `body.mock-*`).
+      3. `python scripts/embed_web.py`.
+
+      **Verifica:** `npx playwright test e2e/ups-parameters.spec.ts e2e/telemetry-overrides.spec.ts` verdi: senza `_realpower_estimate` la pagina è come prima.
+
+      **Blocchi:** nessuno.
+
+      ## File Coinvolti
+      - data/www/index.html — badge, tooltip e formula nella card Real Power
+      - data/www/bundle.css — sezione US-146
+      - data/www/index_inlined.html — rigenerato da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] Id `realpower-label`, `card-est-realpower`, `card-est-tip`, `card-est-src`, nascosti di default
+      - [ ] Stili del mockup in `bundle.css`, senza il contorno del mockup
+      - [ ] Asset rigenerati, e2e esistenti verdi
+    ref: TASK-13
+  - id: TASK-14
+    title: 'bundle.js: segno Estimated su card e tabella'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-13
+    body: |-
+      ## Descrizione
+      **Feedback della review** (`data/www/bundle.js:2067`): card e tabella leggono `_realpower_estimate` a ogni poll; il segno di US-144 resta legato all'override di `ups.realpower`.
+
+      **Leggere:** `data/www/bundle.js` (`renderMetrics` ~1999, `TM_CARD_MARKS`/`openNutServerFor`/`tmTextEl` ~2060-2082, `fillUpsRow` ~2099, `renderCardMarkers` ~2131, `fetchUpsVars` ~2160-2270 con la firma delle righe), il mockup `docs/mockups/US-146/index.html` e la sezione Rework del piano (testi del tooltip).
+
+      **Modifiche:**
+      1. In `fetchUpsVars`: `const est = (!data._disconnected && data._realpower_estimate && typeof data._realpower_estimate === 'object') ? data._realpower_estimate : null;`, poi `renderRealPowerEstimate(est, data)` dopo `renderCardMarkers(overrides)`.
+      2. Helper `tmEstFormula(est, load)` che restituisce un `DocumentFragment`: `{load} %` + `span.op ×` + `{nominal} {unit}` (+ `span.op ×` + `0.6` se `factor` ≠ 1) + ` · ` + per `source === 'custom'` un `a` (href `#`, `title` "Open NUT Server on this variable", click → `preventDefault` e `openNutServerFor(est.key)`) con `est.key`, per `ups` uno `span.ups` "UPS " + `est.key`. `load` da `data['ups.load']`.
+      3. Helper `tmEstTip(est, load)` che riempie `.tip` con i testi della sezione Rework del piano (`b` iniziale, `span.src` con `em` per la variabile personalizzata, `span.warn` per le W o `span.src` con il suggerimento per le VA).
+      4. `renderRealPowerEstimate(est, data)`: badge `#card-est-realpower` e `#card-est-src` nascosti senza `est`; con `est` riempie tooltip e formula. `#realpower-label` prende `no-mark` quando `#card-mark-realpower` è nascosto (spazio per il segno NUT solo se serve). Un click sul badge alterna `open` (listener registrato una volta).
+      5. `fillUpsRow(tr, key, value, ovr, est)`: per `key === 'ups.realpower'` con `est`, classe di riga `tm-estd` (oltre a quelle di US-144), nella cella valore dopo `.ups-val` un `button.tm-est.in-table` con `≈ Estimated` e il suo `.tip`, nella descrizione uno `span.tm-est-why` con `≈ ` + la formula.
+      6. Nel ciclo della tabella: passare `est` solo per `ups.realpower` e aggiungere alla firma `est ? [est.source, est.key, est.nominal, est.unit, est.factor, data['ups.load']] : null` per quella riga.
+      7. `renderCardMarkers` e `TM_CARD_MARKS` non cambiano.
+
+      **Verifica:** `npx playwright test e2e/realpower-estimate.spec.ts e2e/telemetry-overrides.spec.ts e2e/ups-parameters.spec.ts` verdi (gli scenari nuovi arrivano in TASK-15).
+
+      **Blocchi:** TASK-13.
+
+      ## File Coinvolti
+      - data/www/bundle.js — `renderRealPowerEstimate`, helper della formula e del tooltip, `fillUpsRow` e firma delle righe
+      - data/www/index_inlined.html — rigenerato da `scripts/embed_web.py`
+
+      ## Criteri di Completamento
+      - [ ] Badge, tooltip e formula seguono `_realpower_estimate` a ogni poll e spariscono senza
+      - [ ] Riga `ups.realpower` con badge e formula; ricostruita quando la stima cambia
+      - [ ] Il link apre NUT Server sulla variabile; nessun `innerHTML` con dati dell'API
+      - [ ] Gli e2e esistenti passano
+    ref: TASK-14
+  - id: TASK-15
+    title: E2E del segno Estimated e verifica finale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+      - TASK-14
+    body: |-
+      ## Descrizione
+      **Feedback della review** (test): e2e sugli stati del mockup e chiusura della verifica.
+
+      **Leggere:** `e2e/realpower-estimate.spec.ts` (mock con stato di `/api/ups-vars` e `/api/nut/overrides`), `docs/mockups/US-146/index.html` (stati A-F), `e2e/telemetry-overrides.spec.ts` (test a 375 px).
+
+      **Modifiche:** estendere `e2e/realpower-estimate.spec.ts`:
+      1. il mock di `upsVars()` aggiunge `_realpower_estimate` quando la stima viene dalla variabile personalizzata (W o VA);
+      2. A: con `ups.realpower` misurata e senza campo → nessun badge né formula;
+      3. B: dopo il salvataggio di `ups.realpower.nominal` = 980 → badge visibile, formula `10.4 % × 980 W · ups.realpower.nominal`, tooltip (hover o click) con "Right only if"; click sul link → scheda NUT Server con la riga `ups.realpower.nominal` evidenziata (`pulse` o `pulse-add`);
+      4. C: mock con `source: ups`, `unit: VA`, `factor: 0.6`, nominale 1500 → formula con `× 0.6` e `UPS ups.power.nominal`, nessun link;
+      5. D: stima più override di `ups.realpower` → badge e segno "NUT 150 W" visibili, senza sovrapposizione (bounding box disgiunti);
+      6. E: riga `ups.realpower` con `.tm-est` e `.tm-est-why`;
+      7. variabile tolta → badge, formula e badge della riga spariscono al poll successivo;
+      8. 375 px: stato D senza scroll orizzontale (`scrollWidth <= clientWidth`).
+
+      **Verifica finale:** suite nativa completa, suite e2e completa (`npx playwright test`), build `esp32-s3-standard`, `esp32-p4-eth`, `esp32-p4-eth-v1`; log aggiornati in `docs/test-results/US-146/`.
+
+      **Blocchi:** TASK-12, TASK-14.
+
+      ## File Coinvolti
+      - e2e/realpower-estimate.spec.ts — scenari A-E, rimozione, 375 px
+      - docs/test-results/US-146/ — log aggiornati
+
+      ## Criteri di Completamento
+      - [ ] Gli scenari 2-8 passano
+      - [ ] Suite nativa ed e2e complete verdi, tre build ok
+      - [ ] Log aggiornati
+    ref: TASK-15

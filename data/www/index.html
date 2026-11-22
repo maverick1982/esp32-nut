@@ -590,7 +590,9 @@
                     <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
                         of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
                         <code>override.*</code> in <code>ups.conf</code>. The UPS Telemetry page shows them next to the
-                        real UPS values; the board logic keeps using the real ones.</p>
+                        real UPS values; the board logic keeps using the real ones. Exception:
+                        <code>ups.realpower.nominal</code> (W) and <code>ups.power.nominal</code> (VA) also give the
+                        board an estimate of <code>ups.realpower</code> from the load, when the UPS does not measure it.</p>
 
                     <!-- GET /api/nut/overrides failed -->
                     <div class="auth-alert" id="cv-load-error" role="alert" hidden>
@@ -1264,9 +1266,13 @@
                             <button type="button" class="tm-nut tm-card-mark" id="card-mark-load" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Real Power</div>
+                            <!-- US-146: "Estimated" when the board computed ups.realpower, with the formula -->
+                            <div class="metric-label tm-label-row no-mark" id="realpower-label">Real Power
+                                <button type="button" class="tm-est" id="card-est-realpower" hidden aria-describedby="card-est-tip"><span class="approx">&asymp;</span>Estimated<span class="tip" role="tooltip" id="card-est-tip"></span></button>
+                            </div>
                             <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
                             </div>
+                            <div class="tm-est-src" id="card-est-src" hidden></div>
                             <button type="button" class="tm-nut tm-card-mark" id="card-mark-realpower" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                     </div>

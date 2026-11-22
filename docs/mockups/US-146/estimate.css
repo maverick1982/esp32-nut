@@ -1,0 +1,125 @@
+/* US-146 mockup: the "Estimated" mark on the Real Power card and on the ups.realpower row.
+   Colors of US-144 stay as they are: amber = overrides the UPS, cyan = added by the user.
+   The estimate is a third meaning, so it gets neither: a dashed grey outline, the usual sign
+   of a derived value. Everything else comes from bundle.css (copy of data/www/bundle.css). */
+
+/* ---------------------------------------------------------------- the badge */
+.metric-card .metric-label.tm-label-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    /* room for the NUT marker of US-144, top right */
+    padding-right: 4.6rem;
+}
+.metric-card .metric-label.tm-label-row.no-mark { padding-right: 0; }
+
+.tm-est {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.05rem 0.38rem;
+    border: 1px dashed rgba(138, 155, 179, 0.6);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    line-height: 1.45;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: help;
+    transition: var(--transition);
+}
+.tm-est .approx { font-size: 0.8rem; line-height: 1; letter-spacing: 0; }
+.tm-est:hover,
+.tm-est:focus-visible {
+    border-color: var(--text-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+/* The source, on hover / focus / tap (title for the screen reader as well) */
+.tm-est .tip {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 5;
+    width: max-content;
+    max-width: 260px;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--bg-panel-border);
+    border-radius: 2px;
+    background: rgba(6, 9, 14, 0.97);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: normal;
+    line-height: 1.5;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+/* On a card the tooltip spans the label right under it, so it never leaves the card (375 px
+   too) and never covers the badge when the badge wraps (aligned with data/www/bundle.css) */
+.metric-card .metric-label.tm-label-row { position: relative; }
+.metric-card .tm-est { position: static; }
+.metric-card .tm-est .tip {
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    width: auto;
+    max-width: none;
+}
+.tm-est .tip { text-align: left; }
+.tm-est .tip b { color: var(--text-primary); font-weight: 400; }
+.tm-est .tip .src { display: block; margin-top: 0.3rem; color: var(--text-secondary); }
+.tm-est .tip .src.custom em { color: var(--accent); font-style: normal; }
+.tm-est .tip .warn { display: block; margin-top: 0.3rem; color: rgba(255, 184, 0, 0.8); }
+.tm-est:hover .tip,
+.tm-est:focus-visible .tip,
+.tm-est.open .tip {
+    opacity: 1;
+    transform: none;
+}
+
+/* ---------------------------------------------------------------- the formula under the value */
+/* Where the other cards have their progress bar: always visible, so it works on touch too */
+.tm-est-src {
+    margin-top: -0.2rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+.tm-est-src .op { opacity: 0.6; padding: 0 0.15rem; }
+/* The custom variable is a link to NUT Server, in the cyan of the added variables */
+.tm-est-src a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(0, 240, 255, 0.5);
+}
+.tm-est-src a:hover { border-bottom-style: solid; }
+.tm-est-src .ups { color: var(--text-secondary); opacity: 0.8; }
+
+/* ---------------------------------------------------------------- table row */
+.data-table tbody tr.tm-estd .ups-val { color: var(--text-primary); }
+.tm-est.in-table { font-size: 0.6rem; }
+.tm-est-why {
+    display: block;
+    margin-top: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+.tm-est-why a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted rgba(0, 240, 255, 0.5); }
+
+@media (max-width: 768px) {
+    .metric-card .metric-label.tm-label-row { padding-right: 4.2rem; }
+}

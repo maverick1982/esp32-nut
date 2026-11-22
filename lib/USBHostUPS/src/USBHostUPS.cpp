@@ -403,6 +403,8 @@ void USBHostUPS::service() {
 
     // US-138: new Board Settings of the Q* driver, before its step
     applyQxSettings();
+    // US-146: new custom nominal powers for the ups.realpower estimate
+    applyPowerNominals();
 
     // A command or SET VAR of the Q* driver takes the place of this iteration's poll step:
     // one step never waits for more than qxStepBoundMs() of the transport (US-136)
@@ -792,6 +794,7 @@ void USBHostUPS::releaseBoundState() {
     _is_ready_to_poll = false;
     _in_restart_pending = false;
     _ups_data = UPSData();
+    _ups_data.setCustomPowerNominals(_custom_real_w, _custom_apparent_va); // US-146
     _device_product = "";
     if (_driver) { delete _driver; _driver = nullptr; }
     _hid_parser = HIDParser();
@@ -973,6 +976,28 @@ void USBHostUPS::setQxSettings(const char* protocol, bool novendor) {
     snprintf(_qx_protocol, sizeof(_qx_protocol), "%s", protocol ? protocol : "");
     _qx_novendor = novendor;
     _qx_settings_gen++;
+}
+
+void USBHostUPS::setCustomPowerNominals(float real_w, float apparent_va) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    _custom_real_w = real_w;
+    _custom_apparent_va = apparent_va;
+    _power_nominals_gen++;
+}
+
+void USBHostUPS::applyPowerNominals() {
+    float real_w, apparent_va;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_power_nominals_applied == _power_nominals_gen) return;
+        _power_nominals_applied = _power_nominals_gen;
+        real_w = _custom_real_w;
+        apparent_va = _custom_apparent_va;
+        if (!_ups_data.setCustomPowerNominals(real_w, apparent_va)) return;
+        _ups_data.updateRealPower();
+    }
+    log("INFO", "[USB] Nominal power for the ups.realpower estimate (custom variables): %.0f W, %.0f VA",
+        (double)real_w, (double)apparent_va);
 }
 
 bool USBHostUPS::qxDriverInfo(String& detected) const {

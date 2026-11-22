@@ -654,7 +654,7 @@ void test_replay_apc_bgm2200_issue98(void) {
         // first one as NUT: FEATURE 0x50 [80, 28] PercentLoad, 0x25 [37, 96, 9] ConfigVoltage
         // = 24.0 V, 0x30 [48, 230], 0x52 [82, 40, 5] ConfigActivePower = 1320, 0x23 [35, 42, 3]
         { { "ups.load", "28" }, { "battery.voltage.nominal", "24.0" }, { "input.voltage.nominal", "230" },
-          { "ups.realpower.nominal", "1320" }, { "ups.realpower", "369" }, { "battery.runtime", "810" } },
+          { "ups.realpower.nominal", "1320" }, { "ups.realpower", "370" }, { "battery.runtime", "810" } },
         RW_APC_6 " " RW_DELAY_OFF, RW_APC_6 " " RW_DELAY_OFF);
 }
 
@@ -1448,6 +1448,11 @@ void test_cyberpower_snapshot_baseline(void) {
     checkSnapshots(fixtures, sizeof(fixtures) / sizeof(fixtures[0]));
 }
 
+// Differences US-146 (estimate of ups.realpower rounded to the watt instead of truncated, and
+// with the decimal load): BGM2200 issue #98 28 % of 1320 W = 369.6 -> 370 (was 369), CS750RS
+// issue #48 11 % of 415 W = 45.65 -> 46 (was 45), OpenUPS W150 11 % of 150 W = 16.5 -> 17 (was
+// 16). The expected_ups_data of the two APC fixtures and their golden files change with them.
+//
 // US-076 baseline: everything the thirteen APC fixtures serve after the replay, taken from the
 // firmware before the apc_hid2nut migration and updated after it, with every difference listed
 // above its fixture. ups.status is the same on all thirteen. Usages of the descriptors that matter to the
@@ -1489,7 +1494,7 @@ static const char* const kApcSnapshotBackupsBgm2200Pid0002Issue98 =
     "ups.mfr=American Power Conversion\n"
     "ups.model=Back-UPS BGM2200-MSX\n"
     "ups.realpower.nominal=1320\n"
-    "ups.realpower=369\n"
+    "ups.realpower=370\n"
     "ups.serial=TEST0000\n"
     "ups.status.ac_present=1\n"
     "ups.status.battery_low=0\n"
@@ -1679,7 +1684,7 @@ static const char* const kApcSnapshotBackupsCs750rsPid0002Issue48 =
     "ups.mfr=American Power Conversion\n"
     "ups.model=Back-UPS CS 750-RS\n"
     "ups.realpower.nominal=415\n"
-    "ups.realpower=45\n"
+    "ups.realpower=46\n"
     "ups.serial=TEST0000\n"
     "ups.status.ac_present=1\n"
     "ups.status.battery_low=0\n"
@@ -1991,7 +1996,7 @@ static const char* const kOpenupsSnapshotW150Before =
     "ups.mfr=WalleCube\n"
     "ups.model=Smart UPS W150\n"
     "ups.realpower.nominal=150\n"
-    "ups.realpower=16\n"
+    "ups.realpower=17\n"
     "ups.serial=E4B323491C40\n"
     "ups.status.ac_present=1\n"
     "ups.status.battery_low=0\n"
@@ -2039,7 +2044,7 @@ static const char* const kOpenupsSnapshotW150After =
     "ups.mfr=WalleCube\n"
     "ups.model=Smart UPS W150\n"
     "ups.realpower.nominal=150\n"
-    "ups.realpower=16\n"
+    "ups.realpower=17\n"
     "ups.serial=E4B323491C40\n"
     "ups.status.ac_present=1\n"
     "ups.status.battery_low=0\n"

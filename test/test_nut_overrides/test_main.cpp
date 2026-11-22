@@ -182,6 +182,58 @@ void test_error_messages(void) {
     TEST_ASSERT_EQUAL_STRING("", NutOverrides::errorMessage(Check::OK, "x.y").c_str());
 }
 
+// --- US-146: nominal powers for the ups.realpower estimate ---
+
+void test_parse_positive_number(void) {
+    float v = 0;
+    TEST_ASSERT_TRUE(NutOverrides::parsePositiveNumber("980", v));
+    TEST_ASSERT_EQUAL_FLOAT(980.0f, v);
+    TEST_ASSERT_TRUE(NutOverrides::parsePositiveNumber(" 980 ", v));
+    TEST_ASSERT_EQUAL_FLOAT(980.0f, v);
+    TEST_ASSERT_TRUE(NutOverrides::parsePositiveNumber("1.5", v));
+    TEST_ASSERT_EQUAL_FLOAT(1.5f, v);
+    TEST_ASSERT_TRUE(NutOverrides::parsePositiveNumber("1e3", v));
+    TEST_ASSERT_EQUAL_FLOAT(1000.0f, v);
+    const char* bad[] = { "0", "-5", "abc", "980W", "", "   ", "nan", "inf", "1,5" };
+    for (const char* b : bad) {
+        v = 42.0f;
+        TEST_ASSERT_FALSE_MESSAGE(NutOverrides::parsePositiveNumber(b, v), b);
+        TEST_ASSERT_EQUAL_FLOAT(42.0f, v); // untouched
+    }
+}
+
+void test_power_nominals_ignore_case(void) {
+    std::vector<NutOverride> list = { ov("UPS.RealPower.Nominal", "980"), ov("ups.power.nominal", "1500") };
+    float w = -1, va = -1;
+    NutOverrides::powerNominals(list, w, va);
+    TEST_ASSERT_EQUAL_FLOAT(980.0f, w);
+    TEST_ASSERT_EQUAL_FLOAT(1500.0f, va);
+}
+
+void test_power_nominals_only_va(void) {
+    std::vector<NutOverride> list = { ov("battery.date", "2025/03/01"), ov("ups.power.nominal", "1500") };
+    float w = -1, va = -1;
+    NutOverrides::powerNominals(list, w, va);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, w);
+    TEST_ASSERT_EQUAL_FLOAT(1500.0f, va);
+}
+
+void test_power_nominals_invalid_value_is_zero(void) {
+    std::vector<NutOverride> list = { ov("ups.realpower.nominal", "abc") };
+    float w = -1, va = -1;
+    NutOverrides::powerNominals(list, w, va);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, w);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, va);
+}
+
+void test_power_nominals_empty_list(void) {
+    std::vector<NutOverride> list;
+    float w = -1, va = -1;
+    NutOverrides::powerNominals(list, w, va);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, w);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, va);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_valid_keys);
@@ -195,5 +247,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_json_drops_invalid_entries);
     RUN_TEST(test_json_truncated_to_max);
     RUN_TEST(test_error_messages);
+    RUN_TEST(test_parse_positive_number);
+    RUN_TEST(test_power_nominals_ignore_case);
+    RUN_TEST(test_power_nominals_only_va);
+    RUN_TEST(test_power_nominals_invalid_value_is_zero);
+    RUN_TEST(test_power_nominals_empty_list);
     return UNITY_END();
 }

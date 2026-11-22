@@ -474,7 +474,7 @@
         "input.transfer.high": "256",
         "ups.realpower.nominal": "415",
         "ups.load": "11",
-        "ups.realpower": "45",
+        "ups.realpower": "46",
         "battery.voltage.nominal": "12.0"
       }
     },

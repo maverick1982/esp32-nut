@@ -580,6 +580,9 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
         // The rows depend only on the usages: bound before the lists, which keep only the
         // FEATURE reports they read (US-120). decodeReport() would bind them at the first report.
         bindNutTable(host);
+        host->lock(); // it may remove an estimate from the data the other tasks read
+        markOwnedRealPower(data);
+        host->unlock();
         buildPollLists(host, _quick, _full);
         computeInputCoverage(host);
         findInputTwins(host);
@@ -847,6 +850,7 @@ void GenericDriver::completeInitialPoll() {
 void GenericDriver::postDecode(IHidTransport* host, uint8_t report_id, uint8_t report_type, const uint8_t *data, size_t length, UPSData& ups_data) {
     if (!host) return;
     bindNutTable(host);
+    markOwnedRealPower(ups_data);
     if (_nut_rows.empty()) {
         publishAlarms(ups_data);
         return;

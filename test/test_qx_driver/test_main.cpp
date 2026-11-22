@@ -303,6 +303,36 @@ void test_exchange_log_ring_drops_the_oldest(void) {
     TEST_ASSERT_EQUAL_INT32(200, log.at(19).result);
 }
 
+// US-146: a Q* UPS that reports ups.load gets the ups.realpower estimate from the custom
+// nominal power; publish() keeps it (the shadow never has it) and drops it with the load
+void test_custom_nominal_gives_realpower_on_qx(void) {
+    Rig r;
+    r.data.setCustomPowerNominals(1000, 0);
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    const String* load = r.data.find("ups.load");
+    TEST_ASSERT_NOT_NULL(load);
+    String expected((long)lround(load->toFloat() * 1000.0 / 100.0));
+    TEST_ASSERT_EQUAL_STRING(expected.c_str(), r.get("ups.realpower").c_str());
+    TEST_ASSERT_TRUE(r.data.realPowerEstimated());
+    // Later walks publish again: the estimate stays
+    r.runFor(5000);
+    TEST_ASSERT_EQUAL_STRING(expected.c_str(), r.get("ups.realpower").c_str());
+    // New settings drop the values of the protocol: no load, no estimate
+    r.driver.configure("", QxOptions());
+    r.step();
+    TEST_ASSERT_FALSE(r.data.hasKey("ups.load"));
+    TEST_ASSERT_FALSE(r.data.hasKey("ups.realpower"));
+    TEST_ASSERT_FALSE(r.data.realPowerEstimated());
+}
+
+// US-146: without a nominal power a Q* UPS has no ups.realpower, as before
+void test_no_nominal_no_realpower_on_qx(void) {
+    Rig r;
+    TEST_ASSERT_TRUE(r.runUntilFirstData());
+    TEST_ASSERT_TRUE(r.data.hasKey("ups.load"));
+    TEST_ASSERT_FALSE(r.data.hasKey("ups.realpower"));
+}
+
 void test_setup_after_a_recovery_probes_again_and_keeps_the_values(void) {
     Rig r;
     TEST_ASSERT_TRUE(r.runUntilFirstData());
@@ -764,6 +794,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_diagnostics_keep_the_last_20_exchanges);
     RUN_TEST(test_exchange_log_ring_drops_the_oldest);
     RUN_TEST(test_setup_after_a_recovery_probes_again_and_keeps_the_values);
+    RUN_TEST(test_custom_nominal_gives_realpower_on_qx);
+    RUN_TEST(test_no_nominal_no_realpower_on_qx);
     RUN_TEST(test_transports_of_the_registry_rows);
     RUN_TEST(test_deadline_of_the_command_is_set_and_cleared);
     RUN_TEST(test_protocol_change_drops_the_previous_values);

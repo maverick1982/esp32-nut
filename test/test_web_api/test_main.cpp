@@ -1914,6 +1914,88 @@ void test_overrides_json_without_ups() {
     TEST_ASSERT_EQUAL(0, doc["overrides"].size());
 }
 
+// --- US-146: _realpower_estimate in GET /api/ups-vars ---
+
+static void estimateFrom(float custom_w, float custom_va) {
+    mockHost.data.set("ups.load", "10.4");
+    mockHost.data.setCustomPowerNominals(custom_w, custom_va);
+    mockHost.data.updateRealPower();
+}
+
+void test_ups_vars_estimate_custom_watts() {
+    estimateFrom(980, 0);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost)));
+    TEST_ASSERT_EQUAL(102, doc["ups.realpower"].as<int>());
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("custom", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.realpower.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(980.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("W", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, e["factor"].as<float>());
+}
+
+void test_ups_vars_estimate_custom_va() {
+    estimateFrom(0, 1500);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("custom", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.power.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(1500.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("VA", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(0.6f, e["factor"].as<float>());
+}
+
+void test_ups_vars_estimate_ups_watts() {
+    mockHost.data.set("ups.realpower.nominal", "900");
+    estimateFrom(0, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("ups", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.realpower.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_FLOAT(900.0f, e["nominal"].as<float>());
+    TEST_ASSERT_EQUAL_STRING("W", e["unit"]);
+}
+
+void test_ups_vars_estimate_ups_va() {
+    mockHost.data.set("ups.power.nominal", "700");
+    estimateFrom(0, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    JsonObject e = doc["_realpower_estimate"];
+    TEST_ASSERT_EQUAL_STRING("ups", e["source"]);
+    TEST_ASSERT_EQUAL_STRING("ups.power.nominal", e["key"]);
+    TEST_ASSERT_EQUAL_STRING("VA", e["unit"]);
+    TEST_ASSERT_EQUAL_FLOAT(0.6f, e["factor"].as<float>());
+}
+
+void test_ups_vars_measured_realpower_has_no_estimate() {
+    mockHost.data.markRealPowerMeasured();
+    mockHost.data.set("ups.realpower", "321");
+    estimateFrom(980, 0);
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::generateUpsVars(&mockHost));
+    TEST_ASSERT_EQUAL(321, doc["ups.realpower"].as<int>());
+    TEST_ASSERT_TRUE(doc["_realpower_estimate"].isNull());
+}
+
+void test_ups_vars_without_estimate_unchanged() {
+    mockHost.data.set("ups.load", "10.4");
+    String before = WebApiJson::generateUpsVars(&mockHost);
+    mockHost.data.updateRealPower(); // no nominal power: nothing to estimate
+    TEST_ASSERT_EQUAL_STRING(before.c_str(), WebApiJson::generateUpsVars(&mockHost).c_str());
+    TEST_ASSERT_EQUAL(-1, (int)before.indexOf("_realpower_estimate"));
+}
+
+void test_ups_vars_disconnected_has_no_estimate() {
+    estimateFrom(980, 0);
+    mockHost.connected = false;
+    String out = WebApiJson::generateUpsVars(&mockHost);
+    TEST_ASSERT_EQUAL(-1, (int)out.indexOf("_realpower_estimate"));
+}
+
 // --- US-144: custom NUT variables in GET /api/ups-vars ---
 
 void test_ups_vars_overridden_keeps_ups_value() {
@@ -2634,6 +2716,13 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_overrides_json_with_ups_values);
     RUN_TEST(test_overrides_json_without_ups);
+    RUN_TEST(test_ups_vars_estimate_custom_watts);
+    RUN_TEST(test_ups_vars_estimate_custom_va);
+    RUN_TEST(test_ups_vars_estimate_ups_watts);
+    RUN_TEST(test_ups_vars_estimate_ups_va);
+    RUN_TEST(test_ups_vars_measured_realpower_has_no_estimate);
+    RUN_TEST(test_ups_vars_without_estimate_unchanged);
+    RUN_TEST(test_ups_vars_disconnected_has_no_estimate);
     RUN_TEST(test_ups_vars_overridden_keeps_ups_value);
     RUN_TEST(test_ups_vars_added_variable);
     RUN_TEST(test_ups_vars_override_key_in_another_case);

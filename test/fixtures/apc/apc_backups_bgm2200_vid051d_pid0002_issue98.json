@@ -342,7 +342,7 @@
         "input.sensitivity": "medium",
         "ups.load": "28",
         "ups.realpower.nominal": "1320",
-        "ups.realpower": "369",
+        "ups.realpower": "370",
         "ups.mfr.date": "2026/06/08",
         "driver.name": "APCDriver"
       }
