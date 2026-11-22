@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 NUT Server | Custom variables on Telemetry (issue #143 mockup)</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <!-- Local copy of data/www/bundle.css as of v1.17.0 (tokens, fonts, sidebar, panels, .data-table,
+         .metric-card, US-115 .cv-* rows and badges) -->
+    <link rel="stylesheet" href="bundle.css">
+    <!-- New classes introduced by issue #143 (chips in the telemetry table, card marker) -->
+    <link rel="stylesheet" href="telemetry.css">
+    <!-- Mockup-only chrome: switcher, notes, phone frames -->
+    <link rel="stylesheet" href="mock.css">
+</head>
+
+<body class="mock-page">
+
+    <!-- ===================== Mockup-only state switcher ===================== -->
+    <div class="mock-bar" id="mock-bar">
+        <div class="mock-switcher" role="group" aria-label="Mockup state">
+            <span>#143</span>
+            <button type="button" data-state="custom" class="on">Telemetry &middot; 2 overridden + 2 added</button>
+            <button type="button" data-state="none">No custom variables</button>
+            <button type="button" data-state="card">Custom value on a card</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="nut">Chip click &rarr; NUT Server</button>
+            <i class="sep" aria-hidden="true"></i>
+            <button type="button" data-state="mobile">Mobile 375px</button>
+        </div>
+        <p class="mock-note" id="mock-note"></p>
+    </div>
+
+    <!-- ===================== Mockup-only: phone frames (Mobile 375px state) ===================== -->
+    <div class="phone-stage" id="phone-stage" hidden>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; cards + header</figcaption>
+            <iframe title="Telemetry at 375px, top" data-src="index.html?embed=1&amp;state=card"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; table, battery.*</figcaption>
+            <iframe title="Telemetry at 375px, table" data-src="index.html?embed=1&amp;state=custom&amp;scroll=row-battery-charge-low"></iframe>
+        </figure>
+        <figure class="phone">
+            <figcaption>375 &times; 812 &middot; table, ups.*</figcaption>
+            <iframe title="Telemetry at 375px, ups rows" data-src="index.html?embed=1&amp;state=custom&amp;scroll=row-ups-mfr"></iframe>
+        </figure>
+    </div>
+
+    <div class="app-container" id="app">
+        <!-- Sidebar / Navigation (trimmed copy of data/www/index.html) -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="logo.png" alt="Logo">
+                </div>
+                <div class="brand-name">ESP32-NUT <span id="fw-version">v1.18.0</span></div>
+            </div>
+
+            <nav class="tabs">
+                <button class="tab active" data-target="ups">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    UPS Telemetry
+                </button>
+                <button class="tab" data-target="commands" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    UPS Commands
+                </button>
+                <button class="tab" data-target="settings" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    UPS Settings
+                </button>
+                <button class="tab" data-target="network" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="16" y="16" width="6" height="6" rx="1" />
+                        <rect x="2" y="16" width="6" height="6" rx="1" />
+                        <rect x="9" y="2" width="6" height="6" rx="1" />
+                        <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+                    </svg>
+                    Network
+                </button>
+                <button class="tab" data-target="nut">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <path d="M8 21h8M12 17v4" />
+                    </svg>
+                    NUT Server
+                </button>
+                <button class="tab" data-target="board" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+                    </svg>
+                    Board Settings
+                </button>
+                <button class="tab" data-target="logs" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    System Logs
+                </button>
+            </nav>
+
+            <div class="system-status dual">
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-wifi"></div>
+                    <span id="lbl-wifi">Wi-Fi: HomeNet</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-indicator success" id="ind-ups"></div>
+                    <span id="lbl-ups">UPS: Back-UPS BX950MI</span>
+                </div>
+                <div class="status-item" id="status-uptime">
+                    <div class="status-indicator off"></div>
+                    <span id="lbl-uptime">Uptime: 3d 4h</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="topbar">
+                <h1 class="page-title">UPS Telemetry</h1>
+                <div class="device-id">ID: <span>ESP32-S3-A1B2C3</span></div>
+            </header>
+
+            <!-- ======================================================================
+                 UPS Telemetry tab. #143 adds: the summary chip in the panel header, the
+                 "NUT clients" / "Added" chips in the Value column, the user's description
+                 under the NUT one, the marker on a metric card. UPS values never change.
+                 ====================================================================== -->
+            <div class="tab-content active" id="content-ups">
+                <div class="panel ups-panel">
+                    <div class="panel-header">
+                        <h2>Real-Time Data Feed</h2>
+                        <div class="tm-head-meta">
+                            <!-- New: shown only with at least one custom variable; opens NUT Server -->
+                            <button type="button" class="tm-summary" id="tm-summary"
+                                title="Custom variables of the NUT Server tab: NUT clients see these values">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                                    <polyline points="2 17 12 22 22 17" />
+                                    <polyline points="2 12 12 17 22 12" />
+                                </svg>
+                                <span id="tm-summary-text"></span>
+                            </button>
+                            <div class="polling-indicator">
+                                <span class="pulse-dot"></span> Live
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric-card highlight">
+                            <div class="metric-label">UPS Status</div>
+                            <div class="metric-value status-online" id="ups-status">OL</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Battery Charge</div>
+                            <div class="metric-value"><span id="ups-charge">100</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="bar-charge" style="width: 100%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">UPS Load</div>
+                            <div class="metric-value"><span id="ups-load">18</span><span class="unit">%</span></div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar load" id="bar-load" style="width: 18%"></div>
+                            </div>
+                        </div>
+                        <div class="metric-card" id="card-realpower">
+                            <div class="metric-label">Real Power</div>
+                            <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
+                            </div>
+                            <!-- New (state "Custom value on a card"): the card keeps the UPS value,
+                                 the marker says what NUT clients see -->
+                            <button type="button" class="tm-nut add tm-card-mark" id="card-mark-realpower" hidden
+                                data-key="ups.realpower" title="The UPS does not report ups.realpower: NUT clients see 95 W (custom variable)">
+                                <span class="k">NUT</span><span class="v">95 W</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="details-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Value</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ups-table-body">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ======================================================================
+                 NUT Server tab: only the Custom variables panel (US-115), read-only here.
+                 #143 changes only the lead text. The arriving row pulses.
+                 ====================================================================== -->
+            <div class="tab-content" id="content-nut">
+                <div class="panel config-panel cv-panel" id="nut-overrides">
+                    <div class="panel-header">
+                        <h2>Custom variables</h2>
+                        <span class="cv-count" title="Custom variables saved on the board">
+                            <b id="cv-count-n">4</b> / <span>16</span>
+                        </span>
+                    </div>
+
+                    <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
+                        of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
+                        <code>override.*</code> in <code>ups.conf</code>. <b class="mock-changed">The UPS Telemetry page
+                        shows them next to the real UPS values; the board logic keeps using the real ones.</b></p>
+
+                    <div class="cmd-group cv-group" id="cv-group">
+                        <div class="cv-head" aria-hidden="true">
+                            <span>Variable</span><span>Value for NUT clients</span><span>Description</span><span></span>
+                        </div>
+                        <div id="cv-list"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

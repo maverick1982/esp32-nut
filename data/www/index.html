@@ -589,8 +589,8 @@
 
                     <p class="auth-lead cv-lead">NUT clients (upsc, Home Assistant, PeaNUT) see these values in place
                         of the ones reported by the UPS, or as extra variables when the UPS does not report them, like
-                        <code>override.*</code> in <code>ups.conf</code>. The dashboard and the board keep using the
-                        real UPS values.</p>
+                        <code>override.*</code> in <code>ups.conf</code>. The UPS Telemetry page shows them next to the
+                        real UPS values; the board logic keeps using the real ones.</p>
 
                     <!-- GET /api/nut/overrides failed -->
                     <div class="auth-alert" id="cv-load-error" role="alert" hidden>
@@ -1194,8 +1194,20 @@
                 <div class="panel ups-panel">
                     <div class="panel-header">
                         <h2>Real-Time Data Feed</h2>
-                        <div class="polling-indicator">
-                            <span class="pulse-dot"></span> Live
+                        <div class="tm-head-meta">
+                            <!-- US-144: custom variables of the NUT Server tab, hidden without any -->
+                            <button type="button" class="tm-summary" id="tm-summary" hidden
+                                title="Custom variables of the NUT Server tab: NUT clients see these values">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                                    <polyline points="2 17 12 22 22 17" />
+                                    <polyline points="2 12 12 17 22 12" />
+                                </svg>
+                                <span id="tm-summary-text"></span>
+                            </button>
+                            <div class="polling-indicator">
+                                <span class="pulse-dot"></span> Live
+                            </div>
                         </div>
                     </div>
 
@@ -1222,6 +1234,8 @@
                             <div class="progress-bar-container">
                                 <div class="progress-bar" id="bar-charge" style="width: 0%"></div>
                             </div>
+                            <!-- US-144: what NUT clients see when the variable has a custom value -->
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-charge" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">UPS Load</div>
@@ -1229,11 +1243,13 @@
                             <div class="progress-bar-container">
                                 <div class="progress-bar load" id="bar-load" style="width: 0%"></div>
                             </div>
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-load" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">Real Power</div>
                             <div class="metric-value"><span id="ups-realpower">--</span><span class="unit">W</span>
                             </div>
+                            <button type="button" class="tm-nut tm-card-mark" id="card-mark-realpower" hidden><span class="k">NUT</span><span class="v"></span></button>
                         </div>
                     </div>
 

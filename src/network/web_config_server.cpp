@@ -844,7 +844,7 @@ void WebConfigServer::handleUpsVars() {
         server.send(503, "application/json", "{\"error\": \"UPS non inizializzato\"}");
         return;
     }
-    String response = WebApiJson::generateUpsVars(ups_source);
+    String response = WebApiJson::generateUpsVars(ups_source, nut_overrides);
     server.send(200, "application/json", response);
 }
 
