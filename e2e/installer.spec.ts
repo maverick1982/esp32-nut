@@ -42,7 +42,20 @@ test.describe('ESP Web Installer', () => {
     await expect(v3).toContainText('Tested on a v3.2 board');
     await expect(v1).toContainText('ESP32-P4 before v3 (v1.x)');
     await expect(v1).toContainText('Tested on a v1.3 board');
-    await expect(page.locator('esp-web-install-button')).toHaveCount(3);
+    await expect(section.locator('esp-web-install-button')).toHaveCount(2);
+    // S3 (main button), two P4 revisions and the Arduino Nano ESP32 (#149)
+    await expect(page.locator('esp-web-install-button')).toHaveCount(4);
+  });
+
+  test('Arduino Nano ESP32 section: its own button and the ROM download help', async ({ page }) => {
+    await page.goto(indexUrl);
+
+    const section = page.locator('.nano-section');
+    await expect(section).toBeVisible();
+    await expect(section.locator('esp-web-install-button')).toHaveCount(1);
+    await expect(section.locator('esp-web-install-button')).toHaveAttribute('manifest', 'manifest-arduino-nano-esp32.json');
+    await expect(section.locator('#nano-title')).toHaveText('Arduino Nano ESP32');
+    await expect(section.locator('.nano-help')).toContainText('B1 to GND');
   });
 
   test('the revision help is closed and explains how to read the revision', async ({ page }) => {
@@ -153,7 +166,8 @@ test.describe('ESP Web Installer', () => {
       execFileSync('python', [path.resolve(__dirname, '../scripts/release_package.py'), 'manifests',
         '--version', 'latest', '--out', out]);
       const generated = fs.readdirSync(out).sort();
-      expect(generated).toEqual(['manifest-esp32-p4-eth-v1.json', 'manifest-esp32-p4-eth.json', 'manifest.json']);
+      expect(generated).toEqual(['manifest-arduino-nano-esp32.json', 'manifest-esp32-p4-eth-v1.json',
+        'manifest-esp32-p4-eth.json', 'manifest.json']);
       for (const name of generated) {
         expect(readManifest(INSTALLER, name)).toEqual(readManifest(out, name));
       }
