@@ -443,6 +443,39 @@ void test_apc_other_models_request_declared_length(void) {
     TEST_ASSERT_EQUAL_UINT16(2, host._lengths[0]);
 }
 
+// QUIRK_MIN_REQUEST_8 (Vertiv Edge 10af:0002): GenericDriver asks at least 8 bytes, keeps a
+// longer declared length, and the drivers that override requestLength() keep the floor
+void test_quirk_min_request_8_raises_short_requests(void) {
+    bxLikeDevice();
+    host._hid_parser.parseReportDescriptor(REPORT_12_DESC, sizeof(REPORT_12_DESC));
+    host._quirks = QUIRK_MIN_REQUEST_8;
+    data.set("ups.model", "Back-UPS CS 650"); // not a BX: only the quirk raises the length
+    APCDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL(3, host._lengths.size());
+    TEST_ASSERT_EQUAL_UINT8(12, host._reports[0].first);
+    TEST_ASSERT_EQUAL_UINT16(QUIRK_MIN_REQUEST_LENGTH, host._lengths[0]);
+    TEST_ASSERT_EQUAL_UINT16(64, host._lengths[1]);
+    // Public, for the SET VAR read back and the export read
+    const IHidDriver& d = drv;
+    TEST_ASSERT_EQUAL_UINT16(QUIRK_MIN_REQUEST_LENGTH, d.requestLength(3, 30, 2));
+    TEST_ASSERT_EQUAL_UINT16(64, d.requestLength(3, 30, 64));
+}
+
+void test_quirk_min_request_8_generic_driver(void) {
+    host._quirks = QUIRK_MIN_REQUEST_8;
+    host.addUsage(0x00850066, 12, 3, "UPS.PowerSummary.RemainingCapacity");
+    GenericDriver drv;
+    drv.setup();
+    const IHidDriver& d = drv;
+    TEST_ASSERT_EQUAL_UINT16(2, d.requestLength(3, 12, 2)); // quirks not read before loop()
+    runLoop(drv, 1000, 1500);
+    TEST_ASSERT_EQUAL_UINT16(QUIRK_MIN_REQUEST_LENGTH, d.requestLength(3, 12, 2));
+    drv.setup();
+    TEST_ASSERT_EQUAL_UINT16(2, d.requestLength(3, 12, 2)); // reset with the driver state
+}
+
 // US-067: the host asks the same wLength for the SET VAR read-modify-write and read back,
 // through the public IHidDriver::requestLength()
 static uint16_t hostRequestLength(const char* model, uint16_t expected) {
@@ -998,6 +1031,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
     RUN_TEST(test_apc_back_ups_bx_requests_at_least_8_bytes);
     RUN_TEST(test_apc_other_models_request_declared_length);
+    RUN_TEST(test_quirk_min_request_8_raises_short_requests);
+    RUN_TEST(test_quirk_min_request_8_generic_driver);
     RUN_TEST(test_apc_back_ups_bx_request_length_public);
     RUN_TEST(test_dynamic_usages);
     RUN_TEST(test_apc_back_ups_bx_reads_static_reports_once);

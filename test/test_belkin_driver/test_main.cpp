@@ -6,6 +6,7 @@
 #include "HidControl.h"
 #include "IHidTransport.h"
 #include "UPSData.h"
+#include "Quirks.h"
 
 // Belkin (050d) and Liebert / Vertiv (10af:0000-0008), after nut_repo/drivers/belkin-hid.c
 
@@ -241,6 +242,23 @@ void test_delay_paths_follow_belkin_table(void) {
     TEST_ASSERT_EQUAL_STRING("UPS.0x00860027.0x00860056", p->startup[0]);
 }
 
+// The Vertiv Edge answers FEATURE report 30 with more bytes than it declares: only
+// 10af:0002 gets QUIRK_MIN_REQUEST_8, the other Liebert and Belkin PIDs keep their length
+static uint32_t quirksOf(uint16_t vid, uint16_t pid) {
+    uint32_t q = 0;
+    for (int i = 0; UPS_QUIRKS[i].vid != 0; i++) {
+        if (UPS_QUIRKS[i].vid == vid && (UPS_QUIRKS[i].pid == 0xFFFF || UPS_QUIRKS[i].pid == pid)) q |= UPS_QUIRKS[i].flags;
+    }
+    return q;
+}
+
+void test_vertiv_edge_min_request_quirk(void) {
+    TEST_ASSERT_TRUE(quirksOf(0x10AF, 0x0002) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksOf(0x10AF, 0x0000) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksOf(0x10AF, 0x1000) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksOf(0x050D, 0x0980) & QUIRK_MIN_REQUEST_8);
+}
+
 #ifdef PIO_UNIT_TESTING
 static void runAll() {
     RUN_TEST(test_vertiv_edge_line_values);
@@ -252,6 +270,7 @@ static void runAll() {
     RUN_TEST(test_commands_follow_belkin_table);
     RUN_TEST(test_no_command_on_standard_usages);
     RUN_TEST(test_delay_paths_follow_belkin_table);
+    RUN_TEST(test_vertiv_edge_min_request_quirk);
 }
 
 #ifndef ARDUINO

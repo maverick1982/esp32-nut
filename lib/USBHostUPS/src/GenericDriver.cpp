@@ -49,6 +49,7 @@ GenericDriver::GenericDriver() :
     _lists_pruned(false),
     _input_values_polled(false),
     _active_power_checked(false),
+    _min_request_length(0),
     _input_twin{},
     _static_report{},
     _decoded_report{},
@@ -86,6 +87,7 @@ void GenericDriver::setup() {
     _lists_pruned = false;
     _input_values_polled = false;
     _active_power_checked = false;
+    _min_request_length = 0;
     _quick.clear();
     _full.clear();
     _queue.clear();
@@ -573,6 +575,8 @@ void GenericDriver::loop(IHidTransport* host, UPSData& data, uint32_t now) {
         _active_power_checked = true;
         if (readsActivePower(host)) data.markRealPowerMeasured();
     }
+    // Before any request of this loop (QUIRK_MIN_REQUEST_8, Vertiv Edge)
+    _min_request_length = (host->getQuirks() & QUIRK_MIN_REQUEST_8) ? QUIRK_MIN_REQUEST_LENGTH : 0;
     onLoop(host, data);
     host->unlock();
 

@@ -103,7 +103,7 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 - Liebert GXT3, GXT4, PowerSure PSA, PST / PSI5, PSI 1440 (`10af:0008`, `0000`, `0001`, `0002`, `0004`)
 - UPS Belkin elencati dal `belkin-hid` di NUT (`050d`)
 
-**Non testati / forniti dalla community.** Questi modelli usano le mappature `belkin-hid` di NUT, che correggono gli esponenti sbagliati di tensioni e frequenze dei descrittori Liebert. I valori del Vertiv Edge sono stati verificati solo sulla sua diagnostica USB. Il Vertiv GXT5 (`10af:1000`) e gli altri prodotti Belkin e Liebert restano al driver generico, come in NUT.
+**Non testati / forniti dalla community.** Questi modelli usano le mappature `belkin-hid` di NUT, che correggono gli esponenti sbagliati di tensioni e frequenze dei descrittori Liebert. Il Vertiv Edge 750 VA è testato su un ESP32-S3: risponde a un report con più byte di quanti ne dichiari il suo descrittore, cosa che mandava in crash l'host USB di ESP-IDF, quindi il firmware gli chiede almeno 8 byte per ogni GET_REPORT, come fa NUT. Il Vertiv GXT5 (`10af:1000`) e gli altri prodotti Belkin e Liebert restano al driver generico, come in NUT.
 </details>
 
 <details>

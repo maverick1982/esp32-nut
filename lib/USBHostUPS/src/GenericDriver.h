@@ -64,6 +64,13 @@ public:
         return acceptPollReport(report_type, report_id);
     }
     uint32_t requestSpacingMs() const override { return stepSpacingMs(); }
+    // QUIRK_MIN_REQUEST_8 (Quirks.h): at least QUIRK_MIN_REQUEST_LENGTH bytes, never less than
+    // declared. Public: the host asks the same length for the SET VAR read back and the export.
+    uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
+        (void)report_type;
+        (void)report_id;
+        return expected < _min_request_length ? _min_request_length : expected;
+    }
 
     // Hook of the replay runner (US-067): ends the first full poll as loop() does, and applies
     // NutTable::finishInit() as postDecode() then would. Not called by the firmware.
@@ -233,6 +240,7 @@ private:
     bool _lists_pruned;                   // lists built again after finishInit() (US-120)
     bool _input_values_polled;            // every value read from INPUT is polled too (US-123)
     bool _active_power_checked;           // readsActivePower() looked at since setup()
+    uint16_t _min_request_length;         // from QUIRK_MIN_REQUEST_8, read in loop()
     std::vector<PollItem> _quick;
     std::vector<PollItem> _full;
     std::vector<PollItem> _queue;

@@ -46,7 +46,9 @@ public:
     bool relaxedPoll() const { return _relaxed_poll; }
     // Public: the host asks the same length for the SET VAR read-modify-write and read back
     uint16_t requestLength(uint8_t report_type, uint8_t report_id, uint16_t expected) const override {
-        return (_back_ups_bx && expected < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : expected;
+        // The quirk floor of GenericDriver first (QUIRK_MIN_REQUEST_8), then the BX one
+        const uint16_t len = GenericDriver::requestLength(report_type, report_id, expected);
+        return (_back_ups_bx && len < BX_MIN_REQUEST_LENGTH) ? BX_MIN_REQUEST_LENGTH : len;
     }
 
     // apc-hid.c apc_format_model(): "<model> FW:<firmware> USB FW:<aux>". False when
