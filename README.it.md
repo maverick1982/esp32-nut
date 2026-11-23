@@ -129,6 +129,7 @@ Alcuni UPS si presentano sulla USB come dispositivi HID ma inviano i dati con un
 - IPPON (Protocol `innovatae`)
 - Legrand KEOR SP 600 VA (Protocol `mustek`)
 - Cleanline Evolution 1000 (Protocol `mustek`)
+- Powerwalker VI 600 SW (Protocol `mustek`)
 </details>
 
 - **Supportati**: gli UPS che NUT gestisce con il sottodriver USB `krauler`, `fabula`, `hunnox` o `cypress`: quelli con ID USB `0001:0000` (per esempio Krauler, Fideltronik/MEC LUPUS, Hunnox e altri UPS con nome prodotto USB `MEC0003`) e quelli con il bridge USB Cypress (per esempio gli UPS Voltronic Power con ID USB `0665:5161`, venduti come Legrand KEOR SP, IPPON e altre marche, Phoenixtec Innova, Unitek Alpha 1200Sx). Protocolli: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` e `q1`.
