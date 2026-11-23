@@ -652,6 +652,93 @@ void test_apc_status_lookups() {
     TEST_ASSERT_NULL(statusToken(frange, 8, ctx, nullptr));
 }
 
+// --- belkin-hid.c conversions (Belkin and Liebert 10af)
+
+void test_divide_by_10_and_100() {
+    // divide_by_10_conversion_fun / divide_by_100_conversion_fun (usbhid-ups.c:616, 632): "%0.1f"
+    HidInfo d10 = { "input.frequency", 0, 0, "UPS.X", "%s", 0, Conv::DivideBy10, nullptr, 0 };
+    HidInfo d100 = { "input.frequency", 0, 0, "UPS.X", "%s", 0, Conv::DivideBy100, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("50.1", conv(d10, 501, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("49.9", conv(d100, 4990, ctx).c_str()); // Vertiv Edge, 499 with exponent 1
+}
+
+void test_liebert_line_voltage_scales() {
+    // liebert_line_voltage_fun (belkin-hid.c:194-233): below 1 V the scale of the reading picks
+    // the factor, kept for the next readings; larger readings are served as they are
+    HidInfo line = { "input.voltage", 0, 0, "UPS.X", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("241.2", conv(line, 0.002412, ctx).c_str()); // Vertiv Edge: 1e5
+    TEST_ASSERT_EQUAL_STRING("241.3", conv(line, 0.002413, ctx).c_str());
+    Context ctx7;
+    TEST_ASSERT_EQUAL_STRING("220.1", conv(line, 2.201e-05, ctx7).c_str()); // upstream example: 1e7
+    TEST_ASSERT_EQUAL_STRING("13.9", conv(line, 1.39e-06, ctx7).c_str());
+    Context big;
+    TEST_ASSERT_EQUAL_STRING("230.0", conv(line, 230, big).c_str());
+    // Neither scale: not corrected, the factor stays 1
+    Context odd;
+    TEST_ASSERT_EQUAL_STRING("0.5", conv(line, 0.5, odd).c_str());
+}
+
+void test_liebert_config_voltage_sets_both_factors() {
+    // liebert_config_voltage_fun (belkin-hid.c:171-192): 1e-7 sets 1e8 for itself and 1e7 for
+    // the line voltages
+    HidInfo cfg = { "battery.voltage.nominal", 0, 0, "UPS.X", "%s", HU_FLAG_STATIC, Conv::LiebertConfigVoltage, nullptr, 0 };
+    HidInfo line = { "battery.voltage", 0, 0, "UPS.X", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("10.0", conv(cfg, 1e-7, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("13.9", conv(line, 1.39e-06, ctx).c_str());
+    Context plain;
+    TEST_ASSERT_EQUAL_STRING("24.0", conv(cfg, 24, plain).c_str());
+}
+
+void test_belkin_value_conversions() {
+    // belkin-hid.c:239-300: firmware in the high nibble, UPS type in the low one, sensitivity
+    HidInfo fw = { "ups.firmware", 0, 0, "UPS.X", "%s", 0, Conv::BelkinFirmware, nullptr, 0 };
+    HidInfo type = { "ups.type", 0, 0, "UPS.X", "%s", 0, Conv::BelkinUpsType, nullptr, 0 };
+    HidInfo sens = { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.X", "%s", 0, Conv::BelkinSensitivity, nullptr, 0 };
+    Context ctx;
+    TEST_ASSERT_EQUAL_STRING("3", conv(fw, 0x32, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("line-interactive", conv(type, 0x32, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("online", conv(type, 0x30, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("simple line-interactive", conv(type, 0x05, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("normal", conv(sens, 0, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("reduced", conv(sens, 1, ctx).c_str());
+    TEST_ASSERT_EQUAL_STRING("low", conv(sens, 2, ctx).c_str());
+    // No nuf upstream: hu_find_valinfo() finds nothing and SET VAR fails
+    double out = 0;
+    TEST_ASSERT_TRUE(encode(sens, "low", ctx, UPSData(), out) == EncodeResult::FAIL);
+}
+
+void test_belkin_status_functions() {
+    // belkin-hid.c:137-165 (any value but 0) and 302-404 (one bit of the BELKIN status words)
+    struct Case { Conv conv; double on; const char* on_token; double off; const char* off_token; };
+    static const Case cases[] = {
+        { Conv::LiebertOnline, 2, "online", 0, "!online" },
+        { Conv::LiebertDischarging, 1, "dischrg", 0, "!dischrg" },
+        { Conv::LiebertCharging, 1, "chrg", 0, "!chrg" },
+        { Conv::LiebertLowbatt, 1, "lowbatt", 0, "!lowbatt" },
+        { Conv::LiebertReplacebatt, 1, "replacebatt", 0, "!replacebatt" },
+        { Conv::LiebertShutdownimm, 1, "shutdownimm", 0, "!shutdownimm" },
+        { Conv::BelkinOverload, 0x0010, "overload", 0x0001, "!overload" },
+        { Conv::BelkinOverheat, 0x0040, "overheat", 0x0010, "!overheat" },
+        { Conv::BelkinCommfault, 0x0080, "commfault", 0x0040, "!commfault" },
+        { Conv::BelkinAwaitingpower, 0x2000, "awaitingpower", 0x0080, "!awaitingpower" },
+        { Conv::BelkinOnline, 0x0000, "online", 0x0001, "!online" },
+        { Conv::BelkinLowbatt, 0x0004, "lowbatt", 0x0010, "!lowbatt" },
+        { Conv::BelkinDepleted, 0x0040, "depleted", 0x0080, "!depleted" },
+        { Conv::BelkinReplacebatt, 0x0080, "replacebatt", 0x0040, "!replacebatt" },
+    };
+    Context ctx;
+    String out;
+    for (const auto& c : cases) {
+        HidInfo row = { "BOOL", 0, 0, "UPS.X", nullptr, HU_FLAG_QUICK_POLL, c.conv, nullptr, 0 };
+        TEST_ASSERT_EQUAL_STRING(c.on_token, statusToken(row, c.on, ctx, nullptr));
+        TEST_ASSERT_EQUAL_STRING(c.off_token, statusToken(row, c.off, ctx, nullptr));
+        TEST_ASSERT_TRUE(decode(row, c.on, ctx, out) == DecodeResult::DEFER);
+    }
+}
+
 // --- powercom-hid.c conversions (US-077)
 
 void test_powercom_status_functions() {
@@ -1004,6 +1091,13 @@ void test_liebert_rows_have_supported_formats() {
     for (size_t i = 0; i < n; i++) TEST_ASSERT_TRUE_MESSAGE(strncmp(t[i].info_type, "unmapped.", 9) != 0, t[i].info_type);
 }
 
+void test_belkin_rows_have_supported_formats() {
+    size_t n;
+    const HidInfo* t = belkinHid2Nut(n);
+    checkSupportedFormats(t, n);
+    for (size_t i = 0; i < n; i++) TEST_ASSERT_TRUE_MESSAGE(strncmp(t[i].info_type, "unmapped.", 9) != 0, t[i].info_type);
+}
+
 void test_ecoflow_rows_have_supported_formats() {
     size_t n;
     const HidInfo* t = ecoflowHid2Nut(n);
@@ -1255,6 +1349,12 @@ void test_liebert_table_covers_every_upstream_row() {
     // ADR 0011 rule 1: every liebert_hid2nut row is in liebertHid2Nut(), as a row or as a comment (US-106)
     checkTableCoverage("nut_repo/drivers/liebert-hid.c", "static hid_info_t liebert_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
                        "inline const HidInfo* liebertHid2Nut", "} // namespace NutTable");
+}
+
+void test_belkin_table_covers_every_upstream_row() {
+    // ADR 0011 rule 1: every belkin_hid2nut row is in belkinHid2Nut(), as a row or as a comment
+    checkTableCoverage("nut_repo/drivers/belkin-hid.c", "static hid_info_t belkin_hid2nut[]", "lib/USBHostUPS/src/NutTable.h",
+                       "inline const HidInfo* belkinHid2Nut", "inline const HidInfo* genericHid2Nut");
 }
 
 void test_ecoflow_and_openups_publish_only_upstream_names() {
@@ -1529,6 +1629,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_openups_scales);
     RUN_TEST(test_openups_temperature);
     RUN_TEST(test_openups_status_functions);
+    RUN_TEST(test_divide_by_10_and_100);
+    RUN_TEST(test_liebert_line_voltage_scales);
+    RUN_TEST(test_liebert_config_voltage_sets_both_factors);
+    RUN_TEST(test_belkin_value_conversions);
+    RUN_TEST(test_belkin_status_functions);
     RUN_TEST(test_depleted_lookup);
     RUN_TEST(test_nobattery_bit_constant);
     RUN_TEST(test_path_names_ignore_case);
@@ -1545,8 +1650,10 @@ int main(int argc, char** argv) {
     RUN_TEST(test_ecoflow_rows_have_supported_formats);
     RUN_TEST(test_legrand_rows_have_supported_formats);
     RUN_TEST(test_liebert_rows_have_supported_formats);
+    RUN_TEST(test_belkin_rows_have_supported_formats);
     RUN_TEST(test_legrand_table_covers_every_upstream_row);
     RUN_TEST(test_liebert_table_covers_every_upstream_row);
+    RUN_TEST(test_belkin_table_covers_every_upstream_row);
     RUN_TEST(test_openups_rows_have_supported_formats);
     RUN_TEST(test_ecoflow_table_covers_every_upstream_row);
     RUN_TEST(test_openups_table_covers_every_upstream_row);

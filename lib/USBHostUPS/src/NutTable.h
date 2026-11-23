@@ -59,6 +59,13 @@
  *                 2018 Markus "Links2004" <help.markus+gitk@gmail.com>
  *                 2023 Blaž Zakrajšek <zakrajsek.blaz@gmail.com>
  *
+ * drivers/belkin-hid.c:
+ *   Copyright (C) 2003 - 2008 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2011, 2014 Charles Lepple <clepple+nut@gmail.com>
+ *                 2024 James R. Parks <jrjparks@zathera.com>
+ *                 2024 - 2026 Jim Klimov <jimklimov+nut@gmail.com>
+ *
  * drivers/openups-hid.c:
  *   Copyright (C) 2003 - 2012 Arnaud Quette <ArnaudQuette@Eaton.com>
  *                 2005 - 2006 Peter Selinger <selinger@users.sourceforge.net>
@@ -174,7 +181,29 @@ enum class Conv : uint8_t {
     OpenupsCharging,      // openups_charging_info (openups-hid.c)
     OpenupsDischarging,   // openups_discharging_info (openups-hid.c)
     OpenupsOnline,        // openups_online_info (openups-hid.c)
-    OpenupsOff            // openups_off_info (openups-hid.c)
+    OpenupsOff,           // openups_off_info (openups-hid.c)
+    // belkin-hid.c (Belkin and Liebert 10af:0000-0008)
+    DivideBy10,           // divide_by_10_conversion (usbhid-ups.c)
+    DivideBy100,          // divide_by_100_conversion (usbhid-ups.c)
+    LiebertConfigVoltage, // liebert_config_voltage_info (belkin-hid.c)
+    LiebertLineVoltage,   // liebert_line_voltage_info (belkin-hid.c)
+    BelkinFirmware,       // belkin_firmware_conversion (belkin-hid.c)
+    BelkinUpsType,        // belkin_upstype_conversion (belkin-hid.c)
+    BelkinSensitivity,    // belkin_sensitivity_conversion (belkin-hid.c)
+    LiebertOnline,        // liebert_online_info (belkin-hid.c)
+    LiebertDischarging,   // liebert_discharging_info (belkin-hid.c)
+    LiebertCharging,      // liebert_charging_info (belkin-hid.c)
+    LiebertLowbatt,       // liebert_lowbatt_info (belkin-hid.c)
+    LiebertReplacebatt,   // liebert_replacebatt_info (belkin-hid.c)
+    LiebertShutdownimm,   // liebert_shutdownimm_info (belkin-hid.c)
+    BelkinOverload,       // belkin_overload_conversion (belkin-hid.c)
+    BelkinOverheat,       // belkin_overheat_conversion (belkin-hid.c)
+    BelkinCommfault,      // belkin_commfault_conversion (belkin-hid.c)
+    BelkinAwaitingpower,  // belkin_awaitingpower_conversion (belkin-hid.c)
+    BelkinOnline,         // belkin_online_conversion (belkin-hid.c)
+    BelkinLowbatt,        // belkin_lowbatt_conversion (belkin-hid.c)
+    BelkinDepleted,       // belkin_depleted_conversion (belkin-hid.c)
+    BelkinReplacebatt     // belkin_replacebatt_conversion (belkin-hid.c)
 };
 
 struct Lookup {
@@ -370,6 +399,10 @@ static constexpr Lookup kApcLineFailCauseVrange[] = {                           
 };
 static constexpr Lookup kApcLineFailCauseFrange[] = { { 7, "frange" }, { 0, "!frange" } };   // apc_linefailcause_frange_info
 static constexpr Lookup kPowercomBeeperInfo[] = { { 1, "enabled" }, { 2, "disabled" } };    // powercom_beeper_info
+static constexpr Lookup kBelkinTestInfo[] = {                                                // belkin_test_info
+    { 0, "No test initiated" }, { 1, "Done and passed" }, { 2, "Done and warning" }, { 3, "Done and error" },
+    { 4, "Aborted" }, { 5, "In progress" },
+};
 
 // Vendor ups.alarm lookups of mge-hid.c (US-107), verbatim: the text is the alarm
 static constexpr Lookup kMgeEmergencyStop[] = { { 1, "Emergency stop!" } };                    // mge_emergency_stop
@@ -431,6 +464,12 @@ struct Context {
         double ccharge = 1;
         double cdischarge = 1;
     } openups;
+    // The correction factors of belkin-hid.c, globals upstream (liebert_config_voltage_mult,
+    // liebert_line_voltage_mult): 1 until a Liebert voltage tells the broken exponent
+    struct LiebertMult {
+        double config_voltage = 1.0;
+        double line_voltage = 1.0;
+    } liebert;
 };
 
 // CLEAR: the variable must go (dstate_delinfo), the row stays undecided as with DEFER
@@ -559,6 +598,36 @@ inline const char* statusToken(const HidInfo& info, double v, const Context& ctx
         return v ? "online" : "!online";
     case Conv::OpenupsOff:
         return v ? "!off" : "off";
+    // belkin-hid.c:137-165, the liebert_*_fun: any value but 0 is true
+    case Conv::LiebertOnline:
+        return v ? "online" : "!online";
+    case Conv::LiebertDischarging:
+        return v ? "dischrg" : "!dischrg";
+    case Conv::LiebertCharging:
+        return v ? "chrg" : "!chrg";
+    case Conv::LiebertLowbatt:
+        return v ? "lowbatt" : "!lowbatt";
+    case Conv::LiebertReplacebatt:
+        return v ? "replacebatt" : "!replacebatt";
+    case Conv::LiebertShutdownimm:
+        return v ? "shutdownimm" : "!shutdownimm";
+    // belkin-hid.c:302-404, the bits of BELKINPowerStatus and BELKINBatteryStatus
+    case Conv::BelkinOverload:
+        return ((long)v & 0x0010) ? "overload" : "!overload";
+    case Conv::BelkinOverheat:
+        return ((long)v & 0x0040) ? "overheat" : "!overheat";
+    case Conv::BelkinCommfault:
+        return ((long)v & 0x0080) ? "commfault" : "!commfault";
+    case Conv::BelkinAwaitingpower:
+        return ((long)v & 0x2000) ? "awaitingpower" : "!awaitingpower";
+    case Conv::BelkinOnline:
+        return ((long)v & 0x0001) ? "!online" : "online";
+    case Conv::BelkinLowbatt:
+        return ((long)v & 0x0004) ? "lowbatt" : "!lowbatt";
+    case Conv::BelkinDepleted:
+        return ((long)v & 0x0040) ? "depleted" : "!depleted";
+    case Conv::BelkinReplacebatt:
+        return ((long)v & 0x0080) ? "replacebatt" : "!replacebatt";
     default:
         return nullptr;
     }
@@ -1024,6 +1093,56 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
         openupsTemperature(v, buf, sizeof(buf));
         out = buf;
         return DecodeResult::OK;
+    case Conv::DivideBy10:  // divide_by_10_conversion_fun (usbhid-ups.c:616)
+    case Conv::DivideBy100: // divide_by_100_conversion_fun (usbhid-ups.c:632)
+        snprintf(buf, sizeof(buf), "%0.1f", v * (info.conv == Conv::DivideBy10 ? 0.1 : 0.01));
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::LiebertConfigVoltage:
+        // liebert_config_voltage_fun (belkin-hid.c:171-192): a value of 1e-7 is a nominal
+        // voltage with the broken exponent, and sets the factor of the line voltages too
+        if (v < 1) {
+            if (fabs(v - 1e-7) < 1e-9) {
+                ctx.liebert.config_voltage = 1e8;
+                ctx.liebert.line_voltage = 1e7; // stomp this in case input voltage was low
+            }
+            // else "ConfigVoltage exponent looks wrong, but not correcting." upstream
+        }
+        snprintf(buf, sizeof(buf), "%.1f", v * ctx.liebert.config_voltage);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::LiebertLineVoltage:
+        // liebert_line_voltage_fun (belkin-hid.c:194-233): readings below 1 V take the factor
+        // of their scale (1e-5 -> 1e7, 1e-3 -> 1e5); larger readings are kept as they are
+        if (v < 1) {
+            if (fabs(v - 1e-5) < 4 * 1e-5) ctx.liebert.line_voltage = 1e7;
+            else if (fabs(v - 1e-3) < 4 * 1e-3) ctx.liebert.line_voltage = 1e5;
+            // else "LineVoltage exponent looks wrong, but not correcting." upstream
+        }
+        snprintf(buf, sizeof(buf), "%.1f", v * ctx.liebert.line_voltage);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::BelkinFirmware: // belkin_firmware_conversion_fun (belkin-hid.c:239): the high nibble
+        snprintf(buf, sizeof(buf), "%ld", (long)v >> 4);
+        out = buf;
+        return DecodeResult::OK;
+    case Conv::BelkinUpsType: // belkin_upstype_conversion_fun (belkin-hid.c:252): the low nibble
+        switch ((long)v & 0x0f) {
+        case 1: out = "offline"; break;
+        case 2: out = "line-interactive"; break;
+        case 3: out = "simple online"; break;
+        case 4: out = "simple offline"; break;
+        case 5: out = "simple line-interactive"; break;
+        default: out = "online"; break;
+        }
+        return DecodeResult::OK;
+    case Conv::BelkinSensitivity: // belkin_sensitivity_conversion_fun (belkin-hid.c:275)
+        switch ((long)v) {
+        case 1: out = "reduced"; break;
+        case 2: out = "low"; break;
+        default: out = "normal"; break;
+        }
+        return DecodeResult::OK;
     case Conv::MgeBatteryCapacity:
         snprintf(buf, sizeof(buf), "%.2f", v / 3600); // As to Ah
         out = buf;
@@ -1076,6 +1195,20 @@ inline DecodeResult decode(const HidInfo& info, double v, Context& ctx, String& 
     case Conv::OpenupsDischarging:
     case Conv::OpenupsOnline:
     case Conv::OpenupsOff:
+    case Conv::LiebertOnline:
+    case Conv::LiebertDischarging:
+    case Conv::LiebertCharging:
+    case Conv::LiebertLowbatt:
+    case Conv::LiebertReplacebatt:
+    case Conv::LiebertShutdownimm:
+    case Conv::BelkinOverload:
+    case Conv::BelkinOverheat:
+    case Conv::BelkinCommfault:
+    case Conv::BelkinAwaitingpower:
+    case Conv::BelkinOnline:
+    case Conv::BelkinLowbatt:
+    case Conv::BelkinDepleted:
+    case Conv::BelkinReplacebatt:
         // Internal rows and BOOL functions: applyInternal() / statusToken()
         return DecodeResult::DEFER;
     case Conv::Lookup: {
@@ -1626,6 +1759,14 @@ inline const DelayPaths* powercomDelayPaths() {
 inline const DelayPaths* liebertDelayPaths() {
     static const char* const sd[] = { "UPS.PowerSummary.DelayBeforeShutdown" };
     static const char* const st[] = { "UPS.PowerSummary.DelayBeforeStartup" };
+    static const DelayPaths p = { sd, 1, st, 1 };
+    return &p;
+}
+
+// belkin-hid.c:496-497: BELKINControls.BELKINDelayBeforeShutdown / BELKINDelayBeforeStartup
+inline const DelayPaths* belkinDelayPaths() {
+    static const char* const sd[] = { "UPS.0x00860027.0x00860057" };
+    static const char* const st[] = { "UPS.0x00860027.0x00860056" };
     static const DelayPaths p = { sd, 1, st, 1 };
     return &p;
 }
@@ -3252,6 +3393,218 @@ inline const HidInfo* liebertHid2Nut(size_t& n) {
         // liebert-hid.c:141 UPS.PowerSummary.AudibleAlarmControl: the project toggles from
         // ups.beeper.status instead of writing 1 (US-097 deviation 1)
         { "beeper.toggle", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+    };
+    n = sizeof(t) / sizeof(t[0]);
+    return t;
+}
+
+// Every row of belkin_hid2nut: Belkin (050d) and Liebert / Vertiv (10af:0000-0008) units,
+// values, status and instant commands (ADR 0011 rule 4). The BELKIN* usages of belkin_usage_lkp
+// are on page 0x86 and are written here as their codes (UPS.BELKINConfig.BELKINConfigVoltage is
+// UPS.0x00860026.0x00860040). Duplicate keys follow the first-row-wins rule, as upstream: on a
+// Liebert unit the BELKIN* rows are not bound and the standard rows below them give the values.
+// ups.delay.* is left to belkinDelayPaths() / applyDefaultDelays (US-066).
+inline const HidInfo* belkinHid2Nut(size_t& n) {
+    static const HidInfo t[] = {
+        // --- Interpreted Belkin variables (BELKIN* usages of page 0x86, belkin_usage_lkp)
+        // belkin-hid.c:474 UPS.BELKINBatterySystem.BELKINCharge
+        { "battery.charge", 0, 0, "UPS.0x00860010.0x00860039", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // battery.charge.broken (belkin-hid.c:475): commented out upstream
+        // belkin-hid.c:476 UPS.PowerSummary.RemainingCapacityLimit
+        { "battery.charge.low", 0, 0, "UPS.PowerSummary.RemainingCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:477 UPS.PowerSummary.WarningCapacityLimit
+        { "battery.charge.warning", 0, 0, "UPS.PowerSummary.WarningCapacityLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:478 UPS.PowerSummary.RunTimeToEmpty
+        { "battery.runtime", 0, 0, "UPS.PowerSummary.RunTimeToEmpty", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:479 UPS.PowerSummary.iDeviceChemistry
+        { "battery.type", 0, 0, "UPS.PowerSummary.iDeviceChemistry", "%s", 0, Conv::StringId, nullptr, 0 },
+        // belkin-hid.c:480 UPS.BELKINBatterySystem.BELKINVoltage
+        { "battery.voltage", 0, 0, "UPS.0x00860010.0x00860030", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:481 UPS.BELKINConfig.BELKINConfigBatteryVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.0x00860026.0x00860044", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:482 UPS.BELKINPowerState.BELKINInput.BELKINFrequency
+        { "input.frequency", 0, 0, "UPS.0x0086002A.0x0086001A.0x00860032", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:483 UPS.BELKINConfig.BELKINConfigFrequency
+        { "input.frequency.nominal", 0, 0, "UPS.0x00860026.0x00860042", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:484 UPS.BELKINDevice.BELKINVoltageSensitivity, belkin_sensitivity_conversion has no nuf: SET VAR fails as hu_find_valinfo() does upstream
+        { "input.sensitivity", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.0x00860029.0x00860074", "%s", 0, Conv::BelkinSensitivity, nullptr, 0 },
+        // belkin-hid.c:485 UPS.BELKINConfig.BELKINHighVoltageTransfer
+        { "input.transfer.high", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.0x00860026.0x00860054", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:486 UPS.BELKINConfig.BELKINHighVoltageTransferMax
+        { "input.transfer.high.max", 0, 0, "UPS.0x00860026.0x0086005D", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:487 UPS.BELKINConfig.BELKINHighVoltageTransferMin
+        { "input.transfer.high.min", 0, 0, "UPS.0x00860026.0x0086005E", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:488 UPS.BELKINConfig.BELKINLowVoltageTransfer
+        { "input.transfer.low", ST_FLAG_RW | ST_FLAG_STRING, 10, "UPS.0x00860026.0x00860053", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:489 UPS.BELKINConfig.BELKINLowVoltageTransferMax
+        { "input.transfer.low.max", 0, 0, "UPS.0x00860026.0x0086005B", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:490 UPS.BELKINConfig.BELKINLowVoltageTransferMin
+        { "input.transfer.low.min", 0, 0, "UPS.0x00860026.0x0086005C", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:491 UPS.BELKINPowerState.BELKINInput.BELKINVoltage
+        { "input.voltage", 0, 0, "UPS.0x0086002A.0x0086001A.0x00860030", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:492 UPS.BELKINConfig.BELKINConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.0x00860026.0x00860040", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:493 UPS.BELKINPowerState.BELKINOutput.BELKINFrequency
+        { "output.frequency", 0, 0, "UPS.0x0086002A.0x0086001C.0x00860032", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:494 UPS.BELKINPowerState.BELKINOutput.BELKINVoltage
+        { "output.voltage", 0, 0, "UPS.0x0086002A.0x0086001C.0x00860030", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:495 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "ups.beeper.status", 0, 0, "UPS.0x00860027.0x0086005A", "%s", 0, Conv::Lookup, NUT_LKP(kBeeperInfo) },
+        // ups.delay.start (belkin-hid.c:496) excluded: belkinDelayPaths() / applyDefaultDelays (US-066)
+        // ups.delay.shutdown (belkin-hid.c:497) excluded: belkinDelayPaths() / applyDefaultDelays (US-066)
+        // belkin-hid.c:498 UPS.BELKINControls.BELKINDelayBeforeStartup
+        { "ups.timer.start", 0, 0, "UPS.0x00860027.0x00860056", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:499 UPS.BELKINControls.BELKINDelayBeforeShutdown
+        { "ups.timer.shutdown", 0, 0, "UPS.0x00860027.0x00860057", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:500 UPS.BELKINControls.BELKINDelayBeforeReboot
+        { "ups.timer.reboot", 0, 0, "UPS.0x00860027.0x00860055", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:501 UPS.BELKINDevice.BELKINUPSType
+        { "ups.firmware", 0, 0, "UPS.0x00860029.0x0086007C", "%s", 0, Conv::BelkinFirmware, nullptr, 0 },
+        // belkin-hid.c:502 UPS.BELKINPowerState.BELKINOutput.BELKINPercentLoad
+        { "ups.load", 0, 0, "UPS.0x0086002A.0x0086001C.0x00860035", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:503 UPS.BELKINConfig.BELKINConfigOverloadTransfer
+        { "ups.load.high", 0, 0, "UPS.0x00860026.0x00860045", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:504 UPS.PowerSummary.ManufacturerDate, date_conversion
+        { "ups.mfr.date", 0, 0, "UPS.PowerSummary.ManufacturerDate", "%s", 0, Conv::BatteryDate, nullptr, 0 },
+        // belkin-hid.c:505 UPS.BELKINConfig.BELKINConfigApparentPower
+        { "ups.power.nominal", 0, 0, "UPS.0x00860026.0x00860043", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:506 UPS.PowerSummary.iSerialNumber
+        { "ups.serial", 0, 0, "UPS.PowerSummary.iSerialNumber", "%s", 0, Conv::StringId, nullptr, 0 },
+        // belkin-hid.c:507 UPS.BELKINControls.BELKINTest
+        { "ups.test.result", 0, 0, "UPS.0x00860027.0x00860058", "%s", 0, Conv::Lookup, NUT_LKP(kBelkinTestInfo) },
+        // belkin-hid.c:508 UPS.BELKINDevice.BELKINUPSType
+        { "ups.type", 0, 0, "UPS.0x00860029.0x0086007C", "%s", 0, Conv::BelkinUpsType, nullptr, 0 },
+        // --- Liebert PSA (upstream comment)
+        // belkin-hid.c:510 UPS.PowerSummary.RemainingCapacity
+        { "battery.charge", 0, 0, "UPS.PowerSummary.RemainingCapacity", "%.0f", HU_FLAG_QUICK_POLL, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:511 UPS.Input.Frequency
+        { "input.frequency", 0, 0, "UPS.Input.Frequency", "%s", 0, Conv::DivideBy10, nullptr, 0 },
+        // belkin-hid.c:512 UPS.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.Input.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:513 UPS.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.Output.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:515 UPS.PowerSummary.Voltage
+        { "battery.voltage", 0, 0, "UPS.PowerSummary.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:516 UPS.PowerSummary.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.PowerSummary.ConfigVoltage", "%s", HU_FLAG_STATIC, Conv::LiebertConfigVoltage, nullptr, 0 },
+        // belkin-hid.c:517 UPS.Output.PercentLoad
+        { "ups.load", 0, 0, "UPS.Output.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // --- Liebert PSI5 (upstream comment), also the Vertiv Edge 750 (10af:0002)
+        // belkin-hid.c:519 UPS.Flow.ConfigVoltage
+        { "input.voltage.nominal", 0, 0, "UPS.Flow.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:520 UPS.PowerConverter.Input.Frequency
+        { "input.frequency", 0, 0, "UPS.PowerConverter.Input.Frequency", "%s", 0, Conv::DivideBy100, nullptr, 0 },
+        // belkin-hid.c:521 UPS.PowerConverter.Input.Voltage
+        { "input.voltage", 0, 0, "UPS.PowerConverter.Input.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:522 UPS.Flow.ConfigVoltage
+        { "output.voltage.nominal", 0, 0, "UPS.Flow.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:523 UPS.PowerConverter.Output.Frequency
+        { "output.frequency", 0, 0, "UPS.PowerConverter.Output.Frequency", "%s", 0, Conv::DivideBy100, nullptr, 0 },
+        // belkin-hid.c:524 UPS.PowerConverter.Output.Voltage
+        { "output.voltage", 0, 0, "UPS.PowerConverter.Output.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:525 UPS.OutletSystem.Outlet.PercentLoad
+        { "ups.load", 0, 0, "UPS.OutletSystem.Outlet.PercentLoad", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:526 UPS.BatterySystem.Battery.Voltage
+        { "battery.voltage", 0, 0, "UPS.BatterySystem.Battery.Voltage", "%s", 0, Conv::LiebertLineVoltage, nullptr, 0 },
+        // belkin-hid.c:527 UPS.BatterySystem.Battery.ConfigVoltage
+        { "battery.voltage.nominal", 0, 0, "UPS.BatterySystem.Battery.ConfigVoltage", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:528 UPS.Flow.ConfigApparentPower, the nominal apparent power, as upstream
+        { "battery.capacity", 0, 0, "UPS.Flow.ConfigApparentPower", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // --- Status
+        // belkin-hid.c:530 UPS.PowerSummary.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertDischarging, nullptr, 0 },
+        // belkin-hid.c:531 UPS.PowerSummary.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertCharging, nullptr, 0 },
+        // belkin-hid.c:532 UPS.PowerSummary.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ShutdownImminent", nullptr, 0, Conv::LiebertShutdownimm, nullptr, 0 },
+        // belkin-hid.c:533 UPS.PowerSummary.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertOnline, nullptr, 0 },
+        // belkin-hid.c:534 UPS.PowerSummary.PresentStatus.Discharging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Discharging", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertDischarging, nullptr, 0 },
+        // belkin-hid.c:535 UPS.PowerSummary.PresentStatus.Charging
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.Charging", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertCharging, nullptr, 0 },
+        // belkin-hid.c:536 UPS.PowerSummary.PresentStatus.ShutdownImminent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ShutdownImminent", nullptr, 0, Conv::LiebertShutdownimm, nullptr, 0 },
+        // belkin-hid.c:537 UPS.PowerSummary.PresentStatus.ACPresent
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertOnline, nullptr, 0 },
+        // belkin-hid.c:538 UPS.PowerSummary.PresentStatus.NeedReplacement
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.NeedReplacement", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertReplacebatt, nullptr, 0 },
+        // belkin-hid.c:539 UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit
+        { "BOOL", 0, 0, "UPS.PowerSummary.PresentStatus.BelowRemainingCapacityLimit", nullptr, HU_FLAG_QUICK_POLL, Conv::LiebertLowbatt, nullptr, 0 },
+        // UPS.PowerSummary.BelowRemainingCapacityLimit (belkin-hid.c:541): commented out upstream ("broken!")
+        // belkin-hid.c:542 UPS.BELKINStatus.BELKINPowerStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860021", nullptr, 0, Conv::BelkinOverload, nullptr, 0 },
+        // belkin-hid.c:543 UPS.BELKINStatus.BELKINPowerStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860021", nullptr, 0, Conv::BelkinOverheat, nullptr, 0 },
+        // belkin-hid.c:544 UPS.BELKINStatus.BELKINPowerStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860021", nullptr, 0, Conv::BelkinCommfault, nullptr, 0 },
+        // belkin-hid.c:545 UPS.BELKINStatus.BELKINPowerStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860021", nullptr, 0, Conv::BelkinAwaitingpower, nullptr, 0 },
+        // belkin-hid.c:546 UPS.BELKINStatus.BELKINPowerStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860021", nullptr, HU_FLAG_QUICK_POLL, Conv::BelkinOnline, nullptr, 0 },
+        // belkin-hid.c:547 UPS.BELKINStatus.BELKINBatteryStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860022", nullptr, HU_FLAG_QUICK_POLL, Conv::BelkinDepleted, nullptr, 0 },
+        // belkin-hid.c:548 UPS.BELKINStatus.BELKINBatteryStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860022", nullptr, 0, Conv::BelkinReplacebatt, nullptr, 0 },
+        // belkin-hid.c:549 UPS.BELKINStatus.BELKINBatteryStatus
+        { "BOOL", 0, 0, "UPS.0x00860028.0x00860022", nullptr, HU_FLAG_QUICK_POLL, Conv::BelkinLowbatt, nullptr, 0 },
+        // --- Instant commands
+        // belkin-hid.c:555 UPS.BELKINControls.BELKINTest
+        { "test.battery.start.quick", 0, 0, "UPS.0x00860027.0x00860058", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:556 UPS.BELKINControls.BELKINTest
+        { "test.battery.start.deep", 0, 0, "UPS.0x00860027.0x00860058", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:557 UPS.BELKINControls.BELKINTest
+        { "test.battery.stop", 0, 0, "UPS.0x00860027.0x00860058", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:558 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "beeper.on", 0, 0, "UPS.0x00860027.0x0086005A", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:559 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "beeper.off", 0, 0, "UPS.0x00860027.0x0086005A", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:560 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "beeper.disable", 0, 0, "UPS.0x00860027.0x0086005A", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:561 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "beeper.enable", 0, 0, "UPS.0x00860027.0x0086005A", "2", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:562 UPS.BELKINControls.BELKINAudibleAlarmControl
+        { "beeper.mute", 0, 0, "UPS.0x00860027.0x0086005A", "3", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:563 UPS.BELKINControls.BELKINDelayBeforeShutdown
+        { "load.off", 0, 0, "UPS.0x00860027.0x00860057", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:564 UPS.BELKINControls.BELKINDelayBeforeStartup
+        { "load.on", 0, 0, "UPS.0x00860027.0x00860056", "1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:565 UPS.BELKINControls.BELKINDelayBeforeShutdown, DEFAULT_OFFDELAY (usbhid-ups.h)
+        { "load.off.delay", 0, 0, "UPS.0x00860027.0x00860057", "20", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:566 UPS.BELKINControls.BELKINDelayBeforeStartup, DEFAULT_ONDELAY (usbhid-ups.h)
+        { "load.on.delay", 0, 0, "UPS.0x00860027.0x00860056", "30", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:567 UPS.BELKINControls.BELKINDelayBeforeShutdown
+        { "shutdown.stop", 0, 0, "UPS.0x00860027.0x00860057", "-1", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:568 UPS.BELKINControls.BELKINDelayBeforeReboot
+        { "shutdown.reboot", 0, 0, "UPS.0x00860027.0x00860055", "10", HU_TYPE_CMD, Conv::Number, nullptr, 0 },
+        // Upstream note after the commands: no shutdown.return nor load.on on the author's Belkin
+#if WITH_UNMAPPED_DATA_POINTS
+        // added for debugging Liebert GXT3 (upstream comment)
+        // belkin-hid.c:580 UPS.PowerSummary.iSerialNumber
+        { "unmapped.ups.powersummary.iserialnumber", 0, 0, "UPS.PowerSummary.iSerialNumber", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:581 UPS.PowerSummary.iManufacturer
+        { "unmapped.ups.powersummary.imanufacturer", 0, 0, "UPS.PowerSummary.iManufacturer", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:582 UPS.PowerSummary.iOEMInformation
+        { "unmapped.ups.powersummary.ioeminformation", 0, 0, "UPS.PowerSummary.iOEMInformation", "%s", 0, Conv::StringId, nullptr, 0 },
+        // belkin-hid.c:583 UPS.PowerSummary.DesignCapacity
+        { "unmapped.ups.powersummary.designcapacity", 0, 0, "UPS.PowerSummary.DesignCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:584 UPS.PowerSummary.RemainingTimeLimit
+        { "unmapped.ups.powersummary.remainingtimelimit", 0, 0, "UPS.PowerSummary.RemainingTimeLimit", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:585 UPS.PowerSummary.CapacityMode
+        { "unmapped.ups.powersummary.capacitymode", 0, 0, "UPS.PowerSummary.CapacityMode", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:586 UPS.PowerSummary.Rechargeable
+        { "unmapped.ups.powersummary.rechargeable", 0, 0, "UPS.PowerSummary.Rechargeable", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:587 UPS.PowerSummary.BatteryPresent
+        { "unmapped.ups.powersummary.batterypresent", 0, 0, "UPS.PowerSummary.BatteryPresent", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:588 UPS.PowerSummary.FullChargeCapacity
+        { "unmapped.ups.powersummary.fullchargecapacity", 0, 0, "UPS.PowerSummary.FullChargeCapacity", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:589 UPS.PowerSummary.CapacityGranularity1
+        { "unmapped.ups.powersummary.capacitygranularity1", 0, 0, "UPS.PowerSummary.CapacityGranularity1", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:590 UPS.PowerSummary.CapacityGranularity2
+        { "unmapped.ups.powersummary.capacitygranularity2", 0, 0, "UPS.PowerSummary.CapacityGranularity2", "%.0f", 0, Conv::Number, nullptr, 0 },
+        // belkin-hid.c:591 UPS.PowerSummary.iProduct
+        { "unmapped.ups.powersummary.iproduct", 0, 0, "UPS.PowerSummary.iProduct", "%.0f", 0, Conv::Number, nullptr, 0 },
+#endif
     };
     n = sizeof(t) / sizeof(t[0]);
     return t;

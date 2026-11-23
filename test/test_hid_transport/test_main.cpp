@@ -97,7 +97,7 @@ static std::string projectPath(const char* rel) {
 }
 
 void test_driver_sources_include_no_usb_host(void) {
-    const char* drivers[] = { "Generic", "APC", "CyberPower", "Eaton", "EcoFlow", "Legrand", "Liebert", "OpenUPS",
+    const char* drivers[] = { "Generic", "APC", "Belkin", "CyberPower", "Eaton", "EcoFlow", "Legrand", "Liebert", "OpenUPS",
                               "Powercom" };
     std::vector<std::string> files = { "lib/USBHostUPS/src/IUPSDriver.h", "lib/USBHostUPS/src/IHidDriver.h",
                                        "lib/USBHostUPS/src/DriverDispatch.h" };

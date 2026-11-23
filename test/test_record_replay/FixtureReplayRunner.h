@@ -17,6 +17,7 @@
 #include "HIDParser.h"
 #include "Quirks.h"
 #include "APCDriver.h"
+#include "BelkinDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
 #include "PowercomDriver.h"

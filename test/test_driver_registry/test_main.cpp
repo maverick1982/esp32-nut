@@ -60,6 +60,30 @@ void test_phoenixtec_ffff_is_explicit_hid_liebert(void) {
     assertExplicitHid(0x06DA, 0xFFFF, "LiebertDriver");
 }
 
+// belkin_usb_device_table (belkin-hid.c:49-84): the products belkin_claim() takes without the
+// productid option
+void test_belkin_table_is_explicit_hid_belkin(void) {
+    const uint16_t belkin[] = { 0x0980, 0x0900, 0x0910, 0x0912, 0x0551, 0x0750, 0x0751, 0x0375, 0x0F51, 0x1100 };
+    for (uint16_t pid : belkin) assertExplicitHid(0x050D, pid, "BelkinDriver");
+    const uint16_t liebert[] = { 0x0000, 0x0001, 0x0002, 0x0004, 0x0008 };
+    for (uint16_t pid : liebert) assertExplicitHid(0x10AF, pid, "BelkinDriver");
+    // Vertiv Edge 750 (10af:0002), USB diagnostics of v1.18.0
+    assertExplicitHid(0x10AF, 0x0002, "BelkinDriver", "Vertiv Co.", "Vertiv Edge");
+}
+
+// belkin_claim() rejects the other products of both vendors (POSSIBLY_SUPPORTED without the
+// productid option), the F5U218-MOB hub and 10af:1000 (vertiv-hid.c, not ported)
+void test_other_belkin_and_liebert_products_stay_generic(void) {
+    const struct { uint16_t vid, pid; } ids[] = { { 0x050D, 0x0218 }, { 0x050D, 0x0001 }, { 0x10AF, 0x1000 }, { 0x10AF, 0x0003 } };
+    for (const auto& id : ids) {
+        DriverRegistry::Match m = DriverRegistry::match(id.vid, id.pid, "", "");
+        TEST_ASSERT_TRUE(m.family == Family::HID);
+        TEST_ASSERT_FALSE(m.explicit_hid);
+        std::unique_ptr<IUPSDriver> d(DriverRegistry::create(id.vid, id.pid, "", ""));
+        TEST_ASSERT_EQUAL_STRING("GenericDriver", d->getDriverName());
+    }
+}
+
 void test_unknown_vid_with_ups_page_falls_back_to_generic(void) {
     DriverRegistry::Match m = DriverRegistry::match(0x1234, 0x5678, "Acme", "UPS");
     TEST_ASSERT_TRUE(m.family == Family::HID);
@@ -213,6 +237,8 @@ static void runAll() {
     RUN_TEST(test_issue28_mec_mec0003_is_qx_fabula);
     RUN_TEST(test_apc_is_explicit_hid);
     RUN_TEST(test_phoenixtec_ffff_is_explicit_hid_liebert);
+    RUN_TEST(test_belkin_table_is_explicit_hid_belkin);
+    RUN_TEST(test_other_belkin_and_liebert_products_stay_generic);
     RUN_TEST(test_unknown_vid_with_ups_page_falls_back_to_generic);
     RUN_TEST(test_unknown_vid_without_pages_is_ignored);
     RUN_TEST(test_strings_compare_without_case);
