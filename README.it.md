@@ -97,13 +97,15 @@ Il firmware utilizza le mappature HID ufficiali del progetto Network UPS Tools (
 </details>
 
 <details>
-<summary><b>Vertiv / Liebert / Belkin</b> (Clicca per espandere i modelli non testati / forniti dalla community)</summary>
+<summary><b>Vertiv / Liebert / Belkin</b> (Clicca per espandere i modelli testati)</summary>
 
 - Vertiv Edge 750 VA (`10af:0002`)
-- Liebert GXT3, GXT4, PowerSure PSA, PST / PSI5, PSI 1440 (`10af:0008`, `0000`, `0001`, `0002`, `0004`)
-- UPS Belkin elencati dal `belkin-hid` di NUT (`050d`)
+- Liebert GXT3, GXT4, PowerSure PSA, PST / PSI5, PSI 1440 (`10af:0008`, `0000`, `0001`, `0002`, `0004`) (non testati)
+- UPS Belkin elencati dal `belkin-hid` di NUT (`050d`) (non testati)
 
-**Non testati / forniti dalla community.** Questi modelli usano le mappature `belkin-hid` di NUT, che correggono gli esponenti sbagliati di tensioni e frequenze dei descrittori Liebert. Il Vertiv Edge 750 VA è testato su un ESP32-S3: risponde a un report con più byte di quanti ne dichiari il suo descrittore, cosa che mandava in crash l'host USB di ESP-IDF, quindi il firmware gli chiede almeno 8 byte per ogni GET_REPORT, come fa NUT. Il Vertiv GXT5 (`10af:1000`) e gli altri prodotti Belkin e Liebert restano al driver generico, come in NUT.
+Questi modelli usano le mappature `belkin-hid` di NUT, che correggono gli esponenti sbagliati di tensioni e frequenze dei descrittori Liebert. Il Vertiv Edge 750 VA è testato su un ESP32-S3: risponde a un report con più byte di quanti ne dichiari il suo descrittore, cosa che mandava in crash l'host USB di ESP-IDF, quindi il firmware gli chiede almeno 8 byte per ogni GET_REPORT, come fa NUT. Il Vertiv GXT5 (`10af:1000`) e gli altri prodotti Belkin e Liebert restano al driver generico, come in NUT.
+
+`battery.capacity` è la potenza nominale dell'UPS in VA (`UPS.Flow.ConfigApparentPower`), non la capacità della batteria in Ah, come nel `belkin-hid` di NUT. Questi UPS non riportano `ups.power.nominal`, quindi la scheda non può stimare da sola `ups.realpower`: aggiungere `ups.realpower.nominal` (W, la potenza di targa) come variabile personalizzata nella scheda **NUT Server**, oppure `ups.power.nominal` (VA, per esempio 750) per carico × VA × 0,6.
 </details>
 
 <details>

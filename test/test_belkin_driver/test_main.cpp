@@ -244,19 +244,21 @@ void test_delay_paths_follow_belkin_table(void) {
 
 // The Vertiv Edge answers FEATURE report 30 with more bytes than it declares: only
 // 10af:0002 gets QUIRK_MIN_REQUEST_8, the other Liebert and Belkin PIDs keep their length
-static uint32_t quirksOf(uint16_t vid, uint16_t pid) {
-    uint32_t q = 0;
-    for (int i = 0; UPS_QUIRKS[i].vid != 0; i++) {
-        if (UPS_QUIRKS[i].vid == vid && (UPS_QUIRKS[i].pid == 0xFFFF || UPS_QUIRKS[i].pid == pid)) q |= UPS_QUIRKS[i].flags;
-    }
-    return q;
+void test_vertiv_edge_min_request_quirk(void) {
+    TEST_ASSERT_TRUE(quirksFor(0x10AF, 0x0002) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksFor(0x10AF, 0x0000) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksFor(0x10AF, 0x1000) & QUIRK_MIN_REQUEST_8);
+    TEST_ASSERT_FALSE(quirksFor(0x050D, 0x0980) & QUIRK_MIN_REQUEST_8);
 }
 
-void test_vertiv_edge_min_request_quirk(void) {
-    TEST_ASSERT_TRUE(quirksOf(0x10AF, 0x0002) & QUIRK_MIN_REQUEST_8);
-    TEST_ASSERT_FALSE(quirksOf(0x10AF, 0x0000) & QUIRK_MIN_REQUEST_8);
-    TEST_ASSERT_FALSE(quirksOf(0x10AF, 0x1000) & QUIRK_MIN_REQUEST_8);
-    TEST_ASSERT_FALSE(quirksOf(0x050D, 0x0980) & QUIRK_MIN_REQUEST_8);
+// The floor USBHostUPS applies to every GET_REPORT: at least 8 bytes, never less than declared
+void test_quirk_request_length(void) {
+    const uint32_t edge = quirksFor(0x10AF, 0x0002);
+    TEST_ASSERT_EQUAL_UINT16(QUIRK_MIN_REQUEST_LENGTH, quirkRequestLength(edge, 2));
+    TEST_ASSERT_EQUAL_UINT16(64, quirkRequestLength(edge, 64));
+    TEST_ASSERT_EQUAL_UINT16(255, quirkRequestLength(edge, 255));
+    TEST_ASSERT_EQUAL_UINT16(2, quirkRequestLength(quirksFor(0x10AF, 0x0000), 2));
+    TEST_ASSERT_EQUAL_UINT16(2, quirkRequestLength(0, 2));
 }
 
 #ifdef PIO_UNIT_TESTING
@@ -271,6 +273,7 @@ static void runAll() {
     RUN_TEST(test_no_command_on_standard_usages);
     RUN_TEST(test_delay_paths_follow_belkin_table);
     RUN_TEST(test_vertiv_edge_min_request_quirk);
+    RUN_TEST(test_quirk_request_length);
 }
 
 #ifndef ARDUINO

@@ -250,12 +250,7 @@ public:
         IHidDriver* driver = s.driver;
 
         // Match quirks
-        host._quirks = 0;
-        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
-            if (UPS_QUIRKS[q].vid == vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == pid)) {
-                host._quirks |= UPS_QUIRKS[q].flags;
-            }
-        }
+        host._quirks = quirksFor(vid, pid);
 
         TEST_ASSERT_NOT_NULL_MESSAGE(driver, "Failed to instantiate driver for fixture");
         driver->setup();

@@ -566,11 +566,7 @@ void USBHostUPS::claimInterface(hid_host_device_handle_t handle) {
     char product[HID_STR_DESC_MAX_LENGTH + 1] = {0};
     if (have_info) {
         // Quirks first: the strings the registry looks at need QUIRK_INVERT_STRINGS
-        for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
-            if (UPS_QUIRKS[q].vid == dev_info.VID && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == dev_info.PID)) {
-                quirks |= UPS_QUIRKS[q].flags;
-            }
-        }
+        quirks = quirksFor(dev_info.VID, dev_info.PID);
 
         // Some VID/PID are shared by subdrivers that tell the devices apart by their
         // strings, as usbhid-ups does (US-097, Phoenixtec 06da:ffff), and so does nutdrv_qx
@@ -1335,7 +1331,7 @@ bool USBHostUPS::requestReport(uint8_t report_id, uint8_t report_type, uint16_t 
     if (!_is_ready_to_poll || !_hid_dev_handle) return false;
     if (!_link.canPoll(millis())) return false;
 
-    size_t length = expected_length > 0 ? expected_length : 255;
+    size_t length = quirkRequestLength(_quirks, expected_length > 0 ? expected_length : 255);
     if (length > sizeof(_request_buffer)) length = sizeof(_request_buffer);
 
     // Blocking control transfer: no application lock may be held here (ADR 0008)
@@ -1448,7 +1444,7 @@ void USBHostUPS::logDiagReadEnd() {
 }
 
 DiagSweep::Result USBHostUPS::readReportRaw(uint8_t report_id, uint8_t report_type, uint16_t expected_length, size_t& length) {
-    length = expected_length > 0 ? expected_length : 255;
+    length = quirkRequestLength(_quirks, expected_length > 0 ? expected_length : 255);
     if (length > sizeof(_request_buffer)) length = sizeof(_request_buffer);
 
     // Blocking control transfer: no application lock may be held here (ADR 0008)
@@ -1614,7 +1610,8 @@ bool USBHostUPS::setBeeperLocked(bool enable, const HIDUsageDef* field) {
     if (expected_length > sizeof(_request_buffer)) expected_length = sizeof(_request_buffer);
 
     memset(_request_buffer, 0, sizeof(_request_buffer));
-    size_t fetched_len = expected_length;
+    size_t fetched_len = quirkRequestLength(_quirks, expected_length); // QUIRK_MIN_REQUEST_8
+    if (fetched_len > sizeof(_request_buffer)) fetched_len = sizeof(_request_buffer);
 
     // STEP 1: Fetch current report to preserve other fields (no application lock held, ADR 0008)
     esp_err_t err = hid_class_request_get_report(_hid_dev_handle, rep_type, def.report_id, _request_buffer, &fetched_len);
@@ -1672,8 +1669,8 @@ bool USBHostUPS::writeUsageLocked(const HIDUsageDef& def, uint32_t value) {
         // _driver is deleted under _mutex (handleDisconnected())
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         expected_length = _hid_parser.getExpectedLength(def.report_id, HID_REPORT_TYPE_FEATURE);
-        // wLength as the poll asks it (APC Back-UPS BX: at least 8 bytes)
-        request_length = DriverDispatch::requestLength(_driver, HID_REPORT_TYPE_FEATURE, def.report_id, expected_length);
+        // wLength as the poll asks it (APC Back-UPS BX, QUIRK_MIN_REQUEST_8: at least 8 bytes)
+        request_length = quirkRequestLength(_quirks, DriverDispatch::requestLength(_driver, HID_REPORT_TYPE_FEATURE, def.report_id, expected_length));
         shared_report = BeeperLogic::reportHasOtherFields(_hid_parser.getUsages(), def);
     }
     if (expected_length > sizeof(_request_buffer)) expected_length = sizeof(_request_buffer);
