@@ -26,11 +26,19 @@
  *      2020-2021 Edgar Fuß, Mathematisches Institut der Universität Bonn <ef@math.uni-bonn.de>
  *    Armac (Richcomm-variant) additions
  *      2021      Tomasz Fortuna <bla@thera.be>
+ *
+ * drivers/belkin-hid.c (belkin_usb_device_table):
+ *   Copyright (C) 2003 - 2008 Arnaud Quette <arnaud.quette@free.fr>
+ *                 2005 Peter Selinger <selinger@users.sourceforge.net>
+ *                 2011, 2014 Charles Lepple <clepple+nut@gmail.com>
+ *                 2024 James R. Parks <jrjparks@zathera.com>
+ *                 2024 - 2026 Jim Klimov <jimklimov+nut@gmail.com>
  */
 
 #include "DriverRegistry.h"
 #include "GenericDriver.h"
 #include "APCDriver.h"
+#include "BelkinDriver.h"
 #include "CyberPowerDriver.h"
 #include "EatonDriver.h"
 #include "EcoFlowDriver.h"
@@ -80,6 +88,24 @@ const DriverEntry DRIVERS[] = {
     { 0x1CB0, 0x0032, make<LegrandDriver> },                     // Legrand Keor SP
     { 0x04D8, 0xD004, make<OpenUPSDriver> },                     // OpenUPS
     { 0x04D8, 0xD005, make<OpenUPSDriver> },                     // OpenUPS2 / WalleCube
+    // belkin_usb_device_table (belkin-hid.c:49-84): the other Belkin and Liebert products stay
+    // generic (upstream rejects them unless the productid option is given), 10af:1000 is
+    // vertiv-hid.c, not ported
+    { 0x050D, 0x0980, make<BelkinDriver> },                      // Belkin F6C800-UNV
+    { 0x050D, 0x0900, make<BelkinDriver> },                      // Belkin F6C900-UNV
+    { 0x050D, 0x0910, make<BelkinDriver> },                      // Belkin F6C100-UNV
+    { 0x050D, 0x0912, make<BelkinDriver> },                      // Belkin F6C120-UNV
+    { 0x050D, 0x0551, make<BelkinDriver> },                      // Belkin F6C550-AVR
+    { 0x050D, 0x0750, make<BelkinDriver> },                      // Belkin F6C1250-TW-RK
+    { 0x050D, 0x0751, make<BelkinDriver> },                      // Belkin F6C1500-TW-RK
+    { 0x050D, 0x0375, make<BelkinDriver> },                      // Belkin F6H375-USB
+    { 0x050D, 0x0F51, make<BelkinDriver> },                      // Belkin Regulator PRO-USB
+    { 0x050D, 0x1100, make<BelkinDriver> },                      // Belkin F6C1100-UNV, F6C1200-UNV
+    { 0x10AF, 0x0000, make<BelkinDriver> },                      // Liebert GXT4
+    { 0x10AF, 0x0001, make<BelkinDriver> },                      // Liebert PowerSure PSA
+    { 0x10AF, 0x0002, make<BelkinDriver> },                      // Liebert PowerSure PST / PSI5, Vertiv Edge
+    { 0x10AF, 0x0004, make<BelkinDriver> },                      // Liebert PowerSure PSI 1440
+    { 0x10AF, 0x0008, make<BelkinDriver> },                      // Liebert GXT3
 };
 
 // Explicit HID rows, shared by create() and match(): Phoenixtec 06da:ffff, then DRIVERS[].

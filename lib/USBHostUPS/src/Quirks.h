@@ -8,6 +8,13 @@
 #define QUIRK_IGNORE_BATTERY       (1 << 1)
 #define QUIRK_NO_STRING_DESCRIPTOR (1 << 2)
 #define QUIRK_NO_INTERRUPT_PIPE    (1 << 4)
+// Every GET_REPORT asks at least QUIRK_MIN_REQUEST_LENGTH bytes, never less than the
+// declared length (quirkRequestLength(), applied by USBHostUPS where the request goes out). NUT's libhid.c never asks the declared
+// length either: sizeof(rbuf->data[id]) (8 on 64 bit) up to ab2ccd7, MAX_REPORT_ALLOC
+// (256) since. A device that answers with more than it declares overruns a request of the
+// exact length, and the ESP-IDF host controller driver does not survive that.
+#define QUIRK_MIN_REQUEST_8        (1 << 5)
+#define QUIRK_MIN_REQUEST_LENGTH   8
 
 struct QuirkDef {
     uint16_t vid;
@@ -29,8 +36,29 @@ static const QuirkDef UPS_QUIRKS[] = {
     { 0x051D, 0x0003, QUIRK_NO_INTERRUPT_PIPE },
     // APC Smart-UPS 1000: disable_interrupt_pipe as above
     { 0x051D, 0x0004, QUIRK_NO_INTERRUPT_PIPE },
+    // Liebert PSI5 / Vertiv Edge (10af:0002): FEATURE report 30 (Outlet.PercentLoad) is
+    // declared 8 bits long (2 bytes with the ID) but the UPS answers 3 bytes. With wLength 2
+    // the overrun trips assert(urb != NULL) in hcd_dwc.c _buffer_parse() and the board
+    // panics a few seconds after every enumeration; with wLength 8 the transfer completes.
+    { 0x10AF, 0x0002, QUIRK_MIN_REQUEST_8 },
     // Terminator
     { 0x0000, 0x0000, 0 }
 };
+
+// Flags of every UPS_QUIRKS row matching vid:pid
+inline uint32_t quirksFor(uint16_t vid, uint16_t pid) {
+    uint32_t flags = 0;
+    for (int q = 0; UPS_QUIRKS[q].vid != 0; q++) {
+        if (UPS_QUIRKS[q].vid == vid && (UPS_QUIRKS[q].pid == 0xFFFF || UPS_QUIRKS[q].pid == pid)) {
+            flags |= UPS_QUIRKS[q].flags;
+        }
+    }
+    return flags;
+}
+
+// wLength of a GET_REPORT under the device quirks: QUIRK_MIN_REQUEST_8 raises a shorter one
+inline uint16_t quirkRequestLength(uint32_t quirks, uint16_t length) {
+    return ((quirks & QUIRK_MIN_REQUEST_8) && length < QUIRK_MIN_REQUEST_LENGTH) ? QUIRK_MIN_REQUEST_LENGTH : length;
+}
 
 #endif // QUIRKS_H

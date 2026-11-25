@@ -443,6 +443,18 @@ void test_apc_other_models_request_declared_length(void) {
     TEST_ASSERT_EQUAL_UINT16(2, host._lengths[0]);
 }
 
+// QUIRK_MIN_REQUEST_8 (Vertiv Edge 10af:0002) is applied by USBHostUPS where the GET_REPORT
+// goes out (quirkRequestLength(), test_belkin_driver): the drivers ask the declared length
+void test_quirk_min_request_8_left_to_transport(void) {
+    host._quirks = QUIRK_MIN_REQUEST_8;
+    host.addUsage(0x00850066, 12, 3, "UPS.PowerSummary.RemainingCapacity");
+    GenericDriver drv;
+    drv.setup();
+    runLoop(drv, 1000, 1500);
+    const IHidDriver& d = drv;
+    TEST_ASSERT_EQUAL_UINT16(2, d.requestLength(3, 12, 2));
+}
+
 // US-067: the host asks the same wLength for the SET VAR read-modify-write and read back,
 // through the public IHidDriver::requestLength()
 static uint16_t hostRequestLength(const char* model, uint16_t expected) {
@@ -998,6 +1010,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_apc_other_models_keep_2s_quick_poll);
     RUN_TEST(test_apc_back_ups_bx_requests_at_least_8_bytes);
     RUN_TEST(test_apc_other_models_request_declared_length);
+    RUN_TEST(test_quirk_min_request_8_left_to_transport);
     RUN_TEST(test_apc_back_ups_bx_request_length_public);
     RUN_TEST(test_dynamic_usages);
     RUN_TEST(test_apc_back_ups_bx_reads_static_reports_once);

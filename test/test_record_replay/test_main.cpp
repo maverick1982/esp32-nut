@@ -930,6 +930,27 @@ void test_replay_phoenixtec_powerwalker_vi2200shl_issue96(void) {
         RW_DELAYS, RW_DELAYS);
 }
 
+// belkinHid2Nut() rows bound by the Vertiv Edge 750 descriptor (10af:0002), derived from its
+// usages and belkin-hid.c:474-549: the standard PowerSummary rows and the Liebert PSI5 rows; no
+// BELKIN* usage, so no command, no RW row and no ups.delay.*. "BOOL" stands for rows 534-539.
+static const char* const NUT_ROWS_BELKIN_VERTIV_EDGE =
+    "BOOL battery.capacity battery.charge battery.charge.warning battery.runtime battery.type battery.voltage "
+    "battery.voltage.nominal input.frequency input.voltage input.voltage.nominal output.frequency output.voltage "
+    "output.voltage.nominal ups.load ups.serial";
+
+// The values the Generic driver gave as 0.0 V and 4990.0 Hz (liebert_line_voltage_info and
+// divide_by_100_conversion of belkin-hid.c:520-524). No instant command: belkin_hid2nut has them
+// on the BELKIN* usages only, as usbhid-ups with this UPS
+void test_replay_vertiv_edge_750(void) {
+    FixtureReplayRunner::runFixtureTest("test/fixtures/vertiv/vertiv_edge_750_vid10af_pid0002.json",
+        "", nullptr, NUT_ROWS_BELKIN_VERTIV_EDGE,
+        // INPUT/FEATURE 0x18 [24, 108, 9] = 2412, 0x1B [27, 109, 9] = 2413 with exponent 1 in
+        // Volt (0.002412 V), 0x19 / 0x1C [25, 243, 1] = 499 with exponent 1 in Hz
+        { { "input.voltage", "241.2" }, { "output.voltage", "241.3" }, { "input.frequency", "49.9" },
+          { "output.frequency", "49.9" }, { "battery.capacity", "750" } },
+        "", "");
+}
+
 // openupsHid2Nut() rows bound by the W150 descriptor (US-078), derived from its usages and
 // openups-hid.c:296-337: every row but battery.voltage.nominal and the cell voltages
 // (commented out upstream). "BOOL" stands for the 12 status rows 326-337.
@@ -1059,8 +1080,10 @@ void test_status_baseline_all_fixtures(void) {
         { "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json", "OL", nullptr, nullptr },
         { "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json", "OL CHRG", nullptr, nullptr },
         { "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json", "Unknown", nullptr, nullptr },
+        // PresentStatus.NeedReplacement = 1 on mains (liebert_replacebatt_info, belkin-hid.c:538)
+        { "test/fixtures/vertiv/vertiv_edge_750_vid10af_pid0002.json", "ALARM OL RB", "Replace battery!", nullptr },
     };
-    TEST_ASSERT_EQUAL_MESSAGE(32, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(33, (int)(sizeof(rows) / sizeof(rows[0])), "one row per fixture in test/fixtures");
     for (const auto& r : rows) FixtureReplayRunner::runStatusBaseline(r.file, r.status, r.alarm, r.reason);
 }
 
@@ -1098,6 +1121,7 @@ static const char* const kAllFixtures[] = {
     "test/fixtures/openups/wallecube_w150_vid04d8_pidd005.json",
     "test/fixtures/phoenixtec/powerwalker_vi2200shl_vid06da_pidffff_issue96.json",
     "test/fixtures/powercom/powercom_spd750u_vid0d9f_pid0004_issue21.json",
+    "test/fixtures/vertiv/vertiv_edge_750_vid10af_pid0002.json",
 };
 
 // US-079: what every fixture gives with the driver the registry picks (golden/*.registry.txt,
@@ -1105,7 +1129,7 @@ static const char* const kAllFixtures[] = {
 // of the command groups, which changed no known brand. A deliberate change regenerates them
 // (ESP32NUT_WRITE_GOLDEN=1) and shows its diff in the review.
 void test_golden_registry_all_fixtures(void) {
-    TEST_ASSERT_EQUAL_MESSAGE(32, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
+    TEST_ASSERT_EQUAL_MESSAGE(33, (int)(sizeof(kAllFixtures) / sizeof(kAllFixtures[0])), "one row per fixture in test/fixtures");
     for (const char* f : kAllFixtures) FixtureReplayRunner::checkGolden(f, false);
 }
 
@@ -2343,6 +2367,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_cyberpower_sl700u_discussion79);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
+    RUN_TEST(test_replay_vertiv_edge_750);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);
@@ -2404,6 +2429,7 @@ void setup() {
     RUN_TEST(test_replay_cyberpower_ut850eg_discussion95);
     RUN_TEST(test_replay_cyberpower_sl700u_discussion79);
     RUN_TEST(test_replay_phoenixtec_powerwalker_vi2200shl_issue96);
+    RUN_TEST(test_replay_vertiv_edge_750);
     RUN_TEST(test_replay_openups_wallecube_w150);
     RUN_TEST(test_set_cycle_eaton_3s_charge_low);
     RUN_TEST(test_set_cycle_apc_cs750rs_charge_low);

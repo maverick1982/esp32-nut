@@ -97,6 +97,18 @@ The firmware uses the official Network UPS Tools (NUT) HID mappings and supports
 </details>
 
 <details>
+<summary><b>Vertiv / Liebert / Belkin</b> (Click to expand tested models)</summary>
+
+- Vertiv Edge 750 VA (`10af:0002`)
+- Liebert GXT3, GXT4, PowerSure PSA, PST / PSI5, PSI 1440 (`10af:0008`, `0000`, `0001`, `0002`, `0004`) (untested)
+- Belkin units listed by NUT's `belkin-hid` (`050d`) (untested)
+
+These models use the NUT `belkin-hid` mappings, which correct the broken voltage and frequency exponents of the Liebert descriptors. The Vertiv Edge 750 VA is tested on an ESP32-S3: it answers one report with more bytes than its descriptor declares, which crashed the ESP-IDF USB host, so the firmware asks it for at least 8 bytes per GET_REPORT, as NUT does. The Vertiv GXT5 (`10af:1000`) and the other Belkin and Liebert products stay with the generic driver, as in NUT.
+
+`battery.capacity` is the UPS's rated power in VA (`UPS.Flow.ConfigApparentPower`), not a battery capacity in Ah, as with NUT's `belkin-hid`. These units don't report `ups.power.nominal`, so the board can't estimate `ups.realpower` on its own: add `ups.realpower.nominal` (W, the rating on the label) as a custom variable in the **NUT Server** tab, or `ups.power.nominal` (VA, e.g. 750) for load × VA × 0.6.
+</details>
+
+<details>
 <summary><b>EcoFlow</b> (Click to expand untested / community-contributed models)</summary>
 
 - EcoFlow River 3 Plus
