@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_chip_info.h"
 #include "network/wifi_coprocessor.h"
+#include "CoprocessorImage.h"
 
 // PlatformIO environment of the image (scripts/build_env.py); empty when built without it
 #ifndef NUT_BUILD_ENV
@@ -131,6 +132,13 @@ void WebConfigServer::begin(bool isAPMode) {
     if (board().has_ethernet && activeBoard().has_wifi) {
         server.on("/api/network/link", HTTP_GET, guarded([this]() { handleGetLinkMode(); }));
         server.on("/api/network/link", HTTP_POST, guarded([this]() { handleSetLinkMode(); }));
+    }
+    // ADR 0015 section 5: the firmware of the Wi-Fi coprocessor, uploaded from the board page.
+    // Only while the coprocessor answers: the update API needs the link to it. As /update, the
+    // check that counts is in the upload callback, before anything is written
+    if (board().wifi_coprocessor.present && WifiCoprocessorProbe::status().answered) {
+        server.on("/api/coprocessor/update", HTTP_POST, guarded([this]() { handleCoprocessorUploadDone(); }),
+                  [this]() { handleCoprocessorUpload(); });
     }
     // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
     // so protected by the login
@@ -1148,6 +1156,131 @@ void WebConfigServer::handleOTAUpload() {
         ota_upload_started = false;
         AppLogger::log("ERROR", "[OTA] Upload aborted");
     }
+}
+
+// --- Wi-Fi coprocessor firmware (ADR 0015, section 5) ---
+
+void WebConfigServer::coprocessorUploadFail(int status, const char* message) {
+    if (cp_failed) return;
+    cp_failed = true;
+    cp_status = status;
+    cp_error = message;
+    AppLogger::log("ERROR", "[NETWORK] Coprocessor update refused: %s", message);
+}
+
+bool WebConfigServer::coprocessorWrite(const uint8_t* data, size_t len) {
+    if (len == 0) return true;
+    if (!WifiCoprocessorUpdate::write(data, len)) {
+        coprocessorUploadFail(500, "The coprocessor did not accept the data: its old firmware stays");
+        return false;
+    }
+    cp_written += len;
+    return true;
+}
+
+void WebConfigServer::handleCoprocessorUpload() {
+    // As handleOTAUpload(): a POST that is not multipart has no HTTPUpload
+    if (!server.header("Content-Type").startsWith("multipart/")) return;
+    // WebServer reads the whole upload inside handleClient(), and every chunk goes to the
+    // coprocessor over SDIO: the loopTask watchdog is fed per chunk (US-085)
+    esp_task_wdt_reset();
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        cp_upload_started = true;
+        cp_began = false;
+        cp_failed = false;
+        cp_status = 0;
+        cp_error = "";
+        cp_version = "";
+        cp_head_len = 0;
+        cp_written = 0;
+        cp_start_ms = millis();
+        if (!authorizedQuiet()) {
+            coprocessorUploadFail(401, "Not authenticated");
+        } else if (update_service && update_service->busy()) {
+            coprocessorUploadFail(409, "An online update is in progress");
+        } else {
+            AppLogger::log("INFO", "[NETWORK] Coprocessor firmware upload started: %s", upload.filename.c_str());
+        }
+        return;
+    }
+    if (upload.status == UPLOAD_FILE_ABORTED) {
+        // No abort in the update API: without end() the coprocessor keeps booting its old firmware
+        AppLogger::log("ERROR", "[NETWORK] Coprocessor firmware upload aborted after %u bytes",
+                       (unsigned)cp_written);
+        cp_upload_started = false;
+        return;
+    }
+    if (cp_failed) return;  // refused: the rest of the file is read and dropped
+
+    const uint8_t* data = upload.buf;
+    size_t len = upload.status == UPLOAD_FILE_WRITE ? upload.currentSize : 0;
+    if (!cp_began) {
+        // The check needs the first 256 bytes: they may come in more than one chunk
+        const size_t take = len < sizeof(cp_head) - cp_head_len ? len : sizeof(cp_head) - cp_head_len;
+        memcpy(cp_head + cp_head_len, data, take);
+        cp_head_len += take;
+        data += take;
+        len -= take;
+        if (cp_head_len < sizeof(cp_head) && upload.status != UPLOAD_FILE_END) return;
+        const char* target = WifiCoprocessorProbe::status().target;
+        CoprocessorImage::Info info;
+        const CoprocessorImage::Result r = CoprocessorImage::check(cp_head, cp_head_len, target, info);
+        char msg[112];
+        CoprocessorImage::message(r, info, target, msg, sizeof(msg));
+        if (r != CoprocessorImage::Result::OK) {
+            coprocessorUploadFail(400, msg);
+            return;
+        }
+        cp_version = info.version;
+        AppLogger::log("INFO", "[NETWORK] Coprocessor update: %s, writing", msg);
+        if (!WifiCoprocessorUpdate::begin()) {
+            coprocessorUploadFail(500, "The coprocessor did not start the update: its old firmware stays");
+            return;
+        }
+        cp_began = true;
+        if (!coprocessorWrite(cp_head, cp_head_len)) return;
+    }
+    if (!coprocessorWrite(data, len)) return;
+    if (upload.status == UPLOAD_FILE_END) {
+        if (!WifiCoprocessorUpdate::end()) {
+            coprocessorUploadFail(500, "The coprocessor refused the image: its old firmware stays");
+            return;
+        }
+        AppLogger::log("INFO", "[NETWORK] Coprocessor firmware %s written: %u bytes in %u ms", cp_version.c_str(),
+                       (unsigned)cp_written, (unsigned)(millis() - cp_start_ms));
+    }
+}
+
+void WebConfigServer::handleCoprocessorUploadDone() {
+    server.sendHeader("Connection", "close");
+    if (!cp_upload_started) {
+        server.send(400, "application/json", "{\"error\":\"multipart upload required\"}");
+        return;
+    }
+    cp_upload_started = false;
+    if (cp_failed || !cp_began) {
+        JsonDocument doc;
+        doc["error"] = cp_failed ? cp_error : String("No file received");
+        String out;
+        serializeJson(doc, out);
+        server.send(cp_failed ? cp_status : 400, "application/json", out);
+        return;
+    }
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["version"] = cp_version;
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out);
+    // The coprocessor boots the new firmware; the board restarts so ESP-Hosted connects to it.
+    // A coprocessor that does not come back leaves the board without Wi-Fi (ADR 0015 section 2)
+    if (!WifiCoprocessorUpdate::activate()) {
+        AppLogger::log("WARN", "[NETWORK] Coprocessor did not confirm the activation: restarting anyway");
+    }
+    AppLogger::log("INFO", "[NETWORK] Coprocessor firmware %s installed: restarting", cp_version.c_str());
+    should_restart = true;
+    restart_request_time = millis();
 }
 
 // --- Autenticazione (ADR 0009) ---

@@ -1,6 +1,7 @@
 #ifndef NETWORK_WIFI_COPROCESSOR_H
 #define NETWORK_WIFI_COPROCESSOR_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "board/board.h"
 
@@ -36,5 +37,20 @@ bool run(const WifiCoprocessor& c, uint32_t timeout_ms, void (*tick)(uint32_t no
 const WifiCoprocessorStatus& status();
 
 }  // namespace WifiCoprocessorProbe
+
+/**
+ * @brief Writes a new firmware to the coprocessor (ADR 0015, section 5): the ESP-Hosted update
+ * API of the core. The coprocessor writes it to its other OTA partition, so an interrupted
+ * update leaves the old firmware running; activate() makes it boot the new one. Only while
+ * the coprocessor answers; the caller checks the image first (CoprocessorImage). loopTask.
+ */
+namespace WifiCoprocessorUpdate {
+
+bool begin();
+bool write(const uint8_t* data, size_t len);
+bool end();
+bool activate();
+
+}  // namespace WifiCoprocessorUpdate
 
 #endif  // NETWORK_WIFI_COPROCESSOR_H

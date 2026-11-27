@@ -114,6 +114,53 @@ test.describe('Board page, Wi-Fi coprocessor (ADR 0015)', () => {
     await expect(page.locator('#board-cp-text')).toHaveText('Not answering: no answer within 10 s. The board runs without Wi-Fi.');
   });
 
+  // ADR 0015 section 5: update by upload, only while the coprocessor answers
+  test('update form: link to the image of the host version, Update only with a file', async ({ page }) => {
+    await openBoard(page, { ...NANO_BOARD, wifi_coprocessor: { answered: true, target: 'esp32c6', firmware: 'unknown', host: '2.12.13', update_available: true } });
+    await expect(page.locator('#cp-update')).toBeVisible();
+    await expect(page.locator('#cp-update-link')).toHaveText('esp32c6-v2.12.13.bin');
+    await expect(page.locator('#cp-update-link')).toHaveAttribute('href', 'https://espressif.github.io/arduino-esp32/hosted/esp32c6-v2.12.13.bin');
+    await expect(page.locator('#btn-cp-update')).toBeDisabled();
+    await page.locator('#cp-update-file').setInputFiles({ name: 'esp32c6-v2.12.13.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(300, 0xE9) });
+    await expect(page.locator('#btn-cp-update')).toBeEnabled();
+  });
+
+  test('update form hidden while the coprocessor does not answer', async ({ page }) => {
+    await openBoard(page, { ...NANO_BOARD, wifi_coprocessor: { answered: false, error: 'no answer within 10 s' } });
+    await expect(page.locator('#cp-update')).toBeHidden();
+  });
+
+  test('refused image: the message of the board, the form stays usable', async ({ page }) => {
+    await openBoard(page, { ...NANO_BOARD, wifi_coprocessor: { answered: true, target: 'esp32c6', firmware: 'unknown', host: '2.12.13', update_available: true } });
+    let uploads = 0;
+    await page.route('**/api/coprocessor/update', route => {
+      uploads++;
+      return route.fulfill({ status: 400, json: { error: 'Not an ESP-Hosted coprocessor firmware (project "blink")' } });
+    });
+    await page.locator('#cp-update-file').setInputFiles({ name: 'blink.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(300, 0xE9) });
+    await page.locator('#btn-cp-update').click();
+    await expect(page.locator('#cp-update-error-text')).toHaveText('Not an ESP-Hosted coprocessor firmware (project "blink")');
+    await expect(page.locator('#cp-update-success')).toBeHidden();
+    await expect(page.locator('#btn-cp-update')).toBeEnabled();
+    expect(uploads).toBe(1);
+  });
+
+  test('installed: version and the restart countdown', async ({ page }) => {
+    await openBoard(page, { ...NANO_BOARD, wifi_coprocessor: { answered: true, target: 'esp32c6', firmware: 'unknown', host: '2.12.13', update_available: true } });
+    let contentType = '';
+    await page.route('**/api/coprocessor/update', route => {
+      contentType = route.request().headers()['content-type'] || '';
+      return route.fulfill({ json: { success: true, version: '2.12.13' } });
+    });
+    await page.locator('#cp-update-file').setInputFiles({ name: 'esp32c6-v2.12.13.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(300, 0xE9) });
+    await page.locator('#btn-cp-update').click();
+    await expect(page.locator('#cp-update-success')).toBeVisible();
+    await expect(page.locator('#cp-update-version')).toHaveText('2.12.13');
+    await expect(page.locator('#cp-update-countdown')).toHaveText(/^(1\d|20)$/);
+    await expect(page.locator('#btn-cp-update')).toBeDisabled();
+    expect(contentType).toMatch(/^multipart\/form-data/);
+  });
+
   test('boards without a coprocessor: no line', async ({ page }) => {
     await openBoard(page, NANO_BOARD);
     await expect(page.locator('#board-chip')).toBeVisible();

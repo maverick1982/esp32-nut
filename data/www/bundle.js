@@ -4319,6 +4319,72 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // ---------- Wi-Fi coprocessor firmware (ADR 0015 section 5) ----------
+        const cpForm = B('cp-update');
+        const cpFile = B('cp-update-file');
+        const cpBtn = B('btn-cp-update');
+        const CP_BTN_IDLE = cpBtn ? cpBtn.innerHTML : '';
+        const CP_RESTART_S = 20;
+        const cpError = (text) => {
+            B('cp-update-error-text').textContent = text || '';
+            B('cp-update-error').hidden = !text;
+        };
+        if (cpForm && cpFile && cpBtn) {
+            cpFile.addEventListener('change', () => {
+                cpError('');
+                cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+            });
+            cpForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (cpBtn.disabled || !cpFile.files || cpFile.files.length !== 1) return;
+                cpError('');
+                const fd = new FormData();
+                fd.append('firmware', cpFile.files[0], cpFile.files[0].name);
+                const progress = B('cp-update-progress');
+                progress.value = 0;
+                progress.hidden = false;
+                cpBtn.disabled = true;
+                cpFile.disabled = true;
+                cpBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Updating...';
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/coprocessor/update');
+                xhr.upload.onprogress = (ev) => {
+                    if (ev.lengthComputable) progress.value = Math.round(ev.loaded * 100 / ev.total);
+                };
+                const fail = (text) => {
+                    progress.hidden = true;
+                    cpBtn.innerHTML = CP_BTN_IDLE;
+                    cpFile.disabled = false;
+                    cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+                    cpError(text);
+                };
+                xhr.onerror = () => fail('The upload failed. Check the connection to the board and try again.');
+                xhr.onload = () => {
+                    // As apiFetch(): an expired session goes to the login page
+                    if (xhr.status === 401) { window.location.replace('/login?expired=1'); return; }
+                    let data = null;
+                    try { data = JSON.parse(xhr.responseText); } catch (err) { data = null; }
+                    if (xhr.status !== 200 || !data || !data.success) {
+                        fail(data && typeof data.error === 'string' ? data.error : 'The coprocessor update failed.');
+                        return;
+                    }
+                    progress.value = 100;
+                    cpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Installed';
+                    B('cp-update-version').textContent = typeof data.version === 'string' ? data.version : '';
+                    B('cp-update-success').hidden = false;
+                    const countdown = B('cp-update-countdown');
+                    let left = CP_RESTART_S;
+                    countdown.textContent = left;
+                    const timer = setInterval(() => {
+                        left -= 1;
+                        countdown.textContent = Math.max(0, left);
+                        if (left <= 0) { clearInterval(timer); window.location.reload(); }
+                    }, 1000);
+                };
+                xhr.send(fd);
+            });
+        }
+
         // ---------- Load ----------
         function renderBoard() {
             const id = typeof board.id === 'string' ? board.id : '';
@@ -4351,6 +4417,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     text = `Not answering${cp.error ? ': ' + cp.error : ''}. The board runs without Wi-Fi.`;
                 }
                 B('board-cp-text').textContent = text;
+            }
+            // ADR 0015 section 5: the update form while the coprocessor answers, with the link to the
+            // image of the host version (the URL the Arduino core names)
+            const canUpdate = !!cp && cp.answered === true && typeof cp.target === 'string' && cp.target !== '' &&
+                typeof cp.host === 'string' && /^\d+\.\d+\.\d+$/.test(cp.host);
+            B('cp-update').hidden = !canUpdate;
+            if (canUpdate) {
+                const name = `${cp.target}-v${cp.host}.bin`;
+                const link = B('cp-update-link');
+                link.href = `https://espressif.github.io/arduino-esp32/hosted/${name}`;
+                link.textContent = name;
             }
 
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;

@@ -2310,6 +2310,13 @@ body.auth-page {
 .board-chip div { display: flex; gap: 8px; align-items: baseline; }
 .board-chip dt { color: var(--text-secondary); }
 .board-chip dd { margin: 0; color: var(--text-primary); }
+/* ADR 0015 section 5: Wi-Fi coprocessor firmware upload */
+.cp-update { display: flex; flex-direction: column; gap: 10px; margin: 0 0 18px; }
+.cp-update[hidden] { display: none; }
+.cp-update-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cp-update-row input[type="file"] { flex: 1 1 220px; min-width: 0; color: var(--text-secondary); font-size: 13px; }
+.cp-update-progress { width: 100%; height: 6px; }
+.cp-update-progress[hidden] { display: none; }
 .board-profile span { color: var(--text-primary); }
 
 .board-lead { margin-top: -0.75rem; }

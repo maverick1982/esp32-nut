@@ -92,6 +92,21 @@ private:
     // ADR 0015: link mode of a board with its own Ethernet port and Wi-Fi
     void handleGetLinkMode();
     void handleSetLinkMode();
+    // ADR 0015 section 5: upload of the Wi-Fi coprocessor firmware
+    void handleCoprocessorUpload();
+    void handleCoprocessorUploadDone();
+    void coprocessorUploadFail(int status, const char* message);
+    bool coprocessorWrite(const uint8_t* data, size_t len);
+    bool cp_upload_started = false;
+    bool cp_began = false;
+    bool cp_failed = false;
+    int cp_status = 0;
+    String cp_error;
+    String cp_version;
+    uint8_t cp_head[256];
+    size_t cp_head_len = 0;
+    uint32_t cp_written = 0;
+    uint32_t cp_start_ms = 0;
     NvsNutOverrideStore* nut_override_store = nullptr;
     std::vector<NutOverride>* nut_overrides = nullptr;
     NUTServer* nut_server = nullptr;

@@ -99,3 +99,31 @@ bool run(const WifiCoprocessor& c, uint32_t timeout_ms, void (*tick)(uint32_t no
 }
 
 }  // namespace WifiCoprocessorProbe
+
+namespace WifiCoprocessorUpdate {
+
+#if CONFIG_ESP_HOSTED_ENABLED
+bool begin() {
+    return s_status.answered && hostedBeginUpdate();
+}
+
+bool write(const uint8_t* data, size_t len) {
+    // The core takes a non-const buffer; it only reads it
+    return hostedWriteUpdate(const_cast<uint8_t*>(data), (uint32_t)len);
+}
+
+bool end() {
+    return hostedEndUpdate();
+}
+
+bool activate() {
+    return hostedActivateUpdate();
+}
+#else
+bool begin() { return false; }
+bool write(const uint8_t*, size_t) { return false; }
+bool end() { return false; }
+bool activate() { return false; }
+#endif
+
+}  // namespace WifiCoprocessorUpdate

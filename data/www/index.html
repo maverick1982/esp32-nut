@@ -792,6 +792,42 @@
                         <div id="board-cp" hidden><dt>Wi-Fi coprocessor</dt><dd id="board-cp-text">--</dd></div>
                     </dl>
 
+                    <!-- ADR 0015 section 5: firmware of the Wi-Fi coprocessor, by upload only. Shown while
+                         the coprocessor answers; POST /api/coprocessor/update (multipart) -->
+                    <form class="cp-update" id="cp-update" hidden novalidate>
+                        <div class="board-label">
+                            <span class="board-name">Update the Wi-Fi coprocessor firmware</span>
+                            <span class="board-hint">Upload the ESP-Hosted image that matches this firmware:
+                                <a id="cp-update-link" href="#" target="_blank" rel="noopener">--</a>.
+                                The board checks the file before writing it; an interrupted upload keeps the old
+                                coprocessor firmware. The board restarts at the end.</span>
+                        </div>
+                        <div class="cp-update-row">
+                            <input type="file" id="cp-update-file" accept=".bin,application/octet-stream"
+                                aria-label="Coprocessor firmware file">
+                            <button type="submit" class="btn btn-primary" id="btn-cp-update" disabled>
+                                <span class="glow"></span>
+                                Update coprocessor
+                            </button>
+                        </div>
+                        <progress class="cp-update-progress" id="cp-update-progress" max="100" value="0" hidden></progress>
+                        <div class="auth-alert" id="cp-update-error" role="alert" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 8v4M12 16h.01" />
+                            </svg>
+                            <span id="cp-update-error-text"></span>
+                        </div>
+                        <div class="auth-alert success" id="cp-update-success" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
+                            </svg>
+                            <span>Coprocessor firmware <span id="cp-update-version">--</span> installed. The board is
+                                restarting, this page reloads in <span class="countdown" id="cp-update-countdown">20</span> s.</span>
+                        </div>
+                    </form>
+
                     <!-- GET /api/board failed -->
                     <div class="auth-alert" id="board-error" role="alert" hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

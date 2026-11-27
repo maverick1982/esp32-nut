@@ -65,11 +65,14 @@ Chosen option: **B**, because it implements the capability ADR 0010 announced, k
 * When nothing is saved, the initial value is `BoardDefaults::network_mode` for a board with its own Ethernet port (Ethernet on the P4, PDR 0002 D3); the W5500 keeps Automatic (US-127).
 * The Network page offers the choice wherever the board has both links: in the W5500 section as today, and in a link section for boards with a built-in port, served by the same API contract for the mode. A mode change restarts the board, as today.
 
-### 5. Coprocessor firmware: shown, not updated (first delivery)
+### 5. Coprocessor firmware: shown, and updated by upload
 
 * The System Log and the board page show the coprocessor target, its ESP-Hosted firmware version ("unknown" when it answers 0.0.0, as the factory firmware of the measured C6 does) and the host version, and say when the host reports a newer firmware for the coprocessor.
-* This is a notice, not an error: the measured factory firmware scans with host 2.12.13.
-* **Updating the coprocessor is out of scope** and gets its own decision. The candidates are an upload of the C6 image from the Web UI through the ESP-Hosted update API, or a download from Espressif's server. Both write the firmware of a second chip and need their own failure analysis.
+* This is a notice, not an error: the measured factory firmware scans and joins networks with host 2.12.13.
+* **Update by upload only.** The board page takes a coprocessor image uploaded from the browser and writes it through the ESP-Hosted update API of the core (`hostedBeginUpdate()`, `hostedWriteUpdate()`, `hostedEndUpdate()`, `hostedActivateUpdate()`): the C6 writes it to its other OTA partition and boots it on activation, so an interrupted upload leaves the old firmware running. The board never downloads it: no dependency on Espressif's server, and it works without Internet access. The page links the image that matches the host (`https://espressif.github.io/arduino-esp32/hosted/<target>-v<host version>.bin`, the URL the core itself names); the same file is in the core package. Release zips do not carry it.
+* **Checked before anything is written** (pure logic, native tests), from the first 256 bytes: an ESP image (magic `0xE9`), for the chip of the coprocessor (image chip ID `0x000D` for an ESP32-C6, from the target the coprocessor reports), with an application description (`0xABCD5432`) whose project is `network_adapter`, the ESP-Hosted slave firmware. Any other C6 application would take the Wi-Fi away, so it is refused. The version of the image is logged and shown.
+* Only while the coprocessor answers (the update API needs the link) and never during an online update of the board. After a successful update the board restarts, so ESP-Hosted connects to the new firmware. A coprocessor that does not come back is the case of section 2: the board runs without Wi-Fi, with Ethernet and the recovery window, and can be updated again once it answers.
+* Not offered: a download by the board, and an image for a host version other than the one shown (the page names it; the check does not compare versions, since the factory firmware reports none).
 
 ### 6. Board page: chip revision and image
 
@@ -100,7 +103,7 @@ The board page shows the chip model and revision and the PlatformIO environment 
 ### Negative
 
 * The boot of a coprocessor board waits for the coprocessor once (about 3 s in the test build).
-* The coprocessor firmware is a second firmware the project does not update yet; a C6 whose factory firmware cannot join networks would need the update path of section 5 first.
+* The coprocessor firmware is a second firmware to keep in step with the core: the user uploads it by hand when the board page says a newer one exists.
 * `planNetwork()` and the Network page change; the S3 and W5500 behavior must be shown unchanged by the existing native and e2e tests.
 * The Wi-Fi MAC address of a coprocessor board is the C6's: unlike the W5500 of US-126, Ethernet and Wi-Fi have different MAC addresses and need separate DHCP reservations; the hostname is the same.
 
@@ -109,6 +112,6 @@ The board page shows the chip model and revision and the PlatformIO environment 
 * Coprocessor pins are profile data (`board().wifi_coprocessor`), passed to `WiFi.setPins()` in the `net` adapter; never literals elsewhere, never a setting, no `#if` per board.
 * Code that offers Wi-Fi (routes, pages, the access point, the plan) asks the runtime capability, not `board().has_wifi` alone, on boards with a coprocessor.
 * `planNetwork()` stays pure and keeps every existing row of `test_net_boot_plan` unchanged; new behavior comes as new rows.
-* Do not write to the coprocessor's flash and do not download its firmware in this delivery; show its version only.
+* Write the coprocessor's flash only through the upload of section 5, after the image check, and only with the update API of the core; never let the board download the coprocessor firmware.
 * Keep the link mode storage (namespace `eth`, key `mode`) and its values: existing boards must keep their saved mode.
 * The coprocessor start runs once at boot, bounded, and its failure is logged once; never retry it in a tight loop.
