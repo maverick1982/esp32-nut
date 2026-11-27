@@ -49,7 +49,7 @@ private:
 
 } // namespace
 
-QxDriver::QxDriver(std::unique_ptr<QxUsbTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
+QxDriver::QxDriver(std::unique_ptr<QxTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
                    const QxSubdriver* const* list)
     : _transport(std::move(transport)), _host(host), _vid(vid), _pid(pid), _recorder(*this),
       _prober(_recorder, list, &QxDriver::logThunk, this) {

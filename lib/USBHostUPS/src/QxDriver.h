@@ -7,6 +7,7 @@
 #include <vector>
 #include "IUPSDriver.h"
 #include "IQxHostPort.h"
+#include "QxTransport.h"
 #include "QxUsbTransport.h"
 #include "QxExchangeLog.h"
 #include "QxProbe.h"
@@ -22,8 +23,8 @@
  * attach of a Q* UPS whose USB transport is ported.
  *
  * It implements the protocol-neutral core of IUPSDriver (hid() == nullptr) on top of one
- * QxUsbTransport, with the protocol detection of QxProber, the walk of QxEngine and the
- * commands of QxControl. Every poll() is one step and sends at most one Q* command (two for
+ * QxTransport (USB or serial, ADR 0014), with the protocol detection of QxProber, the walk
+ * of QxEngine and the commands of QxControl. Every poll() is one step and sends at most one Q* command (two for
  * a claim), so the poll task waits at most qxStepBoundMs() of the transport.
  *
  * No lock is held during a command (ADR 0008): engine and prober write into a shadow
@@ -35,7 +36,7 @@
  */
 class QxDriver : public IUPSDriver {
 public:
-    QxDriver(std::unique_ptr<QxUsbTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
+    QxDriver(std::unique_ptr<QxTransport> transport, IQxHostPort& host, uint16_t vid, uint16_t pid,
              const QxSubdriver* const* list = QX_SUBDRIVER_LIST);
     ~QxDriver() override;
 
@@ -99,7 +100,7 @@ private:
     // Removes from the shadow every key except driver.name, ups.vendorid and ups.productid
     void dropValuesExceptIdentity();
 
-    std::unique_ptr<QxUsbTransport> _transport;
+    std::unique_ptr<QxTransport> _transport;
     IQxHostPort& _host;
     uint16_t _vid;
     uint16_t _pid;
