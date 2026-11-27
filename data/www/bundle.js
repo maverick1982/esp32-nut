@@ -4251,6 +4251,18 @@ document.addEventListener('DOMContentLoaded', () => {
             B('board-name').textContent = label;
             B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
 
+            // ADR 0015: "ESP32-P4 v3.2" and the image it runs ("esp32-p4-eth"); hidden
+            // without the object (older firmware)
+            const chip = board.chip && typeof board.chip === 'object' ? board.chip : null;
+            B('board-chip').hidden = !chip;
+            if (chip) {
+                const model = typeof chip.model === 'string' ? chip.model : '';
+                const rev = typeof chip.revision === 'string' ? chip.revision : '';
+                B('board-chip-model').textContent = [model, rev].filter(Boolean).join(' ') || '--';
+                B('board-chip-image').textContent =
+                    typeof chip.image === 'string' && chip.image !== '' ? chip.image : 'local build';
+            }
+
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
             B('led-section').hidden = !hasLed;
             if (hasLed) {

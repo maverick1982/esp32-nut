@@ -2309,6 +2309,12 @@ body.auth-page {
     white-space: nowrap;
 }
 .board-profile svg { width: 13px; height: 13px; opacity: 0.7; }
+/* ADR 0015: chip revision and installed image */
+.board-chip { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 0 0 16px; font-size: 13px; }
+.board-chip[hidden] { display: none; }
+.board-chip div { display: flex; gap: 8px; align-items: baseline; }
+.board-chip dt { color: var(--text-secondary); }
+.board-chip dd { margin: 0; color: var(--text-primary); }
 .board-profile span { color: var(--text-primary); }
 
 .board-lead { margin-top: -0.75rem; }
@@ -4406,6 +4412,12 @@ body.auth-page {
 
                     <p class="auth-lead board-lead">Hardware options of this board. They are saved on the device
                         and kept after a restart.</p>
+
+                    <!-- ADR 0015: chip revision and installed image, to check the image matches the chip -->
+                    <dl class="board-chip" id="board-chip" hidden>
+                        <div><dt>Chip</dt><dd id="board-chip-model">--</dd></div>
+                        <div><dt>Image</dt><dd class="mono" id="board-chip-image">--</dd></div>
+                    </dl>
 
                     <!-- GET /api/board failed -->
                     <div class="auth-alert" id="board-error" role="alert" hidden>
@@ -9548,6 +9560,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
             B('board-name').textContent = label;
             B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            // ADR 0015: "ESP32-P4 v3.2" and the image it runs ("esp32-p4-eth"); hidden
+            // without the object (older firmware)
+            const chip = board.chip && typeof board.chip === 'object' ? board.chip : null;
+            B('board-chip').hidden = !chip;
+            if (chip) {
+                const model = typeof chip.model === 'string' ? chip.model : '';
+                const rev = typeof chip.revision === 'string' ? chip.revision : '';
+                B('board-chip-model').textContent = [model, rev].filter(Boolean).join(' ') || '--';
+                B('board-chip-image').textContent =
+                    typeof chip.image === 'string' && chip.image !== '' ? chip.image : 'local build';
+            }
 
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
             B('led-section').hidden = !hasLed;

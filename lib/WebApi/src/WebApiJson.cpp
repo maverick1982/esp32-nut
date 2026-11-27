@@ -1,6 +1,7 @@
 #include "WebApiJson.h"
 #include "NUTServer.h"
 #include "NetHostname.h"
+#include <stdio.h>
 #include <string.h>
 
 String WebApiJson::generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOverride>* overrides) {
@@ -474,10 +475,21 @@ String WebApiJson::nutConfigAppliedJson(bool applied, bool changed, unsigned ses
 }
 
 String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
-                                     AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx) {
+                                     AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx,
+                                     const BoardChipInfo* chip) {
     JsonDocument doc;
     doc["id"] = board.name;
     doc["label"] = board.label;
+    // ADR 0015: which chip revision runs which image, so the right image can be checked
+    // without a serial cable (PDR 0002 D2)
+    if (chip) {
+        JsonObject c = doc["chip"].to<JsonObject>();
+        c["model"] = chip->model ? chip->model : "";
+        char rev[12];
+        snprintf(rev, sizeof(rev), "v%u.%u", (unsigned)(chip->revision / 100), (unsigned)(chip->revision % 100));
+        c["revision"] = rev;
+        c["image"] = chip->image ? chip->image : "";
+    }
     if (hasLed(board)) {
         JsonObject led = doc["led"].to<JsonObject>();
         led["present"] = true;

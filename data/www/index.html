@@ -713,6 +713,12 @@
                     <p class="auth-lead board-lead">Hardware options of this board. They are saved on the device
                         and kept after a restart.</p>
 
+                    <!-- ADR 0015: chip revision and installed image, to check the image matches the chip -->
+                    <dl class="board-chip" id="board-chip" hidden>
+                        <div><dt>Chip</dt><dd id="board-chip-model">--</dd></div>
+                        <div><dt>Image</dt><dd class="mono" id="board-chip-image">--</dd></div>
+                    </dl>
+
                     <!-- GET /api/board failed -->
                     <div class="auth-alert" id="board-error" role="alert" hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

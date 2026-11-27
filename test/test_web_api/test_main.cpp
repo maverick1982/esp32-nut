@@ -1175,6 +1175,27 @@ void test_board_json_two_ports_no_led(void) {
         json.c_str());
 }
 
+// ADR 0015: chip revision and image, right after the label; absent without chip (above)
+void test_board_json_chip_and_image(void) {
+    const BoardChipInfo chip = { "ESP32-P4", 302, "esp32-p4-nano" };
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE), AutoShutdownAvailability::AVAILABLE,
+                                                nullptr, &chip);
+    TEST_ASSERT_TRUE(json.startsWith("{\"id\":\"p4_like\",\"label\":\"P4 test board\","
+                                     "\"chip\":{\"model\":\"ESP32-P4\",\"revision\":\"v3.2\","
+                                     "\"image\":\"esp32-p4-nano\"},\"usb\":"));
+    const BoardChipInfo v1 = { "ESP32-P4", 103, "" };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &v1));
+    TEST_ASSERT_EQUAL_STRING("v1.3", doc["chip"]["revision"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("", doc["chip"]["image"].as<const char*>());
+    const BoardChipInfo none = { nullptr, 0, nullptr };
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &none));
+    TEST_ASSERT_EQUAL_STRING("", doc["chip"]["model"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("v0.0", doc["chip"]["revision"].as<const char*>());
+}
+
 // US-114: the automatic shutdown object of GET /api/board
 static JsonDocument boardDoc(bool on, AutoShutdownAvailability sd) {
     BoardSettings s = defaultsFor(board());
@@ -2815,6 +2836,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_needs_confirmation_other_names);
     RUN_TEST(test_board_json_s3);
     RUN_TEST(test_board_json_two_ports_no_led);
+    RUN_TEST(test_board_json_chip_and_image);
     RUN_TEST(test_board_body_led);
     RUN_TEST(test_board_body_invalid_level);
     RUN_TEST(test_board_body_usb_port);

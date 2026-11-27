@@ -13,6 +13,12 @@
 #include <Update.h>
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#include "esp_chip_info.h"
+
+// PlatformIO environment of the image (scripts/build_env.py); empty when built without it
+#ifndef NUT_BUILD_ENV
+#define NUT_BUILD_ENV ""
+#endif
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -299,9 +305,13 @@ void WebConfigServer::handleGetBoard() {
     BoardQxInfo qx = { nullptr };
     bool has_qx = usb_ups && usb_ups->qxDriverInfo(detected);
     qx.detected = detected.c_str();
+    // ADR 0015: the chip revision and the image it runs
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    const BoardChipInfo chip = { ESP.getChipModel(), info.revision, NUT_BUILD_ENV };
     server.send(200, "application/json",
                 WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability(),
-                                              has_qx ? &qx : nullptr));
+                                              has_qx ? &qx : nullptr, &chip));
 }
 
 void WebConfigServer::handleSetBoard() {

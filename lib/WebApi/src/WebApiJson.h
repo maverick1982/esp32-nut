@@ -42,6 +42,16 @@ struct BoardQxInfo {
     const char* detected;
 };
 
+// The chip and the image for GET /api/board (ADR 0015, section 6): model ("ESP32-P4"),
+// revision as major * 100 + minor (302 = v3.2, as esp_chip_info_t::revision) and the
+// PlatformIO environment the image was built for ("esp32-p4-eth", "" in a local build
+// without it)
+struct BoardChipInfo {
+    const char* model;
+    uint16_t revision;
+    const char* image;
+};
+
 class WebApiJson {
 public:
     // Lunghezza massima del body di POST /api/ups/command, /api/ups/variable e
@@ -140,9 +150,11 @@ public:
     // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"
     // absent on a board without LED. US-114: reason "no_ups" / "no_command", absent when
     // available. US-138: "qx":{"protocol","novendor","protocols":[names in probing order],
-    // "detected"} only with qx (a Q* driver bound); protocol "" = automatic
+    // "detected"} only with qx (a Q* driver bound); protocol "" = automatic.
+    // ADR 0015: "chip":{"model","revision":"v3.2","image"} only with chip
     static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
-                                    AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx = nullptr);
+                                    AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx = nullptr,
+                                    const BoardChipInfo* chip = nullptr);
     // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id),
     // auto_shutdown (bool, US-114: false always, true only when available), qx_protocol
     // ("" or a protocol name, case-insensitive, saved lower case) and qx_novendor (bool)
