@@ -116,7 +116,7 @@ Each step is its own commit, and the PRs are cut as agreed with the maintainer:
 
 ## Open Questions
 
-* Whether the XR21V1410 of the SRV2KI-E presents exactly the interface layout of the datasheet. The `serial` export of step 3 answers this on the real unit.
+* ~~Whether the XR21V1410 of the SRV2KI-E presents exactly the interface layout of the datasheet.~~ Answered on the real unit (Waveshare ESP32-P4-NANO, 2026-11-27): a standard CDC-ACM layout, Communication interface 0 (`02/02/01`, interrupt IN `0x85`, 64 bytes) and Data interface 1 (`0A/00/00`, bulk OUT `0x01` and bulk IN `0x81`, 64 bytes), opened on interface 0 with `ESP_OK`. No byte arrives without a command (`rx_bytes` 0), as expected for a request/response protocol. The manufacturer and product strings are empty: whether the chip has none or ESP-IDF skips them (LANGID, as in #91) is looked at with the protocol. The layout is a fixture of `test_usb_serial`.
 * The behavior of the CDC-ACM driver on the P4 High-Speed port with a full-speed bridge (the hub limitation of #113 applies as for HID).
 
 ## Consequences

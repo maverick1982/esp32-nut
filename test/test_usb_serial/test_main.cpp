@@ -62,6 +62,17 @@ static std::vector<uint8_t> cdcAcmConfig() {
         .done();
 }
 
+// The XR21V1410 of an APC SRV2KI-E as the board reported it (System Log, 2026-11-27):
+// "interfaces 0:02/02/01 1:0A/00/00", "endpoints 0x85 interrupt in 64, 0x01 bulk out 64,
+// 0x81 bulk in 64", manufacturer and product strings empty. The functional descriptors are
+// not in the log: the ACM set of the datasheet is assumed (the parser skips them anyway)
+static std::vector<uint8_t> srv2kiConfig() {
+    return Cfg()
+        .iface(0, 0, 1, 0x02, 0x02, 0x01).cdcFunctional(0, 1).ep(0x85, INTR, 64)
+        .iface(1, 0, 2, 0x0A, 0x00, 0x00).ep(0x01, BULK, 64).ep(0x81, BULK, 64)
+        .done();
+}
+
 static UsbSerialDeviceInfo deviceInfo(uint16_t vid, uint16_t pid, const std::vector<uint8_t>& cfg, uint8_t address = 1) {
     UsbSerialDeviceInfo info;
     info.vid = vid;
@@ -185,6 +196,37 @@ void test_xr21v1410_is_claimed_on_its_comm_interface(void) {
     TEST_ASSERT_EQUAL_STRING("xr21v141x", m.adapter);
     TEST_ASSERT_EQUAL_STRING("XR21V141x", m.chip);
     TEST_ASSERT_EQUAL(0, m.interface_number);
+}
+
+// The real unit: parsed as the board logged it, claimed and opened on interface 0
+void test_apc_srv2ki_e_as_seen_on_the_board(void) {
+    UsbSerialDeviceInfo info = deviceInfo(0x04E2, 0x1410, srv2kiConfig());
+    TEST_ASSERT_FALSE(info.truncated);
+    TEST_ASSERT_EQUAL(2, info.interface_count);
+    TEST_ASSERT_EQUAL_HEX8(0x01, info.interfaces[0].protocol);
+    TEST_ASSERT_EQUAL_HEX8(0x85, info.interfaces[0].endpoints[0].address);
+    TEST_ASSERT_EQUAL(64, info.interfaces[0].endpoints[0].max_packet);
+    TEST_ASSERT_EQUAL_HEX8(0x01, info.interfaces[1].endpoints[0].address);
+    TEST_ASSERT_FALSE(info.interfaces[1].endpoints[0].isIn());
+    TEST_ASSERT_EQUAL_HEX8(0x81, info.interfaces[1].endpoints[1].address);
+    TEST_ASSERT_TRUE(info.interfaces[1].endpoints[1].isIn());
+
+    DriverRegistry::SerialMatch m = DriverRegistry::matchSerial(info);
+    TEST_ASSERT_TRUE(m.claim == SerialClaim::CLAIM);
+    TEST_ASSERT_EQUAL_STRING("xr21v141x", m.adapter);
+    TEST_ASSERT_EQUAL(0, m.interface_number);
+
+    // Empty strings, as on the unit: the banner text does not need them
+    UsbSerialLink link;
+    link.attach(info, m, 0);
+    link.opened();
+    char text[64];
+    link.unsupportedText(text, sizeof(text));
+    TEST_ASSERT_EQUAL_STRING("USB serial: XR21V141x (04E2:1410)", text);
+    UsbDiagSerial d;
+    UsbSerialDiag::fill(link, d);
+    TEST_ASSERT_EQUAL_STRING("", d.manufacturer.c_str());
+    TEST_ASSERT_EQUAL_STRING("", d.product.c_str());
 }
 
 void test_xr21v1410_without_cdc_layout_opens_the_bulk_interface(void) {
@@ -463,6 +505,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_parse_rejects_other_descriptors);
     RUN_TEST(test_string_descriptor_to_ascii);
     RUN_TEST(test_xr21v1410_is_claimed_on_its_comm_interface);
+    RUN_TEST(test_apc_srv2ki_e_as_seen_on_the_board);
     RUN_TEST(test_xr21v1410_without_cdc_layout_opens_the_bulk_interface);
     RUN_TEST(test_xr21v1410_without_bulk_endpoints_is_unsupported);
     RUN_TEST(test_other_cdc_acm_device_takes_the_class_fallback);
