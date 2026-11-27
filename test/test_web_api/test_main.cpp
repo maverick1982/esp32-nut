@@ -178,6 +178,33 @@ void test_api_connected_host_with_data() {
     TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());
 }
 
+// A value with a dot is sent as a JSON number only when it is one: the voltronic subdriver
+// publishes "03774.06" (ups.firmware, QVFW) and "054.4" (battery.voltage, QGS) on the APC
+// SRV2KI-E, and the raw leading zero made the whole answer invalid JSON (empty dashboard)
+void test_api_dotted_values_stay_valid_json() {
+    mockHost.connected = true;
+    mockHost.data.set("ups.firmware", "03774.06");
+    mockHost.data.set("battery.voltage", "054.4");
+    mockHost.data.set("ups.firmware.aux", ".");
+    mockHost.data.set("ambient.temperature", "-1.");
+    mockHost.data.set("input.voltage", "229.6");
+    mockHost.data.set("output.current", "0.0");
+    mockHost.data.set("ups.temperature", "-12.5");
+
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    TEST_ASSERT_EQUAL(DeserializationError::Ok, deserializeJson(doc, out).code());
+    TEST_ASSERT_EQUAL_STRING("03774.06", doc["ups.firmware"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("054.4", doc["battery.voltage"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(".", doc["ups.firmware.aux"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("-1.", doc["ambient.temperature"].as<const char*>());
+    // Real numbers keep their formatting
+    TEST_ASSERT_TRUE(out.indexOf("\"input.voltage\":229.6") >= 0);
+    TEST_ASSERT_TRUE(out.indexOf("\"output.current\":0.0") >= 0);
+    TEST_ASSERT_TRUE(out.indexOf("\"ups.temperature\":-12.5") >= 0);
+}
+
 // --- US-132: Q* UPS recognised but not supported yet ---
 
 static const char* QX_TEXT = "Q* UPS (USB transport: hunnox)";
@@ -2751,6 +2778,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_api_null_host);
     RUN_TEST(test_api_disconnected_host);
     RUN_TEST(test_api_connected_host_with_data);
+    RUN_TEST(test_api_dotted_values_stay_valid_json);
     RUN_TEST(test_api_disconnected_without_unsupported_text);
     RUN_TEST(test_api_disconnected_with_unsupported_text);
     RUN_TEST(test_api_connected_ignores_unsupported_text);
