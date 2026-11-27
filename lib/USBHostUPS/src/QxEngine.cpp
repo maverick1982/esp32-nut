@@ -250,8 +250,18 @@ int QxEngine::process(int row, const char* command) {
     int len = _transport.command(_cmd, (size_t)cmdLen, _rx, sizeof(_rx));
 
     memset(_answer, 0, sizeof(_answer));
-    if (len < 0) return -1;
-    memcpy(_answer, _rx, sizeof(_rx)); // _answer[QX_SMALLBUF - 1] stays '\0'
+    if (len < 0) {
+        // Some UPSes execute instant commands / setvars (e.g. Q\r) without sending a reply,
+        // causing the USB transport to time out. Treat this as an empty reply when no
+        // answer is required.
+        if ((it.qxflags & (QX_FLAG_CMD | QX_FLAG_SETVAR)) && it.answer_len == 0 && it.leading == 0) {
+            len = 0;
+        } else {
+            return -1;
+        }
+    } else {
+        memcpy(_answer, _rx, sizeof(_rx)); // _answer[QX_SMALLBUF - 1] stays '\0'
+    }
 
     // Preprocess the answer
     if (it.preprocess_answer) {

@@ -10,13 +10,14 @@
  * subdriver_list[] (nutdrv_qx.c:95-117).
  */
 
-extern const QxSubdriver QX_MUSTEK;      // nutdrv_qx_mustek.c, "Mustek 0.08"
-extern const QxSubdriver QX_MEGATEC_OLD; // nutdrv_qx_megatec-old.c, "Megatec/old 0.08"
-extern const QxSubdriver QX_MEGATEC;     // nutdrv_qx_megatec.c, "Megatec 0.10"
-extern const QxSubdriver QX_ZINTO;       // nutdrv_qx_zinto.c, "Zinto 0.07"
-extern const QxSubdriver QX_HUNNOX;      // nutdrv_qx_hunnox.c, "Hunnox 0.03" (US-138)
-extern const QxSubdriver QX_INNOVATAE;   // nutdrv_qx_innovatae.c, "INNOVATAE 0.01"
-extern const QxSubdriver QX_Q1;          // nutdrv_qx_q1.c, "Q1 0.08" (fallback)
+extern const QxSubdriver QX_VOLTRONIC_QS_HEX; // nutdrv_qx_voltronic-qs-hex.c, "Voltronic-QS-Hex 0.10"
+extern const QxSubdriver QX_MUSTEK;           // nutdrv_qx_mustek.c, "Mustek 0.08"
+extern const QxSubdriver QX_MEGATEC_OLD;      // nutdrv_qx_megatec-old.c, "Megatec/old 0.08"
+extern const QxSubdriver QX_MEGATEC;          // nutdrv_qx_megatec.c, "Megatec 0.10"
+extern const QxSubdriver QX_ZINTO;            // nutdrv_qx_zinto.c, "Zinto 0.07"
+extern const QxSubdriver QX_HUNNOX;           // nutdrv_qx_hunnox.c, "Hunnox 0.03" (US-138)
+extern const QxSubdriver QX_INNOVATAE;        // nutdrv_qx_innovatae.c, "INNOVATAE 0.01"
+extern const QxSubdriver QX_Q1;               // nutdrv_qx_q1.c, "Q1 0.08" (fallback)
 
 /**
  * The ported protocols in the order of subdriver_list[] (nutdrv_qx.c:95-117), ended by

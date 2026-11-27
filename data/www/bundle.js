@@ -2059,9 +2059,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elStatus) elStatus.innerText = data['ups.status'] || '--';
 
         if (elCharge) {
-            const charge = data['battery.charge'] || 0;
-            elCharge.innerText = charge;
-            if (barCharge) barCharge.style.width = `${charge}%`;
+            const charge = data['battery.charge'];
+            elCharge.innerText = charge ?? '--';
+            if (barCharge) barCharge.style.width = `${charge ?? 0}%`;
         }
 
         if (elLoad) {
