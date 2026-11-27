@@ -53,7 +53,8 @@ using QxLogFn = void (*)(void* ctx, const char* level, const char* text);
  * The protocols of the list are tried in its order (subdriver_list[]), each up to
  * QX_MAXTRIES times with its own claim(), as upstream; with a forced protocol (the protocol
  * of ups.conf) only the matching one is tried. Unlike upstream, step() makes at most one
- * claim attempt (1-2 Q* commands), so the poll task stays responsive, and a cycle without a
+ * claim attempt (1-2 Q* commands; voltronic: up to 3 and a 5 s sleep when the UPS does not
+ * answer, as upstream), so the poll task stays responsive, and a cycle without a
  * claim is not fatal: "Device not supported!" is logged once per restart() and a new cycle
  * starts after a back-off (30 s, doubled up to 10 minutes), never in a tight loop.
  *
@@ -86,6 +87,11 @@ public:
      *                 (copied, at most PROTOCOL_MAX - 1 characters)
      */
     void configure(const char* protocol, const QxOptions& options);
+
+    // The host's sleeper for the usleep() of a claim (voltronic_claim() waits 5 s before
+    // asking again a UPS that did not answer, nutdrv_qx_voltronic.c:1704-1709), handed to
+    // the engine. Without one the claim asks again at once
+    void setSleep(QxSleepFn fn, void* ctx);
 
     // New attach: first protocol, first try, back-off and "not supported" line reset, engine
     // dropped
@@ -134,6 +140,8 @@ private:
     int _index = -1; // current protocol in _list, -1 when none is accepted
     int _tries = 0;
     std::unique_ptr<QxEngine> _engine;
+    QxSleepFn _sleep = nullptr;
+    void* _sleepCtx = nullptr;
     const QxSubdriver* _claimed = nullptr;
     uint16_t _failedCycles = 0;
     uint32_t _retryDelayMs = 0;

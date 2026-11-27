@@ -102,6 +102,8 @@ Each step in its own spec and PR, behavior-preserving steps first:
 4. **First transports for the open issues:** fabula and hunnox (krauler family) with the `hunnox` protocol and the `protocol` setting, for #91 and #28. Delivered as a **test build** (OTA zip) for the reporters of the two issues, not as a release; the Q* support goes into a release only after at least one of them confirms it on the real unit. Then cypress and the other SET_REPORT transports for the wider market.
 5. Further protocols and options on user request. CH340 and other USB-serial converters (#34) need a second host class driver next to `hid_host` and get their own ADR.
 
+*Note (2026-11-27):* the USB serial transport is ADR 0014; the Q* driver runs on it unchanged through the `QxTransport` base. `voltronic` (`nutdrv_qx_voltronic.c`, "Voltronic 0.15") is ported in its upstream position, first in the probing order, for the APC SRV2KI-E on an XR21V1410 serial bridge: its 187 table rows identical to upstream, its runtime variables in a per-engine state (`QxEngine::subdriverState()`), the eco voltage ranges through an `info_rw` hook so the tables stay `static const`, range functions with access to the engine (`QxInfoRw::preprocess` takes the engine). Its `ups.conf` options (capability settings, bypass limits, `reset_to_default`, `testing`) are not offered: it runs as upstream without them. `voltronic_axpert`, `voltronic_qs` and `voltronic_qs_hex` are not ported.
+
 Flash is measured at each Q* step on the classic ESP32 image (#93). The Q* code is in every image: no `#if` per board or per protocol family (ADR 0010).
 
 ## Consequences

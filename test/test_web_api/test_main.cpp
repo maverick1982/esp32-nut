@@ -1301,7 +1301,7 @@ void test_board_json_with_qx(void) {
     String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE, &qx);
     TEST_ASSERT_TRUE(json.endsWith(
         ",\"qx\":{\"protocol\":\"hunnox\",\"novendor\":true,"
-        "\"protocols\":[\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
+        "\"protocols\":[\"voltronic\",\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
         "\"detected\":\"Megatec 0.10\"}}"));
     // Automatic, nothing claimed yet
     BoardQxInfo none = { "" };
@@ -1311,7 +1311,7 @@ void test_board_json_with_qx(void) {
     TEST_ASSERT_EQUAL_STRING("", doc["qx"]["protocol"]);
     TEST_ASSERT_FALSE(doc["qx"]["novendor"].as<bool>());
     TEST_ASSERT_EQUAL_STRING("", doc["qx"]["detected"]);
-    TEST_ASSERT_EQUAL(7, (int)doc["qx"]["protocols"].size());
+    TEST_ASSERT_EQUAL(8, (int)doc["qx"]["protocols"].size());
 }
 
 void test_board_body_qx_protocol_accepts_known_and_empty(void) {
@@ -1341,7 +1341,7 @@ void test_board_body_qx_protocol_rejects_unknown(void) {
     BoardSettings cur = defaultsFor(board()), next;
     bool restart;
     String out;
-    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic\"}",
+    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic-qs\"}",
                           "{\"qx_protocol\":3}", "{\"qx_protocol\":true}", "{\"qx_protocol\":null}",
                           "{\"qx_protocol\":\"megatec_with_a_very_long_name\"}" };
     for (const char* b : bad) {

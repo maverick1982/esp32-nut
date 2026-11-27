@@ -2339,16 +2339,16 @@ document.addEventListener('DOMContentLoaded', () => {
             // Q* UPS whose USB transport is not ported yet (issues #91 and #28): _unsupported is
             // "Q* UPS (USB transport: sgs)", shown as "Q* UPS recognized (USB transport: ...)".
             // krauler, fabula, hunnox and cypress are ported: those UPS units never get here.
-            // A USB serial device (ADR 0014) is "USB serial: XR21V141x (04E2:1410)": recognized and
-            // opened, but no UPS protocol runs on a serial device yet.
+            // A USB serial device (ADR 0014) is "USB serial: XR21V141x (04E2:1410)": recognized, but
+            // the Q* driver could not be started on it (line settings refused, a HID UPS bound).
             const unsupportedBanner = document.getElementById('unsupported-ups-banner');
             if (unsupportedBanner) {
                 if (data._unsupported) {
                     const text = String(data._unsupported);
                     let message;
                     if (text.startsWith('USB serial: ')) {
-                        message = text + ' recognized: no UPS protocol runs on USB serial devices yet. ' +
-                            'The USB Diagnostics export (System Logs tab) shows its interfaces and the bytes received.';
+                        message = text + ' recognized, but no UPS protocol could be started on it. ' +
+                            'The System Log and the USB Diagnostics export (System Logs tab) say why.';
                     } else {
                         message = text.replace(/^(.*?) \(/, '$1 recognized (') +
                             ': not supported yet. So far only the krauler, fabula, hunnox and cypress USB transports work.' +

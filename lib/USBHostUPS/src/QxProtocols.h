@@ -10,6 +10,7 @@
  * subdriver_list[] (nutdrv_qx.c:95-117).
  */
 
+extern const QxSubdriver QX_VOLTRONIC;   // nutdrv_qx_voltronic.c, "Voltronic 0.15" (ADR 0014)
 extern const QxSubdriver QX_MUSTEK;      // nutdrv_qx_mustek.c, "Mustek 0.08"
 extern const QxSubdriver QX_MEGATEC_OLD; // nutdrv_qx_megatec-old.c, "Megatec/old 0.08"
 extern const QxSubdriver QX_MEGATEC;     // nutdrv_qx_megatec.c, "Megatec 0.10"
@@ -29,8 +30,9 @@ extern const QxSubdriver* const QX_SUBDRIVER_LIST[];
  * @brief The protocol filter of subdriver_matcher() (nutdrv_qx.c:4329-4345): the protocol
  * name up to the first space, compared case-insensitively with protocol.
  *
- * The names are the ones of protocol in ups.conf: "mustek", "megatec/old" (with the slash,
- * not "megatec-old"), "megatec", "zinto", "innovatae", "q1". A null protocol never matches.
+ * The names are the ones of protocol in ups.conf: "voltronic", "mustek", "megatec/old" (with
+ * the slash, not "megatec-old"), "megatec", "zinto", "hunnox", "innovatae", "q1". A null
+ * protocol never matches.
  */
 bool qxProtocolMatches(const QxSubdriver& sub, const char* protocol);
 

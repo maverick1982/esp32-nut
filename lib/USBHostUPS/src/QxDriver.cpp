@@ -29,6 +29,7 @@
  */
 
 #include "QxDriver.h"
+#include <Arduino.h>
 #include <stdio.h>
 #include <string.h>
 #include "QxControl.h"
@@ -55,12 +56,19 @@ QxDriver::QxDriver(std::unique_ptr<QxTransport> transport, IQxHostPort& host, ui
       _prober(_recorder, list, &QxDriver::logThunk, this) {
     // The defaults upsdrv_initups() picks by USB ID once the device is open (US-141)
     _transport->setDevice(vid, pid);
+    _prober.setSleep(&QxDriver::sleepThunk, this);
 }
 
 QxDriver::~QxDriver() = default;
 
 void QxDriver::logThunk(void* ctx, const char* level, const char* text) {
     static_cast<QxDriver*>(ctx)->_host.log(level, text);
+}
+
+void QxDriver::sleepThunk(void* ctx, uint32_t ms) {
+    (void)ctx;
+    // No lock held (ADR 0008); a few seconds, well inside the 30 s Task WDT of the poll task
+    delay(ms);
 }
 
 const IUpsControl& QxDriver::control() const {

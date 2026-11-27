@@ -80,8 +80,10 @@ void test_qx_settings_default_automatic(void) {
 void test_sanitize_qx_protocol(void) {
     BoardSettings s = defaultsFor(board());
     s.qx_novendor = true;
-    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "voltronic");
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "voltronic-qs"); // not ported
     TEST_ASSERT_EQUAL_STRING("", sanitize(board(), s).qx_protocol);
+    snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "Voltronic"); // ADR 0014
+    TEST_ASSERT_EQUAL_STRING("voltronic", sanitize(board(), s).qx_protocol);
     snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "HUNNOX");
     TEST_ASSERT_EQUAL_STRING("hunnox", sanitize(board(), s).qx_protocol);
     snprintf(s.qx_protocol, sizeof(s.qx_protocol), "%s", "Megatec/Old");

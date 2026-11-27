@@ -35,12 +35,12 @@
 
 // subdriver_list[] of nut_repo/drivers/nutdrv_qx.c:95-117, same order. The protocols not
 // ported yet stay as comments in their upstream position, so a port only uncomments a line.
-// Their claims come first upstream for some units (the vendor-gated voltronic family, for
+// Their claims come first upstream for some units (the vendor-gated voltronic variants, for
 // example): until they are ported such a unit can be claimed by a later protocol here.
 const QxSubdriver* const QX_SUBDRIVER_LIST[] = {
     /* Vendor-ID-gated before command-based protocol probes */
     // &omron_subdriver,
-    // &voltronic_subdriver,
+    &QX_VOLTRONIC,
     // &voltronic_axpert_subdriver,
     // &voltronic_qs_subdriver,
     // &voltronic_qs_hex_subdriver,

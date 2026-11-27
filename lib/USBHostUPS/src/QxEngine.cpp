@@ -137,6 +137,9 @@ void QxEngine::reset(const QxSubdriver& sub, const QxOptions& options) {
     memset(_ctlValue, 0, sizeof(_ctlValue));
     _status = 0;
     _alarms = "";
+    _buzzmode = "";
+    _timedOut = false;
+    memset(_subState, 0, sizeof(_subState));
     _dataChanged = false;
     _lastPollMs = 0;
     _retry = 0;
@@ -203,15 +206,46 @@ void QxEngine::alarmSet(const char* text) {
     _alarms += text;
 }
 
+// buzzmode_set() of dstate.c:2268-2271: str_add_unique_token() of common/common.c:2667-2759
+// into buzzmode_buf[ST_MAX_VALUE_LEN]: each space separated token once, separated by a
+// space, a token that does not fit is dropped
+void QxEngine::buzzmodeSet(const char* token) {
+    static const size_t ST_MAX_VALUE_LEN = 256; // include/extstate.h:35
+    if (!token) return;
+    while (*token) {
+        const size_t len = strcspn(token, " ");
+        if (len > 0) {
+            // str_contains_token(): the token surrounded by spaces or the ends of the string
+            bool present = false;
+            const char* buf = _buzzmode.c_str();
+            for (const char* s = buf; *s && !present; s++) {
+                present = (s == buf || s[-1] == ' ') && strncmp(s, token, len) == 0 &&
+                          (s[len] == '\0' || s[len] == ' ');
+            }
+            const size_t tgtlen = _buzzmode.length();
+            if (!present && ST_MAX_VALUE_LEN >= tgtlen + (tgtlen > 0 ? 1 : 0) + len + 1) {
+                if (tgtlen > 0) _buzzmode += " ";
+                for (size_t i = 0; i < len; i++) _buzzmode += token[i];
+            }
+        }
+        token += len;
+        while (*token == ' ') token++;
+    }
+}
+
 // qx_process_answer(), nutdrv_qx.c:4869-4927 (errno is only used for debug messages there)
 int QxEngine::processAnswer(int row, size_t len) {
     const QxItem& it = item(row);
+    _timedOut = false;
 
-    // Query rejected by the UPS
+    // Query rejected by the UPS (errno = EINVAL)
     if (_sub->rejected && equalsIgnoreCase(_answer, _sub->rejected)) return -1;
 
-    // Short reply
-    if (it.answer_len && len < it.answer_len) return -1;
+    // Short reply: errno = ETIMEDOUT for a zero-length read, EINVAL otherwise
+    if (it.answer_len && len < it.answer_len) {
+        _timedOut = len == 0;
+        return -1;
+    }
 
     // Wrong leading character
     if (it.leading && _answer[0] != it.leading) return -1;
@@ -233,6 +267,7 @@ int QxEngine::processAnswer(int row, size_t len) {
 int QxEngine::process(int row, const char* command) {
     const QxItem& it = item(row);
     const char* src = command ? command : it.command;
+    _timedOut = false;
     // Upstream allocates a larger buffer for commands of SMALLBUF bytes or more: no ported
     // protocol has one, so they fail here instead
     if (!src || strlen(src) >= sizeof(_cmd)) return -1;
@@ -402,9 +437,14 @@ QxEngine::WalkStep QxEngine::walkStep() {
         // Instant commands: dstate_addcmd() upstream, here commandOffered() reads the flags
         if (_flags[row] & QX_FLAG_CMD) continue;
 
-        // Setvars: the QX_FLAG_NONUT branch (setvar(NULL) + skip) is not needed by the
-        // ported protocols
-        if (_flags[row] & QX_FLAG_SETVAR) continue;
+        // Setvars
+        if (_flags[row] & QX_FLAG_SETVAR) {
+            // A one-time setvar from ups.conf: setvar(item->info_type, NULL), then skipped.
+            // Without ups.conf options testvar() is false and setvar() returns
+            // STAT_SET_HANDLED without sending anything, so only the skip remains
+            if (_flags[row] & QX_FLAG_NONUT) _flags[row] |= QX_FLAG_SKIP;
+            continue;
+        }
 
         int retcode;
         bool sent = false; // a command went to the transport for this row
@@ -541,6 +581,8 @@ QxEngine::Update QxEngine::updateInfoStep(UPSData& data, uint32_t nowMs) {
 
     if (!_walkActive || _walkMode == WalkMode::INIT) {
         _reestablished = false;
+        // buzzmode_init()
+        _buzzmode = "";
 
         // Do a full update (polling) every pollfreq or upon data change (i.e. setvar/instcmd).
         // Upstream compares whole seconds (now > lastpoll + pollfreq); here milliseconds, safe
@@ -568,8 +610,10 @@ QxEngine::Update QxEngine::updateInfoStep(UPSData& data, uint32_t nowMs) {
         _dataChanged = false;
     }
 
-    // ups_status_set() + status_commit()
+    // ups_status_set() + status_commit(); buzzmode_commit() in between upstream
     commitStatus();
+    if (_buzzmode.length() == 0) delinfo("experimental.ups.mode.buzzwords");
+    else setinfo("experimental.ups.mode.buzzwords", _buzzmode.c_str());
 
     // ups_alarm_set() + alarm_commit(), only after a full update as upstream: the RB/FSD
     // texts come from the flags just written, after the texts of the protocol rows

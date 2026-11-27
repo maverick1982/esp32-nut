@@ -91,6 +91,8 @@ private:
     };
 
     static void logThunk(void* ctx, const char* level, const char* text);
+    // usleep() of a protocol claim (QxProber::setSleep()), in the poll task
+    static void sleepThunk(void* ctx, uint32_t ms);
     // Makes data equal to the shadow, under the host lock, when the shadow changed
     void publish(UPSData& data);
     void stepPolling(uint32_t now);

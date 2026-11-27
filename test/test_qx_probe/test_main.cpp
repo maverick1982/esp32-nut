@@ -74,39 +74,41 @@ static void assertSelects(const QxTesting* table, const char* rejected, int expe
 
 // --- Choice of the protocol for each kind of UPS -----------------------------------------
 
-void test_selects_mustek(void) { assertSelects(MUSTEK_TESTING, nullptr, 1, "Mustek 0.08"); }
-void test_selects_megatec_old(void) { assertSelects(MEGATEC_OLD_TESTING, nullptr, 4, "Megatec/old 0.08"); }
-void test_selects_megatec(void) { assertSelects(MEGATEC_TESTING, nullptr, 7, "Megatec 0.10"); }
+// Voltronic (ADR 0014) comes first: its 3 tries (QGS) precede every other protocol
+void test_selects_voltronic(void) { assertSelects(VOLTRONIC_TESTING, "(NAK\r", 1, "Voltronic 0.15"); }
+void test_selects_mustek(void) { assertSelects(MUSTEK_TESTING, nullptr, 4, "Mustek 0.08"); }
+void test_selects_megatec_old(void) { assertSelects(MEGATEC_OLD_TESTING, nullptr, 7, "Megatec/old 0.08"); }
+void test_selects_megatec(void) { assertSelects(MEGATEC_TESTING, nullptr, 10, "Megatec 0.10"); }
 // megatec asks I and gets the echo: 3 failed tries, then zinto with Q1 + FW?
-void test_selects_zinto(void) { assertSelects(ZINTO_TESTING, nullptr, 10, "Zinto 0.07"); }
+void test_selects_zinto(void) { assertSelects(ZINTO_TESTING, nullptr, 13, "Zinto 0.07"); }
 // megatec fails on the 37-byte I answer, zinto and hunnox (US-138) on the NAK to FW?
-void test_selects_innovatae(void) { assertSelects(INNOVATAE_TESTING, "NAK\r", 16, "INNOVATAE 0.01"); }
+void test_selects_innovatae(void) { assertSelects(INNOVATAE_TESTING, "NAK\r", 19, "INNOVATAE 0.01"); }
 
 // A unit that answers only Q1: innovatae claims with blazer_claim_light (Q1 only) and comes
 // before the q1 fallback in subdriver_list[] (nutdrv_qx.c:111-116), so NUT picks innovatae
 // too; q1 is reached only with protocol = q1
 void test_q1_only_ups_is_innovatae_as_nut(void) {
-    assertSelects(Q1_TESTING, nullptr, 16, "INNOVATAE 0.01"); // hunnox tries too since US-138
+    assertSelects(Q1_TESTING, nullptr, 19, "INNOVATAE 0.01"); // hunnox tries too since US-138
 }
 
 // MAXTRIES inside a protocol: the first two D queries fail, the third one is claimed
 void test_claim_on_third_try(void) {
     Probe pr(MEGATEC_OLD_TESTING);
-    pr.t.failNext(5); // 3 x QS of mustek + 2 x D
+    pr.t.failNext(8); // 3 x QGS of voltronic + 3 x QS of mustek + 2 x D
     int steps = 0;
     TEST_ASSERT_TRUE(pr.run(0, &steps) == QxProber::Step::Claimed);
-    TEST_ASSERT_EQUAL_INT(6, steps);
+    TEST_ASSERT_EQUAL_INT(9, steps);
     TEST_ASSERT_EQUAL_STRING("Megatec/old 0.08", pr.p.claimed()->name);
 }
 
 void test_tries_and_trying_progress(void) {
     Probe pr(MEGATEC_TESTING);
-    TEST_ASSERT_EQUAL_STRING("Mustek 0.08", pr.p.trying()->name);
+    TEST_ASSERT_EQUAL_STRING("Voltronic 0.15", pr.p.trying()->name);
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 0) == QxProber::Step::Probing);
     TEST_ASSERT_EQUAL_INT(1, pr.p.tryCount());
     pr.p.step(pr.d, 0);
     pr.p.step(pr.d, 0);
-    TEST_ASSERT_EQUAL_STRING("Megatec/old 0.08", pr.p.trying()->name);
+    TEST_ASSERT_EQUAL_STRING("Mustek 0.08", pr.p.trying()->name);
     TEST_ASSERT_EQUAL_INT(0, pr.p.tryCount());
 }
 
@@ -159,8 +161,8 @@ void test_no_answer_backoff(void) {
     int steps = 0;
     uint32_t now = 5000;
     TEST_ASSERT_TRUE(pr.run(now, &steps) == QxProber::Step::NotSupported);
-    TEST_ASSERT_EQUAL_INT(21, steps); // 7 protocols x QX_MAXTRIES
-    TEST_ASSERT_EQUAL_UINT(21, pr.t.sent.size());
+    TEST_ASSERT_EQUAL_INT(24, steps); // 8 protocols x QX_MAXTRIES
+    TEST_ASSERT_EQUAL_UINT(24, pr.t.sent.size());
     assertSingleNotSupportedLine(pr, "No protocol claimed the UPS, next probe in 30 s");
     TEST_ASSERT_EQUAL_UINT32(30000, pr.p.retryDelayMs());
     TEST_ASSERT_EQUAL_UINT(1, pr.p.failedCycles());
@@ -169,7 +171,7 @@ void test_no_answer_backoff(void) {
     // Waiting: nothing sent until the delay is over
     TEST_ASSERT_TRUE(pr.p.step(pr.d, now + 1) == QxProber::Step::Waiting);
     TEST_ASSERT_TRUE(pr.p.step(pr.d, now + 29999) == QxProber::Step::Waiting);
-    TEST_ASSERT_EQUAL_UINT(21, pr.t.sent.size());
+    TEST_ASSERT_EQUAL_UINT(24, pr.t.sent.size());
 
     // Each later cycle doubles the delay up to 10 minutes, without new log lines
     const uint32_t delays[] = { 60000, 120000, 240000, 480000, 600000, 600000 };
@@ -180,7 +182,7 @@ void test_no_answer_backoff(void) {
         TEST_ASSERT_TRUE(pr.p.step(pr.d, now) == QxProber::Step::Probing);
         TEST_ASSERT_EQUAL_UINT(sent + 1, pr.t.sent.size());
         TEST_ASSERT_TRUE(pr.run(now, &steps) == QxProber::Step::NotSupported);
-        TEST_ASSERT_EQUAL_INT(20, steps);
+        TEST_ASSERT_EQUAL_INT(23, steps);
         TEST_ASSERT_EQUAL_UINT32(next, pr.p.retryDelayMs());
         TEST_ASSERT_EQUAL_UINT32(now + next, pr.p.nextProbeAtMs());
         TEST_ASSERT_TRUE(pr.p.step(pr.d, now + next - 1) == QxProber::Step::Waiting);
@@ -199,7 +201,7 @@ void test_restart_resets(void) {
     pr.p.restart();
     TEST_ASSERT_EQUAL_UINT32(0, pr.p.retryDelayMs());
     TEST_ASSERT_EQUAL_UINT(0, pr.p.failedCycles());
-    TEST_ASSERT_EQUAL_STRING("Mustek 0.08", pr.p.trying()->name);
+    TEST_ASSERT_EQUAL_STRING("Voltronic 0.15", pr.p.trying()->name);
     size_t sent = pr.t.sent.size();
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 200) == QxProber::Step::Probing);
     TEST_ASSERT_EQUAL_UINT(sent + 1, pr.t.sent.size());
@@ -268,15 +270,15 @@ void test_forced_name_like_ups_conf(void) {
     TEST_ASSERT_EQUAL_UINT(0, wrong.t.sent.size());
 }
 
-// A protocol not ported (voltronic): no command, back-off as for a failed cycle
+// A protocol not ported (voltronic-qs): no command, back-off as for a failed cycle
 void test_forced_unknown_protocol(void) {
     Probe pr(MEGATEC_TESTING);
-    pr.p.configure("voltronic", QxOptions());
+    pr.p.configure("voltronic-qs", QxOptions());
     TEST_ASSERT_NULL(pr.p.trying());
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 0) == QxProber::Step::NotSupported);
     TEST_ASSERT_EQUAL_UINT(0, pr.t.sent.size());
     TEST_ASSERT_EQUAL_UINT32(30000, pr.p.retryDelayMs());
-    assertSingleNotSupportedLine(pr, "Protocol voltronic did not claim the UPS");
+    assertSingleNotSupportedLine(pr, "Protocol voltronic-qs did not claim the UPS");
     TEST_ASSERT_TRUE(pr.p.step(pr.d, 1000) == QxProber::Step::Waiting);
 }
 
@@ -297,7 +299,7 @@ void test_forced_hunnox_tries_only_hunnox(void) {
 }
 
 void test_automatic_never_selects_hunnox(void) {
-    assertSelects(HUNNOX_TESTING, nullptr, 10, "Zinto 0.07");
+    assertSelects(HUNNOX_TESTING, nullptr, 13, "Zinto 0.07");
 }
 
 // Back to automatic: "" (or nullptr) tries the whole list again
@@ -360,7 +362,7 @@ void test_reused_engine_state_is_fresh(void) {
     Probe pr(ZINTO_TESTING); // megatec fails 3 times on I, then zinto claims
     int steps = 0;
     TEST_ASSERT_TRUE(pr.run(0, &steps) == QxProber::Step::Claimed);
-    TEST_ASSERT_EQUAL_INT(10, steps);
+    TEST_ASSERT_EQUAL_INT(13, steps);
     std::unique_ptr<QxEngine> e = pr.p.takeEngine();
     TEST_ASSERT_EQUAL_STRING("Zinto 0.07", e->subdriver().name);
     TEST_ASSERT_EQUAL_UINT(34, e->rowCount());
@@ -436,6 +438,7 @@ void test_engine_reset_equals_new_engine(void) {
 #ifndef ARDUINO
 int main(int argc, char **argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_selects_voltronic);
     RUN_TEST(test_selects_mustek);
     RUN_TEST(test_selects_megatec_old);
     RUN_TEST(test_selects_megatec);

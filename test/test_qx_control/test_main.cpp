@@ -507,6 +507,7 @@ static std::string joined(const std::vector<std::string>& v) {
 }
 
 static const QxTesting* testingOf(const QxSubdriver* sub) {
+    if (sub == &QX_VOLTRONIC) return VOLTRONIC_TESTING;
     if (sub == &QX_MUSTEK) return MUSTEK_TESTING;
     if (sub == &QX_MEGATEC_OLD) return MEGATEC_OLD_TESTING;
     if (sub == &QX_MEGATEC) return MEGATEC_TESTING;
@@ -523,16 +524,21 @@ void test_commands_of_every_ported_protocol(void) {
     const char* expected = "beeper.toggle,test.battery.start,test.battery.start.quick,test.battery.start.deep,"
                            "test.battery.stop,load.off,load.on,shutdown.return,shutdown.stayoff,shutdown.stop,"
                            "shutdown.default";
+    // Voltronic (ADR 0014): its own rows with the same names, plus beeper.{enable,disable}
+    // unskipped by the alarm control capability of its testing table (QFLAG 'a'). Its outlet
+    // and bypass commands are not in the catalog
+    const std::string voltronic = std::string("beeper.enable,beeper.disable,") + expected;
     int n = 0;
     for (const QxSubdriver* const* s = QX_SUBDRIVER_LIST; *s; s++, n++) {
         const QxTesting* table = testingOf(*s);
         TEST_ASSERT_NOT_NULL_MESSAGE(table, (*s)->name);
         Ctl c(**s, table);
         TEST_ASSERT_TRUE_MESSAGE(c.start(), (*s)->name);
-        TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, joined(c.names()).c_str(), (*s)->name);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(*s == &QX_VOLTRONIC ? voltronic.c_str() : expected,
+                                         joined(c.names()).c_str(), (*s)->name);
         c.checkNoHid();
     }
-    TEST_ASSERT_EQUAL(7, n);
+    TEST_ASSERT_EQUAL(8, n);
 }
 
 void test_commands_of_the_fallbacks(void) {
