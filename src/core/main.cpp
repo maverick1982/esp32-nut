@@ -456,7 +456,7 @@ void loop() {
     static uint32_t last_print = 0;
     if (now - last_print >= 5000) {
         last_print = now;
-        auto* ups_data = usb_ups.getUPSData();
+        auto ups_data = usb_ups.getUPSData();
         const bool has_battery = ups_data->hasKey("battery.charge");
         // Molti Back-UPS non hanno output.voltage (issue 60: "Voltage = 0.0 V"): si
         // ripiega su input.voltage, indicando quale delle due
@@ -508,4 +508,3 @@ void loop() {
     delay(10);
 }
 #endif
-
