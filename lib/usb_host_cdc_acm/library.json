@@ -1,0 +1,12 @@
+{
+  "name": "usb_host_cdc_acm",
+  "version": "2.4.1",
+  "description": "Espressif USB Host CDC-ACM driver (esp-usb host/class/cdc/usb_host_cdc_acm 2.4.1), vendored unchanged for esp32-nut (ADR 0014)",
+  "license": "Apache-2.0",
+  "platforms": ["espressif32"],
+  "build": {
+    "srcFilter": ["+<*.c>"],
+    "includeDir": "include",
+    "flags": ["-Iprivate_include", "-Iinclude/esp_private", "-Iinterface"]
+  }
+}

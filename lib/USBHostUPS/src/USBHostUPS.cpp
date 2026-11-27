@@ -126,6 +126,11 @@ bool USBHostUPS::begin() {
         return false;
     }
 
+    // The serial family (ADR 0014): a second class driver on the same USB host, right after
+    // hid_host so both see the first enumeration. Not fatal: the HID path works without it
+    _serial.setLog(&USBHostUPS::serialLog, this);
+    _serial.begin();
+
     // A UPS that does not enumerate gets its root port power-cycled (ESP-IDF does not retry a
     // cancelled enumeration). After a controlled restart a new restart follows (US-121); after
     // any other boot (power on, OTA, settings saved) only the two cycles (US-139, #78).
@@ -220,6 +225,7 @@ void USBHostUPS::end() {
         clearDeferredClaim(_desc_retry_handle);
     }
 
+    _serial.end();
     hid_host_uninstall();
 
     if (_usb_task_handle) {
@@ -314,6 +320,9 @@ void USBHostUPS::postEvent(const HidEvent& ev, bool reserved_slot) {
 
 void USBHostUPS::service() {
     processEvents();
+    // The serial family drains its own queue (ADR 0014, section 3): the HID events above are
+    // unchanged. A new device record counts as an enumeration, as the HID CONNECTED event
+    if (_serial.service(millis())) _enum_seen = true;
 
     uint32_t now = millis();
     if (_desc_retry.due(now)) {
@@ -963,8 +972,19 @@ void USBHostUPS::attachQxDriver(hid_host_device_handle_t handle, const DriverReg
 }
 
 String USBHostUPS::unsupportedDevice() const {
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    return _unsupported_device;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_unsupported_device.length() > 0) return _unsupported_device;
+    }
+    // A serial device without a protocol yet (ADR 0014, section 5)
+    char text[64];
+    _serial.unsupportedText(text, sizeof(text));
+    return String(text);
+}
+
+void USBHostUPS::serialLog(void* ctx, const char* level, const char* text) {
+    const USBHostUPS* self = static_cast<const USBHostUPS*>(ctx);
+    if (self && self->_log_cb) self->_log_cb(level, text);
 }
 
 void USBHostUPS::setQxSettings(const char* protocol, bool novendor) {
@@ -1997,6 +2017,8 @@ void USBHostUPS::snapshotUSBDiagnostics(UsbDiagSnapshot& s) {
         if (const QxDriver* q = _driver ? _driver->qx() : nullptr) q->fillDiagnostics(s.qx);
     }
     s.qx.uptime_ms = millis();
+    // Serial section (ADR 0014): only with a serial device claimed
+    _serial.fillDiagnostics(s.serial);
 }
 
 // ---------------------------------------------------------------------------

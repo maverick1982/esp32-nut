@@ -242,6 +242,18 @@ void test_ups_status_unsupported_qx() {
     TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
 }
 
+// ADR 0014: a USB serial device without a protocol takes the same "Not supported yet" path
+void test_ups_status_unsupported_serial() {
+    mockHost.connected = false;
+    mockHost.stale = true;
+    mockHost.unsupported = "USB serial: XR21V141x (04E2:1410)";
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Not supported yet", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("USB serial: XR21V141x (04E2:1410)", doc["ups"]["unsupported"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+}
+
 void test_ups_status_connected_with_model() {
     mockHost.data.set("ups.model", "Eaton 3S 700");
     JsonDocument doc;
@@ -2744,6 +2756,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_api_connected_ignores_unsupported_text);
     RUN_TEST(test_ups_status_disconnected);
     RUN_TEST(test_ups_status_unsupported_qx);
+    RUN_TEST(test_ups_status_unsupported_serial);
     RUN_TEST(test_ups_status_connected_with_model);
     RUN_TEST(test_ups_status_connected_without_model);
     RUN_TEST(test_ups_status_without_model_shows_manufacturer);

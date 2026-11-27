@@ -149,7 +149,7 @@ Some UPS units show up on USB as HID devices but send their data with a protocol
 - **Not supported yet**: Q\* UPS units with other USB adapters (`phoenix`, `ippon`, `sgs`, … in NUT, for example Mustek Powermust `06da:0003` and GE EP series). The board recognizes them and the Web UI says they are not supported yet.
 
 > [!NOTE]
-> UPS units with a USB-to-serial adapter (USB CDC, CH340, …) or a proprietary protocol are not supported.
+> UPS units with a USB-to-serial adapter (USB CDC, CH340, …) or a proprietary protocol are not supported yet. A UPS with a USB CDC-ACM port or an XR21V1410 bridge (`04e2:1410`, for example the APC SRV2KI-E) is recognized: the Web UI says it is not supported yet, the System Log shows its USB interfaces, and the USB Diagnostics export has a `serial` section. No UPS protocol runs on it yet ([ADR 0014](docs/adr/0014-usb-serial-transport.md)).
 
 ## 📸 Screenshots
 

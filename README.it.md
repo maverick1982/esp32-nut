@@ -149,7 +149,7 @@ Alcuni UPS si presentano sulla USB come dispositivi HID ma inviano i dati con un
 - **Non ancora supportati**: gli UPS Q\* con altri adattatori USB (`phoenix`, `ippon`, `sgs`, … in NUT, per esempio Mustek Powermust `06da:0003` e GE serie EP). La scheda li riconosce e la Web UI indica che non sono ancora supportati.
 
 > [!NOTE]
-> Gli UPS con un convertitore USB-seriale (USB CDC, CH340, …) o un protocollo proprietario non sono supportati.
+> Gli UPS con un convertitore USB-seriale (USB CDC, CH340, …) o un protocollo proprietario non sono ancora supportati. Un UPS con una porta USB CDC-ACM o un bridge XR21V1410 (`04e2:1410`, per esempio l'APC SRV2KI-E) viene riconosciuto: la Web UI dice che non è ancora supportato, il System Log mostra le sue interfacce USB e l'export della diagnostica USB ha una sezione `serial`. Non vi gira ancora nessun protocollo UPS ([ADR 0014](docs/adr/0014-usb-serial-transport.md)).
 
 ## 📸 Screenshot
 
