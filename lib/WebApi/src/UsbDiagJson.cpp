@@ -184,6 +184,81 @@ void qxSection(ChunkWriter& w, const UsbDiagQx& q) {
     w.write('}');
 }
 
+// Byte as "0x0A": the class codes and endpoint addresses of the "serial" object
+void hex8(ChunkWriter& w, uint8_t v) {
+    char buf[7];
+    snprintf(buf, sizeof(buf), "\"0x%02X\"", static_cast<unsigned>(v));
+    raw(w, buf);
+}
+
+// The "serial" object (ADR 0014, section 5): the claimed serial device, its interfaces and
+// endpoints, the open result and the byte counters
+void serialSection(ChunkWriter& w, const UsbDiagSerial& d) {
+    key(w, 1, "serial", false);
+    w.write('{');
+    key(w, 2, "vid", true);                   str(w, d.vid);
+    key(w, 2, "pid", false);                  str(w, d.pid);
+    key(w, 2, "manufacturer", false);         str(w, d.manufacturer);
+    key(w, 2, "product", false);              str(w, d.product);
+    key(w, 2, "serial_number", false);        str(w, d.serial_number);
+    key(w, 2, "address", false);              num(w, d.address);
+    key(w, 2, "chip", false);                 str(w, d.chip);
+    key(w, 2, "adapter", false);              str(w, d.adapter);
+    key(w, 2, "interface", false);            num(w, d.interface_number);
+    key(w, 2, "state", false);                str(w, d.state);
+    key(w, 2, "open_result", false);          str(w, d.open_result);
+    key(w, 2, "rx_bytes", false);             num(w, d.rx_bytes);
+    key(w, 2, "rx_chunks", false);            num(w, d.rx_chunks);
+    key(w, 2, "tx_bytes", false);             num(w, d.tx_bytes);
+    key(w, 2, "last_event", false);           str(w, d.last_event);
+    key(w, 2, "last_error", false);           str(w, d.last_error);
+    key(w, 2, "attached_ms", false);          num(w, d.attached_ms);
+    key(w, 2, "descriptor_truncated", false); raw(w, d.descriptor_truncated ? "true" : "false");
+    key(w, 2, "interfaces", false);
+    if (d.interfaces.empty()) {
+        raw(w, "[]");
+    } else {
+        w.write('[');
+        for (size_t i = 0; i < d.interfaces.size(); ++i) {
+            const UsbDiagSerialInterface& it = d.interfaces[i];
+            if (i > 0) w.write(',');
+            newline(w, 3);
+            w.write('{');
+            key(w, 4, "number", true);     num(w, it.number);
+            key(w, 4, "alternate", false); num(w, it.alternate);
+            key(w, 4, "class", false);     hex8(w, it.cls);
+            key(w, 4, "subclass", false);  hex8(w, it.subclass);
+            key(w, 4, "protocol", false);  hex8(w, it.protocol);
+            key(w, 4, "endpoints", false);
+            if (it.endpoints.empty()) {
+                raw(w, "[]");
+            } else {
+                w.write('[');
+                for (size_t j = 0; j < it.endpoints.size(); ++j) {
+                    const UsbDiagSerialEndpoint& ep = it.endpoints[j];
+                    if (j > 0) w.write(',');
+                    newline(w, 5);
+                    w.write('{');
+                    key(w, 6, "address", true);     hex8(w, ep.address);
+                    key(w, 6, "type", false);       str(w, ep.type);
+                    key(w, 6, "direction", false);  str(w, ep.direction);
+                    key(w, 6, "max_packet", false); num(w, ep.max_packet);
+                    newline(w, 5);
+                    w.write('}');
+                }
+                newline(w, 4);
+                w.write(']');
+            }
+            newline(w, 3);
+            w.write('}');
+        }
+        newline(w, 2);
+        w.write(']');
+    }
+    newline(w, 1);
+    w.write('}');
+}
+
 // "state" of "export_read": an export without a read says so (a client that only calls
 // GET /api/usb/dump)
 const char* exportReadState(DiagSweep::State st) {
@@ -237,6 +312,8 @@ void UsbDiagJson::write(const UsbDiagSnapshot& s, ChunkWriter& w) {
 
     // Q* section (US-136), only with a Q* UPS: the HID export stays byte for byte as before
     if (s.qx.present) qxSection(w, s.qx);
+    // Serial section (ADR 0014), only with a serial device: the HID and Q* export stay as before
+    if (s.serial.present) serialSection(w, s.serial);
 
     // scenarios: un solo oggetto, quindi l'array non è mai vuoto
     key(w, 1, "scenarios", false);

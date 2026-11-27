@@ -16,6 +16,8 @@
 // US-136 aggiunge l'oggetto "qx" dopo "export_read", solo con un UPS Q* agganciato: trasporto,
 // protocollo, esito del riconoscimento e ultimi 20 scambi (risposta in testo con escape JSON
 // valido per ogni byte di controllo, ed esadecimale). L'export HID non cambia.
+// ADR 0014 adds the "serial" object after "qx", only with a serial device claimed: the
+// device, its interfaces and endpoints, the open result and the byte counters.
 // Lo verifica test/test_usb_diag_json.
 class UsbDiagJson {
 public:

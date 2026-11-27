@@ -49,7 +49,7 @@ Chosen option: **B**, because it reuses a maintained class driver, leaves the HI
 
 ### 2. Device-level family attach
 
-* **New family `SERIAL`** in `DriverRegistry`. It is chosen at device level, before any interface is claimed:
+* **New family `USB_SERIAL`** in `DriverRegistry`. It is chosen at device level, before any interface is claimed:
   1. A device with an HID interface stays with `hid_host` and the existing attach (explicit HID rows, Q* rows, generic HID fallback, ADR 0013). For a composite device with both HID and CDC interfaces, HID wins and the serial path does not claim it.
   2. A device without an HID interface is classified by the serial rows: first explicit VID/PID rows naming the bridge adapter (04e2:1410 → `xr21v141x`), then a class fallback for a standard CDC-ACM device (Communication interface class 0x02, subclass 0x02, plus a Data interface class 0x0A) → adapter `cdc-acm`. The rows follow the device tables of the Linux USB serial drivers (IDs only, no code).
   3. A device that matches nothing is logged once with its VID:PID and interface classes ("USB device not supported") and left alone. Today it is silent.
@@ -111,7 +111,7 @@ Each step is its own commit, and the PRs are cut as agreed with the maintainer:
 
 1. This ADR (Proposed).
 2. The vendored `usb_host_cdc_acm` 2.4.1, unchanged (with `NOTICE`).
-3. The `SERIAL` family with the 04e2:1410 row and the class fallback, the serial event queue, the open by address and the visibility of section 5, with native and e2e tests.
+3. The `USB_SERIAL` family with the 04e2:1410 row and the class fallback, the serial event queue, the open by address and the visibility of section 5, with native and e2e tests.
 4. The protocol (section 6), after the device has been made visible on the real unit.
 
 ## Open Questions

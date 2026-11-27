@@ -2339,13 +2339,22 @@ document.addEventListener('DOMContentLoaded', () => {
             // Q* UPS whose USB transport is not ported yet (issues #91 and #28): _unsupported is
             // "Q* UPS (USB transport: sgs)", shown as "Q* UPS recognized (USB transport: ...)".
             // krauler, fabula, hunnox and cypress are ported: those UPS units never get here.
+            // A USB serial device (ADR 0014) is "USB serial: XR21V141x (04E2:1410)": recognized and
+            // opened, but no UPS protocol runs on a serial device yet.
             const unsupportedBanner = document.getElementById('unsupported-ups-banner');
             if (unsupportedBanner) {
                 if (data._unsupported) {
-                    const device = String(data._unsupported).replace(/^(.*?) \(/, '$1 recognized (');
-                    document.getElementById('unsupported-ups-text').textContent = device +
-                        ': not supported yet. So far only the krauler, fabula, hunnox and cypress USB transports work.' +
-                        'Please open an issue on GitHub and attach the USB Diagnostics export (System Logs tab).';
+                    const text = String(data._unsupported);
+                    let message;
+                    if (text.startsWith('USB serial: ')) {
+                        message = text + ' recognized: no UPS protocol runs on USB serial devices yet. ' +
+                            'The USB Diagnostics export (System Logs tab) shows its interfaces and the bytes received.';
+                    } else {
+                        message = text.replace(/^(.*?) \(/, '$1 recognized (') +
+                            ': not supported yet. So far only the krauler, fabula, hunnox and cypress USB transports work.' +
+                            'Please open an issue on GitHub and attach the USB Diagnostics export (System Logs tab).';
+                    }
+                    document.getElementById('unsupported-ups-text').textContent = message;
                     unsupportedBanner.style.display = 'block';
                 } else {
                     unsupportedBanner.style.display = 'none';

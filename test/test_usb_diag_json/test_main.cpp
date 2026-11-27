@@ -546,6 +546,99 @@ void test_qx_langid_fix_and_string_failure(void) {
 void setUp(void) {}
 void tearDown(void) {}
 
+// ADR 0014: the "serial" object, only with a serial device claimed
+static UsbDiagSerial serialSection() {
+    UsbDiagSerial d;
+    d.present = true;
+    d.vid = "04E2";
+    d.pid = "1410";
+    d.manufacturer = "Exar Corp.";
+    d.product = "XR21V1410 USB-UART IC";
+    d.serial_number = "";
+    d.address = 1;
+    d.chip = "XR21V141x";
+    d.adapter = "xr21v141x";
+    d.interface_number = 0;
+    d.state = "open";
+    d.open_result = "ESP_OK";
+    d.rx_bytes = 12;
+    d.rx_chunks = 2;
+    d.attached_ms = 4321;
+    UsbDiagSerialInterface comm;
+    comm.number = 0; comm.cls = 0x02; comm.subclass = 0x02; comm.protocol = 0x00;
+    UsbDiagSerialEndpoint intr; intr.address = 0x85; intr.type = "interrupt"; intr.direction = "in"; intr.max_packet = 10;
+    comm.endpoints.push_back(intr);
+    UsbDiagSerialInterface data;
+    data.number = 1; data.cls = 0x0A;
+    UsbDiagSerialEndpoint out; out.address = 0x02; out.type = "bulk"; out.direction = "out"; out.max_packet = 64;
+    UsbDiagSerialEndpoint in; in.address = 0x83; in.type = "bulk"; in.direction = "in"; in.max_packet = 64;
+    data.endpoints.push_back(out);
+    data.endpoints.push_back(in);
+    d.interfaces.push_back(comm);
+    d.interfaces.push_back(data);
+    return d;
+}
+
+void test_serial_absent_keeps_hid_export(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.serial = serialSection();
+    s.serial.present = false;
+    assertSameAsReference(s);
+    TEST_ASSERT_TRUE(writeChunked(s, 64).find("\"serial\"") == std::string::npos);
+}
+
+void test_serial_section_bytes(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.driver = "None";
+    s.serial = serialSection();
+    for (size_t cap : BUFFER_SIZES) {
+        std::string got = writeChunked(s, cap);
+        TEST_ASSERT_TRUE_MESSAGE(got.find(
+            "\"failed\": 0\r\n  },\r\n  \"serial\": {\r\n"
+            "    \"vid\": \"04E2\",\r\n    \"pid\": \"1410\",\r\n"
+            "    \"manufacturer\": \"Exar Corp.\",\r\n    \"product\": \"XR21V1410 USB-UART IC\",\r\n"
+            "    \"serial_number\": \"\",\r\n    \"address\": 1,\r\n"
+            "    \"chip\": \"XR21V141x\",\r\n    \"adapter\": \"xr21v141x\",\r\n    \"interface\": 0,\r\n"
+            "    \"state\": \"open\",\r\n    \"open_result\": \"ESP_OK\",\r\n"
+            "    \"rx_bytes\": 12,\r\n    \"rx_chunks\": 2,\r\n    \"tx_bytes\": 0,\r\n"
+            "    \"last_event\": \"\",\r\n    \"last_error\": \"\",\r\n    \"attached_ms\": 4321,\r\n"
+            "    \"descriptor_truncated\": false,\r\n"
+            "    \"interfaces\": [\r\n      {\r\n        \"number\": 0,\r\n        \"alternate\": 0,\r\n"
+            "        \"class\": \"0x02\",\r\n        \"subclass\": \"0x02\",\r\n        \"protocol\": \"0x00\",\r\n"
+            "        \"endpoints\": [\r\n          {\r\n            \"address\": \"0x85\",\r\n"
+            "            \"type\": \"interrupt\",\r\n            \"direction\": \"in\",\r\n"
+            "            \"max_packet\": 10\r\n          }\r\n        ]\r\n      },\r\n") != std::string::npos,
+            "serial object layout");
+        JsonDocument doc;
+        TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+        TEST_ASSERT_EQUAL_STRING("XR21V141x", doc["serial"]["chip"]);
+        TEST_ASSERT_EQUAL(2, (int)doc["serial"]["interfaces"].size());
+        TEST_ASSERT_EQUAL_STRING("0x0A", doc["serial"]["interfaces"][1]["class"]);
+        TEST_ASSERT_EQUAL(2, (int)doc["serial"]["interfaces"][1]["endpoints"].size());
+        TEST_ASSERT_EQUAL_STRING("0x83", doc["serial"]["interfaces"][1]["endpoints"][1]["address"]);
+        TEST_ASSERT_EQUAL(64, (int)doc["serial"]["interfaces"][1]["endpoints"][1]["max_packet"]);
+        TEST_ASSERT_TRUE(doc["scenarios"].is<JsonArray>());
+    }
+}
+
+// Both sections: "qx" first, then "serial", then "scenarios"
+void test_serial_after_qx(void) {
+    UsbDiagSnapshot s = baseSnapshot();
+    s.qx.present = true;
+    s.qx.transport = "krauler";
+    s.serial = serialSection();
+    s.serial.interfaces.clear();
+    std::string got = writeChunked(s, 7);
+    const size_t qx = got.find("\"qx\": {");
+    const size_t serial = got.find("\"serial\": {");
+    const size_t scenarios = got.find("\"scenarios\": [");
+    TEST_ASSERT_TRUE(qx != std::string::npos && serial != std::string::npos && scenarios != std::string::npos);
+    TEST_ASSERT_TRUE(qx < serial && serial < scenarios);
+    TEST_ASSERT_TRUE(got.find("\"interfaces\": []\r\n  },\r\n  \"scenarios\"") != std::string::npos);
+    JsonDocument doc;
+    TEST_ASSERT_TRUE(deserializeJson(doc, got) == DeserializationError::Ok);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_eaton_fixture_same_bytes);
@@ -566,5 +659,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_qx_two_exchanges);
     RUN_TEST(test_qx_control_bytes_and_truncated);
     RUN_TEST(test_qx_langid_fix_and_string_failure);
+    RUN_TEST(test_serial_absent_keeps_hid_export);
+    RUN_TEST(test_serial_section_bytes);
+    RUN_TEST(test_serial_after_qx);
     return UNITY_END();
 }
