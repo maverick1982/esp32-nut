@@ -18,6 +18,7 @@ static const BoardConfig NANO_ESP32_BOARD = {
     { -1, -1 },  // no status LED: RGB pins are strapping pins
     { 1, { { "otg", "USB OTG", 0 } } },
     { "NUT_ESP32_Config", "12345678", false, 3, 0, NetworkMode::WIFI },
+    { false, -1, -1, -1, -1, -1, -1, -1 },  // Wi-Fi in the chip, no coprocessor (ADR 0015)
 };
 
 const BoardConfig& board() {

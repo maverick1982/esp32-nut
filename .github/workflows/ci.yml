@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1]
+        env: [esp32-s3-standard, arduino-nano-esp32, esp32-p4-eth, esp32-p4-eth-v1, esp32-p4-nano, esp32-p4-nano-v1]
 
     steps:
       - name: Checkout code
@@ -96,3 +96,6 @@ jobs:
 
       - name: Test Arduino Nano ESP32 profile
         run: pio test -e native-arduino-nano-esp32
+
+      - name: Test Waveshare ESP32-P4-NANO profile
+        run: pio test -e native-waveshare-p4-nano

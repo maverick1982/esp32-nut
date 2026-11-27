@@ -15,6 +15,11 @@ void test_identity_and_capabilities(void) {
     TEST_ASSERT_TRUE(board().eth.type == EthType::NONE);
 }
 
+// ADR 0015: the S3 radio is in the chip, no coprocessor
+void test_no_wifi_coprocessor(void) {
+    TEST_ASSERT_FALSE(board().wifi_coprocessor.present);
+}
+
 void test_status_led_pins(void) {
     // DevKitC-1 NeoPixel and its power switch, before in DiagnosticLED.h
     TEST_ASSERT_EQUAL_INT8(48, board().led.pin);
@@ -59,6 +64,7 @@ void test_spi_eth_option(void) {
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_identity_and_capabilities);
+    RUN_TEST(test_no_wifi_coprocessor);
     RUN_TEST(test_status_led_pins);
     RUN_TEST(test_usb_default_peripheral);
     RUN_TEST(test_initial_settings);

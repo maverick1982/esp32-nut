@@ -17,6 +17,7 @@ static const BoardConfig ESP32P4_ETH = {
     { -1, -1 },  // no status LED
     { 1, { { "hs", "USB High-Speed", 0 } } },  // 0 = ESP-IDF default, the High-Speed port
     { "", "", false, 3, 0, NetworkMode::ETHERNET },
+    { false, -1, -1, -1, -1, -1, -1, -1 },  // the P4-ETH has no Wi-Fi coprocessor (ADR 0015)
 };
 
 const BoardConfig& board() {
