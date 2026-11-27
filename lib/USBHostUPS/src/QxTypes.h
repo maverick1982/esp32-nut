@@ -76,10 +76,13 @@ inline unsigned int QX_STATUS(unsigned int bit) { return 1U << bit; }
 class QxEngine;
 struct QxItem;
 
-// info_rw_t: value for enum/range (or length for ST_FLAG_STRING), optional preprocess
+// info_rw_t: value for enum/range (or length for ST_FLAG_STRING), optional preprocess. The
+// preprocess also receives the engine: the range functions of voltronic read the device state
+// with dstate_getinfo() upstream (voltronic_batt_low(), nutdrv_qx_voltronic.c:133-159).
+// It returns 0 if value is supported, -1 if not
 struct QxInfoRw {
     const char* value;
-    int (*preprocess)(char* value, size_t len);
+    int (*preprocess)(QxEngine& qx, char* value, size_t len);
 };
 
 // item_t without the runtime columns answer and value
@@ -111,7 +114,15 @@ struct QxSubdriver {
     void (*initinfo)(QxEngine& qx); // Subdriver specific upsdrv_initinfo
     const char* accepted;          // Reply of an accepted instcmd/setvar
     const char* rejected;          // Reply of a rejected query
+    // Not in subdriver_t: the info_rw a row has at runtime, for a subdriver whose info_rw
+    // values are written while the driver runs (upstream writes into its item_t tables:
+    // voltronic_r_eco_volt_max/min, nutdrv_qx_voltronic.c:702-714). nullptr, as for every
+    // other protocol: item.info_rw. See QxEngine::infoRw()
+    const QxInfoRw* (*info_rw)(QxEngine& qx, const QxItem& item);
 };
+
+// usleep() of a subdriver, provided by the host (QxEngine::setSleep()): the engine has no clock
+using QxSleepFn = void (*)(void* ctx, uint32_t ms);
 
 // The ups.conf flags of the blazer protocols (testvar() upstream); novendor becomes a
 // board setting with US-138

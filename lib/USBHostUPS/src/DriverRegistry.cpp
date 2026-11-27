@@ -216,6 +216,83 @@ bool DriverRegistry::hasUpsPages(const std::vector<HIDUsageDef>& usages) {
     return false;
 }
 
+namespace {
+
+// Serial bridges by USB ID (ADR 0014). The IDs come from the device tables of the Linux USB
+// serial drivers (data only, no code: those drivers are GPL-2.0-only)
+struct SerialRow {
+    uint16_t vid;
+    uint16_t pid;
+    const char* adapter;
+    const char* chip;
+};
+
+const SerialRow SERIAL_ROWS[] = {
+    { 0x04E2, 0x1410, "xr21v141x", "XR21V141x" },  // MaxLinear/Exar XR21V1410 (APC SRV2KI-E)
+};
+
+const uint8_t USB_CLASS_COMM = 0x02;
+const uint8_t USB_CLASS_HID = 0x03;
+const uint8_t USB_CLASS_HUB = 0x09;
+const uint8_t USB_CLASS_CDC_DATA = 0x0A;
+const uint8_t CDC_SUBCLASS_ACM = 0x02;
+
+const UsbSerialInterface* findComm(const UsbSerialDeviceInfo& info) {
+    for (uint8_t i = 0; i < info.interface_count; i++) {
+        const UsbSerialInterface& it = info.interfaces[i];
+        if (it.cls == USB_CLASS_COMM && it.subclass == CDC_SUBCLASS_ACM) return &it;
+    }
+    return nullptr;
+}
+
+// A Data interface with bulk IN and OUT (any alternate setting)
+bool hasCdcData(const UsbSerialDeviceInfo& info) {
+    for (uint8_t i = 0; i < info.interface_count; i++) {
+        const UsbSerialInterface& it = info.interfaces[i];
+        if (it.cls == USB_CLASS_CDC_DATA && it.hasBulkInOut()) return true;
+    }
+    return false;
+}
+
+// Any interface with bulk IN and OUT: what usb_host_cdc_acm opens for a bridge that is not
+// CDC compliant
+const UsbSerialInterface* findBulk(const UsbSerialDeviceInfo& info) {
+    for (uint8_t i = 0; i < info.interface_count; i++) {
+        if (info.interfaces[i].hasBulkInOut()) return &info.interfaces[i];
+    }
+    return nullptr;
+}
+
+DriverRegistry::SerialMatch serialClaim(const char* adapter, const char* chip, uint8_t iface) {
+    return { DriverRegistry::SerialClaim::CLAIM, adapter, chip, iface, nullptr };
+}
+
+DriverRegistry::SerialMatch serialUnsupported(const char* chip, const char* reason) {
+    return { DriverRegistry::SerialClaim::UNSUPPORTED, nullptr, chip, 0, reason };
+}
+
+} // namespace
+
+DriverRegistry::SerialMatch DriverRegistry::matchSerial(const UsbSerialDeviceInfo& info) {
+    if (info.hasClass(USB_CLASS_HID)) return { SerialClaim::HID_DEVICE, nullptr, nullptr, 0, nullptr };
+    if (info.device_class == USB_CLASS_HUB || info.hasClass(USB_CLASS_HUB)) {
+        return { SerialClaim::HUB, nullptr, nullptr, 0, nullptr };
+    }
+    const UsbSerialInterface* comm = findComm(info);
+    const bool cdc = comm && hasCdcData(info);
+    for (const auto& r : SERIAL_ROWS) {
+        if (r.vid != info.vid || r.pid != info.pid) continue;
+        if (cdc) return serialClaim(r.adapter, r.chip, comm->number);
+        // Not CDC compliant: usb_host_cdc_acm falls back to the interface with two bulk
+        // endpoints, so that one is opened
+        if (const UsbSerialInterface* bulk = findBulk(info)) return serialClaim(r.adapter, r.chip, bulk->number);
+        return serialUnsupported(r.chip, "no interface with bulk IN and OUT");
+    }
+    if (cdc) return serialClaim("cdc-acm", "CDC-ACM", comm->number);
+    if (comm) return serialUnsupported(nullptr, "CDC-ACM interface without a data interface");
+    return serialUnsupported(nullptr, "no serial row and not CDC-ACM");
+}
+
 IUPSDriver* DriverRegistry::create(uint16_t vid, uint16_t pid, const char* mfr, const char* product) {
     const DriverEntry* entry;
     if (findExplicitHid(vid, pid, &entry)) {

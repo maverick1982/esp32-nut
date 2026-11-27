@@ -33,6 +33,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <cstddef>
+#include <type_traits>
 #include <vector>
 #include "QxTypes.h"
 #include "IQxTransport.h"
@@ -51,8 +53,9 @@
  * State: the tables are static const; the per-row runtime flags are copied into _flags; the
  * runtime answer/value of upstream item_t live in one pair of work buffers, because
  * qx_ups_walk() clears them after every row and no ported protocol reads the answer or the
- * value of another row. A protocol that does (voltronic, nutdrv_qx_voltronic.c:2692) will
- * need per-row buffers.
+ * value of another row. The info_rw values a subdriver writes at runtime (voltronic,
+ * nutdrv_qx_voltronic.c:2610-2623, read back at 2692-2702) live in its subdriverState() and
+ * reach the engine through QxSubdriver::info_rw (infoRw()).
  *
  * Order of the calls, as upstream: claim() -> initUps() -> initInfo() -> updateInfo() every
  * poll interval.
@@ -146,8 +149,26 @@ public:
     void updateStatus(const char* nutvalue);
     // alarm_set()
     void alarmSet(const char* text);
+    // buzzmode_set() of dstate.c (str_add_unique_token()): the tokens of
+    // experimental.ups.mode.buzzwords, collected by an update walk and published after it
+    // (buzzmode_init()/buzzmode_commit() of upsdrv_updateinfo(), nutdrv_qx.c:3784, 3837)
+    void buzzmodeSet(const char* token);
     // qx_status()
     unsigned int status() const { return _status; }
+    // errno == ETIMEDOUT after the last process() or walk row: the answer was a short reply
+    // of 0 bytes (qx_process_answer(), nutdrv_qx.c:5168-5178, the only place nutdrv_qx.c sets
+    // it; a serial read without a line within SER_WAIT_SEC returns 0). A transport error
+    // (< 0) leaves it false: qx_command() does not set errno for it
+    bool timedOut() const { return _timedOut; }
+    // usleep() of a subdriver (voltronic_claim(), nutdrv_qx_voltronic.c:1706): through the
+    // host's sleeper, nothing without one (the engine has no clock). Kept by reset()
+    void setSleep(QxSleepFn fn, void* ctx) {
+        _sleep = fn;
+        _sleepCtx = ctx;
+    }
+    void sleepMs(uint32_t ms) {
+        if (_sleep) _sleep(_sleepCtx, ms);
+    }
 
     // Shared preprocess functions (qx_multiply_battvolt, qx_multiply_x1000, qx_multiply_m2s)
     static int qxMultiplyBattvolt(QxEngine& qx, const QxItem& item, char* value, size_t valuelen);
@@ -159,6 +180,14 @@ public:
     const QxOptions& options() const { return _options; }
     size_t rowCount() const { return _rows; }
     const QxItem& item(int row) const { return _sub->qx2nut[row]; }
+    // The row of a table item (item_t* upstream): a preprocess receives the item, the
+    // runtime flags of its row are in the engine
+    int row(const QxItem& item) const { return (int)(&item - _sub->qx2nut); }
+    // item->info_rw at runtime: QxSubdriver::info_rw when the subdriver has one, otherwise
+    // the info_rw column of the table
+    const QxInfoRw* infoRw(const QxItem& item) {
+        return _sub->info_rw ? _sub->info_rw(*this, item) : item.info_rw;
+    }
     uint32_t flags(int row) const { return _flags[row]; }
     void addFlags(int row, uint32_t f) { _flags[row] |= f; }
     void clearFlags(int row, uint32_t f) { _flags[row] &= ~f; }
@@ -172,6 +201,25 @@ public:
 
     // ASCII strcasecmp() == 0, as the upstream comparisons
     static bool equalsIgnoreCase(const char* a, const char* b);
+
+    /**
+     * @brief The module-level variables of the subdriver that change at runtime (static
+     * variables of nutdrv_qx_<name>.c upstream), kept per engine instead of in globals.
+     *
+     * T is a trivial type of the subdriver whose all-zero value is the initial state, as the
+     * zero initialization of the upstream statics: reset() zeroes the storage, so a new
+     * protocol or a new attach starts from it. SUBDRIVER_STATE_SIZE bytes for every engine,
+     * whatever the protocol.
+     */
+    static const size_t SUBDRIVER_STATE_SIZE = 384;
+    template <typename T>
+    T& subdriverState() {
+        static_assert(sizeof(T) <= SUBDRIVER_STATE_SIZE, "subdriver state too large");
+        static_assert(alignof(T) <= alignof(std::max_align_t), "subdriver state over-aligned");
+        static_assert(std::is_trivially_copyable<T>::value && std::is_trivially_default_constructible<T>::value,
+                      "subdriver state must be a trivial type (all-zero initial state)");
+        return *reinterpret_cast<T*>(_subState);
+    }
 
 private:
     enum class WalkMode : uint8_t { INIT, QUICK_UPDATE, FULL_UPDATE };
@@ -204,9 +252,9 @@ private:
     Instcmd doInstcmd(const char* cmdname, const char* extradata);
     Setvar doSetvar(const char* varname, const char* val);
     // The ranges qx_set_var() publishes for a row (pairs of info_rw values)
-    static bool rangeContains(const QxItem& item, long value);
+    bool rangeContains(const QxItem& item, long value);
     // The enum values qx_set_var() publishes for a row
-    static bool enumContains(const QxItem& item, const char* value);
+    bool enumContains(const QxItem& item, const char* value);
 
     const QxSubdriver* _sub; // never null: set by the constructor and reset()
     IQxTransport& _transport;
@@ -229,6 +277,12 @@ private:
 
     unsigned int _status = 0;
     String _alarms;
+    String _buzzmode; // buzzmode_buf of dstate.c
+    bool _timedOut = false;
+    QxSleepFn _sleep = nullptr; // configuration, kept by reset()
+    void* _sleepCtx = nullptr;
+    // subdriverState(): zeroed by reset()
+    alignas(std::max_align_t) unsigned char _subState[SUBDRIVER_STATE_SIZE];
     bool _dataChanged = false;
     uint32_t _lastPollMs = 0;
     int _retry = 0;

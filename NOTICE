@@ -30,6 +30,9 @@ SOFTWARE.
 Third-party components
 ----------------------
 
+- lib/usb_host_cdc_acm: Copyright (c) Espressif Systems (Shanghai) CO LTD,
+  Apache License 2.0 (lib/usb_host_cdc_acm/LICENSE), version 2.4.1 of
+  esp-usb host/class/cdc/usb_host_cdc_acm, unchanged (library.json added).
 - lib/usb_host_hid: Copyright (c) Espressif Systems (Shanghai) CO LTD,
   Apache License 2.0 (lib/usb_host_hid/LICENSE), modified for esp32-nut
   (changes marked "[esp32-nut]").

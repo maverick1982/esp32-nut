@@ -49,6 +49,16 @@ String WebApiJson::generateUpsVars(IUpsSource* usb_ups, const std::vector<NutOve
             }
         }
         
+        // Raw only when it is a JSON number (RFC 8259 section 6): no leading zero, digits on both
+        // sides of the dot. The voltronic subdriver publishes "03774.06" and "054.4"; written raw,
+        // they made the whole answer invalid JSON. Such values go as strings, as they are
+        if (isNumeric && hasDot) {
+            const int start = param.value[0] == '-' ? 1 : 0;
+            const int dot = param.value.indexOf('.');
+            const bool leadingZero = dot - start > 1 && param.value[start] == '0';
+            if (dot == start || dot == (int)param.value.length() - 1 || leadingZero) isNumeric = false;
+        }
+
         if (isNumeric) {
             if (hasDot) doc[param.key] = serialized(param.value); // Use serialized for floats to preserve formatting
             else doc[param.key] = param.value.toInt();

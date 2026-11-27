@@ -7,7 +7,8 @@
  * @brief One Q* command, one answer (ADR 0013, section 3): the shape of qx_command() and
  * of the USB subdriver *_command() functions of nut_repo/drivers/nutdrv_qx.c.
  *
- * The USB implementations derive from QxUsbTransport (US-136), which gives every command a
+ * QxDriver takes a QxTransport (ADR 0014). The USB implementations derive from QxUsbTransport
+ * (US-136), which gives every command a
  * time budget enforced by the USB primitives; the subdrivers themselves fill the
  * QxUsbTransports table (krauler, fabula and hunnox in QxUsbKrauler, US-137). The native
  * tests use fakes

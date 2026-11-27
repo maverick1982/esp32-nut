@@ -31,6 +31,7 @@
 #include "QxRequestBox.h"
 #include "QxProtocols.h"
 #include "InputSilenceGuard.h"
+#include "UsbSerialHost.h"
 #include <atomic>
 #include <map>
 #include <memory>
@@ -425,6 +426,19 @@ private:
     // unsupportedDevice(); nullptr / empty on the HID path and without a device
     const char* _qx_transport = nullptr;
     String _unsupported_device;
+    // The serial family next to hid_host (ADR 0014): usb_host_cdc_acm, its device and its
+    // events. Fed in service(); its own lock, never taken with _mutex held by its callbacks
+    UsbSerialHost _serial;
+    static void serialLog(void* ctx, const char* level, const char* text);
+    // ADR 0014 section 6: the Q* driver of a serial device is this host's driver, as the one of
+    // a Q* HID bridge (one UPS, one consumer API), polled by serviceSerialDriver() without the
+    // HID supervision. Poll task only
+    bool _serial_bound = false;
+    uint32_t _serial_port_gen = 0;
+    void serviceSerialPort(uint32_t now);
+    void attachSerialQxDriver(uint32_t now);
+    void serviceSerialDriver(uint32_t now);
+    void serviceFirstData(uint32_t now);
     uint16_t _vid;
     uint16_t _pid;
     bool _initialized;
@@ -463,7 +477,7 @@ private:
     // UPS not enumerated after an automatic restart (US-121): poll task only
     EnumWatchdog _enum_wd;
     uint8_t _auto_restart_count = 0;
-    bool _enum_seen = false;  // a HID device connected (or failed to open) since the boot
+    bool _enum_seen = false;  // a HID or serial device connected (or failed to open) since the boot
 
     // Stuck control transfer recovered with a USB port power cycle (US-122): poll task only
     PortCyclePolicy _port_cycles;

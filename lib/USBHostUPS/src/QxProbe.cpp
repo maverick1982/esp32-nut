@@ -44,6 +44,12 @@ void QxProber::configure(const char* protocol, const QxOptions& options) {
     restart();
 }
 
+void QxProber::setSleep(QxSleepFn fn, void* ctx) {
+    _sleep = fn;
+    _sleepCtx = ctx;
+    if (_engine) _engine->setSleep(fn, ctx);
+}
+
 void QxProber::restart() {
     // The engine, if any, is kept: step() resets it on the first protocol it tries
     _claimed = nullptr;
@@ -99,7 +105,10 @@ QxProber::Step QxProber::step(UPSData& data, uint32_t nowMs) {
     // protocol on the heap of the board.
     if (_tries == 0) {
         if (_engine) _engine->reset(*sub, _options);
-        else _engine.reset(new QxEngine(*sub, _transport, _options));
+        else {
+            _engine.reset(new QxEngine(*sub, _transport, _options));
+            _engine->setSleep(_sleep, _sleepCtx);
+        }
     }
 
     // "Give every subdriver some tries" (nutdrv_qx.c:4347-4362), one per step

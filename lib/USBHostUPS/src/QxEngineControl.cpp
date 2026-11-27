@@ -144,9 +144,10 @@ QxEngine::Setvar QxEngine::doSetvar(const char* varname, const char* val) {
 
     const QxItem& it = item(row);
 
-    // A one-time setvar from ups.conf: upstream the INIT walk runs it and marks the row
-    // QX_FLAG_SKIP, so find_nut_info() never finds it afterwards. No ported protocol has one.
-    if (_flags[row] & QX_FLAG_NONUT) return Setvar::Unknown;
+    // No NUT variable is available for this item, so we're handling a one-time setvar from
+    // ups.conf: without ups.conf options testvar() is false, "nothing to do". The INIT walk
+    // marks these rows QX_FLAG_SKIP, so after initInfo() find_nut_info() no longer finds them
+    if (_flags[row] & QX_FLAG_NONUT) return Setvar::Handled;
 
     // "value not given for %s"
     if (!val || !*val) return Setvar::Unknown;
@@ -168,8 +169,9 @@ QxEngine::Setvar QxEngine::doSetvar(const char* varname, const char* val) {
     } else if (it.info_flags & QX_ST_FLAG_STRING) {
         // Check if given value is not too long (string): the aux qx_set_var() sets from
         // info_rw[0]; none means "unable to find tree node"
-        if (!it.info_rw || !it.info_rw[0].value) return Setvar::Unknown;
-        long aux = strtol(it.info_rw[0].value, nullptr, 10);
+        const QxInfoRw* rw = infoRw(it);
+        if (!rw || !rw[0].value) return Setvar::Unknown;
+        long aux = strtol(rw[0].value, nullptr, 10);
         if (aux < 0) return Setvar::Unknown;
         if (aux < (long)strlen(_ctlValue)) return Setvar::Unknown; // value is too long
     }
@@ -206,13 +208,15 @@ QxEngine::Setvar QxEngine::doSetvar(const char* varname, const char* val) {
 // The ranges of qx_set_var() (nutdrv_qx.c, "Set range"): consecutive pairs (from, to) of the
 // info_rw values, skipping a value whose preprocess fails and a pair beyond INT_MAX
 // ("settable range exceeds INT_MAX"). The preprocess runs on a copy: the tables are const.
+// The values are read at setvar() time, upstream qx_set_var() reads them in the INIT walk:
+// the range functions of the ported protocols read only static values (ratings, protocol).
 bool QxEngine::rangeContains(const QxItem& item, long value) {
     const char* from = nullptr;
     char fromBuf[kInfoRwBuf];
     char buf[kInfoRwBuf];
-    for (const QxInfoRw* rv = item.info_rw; rv && rv->value && strlen(rv->value) > 0; rv++) {
+    for (const QxInfoRw* rv = infoRw(item); rv && rv->value && strlen(rv->value) > 0; rv++) {
         snprintf(buf, sizeof(buf), "%s", rv->value);
-        if (rv->preprocess && rv->preprocess(buf, sizeof(buf))) continue;
+        if (rv->preprocess && rv->preprocess(*this, buf, sizeof(buf))) continue;
 
         if (!from) {
             snprintf(fromBuf, sizeof(fromBuf), "%s", buf);
@@ -233,9 +237,9 @@ bool QxEngine::rangeContains(const QxItem& item, long value) {
 // The enum values of qx_set_var() (nutdrv_qx.c, "Set enum list"), compared as setvar() does
 bool QxEngine::enumContains(const QxItem& item, const char* value) {
     char buf[kInfoRwBuf];
-    for (const QxInfoRw* ev = item.info_rw; ev && ev->value && strlen(ev->value) > 0; ev++) {
+    for (const QxInfoRw* ev = infoRw(item); ev && ev->value && strlen(ev->value) > 0; ev++) {
         snprintf(buf, sizeof(buf), "%s", ev->value);
-        if (ev->preprocess && ev->preprocess(buf, sizeof(buf))) continue;
+        if (ev->preprocess && ev->preprocess(*this, buf, sizeof(buf))) continue;
         if (equalsIgnoreCase(buf, value)) return true;
     }
     return false;

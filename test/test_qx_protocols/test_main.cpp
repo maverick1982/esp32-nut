@@ -351,8 +351,8 @@ void test_innovatae_nak_rejected(void) {
 
 // subdriver_list[] of nutdrv_qx.c:95-117 restricted to the ported protocols
 void test_subdriver_list_order(void) {
-    const char* expected[] = { "Mustek 0.08", "Megatec/old 0.08", "Megatec 0.10", "Zinto 0.07",
-                               "Hunnox 0.03", "INNOVATAE 0.01", "Q1 0.08" };
+    const char* expected[] = { "Voltronic 0.15", "Mustek 0.08", "Megatec/old 0.08", "Megatec 0.10",
+                               "Zinto 0.07", "Hunnox 0.03", "INNOVATAE 0.01", "Q1 0.08" };
     size_t n = sizeof(expected) / sizeof(expected[0]);
     for (size_t i = 0; i < n; i++) {
         TEST_ASSERT_NOT_NULL(QX_SUBDRIVER_LIST[i]);
@@ -387,7 +387,7 @@ void test_protocol_name_match(void) {
 
 // US-138: the names of Board Settings, in the order of the list
 void test_protocol_names_in_list_order(void) {
-    const char* expected[] = { "mustek", "megatec/old", "megatec", "zinto", "hunnox", "innovatae", "q1" };
+    const char* expected[] = { "voltronic", "mustek", "megatec/old", "megatec", "zinto", "hunnox", "innovatae", "q1" };
     char name[QX_PROTOCOL_NAME_MAX];
     size_t i = 0;
     for (const QxSubdriver* const* s = QX_SUBDRIVER_LIST; *s; s++, i++) {
@@ -411,7 +411,8 @@ void test_find_protocol(void) {
     TEST_ASSERT_TRUE(qxFindProtocol("megatec") == &QX_MEGATEC);
     TEST_ASSERT_TRUE(qxFindProtocol("q1") == &QX_Q1);
     TEST_ASSERT_NULL(qxFindProtocol("megatec-old"));
-    TEST_ASSERT_NULL(qxFindProtocol("voltronic"));
+    TEST_ASSERT_TRUE(qxFindProtocol("voltronic") == &QX_VOLTRONIC);
+    TEST_ASSERT_NULL(qxFindProtocol("voltronic-qs"));
     TEST_ASSERT_NULL(qxFindProtocol(""));
     TEST_ASSERT_NULL(qxFindProtocol(nullptr));
 }
@@ -664,10 +665,22 @@ void test_delay_ranges(void) {
 
 // --- dfl guard: the formats are passed to snprintf ---------------------------------------
 
+// "%d", "%03d": one int conversion
+static bool intFormat(const char* f) {
+    if (f[0] != '%') return false;
+    const char* p = f + 1;
+    while (*p >= '0' && *p <= '9') p++;
+    return p[0] == 'd' && p[1] == '\0';
+}
+
 static bool dflAllowed(const QxItem& it) {
     const char* f = it.dfl;
     if (!f || strcmp(f, "%s") == 0 || strcmp(f, "%f") == 0) return true;
     if (it.qxflags & QX_FLAG_ABSENT) return strchr(f, '%') == nullptr;
+    // voltronic: a preprocess that formats an int with dfl (voltronic_batt_numb(),
+    // voltronic_phase(): snprintf_dynamic(value, valuelen, item->dfl, "%d", ...)); the engine
+    // itself uses dfl only for rows without preprocess
+    if (it.preprocess && intFormat(f)) return true;
     // %.Nf
     if (f[0] != '%' || f[1] != '.') return false;
     const char* p = f + 2;

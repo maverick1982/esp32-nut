@@ -178,6 +178,33 @@ void test_api_connected_host_with_data() {
     TEST_ASSERT_TRUE(doc["ups.beeper.switchable"].isNull());
 }
 
+// A value with a dot is sent as a JSON number only when it is one: the voltronic subdriver
+// publishes "03774.06" (ups.firmware, QVFW) and "054.4" (battery.voltage, QGS) on the APC
+// SRV2KI-E, and the raw leading zero made the whole answer invalid JSON (empty dashboard)
+void test_api_dotted_values_stay_valid_json() {
+    mockHost.connected = true;
+    mockHost.data.set("ups.firmware", "03774.06");
+    mockHost.data.set("battery.voltage", "054.4");
+    mockHost.data.set("ups.firmware.aux", ".");
+    mockHost.data.set("ambient.temperature", "-1.");
+    mockHost.data.set("input.voltage", "229.6");
+    mockHost.data.set("output.current", "0.0");
+    mockHost.data.set("ups.temperature", "-12.5");
+
+    String out = WebApiJson::generateUpsVars(&mockHost);
+
+    JsonDocument doc;
+    TEST_ASSERT_EQUAL(DeserializationError::Ok, deserializeJson(doc, out).code());
+    TEST_ASSERT_EQUAL_STRING("03774.06", doc["ups.firmware"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("054.4", doc["battery.voltage"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING(".", doc["ups.firmware.aux"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("-1.", doc["ambient.temperature"].as<const char*>());
+    // Real numbers keep their formatting
+    TEST_ASSERT_TRUE(out.indexOf("\"input.voltage\":229.6") >= 0);
+    TEST_ASSERT_TRUE(out.indexOf("\"output.current\":0.0") >= 0);
+    TEST_ASSERT_TRUE(out.indexOf("\"ups.temperature\":-12.5") >= 0);
+}
+
 // --- US-132: Q* UPS recognised but not supported yet ---
 
 static const char* QX_TEXT = "Q* UPS (USB transport: hunnox)";
@@ -239,6 +266,18 @@ void test_ups_status_unsupported_qx() {
     upsStatus(doc, &mockHost);
     TEST_ASSERT_EQUAL_STRING("Not supported yet", doc["ups"]["status"].as<const char*>());
     TEST_ASSERT_EQUAL_STRING(QX_TEXT, doc["ups"]["unsupported"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
+}
+
+// ADR 0014: a USB serial device without a protocol takes the same "Not supported yet" path
+void test_ups_status_unsupported_serial() {
+    mockHost.connected = false;
+    mockHost.stale = true;
+    mockHost.unsupported = "USB serial: XR21V141x (04E2:1410)";
+    JsonDocument doc;
+    upsStatus(doc, &mockHost);
+    TEST_ASSERT_EQUAL_STRING("Not supported yet", doc["ups"]["status"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("USB serial: XR21V141x (04E2:1410)", doc["ups"]["unsupported"].as<const char*>());
     TEST_ASSERT_TRUE(doc["ups"]["stale"].isNull());
 }
 
@@ -1262,7 +1301,7 @@ void test_board_json_with_qx(void) {
     String json = WebApiJson::boardSettingsJson(board(), s, AutoShutdownAvailability::AVAILABLE, &qx);
     TEST_ASSERT_TRUE(json.endsWith(
         ",\"qx\":{\"protocol\":\"hunnox\",\"novendor\":true,"
-        "\"protocols\":[\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
+        "\"protocols\":[\"voltronic\",\"mustek\",\"megatec/old\",\"megatec\",\"zinto\",\"hunnox\",\"innovatae\",\"q1\"],"
         "\"detected\":\"Megatec 0.10\"}}"));
     // Automatic, nothing claimed yet
     BoardQxInfo none = { "" };
@@ -1272,7 +1311,7 @@ void test_board_json_with_qx(void) {
     TEST_ASSERT_EQUAL_STRING("", doc["qx"]["protocol"]);
     TEST_ASSERT_FALSE(doc["qx"]["novendor"].as<bool>());
     TEST_ASSERT_EQUAL_STRING("", doc["qx"]["detected"]);
-    TEST_ASSERT_EQUAL(7, (int)doc["qx"]["protocols"].size());
+    TEST_ASSERT_EQUAL(8, (int)doc["qx"]["protocols"].size());
 }
 
 void test_board_body_qx_protocol_accepts_known_and_empty(void) {
@@ -1302,7 +1341,7 @@ void test_board_body_qx_protocol_rejects_unknown(void) {
     BoardSettings cur = defaultsFor(board()), next;
     bool restart;
     String out;
-    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic\"}",
+    const char* bad[] = { "{\"qx_protocol\":\"megatec-old\"}", "{\"qx_protocol\":\"voltronic-qs\"}",
                           "{\"qx_protocol\":3}", "{\"qx_protocol\":true}", "{\"qx_protocol\":null}",
                           "{\"qx_protocol\":\"megatec_with_a_very_long_name\"}" };
     for (const char* b : bad) {
@@ -2739,11 +2778,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_api_null_host);
     RUN_TEST(test_api_disconnected_host);
     RUN_TEST(test_api_connected_host_with_data);
+    RUN_TEST(test_api_dotted_values_stay_valid_json);
     RUN_TEST(test_api_disconnected_without_unsupported_text);
     RUN_TEST(test_api_disconnected_with_unsupported_text);
     RUN_TEST(test_api_connected_ignores_unsupported_text);
     RUN_TEST(test_ups_status_disconnected);
     RUN_TEST(test_ups_status_unsupported_qx);
+    RUN_TEST(test_ups_status_unsupported_serial);
     RUN_TEST(test_ups_status_connected_with_model);
     RUN_TEST(test_ups_status_connected_without_model);
     RUN_TEST(test_ups_status_without_model_shows_manufacturer);

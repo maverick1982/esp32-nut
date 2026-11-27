@@ -142,14 +142,17 @@ Some UPS units show up on USB as HID devices but send their data with a protocol
 - Legrand KEOR SP 600 VA (Protocol `mustek`)
 - Cleanline Evolution 1000 (Protocol `mustek`)
 - Powerwalker VI 600 SW (Protocol `mustek`)
+- APC SRV2KI-E (Protocol `voltronic`, USB serial bridge XR21V1410)
 </details>
 
-- **Supported**: UPS units that NUT handles with the `krauler`, `fabula`, `hunnox` or `cypress` USB subdriver: units with USB ID `0001:0000` (for example Krauler, Fideltronik/MEC LUPUS, Hunnox and other units whose USB product name is `MEC0003`) and units with the Cypress USB bridge (for example the Voltronic Power units with USB ID `0665:5161`, sold as Legrand KEOR SP, IPPON and other brands, Phoenixtec Innova, Unitek Alpha 1200Sx). Protocols: `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` and `q1`.
+- **Supported**: UPS units that NUT handles with the `krauler`, `fabula`, `hunnox` or `cypress` USB subdriver: units with USB ID `0001:0000` (for example Krauler, Fideltronik/MEC LUPUS, Hunnox and other units whose USB product name is `MEC0003`) and units with the Cypress USB bridge (for example the Voltronic Power units with USB ID `0665:5161`, sold as Legrand KEOR SP, IPPON and other brands, Phoenixtec Innova, Unitek Alpha 1200Sx). Protocols: `voltronic`, `megatec`, `megatec/old`, `mustek`, `zinto`, `hunnox`, `innovatae` and `q1`.
+- **USB serial**: Q\* UPS units whose USB port is a CDC-ACM device or an XR21V1410 bridge (`04e2:1410`, for example the APC SRV2KI-E) run the same protocols over a serial line, as NUT's `nutdrv_qx` on a serial port (2400 baud, 8N1). The System Log shows the line settings, and the USB Diagnostics export has a `serial` section next to the `qx` one ([ADR 0014](docs/adr/0014-usb-serial-transport.md)).
+- **`voltronic`**: the `ups.conf` options of NUT's voltronic subdriver (capability settings such as `bypass_alarm`, `reset_to_default`, the bypass limits) are not offered yet: the board behaves as NUT does without them.
 - **Settings**: if your UPS needs `protocol` or `novendor` in NUT's `ups.conf`, set them in **Board Settings** > **Q\* UPS driver** (see [More Settings](#5-more-settings)). `langid_fix` is applied by itself when the UPS needs it.
 - **Not supported yet**: Q\* UPS units with other USB adapters (`phoenix`, `ippon`, `sgs`, … in NUT, for example Mustek Powermust `06da:0003` and GE EP series). The board recognizes them and the Web UI says they are not supported yet.
 
 > [!NOTE]
-> UPS units with a USB-to-serial adapter (USB CDC, CH340, …) or a proprietary protocol are not supported.
+> UPS units with another USB-to-serial adapter (CH340, CP210x, FTDI, …) or a proprietary protocol are not supported yet. A USB serial device the board recognizes but cannot start a protocol on is shown as not supported yet, with the reason in the System Log ([ADR 0014](docs/adr/0014-usb-serial-transport.md)).
 
 ## 📸 Screenshots
 

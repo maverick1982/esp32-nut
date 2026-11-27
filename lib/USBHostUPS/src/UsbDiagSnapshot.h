@@ -62,6 +62,47 @@ struct UsbDiagQx {
     uint32_t uptime_ms = 0; // uptime of the snapshot, the reference of the exchange times
 };
 
+// "serial" object of the export (ADR 0014, section 5): written only when present (a serial
+// device is claimed), so the HID and Q* export do not change
+struct UsbDiagSerialEndpoint {
+    uint8_t address = 0;
+    String type;       // "bulk", "interrupt", "isochronous", "control"
+    String direction;  // "in", "out"
+    uint16_t max_packet = 0;
+};
+
+struct UsbDiagSerialInterface {
+    uint8_t number = 0;
+    uint8_t alternate = 0;
+    uint8_t cls = 0;
+    uint8_t subclass = 0;
+    uint8_t protocol = 0;
+    std::vector<UsbDiagSerialEndpoint> endpoints;
+};
+
+struct UsbDiagSerial {
+    bool present = false;
+    String vid;  // "04E2": four upper case digits
+    String pid;
+    String manufacturer;
+    String product;
+    String serial_number;
+    uint8_t address = 0;
+    String chip;     // "XR21V141x"
+    String adapter;  // "xr21v141x"
+    uint8_t interface_number = 0;
+    String state;        // "open", "open_failed"
+    String open_result;  // "ESP_OK" or the ESP-IDF error name
+    uint32_t rx_bytes = 0;
+    uint32_t rx_chunks = 0;
+    uint32_t tx_bytes = 0;
+    String last_event;
+    String last_error;
+    uint32_t attached_ms = 0;  // uptime when the device was claimed
+    bool descriptor_truncated = false;
+    std::vector<UsbDiagSerialInterface> interfaces;
+};
+
 struct UsbDiagSnapshot {
     String firmware_version;
     String vid;
@@ -91,6 +132,7 @@ struct UsbDiagSnapshot {
     std::vector<UsbDiagReport> reports;    // by key (type << 8) | id, as the report cache
     std::vector<UPSParameter> ups_data;    // expected_ups_data, in UPSData order
     UsbDiagQx qx;                          // Q* section (US-136)
+    UsbDiagSerial serial;                  // serial section (ADR 0014)
 };
 
 // Adds the reports of the on-demand read (US-119) whose key the poll's reports do not hold,
