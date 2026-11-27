@@ -275,6 +275,78 @@
                     </div>
                 </section>
 
+                <!-- ADR 0015: link to use on a board with its own Ethernet port and Wi-Fi (P4 with a
+                     Wi-Fi coprocessor). Shown only when GET /api/network/link answers 200; the W5500
+                     section has its own choice. Same cards as the W5500 "Link to use" -->
+                <section class="net-section" id="sec-linkmode" data-section="linkmode" aria-labelledby="ttl-linkmode" hidden>
+                    <h2 class="net-section-title" id="ttl-linkmode">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M7 7h10M7 7l3-3M7 7l3 3M17 17H7M17 17l-3-3M17 17l-3 3" />
+                        </svg>
+                        Link to use
+                    </h2>
+                    <div class="panel config-panel net-panel">
+                        <form id="linkmode-form" novalidate>
+                            <div class="port-options w5500-mode-options" id="linkmode" role="radiogroup"
+                                aria-labelledby="ttl-linkmode">
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="auto">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Automatic</span>
+                                        <span class="port-desc">Ethernet when the cable is connected, otherwise Wi-Fi.
+                                            Switches by itself within 30 s.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="ethernet">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Ethernet</span>
+                                        <span class="port-desc">Cable only, the initial setting. Wi-Fi is used only if
+                                            the Ethernet port does not start.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="wifi">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Wi-Fi</span>
+                                        <span class="port-desc">Wi-Fi only. Set the network in the Wi-Fi section
+                                            first; without one the board starts its access point.</span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div class="auth-alert" id="linkmode-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="linkmode-error-text"></span>
+                            </div>
+
+                            <div class="auth-alert success" id="linkmode-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>Saved. The board is restarting,
+                                    this page reloads in <span class="countdown" id="linkmode-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions w5500-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-linkmode" disabled>
+                                    <span class="glow"></span>
+                                    Save link
+                                </button>
+                            </div>
+                        </form>
+                        <p class="auth-fineprint">Only one link is active at a time, with the same hostname on both.
+                            Saving restarts the board. The double reset always starts the access point.</p>
+                    </div>
+                </section>
+
                 <!-- W5500 wired by the user (US-126, docs/mockups/US-126): shown only when
                      GET /api/network/eth answers 200 with available:true (not on the P4) -->
                 <section class="net-section" id="sec-w5500" data-section="w5500" aria-labelledby="ttl-w5500" hidden>
@@ -717,6 +789,7 @@
                     <dl class="board-chip" id="board-chip" hidden>
                         <div><dt>Chip</dt><dd id="board-chip-model">--</dd></div>
                         <div><dt>Image</dt><dd class="mono" id="board-chip-image">--</dd></div>
+                        <div id="board-cp" hidden><dt>Wi-Fi coprocessor</dt><dd id="board-cp-text">--</dd></div>
                     </dl>
 
                     <!-- GET /api/board failed -->

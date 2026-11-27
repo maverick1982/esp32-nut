@@ -89,6 +89,9 @@ private:
     NetworkMode eth_mode = NetworkMode::AUTO;
     void handleGetEthSpi();
     void handleSetEthSpi();
+    // ADR 0015: link mode of a board with its own Ethernet port and Wi-Fi
+    void handleGetLinkMode();
+    void handleSetLinkMode();
     NvsNutOverrideStore* nut_override_store = nullptr;
     std::vector<NutOverride>* nut_overrides = nullptr;
     NUTServer* nut_server = nullptr;

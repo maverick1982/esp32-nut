@@ -305,6 +305,84 @@ void test_boards_without_wifi_ignore_the_mode(void) {
     }
 }
 
+// --- ADR 0015: a board with its own Ethernet port and Wi-Fi (P4 with a coprocessor) ---
+
+static NetBootInput both(NetworkMode mode, bool config_valid, bool ssid_set, bool manual) {
+    const NetBootInput in = { true, true, false, config_valid, ssid_set, manual, mode };
+    return in;
+}
+
+// The port takes the place of the W5500: the same plan in every mode and state
+void test_builtin_port_plans_like_an_enabled_w5500(void) {
+    for (int m = 0; m < 3; m++) {
+        for (int valid = 0; valid < 2; valid++) {
+            for (int ssid = 0; ssid < 2; ssid++) {
+                for (int manual = 0; manual < 2; manual++) {
+                    const NetBootPlan p = planNetwork(both(MODES[m], valid, ssid && valid, manual));
+                    const NetBootPlan w = planNetwork(s3m(MODES[m], valid, ssid && valid, manual));
+                    TEST_ASSERT_TRUE(samePlan(p, w));
+                }
+            }
+        }
+    }
+}
+
+// The P4-NANO out of the box: Ethernet mode, the default configuration, the access point only
+// as the fallback of a port that does not start
+void test_builtin_port_ethernet_mode_without_config(void) {
+    const NetBootPlan p = planNetwork(both(NetworkMode::ETHERNET, false, false, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.default_config);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_ACCESS_POINT);
+    TEST_ASSERT_FALSE(p.fallback_on_no_link);
+    TEST_ASSERT_FALSE(p.auto_switch);
+    TEST_ASSERT_FALSE(p.recovery_window);
+    TEST_ASSERT_TRUE(needsFallback(p, EthProbeOutcome::NO_CHIP));
+    TEST_ASSERT_FALSE(needsFallback(p, EthProbeOutcome::NO_LINK));
+}
+
+void test_builtin_port_auto_with_wifi_switches(void) {
+    const NetBootPlan p = planNetwork(both(NetworkMode::AUTO, true, true, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::WIFI_STATION);
+    TEST_ASSERT_TRUE(p.auto_switch);
+    TEST_ASSERT_TRUE(p.fallback_on_no_link);
+}
+
+void test_builtin_port_wifi_mode_uses_the_station(void) {
+    const NetBootPlan p = planNetwork(both(NetworkMode::WIFI, true, true, false));
+    TEST_ASSERT_TRUE(p.link == BootLink::WIFI_STATION);
+    TEST_ASSERT_TRUE(p.fallback == BootLink::NONE);
+    TEST_ASSERT_FALSE(p.auto_switch);
+}
+
+// PDR 0002 D5: a board with Wi-Fi keeps the access point recovery, not the recovery window
+void test_builtin_port_double_reset_starts_the_ap(void) {
+    for (int m = 0; m < 3; m++) {
+        const NetBootPlan p = planNetwork(both(MODES[m], true, true, true));
+        TEST_ASSERT_TRUE(p.link == BootLink::WIFI_ACCESS_POINT);
+        TEST_ASSERT_TRUE(p.captive_portal);
+        TEST_ASSERT_TRUE(p.ap_idle_timeout);
+        TEST_ASSERT_FALSE(p.recovery_window);
+    }
+}
+
+// A coprocessor that did not answer at boot: the caller plans the board without Wi-Fi, which
+// is exactly the P4-ETH (Ethernet, recovery window after the double reset), in every mode
+void test_coprocessor_not_answering_plans_a_board_without_wifi(void) {
+    for (int m = 0; m < 3; m++) {
+        for (int valid = 0; valid < 2; valid++) {
+            for (int manual = 0; manual < 2; manual++) {
+                const NetBootInput in = { false, true, false, (bool)valid, (bool)valid, (bool)manual, MODES[m] };
+                const NetBootPlan p = planNetwork(in);
+                TEST_ASSERT_TRUE(samePlan(p, planNetwork(ETHERNET_ONLY, valid, manual)));
+                TEST_ASSERT_EQUAL((bool)manual, p.recovery_window);
+                TEST_ASSERT_TRUE(p.link == BootLink::ETHERNET);
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_auto_with_wifi_configured_switches_while_running);
@@ -315,6 +393,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_needs_fallback_for_every_mode_and_outcome);
     RUN_TEST(test_fallback_plan_keeps_auto_switch_only_towards_the_station);
     RUN_TEST(test_boards_without_wifi_ignore_the_mode);
+    RUN_TEST(test_builtin_port_plans_like_an_enabled_w5500);
+    RUN_TEST(test_builtin_port_ethernet_mode_without_config);
+    RUN_TEST(test_builtin_port_auto_with_wifi_switches);
+    RUN_TEST(test_builtin_port_wifi_mode_uses_the_station);
+    RUN_TEST(test_builtin_port_double_reset_starts_the_ap);
+    RUN_TEST(test_coprocessor_not_answering_plans_a_board_without_wifi);
     RUN_TEST(test_w5500_with_valid_config_tries_ethernet_then_station);
     RUN_TEST(test_w5500_without_config_tries_ethernet_then_ap);
     RUN_TEST(test_w5500_double_reset_starts_ap);

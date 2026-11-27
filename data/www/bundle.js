@@ -2008,6 +2008,81 @@ document.addEventListener('DOMContentLoaded', () => {
             .catch(err => console.error('Failed to fetch the W5500 settings:', err));
     }
 
+    // ---------- Link to use, board with its own Ethernet port and Wi-Fi (ADR 0015) ----------
+    // GET/POST /api/network/link; 404 on the other boards and while the Wi-Fi coprocessor does
+    // not answer, so the section stays hidden there
+    const linkModeSection = document.getElementById('sec-linkmode');
+    const linkModeForm = document.getElementById('linkmode-form');
+    const btnLinkMode = document.getElementById('btn-linkmode');
+    if (linkModeSection && linkModeForm && btnLinkMode) {
+        const LINK_MODES = ['auto', 'ethernet', 'wifi'];
+        const LINK_RESTART_S = 15;
+        const LINK_BTN_IDLE = btnLinkMode.innerHTML;
+        let linkSavedMode = 'ethernet';
+        const linkRadios = () => Array.from(document.querySelectorAll('input[name="linkmode"]'));
+        const readLinkMode = () => { const r = linkRadios().find(i => i.checked); return r ? r.value : linkSavedMode; };
+        const linkError = (text) => {
+            document.getElementById('linkmode-error-text').textContent = text || '';
+            document.getElementById('linkmode-error').hidden = !text;
+        };
+        const refreshLinkButton = () => { btnLinkMode.disabled = readLinkMode() === linkSavedMode; };
+
+        document.getElementById('linkmode').addEventListener('change', () => { linkError(''); refreshLinkButton(); });
+
+        linkModeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnLinkMode.disabled) return;
+            linkError('');
+            const mode = readLinkMode();
+            btnLinkMode.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnLinkMode.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/link', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Link mode save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnLinkMode.innerHTML = LINK_BTN_IDLE;
+                refreshLinkButton();
+                linkError(data && typeof data.error === 'string' ? data.error : 'Could not save the link.');
+                return;
+            }
+            linkSavedMode = mode;
+            if (!data.restart) { btnLinkMode.innerHTML = LINK_BTN_IDLE; refreshLinkButton(); return; }
+            netRestarting = true;
+            btnLinkMode.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+            linkRadios().forEach(r => { r.disabled = true; });
+            document.getElementById('linkmode-success').hidden = false;
+            const countdown = document.getElementById('linkmode-countdown');
+            let left = LINK_RESTART_S;
+            countdown.textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                countdown.textContent = Math.max(0, left);
+                if (left <= 0) { clearInterval(timer); window.location.reload(); }
+            }, 1000);
+        });
+
+        apiFetch('/api/network/link', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => {
+                if (!data || !LINK_MODES.includes(data.mode)) return;
+                linkSavedMode = data.mode;
+                linkRadios().forEach(r => { r.checked = r.value === data.mode; });
+                refreshLinkButton();
+                linkModeSection.hidden = false;
+            })
+            .catch(err => console.error('Failed to fetch the link mode:', err));
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
@@ -4261,6 +4336,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 B('board-chip-model').textContent = [model, rev].filter(Boolean).join(' ') || '--';
                 B('board-chip-image').textContent =
                     typeof chip.image === 'string' && chip.image !== '' ? chip.image : 'local build';
+            }
+            // ADR 0015: "ESP32-C6, firmware unknown (host 2.12.13), update available" or why it
+            // did not answer; only on boards with a coprocessor
+            const cp = board.wifi_coprocessor && typeof board.wifi_coprocessor === 'object' ? board.wifi_coprocessor : null;
+            B('board-cp').hidden = !cp;
+            if (cp) {
+                let text;
+                if (cp.answered) {
+                    const target = typeof cp.target === 'string' && cp.target !== '' ? cp.target.toUpperCase().replace('ESP32', 'ESP32-') : 'Coprocessor';
+                    text = `${target}, firmware ${cp.firmware || 'unknown'} (host ${cp.host || '?'})`;
+                    if (cp.update_available) text += ', newer firmware available';
+                } else {
+                    text = `Not answering${cp.error ? ': ' + cp.error : ''}. The board runs without Wi-Fi.`;
+                }
+                B('board-cp-text').textContent = text;
             }
 
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;

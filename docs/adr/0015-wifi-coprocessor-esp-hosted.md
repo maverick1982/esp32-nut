@@ -57,6 +57,7 @@ Chosen option: **B**, because it implements the capability ADR 0010 announced, k
 * `NetBootInput` describes the Ethernet that exists independently of the user: the board's own port, or the W5500 enabled by the user. `planNetwork()` uses one rule for both: Ethernet first in Automatic and Ethernet mode, Wi-Fi (station, or the access point when Wi-Fi is not configured) as the fallback, switching between Ethernet and the station in Automatic (US-127), the double reset starting the access point.
 * The decision table of `planNetwork()` for the ESP32-S3, with and without the W5500, and for P4 boards without Wi-Fi stays as it is; the native tests of `test_net_boot_plan` must pass unchanged, and new rows cover a board with both.
 * An Ethernet port of the board cannot be "not answering" the way a wrongly wired W5500 can; a failed start of the PHY is handled like the W5500's NO_CHIP outcome, so the board still falls back to Wi-Fi in every mode.
+* **Addresses and name.** The W5500 takes the station MAC so the router sees one device (issue #64). A board's own port keeps its Ethernet MAC: the Wi-Fi of a coprocessor goes on the air with the coprocessor's own MAC, so one MAC on both links cannot be had, and a board that moves from the `esp32-p4-eth` image keeps its Ethernet MAC and its DHCP reservation. The default hostname (`esp32-nut-xxxxxx`) of both links comes from the Ethernet MAC, so the board keeps one name. A DHCP reservation covers one link; the Wi-Fi link needs its own.
 
 ### 4. Link mode as a board-level setting
 
@@ -101,7 +102,7 @@ The board page shows the chip model and revision and the PlatformIO environment 
 * The boot of a coprocessor board waits for the coprocessor once (about 3 s in the test build).
 * The coprocessor firmware is a second firmware the project does not update yet; a C6 whose factory firmware cannot join networks would need the update path of section 5 first.
 * `planNetwork()` and the Network page change; the S3 and W5500 behavior must be shown unchanged by the existing native and e2e tests.
-* The Wi-Fi MAC address of a coprocessor board is the C6's, not derived from the P4: the "same address on both links" of US-126 has to be checked on the hardware.
+* The Wi-Fi MAC address of a coprocessor board is the C6's: unlike the W5500 of US-126, Ethernet and Wi-Fi have different MAC addresses and need separate DHCP reservations; the hostname is the same.
 
 ## Impact on Agent Implementation
 

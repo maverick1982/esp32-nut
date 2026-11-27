@@ -21,6 +21,7 @@
 #include "core/log_settings_store.h"
 #include "network/syslog_output.h"
 #include "network/ntp_clock.h"
+#include "network/wifi_coprocessor.h"
 #include "core/time_settings_store.h"
 
 USBHostUPS usb_ups;
@@ -171,8 +172,10 @@ void setup() {
     String saved_hostname = hostname_store.load();
     // W5500 wired by the user (US-126): off on every board until enabled in the Network page
     EthSpiSettings eth_spi = eth_spi_store.load(board());
-    // Link to use with the W5500 on (US-127): AUTO until the user picks one
-    const NetworkMode net_mode = eth_spi_store.loadMode();
+    // Link to use with the W5500 on (US-127): AUTO until the user picks one. A board with its
+    // own Ethernet port starts with the link of its profile (ADR 0015, PDR 0002 D3)
+    const NetworkMode net_mode =
+        eth_spi_store.loadMode(board().has_ethernet ? board().defaults.network_mode : NetworkMode::AUTO);
 
     // Task watchdog sul loopTask (30 secondi)
     setupLoopWatchdog();
@@ -192,21 +195,50 @@ void setup() {
 
     // Inizializzazione di ConfigManager
     bool config_ok = config_mgr.begin() && config_mgr.isValid();
+
+    // ADR 0015: the Wi-Fi of a board with a coprocessor exists only once the coprocessor
+    // answered. One bounded start before the plan; without an answer the board is planned as
+    // a board without Wi-Fi (Ethernet, recovery window), so it can never lock the user out
+    if (board().wifi_coprocessor.present) {
+        const bool answered = WifiCoprocessorProbe::run(board().wifi_coprocessor, 10000, closeManualApWindow);
+        setWifiCoprocessorAnswered(answered);
+        const WifiCoprocessorStatus& cp = WifiCoprocessorProbe::status();
+        if (answered) {
+            char firmware[16];
+            if (cp.slaveKnown()) {
+                snprintf(firmware, sizeof(firmware), "%u.%u.%u", cp.slave[0], cp.slave[1], cp.slave[2]);
+            } else {
+                snprintf(firmware, sizeof(firmware), "unknown");
+            }
+            AppLogger::log("INFO", "[NETWORK] Wi-Fi coprocessor %s answered in %u ms: firmware %s, host %u.%u.%u",
+                           cp.target, (unsigned)cp.duration_ms, firmware, cp.host[0], cp.host[1], cp.host[2]);
+            if (cp.update_available) {
+                AppLogger::log("INFO", "[NETWORK] A newer firmware for the Wi-Fi coprocessor exists (%u.%u.%u); "
+                               "the board does not update it", cp.host[0], cp.host[1], cp.host[2]);
+            }
+        } else {
+            AppLogger::log("WARN", "[NETWORK] Wi-Fi coprocessor not available (%s): the board runs without Wi-Fi",
+                           cp.error);
+        }
+    }
     // Which link to start, from the board capabilities (US-090, ADR 0010 §3), the W5500
     // enabled by the user (US-126) and the link mode of the Network page (US-127)
-    const NetBootInput net_input = { board().has_wifi, board().has_ethernet, eth_spi.enabled, config_ok,
+    const NetBootInput net_input = { activeBoard().has_wifi, board().has_ethernet, eth_spi.enabled, config_ok,
                                      config_ok && config_mgr.getWifiConfig().ssid.length() > 0,
                                      manual_ap_triggered, net_mode };
     NetBootPlan net_plan = planNetwork(net_input);
-    if (eth_spi.enabled && board().has_wifi) {
+    if (eth_spi.enabled && activeBoard().has_wifi) {
         AppLogger::log("INFO", "[MAIN] W5500 enabled, link mode %s", networkModeName(net_mode));
+    } else if (board().has_ethernet && activeBoard().has_wifi) {
+        AppLogger::log("INFO", "[MAIN] Ethernet port and Wi-Fi, link mode %s", networkModeName(net_mode));
     }
     if (net_plan.link == BootLink::ETHERNET && net_plan.fallback != BootLink::NONE) {
         // US-126: Ethernet first. The probe resets the watchdog. Where it falls back to
         // Wi-Fi (or the access point when Wi-Fi is not configured) depends on the mode
         // (needsFallback, US-127): a silent module always, a cable without link or address
         // only in AUTO, where the W5500 stays on standby to come back to Ethernet
-        network_mgr.setEthernetConfig(toEthConfig(eth_spi));
+        // The W5500 (US-126) or the board's own port (ADR 0015)
+        network_mgr.setEthernetConfig(eth_spi.enabled ? toEthConfig(eth_spi) : board().eth);
         const EthProbeOutcome outcome = network_mgr.probeEthernet(saved_hostname, closeManualApWindow);
         if (needsFallback(net_plan, outcome)) {
             network_mgr.leaveEthernet(net_plan.auto_switch && outcome != EthProbeOutcome::NO_CHIP);
@@ -248,7 +280,7 @@ void setup() {
     if (net_plan.link == BootLink::WIFI_ACCESS_POINT) {
         is_ap_mode = true;
         AppLogger::log("WARN", "[MAIN] Starting in AP mode...");
-        network_mgr.begin(board(), net_plan, "", "", saved_hostname);
+        network_mgr.begin(activeBoard(), net_plan, "", "", saved_hostname);
         // Only the double reset with a valid config has a normal mode to go back to;
         // manual_ap is already cleared, so the restart boots in STA (PDR 0001 D7)
         ap_timeout = ApIdleTimeout(net_plan.ap_idle_timeout);
@@ -269,7 +301,7 @@ void setup() {
         AppLogger::log("INFO", "[MAIN] NUT UPS Name: %s\n", nut.ups_name.c_str());
         
         // Inizializzazione di AppNetworkManager
-        network_mgr.begin(board(), net_plan, wifi.ssid, wifi.password, saved_hostname);
+        network_mgr.begin(activeBoard(), net_plan, wifi.ssid, wifi.password, saved_hostname);
         web_server.setUPS(&usb_ups);
         web_server.begin(false);
     }

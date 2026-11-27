@@ -10,7 +10,7 @@
 static const BoardConfig WAVESHARE_P4_NANO = {
     "waveshare_p4_nano",
     "Waveshare ESP32-P4-NANO",
-    false,  // has_wifi: the coprocessor is not used yet (ADR 0015, next step)
+    true,   // has_wifi: through the coprocessor, once it answered at boot (activeBoard(), ADR 0015)
     true,   // has_ethernet
     { EthType::RMII, EthPhy::IP101, 1, 31, 52, 50, 51, -1, -1, -1, -1, -1, -1 },
     { false, 0, 0, {}, 0, {} },  // no W5500: the board has its own Ethernet port

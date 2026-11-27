@@ -18,11 +18,21 @@ AppNetworkManager::~AppNetworkManager() {
     delete m_eth;
 }
 
+bool AppNetworkManager::nameMac(uint8_t mac[6]) const {
+    // From eFuse, as WifiStaLink: the link need not be running
+    return esp_read_mac(mac, m_ownEthPort ? ESP_MAC_ETH : ESP_MAC_WIFI_STA) == ESP_OK;
+}
+
+WifiStaLink* AppNetworkManager::newStaLink(const String& ssid, const String& password) const {
+    uint8_t mac[6];
+    const bool eth_name = m_ownEthPort && nameMac(mac);
+    return new WifiStaLink(ssid, password, m_savedHostname, eth_name ? mac : nullptr);
+}
+
 String AppNetworkManager::ethHostnameSeed(bool has_wifi) const {
     if (!has_wifi) return m_savedHostname;
-    // From eFuse, as WifiStaLink: the station need not be running
     uint8_t mac[6];
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) return m_savedHostname;
+    if (!nameMac(mac)) return m_savedHostname;
     return NetHostname::effective(m_savedHostname, mac);
 }
 
@@ -31,8 +41,10 @@ EthLink* AppNetworkManager::newEthLink(const EthConfig& cfg, bool has_wifi) cons
     // Issue #64: on a board with Wi-Fi the W5500 takes the station MAC, so the router sees
     // one device on both links and gives it the same address (a DHCP reservation works).
     // Safe only because the two never hold an address together (setDhcp, switchLink)
+    // Only the W5500: the board's own port keeps its MAC, and the Wi-Fi of a coprocessor goes
+    // on the air with the coprocessor's MAC anyway (ADR 0015)
     uint8_t mac[6];
-    if (has_wifi && esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) eth->setMac(mac);
+    if (has_wifi && cfg.type == EthType::SPI && esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) eth->setMac(mac);
     return eth;
 }
 
@@ -40,12 +52,13 @@ void AppNetworkManager::begin(const BoardConfig& board, const NetBootPlan& plan,
                               const String& password, const String& saved_hostname) {
     m_savedHostname = saved_hostname;
     m_hasWifi = board.has_wifi;
+    m_ownEthPort = board.has_ethernet;
     // Kept for a station created later by the automatic switch (US-127)
     m_ssid = ssid;
     m_password = password;
     switch (plan.link) {
     case BootLink::WIFI_STATION:
-        if (!m_sta) m_sta = new WifiStaLink(ssid, password, saved_hostname);
+        if (!m_sta) m_sta = newStaLink(ssid, password);
         // A W5500 in standby (AUTO mode) is outside the selector and keeps running
         m_selector.activate(m_sta, m_ethStandby);
         break;
@@ -89,7 +102,8 @@ void AppNetworkManager::setEthernetConfig(const EthConfig& cfg) {
 
 EthProbeOutcome AppNetworkManager::probeEthernet(const String& saved_hostname, void (*tick)(uint32_t now)) {
     m_savedHostname = saved_hostname;
-    m_hasWifi = board().has_wifi;
+    m_hasWifi = activeBoard().has_wifi;  // ADR 0015: only with a coprocessor that answered
+    m_ownEthPort = board().has_ethernet;
     if (!m_eth) m_eth = newEthLink(m_hasEthCfg ? m_ethCfg : EthConfig(), m_hasWifi);
     m_selector.activate(m_eth);
     EthBootProbe probe;
@@ -131,7 +145,7 @@ void AppNetworkManager::switchLink(AutoAction action) {
     if (action == AutoAction::TO_WIFI) {
         AppLogger::log("WARN", "[NETWORK] Ethernet lost: switching to Wi-Fi");
         m_eth->setDhcp(false);
-        if (!m_sta) m_sta = new WifiStaLink(m_ssid, m_password, m_savedHostname);
+        if (!m_sta) m_sta = newStaLink(m_ssid, m_password);
         m_selector.activate(m_sta, true);
         m_ethStandby = true;
         m_autoSwitcher.switched(now, AutoLink::WIFI);
@@ -217,9 +231,10 @@ String AppNetworkManager::defaultHostname() const {
     const INetLink* link = m_selector.active();
     if (!link) return String();
     uint8_t mac[6];
-    // US-127: on a board with Wi-Fi the default name comes from the station MAC on every
-    // link, so cable and Wi-Fi give the board the same name
-    if (!m_hasWifi || esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) link->macAddress(mac);
+    // US-127: on a board with Wi-Fi the default name comes from the name MAC on every link
+    // (the station MAC, or the Ethernet MAC of a board's own port, ADR 0015), so cable and
+    // Wi-Fi give the board the same name
+    if (!m_hasWifi || !nameMac(mac)) link->macAddress(mac);
     return NetHostname::defaultFor(mac);
 }
 

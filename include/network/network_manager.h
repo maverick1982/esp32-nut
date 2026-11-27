@@ -72,10 +72,16 @@ public:
 
 private:
     // Name given to the Ethernet link: on a board with Wi-Fi, without a saved name, the
-    // default of the station MAC, so the board has the same name on both links (US-127)
+    // default of the name MAC, so the board has the same name on both links (US-127)
     String ethHostnameSeed(bool has_wifi) const;
-    // The Ethernet link, with the station MAC on a W5500 of a board with Wi-Fi (issue #64)
+    // The Ethernet link, with the station MAC on a W5500 of a board with Wi-Fi (issue #64).
+    // A board's own Ethernet port keeps its MAC (ADR 0015)
     EthLink* newEthLink(const EthConfig& cfg, bool has_wifi) const;
+    // The MAC of the default name of every link: the station MAC (US-127), or the Ethernet MAC
+    // on a board with its own Ethernet port, whose Wi-Fi is a coprocessor with a MAC of its
+    // own (ADR 0015). False when it cannot be read
+    bool nameMac(uint8_t mac[6]) const;
+    WifiStaLink* newStaLink(const String& ssid, const String& password) const;
     void switchLink(AutoAction action);
 
     NetLinkSelector m_selector;
@@ -88,6 +94,7 @@ private:
     EthConfig m_ethCfg;
     bool m_hasEthCfg;
     bool m_hasWifi;
+    bool m_ownEthPort = false;  // the board has its own Ethernet port (ADR 0015)
     EthProbeOutcome m_ethProbe;
     NetAutoSwitch m_autoSwitcher;
     bool m_autoSwitch;

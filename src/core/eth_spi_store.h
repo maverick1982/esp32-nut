@@ -10,13 +10,15 @@
  * does not allow (PDR 0002 D4: a wrong value must not lock the user out), keeping the pins
  * so the user can fix them.
  * The same namespace keeps the link mode chosen with the W5500 on (US-127): key "mode",
- * string "auto", "ethernet" or "wifi" (networkModeName). Missing or not valid → AUTO.
+ * string "auto", "ethernet" or "wifi" (networkModeName). Missing or not valid → AUTO, or the
+ * fallback given to loadMode(): the initial link of a board with its own Ethernet port and
+ * Wi-Fi (ADR 0015, BoardDefaults::network_mode).
  */
 class EthSpiStore {
 public:
     EthSpiSettings load(const BoardConfig& board);
     bool save(const EthSpiSettings& settings);
-    NetworkMode loadMode();
+    NetworkMode loadMode(NetworkMode fallback = NetworkMode::AUTO);
     bool saveMode(NetworkMode mode);
 };
 

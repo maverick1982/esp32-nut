@@ -474,9 +474,39 @@ String WebApiJson::nutConfigAppliedJson(bool applied, bool changed, unsigned ses
     return String(out_std.c_str());
 }
 
+String WebApiJson::linkModeJson(NetworkMode mode, const char* active) {
+    JsonDocument doc;
+    doc["mode"] = networkModeName(mode);
+    doc["active"] = active ? active : "";
+    std::string out;
+    serializeJson(doc, out);
+    return String(out.c_str());
+}
+
+int WebApiJson::checkLinkModeBody(JsonVariantConst body, NetworkMode current, NetworkMode& next, bool& restart,
+                                  String& response) {
+    next = current;
+    restart = false;
+    if (!body.is<JsonObjectConst>()) return sendError(response, 400, "Invalid request");
+    JsonVariantConst mode = body.as<JsonObjectConst>()["mode"];
+    NetworkMode candidate = current;
+    if (!mode.is<const char*>() || !parseNetworkMode(mode.as<const char*>(), candidate)) {
+        return sendError(response, 400, INVALID_NETWORK_MODE_ERROR);
+    }
+    next = candidate;
+    restart = next != current;
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["restart"] = restart;
+    std::string out;
+    serializeJson(doc, out);
+    response = String(out.c_str());
+    return 0;
+}
+
 String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
                                      AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx,
-                                     const BoardChipInfo* chip) {
+                                     const BoardChipInfo* chip, const BoardCoprocessorInfo* coprocessor) {
     JsonDocument doc;
     doc["id"] = board.name;
     doc["label"] = board.label;
@@ -489,6 +519,19 @@ String WebApiJson::boardSettingsJson(const BoardConfig& board, const BoardSettin
         snprintf(rev, sizeof(rev), "v%u.%u", (unsigned)(chip->revision / 100), (unsigned)(chip->revision % 100));
         c["revision"] = rev;
         c["image"] = chip->image ? chip->image : "";
+    }
+    // ADR 0015: whether the Wi-Fi coprocessor answered at boot, and its firmware
+    if (coprocessor) {
+        JsonObject w = doc["wifi_coprocessor"].to<JsonObject>();
+        w["answered"] = coprocessor->answered;
+        if (coprocessor->answered) {
+            w["target"] = coprocessor->target ? coprocessor->target : "";
+            w["firmware"] = coprocessor->firmware ? coprocessor->firmware : "";
+            w["host"] = coprocessor->host ? coprocessor->host : "";
+            w["update_available"] = coprocessor->update_available;
+        } else {
+            w["error"] = coprocessor->error ? coprocessor->error : "";
+        }
     }
     if (hasLed(board)) {
         JsonObject led = doc["led"].to<JsonObject>();

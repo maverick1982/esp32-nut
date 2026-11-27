@@ -120,4 +120,11 @@ struct BoardConfig {
 // The profile of the board this image was built for
 const BoardConfig& board();
 
+// The profile with the capabilities found at boot (ADR 0010 section 3, ADR 0015 section 2):
+// the same as board(), except that has_wifi of a board with a Wi-Fi coprocessor is true only
+// once the coprocessor answered (setWifiCoprocessorAnswered()). Code that offers Wi-Fi (the
+// network plan, the Wi-Fi routes and pages) asks this one
+const BoardConfig& activeBoard();
+void setWifiCoprocessorAnswered(bool answered);
+
 #endif // BOARD_H

@@ -14,6 +14,7 @@
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_chip_info.h"
+#include "network/wifi_coprocessor.h"
 
 // PlatformIO environment of the image (scripts/build_env.py); empty when built without it
 #ifndef NUT_BUILD_ENV
@@ -104,8 +105,9 @@ void WebConfigServer::begin(bool isAPMode) {
 
 
     // REST endpoints
-    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092)
-    if (board().has_wifi) {
+    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092).
+    // ADR 0015: nor a board whose Wi-Fi coprocessor did not answer at boot
+    if (activeBoard().has_wifi) {
         server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
     }
     server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
@@ -123,6 +125,12 @@ void WebConfigServer::begin(bool isAPMode) {
     if (board().spi_eth.available) {
         server.on("/api/network/eth", HTTP_GET, guarded([this]() { handleGetEthSpi(); }));
         server.on("/api/network/eth", HTTP_POST, guarded([this]() { handleSetEthSpi(); }));
+    }
+    // ADR 0015: the link mode of a board with its own Ethernet port and Wi-Fi (the W5500 page
+    // has its own); 404 elsewhere, and while the Wi-Fi coprocessor does not answer
+    if (board().has_ethernet && activeBoard().has_wifi) {
+        server.on("/api/network/link", HTTP_GET, guarded([this]() { handleGetLinkMode(); }));
+        server.on("/api/network/link", HTTP_POST, guarded([this]() { handleSetLinkMode(); }));
     }
     // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
     // so protected by the login
@@ -309,9 +317,21 @@ void WebConfigServer::handleGetBoard() {
     esp_chip_info_t info;
     esp_chip_info(&info);
     const BoardChipInfo chip = { ESP.getChipModel(), info.revision, NUT_BUILD_ENV };
+    // ADR 0015: the Wi-Fi coprocessor, only on a board that has one
+    const WifiCoprocessorStatus& cp = WifiCoprocessorProbe::status();
+    char firmware[16];
+    char host[16];
+    if (cp.slaveKnown()) {
+        snprintf(firmware, sizeof(firmware), "%u.%u.%u", cp.slave[0], cp.slave[1], cp.slave[2]);
+    } else {
+        snprintf(firmware, sizeof(firmware), "unknown");
+    }
+    snprintf(host, sizeof(host), "%u.%u.%u", cp.host[0], cp.host[1], cp.host[2]);
+    const BoardCoprocessorInfo coprocessor = { cp.answered, cp.target, firmware, host, cp.update_available, cp.error };
     server.send(200, "application/json",
                 WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability(),
-                                              has_qx ? &qx : nullptr, &chip));
+                                              has_qx ? &qx : nullptr, &chip,
+                                              cp.present ? &coprocessor : nullptr));
 }
 
 void WebConfigServer::handleSetBoard() {
@@ -520,6 +540,42 @@ void WebConfigServer::handleSetEthSpi() {
     server.send(200, "application/json", response);
     AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s, link mode %s): restarting",
                    next.enabled ? "enabled" : "disabled", networkModeName(next_mode));
+    should_restart = true;
+    restart_request_time = millis();
+}
+
+// --- Link mode of a board with its own Ethernet port and Wi-Fi (ADR 0015) ---
+
+void WebConfigServer::handleGetLinkMode() {
+    server.send(200, "application/json",
+                WebApiJson::linkModeJson(eth_mode, network ? network->typeName() : ""));
+}
+
+void WebConfigServer::handleSetLinkMode() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    NetworkMode next = eth_mode;
+    bool restart = false;
+    String response;
+    if (int status = WebApiJson::checkLinkModeBody(doc, eth_mode, next, restart, response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!restart) {
+        server.send(200, "application/json", response);
+        return;
+    }
+    if (!eth_spi_store || !eth_spi_store->saveMode(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the link mode\"}");
+        return;
+    }
+    eth_mode = next;
+    server.send(200, "application/json", response);
+    AppLogger::log("INFO", "[NETWORK] Link mode saved (%s): restarting", networkModeName(next));
     should_restart = true;
     restart_request_time = millis();
 }
@@ -843,10 +899,10 @@ void WebConfigServer::handleGetConfig() {
     wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
     // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
-    doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
+    doc["network"]["type"] = activeBoard().has_wifi ? "wifi" : "ethernet";
     // US-126: an enabled W5500 adds the Ethernet section on a Wi-Fi board
     // US-127: in Wi-Fi mode the W5500 is not used, so the board has no Ethernet link
-    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(),
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), activeBoard(),
                                  eth_spi.enabled && eth_mode != NetworkMode::WIFI);
     // Name in use, saved name and default (US-113)
     WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),

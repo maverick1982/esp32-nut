@@ -10,8 +10,11 @@
 // Station on the home network, with the reconnection of the former AppNetworkManager
 class WifiStaLink : public INetLink {
 public:
-    // saved_hostname: the name chosen in the Network page, "" for the default (US-113)
-    WifiStaLink(const String& ssid, const String& password, const String& saved_hostname);
+    // saved_hostname: the name chosen in the Network page, "" for the default (US-113).
+    // name_mac: the MAC of the default name, nullptr for the station MAC; a board with its own
+    // Ethernet port passes the Ethernet MAC, so both links have one name (ADR 0015)
+    WifiStaLink(const String& ssid, const String& password, const String& saved_hostname,
+                const uint8_t* name_mac = nullptr);
 
     NetLinkKind kind() const override { return NetLinkKind::STATION; }
     void begin() override;
@@ -29,6 +32,8 @@ private:
     String m_password;
     String m_savedHostname;
     String m_hostname;
+    uint8_t m_nameMac[6];
+    bool m_hasNameMac;
     wl_status_t m_lastStatus;
     uint32_t m_lastConnectionAttempt;
     uint32_t m_lastDisconnectTime;

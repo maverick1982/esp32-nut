@@ -11,6 +11,8 @@ void test_identity_led_and_usb(void) {
     TEST_ASSERT_EQUAL_STRING("waveshare_p4_nano", board().name);
     TEST_ASSERT_EQUAL_STRING("Waveshare ESP32-P4-NANO", board().label);
     TEST_ASSERT_TRUE(board().has_ethernet);
+    // Wi-Fi through the coprocessor (ADR 0015); confirmed at boot by activeBoard()
+    TEST_ASSERT_TRUE(board().has_wifi);
     TEST_ASSERT_EQUAL_INT8(-1, board().led.pin);
     TEST_ASSERT_FALSE(board().defaults.led_enabled);
     TEST_ASSERT_EQUAL_UINT8(1, board().usb.port_count);
