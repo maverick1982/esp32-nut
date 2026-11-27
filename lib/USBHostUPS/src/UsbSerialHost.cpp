@@ -2,7 +2,10 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include "esp_err.h"
+#include "usb/cdc_acm_host_ops.h"
+#include "XrUartSetup.h"
 #include "DriverRegistry.h"
 #include "UsbSerialDiag.h"
 
@@ -100,10 +103,10 @@ void UsbSerialHost::onDeviceEvent(const cdc_acm_host_dev_event_data_t* event, vo
 }
 
 bool UsbSerialHost::onData(const uint8_t* data, size_t len, void* user_ctx) {
-    (void)data;
     UsbSerialHost* self = static_cast<UsbSerialHost*>(user_ctx);
     if (self) {
-        // No protocol yet: the bytes are counted and dropped (ADR 0014, section 4)
+        // Into the buffer the protocol reads in the poll task; never waits (ADR 0008)
+        self->_rx.push(data, len);
         self->_rx_bytes.fetch_add((uint32_t)len);
         self->_rx_chunks.fetch_add(1);
     }
@@ -127,9 +130,11 @@ bool UsbSerialHost::service(uint32_t now) {
 
     const uint32_t bytes = _rx_bytes.exchange(0);
     const uint32_t chunks = _rx_chunks.exchange(0);
-    if (bytes || chunks) {
+    const uint32_t sent = _tx_bytes.exchange(0);
+    if (bytes || chunks || sent) {
         std::lock_guard<std::mutex> lock(_mutex);
         _link.noteReceived(bytes, chunks);
+        _link.noteSent(sent);
     }
 
     const uint32_t dropped = _dropped.load();
@@ -175,15 +180,15 @@ void UsbSerialHost::handleNewDevice(const UsbSerialDeviceInfo& info, uint32_t no
         (unsigned)info.vid, (unsigned)info.pid, m.chip, m.adapter, info.manufacturer, info.product,
         classes[0] ? classes : "none");
 
-    // Read only: out_buffer_size 0 allocates no OUT transfer, and nothing is sent. The IN
-    // transfer has the max packet size of the IN endpoint
+    // The IN transfer has the max packet size of the IN endpoint; the OUT one carries the
+    // commands of the protocol (ADR 0014, section 6)
     cdc_acm_host_open_config_t cfg = {};
     cfg.vid = info.vid;
     cfg.pid = info.pid;
     cfg.interface_idx = m.interface_number;
     cfg.dev_addr = info.address;
     cfg.connection_timeout_ms = OPEN_TIMEOUT_MS;
-    cfg.out_buffer_size = 0;
+    cfg.out_buffer_size = OUT_BUFFER_LEN;
     cfg.in_buffer_size = 0;
     cfg.event_cb = UsbSerialHost::onDeviceEvent;
     cfg.data_cb = UsbSerialHost::onData;
@@ -201,8 +206,13 @@ void UsbSerialHost::handleNewDevice(const UsbSerialDeviceInfo& info, uint32_t no
         return;
     }
     _cdc = hdl;
+    _rx.clear();
+    _gone.store(false);
+    _port_device = info;
+    _port_gen++;
     _rx_bytes.store(0);
     _rx_chunks.store(0);
+    _tx_bytes.store(0);
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _link.opened();
@@ -218,14 +228,15 @@ void UsbSerialHost::handleNewDevice(const UsbSerialDeviceInfo& info, uint32_t no
                           UsbSerialDiag::endpointType(ep), ep.isIn() ? "in" : "out", (unsigned)ep.max_packet);
         }
     }
-    log("INFO", "[USB] Serial device opened (interface %u), endpoints %s; no protocol yet, nothing is sent",
-        (unsigned)m.interface_number, eps[0] ? eps : "none");
+    log("INFO", "[USB] Serial device opened (interface %u), endpoints %s", (unsigned)m.interface_number,
+        eps[0] ? eps : "none");
 }
 
 void UsbSerialHost::handleDeviceEvent(const cdc_acm_host_dev_event_data_t& data) {
     switch (data.type) {
     case CDC_ACM_HOST_DEVICE_DISCONNECTED: {
         if (!_cdc || data.data.cdc_hdl != _cdc) return;
+        _gone.store(true);
         closeDevice();
         uint16_t vid = 0, pid = 0;
         {
@@ -263,6 +274,7 @@ void UsbSerialHost::closeDevice() {
     if (!_cdc) return;
     cdc_acm_dev_hdl_t hdl = _cdc;
     _cdc = nullptr;
+    _port_gen++;  // the host releases the protocol of this port
     const esp_err_t err = cdc_acm_host_close(hdl);
     if (err != ESP_OK) log("WARN", "[USB] cdc_acm_host_close failed: %s", esp_err_to_name(err));
 }
@@ -292,6 +304,171 @@ void UsbSerialHost::checkPresence(uint32_t now) {
         _link.detach(address);
     }
     log("INFO", "[USB] Serial device %04X:%04X disconnected", (unsigned)vid, (unsigned)pid);
+}
+
+// --- ISerialPort (poll task) ---------------------------------------------------------------
+
+void UsbSerialHost::Port::setError(const char* what, int err) {
+    snprintf(_error, sizeof(_error), "%s: %s", what, esp_err_to_name((esp_err_t)err));
+    char text[UsbSerialLink::TEXT_LEN + 1];
+    snprintf(text, sizeof(text), "%s", _error);
+    std::lock_guard<std::mutex> lock(_h._mutex);
+    _h._link.noteError(text);
+}
+
+bool UsbSerialHost::Port::configure(const SerialLineSettings& s) {
+    if (!_h._cdc) {
+        snprintf(_error, sizeof(_error), "no device");
+        return false;
+    }
+    // CDC-ACM SET_LINE_CODING: the XR21V141x takes it too (datasheet section 1.2, table 4)
+    cdc_acm_line_coding_t coding = {};
+    coding.dwDTERate = s.baud;
+    coding.bCharFormat = s.stop_bits == 2 ? 2 : 0;
+    coding.bParityType = s.parity == 'O' ? 1 : (s.parity == 'E' ? 2 : 0);
+    coding.bDataBits = s.data_bits;
+    esp_err_t err = cdc_acm_host_line_coding_set(_h._cdc, &coding);
+    if (err != ESP_OK) {
+        setError("line coding", err);
+        return false;
+    }
+    const char* adapter;
+    {
+        std::lock_guard<std::mutex> lock(_h._mutex);
+        adapter = _h._link.adapter();
+    }
+    const bool xr = strcmp(adapter, "xr21v141x") == 0;
+#if defined(NUT_TEST_XR_LOOPBACK) && NUT_TEST_XR_LOOPBACK
+    if (xr) logXrRegisters();  // test build: after SET_LINE_CODING
+#endif
+    err = cdc_acm_host_set_control_line_state(_h._cdc, s.dtr, s.rts);
+    if (err != ESP_OK) {
+        setError("control lines", err);
+        return false;
+    }
+#if defined(NUT_TEST_XR_LOOPBACK) && NUT_TEST_XR_LOOPBACK
+    if (xr) logXrRegisters();  // test build: after SET_CONTROL_LINE_STATE
+#endif
+    // XR21V141x: off with the RTS/CTS flow control it starts with under CDC-ACM, as a NUT serial
+    // port has none (XrUartSetup.h). Last: on the unit, a CDC-ACM request sent after the
+    // register writes brought the flow control back (FLOW_CONTROL 0x01 read back)
+    if (xr) {
+        for (size_t i = 0; i < XrUart::NO_FLOW_CONTROL_COUNT; i++) {
+            const XrUart::RegWrite& w = XrUart::NO_FLOW_CONTROL[i];
+            err = cdc_acm_host_send_custom_request(_h._cdc, XrUart::SET_REG_REQUEST_TYPE, XrUart::SET_REG_REQUEST,
+                                                   w.wValue(), w.wIndex(), 0, nullptr);
+            if (err != ESP_OK) {
+                setError("XR register", err);
+                return false;
+            }
+        }
+    }
+    _h.log("INFO", "[USB] Serial line %u %u%c%u, DTR %s, RTS %s%s", (unsigned)s.baud, (unsigned)s.data_bits,
+           s.parity, (unsigned)s.stop_bits, s.dtr ? "on" : "off", s.rts ? "on" : "off",
+           xr ? ", flow control off" : "");
+    if (xr) {
+        logXrRegisters();
+#if defined(NUT_TEST_XR_LOOPBACK) && NUT_TEST_XR_LOOPBACK
+        xrLoopbackTest();
+#endif
+    }
+    return true;
+}
+
+bool UsbSerialHost::Port::readXrRegister(uint16_t wIndex, uint8_t& value) {
+    uint8_t buf[1] = {0};
+    const esp_err_t err = cdc_acm_host_send_custom_request(_h._cdc, XrUart::GET_REG_REQUEST_TYPE,
+                                                           XrUart::GET_REG_REQUEST, 0, wIndex, 1, buf);
+    value = buf[0];
+    return err == ESP_OK;
+}
+
+void UsbSerialHost::Port::logXrRegisters() {
+    char line[200] = "";
+    size_t o = 0;
+    for (size_t i = 0; i < XrUart::READBACK_COUNT && o + 32 < sizeof(line); i++) {
+        const XrUart::RegRead& r = XrUart::READBACK[i];
+        uint8_t v = 0;
+        if (readXrRegister(r.wIndex(), v)) {
+            o += snprintf(line + o, sizeof(line) - o, "%s%s 0x%02X", i ? ", " : "", r.name, (unsigned)v);
+        } else {
+            o += snprintf(line + o, sizeof(line) - o, "%s%s ?", i ? ", " : "", r.name);
+        }
+    }
+    _h.log("INFO", "[USB] XR21V141x registers: %s", line);
+}
+
+#if defined(NUT_TEST_XR_LOOPBACK) && NUT_TEST_XR_LOOPBACK
+void UsbSerialHost::Port::xrLoopbackTest() {
+    const uint16_t idx = (uint16_t)(XrUart::REG_LOOPBACK_CTL | (XrUart::BLOCK_UART << 8));
+    esp_err_t err = cdc_acm_host_send_custom_request(_h._cdc, XrUart::SET_REG_REQUEST_TYPE, XrUart::SET_REG_REQUEST,
+                                                     0x04, idx, 0, nullptr);
+    if (err != ESP_OK) {
+        _h.log("WARN", "[TEST] XR loopback not enabled: %s", esp_err_to_name(err));
+        return;
+    }
+    discardInput();
+    static const uint8_t probe[] = { 'L', 'O', 'O', 'P', '\r' };
+    const int w = write(probe, sizeof(probe), 500);
+    uint8_t buf[16] = {0};
+    size_t got = 0;
+    const uint32_t start = millis();
+    while (got < sizeof(probe) && millis() - start < 1000) {
+        const int n = read(buf + got, sizeof(buf) - got, 1000 - (millis() - start));
+        if (n <= 0) break;
+        got += (size_t)n;
+    }
+    cdc_acm_host_send_custom_request(_h._cdc, XrUart::SET_REG_REQUEST_TYPE, XrUart::SET_REG_REQUEST, 0x00, idx, 0,
+                                     nullptr);
+    _h.log("WARN", "[TEST] XR loopback: wrote %d, read %u byte(s) \"%.*s\": the UART %s", w, (unsigned)got,
+           (int)(got > 4 ? 4 : got), (const char*)buf,
+           got == sizeof(probe) ? "sends and receives" : "does not send (or receive)");
+    logXrRegisters();
+}
+#endif
+
+int UsbSerialHost::Port::write(const uint8_t* data, size_t len, uint32_t timeoutMs) {
+    if (!_h._cdc || _h._gone.load()) {
+        snprintf(_error, sizeof(_error), "no device");
+        return -1;
+    }
+    const esp_err_t err = cdc_acm_host_data_tx_blocking(_h._cdc, data, len, timeoutMs);
+    if (err == ESP_ERR_TIMEOUT) {
+        setError("write", err);
+        return 0;
+    }
+    if (err != ESP_OK) {
+        setError("write", err);
+        return -1;
+    }
+    _h._tx_bytes.fetch_add((uint32_t)len);
+    return (int)len;
+}
+
+int UsbSerialHost::Port::read(uint8_t* buf, size_t len, uint32_t timeoutMs) {
+    const uint32_t start = millis();
+    for (;;) {
+        const size_t n = _h._rx.pop(buf, len);
+        if (n > 0) return (int)n;
+        if (!_h._cdc || _h._gone.load()) {
+            snprintf(_error, sizeof(_error), "device gone");
+            return -1;
+        }
+        if (millis() - start >= timeoutMs) return 0;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+size_t UsbSerialHost::Port::discardInput() {
+    return _h._rx.clear();
+}
+
+void UsbSerialHost::Port::sleepMs(uint32_t ms) {
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+uint32_t UsbSerialHost::Port::nowMs() const {
+    return millis();
 }
 
 // --- Any task ----------------------------------------------------------------------------

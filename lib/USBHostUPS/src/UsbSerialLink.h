@@ -59,6 +59,10 @@ public:
         _rx_bytes += bytes;
         _rx_chunks += chunks;
     }
+    // Bytes written to the device by the protocol (ADR 0014, section 6)
+    void noteSent(uint32_t bytes) {
+        if (_state == State::OPEN) _tx_bytes += bytes;
+    }
     // Driver event of the opened device ("error 3", "serial state 0x0003")
     void noteEvent(const char* text) {
         if (_state != State::NONE) copy(_last_event, text);
@@ -86,8 +90,7 @@ public:
     const char* lastError() const { return _last_error; }
     uint32_t rxBytes() const { return _rx_bytes; }
     uint32_t rxChunks() const { return _rx_chunks; }
-    // Nothing is sent in the first delivery (ADR 0014, section 4)
-    uint32_t txBytes() const { return 0; }
+    uint32_t txBytes() const { return _tx_bytes; }
 
     /**
      * @brief Text of IUpsSource::unsupportedDevice() (US-132 pattern, ADR 0014 section 5):
@@ -117,6 +120,7 @@ private:
     char _last_error[TEXT_LEN + 1] = {0};
     uint32_t _rx_bytes = 0;
     uint32_t _rx_chunks = 0;
+    uint32_t _tx_bytes = 0;
 };
 
 #endif // USB_SERIAL_LINK_H

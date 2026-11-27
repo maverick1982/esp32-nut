@@ -382,7 +382,9 @@ void test_link_open_failure_keeps_the_device_reported(void) {
     TEST_ASSERT_EQUAL_STRING("USB serial: XR21V141x (04E2:1410)", text);
     // No bytes are counted on a device that is not open
     link.noteReceived(10, 1);
+    link.noteSent(4);
     TEST_ASSERT_EQUAL(0, link.rxBytes());
+    TEST_ASSERT_EQUAL(0, link.txBytes());
 }
 
 void test_link_counts_received_bytes(void) {
@@ -393,6 +395,11 @@ void test_link_counts_received_bytes(void) {
     link.noteReceived(5, 2);
     TEST_ASSERT_EQUAL(12, link.rxBytes());
     TEST_ASSERT_EQUAL(3, link.rxChunks());
+    // ADR 0014 section 6: the commands of the protocol
+    TEST_ASSERT_EQUAL(0, link.txBytes());
+    link.noteSent(4);
+    link.noteSent(3);
+    TEST_ASSERT_EQUAL(7, link.txBytes());
 }
 
 void test_link_detach_of_another_device_is_ignored(void) {

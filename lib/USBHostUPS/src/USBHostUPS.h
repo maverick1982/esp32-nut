@@ -430,6 +430,15 @@ private:
     // events. Fed in service(); its own lock, never taken with _mutex held by its callbacks
     UsbSerialHost _serial;
     static void serialLog(void* ctx, const char* level, const char* text);
+    // ADR 0014 section 6: the Q* driver of a serial device is this host's driver, as the one of
+    // a Q* HID bridge (one UPS, one consumer API), polled by serviceSerialDriver() without the
+    // HID supervision. Poll task only
+    bool _serial_bound = false;
+    uint32_t _serial_port_gen = 0;
+    void serviceSerialPort(uint32_t now);
+    void attachSerialQxDriver(uint32_t now);
+    void serviceSerialDriver(uint32_t now);
+    void serviceFirstData(uint32_t now);
     uint16_t _vid;
     uint16_t _pid;
     bool _initialized;
