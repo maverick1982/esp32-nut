@@ -42,6 +42,27 @@ struct BoardQxInfo {
     const char* detected;
 };
 
+// The chip and the image for GET /api/board (ADR 0015, section 6): model ("ESP32-P4"),
+// revision as major * 100 + minor (302 = v3.2, as esp_chip_info_t::revision) and the
+// PlatformIO environment the image was built for ("esp32-p4-eth", "" in a local build
+// without it)
+struct BoardChipInfo {
+    const char* model;
+    uint16_t revision;
+    const char* image;
+};
+
+// The Wi-Fi coprocessor for GET /api/board (ADR 0015, section 5): firmware "unknown" when the
+// coprocessor answers 0.0.0 (a factory firmware older than the version query)
+struct BoardCoprocessorInfo {
+    bool answered;
+    const char* target;    // "esp32c6"
+    const char* firmware;  // "2.12.13" or "unknown"
+    const char* host;      // ESP-Hosted version of the host side, "2.12.13"
+    bool update_available; // the host has a newer firmware for the coprocessor
+    const char* error;     // why it did not answer, "" when it did
+};
+
 class WebApiJson {
 public:
     // Lunghezza massima del body di POST /api/ups/command, /api/ups/variable e
@@ -140,9 +161,22 @@ public:
     // "usb":{"ports":[{id,label}],"port"},"auto_shutdown":{on,available,reason}}; "led"
     // absent on a board without LED. US-114: reason "no_ups" / "no_command", absent when
     // available. US-138: "qx":{"protocol","novendor","protocols":[names in probing order],
-    // "detected"} only with qx (a Q* driver bound); protocol "" = automatic
+    // "detected"} only with qx (a Q* driver bound); protocol "" = automatic.
+    // ADR 0015: "chip":{"model","revision":"v3.2","image"} only with chip;
+    // "wifi_coprocessor":{"answered","target","firmware","host","update_available"} or
+    // {"answered":false,"error"} only with coprocessor
+    // ADR 0015: the link mode of a board with its own Ethernet port and Wi-Fi.
+    // GET /api/network/link: {"mode":"ethernet","active":"ethernet"} (active: the link type in use)
+    static String linkModeJson(NetworkMode mode, const char* active);
+    // POST /api/network/link {"mode":"auto"|"ethernet"|"wifi"}: 0 with next and restart (true
+    // when the mode changes) and the {"success","restart"} reply; otherwise 400 {"error"}:
+    // "Invalid request" or the invalid mode message of the W5500 page (US-127)
+    static int checkLinkModeBody(JsonVariantConst body, NetworkMode current, NetworkMode& next, bool& restart,
+                                 String& response);
     static String boardSettingsJson(const BoardConfig& board, const BoardSettings& settings,
-                                    AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx = nullptr);
+                                    AutoShutdownAvailability auto_shutdown, const BoardQxInfo* qx = nullptr,
+                                    const BoardChipInfo* chip = nullptr,
+                                    const BoardCoprocessorInfo* coprocessor = nullptr);
     // POST /api/board: optional led_on (bool), led_level (integer 1-5), usb_port (port id),
     // auto_shutdown (bool, US-114: false always, true only when available), qx_protocol
     // ("" or a protocol name, case-insensitive, saved lower case) and qx_novendor (bool)

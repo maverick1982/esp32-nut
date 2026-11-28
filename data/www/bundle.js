@@ -2008,6 +2008,81 @@ document.addEventListener('DOMContentLoaded', () => {
             .catch(err => console.error('Failed to fetch the W5500 settings:', err));
     }
 
+    // ---------- Link to use, board with its own Ethernet port and Wi-Fi (ADR 0015) ----------
+    // GET/POST /api/network/link; 404 on the other boards and while the Wi-Fi coprocessor does
+    // not answer, so the section stays hidden there
+    const linkModeSection = document.getElementById('sec-linkmode');
+    const linkModeForm = document.getElementById('linkmode-form');
+    const btnLinkMode = document.getElementById('btn-linkmode');
+    if (linkModeSection && linkModeForm && btnLinkMode) {
+        const LINK_MODES = ['auto', 'ethernet', 'wifi'];
+        const LINK_RESTART_S = 15;
+        const LINK_BTN_IDLE = btnLinkMode.innerHTML;
+        let linkSavedMode = 'ethernet';
+        const linkRadios = () => Array.from(document.querySelectorAll('input[name="linkmode"]'));
+        const readLinkMode = () => { const r = linkRadios().find(i => i.checked); return r ? r.value : linkSavedMode; };
+        const linkError = (text) => {
+            document.getElementById('linkmode-error-text').textContent = text || '';
+            document.getElementById('linkmode-error').hidden = !text;
+        };
+        const refreshLinkButton = () => { btnLinkMode.disabled = readLinkMode() === linkSavedMode; };
+
+        document.getElementById('linkmode').addEventListener('change', () => { linkError(''); refreshLinkButton(); });
+
+        linkModeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnLinkMode.disabled) return;
+            linkError('');
+            const mode = readLinkMode();
+            btnLinkMode.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnLinkMode.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/link', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Link mode save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnLinkMode.innerHTML = LINK_BTN_IDLE;
+                refreshLinkButton();
+                linkError(data && typeof data.error === 'string' ? data.error : 'Could not save the link.');
+                return;
+            }
+            linkSavedMode = mode;
+            if (!data.restart) { btnLinkMode.innerHTML = LINK_BTN_IDLE; refreshLinkButton(); return; }
+            netRestarting = true;
+            btnLinkMode.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+            linkRadios().forEach(r => { r.disabled = true; });
+            document.getElementById('linkmode-success').hidden = false;
+            const countdown = document.getElementById('linkmode-countdown');
+            let left = LINK_RESTART_S;
+            countdown.textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                countdown.textContent = Math.max(0, left);
+                if (left <= 0) { clearInterval(timer); window.location.reload(); }
+            }, 1000);
+        });
+
+        apiFetch('/api/network/link', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => {
+                if (!data || !LINK_MODES.includes(data.mode)) return;
+                linkSavedMode = data.mode;
+                linkRadios().forEach(r => { r.checked = r.value === data.mode; });
+                refreshLinkButton();
+                linkModeSection.hidden = false;
+            })
+            .catch(err => console.error('Failed to fetch the link mode:', err));
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
@@ -4244,12 +4319,116 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // ---------- Wi-Fi coprocessor firmware (ADR 0015 section 5) ----------
+        const cpForm = B('cp-update');
+        const cpFile = B('cp-update-file');
+        const cpBtn = B('btn-cp-update');
+        const CP_BTN_IDLE = cpBtn ? cpBtn.innerHTML : '';
+        const CP_RESTART_S = 20;
+        const cpError = (text) => {
+            B('cp-update-error-text').textContent = text || '';
+            B('cp-update-error').hidden = !text;
+        };
+        if (cpForm && cpFile && cpBtn) {
+            cpFile.addEventListener('change', () => {
+                cpError('');
+                cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+            });
+            cpForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (cpBtn.disabled || !cpFile.files || cpFile.files.length !== 1) return;
+                cpError('');
+                const fd = new FormData();
+                fd.append('firmware', cpFile.files[0], cpFile.files[0].name);
+                const progress = B('cp-update-progress');
+                progress.value = 0;
+                progress.hidden = false;
+                cpBtn.disabled = true;
+                cpFile.disabled = true;
+                cpBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Updating...';
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/coprocessor/update');
+                xhr.upload.onprogress = (ev) => {
+                    if (ev.lengthComputable) progress.value = Math.round(ev.loaded * 100 / ev.total);
+                };
+                const fail = (text) => {
+                    progress.hidden = true;
+                    cpBtn.innerHTML = CP_BTN_IDLE;
+                    cpFile.disabled = false;
+                    cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+                    cpError(text);
+                };
+                xhr.onerror = () => fail('The upload failed. Check the connection to the board and try again.');
+                xhr.onload = () => {
+                    // As apiFetch(): an expired session goes to the login page
+                    if (xhr.status === 401) { window.location.replace('/login?expired=1'); return; }
+                    let data = null;
+                    try { data = JSON.parse(xhr.responseText); } catch (err) { data = null; }
+                    if (xhr.status !== 200 || !data || !data.success) {
+                        fail(data && typeof data.error === 'string' ? data.error : 'The coprocessor update failed.');
+                        return;
+                    }
+                    progress.value = 100;
+                    cpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Installed';
+                    B('cp-update-version').textContent = typeof data.version === 'string' ? data.version : '';
+                    B('cp-update-success').hidden = false;
+                    const countdown = B('cp-update-countdown');
+                    let left = CP_RESTART_S;
+                    countdown.textContent = left;
+                    const timer = setInterval(() => {
+                        left -= 1;
+                        countdown.textContent = Math.max(0, left);
+                        if (left <= 0) { clearInterval(timer); window.location.reload(); }
+                    }, 1000);
+                };
+                xhr.send(fd);
+            });
+        }
+
         // ---------- Load ----------
         function renderBoard() {
             const id = typeof board.id === 'string' ? board.id : '';
             const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
             B('board-name').textContent = label;
             B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            // ADR 0015: "ESP32-P4 v3.2" and the image it runs ("esp32-p4-eth"); hidden
+            // without the object (older firmware)
+            const chip = board.chip && typeof board.chip === 'object' ? board.chip : null;
+            B('board-chip').hidden = !chip;
+            if (chip) {
+                const model = typeof chip.model === 'string' ? chip.model : '';
+                const rev = typeof chip.revision === 'string' ? chip.revision : '';
+                B('board-chip-model').textContent = [model, rev].filter(Boolean).join(' ') || '--';
+                B('board-chip-image').textContent =
+                    typeof chip.image === 'string' && chip.image !== '' ? chip.image : 'local build';
+            }
+            // ADR 0015: "ESP32-C6, firmware unknown (host 2.12.13), update available" or why it
+            // did not answer; only on boards with a coprocessor
+            const cp = board.wifi_coprocessor && typeof board.wifi_coprocessor === 'object' ? board.wifi_coprocessor : null;
+            B('board-cp').hidden = !cp;
+            if (cp) {
+                let text;
+                if (cp.answered) {
+                    const target = typeof cp.target === 'string' && cp.target !== '' ? cp.target.toUpperCase().replace('ESP32', 'ESP32-') : 'Coprocessor';
+                    text = `${target}, firmware ${cp.firmware || 'unknown'} (host ${cp.host || '?'})`;
+                    if (cp.update_available) text += ', newer firmware available';
+                } else {
+                    text = `Not answering${cp.error ? ': ' + cp.error : ''}. The board runs without Wi-Fi.`;
+                }
+                B('board-cp-text').textContent = text;
+            }
+            // ADR 0015 section 5: the update form while the coprocessor answers, with the link to the
+            // image of the host version (the URL the Arduino core names)
+            const canUpdate = !!cp && cp.answered === true && typeof cp.target === 'string' && cp.target !== '' &&
+                typeof cp.host === 'string' && /^\d+\.\d+\.\d+$/.test(cp.host);
+            B('cp-update').hidden = !canUpdate;
+            if (canUpdate) {
+                const name = `${cp.target}-v${cp.host}.bin`;
+                const link = B('cp-update-link');
+                link.href = `https://espressif.github.io/arduino-esp32/hosted/${name}`;
+                link.textContent = name;
+            }
 
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
             B('led-section').hidden = !hasLed;

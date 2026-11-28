@@ -69,6 +69,25 @@ BOARDS = {
         "button": "the \"ESP32-P4 before v3 (v1.x)\" button",
         "tested": "tested on a v1.3 board",
     },
+    # Waveshare ESP32-P4-NANO (ADR 0015): its own profile, two images per chip revision
+    "esp32-p4-nano": {
+        "chip_family": "ESP32-P4",
+        "esptool_chip": "esp32p4",
+        "bootloader_offset": 0x2000,
+        "zip_suffix": "-esp32-p4-nano",
+        "label": "Waveshare ESP32-P4-NANO, ESP32-P4 v3.1 or later",
+        "button": "the \"ESP32-P4-NANO, v3.1 or later\" button",
+        "tested": "tested on a v3.x board",
+    },
+    "esp32-p4-nano-v1": {
+        "chip_family": "ESP32-P4",
+        "esptool_chip": "esp32p4",
+        "bootloader_offset": 0x2000,
+        "zip_suffix": "-esp32-p4-nano-v1",
+        "label": "Waveshare ESP32-P4-NANO, ESP32-P4 before v3 (v1.x)",
+        "button": "the \"ESP32-P4-NANO, before v3 (v1.x)\" button",
+        "tested": "not tested on hardware yet",
+    },
 }
 
 # Copied from the PlatformIO build directory; boot_app0.bin comes from the

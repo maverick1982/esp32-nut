@@ -195,6 +195,13 @@ L'UPS richiede VBUS dall'host oltre a D+, D- e GND. **Provato su hardware:** un 
 
 Al posto dell'ESP32-S3 si può usare una scheda ESP32-P4 con porta Ethernet:
 - **Schede supportate**: Waveshare ESP32-P4-ETH (anche la versione PoE), Waveshare ESP32-P4-WIFI6-POE-ETH (provata, [#108](https://github.com/maverick1982/esp32-nut/issues/108); il chip Wi-Fi ESP32-C6 non viene usato, la scheda funziona via Ethernet) e le schede che seguono il design di riferimento Espressif (PHY IP101). Una scheda cablata in modo diverso richiede un suo profilo: apri una issue.
+- **Waveshare ESP32-P4-NANO**: immagini proprie (`esp32-p4-nano`, `esp32-p4-nano-v1`), così la Web UI indica il nome della scheda. Ethernet come sopra, e **Wi-Fi tramite il coprocessore ESP32-C6** ([ADR 0015](docs/adr/0015-wifi-coprocessor-esp-hosted.md)). L'UPS va sulla porta **USB-A** (USB 2.0 High-Speed), la porta USB-C serve per l'alimentazione e il flash. Provata su una scheda v3.x; l'immagine v1.x non è ancora provata. Una P4-NANO con l'immagine `esp32-p4-eth` continua a funzionare, solo via Ethernet.
+  - **Link da usare** (scheda **Network**, sezione **Link to use**): **Ethernet** (il valore iniziale), **Automatico** (Ethernet quando il cavo ha il link, altrimenti Wi-Fi, con il passaggio entro 30 s) o **Wi-Fi**, come con un W5500 sull'ESP32-S3. Imposta prima la rete Wi-Fi nella sezione Wi-Fi. Il salvataggio riavvia la scheda.
+  - **Access point**: come sull'ESP32-S3, il doppio reset avvia l'access point `NUT_ESP32_Config`, in ogni modalità.
+  - **Indirizzi**: i due link hanno lo stesso nome host (`esp32-nut-xxxxxx` dal MAC Ethernet, o quello della scheda Network), ma MAC diversi: il Wi-Fi esce con il MAC del C6. Una prenotazione DHCP vale per un solo link, quindi riserva un indirizzo per ciascuno. Il MAC Ethernet resta quello dell'immagine `esp32-p4-eth`.
+  - **Coprocessore**: all'avvio la scheda avvia una volta il C6. Se non risponde, la scheda funziona come un ESP32-P4 senza Wi-Fi (Ethernet e la finestra di recupero dopo il doppio reset), così non resti mai chiuso fuori. **Board Settings** mostra il C6 e il suo firmware; un firmware di fabbrica può apparire come "unknown", con uno più recente disponibile.
+  - **Aggiornamento del firmware del coprocessore**: in **Board Settings**, sotto il chip, scarica il file indicato dalla pagina (per esempio `esp32c6-v2.12.13.bin`, la versione adatta a questo firmware) e caricalo con **Update coprocessor**. Prima di scrivere, la scheda controlla che sia un firmware ESP-Hosted per il C6, poi si riavvia. Un caricamento interrotto lascia il vecchio firmware del C6. La scheda non lo scarica mai da sola.
+- **Quale immagine è installata**: la scheda **Board Settings** mostra il modello e la revisione del chip e l'immagine installata (per esempio `ESP32-P4 v3.2`, `esp32-p4-nano`).
 - **UPS**: sulla porta USB 2.0 High-Speed (l'header a 4 pin J3 sulla Waveshare ESP32-P4-ETH). Su questa scheda la porta USB-C non è una porta host: un adattatore OTG collegato lì non vede mai l'UPS. Usa sul J3 un cavo da JST 1,25 mm a 4 pin a presa USB-A, con tutti e quattro i fili: l'UPS ha bisogno della linea a 5V per rilevare l'host, e con solo GND, D- e D+ collegati non compare. ([#140](https://github.com/maverick1982/esp32-nut/discussions/140))
 - **Rete**: solo via cavo. L'indirizzo arriva via DHCP e il nome host è `esp32-nut-xxxxxx` (ultimi 3 byte del MAC). Non ci sono Wi-Fi né access point.
 - **Due immagini, una per revisione del chip**:
@@ -253,7 +260,7 @@ I file sorgente `.3mf`, il progetto CAD originale `.f3d` e altre foto sono dispo
 Puoi installare il firmware direttamente dal tuo browser senza scaricare alcun programma!
 👉 <a href="https://maverick1982.github.io/esp32-nut/" target="_blank">**Installa via Browser**</a>
 
-L'installer ha un pulsante per le schede ESP32-S3 generiche, uno per Arduino Nano ESP32 e due per le schede ESP32-P4, uno per revisione del chip (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)). Per il Nano, collega **B1 a GND** durante il reset prima di selezionare la porta seriale.
+L'installer ha un pulsante per le schede ESP32-S3 generiche, uno per Arduino Nano ESP32, due per le schede ESP32-P4 e due per la Waveshare ESP32-P4-NANO, uno per revisione del chip (vedi [ESP32-P4 (Ethernet)](#esp32-p4-ethernet)). Per il Nano, collega **B1 a GND** durante il reset prima di selezionare la porta seriale.
 
 Se l'installer trova la scheda ma si ferma con "Failed to initialize", la scheda non è entrata da sola in modalità download. Tieni premuto il pulsante **BOOT** mentre clicchi **Install** (o mentre colleghi il cavo USB) e rilascialo quando l'installer si collega. Se non basta, scrivi il pacchetto della release con esptool (vedi **Pacchetti delle release** qui sotto).
 
@@ -263,10 +270,10 @@ Se l'installer trova la scheda ma si ferma con "Failed to initialize", la scheda
 3. Collega il tuo ESP32-S3 al PC (utilizzando la porta USB UART/Prog).
 4. Clicca su **Build** e poi su **Upload**.
 
-Gli ambienti PlatformIO sono `esp32-s3-standard`, `arduino-nano-esp32`, `esp32-p4-eth` (ESP32-P4 v3.1 o successive) ed `esp32-p4-eth-v1` (ESP32-P4 prima della v3). Per il Nano entra in modalità ROM download (B1 a GND durante il reset) e carica l'immagine completa; il normale upload Arduino DFU non è supportato da questo firmware.
+Gli ambienti PlatformIO sono `esp32-s3-standard`, `arduino-nano-esp32`, `esp32-p4-eth` (ESP32-P4 v3.1 o successive), `esp32-p4-eth-v1` (ESP32-P4 prima della v3), `esp32-p4-nano` ed `esp32-p4-nano-v1` (Waveshare ESP32-P4-NANO, stesse revisioni del chip). Per il Nano entra in modalità ROM download (B1 a GND durante il reset) e carica l'immagine completa; il normale upload Arduino DFU non è supportato da questo firmware.
 
 **Pacchetti delle release**
-Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip per scheda: `esp32-nut-vX.Y.Z.zip` (ESP32-S3), `esp32-nut-vX.Y.Z-arduino-nano-esp32.zip` (Arduino Nano ESP32), `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` (ESP32-P4 v3.1 o successive) ed `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` (ESP32-P4 prima della v3). Dentro, `firmware.factory.bin` è l'immagine completa da scrivere a `0x0` (per esempio `esptool write-flash 0x0 firmware.factory.bin`, oppure `esptool.py write_flash 0x0 firmware.factory.bin` con esptool v4) e `README.txt` spiega gli altri file. Per un aggiornamento OTA carica lo zip o il suo `firmware.bin`.
+Ogni [release](https://github.com/maverick1982/esp32-nut/releases) ha uno zip per scheda: `esp32-nut-vX.Y.Z.zip` (ESP32-S3), `esp32-nut-vX.Y.Z-arduino-nano-esp32.zip` (Arduino Nano ESP32), `esp32-nut-vX.Y.Z-esp32-p4-eth.zip` (ESP32-P4 v3.1 o successive), `esp32-nut-vX.Y.Z-esp32-p4-eth-v1.zip` (ESP32-P4 prima della v3), `esp32-nut-vX.Y.Z-esp32-p4-nano.zip` ed `esp32-nut-vX.Y.Z-esp32-p4-nano-v1.zip` (Waveshare ESP32-P4-NANO). Dentro, `firmware.factory.bin` è l'immagine completa da scrivere a `0x0` (per esempio `esptool write-flash 0x0 firmware.factory.bin`, oppure `esptool.py write_flash 0x0 firmware.factory.bin` con esptool v4) e `README.txt` spiega gli altri file. Per un aggiornamento OTA carica lo zip o il suo `firmware.bin`.
 
 ### 2. Primo Avvio e Configurazione
 

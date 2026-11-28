@@ -90,6 +90,38 @@
                 </p>
             </section>
 
+            <!-- ADR 0015: Waveshare ESP32-P4-NANO, its own profile; one button per silicon revision -->
+            <section class="p4nano-section" aria-labelledby="p4nano-title">
+                <div class="p4-header">
+                    <h3 id="p4nano-title">Waveshare ESP32-P4-NANO <span>(Ethernet)</span></h3>
+                    <p class="p4-lead">Use these images for a Waveshare ESP32-P4-NANO. Pick the one that matches your chip revision, as for the other ESP32-P4 boards above.</p>
+                </div>
+
+                <div class="p4-options">
+                    <div class="p4-option">
+                        <esp-web-install-button manifest="manifest-esp32-p4-nano.json">
+                            <button slot="activate" type="button" class="p4-button">
+                                <span class="p4-button-label">ESP32-P4-NANO, v3.1 or later</span>
+                                <span class="p4-button-sub mono">manifest-esp32-p4-nano.json</span>
+                            </button>
+                        </esp-web-install-button>
+                        <span class="p4-badge p4-badge--ok mono">Tested on a v3.x board</span>
+                    </div>
+
+                    <div class="p4-option">
+                        <esp-web-install-button manifest="manifest-esp32-p4-nano-v1.json">
+                            <button slot="activate" type="button" class="p4-button">
+                                <span class="p4-button-label">ESP32-P4-NANO, before v3 (v1.x)</span>
+                                <span class="p4-button-sub mono">manifest-esp32-p4-nano-v1.json</span>
+                            </button>
+                        </esp-web-install-button>
+                        <span class="p4-badge mono">Not tested yet</span>
+                    </div>
+                </div>
+
+                <p class="nano-help">The UPS goes on the USB-A port (USB 2.0 High-Speed). The USB-C port is for power and flashing. A P4-NANO that runs the ESP32-P4 Ethernet image keeps working; this image gives the board its own name.</p>
+            </section>
+
             <section class="nano-section" aria-labelledby="nano-title">
                 <div class="p4-header">
                     <h3 id="nano-title">Arduino Nano ESP32</h3>

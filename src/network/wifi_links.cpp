@@ -3,13 +3,18 @@
 #include "NetHostname.h"
 #include <esp_mac.h>
 
-WifiStaLink::WifiStaLink(const String& ssid, const String& password, const String& saved_hostname)
+WifiStaLink::WifiStaLink(const String& ssid, const String& password, const String& saved_hostname,
+                         const uint8_t* name_mac)
     : m_ssid(ssid),
       m_password(password),
       m_savedHostname(saved_hostname),
+      m_nameMac{0, 0, 0, 0, 0, 0},
+      m_hasNameMac(name_mac != nullptr),
       m_lastStatus(WL_IDLE_STATUS),
       m_lastConnectionAttempt(0),
-      m_lastDisconnectTime(0) {}
+      m_lastDisconnectTime(0) {
+    if (name_mac) memcpy(m_nameMac, name_mac, sizeof(m_nameMac));
+}
 
 void WifiStaLink::begin() {
     m_lastStatus = WL_IDLE_STATUS;
@@ -25,7 +30,11 @@ void WifiStaLink::begin() {
     // WiFi.macAddress() gives 00:00:00:00:00:00 (seen on the S3, core 3.3.12). Same value
     // as WiFi.macAddress() once the station runs, so name and device ID match
     uint8_t mac[6];
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) WiFi.macAddress(mac);
+    if (m_hasNameMac) {
+        memcpy(mac, m_nameMac, sizeof(mac));  // ADR 0015: the name of the Ethernet port
+    } else if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        WiFi.macAddress(mac);
+    }
     m_hostname = NetHostname::effective(m_savedHostname, mac);
     if (WiFi.STA.setHostname(m_hostname.c_str())) {
         AppLogger::log("INFO", "[NETWORK] Wi-Fi hostname %s", m_hostname.c_str());

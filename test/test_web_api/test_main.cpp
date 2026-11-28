@@ -1175,6 +1175,92 @@ void test_board_json_two_ports_no_led(void) {
         json.c_str());
 }
 
+// ADR 0015: chip revision and image, right after the label; absent without chip (above)
+void test_board_json_chip_and_image(void) {
+    const BoardChipInfo chip = { "ESP32-P4", 302, "esp32-p4-nano" };
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE), AutoShutdownAvailability::AVAILABLE,
+                                                nullptr, &chip);
+    TEST_ASSERT_TRUE(json.startsWith("{\"id\":\"p4_like\",\"label\":\"P4 test board\","
+                                     "\"chip\":{\"model\":\"ESP32-P4\",\"revision\":\"v3.2\","
+                                     "\"image\":\"esp32-p4-nano\"},\"usb\":"));
+    const BoardChipInfo v1 = { "ESP32-P4", 103, "" };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &v1));
+    TEST_ASSERT_EQUAL_STRING("v1.3", doc["chip"]["revision"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("", doc["chip"]["image"].as<const char*>());
+    const BoardChipInfo none = { nullptr, 0, nullptr };
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &none));
+    TEST_ASSERT_EQUAL_STRING("", doc["chip"]["model"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("v0.0", doc["chip"]["revision"].as<const char*>());
+}
+
+// ADR 0015: the Wi-Fi coprocessor of GET /api/board, after the chip
+void test_board_json_wifi_coprocessor(void) {
+    const BoardChipInfo chip = { "ESP32-P4", 302, "esp32-p4-nano" };
+    const BoardCoprocessorInfo ok = { true, "esp32c6", "unknown", "2.12.13", true, "" };
+    String json = WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE), AutoShutdownAvailability::AVAILABLE,
+                                                nullptr, &chip, &ok);
+    TEST_ASSERT_TRUE(json.indexOf("\"image\":\"esp32-p4-nano\"},\"wifi_coprocessor\":{\"answered\":true,"
+                                  "\"target\":\"esp32c6\",\"firmware\":\"unknown\",\"host\":\"2.12.13\","
+                                  "\"update_available\":true},\"usb\":") >= 0);
+    const BoardCoprocessorInfo down = { false, "", "unknown", "0.0.0", false, "no answer within 10 s" };
+    JsonDocument doc;
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &chip, &down));
+    TEST_ASSERT_FALSE(doc["wifi_coprocessor"]["answered"].as<bool>());
+    TEST_ASSERT_EQUAL_STRING("no answer within 10 s", doc["wifi_coprocessor"]["error"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["wifi_coprocessor"]["firmware"].isNull());
+    // Boards without a coprocessor: no object
+    deserializeJson(doc, WebApiJson::boardSettingsJson(P4_LIKE, defaultsFor(P4_LIKE),
+                                                       AutoShutdownAvailability::AVAILABLE, nullptr, &chip));
+    TEST_ASSERT_TRUE(doc["wifi_coprocessor"].isNull());
+}
+
+// ADR 0015: GET/POST /api/network/link of a board with its own Ethernet port and Wi-Fi
+void test_link_mode_json(void) {
+    TEST_ASSERT_EQUAL_STRING("{\"mode\":\"ethernet\",\"active\":\"ethernet\"}",
+                             WebApiJson::linkModeJson(NetworkMode::ETHERNET, "ethernet").c_str());
+    TEST_ASSERT_EQUAL_STRING("{\"mode\":\"auto\",\"active\":\"wifi\"}",
+                             WebApiJson::linkModeJson(NetworkMode::AUTO, "wifi").c_str());
+    TEST_ASSERT_EQUAL_STRING("{\"mode\":\"wifi\",\"active\":\"\"}",
+                             WebApiJson::linkModeJson(NetworkMode::WIFI, nullptr).c_str());
+}
+
+static int linkBody(const char* json, NetworkMode current, NetworkMode& next, bool& restart, String& out) {
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    return WebApiJson::checkLinkModeBody(doc, current, next, restart, out);
+}
+
+void test_link_mode_body(void) {
+    NetworkMode next = NetworkMode::AUTO;
+    bool restart = true;
+    String out;
+    TEST_ASSERT_EQUAL(0, linkBody("{\"mode\":\"wifi\"}", NetworkMode::ETHERNET, next, restart, out));
+    TEST_ASSERT_TRUE(next == NetworkMode::WIFI);
+    TEST_ASSERT_TRUE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":true}", out.c_str());
+    // The saved mode again: no restart
+    TEST_ASSERT_EQUAL(0, linkBody("{\"mode\":\"ethernet\"}", NetworkMode::ETHERNET, next, restart, out));
+    TEST_ASSERT_TRUE(next == NetworkMode::ETHERNET);
+    TEST_ASSERT_FALSE(restart);
+    TEST_ASSERT_EQUAL_STRING("{\"success\":true,\"restart\":false}", out.c_str());
+    // Refused: unknown name, wrong type, missing, not an object; the mode stays
+    const char* bad[] = { "{\"mode\":\"lte\"}", "{\"mode\":3}", "{}", "[\"wifi\"]" };
+    for (const char* b : bad) {
+        next = NetworkMode::WIFI;
+        TEST_ASSERT_EQUAL(400, linkBody(b, NetworkMode::ETHERNET, next, restart, out));
+        TEST_ASSERT_TRUE(next == NetworkMode::ETHERNET);
+        TEST_ASSERT_FALSE(restart);
+    }
+    linkBody("{\"mode\":\"lte\"}", NetworkMode::ETHERNET, next, restart, out);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid network mode\"}", out.c_str());
+    linkBody("[1]", NetworkMode::ETHERNET, next, restart, out);
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"Invalid request\"}", out.c_str());
+}
+
 // US-114: the automatic shutdown object of GET /api/board
 static JsonDocument boardDoc(bool on, AutoShutdownAvailability sd) {
     BoardSettings s = defaultsFor(board());
@@ -2815,6 +2901,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_needs_confirmation_other_names);
     RUN_TEST(test_board_json_s3);
     RUN_TEST(test_board_json_two_ports_no_led);
+    RUN_TEST(test_board_json_chip_and_image);
+    RUN_TEST(test_board_json_wifi_coprocessor);
+    RUN_TEST(test_link_mode_json);
+    RUN_TEST(test_link_mode_body);
     RUN_TEST(test_board_body_led);
     RUN_TEST(test_board_body_invalid_level);
     RUN_TEST(test_board_body_usb_port);

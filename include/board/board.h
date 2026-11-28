@@ -81,6 +81,20 @@ struct UsbConfig {
     UsbPort ports[2];
 };
 
+// Wi-Fi coprocessor on SDIO (ADR 0015): an ESP32-C6 running the ESP-Hosted slave firmware,
+// the radio of P4 boards. Fixed in the profile (PDR 0002 D4): wrong pins cost the Wi-Fi.
+// present false on boards whose radio is in the chip (ESP32-S3) and on boards without one
+struct WifiCoprocessor {
+    bool present;
+    int8_t clk;
+    int8_t cmd;
+    int8_t d0;
+    int8_t d1;
+    int8_t d2;
+    int8_t d3;
+    int8_t reset;  // reset of the coprocessor, driven by the host
+};
+
 struct BoardDefaults {
     const char* ap_ssid;
     const char* ap_password;
@@ -100,9 +114,17 @@ struct BoardConfig {
     LedConfig led;
     UsbConfig usb;
     BoardDefaults defaults;
+    WifiCoprocessor wifi_coprocessor;  // ADR 0015
 };
 
 // The profile of the board this image was built for
 const BoardConfig& board();
+
+// The profile with the capabilities found at boot (ADR 0010 section 3, ADR 0015 section 2):
+// the same as board(), except that has_wifi of a board with a Wi-Fi coprocessor is true only
+// once the coprocessor answered (setWifiCoprocessorAnswered()). Code that offers Wi-Fi (the
+// network plan, the Wi-Fi routes and pages) asks this one
+const BoardConfig& activeBoard();
+void setWifiCoprocessorAnswered(bool answered);
 
 #endif // BOARD_H

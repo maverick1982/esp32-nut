@@ -2309,6 +2309,19 @@ body.auth-page {
     white-space: nowrap;
 }
 .board-profile svg { width: 13px; height: 13px; opacity: 0.7; }
+/* ADR 0015: chip revision and installed image */
+.board-chip { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 0 0 16px; font-size: 13px; }
+.board-chip[hidden], .board-chip div[hidden] { display: none; }
+.board-chip div { display: flex; gap: 8px; align-items: baseline; }
+.board-chip dt { color: var(--text-secondary); }
+.board-chip dd { margin: 0; color: var(--text-primary); }
+/* ADR 0015 section 5: Wi-Fi coprocessor firmware upload */
+.cp-update { display: flex; flex-direction: column; gap: 10px; margin: 0 0 18px; }
+.cp-update[hidden] { display: none; }
+.cp-update-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cp-update-row input[type="file"] { flex: 1 1 220px; min-width: 0; color: var(--text-secondary); font-size: 13px; }
+.cp-update-progress { width: 100%; height: 6px; }
+.cp-update-progress[hidden] { display: none; }
 .board-profile span { color: var(--text-primary); }
 
 .board-lead { margin-top: -0.75rem; }
@@ -3969,6 +3982,78 @@ body.auth-page {
                     </div>
                 </section>
 
+                <!-- ADR 0015: link to use on a board with its own Ethernet port and Wi-Fi (P4 with a
+                     Wi-Fi coprocessor). Shown only when GET /api/network/link answers 200; the W5500
+                     section has its own choice. Same cards as the W5500 "Link to use" -->
+                <section class="net-section" id="sec-linkmode" data-section="linkmode" aria-labelledby="ttl-linkmode" hidden>
+                    <h2 class="net-section-title" id="ttl-linkmode">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M7 7h10M7 7l3-3M7 7l3 3M17 17H7M17 17l-3-3M17 17l-3 3" />
+                        </svg>
+                        Link to use
+                    </h2>
+                    <div class="panel config-panel net-panel">
+                        <form id="linkmode-form" novalidate>
+                            <div class="port-options w5500-mode-options" id="linkmode" role="radiogroup"
+                                aria-labelledby="ttl-linkmode">
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="auto">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Automatic</span>
+                                        <span class="port-desc">Ethernet when the cable is connected, otherwise Wi-Fi.
+                                            Switches by itself within 30 s.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="ethernet">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Ethernet</span>
+                                        <span class="port-desc">Cable only, the initial setting. Wi-Fi is used only if
+                                            the Ethernet port does not start.</span>
+                                    </span>
+                                </label>
+                                <label class="port-card">
+                                    <input type="radio" name="linkmode" value="wifi">
+                                    <span class="port-radio" aria-hidden="true"></span>
+                                    <span class="port-body">
+                                        <span class="port-title">Wi-Fi</span>
+                                        <span class="port-desc">Wi-Fi only. Set the network in the Wi-Fi section
+                                            first; without one the board starts its access point.</span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div class="auth-alert" id="linkmode-error" role="alert" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4M12 16h.01" />
+                                </svg>
+                                <span id="linkmode-error-text"></span>
+                            </div>
+
+                            <div class="auth-alert success" id="linkmode-success" role="status" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                    <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                <span>Saved. The board is restarting,
+                                    this page reloads in <span class="countdown" id="linkmode-countdown">15</span> s.</span>
+                            </div>
+
+                            <div class="form-actions w5500-actions">
+                                <button type="submit" class="btn btn-primary" id="btn-linkmode" disabled>
+                                    <span class="glow"></span>
+                                    Save link
+                                </button>
+                            </div>
+                        </form>
+                        <p class="auth-fineprint">Only one link is active at a time, with the same hostname on both.
+                            Saving restarts the board. The double reset always starts the access point.</p>
+                    </div>
+                </section>
+
                 <!-- W5500 wired by the user (US-126, docs/mockups/US-126): shown only when
                      GET /api/network/eth answers 200 with available:true (not on the P4) -->
                 <section class="net-section" id="sec-w5500" data-section="w5500" aria-labelledby="ttl-w5500" hidden>
@@ -4406,6 +4491,49 @@ body.auth-page {
 
                     <p class="auth-lead board-lead">Hardware options of this board. They are saved on the device
                         and kept after a restart.</p>
+
+                    <!-- ADR 0015: chip revision and installed image, to check the image matches the chip -->
+                    <dl class="board-chip" id="board-chip" hidden>
+                        <div><dt>Chip</dt><dd id="board-chip-model">--</dd></div>
+                        <div><dt>Image</dt><dd class="mono" id="board-chip-image">--</dd></div>
+                        <div id="board-cp" hidden><dt>Wi-Fi coprocessor</dt><dd id="board-cp-text">--</dd></div>
+                    </dl>
+
+                    <!-- ADR 0015 section 5: firmware of the Wi-Fi coprocessor, by upload only. Shown while
+                         the coprocessor answers; POST /api/coprocessor/update (multipart) -->
+                    <form class="cp-update" id="cp-update" hidden novalidate>
+                        <div class="board-label">
+                            <span class="board-name">Update the Wi-Fi coprocessor firmware</span>
+                            <span class="board-hint">Upload the ESP-Hosted image that matches this firmware:
+                                <a id="cp-update-link" href="#" target="_blank" rel="noopener">--</a>.
+                                The board checks the file before writing it; an interrupted upload keeps the old
+                                coprocessor firmware. The board restarts at the end.</span>
+                        </div>
+                        <div class="cp-update-row">
+                            <input type="file" id="cp-update-file" accept=".bin,application/octet-stream"
+                                aria-label="Coprocessor firmware file">
+                            <button type="submit" class="btn btn-primary" id="btn-cp-update" disabled>
+                                <span class="glow"></span>
+                                Update coprocessor
+                            </button>
+                        </div>
+                        <progress class="cp-update-progress" id="cp-update-progress" max="100" value="0" hidden></progress>
+                        <div class="auth-alert" id="cp-update-error" role="alert" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 8v4M12 16h.01" />
+                            </svg>
+                            <span id="cp-update-error-text"></span>
+                        </div>
+                        <div class="auth-alert success" id="cp-update-success" role="status" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
+                            </svg>
+                            <span>Coprocessor firmware <span id="cp-update-version">--</span> installed. The board is
+                                restarting, this page reloads in <span class="countdown" id="cp-update-countdown">20</span> s.</span>
+                        </div>
+                    </form>
 
                     <!-- GET /api/board failed -->
                     <div class="auth-alert" id="board-error" role="alert" hidden>
@@ -7306,6 +7434,81 @@ document.addEventListener('DOMContentLoaded', () => {
             .catch(err => console.error('Failed to fetch the W5500 settings:', err));
     }
 
+    // ---------- Link to use, board with its own Ethernet port and Wi-Fi (ADR 0015) ----------
+    // GET/POST /api/network/link; 404 on the other boards and while the Wi-Fi coprocessor does
+    // not answer, so the section stays hidden there
+    const linkModeSection = document.getElementById('sec-linkmode');
+    const linkModeForm = document.getElementById('linkmode-form');
+    const btnLinkMode = document.getElementById('btn-linkmode');
+    if (linkModeSection && linkModeForm && btnLinkMode) {
+        const LINK_MODES = ['auto', 'ethernet', 'wifi'];
+        const LINK_RESTART_S = 15;
+        const LINK_BTN_IDLE = btnLinkMode.innerHTML;
+        let linkSavedMode = 'ethernet';
+        const linkRadios = () => Array.from(document.querySelectorAll('input[name="linkmode"]'));
+        const readLinkMode = () => { const r = linkRadios().find(i => i.checked); return r ? r.value : linkSavedMode; };
+        const linkError = (text) => {
+            document.getElementById('linkmode-error-text').textContent = text || '';
+            document.getElementById('linkmode-error').hidden = !text;
+        };
+        const refreshLinkButton = () => { btnLinkMode.disabled = readLinkMode() === linkSavedMode; };
+
+        document.getElementById('linkmode').addEventListener('change', () => { linkError(''); refreshLinkButton(); });
+
+        linkModeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (btnLinkMode.disabled) return;
+            linkError('');
+            const mode = readLinkMode();
+            btnLinkMode.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Saving...';
+            btnLinkMode.disabled = true;
+            let data = null;
+            let ok = false;
+            try {
+                const res = await apiFetch('/api/network/link', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                ok = res.ok;
+                data = await res.json().catch(() => null);
+            } catch (err) {
+                console.error('Link mode save error:', err);
+            }
+            if (!ok || !data || !data.success) {
+                btnLinkMode.innerHTML = LINK_BTN_IDLE;
+                refreshLinkButton();
+                linkError(data && typeof data.error === 'string' ? data.error : 'Could not save the link.');
+                return;
+            }
+            linkSavedMode = mode;
+            if (!data.restart) { btnLinkMode.innerHTML = LINK_BTN_IDLE; refreshLinkButton(); return; }
+            netRestarting = true;
+            btnLinkMode.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Saved';
+            linkRadios().forEach(r => { r.disabled = true; });
+            document.getElementById('linkmode-success').hidden = false;
+            const countdown = document.getElementById('linkmode-countdown');
+            let left = LINK_RESTART_S;
+            countdown.textContent = left;
+            const timer = setInterval(() => {
+                left -= 1;
+                countdown.textContent = Math.max(0, left);
+                if (left <= 0) { clearInterval(timer); window.location.reload(); }
+            }, 1000);
+        });
+
+        apiFetch('/api/network/link', { cache: 'no-store' })
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => {
+                if (!data || !LINK_MODES.includes(data.mode)) return;
+                linkSavedMode = data.mode;
+                linkRadios().forEach(r => { r.checked = r.value === data.mode; });
+                refreshLinkButton();
+                linkModeSection.hidden = false;
+            })
+            .catch(err => console.error('Failed to fetch the link mode:', err));
+    }
+
     // Pre-populate fields
     apiFetch('/api/config')
         .then(res => res.json())
@@ -9542,12 +9745,116 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // ---------- Wi-Fi coprocessor firmware (ADR 0015 section 5) ----------
+        const cpForm = B('cp-update');
+        const cpFile = B('cp-update-file');
+        const cpBtn = B('btn-cp-update');
+        const CP_BTN_IDLE = cpBtn ? cpBtn.innerHTML : '';
+        const CP_RESTART_S = 20;
+        const cpError = (text) => {
+            B('cp-update-error-text').textContent = text || '';
+            B('cp-update-error').hidden = !text;
+        };
+        if (cpForm && cpFile && cpBtn) {
+            cpFile.addEventListener('change', () => {
+                cpError('');
+                cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+            });
+            cpForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (cpBtn.disabled || !cpFile.files || cpFile.files.length !== 1) return;
+                cpError('');
+                const fd = new FormData();
+                fd.append('firmware', cpFile.files[0], cpFile.files[0].name);
+                const progress = B('cp-update-progress');
+                progress.value = 0;
+                progress.hidden = false;
+                cpBtn.disabled = true;
+                cpFile.disabled = true;
+                cpBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:1px;"></div> Updating...';
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/coprocessor/update');
+                xhr.upload.onprogress = (ev) => {
+                    if (ev.lengthComputable) progress.value = Math.round(ev.loaded * 100 / ev.total);
+                };
+                const fail = (text) => {
+                    progress.hidden = true;
+                    cpBtn.innerHTML = CP_BTN_IDLE;
+                    cpFile.disabled = false;
+                    cpBtn.disabled = !(cpFile.files && cpFile.files.length === 1);
+                    cpError(text);
+                };
+                xhr.onerror = () => fail('The upload failed. Check the connection to the board and try again.');
+                xhr.onload = () => {
+                    // As apiFetch(): an expired session goes to the login page
+                    if (xhr.status === 401) { window.location.replace('/login?expired=1'); return; }
+                    let data = null;
+                    try { data = JSON.parse(xhr.responseText); } catch (err) { data = null; }
+                    if (xhr.status !== 200 || !data || !data.success) {
+                        fail(data && typeof data.error === 'string' ? data.error : 'The coprocessor update failed.');
+                        return;
+                    }
+                    progress.value = 100;
+                    cpBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Installed';
+                    B('cp-update-version').textContent = typeof data.version === 'string' ? data.version : '';
+                    B('cp-update-success').hidden = false;
+                    const countdown = B('cp-update-countdown');
+                    let left = CP_RESTART_S;
+                    countdown.textContent = left;
+                    const timer = setInterval(() => {
+                        left -= 1;
+                        countdown.textContent = Math.max(0, left);
+                        if (left <= 0) { clearInterval(timer); window.location.reload(); }
+                    }, 1000);
+                };
+                xhr.send(fd);
+            });
+        }
+
         // ---------- Load ----------
         function renderBoard() {
             const id = typeof board.id === 'string' ? board.id : '';
             const label = typeof board.label === 'string' && board.label !== '' ? board.label : (id || '--');
             B('board-name').textContent = label;
             B('board-profile').title = id ? `Board profile: ${id} (read-only)` : 'Board profile';
+
+            // ADR 0015: "ESP32-P4 v3.2" and the image it runs ("esp32-p4-eth"); hidden
+            // without the object (older firmware)
+            const chip = board.chip && typeof board.chip === 'object' ? board.chip : null;
+            B('board-chip').hidden = !chip;
+            if (chip) {
+                const model = typeof chip.model === 'string' ? chip.model : '';
+                const rev = typeof chip.revision === 'string' ? chip.revision : '';
+                B('board-chip-model').textContent = [model, rev].filter(Boolean).join(' ') || '--';
+                B('board-chip-image').textContent =
+                    typeof chip.image === 'string' && chip.image !== '' ? chip.image : 'local build';
+            }
+            // ADR 0015: "ESP32-C6, firmware unknown (host 2.12.13), update available" or why it
+            // did not answer; only on boards with a coprocessor
+            const cp = board.wifi_coprocessor && typeof board.wifi_coprocessor === 'object' ? board.wifi_coprocessor : null;
+            B('board-cp').hidden = !cp;
+            if (cp) {
+                let text;
+                if (cp.answered) {
+                    const target = typeof cp.target === 'string' && cp.target !== '' ? cp.target.toUpperCase().replace('ESP32', 'ESP32-') : 'Coprocessor';
+                    text = `${target}, firmware ${cp.firmware || 'unknown'} (host ${cp.host || '?'})`;
+                    if (cp.update_available) text += ', newer firmware available';
+                } else {
+                    text = `Not answering${cp.error ? ': ' + cp.error : ''}. The board runs without Wi-Fi.`;
+                }
+                B('board-cp-text').textContent = text;
+            }
+            // ADR 0015 section 5: the update form while the coprocessor answers, with the link to the
+            // image of the host version (the URL the Arduino core names)
+            const canUpdate = !!cp && cp.answered === true && typeof cp.target === 'string' && cp.target !== '' &&
+                typeof cp.host === 'string' && /^\d+\.\d+\.\d+$/.test(cp.host);
+            B('cp-update').hidden = !canUpdate;
+            if (canUpdate) {
+                const name = `${cp.target}-v${cp.host}.bin`;
+                const link = B('cp-update-link');
+                link.href = `https://espressif.github.io/arduino-esp32/hosted/${name}`;
+                link.textContent = name;
+            }
 
             const hasLed = !!board.led && typeof board.led === 'object' && board.led.present !== false;
             B('led-section').hidden = !hasLed;

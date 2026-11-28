@@ -49,16 +49,16 @@ bool EthSpiStore::save(const EthSpiSettings& settings) {
     return ok;
 }
 
-NetworkMode EthSpiStore::loadMode() {
-    NetworkMode mode = NetworkMode::AUTO;
+NetworkMode EthSpiStore::loadMode(NetworkMode fallback) {
+    NetworkMode mode = fallback;
     Preferences prefs;
     if (!NvsNamespace::beginRead(prefs, kNamespace)) return mode;
     // isKey() first: getString() of a missing key logs an NVS error
     if (prefs.isKey(kKeyMode)) {
         const String text = prefs.getString(kKeyMode, "");
         if (!parseNetworkMode(text.c_str(), mode)) {
-            mode = NetworkMode::AUTO;
-            AppLogger::log("WARN", "[NETWORK] Saved link mode not valid: using auto");
+            mode = fallback;
+            AppLogger::log("WARN", "[NETWORK] Saved link mode not valid: using %s", networkModeName(fallback));
         }
     }
     prefs.end();

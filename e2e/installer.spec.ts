@@ -43,8 +43,25 @@ test.describe('ESP Web Installer', () => {
     await expect(v1).toContainText('ESP32-P4 before v3 (v1.x)');
     await expect(v1).toContainText('Tested on a v1.3 board');
     await expect(section.locator('esp-web-install-button')).toHaveCount(2);
-    // S3 (main button), two P4 revisions and the Arduino Nano ESP32 (#149)
-    await expect(page.locator('esp-web-install-button')).toHaveCount(4);
+    // S3 (main button), two P4 revisions, the Arduino Nano ESP32 (#149) and the two
+    // P4-NANO revisions (ADR 0015)
+    await expect(page.locator('esp-web-install-button')).toHaveCount(6);
+  });
+
+  // ADR 0015: the Waveshare ESP32-P4-NANO has its own profile and its own two images
+  test('Waveshare ESP32-P4-NANO section: one button per silicon revision', async ({ page }) => {
+    await page.goto(indexUrl);
+
+    const section = page.locator('.p4nano-section');
+    await expect(section).toBeVisible();
+    await expect(section.locator('#p4nano-title')).toContainText('Waveshare ESP32-P4-NANO');
+    const v3 = section.locator('.p4-option').filter({ has: page.locator('esp-web-install-button[manifest="manifest-esp32-p4-nano.json"]') });
+    const v1 = section.locator('.p4-option').filter({ has: page.locator('esp-web-install-button[manifest="manifest-esp32-p4-nano-v1.json"]') });
+    await expect(v3).toContainText('ESP32-P4-NANO, v3.1 or later');
+    await expect(v3).toContainText('Tested on a v3.x board');
+    await expect(v1).toContainText('ESP32-P4-NANO, before v3 (v1.x)');
+    await expect(v1).toContainText('Not tested yet');
+    await expect(section.locator('esp-web-install-button')).toHaveCount(2);
   });
 
   test('Arduino Nano ESP32 section: its own button and the ROM download help', async ({ page }) => {
@@ -102,7 +119,7 @@ test.describe('ESP Web Installer', () => {
     }
   });
 
-  for (const env of ['esp32-p4-eth', 'esp32-p4-eth-v1']) {
+  for (const env of ['esp32-p4-eth', 'esp32-p4-eth-v1', 'esp32-p4-nano', 'esp32-p4-nano-v1']) {
     test(`manifest-${env}.json: ESP32-P4 with the bootloader at 0x2000, in the board folder`, () => {
       const manifest = readManifest(INSTALLER, `manifest-${env}.json`);
       expect(manifest.builds).toHaveLength(1);
@@ -134,6 +151,8 @@ test.describe('ESP Web Installer', () => {
         'esp32-s3-standard': 'esp32-nut-v9.9.9.zip',
         'esp32-p4-eth': 'esp32-nut-v9.9.9-esp32-p4-eth.zip',
         'esp32-p4-eth-v1': 'esp32-nut-v9.9.9-esp32-p4-eth-v1.zip',
+        'esp32-p4-nano': 'esp32-nut-v9.9.9-esp32-p4-nano.zip',
+        'esp32-p4-nano-v1': 'esp32-nut-v9.9.9-esp32-p4-nano-v1.zip',
       };
       for (const env of Object.keys(expected)) {
         execFileSync('python', [script, 'package', '--env', env, '--version', 'v9.9.9',
@@ -167,7 +186,8 @@ test.describe('ESP Web Installer', () => {
         '--version', 'latest', '--out', out]);
       const generated = fs.readdirSync(out).sort();
       expect(generated).toEqual(['manifest-arduino-nano-esp32.json', 'manifest-esp32-p4-eth-v1.json',
-        'manifest-esp32-p4-eth.json', 'manifest.json']);
+        'manifest-esp32-p4-eth.json', 'manifest-esp32-p4-nano-v1.json', 'manifest-esp32-p4-nano.json',
+        'manifest.json']);
       for (const name of generated) {
         expect(readManifest(INSTALLER, name)).toEqual(readManifest(out, name));
       }

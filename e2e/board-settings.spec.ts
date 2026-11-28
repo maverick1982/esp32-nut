@@ -13,6 +13,8 @@ interface BoardJson {
   usb: { ports: { id: string; label: string }[]; port: string };
   // US-114
   auto_shutdown?: { on: boolean; available: boolean; reason?: string };
+  // ADR 0015
+  chip?: { model: string; revision: string; image: string };
 }
 
 interface Mock {
@@ -114,6 +116,26 @@ test.describe('Board page (US-094)', () => {
     await expect(page.locator('#board-name')).toHaveText('ESP32-S3 DevKitC-1');
     await expect(page.locator('#board-profile')).toHaveAttribute('title', /esp32s3_devkit/);
     expect(mock.getHits).toBe(1);
+  });
+
+  // ADR 0015: chip revision and the installed image, so the image can be checked against the chip
+  test('chip revision and image shown; hidden without the object; local build named', async ({ page }) => {
+    await openBoardTab(page);
+    await expect(page.locator('#board-chip')).toBeHidden();
+
+    mock.board = dualBoard(false);
+    mock.board.chip = { model: 'ESP32-P4', revision: 'v3.2', image: 'esp32-p4-nano' };
+    await page.reload();
+    await page.locator('button.tab[data-target="board"]').click();
+    await expect(page.locator('#board-chip')).toBeVisible();
+    await expect(page.locator('#board-chip-model')).toHaveText('ESP32-P4 v3.2');
+    await expect(page.locator('#board-chip-image')).toHaveText('esp32-p4-nano');
+
+    mock.board.chip = { model: 'ESP32-P4', revision: 'v1.3', image: '' };
+    await page.reload();
+    await page.locator('button.tab[data-target="board"]').click();
+    await expect(page.locator('#board-chip-model')).toHaveText('ESP32-P4 v1.3');
+    await expect(page.locator('#board-chip-image')).toHaveText('local build');
   });
 
   test('S3: LED on at level 3, no USB section; level 5 and LED off are applied immediately', async ({ page }) => {

@@ -13,6 +13,14 @@
 #include <Update.h>
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#include "esp_chip_info.h"
+#include "network/wifi_coprocessor.h"
+#include "CoprocessorImage.h"
+
+// PlatformIO environment of the image (scripts/build_env.py); empty when built without it
+#ifndef NUT_BUILD_ENV
+#define NUT_BUILD_ENV ""
+#endif
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -98,8 +106,9 @@ void WebConfigServer::begin(bool isAPMode) {
 
 
     // REST endpoints
-    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092)
-    if (board().has_wifi) {
+    // Boards without Wi-Fi have no Wi-Fi settings: the route is not registered (404, US-092).
+    // ADR 0015: nor a board whose Wi-Fi coprocessor did not answer at boot
+    if (activeBoard().has_wifi) {
         server.on("/api/wifi/connect", HTTP_POST, guarded([this]() { handleConnect(); }));
     }
     server.on("/api/nut/config", HTTP_POST, guarded([this]() { handleNutConfig(); }));
@@ -117,6 +126,19 @@ void WebConfigServer::begin(bool isAPMode) {
     if (board().spi_eth.available) {
         server.on("/api/network/eth", HTTP_GET, guarded([this]() { handleGetEthSpi(); }));
         server.on("/api/network/eth", HTTP_POST, guarded([this]() { handleSetEthSpi(); }));
+    }
+    // ADR 0015: the link mode of a board with its own Ethernet port and Wi-Fi (the W5500 page
+    // has its own); 404 elsewhere, and while the Wi-Fi coprocessor does not answer
+    if (board().has_ethernet && activeBoard().has_wifi) {
+        server.on("/api/network/link", HTTP_GET, guarded([this]() { handleGetLinkMode(); }));
+        server.on("/api/network/link", HTTP_POST, guarded([this]() { handleSetLinkMode(); }));
+    }
+    // ADR 0015 section 5: the firmware of the Wi-Fi coprocessor, uploaded from the board page.
+    // Only while the coprocessor answers: the update API needs the link to it. As /update, the
+    // check that counts is in the upload callback, before anything is written
+    if (board().wifi_coprocessor.present && WifiCoprocessorProbe::status().answered) {
+        server.on("/api/coprocessor/update", HTTP_POST, guarded([this]() { handleCoprocessorUploadDone(); }),
+                  [this]() { handleCoprocessorUpload(); });
     }
     // Remote logging of the System Logs page (US-116): not public in AuthPolicy (ADR 0009),
     // so protected by the login
@@ -299,9 +321,25 @@ void WebConfigServer::handleGetBoard() {
     BoardQxInfo qx = { nullptr };
     bool has_qx = usb_ups && usb_ups->qxDriverInfo(detected);
     qx.detected = detected.c_str();
+    // ADR 0015: the chip revision and the image it runs
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    const BoardChipInfo chip = { ESP.getChipModel(), info.revision, NUT_BUILD_ENV };
+    // ADR 0015: the Wi-Fi coprocessor, only on a board that has one
+    const WifiCoprocessorStatus& cp = WifiCoprocessorProbe::status();
+    char firmware[16];
+    char host[16];
+    if (cp.slaveKnown()) {
+        snprintf(firmware, sizeof(firmware), "%u.%u.%u", cp.slave[0], cp.slave[1], cp.slave[2]);
+    } else {
+        snprintf(firmware, sizeof(firmware), "unknown");
+    }
+    snprintf(host, sizeof(host), "%u.%u.%u", cp.host[0], cp.host[1], cp.host[2]);
+    const BoardCoprocessorInfo coprocessor = { cp.answered, cp.target, firmware, host, cp.update_available, cp.error };
     server.send(200, "application/json",
                 WebApiJson::boardSettingsJson(board(), board_settings, autoShutdownAvailability(),
-                                              has_qx ? &qx : nullptr));
+                                              has_qx ? &qx : nullptr, &chip,
+                                              cp.present ? &coprocessor : nullptr));
 }
 
 void WebConfigServer::handleSetBoard() {
@@ -510,6 +548,42 @@ void WebConfigServer::handleSetEthSpi() {
     server.send(200, "application/json", response);
     AppLogger::log("INFO", "[NETWORK] W5500 settings saved (%s, link mode %s): restarting",
                    next.enabled ? "enabled" : "disabled", networkModeName(next_mode));
+    should_restart = true;
+    restart_request_time = millis();
+}
+
+// --- Link mode of a board with its own Ethernet port and Wi-Fi (ADR 0015) ---
+
+void WebConfigServer::handleGetLinkMode() {
+    server.send(200, "application/json",
+                WebApiJson::linkModeJson(eth_mode, network ? network->typeName() : ""));
+}
+
+void WebConfigServer::handleSetLinkMode() {
+    if (!requireJson()) return;
+    JsonDocument doc;
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"error\":\"Invalid request\"}");
+        return;
+    }
+    NetworkMode next = eth_mode;
+    bool restart = false;
+    String response;
+    if (int status = WebApiJson::checkLinkModeBody(doc, eth_mode, next, restart, response)) {
+        server.send(status, "application/json", response);
+        return;
+    }
+    if (!restart) {
+        server.send(200, "application/json", response);
+        return;
+    }
+    if (!eth_spi_store || !eth_spi_store->saveMode(next)) {
+        server.send(500, "application/json", "{\"error\":\"Failed to save the link mode\"}");
+        return;
+    }
+    eth_mode = next;
+    server.send(200, "application/json", response);
+    AppLogger::log("INFO", "[NETWORK] Link mode saved (%s): restarting", networkModeName(next));
     should_restart = true;
     restart_request_time = millis();
 }
@@ -833,10 +907,10 @@ void WebConfigServer::handleGetConfig() {
     wifiObj["ssid"] = config_mgr.getWifiConfig().ssid;
     wifiObj["mode"] = is_ap_mode ? "AP" : "STA";
     // "ethernet" on boards without Wi-Fi (US-092); links: the sections of the Network page (US-112)
-    doc["network"]["type"] = board().has_wifi ? "wifi" : "ethernet";
+    doc["network"]["type"] = activeBoard().has_wifi ? "wifi" : "ethernet";
     // US-126: an enabled W5500 adds the Ethernet section on a Wi-Fi board
     // US-127: in Wi-Fi mode the W5500 is not used, so the board has no Ethernet link
-    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), board(),
+    WebApiJson::networkLinksJson(doc["network"]["links"].to<JsonArray>(), activeBoard(),
                                  eth_spi.enabled && eth_mode != NetworkMode::WIFI);
     // Name in use, saved name and default (US-113)
     WebApiJson::hostnameJson(doc["network"]["hostname"].to<JsonObject>(), network ? network->hostname() : String(),
@@ -1082,6 +1156,131 @@ void WebConfigServer::handleOTAUpload() {
         ota_upload_started = false;
         AppLogger::log("ERROR", "[OTA] Upload aborted");
     }
+}
+
+// --- Wi-Fi coprocessor firmware (ADR 0015, section 5) ---
+
+void WebConfigServer::coprocessorUploadFail(int status, const char* message) {
+    if (cp_failed) return;
+    cp_failed = true;
+    cp_status = status;
+    cp_error = message;
+    AppLogger::log("ERROR", "[NETWORK] Coprocessor update refused: %s", message);
+}
+
+bool WebConfigServer::coprocessorWrite(const uint8_t* data, size_t len) {
+    if (len == 0) return true;
+    if (!WifiCoprocessorUpdate::write(data, len)) {
+        coprocessorUploadFail(500, "The coprocessor did not accept the data: its old firmware stays");
+        return false;
+    }
+    cp_written += len;
+    return true;
+}
+
+void WebConfigServer::handleCoprocessorUpload() {
+    // As handleOTAUpload(): a POST that is not multipart has no HTTPUpload
+    if (!server.header("Content-Type").startsWith("multipart/")) return;
+    // WebServer reads the whole upload inside handleClient(), and every chunk goes to the
+    // coprocessor over SDIO: the loopTask watchdog is fed per chunk (US-085)
+    esp_task_wdt_reset();
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        cp_upload_started = true;
+        cp_began = false;
+        cp_failed = false;
+        cp_status = 0;
+        cp_error = "";
+        cp_version = "";
+        cp_head_len = 0;
+        cp_written = 0;
+        cp_start_ms = millis();
+        if (!authorizedQuiet()) {
+            coprocessorUploadFail(401, "Not authenticated");
+        } else if (update_service && update_service->busy()) {
+            coprocessorUploadFail(409, "An online update is in progress");
+        } else {
+            AppLogger::log("INFO", "[NETWORK] Coprocessor firmware upload started: %s", upload.filename.c_str());
+        }
+        return;
+    }
+    if (upload.status == UPLOAD_FILE_ABORTED) {
+        // No abort in the update API: without end() the coprocessor keeps booting its old firmware
+        AppLogger::log("ERROR", "[NETWORK] Coprocessor firmware upload aborted after %u bytes",
+                       (unsigned)cp_written);
+        cp_upload_started = false;
+        return;
+    }
+    if (cp_failed) return;  // refused: the rest of the file is read and dropped
+
+    const uint8_t* data = upload.buf;
+    size_t len = upload.status == UPLOAD_FILE_WRITE ? upload.currentSize : 0;
+    if (!cp_began) {
+        // The check needs the first 256 bytes: they may come in more than one chunk
+        const size_t take = len < sizeof(cp_head) - cp_head_len ? len : sizeof(cp_head) - cp_head_len;
+        memcpy(cp_head + cp_head_len, data, take);
+        cp_head_len += take;
+        data += take;
+        len -= take;
+        if (cp_head_len < sizeof(cp_head) && upload.status != UPLOAD_FILE_END) return;
+        const char* target = WifiCoprocessorProbe::status().target;
+        CoprocessorImage::Info info;
+        const CoprocessorImage::Result r = CoprocessorImage::check(cp_head, cp_head_len, target, info);
+        char msg[112];
+        CoprocessorImage::message(r, info, target, msg, sizeof(msg));
+        if (r != CoprocessorImage::Result::OK) {
+            coprocessorUploadFail(400, msg);
+            return;
+        }
+        cp_version = info.version;
+        AppLogger::log("INFO", "[NETWORK] Coprocessor update: %s, writing", msg);
+        if (!WifiCoprocessorUpdate::begin()) {
+            coprocessorUploadFail(500, "The coprocessor did not start the update: its old firmware stays");
+            return;
+        }
+        cp_began = true;
+        if (!coprocessorWrite(cp_head, cp_head_len)) return;
+    }
+    if (!coprocessorWrite(data, len)) return;
+    if (upload.status == UPLOAD_FILE_END) {
+        if (!WifiCoprocessorUpdate::end()) {
+            coprocessorUploadFail(500, "The coprocessor refused the image: its old firmware stays");
+            return;
+        }
+        AppLogger::log("INFO", "[NETWORK] Coprocessor firmware %s written: %u bytes in %u ms", cp_version.c_str(),
+                       (unsigned)cp_written, (unsigned)(millis() - cp_start_ms));
+    }
+}
+
+void WebConfigServer::handleCoprocessorUploadDone() {
+    server.sendHeader("Connection", "close");
+    if (!cp_upload_started) {
+        server.send(400, "application/json", "{\"error\":\"multipart upload required\"}");
+        return;
+    }
+    cp_upload_started = false;
+    if (cp_failed || !cp_began) {
+        JsonDocument doc;
+        doc["error"] = cp_failed ? cp_error : String("No file received");
+        String out;
+        serializeJson(doc, out);
+        server.send(cp_failed ? cp_status : 400, "application/json", out);
+        return;
+    }
+    JsonDocument doc;
+    doc["success"] = true;
+    doc["version"] = cp_version;
+    String out;
+    serializeJson(doc, out);
+    server.send(200, "application/json", out);
+    // The coprocessor boots the new firmware; the board restarts so ESP-Hosted connects to it.
+    // A coprocessor that does not come back leaves the board without Wi-Fi (ADR 0015 section 2)
+    if (!WifiCoprocessorUpdate::activate()) {
+        AppLogger::log("WARN", "[NETWORK] Coprocessor did not confirm the activation: restarting anyway");
+    }
+    AppLogger::log("INFO", "[NETWORK] Coprocessor firmware %s installed: restarting", cp_version.c_str());
+    should_restart = true;
+    restart_request_time = millis();
 }
 
 // --- Autenticazione (ADR 0009) ---

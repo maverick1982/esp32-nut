@@ -22,6 +22,10 @@
  *   the fallback (the station when it is configured, otherwise the access point) if the
  *   module does not answer or gets no address (EthBootProbe). Only one link at a time
  *   (PDR 0002 D3). The double reset still starts the access point.
+ * - With Wi-Fi and an Ethernet port of its own (ADR 0015, a P4 board with a Wi-Fi
+ *   coprocessor): the same plan as with the W5500, the port taking its place. Without a
+ *   coprocessor that answered at boot, the board has no Wi-Fi and gets the plan of a board
+ *   without it (has_wifi false, decided by the caller).
  * - The link mode chosen in the Network page (US-127) refines the W5500 case:
  *   - WIFI: the W5500 is not used, the plan is the one of a board without it;
  *   - AUTO: as above; a cable without link or address also falls back to Wi-Fi, and with
@@ -57,17 +61,18 @@ struct NetBootPlan {
 struct NetBootInput {
     bool has_wifi;
     bool has_ethernet;
-    bool spi_eth;        // W5500 enabled by the user (US-126)
+    bool spi_eth;        // W5500 enabled by the user (US-126); next to has_ethernet on Wi-Fi boards
     bool config_valid;
     bool wifi_ssid_set;  // the saved configuration names a Wi-Fi network
     bool manual_trigger; // double reset
-    NetworkMode mode;    // link chosen in the Network page, meaningful only with spi_eth (US-127)
+    NetworkMode mode;    // link chosen in the Network page, meaningful with Wi-Fi and Ethernet (US-127)
 };
 
 inline NetBootPlan planNetwork(const NetBootInput& in) {
     NetBootPlan plan = { BootLink::NONE, false, false, false, false, BootLink::NONE, false, false };
     if (in.has_wifi) {
-        const bool use_eth = in.spi_eth && in.mode != NetworkMode::WIFI;
+        // The W5500 (US-126) or the board's own port (ADR 0015): one rule for both
+        const bool use_eth = (in.spi_eth || in.has_ethernet) && in.mode != NetworkMode::WIFI;
         if (use_eth && !in.manual_trigger) {
             plan.link = BootLink::ETHERNET;
             plan.fallback = (in.config_valid && in.wifi_ssid_set) ? BootLink::WIFI_STATION

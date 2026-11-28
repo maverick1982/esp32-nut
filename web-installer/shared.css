@@ -191,6 +191,7 @@ body {
 }
 
 .p4-section,
+.p4nano-section,
 .nano-section {
     border-top: 1px dashed var(--bg-panel-border);
     padding-top: 1.75rem;
