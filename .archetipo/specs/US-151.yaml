@@ -1,0 +1,36 @@
+schema: archetipo/spec/v2
+code: US-151
+title: Coda e task del syslog solo con il syslog acceso
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-151: Coda e task del syslog solo con il syslog acceso
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio che la coda dei log remoti (40 x 248 B) e il task `log_out` (4 KB) esistano solo quando il syslog è acceso,
+  in modo che chi non usa il syslog (il default) recuperi circa 14 KB di heap.
+
+  **Dimostrazione**
+  Sull'Eaton con il syslog spento la heap libera a riposo sale di almeno 13 KB rispetto a prima; accendendo il syslog dalla Web UI, senza riavvio, le righe arrivano al server syslog; spegnendolo, la memoria torna libera.
+
+  **Criteri di Accettazione**
+  - [ ] Con il syslog spento in NVS, dopo l'avvio non esistono né la coda né il task `log_out`.
+  - [ ] Con il syslog acceso in NVS, i log di avvio arrivano come oggi, boot hold di ADR 0012 compreso: nessuna riga persa tra l'avvio e la rete pronta.
+  - [ ] Accendere il syslog dalla Web UI crea coda e task senza riavvio; spegnerlo li libera senza perdere né bloccare chi scrive un log in quel momento (`ups_poll`, `loopTask`).
+  - [ ] Il System Log della Web UI resta identico in tutti i casi.
+  - [ ] Regressione: test nativi di LogCore ed e2e del syslog verdi; prova con un server syslog reale, acceso all'avvio e acceso dopo.
+
+  **Assunzioni**
+  - **Origine:** analisi della heap del 2026-11-27 (`log_dispatcher.cpp:7`, `:15`; `main.cpp:152`, `:288-290`).
+  - **Fuori ambito:** cambiare `QUEUE_LENGTH` o `LOG_RECORD_MSG` con il syslog acceso.
+history:
+  - status: TODO
+    at: "2026-11-27T21:59:21Z"

@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-153
+title: battery_voltage_reports_one_pack in Board Settings e battery.packs dalle variabili personalizzate per gli UPS Q* che riportano la tensione di una cella (#165)
+epic:
+  code: EP-007
+  title: Supporto UPS Q* (nutdrv_qx)
+priority: MEDIUM
+points: 3
+status: TODO
+body: |-
+  #### US-153: battery_voltage_reports_one_pack in Board Settings e battery.packs dalle variabili personalizzate per gli UPS Q* che riportano la tensione di una cella (#165)
+
+  **Epic:** EP-007 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come utente con un UPS Q* che nella risposta Q1 riporta la tensione di una sola cella (come mortalme2 con l'LA-ON-3K-SH di #165: `2.27` con 6 batterie da 12 V e `battery.voltage.nominal` 72),
+  voglio attivare `battery_voltage_reports_one_pack` in Board Settings e, se serve, impostare il numero di pacchi con la variabile personalizzata `battery.packs` in NUT Server,
+  in modo che `battery.voltage` e `battery.charge` siano quelli della batteria intera, come con NUT, e Home Assistant non mostri più 0 % con la batteria carica.
+
+  **Dimostrazione**
+  Con il replay dell'LA-ON-3K-SH di #165 (Q1 `(229.6 229.6 229.7 006 50.0 2.27 15.7 00000001`, F con 72 V nominali) e il flag spento, `upsc` dà `battery.voltage: 2.27` e `battery.charge: 0`, come oggi. Si attiva `battery_voltage_reports_one_pack` in Board Settings e si salva: il riconoscimento riparte, il System Log scrive che i pacchi rilevati sono 36, e dal ciclo di poll successivo `upsc` dà `battery.voltage: 81.72`, `battery.packs: 36` e `battery.charge: 100`. Con il valore in batteria `2.03` la carica scende a circa 69. Aggiungendo in NUT Server `battery.packs = 12` e ricollegando l'UPS, il rilevamento automatico viene saltato e `battery.voltage` diventa `27.24`.
+
+  **Criteri di Accettazione**
+  - [ ] La sezione del driver Q* di Board Settings (US-138) ha la casella `battery_voltage_reports_one_pack`, spenta per default, accanto a `protocol` e `novendor`. Il valore è salvato in NVS, vale dopo un riavvio, e il salvataggio fa ripartire il riconoscimento senza riavviare la scheda, come `novendor`. Il System Log scrive la modifica e chi l'ha fatta.
+  - [ ] Con il flag acceso e il numero di pacchi noto, `battery.voltage` pubblicato è il valore dell'UPS moltiplicato per i pacchi, e `battery.charge` stimata usa quella tensione, come `qx_multiply_battvolt()` e `qx_initbattery()` di NUT (`nutdrv_qx.c:246-275` e `:560-584`).
+  - [ ] Con il flag acceso e senza `battery.packs`, i pacchi vengono rilevati in automatico dalla tensione dell'UPS e dalla nominale, con la tabella di NUT: 36 per il caso di #165. Il System Log scrive una riga INFO con i pacchi rilevati, oppure che non è stato possibile rilevarli (testi di NUT: "Autodetected %.0f as number of battery packs" / "Can't autodetect number of battery packs").
+  - [ ] La variabile personalizzata `battery.packs` di NUT Server, con un numero maggiore di zero, entra nello stato del driver Q* prima dell'inizializzazione della batteria, come `override.battery.packs` in `ups.conf`: i pacchi sono noti e il rilevamento automatico viene saltato. Un valore non numerico, zero o negativo viene ignorato (rilevamento automatico) senza errori in Web UI.
+  - [ ] La variabile `battery.packs` si applica alla connessione successiva del driver (riconnessione o ciclo della porta, salvataggio delle impostazioni Q*, riavvio), non al salvataggio in NUT Server. Il testo introduttivo del pannello "Custom variables" lo dice, accanto all'eccezione già scritta per le potenze nominali (US-146).
+  - [ ] Regressione: con il flag spento non cambia nulla, nemmeno con `battery.packs` impostato: tutti i protocolli Q* portati usano già `qx_multiply_battvolt`, quindi la tensione passa invariata come in NUT. Gli UPS HID non leggono `battery.packs` e non cambiano.
+  - [ ] La sezione Q* dell'export diagnostico riporta il flag, i pacchi usati e la loro origine (rilevati, variabile personalizzata, nessuno).
+  - [ ] Test nativi in `test_qx_driver` sul replay di #165: flag spento, flag acceso con rilevamento automatico (36), flag acceso con `battery.packs` personalizzato, valore personalizzato non valido, rilevamento impossibile. e2e della casella in Board Settings (salvataggio e valore ricaricato). Le tre build passano.
+  - [ ] Build di test (zip OTA, ESP32-S3) consegnata a mortalme2 su #165 con le istruzioni (flag da attivare, export diagnostico da allegare); nella issue si scrive "Refs #165".
+
+  **Assunzioni**
+  - Decisioni prese con l'utente il 2026-11-27: il flag è un'opzione del driver e va in Board Settings come `protocol` e `novendor`; il numero di pacchi non diventa un campo nuovo ma usa le variabili personalizzate, che hanno già la semantica di `override.<var>` di `ups.conf`. È la seconda eccezione alla regola "la logica della scheda usa i valori reali", dopo le potenze nominali di US-146.
+  - Niente rilevamento automatico senza flag: NUT non lo fa, e una regola tipo "tensione molto sotto la nominale" scatterebbe anche con la batteria scollegata o guasta.
+  - Comportamento di NUT portato così com'è: subito dopo il rilevamento automatico il primo ciclo stima la carica sulla tensione non ancora moltiplicata; il valore giusto arriva dal ciclo successivo.
+  - La stima della carica resta quella di NUT sulla tensione (`battery.voltage.low`/`high` calcolati dalla nominale, 62.4-78 V nel caso di #165): sotto carico tende a sottostimare. `runtimecal` resta fuori ambito.
+  - Il caso di #165 viene dal diagnostico allegato alla issue (0665:5161, cypress, megatec, `novendor` acceso, firmware v1.18.0) e dai valori del blackout riportati dal reporter (2.03 all'inizio, 1.97 dopo 64 minuti, 2.36 in carica rapida).
+  - Come far arrivare `battery.packs` dal vettore delle variabili personalizzate al driver Q* (setter in USBHostUPS sullo schema di `setQxSettings()` e `setCustomPowerNominals()`) si decide in pianificazione.
+history:
+  - status: TODO
+    at: "2026-11-27T22:47:10Z"

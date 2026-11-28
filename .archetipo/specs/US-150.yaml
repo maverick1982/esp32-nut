@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-150
+title: Controllo aggiornamenti senza task permanente e con la guardia di memoria
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-150: Controllo aggiornamenti senza task permanente e con la guardia di memoria
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio che il task `fw_update` esista solo mentre controlla o installa un aggiornamento, che il buffer di download non stia più in `.bss` e che anche il controllo verifichi la memoria prima di aprire TLS,
+  in modo che la scheda recuperi circa 16 KB di heap fissi e il controllo periodico non faccia crollare la heap minima.
+
+  **Dimostrazione**
+  Sull'Eaton 3S, nelle stesse condizioni di main e8194b3 (110 KB liberi a riposo, minimo 48-50 KB), la heap libera a riposo sale di almeno 14 KB; un avvio con il controllo automatico spento e uno con il controllo acceso mostrano quanto pesa la sessione TLS di `check()` sulla heap minima.
+
+  **Criteri di Accettazione**
+  - [ ] A riposo non esiste nessun task `fw_update`: viene creato per un controllo (automatico o dalla Web UI) o per un'installazione e termina a lavoro finito.
+  - [ ] Il buffer di lettura di `install()` non è più `static`: esiste solo durante l'installazione.
+  - [ ] `check()` applica le stesse soglie di `install()` (95 KB liberi, blocco da 36 KB): sotto soglia il controllo automatico è rimandato con una riga di log, quello manuale finisce con un errore leggibile nella Web UI, come oggi l'installazione.
+  - [ ] Se il task non si può creare, la richiesta finisce con un errore nello stato dell'aggiornamento, senza riavvii.
+  - [ ] Regressione: controllo manuale, controllo automatico (2 minuti dopo l'avvio, poi ogni 24 h) e installazione online funzionano come prima; test nativi ed e2e verdi.
+  - [ ] Misura sull'Eaton prima e dopo (heap libera, minima, blocco massimo dopo 10 minuti), più un avvio con il controllo automatico spento, riportate nella spec.
+
+  **Assunzioni**
+  - **Origine:** analisi della heap del 2026-11-27 (`update_service.cpp:57`, `:267-268`, `:283`); la PR #166 costa 8-12 KB di heap.
+  - **Ipotesi da verificare:** il minimo di 48-50 KB su main viene dalla sessione TLS di `check()` (46-52 KB).
+  - **Misura del 2026-11-28 (conferma l'ipotesi):** sull'Eaton 3S con la build di prova hotplug-v2 (S3, main e8194b3 + i branch di #36 e #163), campionando `/api/system-status` ogni secondo, la heap minima non si muove nei ricollegamenti USB (86-88 KB) e crolla solo a uptime 123-125 s, cioè al primo controllo automatico (`FIRST_CHECK_MS`, 2 minuti dopo la rete): heap libera 107 → 47 KB per circa 2 s, minima 22,9 KB, blocco massimo 31,7 KB; poi di nuovo 107 KB. La sessione TLS di `check()` pesa quindi circa 60 KB al picco. In tre avvii la minima è finita a 22,9, 26,1 e 28,6 KB, sempre 2-3 minuti dopo l'avvio; probabilmente da lì viene anche il minimo di 35,8 KB misurato sulla PR #166.
+  - **Fuori ambito:** dimensioni dei buffer mbedTLS e `custom_sdkconfig`.
+history:
+  - status: TODO
+    at: "2026-11-27T21:59:21Z"
