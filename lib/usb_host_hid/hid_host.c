@@ -93,6 +93,7 @@ typedef struct hid_host_device {
     SemaphoreHandle_t ctrl_xfer_done;           /**< Control transfer semaphore */
     usb_transfer_t *ctrl_xfer;                  /**< Pointer to control transfer buffer */
     volatile bool ctrl_inflight;                /**< ctrl_xfer is owned by the USB Host stack (submitted, callback not yet delivered) */
+    volatile int last_ctrl_status;              /**< [esp32-nut, issue 163] usb_transfer_status_t of the last failed control transfer */
     usb_device_handle_t dev_hdl;                /**< USB device handle */
     uint8_t dev_addr;                           /**< USB device address */
 #ifdef HID_HOST_REMOTE_WAKE_SUPPORTED
@@ -128,6 +129,8 @@ typedef struct hid_interface {
     uint16_t report_desc_len;               /**< [esp32-nut] Bytes of the Report actually received */
     uint8_t *report_desc;                   /**< Pointer to HID Report */
     usb_transfer_t *in_xfer;                /**< Pointer to IN transfer buffer */
+    volatile int last_in_error;             /**< [esp32-nut, issue 163] usb_transfer_status_t of the last failed IN transfer, or -(esp_err_t) of a failed re-submit */
+    volatile int last_in_bytes;             /**< [esp32-nut, issue 163] actual_num_bytes of that IN transfer */
     hid_host_interface_event_cb_t user_cb;  /**< Interface application callback */
     void *user_cb_arg;                      /**< Interface application callback arg */
     hid_iface_state_t state;                /**< Interface state */
@@ -1005,6 +1008,8 @@ static void in_xfer_done(usb_transfer_t *in_xfer)
         esp_err_t err = usb_host_transfer_submit(in_xfer);
         if (err != ESP_OK && iface->state == HID_INTERFACE_STATE_ACTIVE) {
             ESP_LOGE(TAG, "Unable to re-submit IN transfer: %s", esp_err_to_name(err));
+            iface->last_in_error = -(int)err;
+            iface->last_in_bytes = 0;
             hid_host_user_interface_callback(iface, HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR);
         }
         return;
@@ -1019,6 +1024,9 @@ static void in_xfer_done(usb_transfer_t *in_xfer)
     }
 
     ESP_LOGE(TAG, "Transfer failed, status %d", in_xfer->status);
+    // [esp32-nut, issue 163] Kept for the application's log (syslog), read in the callback
+    iface->last_in_error = (int)in_xfer->status;
+    iface->last_in_bytes = in_xfer->actual_num_bytes;
     // Notify user about transfer or any other error
     hid_host_user_interface_callback(iface, HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR);
 }
@@ -1152,6 +1160,7 @@ static esp_err_t hid_control_transfer(hid_device_t *hid_device,
         return ESP_ERR_INVALID_SIZE;
     default:
         ESP_LOGW(TAG, "Control transfer failed, status %d", ctrl_xfer->status);
+        hid_device->last_ctrl_status = (int)ctrl_xfer->status; // [esp32-nut, issue 163]
         return ESP_FAIL;
     }
     if (ctrl_xfer->actual_num_bytes < USB_SETUP_PACKET_SIZE) {
@@ -2065,6 +2074,19 @@ uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle)
 {
     hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
     return iface ? iface->ep_in_mps : 0;
+}
+
+int hid_host_device_get_in_error(hid_host_device_handle_t hid_dev_handle, int *bytes)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+    if (bytes) *bytes = iface ? iface->last_in_bytes : 0;
+    return iface ? iface->last_in_error : 0;
+}
+
+int hid_host_device_get_last_ctrl_status(hid_host_device_handle_t hid_dev_handle)
+{
+    hid_iface_t *iface = get_iface_by_handle(hid_dev_handle);
+    return (iface && iface->parent) ? iface->parent->last_ctrl_status : 0;
 }
 
 bool hid_host_device_ctrl_stuck(hid_host_device_handle_t hid_dev_handle)

@@ -54,16 +54,31 @@ void test_delay_doubles_up_to_max(void) {
     TEST_ASSERT_EQUAL_UINT32(B::MAX_DELAY_MS, b.delayMs());
 }
 
+// Errors 50 ms after every interface restart until onError() escalates; returns the action
+static B::Action runUntilEscalation(B& b, uint32_t& now) {
+    for (;;) {
+        B::Action a = b.onError(now);
+        if (a != B::Action::RECOVER) return a;
+        now += b.delayMs();
+        b.onRecoveryStarted();
+        now += 50 + 80;
+    }
+}
+
 // The trace of the Powercom (issue #36): a new error 50 ms after every restart. The old
-// code restarted the board after 0.4 s; now the restart waits ESCALATE_AFTER_MS.
-void test_continuous_errors_restart_after_escalate_time(void) {
+// code restarted the board after 0.4 s; now the escalation waits ESCALATE_AFTER_MS, and the
+// first one power-cycles the USB port (issue #163).
+void test_continuous_errors_escalate_after_escalate_time(void) {
     B b;
     const uint32_t t0 = 25539219;
     uint32_t now = t0;
     int recoveries = 0;
     for (;;) {
         B::Action a = b.onError(now);
-        if (a == B::Action::RESTART) break;
+        if (a != B::Action::RECOVER) {
+            TEST_ASSERT_TRUE(a == B::Action::CYCLE_PORT);
+            break;
+        }
         recoveries++;
         TEST_ASSERT_TRUE(now - t0 < B::ESCALATE_AFTER_MS);
         now += b.delayMs();
@@ -76,6 +91,41 @@ void test_continuous_errors_restart_after_escalate_time(void) {
     TEST_ASSERT_FALSE(b.pending());
 }
 
+// Issue #163: the IN pipe stuck again after the port cycle restarts the board
+void test_second_escalation_within_gap_restarts(void) {
+    B b;
+    uint32_t now = 1000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::CYCLE_PORT);
+    b.reset(); // the cycle disconnects the UPS, the new claim resets again
+    now += 3000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::RESTART);
+    TEST_ASSERT_FALSE(b.pending());
+}
+
+// A new streak PORT_CYCLE_GAP_MS after the last cycle gets a cycle again
+void test_escalation_after_gap_cycles_again(void) {
+    B b;
+    uint32_t now = 1000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::CYCLE_PORT);
+    const uint32_t cycled_at = now;
+    b.reset();
+    now = cycled_at + B::PORT_CYCLE_GAP_MS - B::ESCALATE_AFTER_MS - 5000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::RESTART);
+    TEST_ASSERT_TRUE(now - cycled_at < B::PORT_CYCLE_GAP_MS);
+    b.reset();
+    now = cycled_at + B::PORT_CYCLE_GAP_MS;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::CYCLE_PORT);
+}
+
+void test_cycle_gap_across_millis_wrap(void) {
+    B b;
+    uint32_t now = 0xFFFFFFFFu - 2000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::CYCLE_PORT); // past the wrap
+    b.reset();
+    now += 1000;
+    TEST_ASSERT_TRUE(runUntilEscalation(b, now) == B::Action::RESTART);
+}
+
 void test_restart_needs_min_recoveries(void) {
     B b;
     // Two errors far apart in time but closer than QUIET_RESET_MS
@@ -86,7 +136,7 @@ void test_restart_needs_min_recoveries(void) {
     TEST_ASSERT_TRUE(b.onError(1000 + B::ESCALATE_AFTER_MS + 2) == B::Action::RECOVER);
     b.onRecoveryStarted();
     TEST_ASSERT_EQUAL_UINT8(B::MIN_RECOVERIES, b.recoveries());
-    TEST_ASSERT_TRUE(b.onError(1000 + B::ESCALATE_AFTER_MS + 3) == B::Action::RESTART);
+    TEST_ASSERT_TRUE(b.onError(1000 + B::ESCALATE_AFTER_MS + 3) == B::Action::CYCLE_PORT);
 }
 
 void test_reset_ends_the_streak(void) {
@@ -167,7 +217,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_idle_by_default);
     RUN_TEST(test_first_restart_waits_first_delay);
     RUN_TEST(test_delay_doubles_up_to_max);
-    RUN_TEST(test_continuous_errors_restart_after_escalate_time);
+    RUN_TEST(test_continuous_errors_escalate_after_escalate_time);
+    RUN_TEST(test_second_escalation_within_gap_restarts);
+    RUN_TEST(test_escalation_after_gap_cycles_again);
+    RUN_TEST(test_cycle_gap_across_millis_wrap);
     RUN_TEST(test_restart_needs_min_recoveries);
     RUN_TEST(test_reset_ends_the_streak);
     RUN_TEST(test_disconnection_while_pending_clears_it);

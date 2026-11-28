@@ -195,6 +195,9 @@ private:
         Type type;
         uint16_t length;
         uint32_t ts; // millis() when the HID task received it
+        // TRANSFER_ERROR: hid_host_device_get_in_error() read in the HID task right after the
+        // failure (issue #163), length = the bytes of that transfer
+        int32_t xfer_status;
         hid_host_device_handle_t handle;
         uint8_t data[64]; // Full-speed interrupt IN max packet size
     };
@@ -476,6 +479,16 @@ private:
     uint32_t _in_restart_at;
     // Restarts of the interface after IN pipe errors, spaced out (issue #36)
     InputErrorBackoff _in_errors;
+    // The IN pipe errors escalated to a USB port power cycle (issue #163): service() runs it
+    // after the events, outside the event loop
+    bool _in_cycle_due = false;
+    // Restart reason when the IN pipe errors come back after that cycle (issue #163)
+    static constexpr const char* IN_AFTER_CYCLE_REASON =
+        "INPUT transfer keeps failing after the USB port power cycle";
+    // Port power cycle asked by InputErrorBackoff (issue #163)
+    void cycleAfterInputErrors(uint32_t now);
+    // usb_transfer_status_t (or -(esp_err_t) of a failed re-submit) as text, for the log
+    static const char* xferStatusName(int status);
     bool _restart_requested;
     const char* _restart_reason;
 

@@ -290,6 +290,9 @@ void USBHostUPS::handle_interface_event(hid_host_device_handle_t hid_device_hand
         postEvent(ev, true);
     } else if (event == HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR) {
         ev.type = HidEvent::TRANSFER_ERROR;
+        int bytes = 0;
+        ev.xfer_status = hid_host_device_get_in_error(hid_device_handle, &bytes);
+        ev.length = (uint16_t)(bytes < 0 ? 0 : bytes);
         postEvent(ev, true);
     }
 }
@@ -325,6 +328,13 @@ void USBHostUPS::service() {
     serviceEnumWatchdog(now);
     // Before the early returns: until the claim service() stops at !_is_ready_to_poll
     serviceReconnectBridge(now);
+
+    // The IN pipe errors escalated (issue #163): out of the event loop, before the
+    // early returns
+    if (_in_cycle_due) {
+        _in_cycle_due = false;
+        if (!_restart_requested && _is_ready_to_poll) cycleAfterInputErrors(now);
+    }
 
 #if defined(NUT_TEST_RECONNECT_BRIDGE) && NUT_TEST_RECONNECT_BRIDGE
     // Test build (US-140): after TEST_BRIDGE_EVERY_MS of fresh data the UPS drops off the bus
@@ -597,13 +607,33 @@ void USBHostUPS::handleEvent(const HidEvent& ev) {
             // Issue #36: the restart waits, with a growing delay. A UPS dropping off the
             // bus raises these errors before the disconnection, which then clears them.
             uint32_t now = millis();
-            if (_in_errors.onError(now) == InputErrorBackoff::Action::RESTART) {
-                requestRestart("INPUT transfer keeps failing");
-            } else {
-                log("WARN", "[USB] INPUT transfer error (%u in %u ms): interface restart in %u ms",
+            switch (_in_errors.onError(now)) {
+            case InputErrorBackoff::Action::RESTART:
+                log("WARN", "[USB] INPUT transfer error, status %s (%d), %u bytes: back after the "
+                            "USB port power cycle",
+                    xferStatusName(ev.xfer_status), (int)ev.xfer_status, (unsigned)ev.length);
+                requestRestart(IN_AFTER_CYCLE_REASON);
+                break;
+            case InputErrorBackoff::Action::CYCLE_PORT:
+                // Issue #163: a new enumeration without the board restart; service() runs it
+                log("WARN", "[USB] INPUT transfer error, status %s (%d), %u bytes: still failing "
+                            "after %u interface restarts",
+                    xferStatusName(ev.xfer_status), (int)ev.xfer_status, (unsigned)ev.length,
+                    (unsigned)_in_errors.recoveries());
+                _in_cycle_due = true;
+                break;
+            default:
+                log("WARN", "[USB] INPUT transfer error, status %s (%d), %u bytes (%u in %u ms): "
+                            "interface restart in %u ms",
+                    xferStatusName(ev.xfer_status), (int)ev.xfer_status, (unsigned)ev.length,
                     (unsigned)_in_errors.recoveries(), (unsigned)_in_errors.streakMs(now),
                     (unsigned)_in_errors.delayMs());
+                break;
             }
+        } else if (ev.handle == _hid_dev_handle) {
+            // Issue #163: the status of the errors not counted, for the syslog too
+            log("INFO", "[USB] INPUT transfer error, status %s (%d), %u bytes: not counted, recovery under way",
+                xferStatusName(ev.xfer_status), (int)ev.xfer_status, (unsigned)ev.length);
         }
         break;
     }
@@ -869,6 +899,7 @@ void USBHostUPS::releaseBoundState(bool keep_values) {
     _is_ready_to_poll = false;
     _in_restart_pending = false;
     _in_errors.reset();
+    _in_cycle_due = false; // a UPS gone by itself needs no port cycle (issue #163)
     _bound_id = UpsIdentity();
     if (!keep_values) {
         clearUpsData();
@@ -1191,6 +1222,11 @@ void USBHostUPS::recoverInterface(const char* why, uint32_t now, bool clear_in_h
         noteControlResult(err, millis());
         if (err == ESP_OK) {
             log("INFO", "[USB] IN endpoint halt cleared");
+        } else if (err == ESP_FAIL) {
+            // Issue #163: which bus error, from the transfer status
+            const int st = hid_host_device_get_last_ctrl_status(_hid_dev_handle);
+            log("WARN", "[USB] CLEAR_FEATURE(ENDPOINT_HALT) failed: %s, transfer status %s (%d)",
+                esp_err_to_name(err), xferStatusName(st), st);
         } else {
             log("WARN", "[USB] CLEAR_FEATURE(ENDPOINT_HALT) failed: %s", esp_err_to_name(err));
         }
@@ -1395,6 +1431,39 @@ void USBHostUPS::recoverStuckTransfer(uint32_t now) {
     log("WARN", "[USB] Control transfer stuck: power-cycling the USB port (cycle %u since boot)",
         (unsigned)_port_cycles.cyclesSinceBoot());
     powerCyclePort(now);
+}
+
+// Issue #163: the IN pipe of a Vertiv Edge plugged in while the board runs stays stuck, and
+// only a new enumeration brings it back. The cycle goes through PortCyclePolicy like a stuck
+// control transfer: the UPS must be back within BACK_TIMEOUT_MS, at most 12 cycles an hour.
+void USBHostUPS::cycleAfterInputErrors(uint32_t now) {
+    if (_port_cycles.waiting()) {
+        // A cycle of a stuck transfer did not bring the UPS fully back yet
+        requestRestart(IN_AFTER_CYCLE_REASON);
+        return;
+    }
+    if (_port_cycles.onStuck(now) == PortCyclePolicy::Decision::RESTART) {
+        requestRestart(_port_cycles.lastRestartReason());
+        return;
+    }
+    log("WARN", "[USB] INPUT transfer keeps failing: power-cycling the USB port (cycle %u since boot)",
+        (unsigned)_port_cycles.cyclesSinceBoot());
+    powerCyclePort(now);
+}
+
+const char* USBHostUPS::xferStatusName(int status) {
+    if (status < 0) return esp_err_to_name((esp_err_t)-status); // the re-submit failed
+    switch ((usb_transfer_status_t)status) {
+    case USB_TRANSFER_STATUS_COMPLETED: return "COMPLETED";
+    case USB_TRANSFER_STATUS_ERROR: return "ERROR";
+    case USB_TRANSFER_STATUS_TIMED_OUT: return "TIMED_OUT";
+    case USB_TRANSFER_STATUS_CANCELED: return "CANCELED";
+    case USB_TRANSFER_STATUS_STALL: return "STALL";
+    case USB_TRANSFER_STATUS_OVERFLOW: return "OVERFLOW";
+    case USB_TRANSFER_STATUS_SKIPPED: return "SKIPPED";
+    case USB_TRANSFER_STATUS_NO_DEVICE: return "NO_DEVICE";
+    default: return "?";
+    }
 }
 
 void USBHostUPS::powerCyclePort(uint32_t now) {

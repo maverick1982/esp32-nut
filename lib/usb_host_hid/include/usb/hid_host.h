@@ -347,6 +347,27 @@ uint16_t hid_host_device_get_ep_in_mps(hid_host_device_handle_t hid_dev_handle);
 bool hid_host_device_ctrl_stuck(hid_host_device_handle_t hid_dev_handle);
 
 /**
+ * @brief [esp32-nut, issue 163] How the last IN transfer of the interface failed.
+ *
+ * Meant for the TRANSFER_ERROR callback, which runs right after the failure is recorded.
+ *
+ * @param[in]  hid_dev_handle HID device handle.
+ * @param[out] bytes          actual_num_bytes of the failed transfer (may be NULL).
+ *
+ * @return usb_transfer_status_t of the failed transfer, -(esp_err_t) when its re-submit
+ *         failed, 0 if nothing failed yet or hid_dev_handle is invalid
+ */
+int hid_host_device_get_in_error(hid_host_device_handle_t hid_dev_handle, int *bytes);
+
+/**
+ * @brief [esp32-nut, issue 163] usb_transfer_status_t of the last control transfer of the
+ *        device that ended with ESP_FAIL (a status other than COMPLETED, STALL, OVERFLOW).
+ *
+ * @return the status, or 0 if none failed that way or hid_dev_handle is invalid
+ */
+int hid_host_device_get_last_ctrl_status(hid_host_device_handle_t hid_dev_handle);
+
+/**
  * @brief [esp32-nut, review M5] Read a string descriptor of the device (GET_DESCRIPTOR on EP0).
  *
  * @param[in] hid_dev_handle HID device handle.
