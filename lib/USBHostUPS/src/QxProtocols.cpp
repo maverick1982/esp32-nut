@@ -43,7 +43,7 @@ const QxSubdriver* const QX_SUBDRIVER_LIST[] = {
     // &voltronic_subdriver,
     // &voltronic_axpert_subdriver,
     // &voltronic_qs_subdriver,
-    // &voltronic_qs_hex_subdriver,
+    &QX_VOLTRONIC_QS_HEX,
     &QX_MUSTEK,
     &QX_MEGATEC_OLD,
     // &bestups_subdriver,
