@@ -1,0 +1,39 @@
+schema: archetipo/spec/v2
+code: US-148
+title: '"Remember me" rinnovato a ogni visita della Web UI'
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 3
+status: TODO
+body: |
+  #### US-148: "Remember me" rinnovato a ogni visita della Web UI
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di esp32-nut che apre la Web UI di rado,
+  voglio che la sessione "Remember me" duri 30 giorni dall'ultima visita invece che dal login,
+  in modo da autenticarmi una volta sola per browser, senza dover ricordare la password ogni mese.
+
+  **Dimostrazione**
+  L'utente entra con "Remember me". Nei giorni seguenti ricarica la dashboard: negli strumenti per sviluppatori del browser la scadenza del cookie `sid` si sposta ogni volta a 30 giorni da quel momento, con lo stesso valore. Dopo un riavvio della scheda la sessione è ancora valida. "Log out" e "Log out of all devices" chiudono la sessione come oggi. Nei test nativi lo storage finto conta zero scritture del blob `sessions` durante i rinnovi.
+
+  **Criteri di Accettazione**
+  - [ ] Con una sessione persistente valida, ogni caricamento di una pagina della Web UI servita dalla scheda (`/`, `/update`) rimanda il cookie `sid` con lo stesso token, `Max-Age=2592000` e gli stessi attributi di oggi (`Path=/; HttpOnly; SameSite=Strict`).
+  - [ ] Il rinnovo non scrive in NVS. Il blob `sessions` si scrive ancora solo a login, logout, logout-all e cambio credenziali.
+  - [ ] Le sessioni senza "Remember me" non ricevono `Max-Age`: restano cookie di sessione con la scadenza di 30 minuti di inattività di oggi.
+  - [ ] Un cookie che non corrisponde più a una sessione (dopo un logout, un logout-all, un cambio password, un reset in AP o un'espulsione) non viene rinnovato: la pagina risponde con il redirect al login come oggi.
+  - [ ] In modalità AP e durante la finestra di recupero non viene emesso alcun cookie di rinnovo.
+  - [ ] Test nativi in `test_web_auth`: rinnovo di una sessione persistente, nessun rinnovo per le sessioni temporanee e per i token sconosciuti, nessuna scrittura dello storage durante il rinnovo.
+  - [ ] PDR 0001 (D2), ADR 0009 e la voce "Remember me" di README.md e README.it.md dicono "30 giorni dall'ultima visita".
+
+  **Assunzioni**
+  - Riferimenti: #131, [PDR 0001](docs/pdr/0001-autenticazione-web.md) D2, [ADR 0009](docs/adr/0009-web-ui-authentication.md). La scheda non applica una scadenza assoluta alle sessioni persistenti, quindi il rinnovo cambia solo il cookie nel browser.
+  - Fuori perimetro: quando le sessioni persistenti superano 8, viene ancora espulsa la più vecchia per data di creazione, non per ultimo uso (saperlo richiederebbe scritture in NVS a ogni visita).
+  - Fuori perimetro: un'opzione per disattivare il login.
+history:
+  - status: TODO
+    at: "2026-11-23T19:02:30Z"

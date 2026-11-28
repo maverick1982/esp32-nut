@@ -1,0 +1,40 @@
+schema: archetipo/spec/v2
+code: US-149
+title: Link "Forgot your password?" nella pagina di login, con la procedura di recupero della scheda
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+body: |
+  #### US-149: Link "Forgot your password?" nella pagina di login, con la procedura di recupero della scheda
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come proprietario di esp32-nut che non ricorda più la password della Web UI,
+  voglio trovare nella pagina di login i passi per recuperare l'accesso sulla mia scheda,
+  in modo da non credere di dover riflashare il firmware e da non dover cercare la procedura nel README.
+
+  **Dimostrazione**
+  Sotto il form di login l'utente clicca "Forgot your password?" e, senza lasciare la pagina, legge i passi per la sua scheda. Su un ESP32-S3 (anche con W5500) o un Nano ESP32: doppio reset, access point `NUT_ESP32_Config` e "Reset credentials" nella tab Web Login. Su un ESP32-P4: doppio reset e finestra di 10 minuti in questa stessa pagina. Nei test e2e, con lo stato mockato, compaiono i passi giusti per ciascun tipo di scheda.
+
+  **Criteri di Accettazione**
+  - [ ] La vista "Sign in" ha un link "Forgot your password?" che apre e chiude i passi di recupero nella pagina, senza navigare altrove.
+  - [ ] L'API pubblica `/api/auth/status` ha un campo nuovo con il metodo di recupero della scheda: access point sulle schede con Wi-Fi, finestra di recupero su quelle senza. Il campo non rivela altro: niente modello della scheda, niente dati di rete.
+  - [ ] Schede con Wi-Fi: i passi dicono di spegnere e riaccendere due volte entro 3 secondi, connettersi all'access point `NUT_ESP32_Config` (password `12345678`), aprire la Web UI, andare nella tab **Web Login** e usare **Reset credentials**. Dicono anche che durante l'access point i client NUT non raggiungono la scheda, e che la scheda torna sulla rete di casa con un riavvio o da sola 10 minuti dopo che l'ultimo dispositivo ha lasciato l'access point.
+  - [ ] Schede senza Wi-Fi: i passi dicono che il doppio reset entro 3 secondi apre per 10 minuti una finestra in cui questa pagina permette di creare credenziali nuove senza la password attuale, e che le vecchie restano valide se nessuno le sostituisce.
+  - [ ] Se lo stato non arriva, la pagina mostra entrambe le procedure.
+  - [ ] Il link non compare nel form "Create credentials" del primo uso né durante la finestra di recupero.
+  - [ ] Testi in inglese come il resto della Web UI. Le pagine incorporate sono rigenerate.
+  - [ ] Test nativi del campo nuovo in `test_web_auth`. Test e2e Playwright: link e passi per le due schede (stato mockato), entrambe le procedure senza stato, link assente nella vista di creazione.
+  - [ ] La sezione "Forgotten password" di README.md e README.it.md cita il link della pagina di login.
+
+  **Assunzioni**
+  - Riferimenti: #131, [PDR 0001](docs/pdr/0001-autenticazione-web.md) D6, [PDR 0002](docs/pdr/0002-supporto-multi-scheda-esp32-p4-ethernet.md) D5, US-091. La procedura di recupero non cambia: la spec la rende visibile.
+  - Il campo esposto dice solo se la scheda ha il Wi-Fi, e lo si capisce comunque dal suo comportamento. Rischio accettato.
+history:
+  - status: TODO
+    at: "2026-11-23T19:02:30Z"

@@ -1,0 +1,35 @@
+schema: archetipo/spec/v2
+code: US-152
+title: Stack dei task nelle diagnostiche e stack di loopTask a 12 KB
+epic:
+  code: EP-002
+  title: Connettività di Rete e Configurazione
+priority: MEDIUM
+points: 2
+status: TODO
+body: |
+  #### US-152: Stack dei task nelle diagnostiche e stack di loopTask a 12 KB
+
+  **Epic:** EP-002 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccato da:** -
+
+  **User Story**
+  Come sviluppatore del firmware,
+  voglio vedere nelle diagnostiche quanto stack resta a ciascun task, e portare `loopTask` da 16 a 12 KB,
+  in modo da recuperare 4 KB con un margine misurato e non stimato.
+
+  **Dimostrazione**
+  `/api/system-status` mostra lo stack minimo libero (high water mark) di `loopTask`, `ups_poll`, `USB HID Host`, `usb_host_events` e, se esistono, `log_out` e `fw_update`; dopo un giro completo sull'Eaton a 12 KB, `loopTask` ha ancora almeno 4 KB liberi.
+
+  **Criteri di Accettazione**
+  - [ ] Le diagnostiche espongono l'high water mark dei task elencati; un task che non esiste non compare o è segnato come assente.
+  - [ ] `ARDUINO_LOOP_STACK_SIZE` passa a 12288 su tutte le schede.
+  - [ ] Giro di prova sull'Eaton (login, salvataggio impostazioni, upload OTA, ripristino della configurazione, export USB, 8 client NUT): stack minimo libero di `loopTask` di almeno 4096 B, riportato nella spec insieme agli altri task.
+  - [ ] Regressione: test nativi ed e2e verdi; nessun reset per stack overflow durante il giro.
+
+  **Assunzioni**
+  - **Origine:** `platformio.ini:7`; 13 192 B liberi su 16 KB dopo 1 h di carico (`docs/plans/platform-upgrade-idf55.md:323`), senza OTA né login nella misura.
+  - **Fuori ambito:** ridurre lo stack degli altri task; con i numeri esposti si deciderà in una spec a parte.
+history:
+  - status: TODO
+    at: "2026-11-27T21:59:21Z"
